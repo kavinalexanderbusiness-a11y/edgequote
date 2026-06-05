@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { openQuotePdf } from '@/components/quotes/QuotePDF'
-import { Edit2, ArrowLeft, FileDown, CalendarPlus } from 'lucide-react'
+import { Edit2, ArrowLeft, FileDown, CalendarPlus, FileText } from 'lucide-react'
 
 export default function QuoteDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -26,6 +26,8 @@ export default function QuoteDetailPage() {
   const [pdfLoading, setPdfLoading] = useState(false)
   const [scheduling, setScheduling] = useState(false)
   const [scheduleMsg, setScheduleMsg] = useState<string | null>(null)
+  const [converting, setConverting] = useState(false)
+  const [convertMsg, setConvertMsg] = useState<string | null>(null)
 
   const supabase = createClient()
 
@@ -142,7 +144,6 @@ export default function QuoteDetailPage() {
       if (error) {
         setScheduleMsg('Could not create job: ' + error.message)
       } else {
-        // Bump quote to scheduled if it was accepted
         if (quote.status === 'accepted') {
           await supabase.from('quotes').update({ status: 'scheduled' }).eq('id', quote.id)
           setQuote({ ...quote, status: 'scheduled' })
@@ -156,12 +157,71 @@ export default function QuoteDetailPage() {
     }
   }
 
+  async function handleConvertToInvoice() {
+    if (!quote) return
+    setConverting(true)
+    setConvertMsg(null)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+
+      // Don't double-convert
+      const { data: existing } = await supabase
+        .from('invoices')
+        .select('id')
+        .eq('quote_id', quote.id)
+        .limit(1)
+      if (existing && existing.length > 0) {
+        setConvertMsg('An invoice already exists for this quote.')
+        setConverting(false)
+        return
+      }
+
+      // Generate INV-#### from current count
+      const { count } = await supabase
+        .from('invoices')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', user!.id)
+      const num = (count || 0) + 1
+      const invoiceNumber = `INV-${String(num).padStart(4, '0')}`
+
+      const due = new Date()
+      due.setDate(due.getDate() + 14)
+
+      const { error } = await supabase.from('invoices').insert({
+        user_id: user!.id,
+        quote_id: quote.id,
+        customer_id: quote.customer_id,
+        property_id: quote.property_id,
+        invoice_number: invoiceNumber,
+        customer_name: quote.customer_name,
+        address: quote.address,
+        service_type: quote.service_type,
+        amount: quote.total,
+        status: 'unpaid',
+        issued_date: new Date().toISOString().slice(0, 10),
+        due_date: due.toISOString().slice(0, 10),
+        notes: quote.notes,
+      })
+
+      if (error) {
+        setConvertMsg('Could not create invoice: ' + error.message)
+      } else {
+        setConvertMsg(`Invoice ${invoiceNumber} created.`)
+      }
+    } catch {
+      setConvertMsg('Could not create invoice. Please try again.')
+    } finally {
+      setConverting(false)
+    }
+  }
+
   if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading...</div>
   if (!quote) return <div className="text-center py-16 text-sm text-red-400">Quote not found.</div>
 
   const isRecurring = quote.service_frequency && quote.service_frequency !== 'one_time'
   const recurringLabel = quote.service_frequency === 'initial_weekly' ? 'Weekly Maintenance' : 'Bi-Weekly Maintenance'
   const canSchedule = quote.status === 'accepted' || quote.status === 'scheduled'
+  const canInvoice = quote.status === 'accepted' || quote.status === 'scheduled' || quote.status === 'completed'
 
   if (editing) return (
     <div className="max-w-5xl space-y-6">
@@ -215,6 +275,11 @@ export default function QuoteDetailPage() {
                   <CalendarPlus className="w-3.5 h-3.5" /> Schedule Job
                 </Button>
               )}
+              {canInvoice && (
+                <Button onClick={handleConvertToInvoice} variant="secondary" size="sm" loading={converting}>
+                  <FileText className="w-3.5 h-3.5" /> Convert to Invoice
+                </Button>
+              )}
               <Button onClick={handleOpenPdf} variant="secondary" size="sm" loading={pdfLoading}>
                 <FileDown className="w-3.5 h-3.5" /> Open PDF
               </Button>
@@ -229,6 +294,12 @@ export default function QuoteDetailPage() {
       {scheduleMsg && (
         <div className="text-sm text-accent bg-accent/10 border border-accent/20 rounded-xl px-4 py-2.5">
           {scheduleMsg} <button onClick={() => router.push('/dashboard/schedule')} className="underline font-medium ml-1">Go to Schedule</button>
+        </div>
+      )}
+
+      {convertMsg && (
+        <div className="text-sm text-accent bg-accent/10 border border-accent/20 rounded-xl px-4 py-2.5">
+          {convertMsg} <button onClick={() => router.push('/dashboard/invoices')} className="underline font-medium ml-1">Go to Invoices</button>
         </div>
       )}
 

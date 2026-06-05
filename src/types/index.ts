@@ -110,6 +110,40 @@ export const JOB_STATUS_COLORS: Record<JobStatus, string> = {
   cancelled:   'bg-ink-faint/20 text-ink-muted border-ink-faint/30',
 }
 
+export type InvoiceStatus = 'unpaid' | 'sent' | 'paid'
+
+export interface Invoice {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  quote_id: string | null
+  customer_id: string | null
+  property_id: string | null
+  invoice_number: string
+  customer_name: string
+  address: string | null
+  service_type: string | null
+  amount: number
+  status: InvoiceStatus
+  issued_date: string | null
+  due_date: string | null
+  notes: string | null
+  customers?: Pick<Customer, 'id' | 'name' | 'email' | 'phone'>
+}
+
+export const INVOICE_STATUS_LABELS: Record<InvoiceStatus, string> = {
+  unpaid: 'Unpaid',
+  sent: 'Sent',
+  paid: 'Paid',
+}
+
+export const INVOICE_STATUS_COLORS: Record<InvoiceStatus, string> = {
+  unpaid: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
+  sent:   'bg-blue-500/10 text-blue-400 border-blue-500/20',
+  paid:   'bg-emerald-500/15 text-emerald-400 border-emerald-500/25',
+}
+
 export interface Quote {
   id: string
   created_at: string
