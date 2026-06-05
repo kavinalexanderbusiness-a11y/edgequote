@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Customer, Job, JobFormValues } from '@/types'
 import { Calendar, CalendarView } from '@/components/schedule/Calendar'
-import { JobForm } from '@/components/schedule/JobForm'
+import { JobForm, Recurrence } from '@/components/schedule/JobForm'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
@@ -40,22 +40,29 @@ export default function SchedulePage() {
 
   useEffect(() => { fetchJobs() }, [fetchJobs])
 
-  async function handleAdd(values: JobFormValues) {
+  async function handleAdd(values: JobFormValues, recurrence: Recurrence) {
     const { data: { user } } = await supabase.auth.getUser()
-    await supabase.from('jobs').insert({
+    const base = {
       user_id: user!.id,
       customer_id: values.customer_id || null,
       property_id: values.property_id || null,
       title: values.title,
       service_type: values.service_type || null,
-      scheduled_date: values.scheduled_date,
       start_time: values.start_time || null,
       end_time: values.end_time || null,
       duration_minutes: values.duration_minutes ? Number(values.duration_minutes) : null,
       crew_size: Number(values.crew_size) || 1,
       status: values.status,
       notes: values.notes || null,
-    })
+    }
+    const count = recurrence.repeat === 'none' ? 1 : Math.max(1, recurrence.occurrences)
+    const stepDays = recurrence.repeat === 'biweekly' ? 14 : 7
+    const startDate = new Date(values.scheduled_date + 'T00:00:00')
+    const rows = Array.from({ length: count }, (_, i) => ({
+      ...base,
+      scheduled_date: format(addDays(startDate, i * stepDays), 'yyyy-MM-dd'),
+    }))
+    await supabase.from('jobs').insert(rows)
     await fetchJobs()
     setShowForm(false)
     setFormDate('')
