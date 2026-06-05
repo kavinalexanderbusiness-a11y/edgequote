@@ -59,6 +59,57 @@ export interface PropertyFormValues {
   notes: string
 }
 
+export type JobStatus = 'scheduled' | 'in_progress' | 'completed' | 'cancelled'
+
+export interface Job {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  customer_id: string | null
+  property_id: string | null
+  quote_id: string | null
+  title: string
+  service_type: string | null
+  scheduled_date: string
+  start_time: string | null
+  end_time: string | null
+  duration_minutes: number | null
+  crew_size: number
+  status: JobStatus
+  notes: string | null
+  customers?: Pick<Customer, 'id' | 'name' | 'phone'>
+  properties?: Pick<Property, 'id' | 'address' | 'lat' | 'lng'>
+}
+
+export interface JobFormValues {
+  customer_id: string
+  property_id: string
+  title: string
+  service_type: string
+  scheduled_date: string
+  start_time: string
+  end_time: string
+  duration_minutes: number
+  crew_size: number
+  status: JobStatus
+  notes: string
+}
+
+export const JOB_STATUS_LABELS: Record<JobStatus, string> = {
+  scheduled: 'Scheduled',
+  in_progress: 'In Progress',
+  completed: 'Completed',
+  cancelled: 'Cancelled',
+}
+
+export const JOB_STATUS_COLORS: Record<JobStatus, string> = {
+  scheduled:   'bg-blue-500/10 text-blue-400 border-blue-500/20',
+  in_progress: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
+  completed:   'bg-emerald-500/15 text-emerald-400 border-emerald-500/25',
+  cancelled:   'bg-ink-faint/20 text-ink-muted border-ink-faint/30',
+}
+
 export interface Quote {
   id: string
   created_at: string

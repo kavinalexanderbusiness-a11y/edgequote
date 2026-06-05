@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { openQuotePdf } from '@/components/quotes/QuotePDF'
-import { Edit2, ArrowLeft, FileDown } from 'lucide-react'
+import { Edit2, ArrowLeft, FileDown, CalendarPlus } from 'lucide-react'
 
 export default function QuoteDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -24,6 +24,8 @@ export default function QuoteDetailPage() {
   const [editing, setEditing] = useState(false)
   const [loading, setLoading] = useState(true)
   const [pdfLoading, setPdfLoading] = useState(false)
+  const [scheduling, setScheduling] = useState(false)
+  const [scheduleMsg, setScheduleMsg] = useState<string | null>(null)
 
   const supabase = createClient()
 
@@ -104,11 +106,62 @@ export default function QuoteDetailPage() {
     }
   }
 
+  async function handleScheduleJob() {
+    if (!quote) return
+    setScheduling(true)
+    setScheduleMsg(null)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+
+      // Find the property for this quote: use quote.property_id, else the customer's primary property
+      let propertyId: string | null = quote.property_id
+      if (!propertyId && quote.customer_id) {
+        const { data: props } = await supabase
+          .from('properties')
+          .select('id')
+          .eq('customer_id', quote.customer_id)
+          .order('is_primary', { ascending: false })
+          .limit(1)
+        if (props && props.length > 0) propertyId = props[0].id
+      }
+
+      const { error } = await supabase.from('jobs').insert({
+        user_id: user!.id,
+        customer_id: quote.customer_id,
+        property_id: propertyId,
+        quote_id: quote.id,
+        title: `${quote.service_type} — ${quote.customer_name}`,
+        service_type: quote.service_type,
+        scheduled_date: new Date().toISOString().slice(0, 10),
+        duration_minutes: Math.round(Number(quote.hours) * 60),
+        crew_size: quote.crew_size,
+        status: 'scheduled',
+        notes: quote.notes,
+      })
+
+      if (error) {
+        setScheduleMsg('Could not create job: ' + error.message)
+      } else {
+        // Bump quote to scheduled if it was accepted
+        if (quote.status === 'accepted') {
+          await supabase.from('quotes').update({ status: 'scheduled' }).eq('id', quote.id)
+          setQuote({ ...quote, status: 'scheduled' })
+        }
+        setScheduleMsg('Job created. Set the date on the Schedule page.')
+      }
+    } catch {
+      setScheduleMsg('Could not create job. Please try again.')
+    } finally {
+      setScheduling(false)
+    }
+  }
+
   if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading...</div>
   if (!quote) return <div className="text-center py-16 text-sm text-red-400">Quote not found.</div>
 
   const isRecurring = quote.service_frequency && quote.service_frequency !== 'one_time'
   const recurringLabel = quote.service_frequency === 'initial_weekly' ? 'Weekly Maintenance' : 'Bi-Weekly Maintenance'
+  const canSchedule = quote.status === 'accepted' || quote.status === 'scheduled'
 
   if (editing) return (
     <div className="max-w-5xl space-y-6">
@@ -157,6 +210,11 @@ export default function QuoteDetailPage() {
           action={
             <div className="flex items-center gap-2">
               <StatusBadge status={quote.status} />
+              {canSchedule && (
+                <Button onClick={handleScheduleJob} variant="secondary" size="sm" loading={scheduling}>
+                  <CalendarPlus className="w-3.5 h-3.5" /> Schedule Job
+                </Button>
+              )}
               <Button onClick={handleOpenPdf} variant="secondary" size="sm" loading={pdfLoading}>
                 <FileDown className="w-3.5 h-3.5" /> Open PDF
               </Button>
@@ -167,6 +225,12 @@ export default function QuoteDetailPage() {
           }
         />
       </div>
+
+      {scheduleMsg && (
+        <div className="text-sm text-accent bg-accent/10 border border-accent/20 rounded-xl px-4 py-2.5">
+          {scheduleMsg} <button onClick={() => router.push('/dashboard/schedule')} className="underline font-medium ml-1">Go to Schedule</button>
+        </div>
+      )}
 
       <Card>
         <div className="p-6 border-b border-border bg-gradient-to-r from-accent/5 to-transparent">

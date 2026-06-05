@@ -40,14 +40,13 @@ export default function NewQuotePage() {
   async function handleSubmit(values: QuoteFormValues) {
     const { data: { user } } = await supabase.auth.getUser()
 
+    // New format: EPS-#### (zero-padded, auto-increment)
     const { count } = await supabase
       .from('quotes')
       .select('*', { count: 'exact', head: true })
       .eq('user_id', user!.id)
-
     const num = String((count || 0) + 1).padStart(4, '0')
-    const year = new Date().getFullYear()
-    const quote_number = `EPS-${year}-${num}`
+    const quote_number = `EPS-${num}`
 
     let customerName = values.customer_name
     if (values.customer_id && values.customer_id !== '__manual') {
@@ -57,6 +56,7 @@ export default function NewQuotePage() {
 
     const mult = Number(values.overgrowth_multiplier) || 1
     const finalRate = mult === 0 ? Number(values.rate) : Number(values.rate) * mult
+    const isRecurring = values.service_frequency !== 'one_time'
 
     const { data, error } = await supabase.from('quotes').insert({
       quote_number,
@@ -65,7 +65,13 @@ export default function NewQuotePage() {
       address: values.address,
       service_type: values.service_type,
       service_template_id: values.service_template_id || null,
+      service_frequency: values.service_frequency,
+      initial_price: isRecurring ? Number(values.initial_price) || null : null,
+      recurring_price: isRecurring ? Number(values.recurring_price) || null : null,
+      recurring_interval: values.recurring_interval || null,
       overgrowth_multiplier: mult,
+      custom_travel_required: values.custom_travel_required,
+      show_travel_separately: values.show_travel_separately,
       issued_date: new Date().toISOString().split('T')[0],
       notes: values.notes || null,
       hours: Number(values.hours),
