@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { LayoutDashboard, Users, FileText, Plus, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays } from 'lucide-react'
+import { LayoutDashboard, Users, FileText, Plus, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Navigation } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
@@ -12,6 +12,7 @@ const nav = [
   { label: 'Customers',  href: '/dashboard/customers',    icon: Users },
   { label: 'Properties', href: '/dashboard/properties',   icon: Home },
   { label: 'Schedule',   href: '/dashboard/schedule',     icon: CalendarDays },
+  { label: 'Routes',     href: '/dashboard/routes',       icon: Navigation },
   { label: 'Quotes',     href: '/dashboard/quotes',       icon: FileText },
   { label: 'New Quote',  href: '/dashboard/quotes/new',   icon: Plus },
 ]
