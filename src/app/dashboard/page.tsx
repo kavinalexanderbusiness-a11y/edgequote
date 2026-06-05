@@ -1,0 +1,70 @@
+import { createClient } from '@/lib/supabase/server'
+import { StatsGrid } from '@/components/dashboard/StatsGrid'
+import { RecentQuotes } from '@/components/dashboard/RecentQuotes'
+import { PageHeader } from '@/components/layout/PageHeader'
+import { DashboardStats, Quote } from '@/types'
+import Link from 'next/link'
+import { Button } from '@/components/ui/Button'
+import { Plus } from 'lucide-react'
+
+export default async function DashboardPage() {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+
+  const { data: quotes } = await supabase
+    .from('quotes')
+    .select('*')
+    .eq('user_id', user!.id)
+    .order('created_at', { ascending: false })
+
+  const allQuotes: Quote[] = quotes || []
+
+  // Monthly revenue = total of quotes created this calendar month
+  const now = new Date()
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+  const monthlyRevenue = allQuotes
+    .filter(q => new Date(q.created_at) >= monthStart)
+    .reduce((sum, q) => sum + Number(q.total), 0)
+
+  // Conversion rate = accepted / (everything except draft)
+  const acceptedCount = allQuotes.filter(q => q.status === 'accepted').length
+  const decidedCount = allQuotes.filter(q => q.status !== 'draft').length
+  const conversionRate = decidedCount > 0
+    ? Math.round((acceptedCount / decidedCount) * 100)
+    : 0
+
+  const stats: DashboardStats = {
+    totalQuotes: allQuotes.length,
+    revenueQuoted: allQuotes.reduce((sum, q) => sum + Number(q.total), 0),
+    acceptedJobs: acceptedCount,
+    pendingQuotes: allQuotes.filter(q => q.status === 'draft' || q.status === 'sent').length,
+    acceptedRevenue: allQuotes
+      .filter(q => q.status === 'accepted')
+      .reduce((sum, q) => sum + Number(q.total), 0),
+    monthlyRevenue,
+    conversionRate,
+  }
+
+  const recent = allQuotes.slice(0, 8)
+
+  const hour = new Date().getHours()
+  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
+
+  return (
+    <div className="max-w-6xl space-y-6">
+      <PageHeader
+        title={greeting}
+        description="Here's what's happening with Edge Property Services today."
+        action={
+          <Link href="/dashboard/quotes/new">
+            <Button>
+              <Plus className="w-4 h-4" /> New Quote
+            </Button>
+          </Link>
+        }
+      />
+      <StatsGrid stats={stats} />
+      <RecentQuotes quotes={recent} />
+    </div>
+  )
+}
