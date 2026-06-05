@@ -78,7 +78,16 @@ export default function CustomersPage() {
           </CardHeader>
           <CardBody>
             <CustomerForm
-              defaultValues={editing || undefined}
+              defaultValues={editing ? {
+                name: editing.name || '',
+                email: editing.email || '',
+                phone: editing.phone || '',
+                address: editing.address || '',
+                city: editing.city || '',
+                province: editing.province || '',
+                postal_code: editing.postal_code || '',
+                notes: editing.notes || '',
+              } : undefined}
               onSubmit={editing ? handleEdit : handleAdd}
               onCancel={() => { setShowForm(false); setEditing(null) }}
               isEdit={!!editing}
