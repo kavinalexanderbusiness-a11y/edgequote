@@ -9,7 +9,8 @@ import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
 import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
-import { useForm } from 'react-hook-form'
+import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
+import { useForm, Controller } from 'react-hook-form'
 import { Upload, Plus, Trash2, Check } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 
@@ -22,7 +23,7 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false)
   const [localTiers, setLocalTiers] = useState<Partial<TravelFeeTier>[]>([])
 
-  const { register, handleSubmit, reset, formState: { isSubmitting } } =
+  const { register, handleSubmit, reset, control, formState: { isSubmitting } } =
     useForm<BusinessSettingsFormValues>()
 
   useEffect(() => {
@@ -70,7 +71,7 @@ export default function SettingsPage() {
   async function onSubmit(values: BusinessSettingsFormValues) {
     const { data: { user } } = await supabase.auth.getUser()
     await supabase.from('business_settings')
-      .update({ ...values, default_rate: Number(values.default_rate) })
+      .update({ ...values, default_rate: Number(values.default_rate), base_lat: null, base_lng: null })
       .eq('user_id', user!.id)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
@@ -153,8 +154,16 @@ export default function SettingsPage() {
               <Input label="Business Email" type="email" {...register('email_secondary')} />
             </div>
             <Input label="Website" {...register('website')} />
-            <Input label="Base Location (address)" {...register('base_address')}
-              hint="Used to suggest travel fees. Google Maps distance coming later." />
+            <Controller name="base_address" control={control}
+              render={({ field }) => (
+                <AddressAutocomplete
+                  label="Base Location (address)"
+                  value={field.value || ''}
+                  onChange={field.onChange}
+                  onSelect={(p) => field.onChange(p.formatted)}
+                  hint="Your starting point for travel fees and route planning."
+                />
+              )} />
             <Input label="Default Labour Rate ($/man-hour)" type="number" step="5" min="50" {...register('default_rate')} />
             <Textarea label="PDF Terms & Conditions" rows={5} {...register('terms_text')} />
           </CardBody>

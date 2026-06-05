@@ -1,9 +1,10 @@
 'use client'
 
-import { useForm } from 'react-hook-form'
+import { useForm, Controller } from 'react-hook-form'
 import { Input } from '@/components/ui/Input'
 import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
+import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { CustomerFormValues } from '@/types'
 
 interface CustomerFormProps {
@@ -16,7 +17,7 @@ interface CustomerFormProps {
 const PROVINCES = ['AB','BC','MB','NB','NL','NS','NT','NU','ON','PE','QC','SK','YT']
 
 export function CustomerForm({ defaultValues, onSubmit, onCancel, isEdit }: CustomerFormProps) {
-  const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<CustomerFormValues>({
+  const { register, handleSubmit, control, setValue, formState: { errors, isSubmitting } } = useForm<CustomerFormValues>({
     defaultValues: {
       province: 'AB',
       ...defaultValues,
@@ -45,10 +46,23 @@ export function CustomerForm({ defaultValues, onSubmit, onCancel, isEdit }: Cust
           {...register('phone')}
         />
       </div>
-      <Input
-        label="Street Address"
-        placeholder="123 Main Street"
-        {...register('address')}
+      <Controller
+        name="address"
+        control={control}
+        render={({ field }) => (
+          <AddressAutocomplete
+            label="Street Address"
+            placeholder="123 Main Street"
+            value={field.value || ''}
+            onChange={field.onChange}
+            onSelect={(p) => {
+              field.onChange(p.address)
+              if (p.city) setValue('city', p.city)
+              if (p.province) setValue('province', p.province)
+              if (p.postal) setValue('postal_code', p.postal)
+            }}
+          />
+        )}
       />
       <div className="grid grid-cols-3 gap-4">
         <div className="col-span-2">

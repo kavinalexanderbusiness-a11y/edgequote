@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useForm, Controller } from 'react-hook-form'
 import { useRouter } from 'next/navigation'
 import { Input } from '@/components/ui/Input'
+import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { Select } from '@/components/ui/Select'
 import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
@@ -197,9 +198,18 @@ export function QuoteBuilder({
                   error={errors.customer_name?.message}
                   {...register('customer_name', { required: 'Customer name is required' })} />
               )}
-              <Input label="Service Address" placeholder="123 Main Street, Calgary, AB"
-                error={errors.address?.message}
-                {...register('address', { required: 'Address is required' })} />
+              <Controller name="address" control={control}
+                rules={{ required: 'Address is required' }}
+                render={({ field }) => (
+                  <AddressAutocomplete
+                    label="Service Address"
+                    placeholder="123 Main Street, Calgary, AB"
+                    value={field.value || ''}
+                    onChange={field.onChange}
+                    onSelect={(p) => field.onChange(p.formatted)}
+                    error={errors.address?.message}
+                  />
+                )} />
             </CardBody>
           </Card>
 
