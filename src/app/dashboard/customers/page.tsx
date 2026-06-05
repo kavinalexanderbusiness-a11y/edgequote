@@ -33,7 +33,32 @@ export default function CustomersPage() {
 
   async function handleAdd(values: CustomerFormValues) {
     const { data: { user } } = await supabase.auth.getUser()
-    await supabase.from('customers').insert({ ...values, user_id: user!.id })
+
+    // Insert customer
+    const { data: newCustomer, error } = await supabase
+      .from('customers')
+      .insert({ ...values, user_id: user!.id })
+      .select()
+      .single()
+
+    if (error || !newCustomer) {
+      console.error('Failed to create customer:', error)
+      return
+    }
+
+    // Auto-create a primary property from the customer's address
+    if (values.address) {
+      await supabase.from('properties').insert({
+        customer_id: newCustomer.id,
+        user_id: user!.id,
+        address: values.address,
+        city: values.city || null,
+        province: values.province || 'AB',
+        postal_code: values.postal_code || null,
+        is_primary: true,
+      })
+    }
+
     await fetchCustomers()
     setShowForm(false)
   }
@@ -41,6 +66,21 @@ export default function CustomersPage() {
   async function handleEdit(values: CustomerFormValues) {
     if (!editing) return
     await supabase.from('customers').update(values).eq('id', editing.id)
+
+    // If address changed, update the primary property address too
+    if (values.address) {
+      await supabase
+        .from('properties')
+        .update({
+          address: values.address,
+          city: values.city || null,
+          province: values.province || 'AB',
+          postal_code: values.postal_code || null,
+        })
+        .eq('customer_id', editing.id)
+        .eq('is_primary', true)
+    }
+
     await fetchCustomers()
     setEditing(null)
   }
@@ -62,7 +102,6 @@ export default function CustomersPage() {
         }
       />
 
-      {/* Add / Edit Form */}
       {(showForm || editing) && (
         <Card>
           <CardHeader className="flex items-center justify-between">

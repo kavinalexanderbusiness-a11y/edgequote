@@ -2,16 +2,17 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { LayoutDashboard, Users, FileText, Plus, Settings, LogOut, Zap, LayoutTemplate } from 'lucide-react'
+import { LayoutDashboard, Users, FileText, Plus, Settings, LogOut, Zap, LayoutTemplate, Home } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
 
 const nav = [
-  { label: 'Dashboard',  href: '/dashboard',           icon: LayoutDashboard },
-  { label: 'Customers',  href: '/dashboard/customers',  icon: Users },
-  { label: 'Quotes',     href: '/dashboard/quotes',     icon: FileText },
-  { label: 'New Quote',  href: '/dashboard/quotes/new', icon: Plus },
+  { label: 'Dashboard',  href: '/dashboard',              icon: LayoutDashboard },
+  { label: 'Customers',  href: '/dashboard/customers',    icon: Users },
+  { label: 'Properties', href: '/dashboard/properties',   icon: Home },
+  { label: 'Quotes',     href: '/dashboard/quotes',       icon: FileText },
+  { label: 'New Quote',  href: '/dashboard/quotes/new',   icon: Plus },
 ]
 
 export function Sidebar() {

@@ -17,6 +17,48 @@ export interface Customer {
   user_id: string
 }
 
+export interface Property {
+  id: string
+  created_at: string
+  updated_at: string
+  customer_id: string
+  user_id: string
+  address: string
+  city: string | null
+  province: string | null
+  postal_code: string | null
+  lat: number | null
+  lng: number | null
+  lot_size: number | null
+  lawn_sqft: number | null
+  fence_length: number | null
+  mulch_area: number | null
+  rock_area: number | null
+  driveway_area: number | null
+  notes: string | null
+  measurement_history: MeasurementSnapshot[]
+  is_primary: boolean
+  customers?: Pick<Customer, 'id' | 'name' | 'email' | 'phone'>
+}
+
+export interface MeasurementSnapshot {
+  date: string
+  lawn_sqft: number | null
+  fence_length: number | null
+  mulch_area: number | null
+  rock_area: number | null
+  driveway_area: number | null
+  notes: string | null
+}
+
+export interface PropertyFormValues {
+  address: string
+  city: string
+  province: string
+  postal_code: string
+  notes: string
+}
+
 export interface Quote {
   id: string
   created_at: string
@@ -44,6 +86,7 @@ export interface Quote {
   service_template_id: string | null
   overgrowth_multiplier: number
   issued_date: string | null
+  property_id: string | null
   user_id: string
   customers?: Pick<Customer, 'id' | 'name' | 'email' | 'phone'>
 }
