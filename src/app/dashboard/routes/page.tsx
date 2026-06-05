@@ -122,7 +122,6 @@ export default function RoutesPage() {
             lat = c.lat
             lng = c.lng
             geocodedCount++
-            // Save back to the property so we don't re-geocode next time
             if (prop?.id) {
               await supabase.from('properties').update({ lat: c.lat, lng: c.lng }).eq('id', prop.id)
             }
@@ -149,11 +148,26 @@ export default function RoutesPage() {
         return
       }
 
-      // 3) Nearest-neighbour ordering starting from base
+      // 3) Order: go to the FURTHEST stop from base first, then nearest-neighbour
+      //    back toward home (drive out far while fresh, end close to base).
       const remaining = [...located]
       const ordered: Stop[] = []
-      let current: Coord = baseCoord
       let total = 0
+
+      // First stop = furthest from base
+      let firstIdx = 0
+      let farDist = -Infinity
+      for (let i = 0; i < remaining.length; i++) {
+        const d = haversineKm(baseCoord, { lat: remaining[i].lat!, lng: remaining[i].lng! })
+        if (d > farDist) { farDist = d; firstIdx = i }
+      }
+      const first = remaining.splice(firstIdx, 1)[0]
+      first.legKm = Math.round(farDist * 10) / 10
+      total += farDist
+      ordered.push(first)
+      let current: Coord = { lat: first.lat!, lng: first.lng! }
+
+      // Remaining stops: nearest-neighbour from current position
       while (remaining.length > 0) {
         let bestIdx = 0
         let bestDist = Infinity
@@ -185,7 +199,7 @@ export default function RoutesPage() {
       setTotalKm(Math.round(total * 10) / 10)
       setMapsUrl(u.toString())
 
-      let info = `Optimized ${ordered.length} stop${ordered.length !== 1 ? 's' : ''}.`
+      let info = `Optimized ${ordered.length} stop${ordered.length !== 1 ? 's' : ''} (furthest first).`
       if (geocodedCount > 0) info += ` Located ${geocodedCount} new address${geocodedCount !== 1 ? 'es' : ''}.`
       if (missing.length > 0) info += ` ${missing.length} job(s) skipped (no locatable address).`
       setMsg(info)
