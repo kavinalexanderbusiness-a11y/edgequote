@@ -32,7 +32,7 @@ export function CustomerForm({ defaultValues, onSubmit, onCancel, isEdit }: Cust
         error={errors.name?.message}
         {...register('name', { required: 'Name is required' })}
       />
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <Input
           label="Email"
           type="email"
@@ -64,7 +64,7 @@ export function CustomerForm({ defaultValues, onSubmit, onCancel, isEdit }: Cust
           />
         )}
       />
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="col-span-2">
           <Input
             label="City"

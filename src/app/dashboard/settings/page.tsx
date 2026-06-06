@@ -145,11 +145,11 @@ export default function SettingsPage() {
           <CardHeader><h2 className="text-sm font-semibold text-ink">Company Information</h2></CardHeader>
           <CardBody className="space-y-4">
             <Input label="Company Name" {...register('company_name')} />
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input label="Owner Name" {...register('owner_name')} />
               <Input label="Phone" {...register('phone')} />
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input label="Primary Email" type="email" {...register('email_primary')} />
               <Input label="Business Email" type="email" {...register('email_secondary')} />
             </div>

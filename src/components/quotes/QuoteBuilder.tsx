@@ -226,7 +226,7 @@ export function QuoteBuilder({
               <Controller name="service_frequency" control={control}
                 render={({ field }) => (<Select label="Service Frequency" options={frequencyOptions} {...field} />)} />
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <Input label="Estimated Hours" type="number" step="0.5" min="0.5"
                   error={errors.hours?.message}
                   {...register('hours', { required: 'Required', min: { value: 0.5, message: 'Min 0.5' } })} />

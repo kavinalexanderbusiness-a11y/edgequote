@@ -98,7 +98,7 @@ export default function ServiceTemplatesPage() {
           <CardBody>
             <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
               <Input label="Service Name" {...register('name', { required: true })} />
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <Select label="Category" options={categoryOptions} {...register('category')} />
                 <Input label="Default Rate ($/man-hour)" type="number" step="5" min="50" {...register('default_rate', { required: true })} />
               </div>
