@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
@@ -38,13 +38,12 @@ export function TodayJobs() {
       setLoading(false)
     }
     load()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   return (
     <Card>
       <CardHeader className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-ink">Today&apos;s Jobs</h2>
+        <h2 className="text-sm font-semibold text-ink">Today's Jobs</h2>
         <Link href="/dashboard/routes" className="text-xs text-accent hover:text-accent-hover flex items-center gap-1">
           Plan route <Navigation className="w-3 h-3" />
         </Link>
@@ -58,9 +57,7 @@ export function TodayJobs() {
           <div className="divide-y divide-border">
             {jobs.map(j => {
               const address = j.properties?.address || null
-              const mapsUrl = address
-                ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`
-                : null
+              const mapsUrl = address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}` : null
               return (
                 <div key={j.id} className="flex items-center justify-between gap-3 px-5 py-3.5">
                   <div className="min-w-0">
@@ -76,22 +73,12 @@ export function TodayJobs() {
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     {j.customers?.phone && (
-                      
-                        href={`tel:${j.customers.phone}`}
-                        className="w-9 h-9 rounded-lg bg-accent/10 text-accent flex items-center justify-center hover:bg-accent/20 transition-colors"
-                        title={`Call ${j.customers.name}`}
-                      >
+                      <a href={`tel:${j.customers.phone}`} title={`Call ${j.customers.name}`} className="w-9 h-9 rounded-lg bg-accent/10 text-accent flex items-center justify-center hover:bg-accent/20 transition-colors">
                         <Phone className="w-4 h-4" />
                       </a>
                     )}
                     {mapsUrl && (
-                      
-                        href={mapsUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="w-9 h-9 rounded-lg bg-surface border border-border text-ink-muted flex items-center justify-center hover:text-ink transition-colors"
-                        title="Open in Maps"
-                      >
+                      <a href={mapsUrl} target="_blank" rel="noopener noreferrer" title="Open in Maps" className="w-9 h-9 rounded-lg bg-surface border border-border text-ink-muted flex items-center justify-center hover:text-ink transition-colors">
                         <MapPin className="w-4 h-4" />
                       </a>
                     )}
