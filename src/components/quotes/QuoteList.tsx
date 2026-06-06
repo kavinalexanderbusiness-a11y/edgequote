@@ -4,7 +4,7 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { Quote, QuoteStatus } from '@/types'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { StatusBadge } from '@/components/ui/Badge'
+import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Search, Trash2, ArrowRight } from 'lucide-react'
@@ -104,7 +104,7 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
                     <td className="px-5 py-3.5 font-medium text-ink">{q.customer_name}</td>
                     <td className="px-5 py-3.5 text-ink-muted hidden md:table-cell">{q.service_type}</td>
                     <td className="px-5 py-3.5 font-semibold text-ink">{formatCurrency(q.total)}</td>
-                    <td className="px-5 py-3.5"><StatusBadge status={q.status} /></td>
+                    import { QuoteStatusControl } from '@/components/quotes<td className="px-5 py-3.5"><QuoteStatusControl quoteId={q.id} status={q.status} /></td>/QuoteStatusControl'
                     <td className="px-5 py-3.5 text-ink-faint hidden lg:table-cell">{formatDate(q.created_at)}</td>
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-1 justify-end">

@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import { Quote } from '@/types'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { StatusBadge } from '@/components/ui/Badge'
+import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { ArrowRight } from 'lucide-react'
 
@@ -24,22 +24,17 @@ export function RecentQuotes({ quotes }: RecentQuotesProps) {
         ) : (
           <div className="divide-y divide-border">
             {quotes.map((q) => (
-              <Link
-                key={q.id}
-                href={`/dashboard/quotes/${q.id}`}
-                className="flex items-center justify-between px-6 py-4 hover:bg-surface-raised transition-colors group"
-              >
-                <div className="min-w-0">
+              <div key={q.id} className="flex items-center justify-between px-6 py-4 hover:bg-surface-raised transition-colors">
+                <Link href={`/dashboard/quotes/${q.id}`} className="min-w-0 flex-1">
                   <p className="text-sm font-medium text-ink truncate">{q.customer_name}</p>
                   <p className="text-xs text-ink-muted truncate mt-0.5">{q.quote_number} · {q.service_type}</p>
-                </div>
+                </Link>
                 <div className="flex items-center gap-4 shrink-0 ml-4">
                   <p className="text-sm font-semibold text-ink">{formatCurrency(q.total)}</p>
-                  <StatusBadge status={q.status} />
+                  <QuoteStatusControl quoteId={q.id} status={q.status} />
                   <span className="text-xs text-ink-faint hidden sm:block">{formatDate(q.created_at)}</span>
-                  <ArrowRight className="w-4 h-4 text-ink-faint opacity-0 group-hover:opacity-100 transition-opacity" />
                 </div>
-              </Link>
+              </div>
             ))}
           </div>
         )}
