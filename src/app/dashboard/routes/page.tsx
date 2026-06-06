@@ -122,6 +122,7 @@ export default function RoutesPage() {
             lat = c.lat
             lng = c.lng
             geocodedCount++
+            // Save back to the property so we don't re-geocode next time
             if (prop?.id) {
               await supabase.from('properties').update({ lat: c.lat, lng: c.lng }).eq('id', prop.id)
             }
@@ -148,58 +149,73 @@ export default function RoutesPage() {
         return
       }
 
-      // 3) Order: go to the FURTHEST stop from base first, then nearest-neighbour
-      //    back toward home (drive out far while fresh, end close to base).
-      const remaining = [...located]
-      const ordered: Stop[] = []
+      // 3) Order the stops. Prefer Google's real-road optimization;
+      //    fall back to a straight-line nearest-neighbour if that fails.
+      let ordered: Stop[] = []
       let total = 0
+      let usedGoogle = false
 
-      // First stop = furthest from base
-      let firstIdx = 0
-      let farDist = -Infinity
-      for (let i = 0; i < remaining.length; i++) {
-        const d = haversineKm(baseCoord, { lat: remaining[i].lat!, lng: remaining[i].lng! })
-        if (d > farDist) { farDist = d; firstIdx = i }
-      }
-      const first = remaining.splice(firstIdx, 1)[0]
-      first.legKm = Math.round(farDist * 10) / 10
-      total += farDist
-      ordered.push(first)
-      let current: Coord = { lat: first.lat!, lng: first.lng! }
-
-      // Remaining stops: nearest-neighbour from current position
-      while (remaining.length > 0) {
-        let bestIdx = 0
-        let bestDist = Infinity
-        for (let i = 0; i < remaining.length; i++) {
-          const d = haversineKm(current, { lat: remaining[i].lat!, lng: remaining[i].lng! })
-          if (d < bestDist) { bestDist = d; bestIdx = i }
+      try {
+        const res = await fetch('/api/route', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            base: baseCoord,
+            stops: located.map(s => ({ lat: s.lat, lng: s.lng })),
+          }),
+        })
+        const data = await res.json()
+        if (res.ok && Array.isArray(data.order)) {
+          ordered = data.order.map((idx: number, i: number) => ({
+            ...located[idx],
+            order: i + 1,
+            legKm: typeof data.legKm?.[i] === 'number' ? data.legKm[i] : null,
+          }))
+          total = typeof data.totalKm === 'number' ? data.totalKm : 0
+          usedGoogle = true
         }
-        const next = remaining.splice(bestIdx, 1)[0]
-        next.legKm = Math.round(bestDist * 10) / 10
-        total += bestDist
-        ordered.push(next)
-        current = { lat: next.lat!, lng: next.lng! }
+      } catch {
+        // ignore — fall back below
       }
-      ordered.forEach((s, i) => { s.order = i + 1 })
 
-      // 4) Build a Google Maps multi-stop directions URL
-      const originParam = `${baseCoord.lat},${baseCoord.lng}`
-      const stopCoords = ordered.map(s => `${s.lat},${s.lng}`)
-      const destinationParam = stopCoords[stopCoords.length - 1]
-      const waypoints = stopCoords.slice(0, -1).join('|')
+      if (!usedGoogle) {
+        // Fallback: nearest-neighbour from base (closest first)
+        const remaining = [...located]
+        let current: Coord = baseCoord
+        while (remaining.length > 0) {
+          let bestIdx = 0
+          let bestDist = Infinity
+          for (let i = 0; i < remaining.length; i++) {
+            const d = haversineKm(current, { lat: remaining[i].lat!, lng: remaining[i].lng! })
+            if (d < bestDist) { bestDist = d; bestIdx = i }
+          }
+          const next = remaining.splice(bestIdx, 1)[0]
+          next.legKm = Math.round(bestDist * 10) / 10
+          total += bestDist
+          ordered.push(next)
+          current = { lat: next.lat!, lng: next.lng! }
+        }
+        ordered.forEach((s, i) => { s.order = i + 1 })
+        total = Math.round(total * 10) / 10
+      }
+
+      // 4) Build a Google Maps multi-stop directions URL (round trip to base)
+      const baseParam = `${baseCoord.lat},${baseCoord.lng}`
+      const waypoints = ordered.map(s => `${s.lat},${s.lng}`).join('|')
       const u = new URL('https://www.google.com/maps/dir/')
       u.searchParams.set('api', '1')
-      u.searchParams.set('origin', originParam)
-      u.searchParams.set('destination', destinationParam)
+      u.searchParams.set('origin', baseParam)
+      u.searchParams.set('destination', baseParam)
       if (waypoints) u.searchParams.set('waypoints', waypoints)
       u.searchParams.set('travelmode', 'driving')
 
       setOrderedStops(ordered)
-      setTotalKm(Math.round(total * 10) / 10)
+      setTotalKm(total)
       setMapsUrl(u.toString())
 
-      let info = `Optimized ${ordered.length} stop${ordered.length !== 1 ? 's' : ''} (furthest first).`
+      let info = usedGoogle
+        ? `Optimized ${ordered.length} stop${ordered.length !== 1 ? 's' : ''} by driving distance (round trip).`
+        : `Ordered ${ordered.length} stop${ordered.length !== 1 ? 's' : ''} (estimate — enable Directions API for real roads).`
       if (geocodedCount > 0) info += ` Located ${geocodedCount} new address${geocodedCount !== 1 ? 'es' : ''}.`
       if (missing.length > 0) info += ` ${missing.length} job(s) skipped (no locatable address).`
       setMsg(info)
@@ -224,12 +240,12 @@ export default function RoutesPage() {
         }
       />
 
-      <div className="flex items-center gap-3">
-        <div className="w-48">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+        <div className="w-full sm:w-48">
           <Input label="Day" type="date" value={date} onChange={e => setDate(e.target.value)} />
         </div>
-        <div className="flex items-center gap-2 text-xs text-ink-muted mt-5">
-          <Home className="w-3.5 h-3.5" />
+        <div className="flex items-start gap-2 text-xs text-ink-muted sm:mt-5">
+          <Home className="w-3.5 h-3.5 shrink-0 mt-0.5" />
           {hasBase ? (
             <span>Base: {settings?.base_address || `${settings?.base_lat}, ${settings?.base_lng}`}</span>
           ) : (
@@ -275,16 +291,16 @@ export default function RoutesPage() {
         </Card>
       ) : (
         <Card>
-          <div className="px-6 py-4 border-b border-border flex items-center justify-between bg-gradient-to-r from-accent/5 to-transparent">
+          <div className="px-4 sm:px-6 py-4 border-b border-border flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-gradient-to-r from-accent/5 to-transparent">
             <div className="flex items-center gap-2">
               <RouteIcon className="w-4 h-4 text-accent" />
               <span className="text-sm font-semibold text-ink">
-                {orderedStops.length} stops · ~{totalKm} km total
+                {orderedStops.length} stops · ~{totalKm} km round trip
               </span>
             </div>
             {mapsUrl && (
               <a href={mapsUrl} target="_blank" rel="noopener noreferrer">
-                <Button size="sm">
+                <Button size="sm" className="w-full sm:w-auto">
                   <ExternalLink className="w-3.5 h-3.5" /> Open in Google Maps
                 </Button>
               </a>
