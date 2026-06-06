@@ -5,7 +5,7 @@ import { loadGoogleMaps } from '@/lib/googleMaps'
 import { createClient } from '@/lib/supabase/client'
 import { Property } from '@/types'
 import { Button } from '@/components/ui/Button'
-import { Undo2, Trash2, Check, Ruler } from 'lucide-react'
+import { Undo2, Trash2, Check, Ruler, Plus } from 'lucide-react'
 
 const M2_TO_SQFT = 10.7639
 const M_TO_FT = 3.28084
@@ -32,15 +32,20 @@ export function MeasureTool({ property }: { property: Property }) {
   const supabase = createClient()
   const mapEl = useRef<HTMLDivElement>(null)
   const gmap = useRef<any>(null)
-  const overlay = useRef<any>(null)
-  const path = useRef<any[]>([])
+  const committedOverlays = useRef<any[]>([])
+  const committedPaths = useRef<any[][]>([])
+  const currentOverlay = useRef<any>(null)
+  const currentPath = useRef<any[]>([])
+  const preview = useRef<any>(null)
   const activeRef = useRef<MeasureType>('lawn')
 
   const [ready, setReady] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [active, setActive] = useState<MeasureType>('lawn')
   const [measurement, setMeasurement] = useState(0)
+  const [shapes, setShapes] = useState(0)
   const [points, setPoints] = useState(0)
+  const [pricePerUnit, setPricePerUnit] = useState(0)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState<Record<string, number | null>>({
     lawn_sqft: property.lawn_sqft,
@@ -52,38 +57,58 @@ export function MeasureTool({ property }: { property: Property }) {
 
   const activeDef = TYPES.find(t => t.key === active)!
 
-  function recompute() {
+  function measureOf(p: any[], mode: 'area' | 'length'): number {
     const g = window.google
-    const def = TYPES.find(t => t.key === activeRef.current)!
-    const pts = path.current
-    setPoints(pts.length)
-    if (def.mode === 'area') {
-      if (pts.length >= 3) {
-        const area = g.maps.geometry.spherical.computeArea(pts)
-        setMeasurement(Math.round(area * M2_TO_SQFT))
-      } else setMeasurement(0)
-    } else {
-      if (pts.length >= 2) {
-        const len = g.maps.geometry.spherical.computeLength(pts)
-        setMeasurement(Math.round(len * M_TO_FT))
-      } else setMeasurement(0)
-    }
+    if (mode === 'area') return p.length >= 3 ? g.maps.geometry.spherical.computeArea(p) * M2_TO_SQFT : 0
+    return p.length >= 2 ? g.maps.geometry.spherical.computeLength(p) * M_TO_FT : 0
   }
 
-  function redraw() {
-    const g = window.google
-    if (overlay.current) { overlay.current.setMap(null); overlay.current = null }
+  function recompute() {
     const def = TYPES.find(t => t.key === activeRef.current)!
-    if (path.current.length === 0) return
+    let total = 0
+    for (const p of committedPaths.current) total += measureOf(p, def.mode)
+    total += measureOf(currentPath.current, def.mode)
+    setMeasurement(Math.round(total))
+    setPoints(currentPath.current.length)
+    setShapes(committedPaths.current.length)
+  }
+
+  function redrawCurrent() {
+    const g = window.google
+    if (currentOverlay.current) { currentOverlay.current.setMap(null); currentOverlay.current = null }
+    const def = TYPES.find(t => t.key === activeRef.current)!
+    if (currentPath.current.length === 0) return
     if (def.mode === 'area') {
-      overlay.current = new g.maps.Polygon({
-        paths: path.current, strokeColor: def.color, strokeWeight: 2,
+      currentOverlay.current = new g.maps.Polygon({
+        paths: currentPath.current, strokeColor: def.color, strokeWeight: 2,
         fillColor: def.color, fillOpacity: 0.3, map: gmap.current,
       })
     } else {
-      overlay.current = new g.maps.Polyline({
-        path: path.current, strokeColor: def.color, strokeWeight: 4, map: gmap.current,
+      currentOverlay.current = new g.maps.Polyline({
+        path: currentPath.current, strokeColor: def.color, strokeWeight: 4, map: gmap.current,
       })
+    }
+  }
+
+  function updatePreview(cursor: any) {
+    const g = window.google
+    const def = TYPES.find(t => t.key === activeRef.current)!
+    if (currentPath.current.length === 0 || !cursor) {
+      if (preview.current) { preview.current.setMap(null); preview.current = null }
+      return
+    }
+    const last = currentPath.current[currentPath.current.length - 1]
+    const pts = def.mode === 'area' && currentPath.current.length >= 2
+      ? [last, cursor, currentPath.current[0]]
+      : [last, cursor]
+    if (!preview.current) {
+      preview.current = new g.maps.Polyline({
+        path: pts, strokeColor: def.color, strokeOpacity: 0.7, strokeWeight: 2,
+        icons: [{ icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 3 }, offset: '0', repeat: '10px' }],
+        map: gmap.current,
+      })
+    } else {
+      preview.current.setPath(pts)
     }
   }
 
@@ -121,9 +146,10 @@ export function MeasureTool({ property }: { property: Property }) {
           streetViewControl: false, fullscreenControl: false, mapTypeControl: false,
         })
         gmap.current.addListener('click', (e: any) => {
-          path.current = [...path.current, e.latLng]
-          redraw(); recompute()
+          currentPath.current = [...currentPath.current, e.latLng]
+          redrawCurrent(); recompute()
         })
+        gmap.current.addListener('mousemove', (e: any) => updatePreview(e.latLng))
         setReady(true)
       } catch (e) {
         if (!cancelled) setLoadError(e instanceof Error ? e.message : 'Map failed to load')
@@ -137,19 +163,41 @@ export function MeasureTool({ property }: { property: Property }) {
   function selectType(t: MeasureType) {
     setActive(t)
     activeRef.current = t
-    clearDrawing()
+    setPricePerUnit(0)
+    clearAll()
   }
 
-  function clearDrawing() {
-    path.current = []
-    if (overlay.current) { overlay.current.setMap(null); overlay.current = null }
-    setMeasurement(0)
-    setPoints(0)
+  function clearAll() {
+    committedOverlays.current.forEach(o => o.setMap(null))
+    committedOverlays.current = []
+    committedPaths.current = []
+    if (currentOverlay.current) { currentOverlay.current.setMap(null); currentOverlay.current = null }
+    if (preview.current) { preview.current.setMap(null); preview.current = null }
+    currentPath.current = []
+    setMeasurement(0); setPoints(0); setShapes(0)
+  }
+
+  function addArea() {
+    const def = TYPES.find(t => t.key === activeRef.current)!
+    const min = def.mode === 'area' ? 3 : 2
+    if (currentPath.current.length < min) return
+    if (currentOverlay.current) { committedOverlays.current.push(currentOverlay.current); currentOverlay.current = null }
+    committedPaths.current.push(currentPath.current)
+    currentPath.current = []
+    if (preview.current) { preview.current.setMap(null); preview.current = null }
+    recompute()
   }
 
   function undo() {
-    path.current = path.current.slice(0, -1)
-    redraw(); recompute()
+    if (currentPath.current.length > 0) {
+      currentPath.current = currentPath.current.slice(0, -1)
+      redrawCurrent()
+    } else if (committedPaths.current.length > 0) {
+      const ov = committedOverlays.current.pop()
+      if (ov) ov.setMap(null)
+      committedPaths.current.pop()
+    }
+    recompute()
   }
 
   async function save() {
@@ -159,11 +207,14 @@ export function MeasureTool({ property }: { property: Property }) {
     await supabase.from('properties').update({ [def.column]: measurement }).eq('id', property.id)
     setSaved(prev => ({ ...prev, [def.column]: measurement }))
     setSaving(false)
-    clearDrawing()
+    clearAll()
   }
 
   const unit = activeDef.mode === 'area' ? 'sq ft' : 'ft'
-  const minPoints = activeDef.mode === 'area' ? 3 : 2
+  const priceLabel = activeDef.mode === 'area' ? '$ per 1,000 sq ft' : '$ per ft'
+  const estPrice = activeDef.mode === 'area'
+    ? (measurement / 1000) * pricePerUnit
+    : measurement * pricePerUnit
 
   if (loadError) {
     return (
@@ -176,6 +227,7 @@ export function MeasureTool({ property }: { property: Property }) {
 
   return (
     <div className="space-y-4">
+      {/* Type selector */}
       <div className="flex gap-2 overflow-x-auto pb-1">
         {TYPES.map(t => (
           <button
@@ -197,6 +249,7 @@ export function MeasureTool({ property }: { property: Property }) {
         ))}
       </div>
 
+      {/* Map */}
       <div className="relative rounded-card overflow-hidden border border-border">
         <div ref={mapEl} className="w-full h-[55vh] min-h-[320px] bg-bg-secondary" />
         {!ready && !loadError && (
@@ -206,21 +259,42 @@ export function MeasureTool({ property }: { property: Property }) {
         )}
       </div>
 
-      <div className="flex items-center justify-between flex-wrap gap-3 bg-bg-secondary border border-border rounded-xl px-4 py-3">
-        <div className="flex items-center gap-2">
-          <Ruler className="w-4 h-4 text-accent" />
-          <span className="text-sm text-ink-muted">
-            {activeDef.label} {activeDef.mode === 'area' ? 'area' : 'length'}:
-          </span>
-          <span className="text-lg font-bold text-ink">
-            {measurement > 0 ? `${measurement.toLocaleString()} ${unit}` : '—'}
-          </span>
+      {/* Readout + price */}
+      <div className="bg-bg-secondary border border-border rounded-xl px-4 py-3 space-y-3">
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <div className="flex items-center gap-2">
+            <Ruler className="w-4 h-4 text-accent" />
+            <span className="text-sm text-ink-muted">{activeDef.label} total:</span>
+            <span className="text-lg font-bold text-ink">
+              {measurement > 0 ? `${measurement.toLocaleString()} ${unit}` : '—'}
+            </span>
+            {shapes > 0 && (
+              <span className="text-xs text-ink-faint">({shapes} area{shapes !== 1 ? 's' : ''} + current)</span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              type="number" min="0" step="1" placeholder="0"
+              value={pricePerUnit || ''}
+              onChange={e => setPricePerUnit(Number(e.target.value) || 0)}
+              className="w-24 bg-bg-tertiary border border-border-strong rounded-lg px-2.5 py-2 text-base sm:text-sm text-ink outline-none focus:border-accent"
+            />
+            <span className="text-xs text-ink-muted">{priceLabel}</span>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="secondary" size="sm" onClick={undo} disabled={points === 0}>
+        {pricePerUnit > 0 && measurement > 0 && (
+          <p className="text-sm text-ink">
+            Suggested price: <span className="font-bold text-accent">${estPrice.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+          </p>
+        )}
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button variant="secondary" size="sm" onClick={addArea} disabled={points < (activeDef.mode === 'area' ? 3 : 2)}>
+            <Plus className="w-3.5 h-3.5" /> Add another area
+          </Button>
+          <Button variant="secondary" size="sm" onClick={undo} disabled={points === 0 && shapes === 0}>
             <Undo2 className="w-3.5 h-3.5" /> Undo
           </Button>
-          <Button variant="secondary" size="sm" onClick={clearDrawing} disabled={points === 0}>
+          <Button variant="secondary" size="sm" onClick={clearAll} disabled={points === 0 && shapes === 0}>
             <Trash2 className="w-3.5 h-3.5" /> Clear
           </Button>
           <Button size="sm" onClick={save} loading={saving} disabled={measurement <= 0}>
@@ -230,9 +304,8 @@ export function MeasureTool({ property }: { property: Property }) {
       </div>
 
       <p className="text-xs text-ink-faint">
-        Tap each corner of the {activeDef.label.toLowerCase()} on the map
-        {activeDef.mode === 'area' ? ' to trace its outline' : ' along the fence line'}.
-        You need at least {minPoints} points. The measurement updates as you go — tap Save when it looks right.
+        Tap each corner to trace the {activeDef.label.toLowerCase()}. For a separate front and back {activeDef.label.toLowerCase()},
+        trace one, tap <span className="text-ink font-medium">Add another area</span>, then trace the next — they add up. Tap Save when done.
       </p>
     </div>
   )
