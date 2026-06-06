@@ -12,7 +12,7 @@ import { Toggle } from '@/components/ui/Toggle'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import {
   QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings,
-  OVERGROWTH_LEVELS, SERVICE_FREQUENCIES,
+  SERVICE_FREQUENCIES,
 } from '@/types'
 import { calculateQuote, formatCurrency, suggestTravelFee } from '@/lib/utils'
 import { Users, Clock, DollarSign, Car, Calculator, Sprout, AlertTriangle, MapPin, Repeat } from 'lucide-react'
@@ -52,6 +52,7 @@ export function QuoteBuilder({
         crew_size: 1,
         rate: DEFAULT_RATE,
         travel_fee: 0,
+        flat_price: 0,
         custom_travel_required: false,
         show_travel_separately: false,
         notes: '',
@@ -67,6 +68,7 @@ export function QuoteBuilder({
   const crewSize = watch('crew_size') || 1
   const rate = watch('rate') || DEFAULT_RATE
   const travelFee = watch('travel_fee') || 0
+  const flatPrice = Number(watch('flat_price')) || 0
   const customerId = watch('customer_id')
   const templateId = watch('service_template_id')
   const overgrowth = Number(watch('overgrowth_multiplier')) || 1
@@ -77,11 +79,11 @@ export function QuoteBuilder({
   const customTravelRequired = watch('custom_travel_required')
 
   const isRecurring = frequency === 'initial_weekly' || frequency === 'initial_biweekly'
-  const isCustomOvergrowth = overgrowth === 0
-  const effectiveRate = isCustomOvergrowth ? Number(rate) : Number(rate) * overgrowth
+  const effectiveRate = Number(rate) * (overgrowth || 1)
   const { manHours, subtotal, total } = calculateQuote(
     Number(hours), Number(crewSize), effectiveRate, Number(travelFee)
   )
+  const effectiveTotal = flatPrice > 0 ? flatPrice : total
 
   useEffect(() => {
     if (!customerId || customerId === '__manual') return
@@ -171,10 +173,6 @@ export function QuoteBuilder({
     ...activeTemplates.map(t => ({ value: t.id, label: `${t.name} — ${formatCurrency(t.default_rate)}/hr` })),
   ]
   const frequencyOptions = SERVICE_FREQUENCIES.map(f => ({ value: f.value, label: f.label }))
-  const overgrowthOptions = OVERGROWTH_LEVELS.map((o) => ({
-    value: String(o.multiplier),
-    label: o.multiplier === 0 ? `${o.label} (custom quote)` : `${o.label} (${o.multiplier}×)`,
-  }))
   const statusOptions = [
     { value: 'draft', label: 'Draft' }, { value: 'sent', label: 'Sent' },
     { value: 'accepted', label: 'Accepted' }, { value: 'scheduled', label: 'Scheduled' },
@@ -235,22 +233,30 @@ export function QuoteBuilder({
                   {...register('crew_size', { required: 'Required', min: { value: 1, message: 'Min 1' } })} />
               </div>
 
-              <Controller name="overgrowth_multiplier" control={control}
-                render={({ field }) => (<Select label="Overgrowth Level (first visit)" options={overgrowthOptions} {...field} />)} />
-              {isCustomOvergrowth && (
-                <div className="flex items-start gap-2 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
-                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                  Over 2 feet requires a custom quote. Set the rate manually based on a site assessment.
-                </div>
-              )}
+              <Input label="Adjustment Multiplier" type="number" step="0.05" min="0"
+                hint="Multiplies the rate. e.g. 0.75 (easy/small), 1.0 (standard), 1.25 (overgrown), 2.25 (heavy). Any decimal works."
+                {...register('overgrowth_multiplier', { min: 0 })} />
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <Input label="Base Rate ($/man-hour)" type="number" step="5" min="0"
-                  hint="Overgrowth multiplies this. Set any rate you need."
+                  hint="The multiplier above adjusts this. Set any rate you need."
                   error={errors.rate?.message}
                   {...register('rate', { required: 'Required', min: { value: 0, message: 'Rate cannot be negative' } })} />
                 <Input label="Travel Fee ($)" type="number" step="5" min="0"
                   {...register('travel_fee', { min: 0 })} />
+              </div>
+
+              <div>
+                <Input label="Total Price Override ($) — optional"
+                  type="number" step="1" min="0"
+                  hint="Type a flat total to override the calculation (e.g. a price from the measure tool). Leave 0 to use the calculated total."
+                  {...register('flat_price', { min: 0 })} />
+                {flatPrice > 0 && (
+                  <div className="flex items-center gap-2 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 mt-2">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                    Manual Override Active — using ${flatPrice.toLocaleString()} instead of the calculated total.
+                  </div>
+                )}
               </div>
 
               {/* Recurring pricing */}
@@ -260,7 +266,7 @@ export function QuoteBuilder({
                     <Repeat className="w-3.5 h-3.5" /> Recurring Pricing
                   </div>
                   <p className="text-xs text-ink-faint">The first visit (with overgrowth) is the initial price. Set the cheaper recurring maintenance price below.</p>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <Input label="Initial Visit ($)" type="number" step="1" min="0"
                       hint="First visit — usually higher"
                       {...register('initial_price', { min: 0 })} />
@@ -282,7 +288,7 @@ export function QuoteBuilder({
                   </Button>
                 </div>
                 {calcMsg && <p className="text-xs text-accent">{calcMsg}</p>}
-                <div className="grid grid-cols-2 gap-4 items-end">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
                   <Input label="Distance (km)" type="number" step="1" min="0"
                     {...register('distance_km', { min: 0 })} />
                   {travelSuggestion && (
@@ -343,16 +349,16 @@ export function QuoteBuilder({
                 <span className="flex items-center gap-2 text-ink-muted"><Users className="w-3.5 h-3.5" /> Crew Size</span>
                 <span className="text-ink font-medium">{crewSize} worker{crewSize > 1 ? 's' : ''}</span>
               </div>
-              {overgrowth !== 1 && !isCustomOvergrowth && (
+              {overgrowth !== 1 && (
                 <div className="flex items-center justify-between text-sm">
-                  <span className="flex items-center gap-2 text-ink-muted"><Sprout className="w-3.5 h-3.5" /> Overgrowth</span>
+                  <span className="flex items-center gap-2 text-ink-muted"><Sprout className="w-3.5 h-3.5" /> Multiplier</span>
                   <span className="text-ink font-medium">{overgrowth}×</span>
                 </div>
               )}
               <div className="flex items-center justify-between text-sm">
                 <span className="flex items-center gap-2 text-ink-muted"><DollarSign className="w-3.5 h-3.5" /> Rate</span>
                 <span className="text-ink font-medium">
-                  {overgrowth !== 1 && !isCustomOvergrowth ? (
+                  {overgrowth !== 1 ? (
                     <><span className="text-ink-faint line-through mr-1">{formatCurrency(Number(rate))}</span>{formatCurrency(effectiveRate)}/hr</>
                   ) : (<>{formatCurrency(Number(rate))}/hr</>)}
                 </span>
@@ -382,7 +388,7 @@ export function QuoteBuilder({
                 ) : (
                   <div className="flex items-center justify-between">
                     <span className="text-sm font-semibold text-ink">Total</span>
-                    <span className="text-2xl font-bold text-accent">{formatCurrency(total)}</span>
+                    <span className="text-2xl font-bold text-accent">{formatCurrency(effectiveTotal)}</span>
                   </div>
                 )}
               </div>

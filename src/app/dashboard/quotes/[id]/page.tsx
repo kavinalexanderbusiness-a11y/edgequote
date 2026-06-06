@@ -81,6 +81,7 @@ export default function QuoteDetailPage() {
         crew_size: Number(values.crew_size),
         rate: finalRate,
         travel_fee: Number(values.travel_fee),
+        flat_price: Number(values.flat_price) > 0 ? Number(values.flat_price) : null,
         status: values.status,
       })
       .eq('id', id)
@@ -258,6 +259,7 @@ export default function QuoteDetailPage() {
           crew_size: quote.crew_size,
           rate: quote.rate,
           travel_fee: quote.travel_fee,
+          flat_price: quote.flat_price || 0,
           custom_travel_required: quote.custom_travel_required || false,
           show_travel_separately: quote.show_travel_separately || false,
           notes: quote.notes || '',
@@ -364,30 +366,42 @@ export default function QuoteDetailPage() {
             {quote.custom_travel_required && (
               <div className="flex items-center gap-2 text-xs text-amber-400 mb-1">Custom travel fee applied (beyond standard tiers)</div>
             )}
-            <div className="flex justify-between text-sm">
-              <span className="text-ink-muted">Labour ({quote.man_hours} hrs × {formatCurrency(quote.rate)})</span>
-              <span className="text-ink font-medium">{formatCurrency(quote.subtotal)}</span>
-            </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-ink-muted">Travel Fee {quote.show_travel_separately ? '(shown to customer)' : '(in total)'}</span>
-              <span className="text-ink font-medium">{formatCurrency(quote.travel_fee)}</span>
-            </div>
-            {isRecurring ? (
-              <div className="pt-2 border-t border-border space-y-2">
-                <div className="flex justify-between items-center">
-                  <span className="text-sm text-ink-muted">Initial Visit</span>
-                  <span className="text-xl font-bold text-ink">{formatCurrency(quote.initial_price || quote.total)}</span>
+            {quote.flat_price != null ? (
+              <div className="flex items-center justify-between pt-1">
+                <div>
+                  <span className="text-sm font-semibold text-ink">Total</span>
+                  <span className="ml-2 text-[10px] uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5">Manual price</span>
                 </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-sm text-ink-muted">{recurringLabel}</span>
-                  <span className="text-xl font-bold text-accent">{formatCurrency(quote.recurring_price || 0)}</span>
-                </div>
-              </div>
-            ) : (
-              <div className="flex justify-between items-center pt-2 border-t border-border">
-                <span className="text-sm font-semibold text-ink">Total</span>
                 <span className="text-3xl font-bold text-accent">{formatCurrency(quote.total)}</span>
               </div>
+            ) : (
+              <>
+                <div className="flex justify-between text-sm">
+                  <span className="text-ink-muted">Labour ({quote.man_hours} hrs × {formatCurrency(quote.rate)})</span>
+                  <span className="text-ink font-medium">{formatCurrency(quote.subtotal)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-ink-muted">Travel Fee {quote.show_travel_separately ? '(shown to customer)' : '(in total)'}</span>
+                  <span className="text-ink font-medium">{formatCurrency(quote.travel_fee)}</span>
+                </div>
+                {isRecurring ? (
+                  <div className="pt-2 border-t border-border space-y-2">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-ink-muted">Initial Visit</span>
+                      <span className="text-xl font-bold text-ink">{formatCurrency(quote.initial_price || quote.total)}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-ink-muted">{recurringLabel}</span>
+                      <span className="text-xl font-bold text-accent">{formatCurrency(quote.recurring_price || 0)}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex justify-between items-center pt-2 border-t border-border">
+                    <span className="text-sm font-semibold text-ink">Total</span>
+                    <span className="text-3xl font-bold text-accent">{formatCurrency(quote.total)}</span>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </CardBody>

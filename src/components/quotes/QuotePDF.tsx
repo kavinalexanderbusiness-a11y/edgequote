@@ -140,36 +140,53 @@ export function QuoteDocument({ quote, settings }: QuotePDFProps) {
             <Text style={[styles.th, styles.cellQty]}>Man-Hours</Text>
             <Text style={[styles.th, styles.cellAmt]}>Amount</Text>
           </View>
-          <View style={styles.tableRow}>
-            <View style={styles.cellDesc}>
-              <Text style={styles.td}>{quote.service_type}</Text>
-              <Text style={styles.muted}>{quote.hours} hrs × {quote.crew_size} crew @ {money(quote.rate)}/man-hour</Text>
-            </View>
-            <Text style={[styles.td, styles.cellQty]}>{quote.man_hours}</Text>
-            <Text style={[styles.td, styles.cellAmt]}>{money(quote.subtotal)}</Text>
-          </View>
-          {quote.travel_fee > 0 ? (
+          {quote.flat_price != null ? (
             <View style={styles.tableRow}>
               <View style={styles.cellDesc}>
-                <Text style={styles.td}>Travel Fee</Text>
-                <Text style={styles.muted}>Travel to job site</Text>
+                <Text style={styles.td}>{quote.service_type}</Text>
+                <Text style={styles.muted}>Flat-rate service</Text>
               </View>
               <Text style={[styles.td, styles.cellQty]}>—</Text>
-              <Text style={[styles.td, styles.cellAmt]}>{money(quote.travel_fee)}</Text>
+              <Text style={[styles.td, styles.cellAmt]}>{money(quote.total)}</Text>
             </View>
-          ) : null}
+          ) : (
+            <>
+              <View style={styles.tableRow}>
+                <View style={styles.cellDesc}>
+                  <Text style={styles.td}>{quote.service_type}</Text>
+                  <Text style={styles.muted}>{quote.hours} hrs × {quote.crew_size} crew @ {money(quote.rate)}/man-hour</Text>
+                </View>
+                <Text style={[styles.td, styles.cellQty]}>{quote.man_hours}</Text>
+                <Text style={[styles.td, styles.cellAmt]}>{money(quote.subtotal)}</Text>
+              </View>
+              {quote.travel_fee > 0 ? (
+                <View style={styles.tableRow}>
+                  <View style={styles.cellDesc}>
+                    <Text style={styles.td}>Travel Fee</Text>
+                    <Text style={styles.muted}>Travel to job site</Text>
+                  </View>
+                  <Text style={[styles.td, styles.cellQty]}>—</Text>
+                  <Text style={[styles.td, styles.cellAmt]}>{money(quote.travel_fee)}</Text>
+                </View>
+              ) : null}
+            </>
+          )}
         </View>
 
         {/* Totals */}
         <View style={styles.totals}>
-          <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Labour Subtotal</Text>
-            <Text style={styles.totalValue}>{money(quote.subtotal)}</Text>
-          </View>
-          <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Travel Fee</Text>
-            <Text style={styles.totalValue}>{money(quote.travel_fee)}</Text>
-          </View>
+          {quote.flat_price == null ? (
+            <>
+              <View style={styles.totalRow}>
+                <Text style={styles.totalLabel}>Labour Subtotal</Text>
+                <Text style={styles.totalValue}>{money(quote.subtotal)}</Text>
+              </View>
+              <View style={styles.totalRow}>
+                <Text style={styles.totalLabel}>Travel Fee</Text>
+                <Text style={styles.totalValue}>{money(quote.travel_fee)}</Text>
+              </View>
+            </>
+          ) : null}
           <View style={styles.grandRow}>
             <Text style={styles.grandLabel}>Total</Text>
             <Text style={styles.grandValue}>{money(quote.total)}</Text>

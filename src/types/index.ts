@@ -161,6 +161,7 @@ export interface Quote {
   man_hours: number
   subtotal: number
   total: number
+  flat_price: number | null
   service_frequency: 'one_time' | 'initial_weekly' | 'initial_biweekly'
   initial_price: number | null
   recurring_price: number | null
@@ -188,6 +189,7 @@ export interface QuoteFormValues {
   crew_size: number
   rate: number
   travel_fee: number
+  flat_price: number
   notes: string
   service_frequency: 'one_time' | 'initial_weekly' | 'initial_biweekly'
   initial_price: number
