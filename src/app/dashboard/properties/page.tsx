@@ -1,11 +1,13 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { Property } from '@/types'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
-import { MapPin, Home, User } from 'lucide-react'
+import { Button } from '@/components/ui/Button'
+import { MapPin, Home, User, Ruler } from 'lucide-react'
 
 export default function PropertiesPage() {
   const [properties, setProperties] = useState<Property[]>([])
@@ -46,12 +48,12 @@ export default function PropertiesPage() {
             <Card key={property.id}>
               <CardBody>
                 <div className="flex items-start justify-between gap-4">
-                  <div className="flex items-start gap-3">
+                  <div className="flex items-start gap-3 min-w-0">
                     <div className="w-9 h-9 rounded-lg bg-accent/10 flex items-center justify-center shrink-0 mt-0.5">
                       <Home className="w-4 h-4 text-accent" />
                     </div>
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
+                    <div className="space-y-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <p className="text-sm font-semibold text-ink">{property.address}</p>
                         {property.is_primary && (
                           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border uppercase tracking-wide bg-accent-dim text-accent border-accent/20">
@@ -71,16 +73,25 @@ export default function PropertiesPage() {
                           {property.customers.name}
                         </p>
                       )}
-                      {property.notes && (
-                        <p className="text-xs text-ink-faint mt-1">{property.notes}</p>
+                      {(property.lawn_sqft || property.fence_length) && (
+                        <p className="text-xs text-ink-faint">
+                          {property.lawn_sqft ? `Lawn ${property.lawn_sqft} ft²` : ''}
+                          {property.lawn_sqft && property.fence_length ? ' · ' : ''}
+                          {property.fence_length ? `Fence ${property.fence_length} ft` : ''}
+                        </p>
                       )}
                     </div>
                   </div>
-                  <div className="text-right shrink-0">
+                  <div className="flex flex-col items-end gap-2 shrink-0">
+                    <Link href={`/dashboard/properties/${property.id}/measure`}>
+                      <Button variant="secondary" size="sm">
+                        <Ruler className="w-3.5 h-3.5" /> Measure
+                      </Button>
+                    </Link>
                     {property.lat && property.lng ? (
-                      <p className="text-xs text-accent font-medium">📍 Geocoded</p>
+                      <p className="text-xs text-accent font-medium">📍 Located</p>
                     ) : (
-                      <p className="text-xs text-ink-faint">No coordinates yet</p>
+                      <p className="text-xs text-ink-faint">No coords yet</p>
                     )}
                   </div>
                 </div>
