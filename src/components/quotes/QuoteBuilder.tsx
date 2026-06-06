@@ -245,10 +245,10 @@ export function QuoteBuilder({
               )}
 
               <div className="grid grid-cols-2 gap-4">
-                <Input label="Base Rate ($/man-hour)" type="number" step="5" min="50"
-                  hint="Overgrowth multiplies this. Min $50."
+                <Input label="Base Rate ($/man-hour)" type="number" step="5" min="0"
+                  hint="Overgrowth multiplies this. Set any rate you need."
                   error={errors.rate?.message}
-                  {...register('rate', { required: 'Required', min: { value: 50, message: 'Minimum rate is $50/man-hour' } })} />
+                  {...register('rate', { required: 'Required', min: { value: 0, message: 'Rate cannot be negative' } })} />
                 <Input label="Travel Fee ($)" type="number" step="5" min="0"
                   {...register('travel_fee', { min: 0 })} />
               </div>

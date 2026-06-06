@@ -2,31 +2,58 @@
 
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { Invoice, InvoiceStatus, INVOICE_STATUS_LABELS, INVOICE_STATUS_COLORS } from '@/types'
+import { Invoice, InvoiceStatus, INVOICE_STATUS_LABELS, INVOICE_STATUS_COLORS, BusinessSettings } from '@/types'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
+import { Button } from '@/components/ui/Button'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { FileText, User, Check } from 'lucide-react'
+import { FileText, User, Check, FileDown } from 'lucide-react'
 
 const STATUS_CYCLE: InvoiceStatus[] = ['unpaid', 'sent', 'paid']
 
 export default function InvoicesPage() {
   const supabase = createClient()
   const [invoices, setInvoices] = useState<Invoice[]>([])
+  const [settings, setSettings] = useState<BusinessSettings | null>(null)
   const [loading, setLoading] = useState(true)
+  const [openingId, setOpeningId] = useState<string | null>(null)
 
   async function fetchInvoices() {
     const { data: { user } } = await supabase.auth.getUser()
-    const { data } = await supabase
-      .from('invoices')
-      .select('*, customers(id, name, email, phone)')
-      .eq('user_id', user!.id)
-      .order('created_at', { ascending: false })
-    setInvoices((data as Invoice[]) || [])
+    const [iRes, sRes] = await Promise.all([
+      supabase
+        .from('invoices')
+        .select('*, customers(id, name, email, phone)')
+        .eq('user_id', user!.id)
+        .order('created_at', { ascending: false }),
+      supabase.from('business_settings').select('*').eq('user_id', user!.id).maybeSingle(),
+    ])
+    setInvoices((iRes.data as Invoice[]) || [])
+    setSettings(sRes.data as BusinessSettings | null)
     setLoading(false)
   }
 
   useEffect(() => { fetchInvoices() }, [])
+
+  async function openInvoicePdf(inv: Invoice) {
+    setOpeningId(inv.id)
+    try {
+      const { renderInvoiceBlob } = await import('@/components/quotes/InvoicePDF')
+      const blob = await renderInvoiceBlob(inv, settings)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${inv.invoice_number}.pdf`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 10000)
+    } catch {
+      alert('Could not generate the invoice PDF. Please try again.')
+    } finally {
+      setOpeningId(null)
+    }
+  }
 
   async function cycleStatus(inv: Invoice) {
     const idx = STATUS_CYCLE.indexOf(inv.status)
@@ -95,6 +122,9 @@ export default function InvoicesPage() {
                   </div>
                   <div className="flex items-center gap-3 shrink-0">
                     <span className="text-lg font-bold text-ink">{formatCurrency(Number(inv.amount))}</span>
+                    <Button onClick={() => openInvoicePdf(inv)} variant="secondary" size="sm" loading={openingId === inv.id}>
+                      <FileDown className="w-3.5 h-3.5" /> PDF
+                    </Button>
                     <button
                       onClick={() => cycleStatus(inv)}
                       title="Click to change status"
