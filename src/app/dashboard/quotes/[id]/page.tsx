@@ -95,35 +95,29 @@ export default function QuoteDetailPage() {
     }
   }
 
-  async function handleOpenPdf() {
+ async function handleOpenPdf() {
     if (!quote) return
-    // Open the tab synchronously (inside the tap) so mobile Safari doesn't
-    // block it after the await. Redirect it once the PDF is ready.
-    const win = window.open('', '_blank')
     setPdfLoading(true)
     try {
       const { renderQuoteBlob } = await import('@/components/quotes/QuotePDF')
       const blob = await renderQuoteBlob(quote, settings)
       const url = URL.createObjectURL(blob)
-      if (win) {
-        win.location.href = url
-      } else {
-        // Pop-up was blocked — fall back to a direct download
-        const a = document.createElement('a')
-        a.href = url
-        a.download = `${quote.quote_number}.pdf`
-        document.body.appendChild(a)
-        a.click()
-        a.remove()
-      }
+      // Hand the file directly to the device. On desktop this downloads the
+      // PDF; on iOS it opens the PDF viewer / share sheet. Avoids the
+      // about:blank tab that mobile Safari leaves when opening a blob URL.
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${quote.quote_number}.pdf`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 10000)
     } catch {
-      if (win) win.close()
       alert('Could not generate the PDF. Please try again.')
     } finally {
       setPdfLoading(false)
     }
   }
-
   async function handleScheduleJob() {
     if (!quote) return
     setScheduling(true)
