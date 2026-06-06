@@ -17,7 +17,9 @@ export default function SchedulePage() {
   const [jobs, setJobs] = useState<Job[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
   const [loading, setLoading] = useState(true)
-  const [view, setView] = useState<CalendarView>('month')
+  const [view, setView] = useState<CalendarView>(() =>
+    typeof window !== 'undefined' && window.innerWidth < 1024 ? 'day' : 'month'
+  )
   const [cursor, setCursor] = useState(new Date())
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Job | null>(null)
@@ -126,8 +128,8 @@ export default function SchedulePage() {
       />
 
       {/* Controls */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-2 flex-wrap">
           <Button variant="secondary" size="sm" onClick={() => navigate(-1)}>
             <ChevronLeft className="w-4 h-4" />
           </Button>
