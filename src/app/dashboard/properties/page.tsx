@@ -83,7 +83,7 @@ export default function PropertiesPage() {
                     </div>
                   </div>
                   <div className="flex flex-col items-end gap-2 shrink-0">
-                    <Link href={`/dashboard/properties/${property.id}/measure`}>
+                    <Link href={`/dashboard/properties/measure?id=${property.id}`}>
                       <Button variant="secondary" size="sm">
                         <Ruler className="w-3.5 h-3.5" /> Measure
                       </Button>
