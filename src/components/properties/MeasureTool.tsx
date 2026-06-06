@@ -37,7 +37,7 @@ export function MeasureTool({ property }: { property: Property }) {
   const activeRef = useRef<MeasureType>('lawn')
 
   const [ready, setReady] = useState(false)
-  const [loadError, setLoadError] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [active, setActive] = useState<MeasureType>('lawn')
   const [measurement, setMeasurement] = useState(0)
   const [points, setPoints] = useState(0)
@@ -93,7 +93,7 @@ export function MeasureTool({ property }: { property: Property }) {
       try {
         await loadGoogleMaps()
         const g = window.google
-        await g.maps.importLibrary('maps')
+        const { Map } = await g.maps.importLibrary('maps')
         await g.maps.importLibrary('geometry')
         if (cancelled || !mapEl.current) return
 
@@ -116,7 +116,7 @@ export function MeasureTool({ property }: { property: Property }) {
         }
         if (!center) center = { lat: 51.0447, lng: -114.0719 }
 
-        gmap.current = new g.maps.Map(mapEl.current, {
+        gmap.current = new Map(mapEl.current, {
           center, zoom: 20, mapTypeId: 'satellite', tilt: 0,
           streetViewControl: false, fullscreenControl: false, mapTypeControl: false,
         })
@@ -125,8 +125,8 @@ export function MeasureTool({ property }: { property: Property }) {
           redraw(); recompute()
         })
         setReady(true)
-      } catch {
-        if (!cancelled) setLoadError(true)
+      } catch (e) {
+        if (!cancelled) setLoadError(e instanceof Error ? e.message : 'Map failed to load')
       }
     }
     init()
@@ -167,8 +167,9 @@ export function MeasureTool({ property }: { property: Property }) {
 
   if (loadError) {
     return (
-      <div className="text-sm text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-3">
-        Couldn&apos;t load the map. Make sure the Maps JavaScript API is enabled on your browser key.
+      <div className="text-sm text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-3 space-y-1">
+        <p>The map couldn&apos;t load. Error detail:</p>
+        <p className="font-mono text-xs text-amber-300 break-words">{loadError}</p>
       </div>
     )
   }
