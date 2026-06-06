@@ -10,7 +10,6 @@ import { StatusBadge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { openQuotePdf } from '@/components/quotes/QuotePDF'
 import { Edit2, ArrowLeft, FileDown, CalendarPlus, FileText } from 'lucide-react'
 
 export default function QuoteDetailPage() {
@@ -98,11 +97,28 @@ export default function QuoteDetailPage() {
 
   async function handleOpenPdf() {
     if (!quote) return
+    // Open the tab synchronously (inside the tap) so mobile Safari doesn't
+    // block it after the await. Redirect it once the PDF is ready.
+    const win = window.open('', '_blank')
     setPdfLoading(true)
     try {
-      await openQuotePdf(quote, settings)
+      const { renderQuoteBlob } = await import('@/components/quotes/QuotePDF')
+      const blob = await renderQuoteBlob(quote, settings)
+      const url = URL.createObjectURL(blob)
+      if (win) {
+        win.location.href = url
+      } else {
+        // Pop-up was blocked — fall back to a direct download
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `${quote.quote_number}.pdf`
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+      }
     } catch {
-      alert('Could not generate PDF. Please try again.')
+      if (win) win.close()
+      alert('Could not generate the PDF. Please try again.')
     } finally {
       setPdfLoading(false)
     }
@@ -144,6 +160,7 @@ export default function QuoteDetailPage() {
       if (error) {
         setScheduleMsg('Could not create job: ' + error.message)
       } else {
+        // Bump quote to scheduled if it was accepted
         if (quote.status === 'accepted') {
           await supabase.from('quotes').update({ status: 'scheduled' }).eq('id', quote.id)
           setQuote({ ...quote, status: 'scheduled' })
@@ -268,7 +285,7 @@ export default function QuoteDetailPage() {
           title={quote.quote_number}
           description={`Created ${formatDate(quote.created_at)}`}
           action={
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <StatusBadge status={quote.status} />
               {canSchedule && (
                 <Button onClick={handleScheduleJob} variant="secondary" size="sm" loading={scheduling}>

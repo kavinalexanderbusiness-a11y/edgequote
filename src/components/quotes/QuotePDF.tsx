@@ -202,9 +202,8 @@ export function QuoteDocument({ quote, settings }: QuotePDFProps) {
   )
 }
 
-// Generate the PDF and open it in a new browser tab
-export async function openQuotePdf(quote: Quote, settings: BusinessSettings | null) {
-  const blob = await pdf(<QuoteDocument quote={quote} settings={settings} />).toBlob()
-  const url = URL.createObjectURL(blob)
-  window.open(url, '_blank')
+// Render the quote to a PDF blob. Imported dynamically by the caller so the
+// heavy @react-pdf library only loads when the user actually opens a PDF.
+export async function renderQuoteBlob(quote: Quote, settings: BusinessSettings | null): Promise<Blob> {
+  return pdf(<QuoteDocument quote={quote} settings={settings} />).toBlob()
 }
