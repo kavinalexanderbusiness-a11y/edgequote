@@ -16,6 +16,7 @@ interface CalendarProps {
   jobs: Job[]
   onSelectDay: (date: Date) => void
   onSelectJob: (job: Job) => void
+  movingJobId?: string | null
 }
 
 function jobsOnDay(jobs: Job[], day: Date): Job[] {
@@ -24,13 +25,14 @@ function jobsOnDay(jobs: Job[], day: Date): Job[] {
     .sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''))
 }
 
-function JobChip({ job, onSelect }: { job: Job; onSelect: (j: Job) => void }) {
+function JobChip({ job, onSelect, isMoving }: { job: Job; onSelect: (j: Job) => void; isMoving?: boolean }) {
   return (
     <button
       onClick={(e) => { e.stopPropagation(); onSelect(job) }}
       className={cn(
         'w-full text-left px-1.5 py-0.5 rounded text-[11px] font-medium border truncate transition-opacity hover:opacity-80',
-        JOB_STATUS_COLORS[job.status]
+        JOB_STATUS_COLORS[job.status],
+        isMoving && 'ring-2 ring-accent ring-offset-1 ring-offset-bg opacity-60'
       )}
       title={job.title}
     >
@@ -39,7 +41,7 @@ function JobChip({ job, onSelect }: { job: Job; onSelect: (j: Job) => void }) {
   )
 }
 
-export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob }: CalendarProps) {
+export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, movingJobId }: CalendarProps) {
   const weekdayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
   const monthDays = useMemo(() => {
@@ -88,7 +90,7 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob }: Calen
                 </div>
                 <div className="space-y-0.5">
                   {dayJobs.slice(0, 3).map(job => (
-                    <JobChip key={job.id} job={job} onSelect={onSelectJob} />
+                    <JobChip key={job.id} job={job} onSelect={onSelectJob} isMoving={job.id === movingJobId} />
                   ))}
                   {dayJobs.length > 3 && (
                     <span className="text-[10px] text-ink-faint px-1">+{dayJobs.length - 3} more</span>
@@ -163,7 +165,8 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob }: Calen
               onClick={() => onSelectJob(job)}
               className={cn(
                 'w-full text-left px-3 py-2.5 rounded-xl border transition-opacity hover:opacity-80',
-                JOB_STATUS_COLORS[job.status]
+                JOB_STATUS_COLORS[job.status],
+                job.id === movingJobId && 'ring-2 ring-accent ring-offset-1 ring-offset-bg opacity-60'
               )}
             >
               <div className="flex items-center justify-between">

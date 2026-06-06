@@ -1,3 +1,4 @@
+import { TodayJobs } from '@/components/dashboard/TodayJobs'
 import { createClient } from '@/lib/supabase/server'
 import { StatsGrid } from '@/components/dashboard/StatsGrid'
 import { RecentQuotes } from '@/components/dashboard/RecentQuotes'

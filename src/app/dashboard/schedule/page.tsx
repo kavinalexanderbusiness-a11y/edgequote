@@ -24,6 +24,8 @@ export default function SchedulePage() {
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Job | null>(null)
   const [formDate, setFormDate] = useState<string>('')
+  const [moveMode, setMoveMode] = useState(false)
+  const [movingJob, setMovingJob] = useState<Job | null>(null)
 
   const fetchJobs = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
@@ -96,6 +98,31 @@ export default function SchedulePage() {
     setEditing(null)
   }
 
+  async function moveJobToDate(job: Job, date: Date) {
+    const newDate = format(date, 'yyyy-MM-dd')
+    if (newDate === job.scheduled_date) { setMovingJob(null); return }
+    setJobs(prev => prev.map(j => j.id === job.id ? { ...j, scheduled_date: newDate } : j))
+    setMovingJob(null)
+    await supabase.from('jobs').update({ scheduled_date: newDate }).eq('id', job.id)
+  }
+
+  function handleDayTap(day: Date) {
+    if (moveMode) {
+      if (movingJob) moveJobToDate(movingJob, day)
+      return
+    }
+    openNewJob(day)
+  }
+
+  function handleJobTap(job: Job) {
+    if (moveMode) {
+      setMovingJob(prev => prev?.id === job.id ? null : job)
+      return
+    }
+    setEditing(job)
+    setShowForm(false)
+  }
+
   function navigate(dir: 1 | -1) {
     if (view === 'month') setCursor(c => dir === 1 ? addMonths(c, 1) : subMonths(c, 1))
     else if (view === 'week') setCursor(c => dir === 1 ? addWeeks(c, 1) : subWeeks(c, 1))
@@ -153,6 +180,13 @@ export default function SchedulePage() {
             </button>
           ))}
         </div>
+        <Button
+          variant={moveMode ? 'primary' : 'secondary'}
+          size="sm"
+          onClick={() => { setMoveMode(m => !m); setMovingJob(null) }}
+        >
+          {moveMode ? 'Done Moving' : 'Move Jobs'}
+        </Button>
       </div>
 
       {/* Form */}
@@ -198,6 +232,14 @@ export default function SchedulePage() {
         </Card>
       )}
 
+      {moveMode && (
+        <div className="text-sm text-accent bg-accent/10 border border-accent/20 rounded-xl px-4 py-2.5">
+          {movingJob
+            ? <>Moving <span className="font-semibold">{movingJob.title}</span> — tap a day to drop it. (Tap the job again to cancel.)</>
+            : 'Move mode on — tap a job to pick it up, then tap the day to move it to.'}
+        </div>
+      )}
+
       {loading ? (
         <div className="text-center py-16 text-sm text-ink-muted">Loading schedule...</div>
       ) : (
@@ -205,8 +247,9 @@ export default function SchedulePage() {
           view={view}
           cursor={cursor}
           jobs={jobs}
-          onSelectDay={openNewJob}
-          onSelectJob={(job) => { setEditing(job); setShowForm(false) }}
+          onSelectDay={handleDayTap}
+          onSelectJob={handleJobTap}
+          movingJobId={movingJob?.id ?? null}
         />
       )}
     </div>

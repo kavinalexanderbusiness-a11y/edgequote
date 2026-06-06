@@ -42,7 +42,7 @@ export function CustomerList({ customers, onEdit, onDelete }: CustomerListProps)
           placeholder="Search customers..."
           value={search}
           onChange={e => setSearch(e.target.value)}
-          className="w-full bg-surface border border-border-strong rounded-xl pl-10 pr-4 py-2.5 text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
+          className="w-full bg-surface border border-border-strong rounded-xl pl-10 pr-4 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
         />
       </div>
 
@@ -64,14 +64,14 @@ export function CustomerList({ customers, onEdit, onDelete }: CustomerListProps)
                 <p className="text-sm font-semibold text-ink">{c.name}</p>
                 <div className="flex items-center gap-4 mt-1 flex-wrap">
                   {c.email && (
-                    <span className="flex items-center gap-1 text-xs text-ink-muted">
+                    <a href={`mailto:${c.email}`} className="flex items-center gap-1 text-xs text-ink-muted hover:text-ink hover:underline">
                       <Mail className="w-3 h-3" /> {c.email}
-                    </span>
+                    </a>
                   )}
                   {c.phone && (
-                    <span className="flex items-center gap-1 text-xs text-ink-muted">
+                    <a href={`tel:${c.phone}`} className="flex items-center gap-1 text-xs text-accent hover:underline">
                       <Phone className="w-3 h-3" /> {c.phone}
-                    </span>
+                    </a>
                   )}
                   {c.city && (
                     <span className="text-xs text-ink-faint">{c.city}, {c.province}</span>
