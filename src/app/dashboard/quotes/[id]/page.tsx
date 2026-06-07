@@ -6,11 +6,11 @@ import { createClient } from '@/lib/supabase/client'
 import { Quote, Customer, QuoteFormValues, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
 import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
 import { PageHeader } from '@/components/layout/PageHeader'
-import { StatusBadge } from '@/components/ui/Badge'
+import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Button } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { Edit2, ArrowLeft, FileDown, CalendarPlus, FileText } from 'lucide-react'
+import { Edit2, ArrowLeft, FileDown, CalendarPlus, FileText, Copy } from 'lucide-react'
 
 export default function QuoteDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -27,6 +27,9 @@ export default function QuoteDetailPage() {
   const [scheduleMsg, setScheduleMsg] = useState<string | null>(null)
   const [converting, setConverting] = useState(false)
   const [convertMsg, setConvertMsg] = useState<string | null>(null)
+  const [showSchedulePrompt, setShowSchedulePrompt] = useState(false)
+  const [duplicating, setDuplicating] = useState(false)
+
 
   const supabase = createClient()
 
@@ -282,7 +285,14 @@ export default function QuoteDetailPage() {
           description={`Created ${formatDate(quote.created_at)}`}
           action={
             <div className="flex flex-wrap items-center gap-2">
-              <StatusBadge status={quote.status} />
+              <QuoteStatusControl
+                quoteId={quote.id}
+                status={quote.status}
+                onChanged={(s) => {
+                  setQuote(prev => prev ? { ...prev, status: s } : prev)
+                  if (s === 'accepted') setShowSchedulePrompt(true)
+                }}
+              />
               {canSchedule && (
                 <Button onClick={handleScheduleJob} variant="secondary" size="sm" loading={scheduling}>
                   <CalendarPlus className="w-3.5 h-3.5" /> Schedule Job
@@ -303,6 +313,18 @@ export default function QuoteDetailPage() {
           }
         />
       </div>
+
+      {showSchedulePrompt && (
+        <div className="flex items-center justify-between flex-wrap gap-3 text-sm bg-accent/10 border border-accent/20 rounded-xl px-4 py-3">
+          <span className="text-ink font-medium">Quote accepted — schedule this job now?</span>
+          <div className="flex items-center gap-2">
+            <Button size="sm" onClick={async () => { setShowSchedulePrompt(false); await handleScheduleJob(); router.push('/dashboard/schedule') }}>
+              Yes, schedule
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setShowSchedulePrompt(false)}>Not now</Button>
+          </div>
+        </div>
+      )}
 
       {scheduleMsg && (
         <div className="text-sm text-accent bg-accent/10 border border-accent/20 rounded-xl px-4 py-2.5">
