@@ -7,6 +7,13 @@ import { X, Undo2, Trash2, Plus, Ruler } from 'lucide-react'
 
 const M2_TO_SQFT = 10.7639
 
+const TIERS = [
+  { key: 'budget', label: 'Budget', mult: 0.85 },
+  { key: 'market', label: 'Market', mult: 1.0 },
+  { key: 'recommended', label: 'Recommended', mult: 1.10 },
+  { key: 'premium', label: 'Premium', mult: 1.25 },
+]
+
 interface Props {
   address: string
   travelFee: number
@@ -149,8 +156,7 @@ export function QuoteMeasure({ address, travelFee, onApply, onClose }: Props) {
     setTotalSqft(0); setPoints(0); setShapes(0)
   }
 
-  const areaPrice = (totalSqft / 1000) * ratePer1000
-  const total = areaPrice + Number(travelFee || 0)
+  const marketPrice = (totalSqft / 1000) * ratePer1000
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center p-0 sm:p-4">
@@ -204,22 +210,45 @@ export function QuoteMeasure({ address, travelFee, onApply, onClose }: Props) {
                       onChange={e => setRatePer1000(Number(e.target.value) || 0)}
                       className="w-24 bg-bg border border-border-strong rounded-lg px-2.5 py-2 text-base sm:text-sm text-ink outline-none focus:border-accent"
                     />
-                    <span className="text-xs text-ink-muted">$ / 1,000 sq ft</span>
+                    <span className="text-xs text-ink-muted">$ / 1,000 sq ft (market)</span>
                   </div>
                 </div>
 
-                <div className="border-t border-border pt-3 space-y-1.5 text-sm">
-                  <div className="flex justify-between"><span className="text-ink-muted">Area price</span><span className="text-ink font-medium">${areaPrice.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span></div>
-                  <div className="flex justify-between"><span className="text-ink-muted">Travel fee</span><span className="text-ink font-medium">${Number(travelFee || 0).toLocaleString()}</span></div>
-                  <div className="flex justify-between pt-1.5 border-t border-border"><span className="font-semibold text-ink">Suggested total</span><span className="text-xl font-bold text-accent">${total.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span></div>
-                </div>
+                {ratePer1000 > 0 && totalSqft > 0 ? (
+                  <div className="border-t border-border pt-3">
+                    <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-2">Suggested prices (incl. ${Number(travelFee || 0).toLocaleString()} travel)</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      {TIERS.map(t => {
+                        const tierTotal = Math.round(marketPrice * t.mult + Number(travelFee || 0))
+                        return (
+                          <button
+                            key={t.key}
+                            type="button"
+                            onClick={() => onApply(tierTotal, totalSqft)}
+                            className={`text-left rounded-xl border px-3 py-2.5 transition-all hover:border-accent ${t.key === 'recommended' ? 'border-accent/40 bg-accent/5' : 'border-border'}`}
+                          >
+                            <p className="text-[11px] uppercase tracking-wide text-ink-faint">{t.label}</p>
+                            <p className="text-lg font-bold text-ink">${tierTotal.toLocaleString()}</p>
+                          </button>
+                        )
+                      })}
+                    </div>
+                    <p className="text-xs text-ink-faint mt-2">Tap a price to use it on the quote.</p>
+                  </div>
+                ) : (
+                  <div className="border-t border-border pt-3 text-xs text-ink-faint">
+                    Enter your $ / 1,000 sq ft rate to see suggested prices.
+                  </div>
+                )}
               </div>
 
               <div className="flex items-center justify-end gap-2">
                 <Button variant="ghost" onClick={onClose}>Cancel</Button>
-                <Button onClick={() => onApply(Math.round(total), totalSqft)} disabled={total <= 0}>
-                  Use this price
-                </Button>
+                {ratePer1000 > 0 && totalSqft > 0 && (
+                  <Button onClick={() => onApply(Math.round(marketPrice * 1.10 + Number(travelFee || 0)), totalSqft)}>
+                    Use recommended
+                  </Button>
+                )}
               </div>
 
               <p className="text-xs text-ink-faint">
