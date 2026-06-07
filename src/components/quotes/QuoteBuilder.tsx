@@ -5,6 +5,7 @@ import { useForm, Controller } from 'react-hook-form'
 import { useRouter } from 'next/navigation'
 import { Input } from '@/components/ui/Input'
 import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
+import { QuoteMeasure } from '@/components/quotes/QuoteMeasure'
 import { Select } from '@/components/ui/Select'
 import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
@@ -15,7 +16,7 @@ import {
   SERVICE_FREQUENCIES,
 } from '@/types'
 import { calculateQuote, formatCurrency, suggestTravelFee } from '@/lib/utils'
-import { Users, Clock, DollarSign, Car, Calculator, Sprout, AlertTriangle, MapPin, Repeat } from 'lucide-react'
+import { Users, Clock, DollarSign, Car, Calculator, Sprout, AlertTriangle, MapPin, Repeat, Ruler } from 'lucide-react'
 
 interface QuoteBuilderProps {
   customers: Customer[]
@@ -63,6 +64,8 @@ export function QuoteBuilder({
 
   const [calcLoading, setCalcLoading] = useState(false)
   const [calcMsg, setCalcMsg] = useState<string | null>(null)
+  const [showMeasure, setShowMeasure] = useState(false)
+  const [includeTravel, setIncludeTravel] = useState(true)
 
   const hours = watch('hours') || 0
   const crewSize = watch('crew_size') || 1
@@ -136,21 +139,24 @@ export function QuoteBuilder({
     }
   }
 
-  async function calculateDistance() {
+  async function calculateDistance(addr?: string) {
     setCalcMsg(null)
     const base = settings?.base_address
+    const dest = addr || address
     if (!base) { setCalcMsg('Set your base address in Settings first.'); return }
-    if (!address) { setCalcMsg('Enter a service address first.'); return }
+    if (!dest) { setCalcMsg('Enter a service address first.'); return }
     setCalcLoading(true)
     try {
       const res = await fetch('/api/distance', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ origin: base, destination: address }),
+        body: JSON.stringify({ origin: base, destination: dest }),
       })
       const data = await res.json()
       if (res.ok && typeof data.km === 'number') {
         setValue('distance_km', data.km)
+        const sugg = suggestTravelFee(data.km, tiers)
+        if (includeTravel && !sugg.isCustom && sugg.fee !== null) setValue('travel_fee', sugg.fee)
         setCalcMsg(`${data.km} km${data.durationText ? ` · ${data.durationText} drive` : ''}`)
       } else {
         setCalcMsg(data.error || 'Could not calculate distance.')
@@ -159,6 +165,16 @@ export function QuoteBuilder({
       setCalcMsg('Distance lookup failed.')
     } finally {
       setCalcLoading(false)
+    }
+  }
+
+  function toggleIncludeTravel(on: boolean) {
+    setIncludeTravel(on)
+    if (!on) {
+      setValue('travel_fee', 0)
+    } else if (distanceKm > 0) {
+      const s = suggestTravelFee(distanceKm, tiers)
+      if (!s.isCustom && s.fee !== null) setValue('travel_fee', s.fee)
     }
   }
 
@@ -204,10 +220,14 @@ export function QuoteBuilder({
                     placeholder="123 Main Street, Calgary, AB"
                     value={field.value || ''}
                     onChange={field.onChange}
-                    onSelect={(p) => field.onChange(p.formatted)}
+                    onSelect={(p) => { field.onChange(p.formatted); calculateDistance(p.formatted) }}
                     error={errors.address?.message}
                   />
                 )} />
+              <Button type="button" variant="secondary" size="sm"
+                onClick={() => { if (!address) { setCalcMsg('Enter an address first.'); return } setShowMeasure(true) }}>
+                <Ruler className="w-3.5 h-3.5" /> Measure & price from satellite
+              </Button>
             </CardBody>
           </Card>
 
@@ -225,9 +245,9 @@ export function QuoteBuilder({
                 render={({ field }) => (<Select label="Service Frequency" options={frequencyOptions} {...field} />)} />
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <Input label="Estimated Hours" type="number" step="0.5" min="0.5"
+                <Input label="Estimated Hours" type="number" step="0.25" min="0"
                   error={errors.hours?.message}
-                  {...register('hours', { required: 'Required', min: { value: 0.5, message: 'Min 0.5' } })} />
+                  {...register('hours', { required: 'Required', min: { value: 0.25, message: 'Min 0.25' } })} />
                 <Input label="Crew Size" type="number" min="1" max="20"
                   error={errors.crew_size?.message}
                   {...register('crew_size', { required: 'Required', min: { value: 1, message: 'Min 1' } })} />
@@ -283,7 +303,7 @@ export function QuoteBuilder({
                   <div className="flex items-center gap-2 text-xs font-semibold text-ink-muted uppercase tracking-wide">
                     <Car className="w-3.5 h-3.5" /> Travel Distance
                   </div>
-                  <Button type="button" variant="secondary" size="sm" onClick={calculateDistance} loading={calcLoading}>
+                  <Button type="button" variant="secondary" size="sm" onClick={() => calculateDistance()} loading={calcLoading}>
                     <MapPin className="w-3.5 h-3.5" /> Calculate Distance
                   </Button>
                 </div>
@@ -312,7 +332,9 @@ export function QuoteBuilder({
                     Apply suggested travel fee
                   </Button>
                 )}
-                <div className="pt-1">
+                <div className="pt-1 space-y-2">
+                  <Toggle checked={includeTravel} onChange={toggleIncludeTravel}
+                    label={includeTravel ? 'Charging travel fee' : 'Absorbing travel — no fee'} />
                   <Controller name="show_travel_separately" control={control}
                     render={({ field }) => (
                       <Toggle checked={field.value} onChange={field.onChange}
@@ -402,6 +424,15 @@ export function QuoteBuilder({
           </Card>
         </div>
       </div>
+
+      {showMeasure && (
+        <QuoteMeasure
+          address={address}
+          travelFee={Number(travelFee) || 0}
+          onClose={() => setShowMeasure(false)}
+          onApply={(price) => { setValue('flat_price', price); setShowMeasure(false) }}
+        />
+      )}
     </form>
   )
 }
