@@ -57,7 +57,7 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
             placeholder="Search quotes..."
             value={search}
             onChange={e => setSearch(e.target.value)}
-            className="w-full bg-surface border border-border-strong rounded-xl pl-10 pr-4 py-2.5 text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
+            className="w-full bg-surface border border-border-strong rounded-xl pl-10 pr-4 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
           />
         </div>
         <div className="flex items-center gap-1.5 flex-wrap">
@@ -104,7 +104,7 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
                     <td className="px-5 py-3.5 font-medium text-ink">{q.customer_name}</td>
                     <td className="px-5 py-3.5 text-ink-muted hidden md:table-cell">{q.service_type}</td>
                     <td className="px-5 py-3.5 font-semibold text-ink">{formatCurrency(q.total)}</td>
-                    import { QuoteStatusControl } from '@/components/quotes<td className="px-5 py-3.5"><QuoteStatusControl quoteId={q.id} status={q.status} /></td>/QuoteStatusControl'
+                    <td className="px-5 py-3.5"><QuoteStatusControl quoteId={q.id} status={q.status} /></td>
                     <td className="px-5 py-3.5 text-ink-faint hidden lg:table-cell">{formatDate(q.created_at)}</td>
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-1 justify-end">
