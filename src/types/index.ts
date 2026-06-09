@@ -279,6 +279,10 @@ export interface Quote {
 export interface QuoteFormValues {
   customer_id: string
   customer_name: string
+  // Optional contact captured when entering a brand-new person manually, so the
+  // save flow can create/match the customer (no duplicate) and store contact info.
+  customer_phone?: string
+  customer_email?: string
   address: string
   service_type: string
   service_template_id: string

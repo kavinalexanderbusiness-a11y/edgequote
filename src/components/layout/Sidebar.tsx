@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useState } from 'react'
-import { LayoutDashboard, Users, FileText, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Navigation, Receipt, Menu, X, HeartPulse, BarChart3, Gauge } from 'lucide-react'
+import { LayoutDashboard, Users, FileText, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Navigation, Receipt, Menu, X, HeartPulse, BarChart3, Gauge, ShieldCheck } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 
@@ -19,6 +19,7 @@ const navMain = [
 ]
 const navInsights = [
   { label: 'Profitability',    href: '/dashboard/profitability',   icon: BarChart3 },
+  { label: 'Data Quality',     href: '/dashboard/data-quality',    icon: ShieldCheck },
   { label: 'Pricing Recovery', href: '/dashboard/pricing-recovery', icon: Gauge },
   { label: 'Reactivation',     href: '/dashboard/reactivation',    icon: HeartPulse },
 ]

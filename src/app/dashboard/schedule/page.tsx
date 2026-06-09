@@ -190,6 +190,17 @@ export default function SchedulePage() {
     }
   }
 
+  // Editor modal: lock background scroll + close on Escape while it's open.
+  useEffect(() => {
+    if (!showForm && !editing) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeForm() }
+    document.addEventListener('keydown', onKey)
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.removeEventListener('keydown', onKey); document.body.style.overflow = prevOverflow }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showForm, editing])
+
   async function handleAdd(values: JobFormValues, recurrence: Recurrence, meta?: SuggestionMeta, opts?: { addAnother?: boolean }) {
     const { data: { user } } = await supabase.auth.getUser()
     const base = {
@@ -471,17 +482,23 @@ export default function SchedulePage() {
     setPendingAction({ type: 'edit', job: editing, values, recurrence })
   }
 
-  async function handleDelete() {
-    if (!editing) return
-    if (editing.recurrence_id) {
-      setPendingAction({ type: 'delete', job: editing })
+  // Shared delete — used by the form's trash button AND the Day panel's Delete
+  // button. One-time jobs delete in one tap (with Undo); recurring jobs open the
+  // Apple-style scope dialog (this / future / all), which routes to applyDelete.
+  async function deleteJob(job: Job) {
+    if (job.recurrence_id) {
+      setPendingAction({ type: 'delete', job })
       return
     }
-    const row = jobInsertRow(editing)
-    await supabase.from('jobs').delete().eq('id', editing.id)
+    const row = jobInsertRow(job)
+    await supabase.from('jobs').delete().eq('id', job.id)
     await fetchJobs()
-    setEditing(null)
+    setEditing(prev => (prev?.id === job.id ? null : prev))
     offerUndo('Job deleted', async () => { await supabase.from('jobs').insert(row) })
+  }
+
+  async function handleDelete() {
+    if (editing) await deleteJob(editing)
   }
 
   // One-tap "Done" from the calendar — marks ONLY this visit (no scope prompt),
@@ -672,9 +689,11 @@ export default function SchedulePage() {
         </div>
       </div>
 
-      {/* Form */}
+      {/* Edit/New job — modal overlay so Open always brings the correct job into view */}
       {(showForm || editing) && (
-        <Card>
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/60 backdrop-blur-sm" onClick={closeForm}>
+          <div className="min-h-full flex items-start justify-center p-4 sm:p-6">
+            <Card className="w-full max-w-2xl my-2 shadow-2xl" onClick={e => e.stopPropagation()}>
           <CardHeader className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-ink">{editing ? 'Edit Job' : 'New Job'}</h2>
             <div className="flex items-center gap-2">
@@ -725,7 +744,9 @@ export default function SchedulePage() {
               isEdit={!!editing}
             />
           </CardBody>
-        </Card>
+            </Card>
+          </div>
+        </div>
       )}
 
       {loading ? (
@@ -741,6 +762,7 @@ export default function SchedulePage() {
           onOpenJob={(job) => { setEditing(job); setShowForm(false) }}
           onMarkDone={markJobDone}
           onMove={(job, iso) => moveJobToDate(job, new Date(iso + 'T00:00:00'))}
+          onDeleteJob={deleteJob}
           onAddJob={() => openNewJob(cursor)}
           onQuickSave={quickSaveJob}
         />

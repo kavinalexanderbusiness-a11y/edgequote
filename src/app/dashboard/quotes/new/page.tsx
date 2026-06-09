@@ -7,6 +7,7 @@ import { Customer, QuoteFormValues, ServiceTemplate, TravelFeeTier, BusinessSett
 import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { applyOvergrowth, generateQuoteNumber } from '@/lib/utils'
+import { ensureCustomerAndProperty } from '@/lib/customers'
 
 interface MeasurementPayload {
   customerId: string | null
@@ -76,10 +77,22 @@ export default function NewQuotePage() {
       .eq('user_id', user!.id)
     const quote_number = generateQuoteNumber((count || 0) + 1)
 
+    // Every quote gets a real customer + property (create or match — no dupes, no orphans).
+    let customerId: string | null = values.customer_id && values.customer_id !== '__manual' ? values.customer_id : null
+    let propertyId: string | null = measurement?.propertyId ?? null
     let customerName = values.customer_name
-    if (values.customer_id && values.customer_id !== '__manual') {
-      const customer = customers.find(c => c.id === values.customer_id)
-      if (customer) customerName = customer.name
+    try {
+      const ensured = await ensureCustomerAndProperty(
+        supabase, user!.id,
+        { customerId: values.customer_id, name: values.customer_name, address: values.address, phone: values.customer_phone, email: values.customer_email },
+        customers,
+      )
+      customerId = ensured.customerId
+      customerName = ensured.customerName
+      propertyId = measurement?.propertyId ?? ensured.propertyId
+    } catch {
+      const c = customers.find(c => c.id === values.customer_id)
+      if (c) customerName = c.name
     }
 
     const mult = Number(values.overgrowth_multiplier) || 1
@@ -87,7 +100,7 @@ export default function NewQuotePage() {
 
     const { data, error } = await supabase.from('quotes').insert({
       quote_number,
-      customer_id: values.customer_id && values.customer_id !== '__manual' ? values.customer_id : null,
+      customer_id: customerId,
       customer_name: customerName,
       address: values.address,
       service_type: values.service_type,
@@ -115,7 +128,7 @@ export default function NewQuotePage() {
       other_sqft: measurement?.sections?.other ?? null,
       travel_distance_km: measurement?.travelDistanceKm ?? null,
       pricing_confidence: measurement?.confidence ?? null,
-      property_id: measurement?.propertyId ?? null,
+      property_id: propertyId,
       status: values.status,
       user_id: user!.id,
     }).select().single()

@@ -40,6 +40,8 @@ export function QuoteBuilder({
       defaultValues: {
         customer_id: defaultCustomerId || '',
         customer_name: '',
+        customer_phone: '',
+        customer_email: '',
         address: '',
         service_type: '',
         service_template_id: '',
@@ -216,9 +218,20 @@ export function QuoteBuilder({
               <Controller name="customer_id" control={control}
                 render={({ field }) => (<Select label="Customer" options={customerOptions} {...field} />)} />
               {showManualName && (
-                <Input label="Customer Name" placeholder="Full name"
-                  error={errors.customer_name?.message}
-                  {...register('customer_name', { required: 'Customer name is required' })} />
+                <div className="space-y-3 rounded-xl border border-accent/20 bg-accent/5 p-3">
+                  <p className="text-[11px] text-ink-muted flex items-center gap-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-accent" /> New person — we&apos;ll save them as a customer &amp; property automatically when you save.
+                  </p>
+                  <Input label="Customer Name" placeholder="Full name"
+                    error={errors.customer_name?.message}
+                    {...register('customer_name', { required: 'Customer name is required' })} />
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <Input label="Phone (optional)" type="tel" placeholder="(403) 555-0100"
+                      hint="Used to avoid duplicates" {...register('customer_phone')} />
+                    <Input label="Email (optional)" type="email" placeholder="jane@example.com"
+                      {...register('customer_email')} />
+                  </div>
+                </div>
               )}
 
               {/* Property */}

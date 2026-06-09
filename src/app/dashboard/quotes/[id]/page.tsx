@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
 import { formatCurrency, formatDate, applyOvergrowth, generateQuoteNumber } from '@/lib/utils'
 import { needsFollowUp, daysSince, logFollowUpPatch, markWonPatch } from '@/lib/followup'
+import { ensureCustomerAndProperty } from '@/lib/customers'
 import { Edit2, ArrowLeft, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Send } from 'lucide-react'
 
 function localToday(): string {
@@ -60,10 +61,24 @@ export default function QuoteDetailPage() {
   }, [id])
 
   async function handleUpdate(values: QuoteFormValues) {
+    const { data: { user } } = await supabase.auth.getUser()
+
+    // Keep the quote attached to a real customer + property (create or match).
+    let customerId: string | null = values.customer_id && values.customer_id !== '__manual' ? values.customer_id : null
+    let propertyId: string | null = quote?.property_id ?? null
     let customerName = values.customer_name
-    if (values.customer_id && values.customer_id !== '__manual') {
-      const customer = customers.find(c => c.id === values.customer_id)
-      if (customer) customerName = customer.name
+    try {
+      const ensured = await ensureCustomerAndProperty(
+        supabase, user!.id,
+        { customerId: values.customer_id, name: values.customer_name, address: values.address, phone: values.customer_phone, email: values.customer_email },
+        customers,
+      )
+      customerId = ensured.customerId
+      customerName = ensured.customerName
+      propertyId = ensured.propertyId ?? propertyId
+    } catch {
+      const c = customers.find(c => c.id === values.customer_id)
+      if (c) customerName = c.name
     }
 
     const mult = Number(values.overgrowth_multiplier) || 1
@@ -72,8 +87,9 @@ export default function QuoteDetailPage() {
     const { data, error } = await supabase
       .from('quotes')
       .update({
-        customer_id: values.customer_id && values.customer_id !== '__manual' ? values.customer_id : null,
+        customer_id: customerId,
         customer_name: customerName,
+        property_id: propertyId,
         address: values.address,
         service_type: values.service_type,
         service_template_id: values.service_template_id || null,

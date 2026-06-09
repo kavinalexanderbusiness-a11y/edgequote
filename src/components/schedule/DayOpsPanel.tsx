@@ -11,7 +11,7 @@ import { format } from 'date-fns'
 import { Button } from '@/components/ui/Button'
 import {
   DollarSign, Clock, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
-  MapPin, Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle,
+  MapPin, Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, Trash2,
 } from 'lucide-react'
 
 export interface QuoteLite {
@@ -33,6 +33,7 @@ interface Props {
   onOpenJob: (job: Job) => void
   onMarkDone: (job: Job) => void
   onMove: (job: Job, newDateISO: string) => void
+  onDeleteJob: (job: Job) => void
   onAddJob: () => void
   onQuickSave: (job: Job, patch: QuickPatch) => Promise<void>
 }
@@ -48,7 +49,7 @@ export interface QuickPatch {
 
 export function DayOpsPanel({
   date, dateLabel, jobs, quotesById, recurrences, baseCoord,
-  onOpenJob, onMarkDone, onMove, onAddJob, onQuickSave,
+  onOpenJob, onMarkDone, onMove, onDeleteJob, onAddJob, onQuickSave,
 }: Props) {
   const supabase = createClient()
   const [quickId, setQuickId] = useState<string | null>(null)
@@ -228,11 +229,20 @@ export function DayOpsPanel({
                           {job.recurrence_id && <Repeat className="w-3 h-3 shrink-0 opacity-70" />}
                           <span className={cn('truncate', done && 'line-through opacity-80')}>{job.customers?.name || job.title}</span>
                         </span>
-                        {value > 0
-                          ? <span className="text-sm font-bold shrink-0">{formatCurrency(value)}</span>
-                          : <button onClick={e => { e.stopPropagation(); openQuick(job) }} className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5 flex items-center gap-1 hover:bg-amber-500/20">
-                              <AlertTriangle className="w-3 h-3" /> Set price
-                            </button>}
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {value > 0
+                            ? <span className="text-sm font-bold">{formatCurrency(value)}</span>
+                            : <button onClick={e => { e.stopPropagation(); openQuick(job) }} className="text-[10px] font-semibold uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5 flex items-center gap-1 hover:bg-amber-500/20">
+                                <AlertTriangle className="w-3 h-3" /> Set price
+                              </button>}
+                          <button
+                            onClick={e => { e.stopPropagation(); onDeleteJob(job) }}
+                            title="Delete job" aria-label="Delete job"
+                            className="h-7 w-7 rounded-lg border border-red-500/30 bg-red-500/15 text-red-400 hover:bg-red-500/25 flex items-center justify-center active:scale-95 transition-transform"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
                       <div className="flex items-center gap-1.5 text-xs opacity-80 mt-0.5 flex-wrap">
                         {job.service_type && <span className="truncate">{job.service_type}</span>}
