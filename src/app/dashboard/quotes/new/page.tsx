@@ -56,7 +56,6 @@ export default function NewQuotePage() {
 
     const mult = Number(values.overgrowth_multiplier) || 1
     const finalRate = mult === 0 ? Number(values.rate) : Number(values.rate) * mult
-    const isRecurring = values.service_frequency !== 'one_time'
 
     const { data, error } = await supabase.from('quotes').insert({
       quote_number,
@@ -65,10 +64,10 @@ export default function NewQuotePage() {
       address: values.address,
       service_type: values.service_type,
       service_template_id: values.service_template_id || null,
-      service_frequency: values.service_frequency,
-      initial_price: isRecurring ? Number(values.initial_price) || null : null,
-      recurring_price: isRecurring ? Number(values.recurring_price) || null : null,
-      recurring_interval: values.recurring_interval || null,
+      initial_price: Number(values.initial_price) > 0 ? Number(values.initial_price) : null,
+      weekly_price: Number(values.weekly_price) > 0 ? Number(values.weekly_price) : null,
+      biweekly_price: Number(values.biweekly_price) > 0 ? Number(values.biweekly_price) : null,
+      monthly_price: Number(values.monthly_price) > 0 ? Number(values.monthly_price) : null,
       overgrowth_multiplier: mult,
       custom_travel_required: values.custom_travel_required,
       show_travel_separately: values.show_travel_separately,

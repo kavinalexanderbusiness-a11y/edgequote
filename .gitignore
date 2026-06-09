@@ -1,5 +1,6 @@
 .env.local
 .env
+.mcp.json
 node_modules/
 .next/
 out/

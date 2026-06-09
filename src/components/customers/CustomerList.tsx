@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { Customer } from '@/types'
 import { formatDate, getInitials } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
@@ -61,7 +62,7 @@ export function CustomerList({ customers, onEdit, onDelete }: CustomerListProps)
               </div>
               {/* Info */}
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-ink">{c.name}</p>
+                <Link href={`/dashboard/customers/${c.id}`} className="text-sm font-semibold text-ink hover:text-accent transition-colors">{c.name}</Link>
                 <div className="flex items-center gap-4 mt-1 flex-wrap">
                   {c.email && (
                     <a href={`mailto:${c.email}`} className="flex items-center gap-1 text-xs text-ink-muted hover:text-ink hover:underline">
@@ -75,6 +76,9 @@ export function CustomerList({ customers, onEdit, onDelete }: CustomerListProps)
                   )}
                   {c.city && (
                     <span className="text-xs text-ink-faint">{c.city}, {c.province}</span>
+                  )}
+                  {c.acquisition_source && (
+                    <span className="text-[10px] uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5">{c.acquisition_source}</span>
                   )}
                 </div>
               </div>

@@ -7,6 +7,7 @@ import {
 } from 'date-fns'
 import { Job, JOB_STATUS_COLORS } from '@/types'
 import { cn } from '@/lib/utils'
+import { Repeat } from 'lucide-react'
 
 export type CalendarView = 'month' | 'week' | 'day'
 
@@ -36,7 +37,10 @@ function JobChip({ job, onSelect, isMoving }: { job: Job; onSelect: (j: Job) => 
       )}
       title={job.title}
     >
-      {job.start_time ? job.start_time.slice(0, 5) + ' ' : ''}{job.title}
+      <span className="flex items-center gap-0.5">
+        {job.recurrence_id && <Repeat className="w-2.5 h-2.5 shrink-0 opacity-70" />}
+        <span className="truncate">{job.start_time ? job.start_time.slice(0, 5) + ' ' : ''}{job.title}</span>
+      </span>
     </button>
   )
 }
@@ -170,7 +174,10 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, movingJ
               )}
             >
               <div className="flex items-center justify-between">
-                <span className="text-sm font-semibold">{job.title}</span>
+                <span className="flex items-center gap-1.5 text-sm font-semibold">
+                  {job.recurrence_id && <Repeat className="w-3 h-3 shrink-0 opacity-70" />}
+                  {job.title}
+                </span>
                 {job.start_time && (
                   <span className="text-xs">{job.start_time.slice(0, 5)}{job.end_time ? `–${job.end_time.slice(0, 5)}` : ''}</span>
                 )}

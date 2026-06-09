@@ -10,7 +10,13 @@ import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Button } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { Edit2, ArrowLeft, FileDown, CalendarPlus, FileText, Copy } from 'lucide-react'
+import { needsFollowUp, daysSince, logFollowUpPatch, markWonPatch } from '@/lib/followup'
+import { Edit2, ArrowLeft, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X } from 'lucide-react'
+
+function localToday(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
 
 export default function QuoteDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -62,7 +68,6 @@ export default function QuoteDetailPage() {
 
     const mult = Number(values.overgrowth_multiplier) || 1
     const finalRate = mult === 0 ? Number(values.rate) : Number(values.rate) * mult
-    const isRecurring = values.service_frequency !== 'one_time'
 
     const { data, error } = await supabase
       .from('quotes')
@@ -72,10 +77,10 @@ export default function QuoteDetailPage() {
         address: values.address,
         service_type: values.service_type,
         service_template_id: values.service_template_id || null,
-        service_frequency: values.service_frequency,
-        initial_price: isRecurring ? Number(values.initial_price) || null : null,
-        recurring_price: isRecurring ? Number(values.recurring_price) || null : null,
-        recurring_interval: values.recurring_interval || null,
+        initial_price: Number(values.initial_price) > 0 ? Number(values.initial_price) : null,
+        weekly_price: Number(values.weekly_price) > 0 ? Number(values.weekly_price) : null,
+        biweekly_price: Number(values.biweekly_price) > 0 ? Number(values.biweekly_price) : null,
+        monthly_price: Number(values.monthly_price) > 0 ? Number(values.monthly_price) : null,
         overgrowth_multiplier: mult,
         custom_travel_required: values.custom_travel_required,
         show_travel_separately: values.show_travel_separately,
@@ -84,7 +89,6 @@ export default function QuoteDetailPage() {
         crew_size: Number(values.crew_size),
         rate: finalRate,
         travel_fee: Number(values.travel_fee),
-        flat_price: Number(values.flat_price) > 0 ? Number(values.flat_price) : null,
         status: values.status,
       })
       .eq('id', id)
@@ -122,7 +126,7 @@ export default function QuoteDetailPage() {
       setPdfLoading(false)
     }
   }
-  async function handleScheduleJob() {
+  async function handleScheduleJob(dateOverride?: string) {
     if (!quote) return
     setScheduling(true)
     setScheduleMsg(null)
@@ -148,7 +152,7 @@ export default function QuoteDetailPage() {
         quote_id: quote.id,
         title: `${quote.service_type} — ${quote.customer_name}`,
         service_type: quote.service_type,
-        scheduled_date: new Date().toISOString().slice(0, 10),
+        scheduled_date: dateOverride || localToday(),
         duration_minutes: Math.round(Number(quote.hours) * 60),
         crew_size: quote.crew_size,
         status: 'scheduled',
@@ -230,12 +234,81 @@ export default function QuoteDetailPage() {
     }
   }
 
+  async function handleDuplicate() {
+    if (!quote) return
+    setDuplicating(true)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      const { count } = await supabase
+        .from('quotes')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', user!.id)
+      const num = String((count || 0) + 1).padStart(4, '0')
+      const quote_number = `EPS-${new Date().getFullYear()}-${num}`
+
+      const { data, error } = await supabase.from('quotes').insert({
+        quote_number,
+        customer_id: quote.customer_id,
+        customer_name: quote.customer_name,
+        address: quote.address,
+        service_type: quote.service_type,
+        service_template_id: quote.service_template_id,
+        initial_price: quote.initial_price,
+        weekly_price: quote.weekly_price,
+        biweekly_price: quote.biweekly_price,
+        monthly_price: quote.monthly_price,
+        overgrowth_multiplier: quote.overgrowth_multiplier,
+        custom_travel_required: quote.custom_travel_required,
+        show_travel_separately: quote.show_travel_separately,
+        notes: quote.notes,
+        hours: quote.hours,
+        crew_size: quote.crew_size,
+        rate: quote.rate,
+        travel_fee: quote.travel_fee,
+        property_id: quote.property_id,
+        issued_date: new Date().toISOString().split('T')[0],
+        status: 'draft',
+        user_id: user!.id,
+      }).select().single()
+
+      if (!error && data) {
+        router.push(`/dashboard/quotes/${data.id}`)
+      } else if (error) {
+        alert('Could not duplicate quote: ' + error.message)
+        setDuplicating(false)
+      }
+    } catch {
+      alert('Could not duplicate quote. Please try again.')
+      setDuplicating(false)
+    }
+  }
+
+  async function logFollowUp() {
+    if (!quote) return
+    const patch = logFollowUpPatch(quote)
+    await supabase.from('quotes').update(patch).eq('id', quote.id)
+    setQuote({ ...quote, ...patch })
+  }
+
+  async function markWon() {
+    if (!quote) return
+    const patch = markWonPatch(quote.follow_up_count)
+    await supabase.from('quotes').update(patch).eq('id', quote.id)
+    setQuote({ ...quote, ...patch })
+    setShowSchedulePrompt(true)
+  }
+
+  async function markLost() {
+    if (!quote) return
+    await supabase.from('quotes').update({ status: 'declined' }).eq('id', quote.id)
+    setQuote({ ...quote, status: 'declined' })
+  }
+
   if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading...</div>
   if (!quote) return <div className="text-center py-16 text-sm text-red-400">Quote not found.</div>
 
-  const isRecurring = quote.service_frequency && quote.service_frequency !== 'one_time'
-  const recurringLabel = quote.service_frequency === 'initial_weekly' ? 'Weekly Maintenance' : 'Bi-Weekly Maintenance'
   const canSchedule = quote.status === 'accepted' || quote.status === 'scheduled'
+  const customerPhone = customers.find(c => c.id === quote.customer_id)?.phone || null
   const canInvoice = quote.status === 'accepted' || quote.status === 'scheduled' || quote.status === 'completed'
 
   if (editing) return (
@@ -252,17 +325,16 @@ export default function QuoteDetailPage() {
           address: quote.address,
           service_type: quote.service_type,
           service_template_id: quote.service_template_id || '',
-          service_frequency: quote.service_frequency || 'one_time',
           initial_price: quote.initial_price || 0,
-          recurring_price: quote.recurring_price || 0,
-          recurring_interval: quote.recurring_interval || '',
+          weekly_price: quote.weekly_price || 0,
+          biweekly_price: quote.biweekly_price || 0,
+          monthly_price: quote.monthly_price || 0,
           overgrowth_multiplier: 1,
           distance_km: 0,
           hours: quote.hours,
           crew_size: quote.crew_size,
           rate: quote.rate,
           travel_fee: quote.travel_fee,
-          flat_price: quote.flat_price || 0,
           custom_travel_required: quote.custom_travel_required || false,
           show_travel_separately: quote.show_travel_separately || false,
           notes: quote.notes || '',
@@ -294,7 +366,7 @@ export default function QuoteDetailPage() {
                 }}
               />
               {canSchedule && (
-                <Button onClick={handleScheduleJob} variant="secondary" size="sm" loading={scheduling}>
+                <Button onClick={() => handleScheduleJob()} variant="secondary" size="sm" loading={scheduling}>
                   <CalendarPlus className="w-3.5 h-3.5" /> Schedule Job
                 </Button>
               )}
@@ -309,6 +381,9 @@ export default function QuoteDetailPage() {
               <Button onClick={() => setEditing(true)} variant="secondary" size="sm">
                 <Edit2 className="w-3.5 h-3.5" /> Edit
               </Button>
+              <Button onClick={handleDuplicate} variant="secondary" size="sm" loading={duplicating}>
+                <Copy className="w-3.5 h-3.5" /> Duplicate
+              </Button>
             </div>
           }
         />
@@ -318,8 +393,8 @@ export default function QuoteDetailPage() {
         <div className="flex items-center justify-between flex-wrap gap-3 text-sm bg-accent/10 border border-accent/20 rounded-xl px-4 py-3">
           <span className="text-ink font-medium">Quote accepted — schedule this job now?</span>
           <div className="flex items-center gap-2">
-            <Button size="sm" onClick={async () => { setShowSchedulePrompt(false); await handleScheduleJob(); router.push('/dashboard/schedule') }}>
-              Yes, schedule
+            <Button size="sm" onClick={() => router.push(`/dashboard/schedule?quote=${quote.id}`)}>
+              Open scheduler
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setShowSchedulePrompt(false)}>Not now</Button>
           </div>
@@ -338,6 +413,68 @@ export default function QuoteDetailPage() {
         </div>
       )}
 
+      {quote.status === 'sent' && (
+        <Card className={needsFollowUp(quote) ? 'border-amber-500/40' : ''}>
+          <CardBody>
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center shrink-0">
+                <Bell className="w-5 h-5 text-amber-400" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="text-sm font-semibold text-ink">
+                    {quote.sent_at ? `Sent ${daysSince(quote.sent_at)} day${daysSince(quote.sent_at) !== 1 ? 's' : ''} ago` : 'Not yet marked as sent'}
+                  </p>
+                  {needsFollowUp(quote) && (
+                    <span className="text-[10px] uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5 font-semibold">Needs Follow-Up</span>
+                  )}
+                </div>
+                <p className="text-xs text-ink-muted mt-0.5">
+                  {quote.follow_up_count > 0 ? `${quote.follow_up_count} follow-up${quote.follow_up_count !== 1 ? 's' : ''} logged` : 'No follow-ups logged yet'}
+                  {quote.last_followed_up_at && <> · last {daysSince(quote.last_followed_up_at)}d ago</>}
+                </p>
+              </div>
+            </div>
+
+            {/* One-tap recovery actions — large targets for mobile */}
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mt-3">
+              <a
+                href={customerPhone ? `tel:${customerPhone}` : undefined}
+                aria-disabled={!customerPhone}
+                className={`h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border transition-colors ${customerPhone ? 'bg-accent/10 border-accent/20 text-accent hover:bg-accent/20' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}
+              >
+                <Phone className="w-4 h-4" /> Call
+              </a>
+              <a
+                href={customerPhone ? `sms:${customerPhone}` : undefined}
+                aria-disabled={!customerPhone}
+                className={`h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border transition-colors ${customerPhone ? 'bg-surface border-border text-ink hover:border-border-strong' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}
+              >
+                <MessageSquare className="w-4 h-4" /> Text
+              </a>
+              <button
+                onClick={logFollowUp}
+                className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border border-border bg-surface text-ink hover:border-border-strong transition-colors"
+              >
+                <RotateCw className="w-4 h-4" /> Followed up
+              </button>
+              <button
+                onClick={markWon}
+                className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border border-emerald-500/25 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+              >
+                <Check className="w-4 h-4" /> Won
+              </button>
+              <button
+                onClick={markLost}
+                className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border border-border bg-surface text-ink-muted hover:text-red-400 transition-colors col-span-2 sm:col-span-1"
+              >
+                <X className="w-4 h-4" /> Lost
+              </button>
+            </div>
+          </CardBody>
+        </Card>
+      )}
+
       <Card>
         <div className="p-6 border-b border-border bg-gradient-to-r from-accent/5 to-transparent">
           <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-1">Customer</p>
@@ -349,13 +486,6 @@ export default function QuoteDetailPage() {
             <div>
               <p className="text-xs text-ink-faint uppercase tracking-wide font-semibold mb-1">Service</p>
               <p className="text-ink font-medium">{quote.service_type}</p>
-            </div>
-            <div>
-              <p className="text-xs text-ink-faint uppercase tracking-wide font-semibold mb-1">Frequency</p>
-              <p className="text-ink font-medium">
-                {quote.service_frequency === 'one_time' ? 'One-Time' :
-                 quote.service_frequency === 'initial_weekly' ? 'Initial + Weekly' : 'Initial + Bi-Weekly'}
-              </p>
             </div>
             <div>
               <p className="text-xs text-ink-faint uppercase tracking-wide font-semibold mb-1">Hours</p>
@@ -388,43 +518,34 @@ export default function QuoteDetailPage() {
             {quote.custom_travel_required && (
               <div className="flex items-center gap-2 text-xs text-amber-400 mb-1">Custom travel fee applied (beyond standard tiers)</div>
             )}
-            {quote.flat_price != null ? (
-              <div className="flex items-center justify-between pt-1">
-                <div>
-                  <span className="text-sm font-semibold text-ink">Total</span>
-                  <span className="ml-2 text-[10px] uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5">Manual price</span>
-                </div>
-                <span className="text-3xl font-bold text-accent">{formatCurrency(quote.total)}</span>
+            <div className="flex justify-between text-sm">
+              <span className="text-ink-muted">Initial / first visit</span>
+              <span className="text-ink font-medium">{formatCurrency(quote.initial_price ?? quote.subtotal)}</span>
+            </div>
+            {quote.travel_fee > 0 && (
+              <div className="flex justify-between text-sm">
+                <span className="text-ink-muted">Travel Fee {quote.show_travel_separately ? '(shown to customer)' : '(in total)'}</span>
+                <span className="text-ink font-medium">{formatCurrency(quote.travel_fee)}</span>
               </div>
-            ) : (
-              <>
-                <div className="flex justify-between text-sm">
-                  <span className="text-ink-muted">Labour ({quote.man_hours} hrs × {formatCurrency(quote.rate)})</span>
-                  <span className="text-ink font-medium">{formatCurrency(quote.subtotal)}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-ink-muted">Travel Fee {quote.show_travel_separately ? '(shown to customer)' : '(in total)'}</span>
-                  <span className="text-ink font-medium">{formatCurrency(quote.travel_fee)}</span>
-                </div>
-                {isRecurring ? (
-                  <div className="pt-2 border-t border-border space-y-2">
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm text-ink-muted">Initial Visit</span>
-                      <span className="text-xl font-bold text-ink">{formatCurrency(quote.initial_price || quote.total)}</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-sm text-ink-muted">{recurringLabel}</span>
-                      <span className="text-xl font-bold text-accent">{formatCurrency(quote.recurring_price || 0)}</span>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex justify-between items-center pt-2 border-t border-border">
-                    <span className="text-sm font-semibold text-ink">Total</span>
-                    <span className="text-3xl font-bold text-accent">{formatCurrency(quote.total)}</span>
-                  </div>
-                )}
-              </>
             )}
+            <div className="flex justify-between items-center pt-2 border-t border-border">
+              <span className="text-sm font-semibold text-ink">First Invoice Total</span>
+              <span className="text-3xl font-bold text-accent">{formatCurrency(quote.total)}</span>
+            </div>
+            {(quote.weekly_price || quote.biweekly_price || quote.monthly_price) ? (
+              <div className="pt-3 border-t border-border space-y-1.5">
+                <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Ongoing maintenance options</p>
+                {quote.weekly_price ? (
+                  <div className="flex justify-between text-sm"><span className="text-ink-muted">Weekly</span><span className="text-ink font-medium">{formatCurrency(quote.weekly_price)}/visit</span></div>
+                ) : null}
+                {quote.biweekly_price ? (
+                  <div className="flex justify-between text-sm"><span className="text-ink-muted">Bi-Weekly</span><span className="text-ink font-medium">{formatCurrency(quote.biweekly_price)}/visit</span></div>
+                ) : null}
+                {quote.monthly_price ? (
+                  <div className="flex justify-between text-sm"><span className="text-ink-muted">Monthly</span><span className="text-ink font-medium">{formatCurrency(quote.monthly_price)}/visit</span></div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         </CardBody>
       </Card>

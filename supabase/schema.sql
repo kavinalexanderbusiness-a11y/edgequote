@@ -50,10 +50,17 @@ create table public.quotes (
   rate          numeric(8,2) not null default 50.00,
   travel_fee    numeric(8,2) not null default 0,
 
+  -- typed prices (source of truth). initial_price is the main/first-visit price;
+  -- weekly/biweekly/monthly are optional per-visit maintenance prices.
+  initial_price  numeric(10,2),
+  weekly_price   numeric(10,2),
+  biweekly_price numeric(10,2),
+  monthly_price  numeric(10,2),
+
   -- computed (also stored for history)
   man_hours     numeric(8,2) generated always as (hours * crew_size) stored,
   subtotal      numeric(10,2) generated always as (hours * crew_size * rate) stored,
-  total         numeric(10,2) generated always as (hours * crew_size * rate + travel_fee) stored,
+  total         numeric(10,2) generated always as (coalesce(initial_price, hours * crew_size * rate) + coalesce(travel_fee, 0)) stored,
 
   -- status
   status        text not null default 'draft'

@@ -4,10 +4,11 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { Quote, QuoteStatus } from '@/types'
 import { formatCurrency, formatDate } from '@/lib/utils'
+import { needsFollowUp } from '@/lib/followup'
 import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
-import { Search, Trash2, ArrowRight } from 'lucide-react'
+import { Search, Trash2, ArrowRight, Bell } from 'lucide-react'
 
 interface QuoteListProps {
   quotes: Quote[]
@@ -28,7 +29,10 @@ const STATUS_FILTERS: { value: '' | QuoteStatus; label: string }[] = [
 export function QuoteList({ quotes, onDelete }: QuoteListProps) {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'' | QuoteStatus>('')
+  const [followUpOnly, setFollowUpOnly] = useState(false)
   const [deleting, setDeleting] = useState<string | null>(null)
+
+  const followUpCount = quotes.filter(needsFollowUp).length
 
   const filtered = quotes.filter(q => {
     const matchSearch =
@@ -36,7 +40,8 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
       q.quote_number.toLowerCase().includes(search.toLowerCase()) ||
       q.service_type.toLowerCase().includes(search.toLowerCase())
     const matchStatus = statusFilter ? q.status === statusFilter : true
-    return matchSearch && matchStatus
+    const matchFollowUp = followUpOnly ? needsFollowUp(q) : true
+    return matchSearch && matchStatus && matchFollowUp
   })
 
   async function handleDelete(id: string) {
@@ -61,6 +66,18 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
           />
         </div>
         <div className="flex items-center gap-1.5 flex-wrap">
+          {followUpCount > 0 && (
+            <button
+              onClick={() => setFollowUpOnly(v => !v)}
+              className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                followUpOnly
+                  ? 'bg-amber-400 text-black'
+                  : 'bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20'
+              }`}
+            >
+              <Bell className="w-3 h-3" /> Follow up ({followUpCount})
+            </button>
+          )}
           {STATUS_FILTERS.map(f => (
             <button
               key={f.value}
@@ -100,11 +117,16 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
               <tbody className="divide-y divide-border">
                 {filtered.map(q => (
                   <tr key={q.id} className="hover:bg-surface-raised transition-colors group">
-                    <td className="px-5 py-3.5 font-mono text-xs text-ink-muted">{q.quote_number}</td>
+                    <td className="px-5 py-3.5 font-mono text-xs text-ink-muted">
+                      <span className="flex items-center gap-1.5">
+                        {needsFollowUp(q) && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" title="Needs follow-up" />}
+                        {q.quote_number}
+                      </span>
+                    </td>
                     <td className="px-5 py-3.5 font-medium text-ink">{q.customer_name}</td>
                     <td className="px-5 py-3.5 text-ink-muted hidden md:table-cell">{q.service_type}</td>
                     <td className="px-5 py-3.5 font-semibold text-ink">{formatCurrency(q.total)}</td>
-                    <td className="px-5 py-3.5"><QuoteStatusControl quoteId={q.id} status={q.status} /></td>
+                    <td className="px-5 py-3.5"><QuoteStatusControl quoteId={q.id} status={q.status} followUpCount={q.follow_up_count} /></td>
                     <td className="px-5 py-3.5 text-ink-faint hidden lg:table-cell">{formatDate(q.created_at)}</td>
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-1 justify-end">

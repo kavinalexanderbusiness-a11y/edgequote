@@ -2,6 +2,9 @@ import { TodayJobs } from '@/components/dashboard/TodayJobs'
 import { createClient } from '@/lib/supabase/server'
 import { StatsGrid } from '@/components/dashboard/StatsGrid'
 import { RecentQuotes } from '@/components/dashboard/RecentQuotes'
+import { UnscheduledAccepted } from '@/components/dashboard/UnscheduledAccepted'
+import { FollowUpQuotes } from '@/components/dashboard/FollowUpQuotes'
+import { AcquisitionInsights } from '@/components/dashboard/AcquisitionInsights'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { DashboardStats, Quote } from '@/types'
 import Link from 'next/link'
@@ -65,7 +68,13 @@ export default async function DashboardPage() {
         }
       />
       <StatsGrid stats={stats} />
-      <RecentQuotes quotes={recent} />
+      <FollowUpQuotes />
+      <UnscheduledAccepted />
+      <div className="grid lg:grid-cols-2 gap-6">
+        <TodayJobs />
+        <RecentQuotes quotes={recent} />
+      </div>
+      <AcquisitionInsights />
     </div>
   )
 }

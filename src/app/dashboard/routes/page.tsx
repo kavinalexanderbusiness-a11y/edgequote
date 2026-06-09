@@ -8,9 +8,8 @@ import { Button } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
 import { format } from 'date-fns'
+import { Coord, haversineKm, geocodeAddress } from '@/lib/geo'
 import { MapPin, Navigation, AlertTriangle, ExternalLink, Route as RouteIcon, Home } from 'lucide-react'
-
-interface Coord { lat: number; lng: number }
 
 interface Stop {
   jobId: string
@@ -21,17 +20,6 @@ interface Stop {
   lng: number | null
   order: number
   legKm: number | null
-}
-
-// Haversine straight-line distance in km
-function haversineKm(a: Coord, b: Coord): number {
-  const R = 6371
-  const dLat = (b.lat - a.lat) * Math.PI / 180
-  const dLng = (b.lng - a.lng) * Math.PI / 180
-  const lat1 = a.lat * Math.PI / 180
-  const lat2 = b.lat * Math.PI / 180
-  const h = Math.sin(dLat / 2) ** 2 + Math.sin(dLng / 2) ** 2 * Math.cos(lat1) * Math.cos(lat2)
-  return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h))
 }
 
 export default function RoutesPage() {
@@ -69,19 +57,6 @@ export default function RoutesPage() {
   }, [supabase, date])
 
   useEffect(() => { fetchData() }, [fetchData])
-
-  async function geocodeAddress(address: string): Promise<Coord | null> {
-    const res = await fetch('/api/geocode', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ address }),
-    })
-    const data = await res.json()
-    if (res.ok && typeof data.lat === 'number' && typeof data.lng === 'number') {
-      return { lat: data.lat, lng: data.lng }
-    }
-    return null
-  }
 
   async function optimize() {
     setWorking(true)

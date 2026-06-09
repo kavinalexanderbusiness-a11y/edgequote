@@ -10,10 +10,11 @@ const ALL: QuoteStatus[] = ['draft', 'sent', 'accepted', 'scheduled', 'completed
 interface Props {
   quoteId: string
   status: QuoteStatus
+  followUpCount?: number
   onChanged?: (s: QuoteStatus) => void
 }
 
-export function QuoteStatusControl({ quoteId, status, onChanged }: Props) {
+export function QuoteStatusControl({ quoteId, status, followUpCount, onChanged }: Props) {
   const supabase = createClient()
   const [current, setCurrent] = useState<QuoteStatus>(status)
   const [saving, setSaving] = useState(false)
@@ -22,7 +23,16 @@ export function QuoteStatusControl({ quoteId, status, onChanged }: Props) {
     const s = e.target.value as QuoteStatus
     setCurrent(s)
     setSaving(true)
-    await supabase.from('quotes').update({ status: s }).eq('id', quoteId)
+    const updates: Record<string, unknown> = { status: s }
+    if (s === 'accepted') {
+      updates.accepted_after_followup = (followUpCount ?? 0) > 0
+      updates.follow_up_count_at_acceptance = followUpCount ?? 0
+    }
+    await supabase.from('quotes').update(updates).eq('id', quoteId)
+    // Stamp the first send time only once (never overwrite the original).
+    if (s === 'sent') {
+      await supabase.from('quotes').update({ sent_at: new Date().toISOString() }).eq('id', quoteId).is('sent_at', null)
+    }
     setSaving(false)
     onChanged?.(s)
   }

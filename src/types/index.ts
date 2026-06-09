@@ -14,6 +14,8 @@ export interface Customer {
   postal_code: string | null
   notes: string | null
   tags: string[]
+  acquisition_source: string | null
+  referred_by_customer_id: string | null
   user_id: string
 }
 
@@ -61,6 +63,20 @@ export interface PropertyFormValues {
 
 export type JobStatus = 'scheduled' | 'in_progress' | 'completed' | 'cancelled'
 
+export type RecurFreq = 'weekly' | 'biweekly' | 'monthly'
+
+// One row per recurring series. Individual visits are real `jobs` rows that
+// share a recurrence_id, so per-visit status / invoicing / drag still work.
+export interface JobRecurrence {
+  id: string
+  created_at: string
+  user_id: string
+  freq: RecurFreq
+  start_date: string
+  end_date: string | null // null = open-ended ("never ends")
+  customer_id: string | null
+}
+
 export interface Job {
   id: string
   created_at: string
@@ -69,6 +85,7 @@ export interface Job {
   customer_id: string | null
   property_id: string | null
   quote_id: string | null
+  recurrence_id: string | null
   title: string
   service_type: string | null
   scheduled_date: string
@@ -78,8 +95,21 @@ export interface Job {
   crew_size: number
   status: JobStatus
   notes: string | null
+  // Best-day suggester telemetry: what was recommended vs. what was picked,
+  // so recommendation quality can be measured later.
+  suggested_date: string | null
+  suggested_nearby_count: number | null
   customers?: Pick<Customer, 'id' | 'name' | 'phone'>
   properties?: Pick<Property, 'id' | 'address' | 'lat' | 'lng'>
+}
+
+// Apple-style edit scope for recurring jobs.
+export type RecurrenceScope = 'this' | 'future' | 'all'
+
+export const RECUR_FREQ_LABELS: Record<RecurFreq, string> = {
+  weekly: 'Weekly',
+  biweekly: 'Every 2 weeks',
+  monthly: 'Monthly',
 }
 
 export interface JobFormValues {
@@ -161,14 +191,20 @@ export interface Quote {
   man_hours: number
   subtotal: number
   total: number
-  flat_price: number | null
-  service_frequency: 'one_time' | 'initial_weekly' | 'initial_biweekly'
   initial_price: number | null
-  recurring_price: number | null
-  recurring_interval: 'weekly' | 'bi_weekly' | null
+  weekly_price: number | null
+  biweekly_price: number | null
+  monthly_price: number | null
   custom_travel_required: boolean
   show_travel_separately: boolean
   status: QuoteStatus
+  // Follow-up / missed-quote recovery
+  sent_at: string | null
+  last_followed_up_at: string | null
+  follow_up_count: number
+  // Captured at acceptance so recovery impact can be measured later
+  accepted_after_followup: boolean
+  follow_up_count_at_acceptance: number | null
   service_template_id: string | null
   overgrowth_multiplier: number
   issued_date: string | null
@@ -189,12 +225,11 @@ export interface QuoteFormValues {
   crew_size: number
   rate: number
   travel_fee: number
-  flat_price: number
   notes: string
-  service_frequency: 'one_time' | 'initial_weekly' | 'initial_biweekly'
   initial_price: number
-  recurring_price: number
-  recurring_interval: 'weekly' | 'bi_weekly' | ''
+  weekly_price: number
+  biweekly_price: number
+  monthly_price: number
   custom_travel_required: boolean
   show_travel_separately: boolean
   status: QuoteStatus
@@ -209,7 +244,22 @@ export interface CustomerFormValues {
   province: string
   postal_code: string
   notes: string
+  acquisition_source: string
+  referred_by_customer_id: string
 }
+
+export const ACQUISITION_SOURCES = [
+  'Referral',
+  'Google',
+  'Facebook',
+  'Instagram',
+  'Nextdoor',
+  'Flyer / Mailout',
+  'Truck Signage',
+  'Repeat Customer',
+  'Door Knocking',
+  'Other',
+] as const
 
 export interface DashboardStats {
   totalQuotes: number
@@ -300,12 +350,6 @@ export const OVERGROWTH_LEVELS = [
   { label: '6–12 inches', multiplier: 1.5, description: 'Moderate overgrowth' },
   { label: '1–2 feet', multiplier: 2.0, description: 'Heavy overgrowth' },
   { label: 'Over 2 feet', multiplier: 0, description: 'Custom quote required' },
-] as const
-
-export const SERVICE_FREQUENCIES = [
-  { value: 'one_time', label: 'One-Time Service' },
-  { value: 'initial_weekly', label: 'Initial + Weekly Maintenance' },
-  { value: 'initial_biweekly', label: 'Initial + Bi-Weekly Maintenance' },
 ] as const
 
 export const SERVICE_TYPES = [

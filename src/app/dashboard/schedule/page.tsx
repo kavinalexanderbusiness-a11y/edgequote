@@ -1,10 +1,13 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Customer, Job, JobFormValues } from '@/types'
+import { Customer, Job, JobFormValues, Quote, RecurFreq, RecurrenceScope } from '@/types'
 import { Calendar, CalendarView } from '@/components/schedule/Calendar'
-import { JobForm, Recurrence } from '@/components/schedule/JobForm'
+import { JobForm, Recurrence, SuggestionMeta } from '@/components/schedule/JobForm'
+import { ScopeDialog } from '@/components/schedule/ScopeDialog'
+import { generateOccurrenceDates, jobsInScope, shiftDate, dayDelta } from '@/lib/recurrence'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
@@ -12,8 +15,23 @@ import { cn } from '@/lib/utils'
 import { format, addMonths, addWeeks, addDays, subMonths, subWeeks, subDays } from 'date-fns'
 import { Plus, X, ChevronLeft, ChevronRight, Trash2 } from 'lucide-react'
 
+function localToday(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+type PendingAction =
+  | { type: 'edit'; job: Job; values: JobFormValues }
+  | { type: 'move'; job: Job; newDate: string }
+  | { type: 'delete'; job: Job }
+
 export default function SchedulePage() {
   const supabase = createClient()
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const quoteId = searchParams.get('quote')
+  const customerParam = searchParams.get('customer')
+
   const [jobs, setJobs] = useState<Job[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
   const [loading, setLoading] = useState(true)
@@ -26,6 +44,13 @@ export default function SchedulePage() {
   const [formDate, setFormDate] = useState<string>('')
   const [moveMode, setMoveMode] = useState(false)
   const [movingJob, setMovingJob] = useState<Job | null>(null)
+  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null)
+
+  // When arriving from an accepted quote (?quote=…), open a prefilled new-job form.
+  const [quoteCtx, setQuoteCtx] = useState<Quote | null>(null)
+  const [quotePrefill, setQuotePrefill] = useState<Partial<JobFormValues> | null>(null)
+  // When arriving from a customer (?customer=…), open a new-job form for them.
+  const [customerPrefill, setCustomerPrefill] = useState<Partial<JobFormValues> | null>(null)
 
   const fetchJobs = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
@@ -44,10 +69,110 @@ export default function SchedulePage() {
 
   useEffect(() => { fetchJobs() }, [fetchJobs])
 
-  async function handleAdd(values: JobFormValues, recurrence: Recurrence) {
+  useEffect(() => {
+    if (!quoteId) return
+    let active = true
+    async function loadQuote() {
+      const { data: { user } } = await supabase.auth.getUser()
+      const { data: q } = await supabase.from('quotes').select('*').eq('id', quoteId).eq('user_id', user!.id).single()
+      if (!q || !active) return
+      let propertyId: string | null = q.property_id
+      if (!propertyId && q.customer_id) {
+        const { data: props } = await supabase
+          .from('properties').select('id').eq('customer_id', q.customer_id)
+          .order('is_primary', { ascending: false }).limit(1)
+        if (props && props.length > 0) propertyId = props[0].id
+      }
+      if (!active) return
+      setQuoteCtx(q as Quote)
+      setQuotePrefill({
+        customer_id: q.customer_id || '',
+        property_id: propertyId || '',
+        title: `${q.service_type} — ${q.customer_name}`,
+        service_type: q.service_type,
+        scheduled_date: localToday(),
+        duration_minutes: Math.round(Number(q.hours) * 60),
+        crew_size: q.crew_size,
+        status: 'scheduled',
+        notes: q.notes || '',
+      })
+      setEditing(null)
+      setShowForm(true)
+    }
+    loadQuote()
+    return () => { active = false }
+  }, [quoteId, supabase])
+
+  useEffect(() => {
+    if (!customerParam || quoteId) return
+    setEditing(null)
+    setQuotePrefill(null)
+    setCustomerPrefill({ customer_id: customerParam, scheduled_date: localToday() })
+    setShowForm(true)
+  }, [customerParam, quoteId])
+
+  function closeForm() {
+    setShowForm(false)
+    setEditing(null)
+    setFormDate('')
+    if (quoteCtx || customerPrefill) {
+      setQuoteCtx(null)
+      setQuotePrefill(null)
+      setCustomerPrefill(null)
+      router.replace('/dashboard/schedule')
+    }
+  }
+
+  async function handleAdd(values: JobFormValues, recurrence: Recurrence, meta?: SuggestionMeta) {
     const { data: { user } } = await supabase.auth.getUser()
     const base = {
       user_id: user!.id,
+      customer_id: values.customer_id || null,
+      property_id: values.property_id || null,
+      quote_id: quoteCtx?.id ?? null,
+      title: values.title,
+      service_type: values.service_type || null,
+      start_time: values.start_time || null,
+      end_time: values.end_time || null,
+      duration_minutes: values.duration_minutes ? Number(values.duration_minutes) : null,
+      crew_size: Number(values.crew_size) || 1,
+      status: values.status,
+      notes: values.notes || null,
+      suggested_date: meta?.suggestedDate ?? null,
+      suggested_nearby_count: meta?.suggestedNearby ?? null,
+    }
+
+    if (recurrence.repeat === 'none') {
+      await supabase.from('jobs').insert({ ...base, scheduled_date: values.scheduled_date, recurrence_id: null })
+    } else {
+      const freq = recurrence.repeat as RecurFreq
+      const { data: rec } = await supabase
+        .from('job_recurrences')
+        .insert({
+          user_id: user!.id,
+          freq,
+          start_date: values.scheduled_date,
+          end_date: recurrence.endDate,
+          customer_id: values.customer_id || null,
+        })
+        .select()
+        .single()
+      const dates = generateOccurrenceDates(values.scheduled_date, freq, recurrence.endDate)
+      const rows = dates.map(d => ({ ...base, scheduled_date: d, recurrence_id: rec?.id ?? null }))
+      await supabase.from('jobs').insert(rows)
+    }
+
+    if (quoteCtx && quoteCtx.status === 'accepted') {
+      await supabase.from('quotes').update({ status: 'scheduled' }).eq('id', quoteCtx.id)
+    }
+
+    await fetchJobs()
+    closeForm()
+  }
+
+  // Apply field edits (and a date shift for future/all) across a recurrence scope.
+  async function applyEdit(job: Job, values: JobFormValues, scope: RecurrenceScope) {
+    const fields = {
       customer_id: values.customer_id || null,
       property_id: values.property_id || null,
       title: values.title,
@@ -59,40 +184,50 @@ export default function SchedulePage() {
       status: values.status,
       notes: values.notes || null,
     }
-    const count = recurrence.repeat === 'none' ? 1 : Math.max(1, recurrence.occurrences)
-    const stepDays = recurrence.repeat === 'biweekly' ? 14 : 7
-    const startDate = new Date(values.scheduled_date + 'T00:00:00')
-    const rows = Array.from({ length: count }, (_, i) => ({
-      ...base,
-      scheduled_date: format(addDays(startDate, i * stepDays), 'yyyy-MM-dd'),
-    }))
-    await supabase.from('jobs').insert(rows)
-    await fetchJobs()
-    setShowForm(false)
-    setFormDate('')
-  }
-
-  async function handleEdit(values: JobFormValues) {
-    if (!editing) return
-    await supabase.from('jobs').update({
-      customer_id: values.customer_id || null,
-      property_id: values.property_id || null,
-      title: values.title,
-      service_type: values.service_type || null,
-      scheduled_date: values.scheduled_date,
-      start_time: values.start_time || null,
-      end_time: values.end_time || null,
-      duration_minutes: values.duration_minutes ? Number(values.duration_minutes) : null,
-      crew_size: Number(values.crew_size) || 1,
-      status: values.status,
-      notes: values.notes || null,
-    }).eq('id', editing.id)
+    const targets = jobsInScope(job, jobs, scope)
+    const delta = dayDelta(job.scheduled_date, values.scheduled_date)
+    await Promise.all(targets.map(t => supabase.from('jobs').update({
+      ...fields,
+      scheduled_date: scope === 'this' ? values.scheduled_date : shiftDate(t.scheduled_date, delta),
+    }).eq('id', t.id)))
     await fetchJobs()
     setEditing(null)
   }
 
+  async function applyMove(job: Job, newDate: string, scope: RecurrenceScope) {
+    const delta = dayDelta(job.scheduled_date, newDate)
+    const targets = jobsInScope(job, jobs, scope)
+    await Promise.all(targets.map(t =>
+      supabase.from('jobs').update({ scheduled_date: shiftDate(t.scheduled_date, delta) }).eq('id', t.id)
+    ))
+    await fetchJobs()
+  }
+
+  async function applyDelete(job: Job, scope: RecurrenceScope) {
+    const targets = jobsInScope(job, jobs, scope)
+    await supabase.from('jobs').delete().in('id', targets.map(t => t.id))
+    if (scope === 'all' && job.recurrence_id) {
+      await supabase.from('job_recurrences').delete().eq('id', job.recurrence_id)
+    }
+    await fetchJobs()
+    setEditing(null)
+  }
+
+  async function handleEdit(values: JobFormValues) {
+    if (!editing) return
+    if (editing.recurrence_id) {
+      setPendingAction({ type: 'edit', job: editing, values })
+      return
+    }
+    await applyEdit(editing, values, 'this')
+  }
+
   async function handleDelete() {
     if (!editing) return
+    if (editing.recurrence_id) {
+      setPendingAction({ type: 'delete', job: editing })
+      return
+    }
     await supabase.from('jobs').delete().eq('id', editing.id)
     await fetchJobs()
     setEditing(null)
@@ -101,9 +236,22 @@ export default function SchedulePage() {
   async function moveJobToDate(job: Job, date: Date) {
     const newDate = format(date, 'yyyy-MM-dd')
     if (newDate === job.scheduled_date) { setMovingJob(null); return }
-    setJobs(prev => prev.map(j => j.id === job.id ? { ...j, scheduled_date: newDate } : j))
     setMovingJob(null)
+    if (job.recurrence_id) {
+      setPendingAction({ type: 'move', job, newDate })
+      return
+    }
+    setJobs(prev => prev.map(j => j.id === job.id ? { ...j, scheduled_date: newDate } : j))
     await supabase.from('jobs').update({ scheduled_date: newDate }).eq('id', job.id)
+  }
+
+  async function handleScopeChoice(scope: RecurrenceScope) {
+    const action = pendingAction
+    setPendingAction(null)
+    if (!action) return
+    if (action.type === 'edit') await applyEdit(action.job, action.values, scope)
+    else if (action.type === 'move') await applyMove(action.job, action.newDate, scope)
+    else if (action.type === 'delete') await applyDelete(action.job, scope)
   }
 
   function handleDayTap(day: Date) {
@@ -142,6 +290,9 @@ export default function SchedulePage() {
 
   const viewButtons: CalendarView[] = ['month', 'week', 'day']
 
+  const pendingVerb = pendingAction?.type === 'delete' ? 'Delete'
+    : pendingAction?.type === 'move' ? 'Move' : 'Save changes to'
+
   return (
     <div className="max-w-5xl space-y-6">
       <PageHeader
@@ -153,6 +304,12 @@ export default function SchedulePage() {
           </Button>
         }
       />
+
+      {quoteCtx && (
+        <div className="text-sm text-accent bg-accent/10 border border-accent/20 rounded-xl px-4 py-2.5">
+          Scheduling from accepted quote <span className="font-semibold">{quoteCtx.quote_number}</span> — pick a date and set recurrence below.
+        </div>
+      )}
 
       {/* Controls */}
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -200,10 +357,7 @@ export default function SchedulePage() {
                   <Trash2 className="w-4 h-4" />
                 </button>
               )}
-              <button
-                onClick={() => { setShowForm(false); setEditing(null); setFormDate('') }}
-                className="text-ink-faint hover:text-ink transition-colors"
-              >
+              <button onClick={closeForm} className="text-ink-faint hover:text-ink transition-colors">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -211,6 +365,7 @@ export default function SchedulePage() {
           <CardBody>
             <JobForm
               customers={customers}
+              excludeJobId={editing?.id}
               defaultValues={editing ? {
                 customer_id: editing.customer_id || '',
                 property_id: editing.property_id || '',
@@ -223,9 +378,9 @@ export default function SchedulePage() {
                 crew_size: editing.crew_size,
                 status: editing.status,
                 notes: editing.notes || '',
-              } : { scheduled_date: formDate }}
+              } : (quotePrefill ?? customerPrefill ?? { scheduled_date: formDate })}
               onSubmit={editing ? handleEdit : handleAdd}
-              onCancel={() => { setShowForm(false); setEditing(null); setFormDate('') }}
+              onCancel={closeForm}
               isEdit={!!editing}
             />
           </CardBody>
@@ -250,6 +405,16 @@ export default function SchedulePage() {
           onSelectDay={handleDayTap}
           onSelectJob={handleJobTap}
           movingJobId={movingJob?.id ?? null}
+        />
+      )}
+
+      {pendingAction && (
+        <ScopeDialog
+          title={pendingAction.job.title}
+          verb={pendingVerb}
+          destructive={pendingAction.type === 'delete'}
+          onChoose={handleScopeChoice}
+          onCancel={() => setPendingAction(null)}
         />
       )}
     </div>

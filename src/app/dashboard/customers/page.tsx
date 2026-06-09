@@ -31,13 +31,21 @@ export default function CustomersPage() {
 
   useEffect(() => { fetchCustomers() }, [])
 
+  function normalize(values: CustomerFormValues) {
+    return {
+      ...values,
+      acquisition_source: values.acquisition_source || null,
+      referred_by_customer_id: values.referred_by_customer_id || null,
+    }
+  }
+
   async function handleAdd(values: CustomerFormValues) {
     const { data: { user } } = await supabase.auth.getUser()
 
     // Insert customer
     const { data: newCustomer, error } = await supabase
       .from('customers')
-      .insert({ ...values, user_id: user!.id })
+      .insert({ ...normalize(values), user_id: user!.id })
       .select()
       .single()
 
@@ -65,7 +73,7 @@ export default function CustomersPage() {
 
   async function handleEdit(values: CustomerFormValues) {
     if (!editing) return
-    await supabase.from('customers').update(values).eq('id', editing.id)
+    await supabase.from('customers').update(normalize(values)).eq('id', editing.id)
 
     // If address changed, update the primary property address too
     if (values.address) {
@@ -117,6 +125,7 @@ export default function CustomersPage() {
           </CardHeader>
           <CardBody>
             <CustomerForm
+              customers={editing ? customers.filter(c => c.id !== editing.id) : customers}
               defaultValues={editing ? {
                 name: editing.name || '',
                 email: editing.email || '',
@@ -126,6 +135,8 @@ export default function CustomersPage() {
                 province: editing.province || '',
                 postal_code: editing.postal_code || '',
                 notes: editing.notes || '',
+                acquisition_source: editing.acquisition_source || '',
+                referred_by_customer_id: editing.referred_by_customer_id || '',
               } : undefined}
               onSubmit={editing ? handleEdit : handleAdd}
               onCancel={() => { setShowForm(false); setEditing(null) }}

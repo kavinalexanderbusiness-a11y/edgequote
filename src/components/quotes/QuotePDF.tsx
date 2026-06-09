@@ -72,6 +72,8 @@ interface QuotePDFProps {
 }
 
 export function QuoteDocument({ quote, settings }: QuotePDFProps) {
+  const initialPrice = quote.initial_price ?? quote.subtotal
+  const hasMaintenance = !!(quote.weekly_price || quote.biweekly_price || quote.monthly_price)
   const company = settings?.company_name || 'Edge Property Services'
   const contactLines = [
     settings?.phone,
@@ -137,61 +139,76 @@ export function QuoteDocument({ quote, settings }: QuotePDFProps) {
         <View style={styles.table}>
           <View style={styles.tableHead}>
             <Text style={[styles.th, styles.cellDesc]}>Description</Text>
-            <Text style={[styles.th, styles.cellQty]}>Man-Hours</Text>
+            <Text style={[styles.th, styles.cellQty]}>Details</Text>
             <Text style={[styles.th, styles.cellAmt]}>Amount</Text>
           </View>
-          {quote.flat_price != null ? (
+          <View style={styles.tableRow}>
+            <View style={styles.cellDesc}>
+              <Text style={styles.td}>{quote.service_type}</Text>
+              <Text style={styles.muted}>Initial / first visit</Text>
+            </View>
+            <Text style={[styles.td, styles.cellQty]}>{quote.crew_size} crew · {quote.hours} hrs</Text>
+            <Text style={[styles.td, styles.cellAmt]}>{money(initialPrice)}</Text>
+          </View>
+          {quote.travel_fee > 0 ? (
             <View style={styles.tableRow}>
               <View style={styles.cellDesc}>
-                <Text style={styles.td}>{quote.service_type}</Text>
-                <Text style={styles.muted}>Flat-rate service</Text>
+                <Text style={styles.td}>Travel Fee</Text>
+                <Text style={styles.muted}>Travel to job site</Text>
               </View>
               <Text style={[styles.td, styles.cellQty]}>—</Text>
-              <Text style={[styles.td, styles.cellAmt]}>{money(quote.total)}</Text>
+              <Text style={[styles.td, styles.cellAmt]}>{money(quote.travel_fee)}</Text>
             </View>
-          ) : (
-            <>
-              <View style={styles.tableRow}>
-                <View style={styles.cellDesc}>
-                  <Text style={styles.td}>{quote.service_type}</Text>
-                  <Text style={styles.muted}>{quote.hours} hrs × {quote.crew_size} crew @ {money(quote.rate)}/man-hour</Text>
-                </View>
-                <Text style={[styles.td, styles.cellQty]}>{quote.man_hours}</Text>
-                <Text style={[styles.td, styles.cellAmt]}>{money(quote.subtotal)}</Text>
-              </View>
-              {quote.travel_fee > 0 ? (
-                <View style={styles.tableRow}>
-                  <View style={styles.cellDesc}>
-                    <Text style={styles.td}>Travel Fee</Text>
-                    <Text style={styles.muted}>Travel to job site</Text>
-                  </View>
-                  <Text style={[styles.td, styles.cellQty]}>—</Text>
-                  <Text style={[styles.td, styles.cellAmt]}>{money(quote.travel_fee)}</Text>
-                </View>
-              ) : null}
-            </>
-          )}
+          ) : null}
         </View>
 
         {/* Totals */}
         <View style={styles.totals}>
-          {quote.flat_price == null ? (
-            <>
-              <View style={styles.totalRow}>
-                <Text style={styles.totalLabel}>Labour Subtotal</Text>
-                <Text style={styles.totalValue}>{money(quote.subtotal)}</Text>
-              </View>
-              <View style={styles.totalRow}>
-                <Text style={styles.totalLabel}>Travel Fee</Text>
-                <Text style={styles.totalValue}>{money(quote.travel_fee)}</Text>
-              </View>
-            </>
+          <View style={styles.totalRow}>
+            <Text style={styles.totalLabel}>Initial / first visit</Text>
+            <Text style={styles.totalValue}>{money(initialPrice)}</Text>
+          </View>
+          {quote.travel_fee > 0 ? (
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>Travel Fee</Text>
+              <Text style={styles.totalValue}>{money(quote.travel_fee)}</Text>
+            </View>
           ) : null}
           <View style={styles.grandRow}>
-            <Text style={styles.grandLabel}>Total</Text>
+            <Text style={styles.grandLabel}>First Invoice Total</Text>
             <Text style={styles.grandValue}>{money(quote.total)}</Text>
           </View>
         </View>
+
+        {/* Ongoing maintenance options */}
+        {hasMaintenance ? (
+          <View style={{ marginTop: 20 }}>
+            <Text style={styles.sectionTitle}>Ongoing Maintenance Options</Text>
+            <View style={styles.table}>
+              {quote.weekly_price ? (
+                <View style={styles.tableRow}>
+                  <Text style={[styles.td, styles.cellDesc]}>Weekly visit</Text>
+                  <Text style={[styles.td, styles.cellQty]}>per visit</Text>
+                  <Text style={[styles.td, styles.cellAmt]}>{money(quote.weekly_price)}</Text>
+                </View>
+              ) : null}
+              {quote.biweekly_price ? (
+                <View style={styles.tableRow}>
+                  <Text style={[styles.td, styles.cellDesc]}>Bi-weekly visit</Text>
+                  <Text style={[styles.td, styles.cellQty]}>per visit</Text>
+                  <Text style={[styles.td, styles.cellAmt]}>{money(quote.biweekly_price)}</Text>
+                </View>
+              ) : null}
+              {quote.monthly_price ? (
+                <View style={styles.tableRow}>
+                  <Text style={[styles.td, styles.cellDesc]}>Monthly visit</Text>
+                  <Text style={[styles.td, styles.cellQty]}>per visit</Text>
+                  <Text style={[styles.td, styles.cellAmt]}>{money(quote.monthly_price)}</Text>
+                </View>
+              ) : null}
+            </View>
+          </View>
+        ) : null}
 
         {/* Notes */}
         {quote.notes ? (
