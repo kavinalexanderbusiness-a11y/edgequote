@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Job, JobStatus, JobRecurrence, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
 import { Coord } from '@/lib/geo'
 import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, routeStats, directionsUrl } from '@/lib/route'
-import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
+import { jobVisitValue, effectiveFreq, quoteVisitAmount } from '@/lib/invoicing'
 import { formatCurrency, cn } from '@/lib/utils'
 import { format } from 'date-fns'
 import { Button } from '@/components/ui/Button'
@@ -34,6 +34,7 @@ interface Props {
   onMarkDone: (job: Job) => void
   onMove: (job: Job, newDateISO: string) => void
   onDeleteJob: (job: Job) => void
+  onSetPrice: (job: Job, price: number | null) => Promise<void>
   onAddJob: () => void
   onQuickSave: (job: Job, patch: QuickPatch) => Promise<void>
 }
@@ -49,15 +50,48 @@ export interface QuickPatch {
 
 export function DayOpsPanel({
   date, dateLabel, jobs, quotesById, recurrences, baseCoord,
-  onOpenJob, onMarkDone, onMove, onDeleteJob, onAddJob, onQuickSave,
+  onOpenJob, onMarkDone, onMove, onDeleteJob, onSetPrice, onAddJob, onQuickSave,
 }: Props) {
   const supabase = createClient()
   const [quickId, setQuickId] = useState<string | null>(null)
   const [moveId, setMoveId] = useState<string | null>(null)
   const [qv, setQv] = useState<{ start_time: string; crew_size: number; duration_minutes: number; status: JobStatus; notes: string; price: number }>({ start_time: '', crew_size: 1, duration_minutes: 0, status: 'scheduled', notes: '', price: 0 })
   const [savingQuick, setSavingQuick] = useState(false)
+  // First-class price: a dedicated, price-only inline editor on every card.
+  const [priceId, setPriceId] = useState<string | null>(null)
+  const [priceVal, setPriceVal] = useState('')
+  const [savingPrice, setSavingPrice] = useState(false)
+
+  function openPrice(job: Job) {
+    setQuickId(null); setMoveId(null)
+    setPriceId(job.id)
+    setPriceVal(job.price != null ? String(job.price) : '')
+  }
+  async function savePrice(job: Job) {
+    setSavingPrice(true)
+    const t = priceVal.trim()
+    const next = t === '' ? null : (Number(t) > 0 ? Number(t) : null)
+    await onSetPrice(job, next)
+    setSavingPrice(false)
+    setPriceId(null)
+  }
+  // The quote-derived value for a job, ignoring any manual override — so the
+  // editor can show "from quote" and offer a one-tap revert.
+  function quoteValueFor(job: Job): number {
+    const q = job.quote_id ? quotesById[job.quote_id] : null
+    if (!q) return 0
+    const rec = job.recurrence_id ? recurrences[job.recurrence_id] : null
+    const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
+    return quoteVisitAmount(q as unknown as Record<string, unknown>, freq)
+  }
+  function cadenceLabelFor(job: Job): string {
+    const rec = job.recurrence_id ? recurrences[job.recurrence_id] : null
+    const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
+    return freq ?? 'first visit'
+  }
 
   function openQuick(job: Job) {
+    setPriceId(null); setMoveId(null)
     setQuickId(job.id)
     setQv({
       start_time: job.start_time || '',
@@ -158,9 +192,9 @@ export function DayOpsPanel({
       </div>
 
       {/* Daily revenue forecast — the first thing you see */}
-      <div className="grid grid-cols-3 sm:grid-cols-5 divide-x divide-border border-b border-border">
+      <div className="grid grid-cols-3 sm:grid-cols-5 sm:divide-x divide-border border-b border-border">
         <Metric icon={DollarSign} label="Planned" value={formatCurrency(totalRevenue)} tone="text-accent" />
-        <Metric icon={Wallet} label="Done" value={formatCurrency(revenueCompleted)} tone="text-emerald-400" />
+        <Metric icon={Wallet} label="Completed" value={formatCurrency(revenueCompleted)} tone="text-emerald-400" />
         <Metric icon={DollarSign} label="Remaining" value={formatCurrency(revenueRemaining)} tone="text-amber-400" />
         <Metric icon={ListChecks} label="Jobs left" value={String(remaining.length)} />
         <Metric icon={Hourglass} label="Est. finish" value={estFinish} />
@@ -214,6 +248,7 @@ export function DayOpsPanel({
               const order = orderByJobId.get(job.id)
               const done = job.status === 'completed'
               const value = jobValue(job)
+              const qVal = quoteValueFor(job)
               return (
                 <div key={job.id} className={cn('rounded-xl border px-3 py-2.5', JOB_STATUS_COLORS[job.status])}>
                   <div className="flex items-start gap-2.5">
@@ -231,8 +266,14 @@ export function DayOpsPanel({
                         </span>
                         <div className="flex items-center gap-1.5 shrink-0">
                           {value > 0
-                            ? <span className="text-sm font-bold">{formatCurrency(value)}</span>
-                            : <button onClick={e => { e.stopPropagation(); openQuick(job) }} className="text-[10px] font-semibold uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5 flex items-center gap-1 hover:bg-amber-500/20">
+                            ? <button onClick={e => { e.stopPropagation(); priceId === job.id ? setPriceId(null) : openPrice(job) }}
+                                title="Edit price"
+                                className="flex items-center gap-1 text-sm font-bold text-ink rounded-md px-1.5 py-0.5 hover:bg-black/10 transition-colors">
+                                {formatCurrency(value)}<Pencil className="w-3 h-3 opacity-40" />
+                              </button>
+                            : <button onClick={e => { e.stopPropagation(); priceId === job.id ? setPriceId(null) : openPrice(job) }}
+                                title="Set price"
+                                className="text-[10px] font-semibold uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5 flex items-center gap-1 hover:bg-amber-500/20">
                                 <AlertTriangle className="w-3 h-3" /> Set price
                               </button>}
                           <button
@@ -244,6 +285,33 @@ export function DayOpsPanel({
                           </button>
                         </div>
                       </div>
+
+                      {/* Clean price-only editor — first-class, opens inline */}
+                      {priceId === job.id && (
+                        <div className="mt-2 rounded-lg border border-border bg-bg-secondary p-2.5 space-y-2" onClick={e => e.stopPropagation()}>
+                          <label className="text-[10px] uppercase tracking-wide text-ink-faint block">Price ($/visit)
+                            <input type="number" min="0" step="5" autoFocus
+                              placeholder={qVal > 0 ? `${qVal} from quote` : 'e.g. 55'}
+                              value={priceVal}
+                              onChange={e => setPriceVal(e.target.value)}
+                              onKeyDown={e => { if (e.key === 'Enter') savePrice(job) }}
+                              className="w-full mt-0.5 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none focus:border-accent" />
+                          </label>
+                          {qVal > 0 && (
+                            <div className="flex items-center justify-between gap-2 text-[11px]">
+                              <span className="text-ink-faint">From quote · {cadenceLabelFor(job)}: <span className="text-ink-muted font-medium">{formatCurrency(qVal)}</span></span>
+                              <button type="button" onClick={() => setPriceVal('')} className="text-accent hover:underline font-medium">Use quote price</button>
+                            </div>
+                          )}
+                          <div className="flex items-center gap-2">
+                            <Button size="sm" onClick={() => savePrice(job)} loading={savingPrice}>Save price</Button>
+                            <Button size="sm" variant="ghost" onClick={() => setPriceId(null)}>Cancel</Button>
+                            {job.price != null
+                              ? <span className="text-[10px] text-amber-400 ml-auto">Manual override</span>
+                              : qVal > 0 ? <span className="text-[10px] text-ink-faint ml-auto">Auto from quote</span> : null}
+                          </div>
+                        </div>
+                      )}
                       <div className="flex items-center gap-1.5 text-xs opacity-80 mt-0.5 flex-wrap">
                         {job.service_type && <span className="truncate">{job.service_type}</span>}
                         {job.start_time && <span>· {job.start_time.slice(0, 5)}</span>}
@@ -279,10 +347,6 @@ export function DayOpsPanel({
                       {/* Inline quick edit — small changes without the full form */}
                       {quickId === job.id && (
                         <div className="mt-2 rounded-lg border border-border bg-bg-secondary p-2.5 space-y-2" onClick={e => e.stopPropagation()}>
-                          <label className="text-[10px] uppercase tracking-wide text-ink-faint block">Price ($/visit)
-                            <input type="number" min="0" step="5" placeholder="e.g. 55" value={qv.price || ''} onChange={e => setQv(v => ({ ...v, price: Number(e.target.value) || 0 }))}
-                              className="w-full mt-0.5 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none focus:border-accent" />
-                          </label>
                           <div className="grid grid-cols-3 gap-2">
                             <label className="text-[10px] uppercase tracking-wide text-ink-faint">Time
                               <input type="time" value={qv.start_time} onChange={e => setQv(v => ({ ...v, start_time: e.target.value }))}
@@ -328,11 +392,11 @@ export function DayOpsPanel({
 
 function Metric({ icon: Icon, label, value, tone }: { icon: typeof DollarSign; label: string; value: string; tone?: string }) {
   return (
-    <div className="px-4 py-3">
-      <div className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-muted uppercase tracking-wide">
-        <Icon className="w-3.5 h-3.5" /> {label}
+    <div className="px-3 py-2.5 sm:px-4 sm:py-3">
+      <div className="flex items-center gap-1.5 text-[10px] sm:text-[11px] font-semibold text-ink-muted uppercase tracking-wide">
+        <Icon className="w-3.5 h-3.5 shrink-0" /> <span className="truncate">{label}</span>
       </div>
-      <p className={cn('text-xl font-bold tracking-tight mt-0.5', tone || 'text-ink')}>{value}</p>
+      <p className={cn('text-lg sm:text-xl font-bold tracking-tight mt-0.5 truncate', tone || 'text-ink')}>{value}</p>
     </div>
   )
 }

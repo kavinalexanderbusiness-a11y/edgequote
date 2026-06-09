@@ -158,7 +158,7 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
                 data-date={format(day, 'yyyy-MM-dd')}
                 onClick={() => onSelectDay(day)}
                 className={cn(
-                  'min-h-[96px] border-b border-r border-border p-1.5 text-left align-top transition-colors hover:bg-surface rounded-sm',
+                  'min-h-[108px] border-b border-r border-border p-1.5 text-left align-top transition-colors hover:bg-surface rounded-sm',
                   !inMonth && 'bg-bg-secondary/40',
                   (i + 1) % 7 === 0 && 'border-r-0'
                 )}
@@ -172,11 +172,11 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
                   </span>
                 </div>
                 <div className="space-y-0.5">
-                  {dayJobs.slice(0, 3).map(job => (
+                  {dayJobs.slice(0, 4).map(job => (
                     <JobChip key={job.id} job={job} onSelect={selectJob} onDragStart={onMoveJob ? startDrag : undefined} recurLabel={recurLabelFor(job)} value={valueByJobId?.[job.id]} />
                   ))}
-                  {dayJobs.length > 3 && (
-                    <span className="text-[10px] text-ink-faint px-1">+{dayJobs.length - 3} more</span>
+                  {dayJobs.length > 4 && (
+                    <span className="block text-[10px] font-medium text-ink-faint px-1 pt-0.5">+{dayJobs.length - 4} more</span>
                   )}
                 </div>
               </button>

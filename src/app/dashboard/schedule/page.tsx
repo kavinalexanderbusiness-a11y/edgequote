@@ -537,6 +537,14 @@ export default function SchedulePage() {
     await fetchJobs()
   }
 
+  // First-class price edit from the Day panel — updates ONLY the job's price.
+  // null clears the manual override so the linked quote's cadence price applies.
+  async function setJobPrice(job: Job, price: number | null) {
+    const { error } = await supabase.from('jobs').update({ price }).eq('id', job.id)
+    if (error) { setBanner('Could not update price: ' + error.message); return }
+    await fetchJobs()
+  }
+
   // ── Undo ────────────────────────────────────────────────────────────────────
   function offerUndo(label: string, run: () => Promise<void>) {
     setUndoAction({ label, run })
@@ -763,6 +771,7 @@ export default function SchedulePage() {
           onMarkDone={markJobDone}
           onMove={(job, iso) => moveJobToDate(job, new Date(iso + 'T00:00:00'))}
           onDeleteJob={deleteJob}
+          onSetPrice={setJobPrice}
           onAddJob={() => openNewJob(cursor)}
           onQuickSave={quickSaveJob}
         />

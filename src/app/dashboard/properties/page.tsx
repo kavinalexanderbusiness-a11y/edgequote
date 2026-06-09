@@ -2,15 +2,18 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Property } from '@/types'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { EmptyState } from '@/components/ui/EmptyState'
 import { formatDate } from '@/lib/utils'
 import { MapPin, Home, User, Ruler, History } from 'lucide-react'
 
 export default function PropertiesPage() {
+  const router = useRouter()
   const [properties, setProperties] = useState<Property[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -40,9 +43,12 @@ export default function PropertiesPage() {
       {loading ? (
         <div className="text-center py-16 text-sm text-ink-muted">Loading properties...</div>
       ) : properties.length === 0 ? (
-        <div className="text-center py-16 text-sm text-ink-muted">
-          No properties yet. Properties are created automatically when you add a customer.
-        </div>
+        <EmptyState
+          icon={Home}
+          title="No properties yet"
+          description="Properties are created automatically when you add a customer or save a quote. Add your first customer to get started."
+          action={{ label: 'Add a customer', onClick: () => router.push('/dashboard/customers') }}
+        />
       ) : (
         <div className="space-y-3">
           {properties.map(property => {
