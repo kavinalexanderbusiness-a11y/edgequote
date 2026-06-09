@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Customer, Job, JobFormValues, Quote, RecurrenceScope } from '@/types'
+import { Customer, Job, JobFormValues, Quote, RecurrenceScope, RecurUnit } from '@/types'
 import { Calendar, CalendarView } from '@/components/schedule/Calendar'
 import { JobForm, Recurrence, SuggestionMeta } from '@/components/schedule/JobForm'
 import { ScopeDialog } from '@/components/schedule/ScopeDialog'
@@ -23,9 +23,26 @@ function localToday(): string {
 }
 
 type PendingAction =
-  | { type: 'edit'; job: Job; values: JobFormValues }
+  | { type: 'edit'; job: Job; values: JobFormValues; recurrence: Recurrence }
   | { type: 'move'; job: Job; newDate: string }
   | { type: 'delete'; job: Job }
+
+// Map an interval back to the legacy `freq` column where it lines up.
+function legacyFreqFor(unit: RecurUnit | null, count: number): string | null {
+  if (unit === 'week' && count === 1) return 'weekly'
+  if (unit === 'week' && count === 2) return 'biweekly'
+  if (unit === 'month' && count === 1) return 'monthly'
+  return null
+}
+
+// A series row → the form's Recurrence shape (handles legacy freq-only rows).
+function recFromRow(r: JobRecurrence): Recurrence {
+  if (r.interval_unit) return { unit: r.interval_unit, count: r.interval_count ?? 1, endDate: r.end_date, endCount: r.end_count }
+  if (r.freq === 'weekly') return { unit: 'week', count: 1, endDate: r.end_date, endCount: r.end_count }
+  if (r.freq === 'biweekly') return { unit: 'week', count: 2, endDate: r.end_date, endCount: r.end_count }
+  if (r.freq === 'monthly') return { unit: 'month', count: 1, endDate: r.end_date, endCount: r.end_count }
+  return { unit: null, count: 1, endDate: null, endCount: null }
+}
 
 export default function SchedulePage() {
   const supabase = createClient()
@@ -49,6 +66,7 @@ export default function SchedulePage() {
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null)
   const [banner, setBanner] = useState<string | null>(null)
   const [recurrenceLabels, setRecurrenceLabels] = useState<Record<string, string>>({})
+  const [recurrences, setRecurrences] = useState<Record<string, JobRecurrence>>({})
 
   // When arriving from an accepted quote (?quote=…), open a prefilled new-job form.
   const [quoteCtx, setQuoteCtx] = useState<Quote | null>(null)
@@ -70,10 +88,13 @@ export default function SchedulePage() {
     setJobs((jRes.data as Job[]) || [])
     setCustomers((cRes.data as Customer[]) || [])
     const labels: Record<string, string> = {}
+    const recMap: Record<string, JobRecurrence> = {}
     for (const r of (rRes.data as JobRecurrence[]) || []) {
       labels[r.id] = recurrenceLabel(r.interval_unit, r.interval_count, r.freq)
+      recMap[r.id] = r
     }
     setRecurrenceLabels(labels)
+    setRecurrences(recMap)
     setLoading(false)
   }, [supabase])
 
@@ -192,9 +213,28 @@ export default function SchedulePage() {
     closeForm()
   }
 
-  // Apply field edits (and a date shift for future/all) across a recurrence scope.
-  async function applyEdit(job: Job, values: JobFormValues, scope: RecurrenceScope) {
-    // Fields that propagate across the chosen recurrence scope.
+  // The propagating field set for a generated occurrence (no per-visit outcome).
+  function occurrenceBase(values: JobFormValues, userId: string, recurrenceId: string, quoteId: string | null) {
+    return {
+      user_id: userId,
+      customer_id: values.customer_id || null,
+      property_id: values.property_id || null,
+      quote_id: quoteId,
+      title: values.title,
+      service_type: values.service_type || null,
+      start_time: values.start_time || null,
+      end_time: values.end_time || null,
+      duration_minutes: values.duration_minutes ? Number(values.duration_minutes) : null,
+      crew_size: Number(values.crew_size) || 1,
+      status: 'scheduled' as const,
+      notes: values.notes || null,
+      recurrence_id: recurrenceId,
+    }
+  }
+
+  // Apply field edits (+ per-visit outcome on the anchor, + date shift) across a
+  // recurrence scope. Writes only — the orchestrator handles refresh.
+  async function applyFieldEdits(job: Job, values: JobFormValues, scope: RecurrenceScope) {
     const fields = {
       customer_id: values.customer_id || null,
       property_id: values.property_id || null,
@@ -206,8 +246,7 @@ export default function SchedulePage() {
       crew_size: Number(values.crew_size) || 1,
       notes: values.notes || null,
     }
-    // Per-visit outcome — status and actual time belong ONLY to the visit being
-    // edited, never stamped across siblings (that would fabricate actuals).
+    // Status and actual time belong ONLY to the edited visit, never its siblings.
     const perVisit = {
       status: values.status,
       actual_minutes: values.actual_minutes ? Number(values.actual_minutes) : null,
@@ -222,13 +261,113 @@ export default function SchedulePage() {
     const failed = results.find(r => r.error)
     if (failed?.error) setBanner('Could not save the job: ' + failed.error.message)
 
-    // Completing a recurring visit auto-creates a draft invoice for that visit.
     if (values.status === 'completed' && job.recurrence_id) {
       const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed' })
       if (res.created) setBanner(`Draft invoice ${res.invoiceNumber} created from the completed visit — review it in Invoices.`)
       else if (res.reason === 'exists') setBanner('That visit already has an invoice.')
     }
+  }
 
+  // Turn a one-time job into a recurring series — the current job stays as the
+  // first visit; future visits are generated. No scope prompt (it's one job).
+  async function convertToRecurring(job: Job, values: JobFormValues, recurrence: Recurrence) {
+    if (!recurrence.unit) return
+    const { data: { user } } = await supabase.auth.getUser()
+    const { data: rec, error: recErr } = await supabase.from('job_recurrences').insert({
+      user_id: user!.id,
+      freq: legacyFreqFor(recurrence.unit, recurrence.count),
+      interval_unit: recurrence.unit,
+      interval_count: recurrence.count,
+      start_date: values.scheduled_date,
+      end_date: recurrence.endDate,
+      end_count: recurrence.endCount,
+      customer_id: values.customer_id || null,
+    }).select().single()
+    if (recErr || !rec) { setBanner('Could not create the recurring series: ' + (recErr?.message ?? '')); return }
+
+    await applyFieldEdits(job, values, 'this')
+    await supabase.from('jobs').update({ recurrence_id: rec.id }).eq('id', job.id)
+
+    const dates = generateOccurrences(values.scheduled_date, recurrence.unit, recurrence.count, recurrence.endDate, recurrence.endCount)
+    const future = dates.slice(1) // skip the anchor — it already exists
+    if (future.length) {
+      const base = occurrenceBase(values, user!.id, rec.id, job.quote_id)
+      const { error } = await supabase.from('jobs').insert(future.map(d => ({ ...base, scheduled_date: d })))
+      if (error) { setBanner('Series created, but adding future visits failed: ' + error.message); return }
+    }
+    setBanner(`Now recurring — ${recurrenceLabel(recurrence.unit, recurrence.count)}. ${future.length} future visit${future.length !== 1 ? 's' : ''} added.`)
+  }
+
+  // Detach/delete recurrence per scope, turning the anchor into a one-time job.
+  async function removeRecurrence(job: Job, scope: RecurrenceScope) {
+    if (!job.recurrence_id) return
+    if (scope === 'this') {
+      await supabase.from('jobs').update({ recurrence_id: null }).eq('id', job.id)
+      setBanner('This visit is now a one-time job.')
+      return
+    }
+    if (scope === 'future') {
+      const laterIds = jobs.filter(j => j.recurrence_id === job.recurrence_id && j.scheduled_date > job.scheduled_date).map(j => j.id)
+      if (laterIds.length) await supabase.from('jobs').delete().in('id', laterIds)
+      await supabase.from('jobs').update({ recurrence_id: null }).eq('id', job.id)
+      setBanner(`Recurrence ended — ${laterIds.length} future visit${laterIds.length !== 1 ? 's' : ''} removed.`)
+      return
+    }
+    const siblingIds = jobs.filter(j => j.recurrence_id === job.recurrence_id && j.id !== job.id).map(j => j.id)
+    if (siblingIds.length) await supabase.from('jobs').delete().in('id', siblingIds)
+    await supabase.from('jobs').update({ recurrence_id: null }).eq('id', job.id)
+    await supabase.from('job_recurrences').delete().eq('id', job.recurrence_id)
+    setBanner('Recurrence removed — this is now a one-time job.')
+  }
+
+  // Change the cadence/end of an existing series: keep past visits, regenerate
+  // forward from the anchor with the new rule.
+  async function changeRecurrence(job: Job, values: JobFormValues, recurrence: Recurrence) {
+    if (!job.recurrence_id || !recurrence.unit) return
+    const { data: { user } } = await supabase.auth.getUser()
+    const futureIds = jobs
+      .filter(j => j.recurrence_id === job.recurrence_id && j.id !== job.id && j.scheduled_date > job.scheduled_date)
+      .map(j => j.id)
+    if (futureIds.length) await supabase.from('jobs').delete().in('id', futureIds)
+    await supabase.from('job_recurrences').update({
+      freq: legacyFreqFor(recurrence.unit, recurrence.count),
+      interval_unit: recurrence.unit,
+      interval_count: recurrence.count,
+      end_date: recurrence.endDate,
+      end_count: recurrence.endCount,
+    }).eq('id', job.recurrence_id)
+    const dates = generateOccurrences(values.scheduled_date, recurrence.unit, recurrence.count, recurrence.endDate, recurrence.endCount)
+    const future = dates.slice(1)
+    if (future.length) {
+      const base = occurrenceBase(values, user!.id, job.recurrence_id, job.quote_id)
+      await supabase.from('jobs').insert(future.map(d => ({ ...base, scheduled_date: d })))
+    }
+    setBanner(`Schedule updated to ${recurrenceLabel(recurrence.unit, recurrence.count)}.`)
+  }
+
+  // Orchestrator for an edit on a recurring job (or a one-time → one-time edit):
+  // field edits + any add/change/remove of recurrence, scoped Apple-style.
+  async function applyEdit(job: Job, values: JobFormValues, recurrence: Recurrence, scope: RecurrenceScope) {
+    const was = !!job.recurrence_id
+    const will = recurrence.unit !== null
+    const existing = was && job.recurrence_id ? recurrences[job.recurrence_id] : undefined
+    const existingRec = existing ? recFromRow(existing) : null
+    const ruleChanged = !!(will && existingRec && (
+      existingRec.unit !== recurrence.unit ||
+      existingRec.count !== recurrence.count ||
+      (existingRec.endDate || null) !== (recurrence.endDate || null) ||
+      (existingRec.endCount || null) !== (recurrence.endCount || null)
+    ))
+
+    if (!was || (will && !ruleChanged)) {
+      await applyFieldEdits(job, values, scope)
+    } else if (!will) {
+      await applyFieldEdits(job, values, 'this')
+      await removeRecurrence(job, scope)
+    } else {
+      await applyFieldEdits(job, values, 'this')
+      await changeRecurrence(job, values, recurrence)
+    }
     await fetchJobs()
     setEditing(null)
   }
@@ -252,13 +391,24 @@ export default function SchedulePage() {
     setEditing(null)
   }
 
-  async function handleEdit(values: JobFormValues) {
+  async function handleEdit(values: JobFormValues, recurrence: Recurrence) {
     if (!editing) return
-    if (editing.recurrence_id) {
-      setPendingAction({ type: 'edit', job: editing, values })
+    const was = !!editing.recurrence_id
+    const will = recurrence.unit !== null
+    if (!was && !will) {
+      // One-time edit, stays one-time — no scope prompt.
+      await applyEdit(editing, values, recurrence, 'this')
       return
     }
-    await applyEdit(editing, values, 'this')
+    if (!was && will) {
+      // One-time → recurring — no scope prompt (it's a single job).
+      await convertToRecurring(editing, values, recurrence)
+      await fetchJobs()
+      setEditing(null)
+      return
+    }
+    // Editing an existing recurring job → choose which visits this affects.
+    setPendingAction({ type: 'edit', job: editing, values, recurrence })
   }
 
   async function handleDelete() {
@@ -288,7 +438,7 @@ export default function SchedulePage() {
     const action = pendingAction
     setPendingAction(null)
     if (!action) return
-    if (action.type === 'edit') await applyEdit(action.job, action.values, scope)
+    if (action.type === 'edit') await applyEdit(action.job, action.values, action.recurrence, scope)
     else if (action.type === 'move') await applyMove(action.job, action.newDate, scope)
     else if (action.type === 'delete') await applyDelete(action.job, scope)
   }
@@ -413,8 +563,12 @@ export default function SchedulePage() {
           </CardHeader>
           <CardBody>
             <JobForm
+              key={editing?.id ?? 'new'}
               customers={customers}
               excludeJobId={editing?.id}
+              initialRecurrence={editing?.recurrence_id && recurrences[editing.recurrence_id]
+                ? recFromRow(recurrences[editing.recurrence_id])
+                : undefined}
               defaultValues={editing ? {
                 customer_id: editing.customer_id || '',
                 property_id: editing.property_id || '',

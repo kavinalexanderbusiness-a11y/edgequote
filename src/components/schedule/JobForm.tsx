@@ -30,6 +30,8 @@ interface JobFormProps {
   customers: Customer[]
   defaultValues?: Partial<JobFormValues>
   excludeJobId?: string
+  // Existing series for the job being edited, so the Repeat controls pre-fill.
+  initialRecurrence?: Recurrence
   onSubmit: (values: JobFormValues, recurrence: Recurrence, meta?: SuggestionMeta) => Promise<void>
   onCancel: () => void
   isEdit?: boolean
@@ -66,18 +68,41 @@ function presetToInterval(preset: RepeatPreset, customUnit: RecurUnit, customCou
   }
 }
 
-export function JobForm({ customers, defaultValues, excludeJobId, onSubmit, onCancel, isEdit }: JobFormProps) {
+// Map an existing series back onto the Repeat UI controls so editing pre-fills.
+function recurrenceToUi(r?: Recurrence) {
+  if (!r || !r.unit) {
+    return { preset: 'none' as RepeatPreset, customUnit: 'week' as RecurUnit, customCount: 3, endMode: 'never' as const, endDate: '', endCount: 10 }
+  }
+  let preset: RepeatPreset = 'custom'
+  if (r.unit === 'week' && r.count === 1) preset = 'w1'
+  else if (r.unit === 'week' && r.count === 2) preset = 'w2'
+  else if (r.unit === 'week' && r.count === 3) preset = 'w3'
+  else if (r.unit === 'week' && r.count === 4) preset = 'w4'
+  else if (r.unit === 'month' && r.count === 1) preset = 'm1'
+  const endMode: 'never' | 'on' | 'after' = r.endDate ? 'on' : r.endCount ? 'after' : 'never'
+  return {
+    preset,
+    customUnit: r.unit,
+    customCount: Math.max(1, r.count),
+    endMode,
+    endDate: r.endDate || '',
+    endCount: r.endCount || 10,
+  }
+}
+
+export function JobForm({ customers, defaultValues, excludeJobId, initialRecurrence, onSubmit, onCancel, isEdit }: JobFormProps) {
   const supabase = createClient()
   const [properties, setProperties] = useState<Property[]>([])
   const [topSuggestion, setTopSuggestion] = useState<DaySuggestion | null>(null)
 
-  // Recurrence state
-  const [preset, setPreset] = useState<RepeatPreset>('none')
-  const [customUnit, setCustomUnit] = useState<RecurUnit>('week')
-  const [customCount, setCustomCount] = useState(3)
-  const [endMode, setEndMode] = useState<'never' | 'on' | 'after'>('never')
-  const [endDate, setEndDate] = useState('')
-  const [endCount, setEndCount] = useState(10)
+  // Recurrence state — pre-filled from an existing series when editing.
+  const ui0 = recurrenceToUi(initialRecurrence)
+  const [preset, setPreset] = useState<RepeatPreset>(ui0.preset)
+  const [customUnit, setCustomUnit] = useState<RecurUnit>(ui0.customUnit)
+  const [customCount, setCustomCount] = useState(ui0.customCount)
+  const [endMode, setEndMode] = useState<'never' | 'on' | 'after'>(ui0.endMode)
+  const [endDate, setEndDate] = useState(ui0.endDate)
+  const [endCount, setEndCount] = useState(ui0.endCount)
 
   const { register, handleSubmit, watch, setValue, control, formState: { errors, isSubmitting } } =
     useForm<JobFormValues>({
@@ -228,16 +253,23 @@ export function JobForm({ customers, defaultValues, excludeJobId, onSubmit, onCa
           {...register('actual_minutes', { min: 0 })} />
       )}
 
-      {/* Repeat — prominent & discoverable (new jobs) */}
-      {!isEdit && (
-        <div className="border border-border-strong rounded-xl overflow-hidden">
+      {/* Repeat — available for new AND existing jobs */}
+      <div className="border border-border-strong rounded-xl overflow-hidden">
           <div className="bg-bg-tertiary px-4 py-3 flex items-center gap-2 border-b border-border">
             <Repeat className="w-4 h-4 text-accent" />
             <span className="text-sm font-semibold text-ink">Repeat</span>
             {interval && <span className="ml-auto text-xs text-accent font-medium">{recurrenceLabel(interval.unit, interval.count)} · {endSummary}</span>}
           </div>
           <div className="p-4 space-y-3">
-            {/* One-click lawn-care presets */}
+            {isEdit && (
+              <p className="text-xs text-ink-faint">
+                {initialRecurrence?.unit
+                  ? 'This job repeats. Change the cadence, or pick “Does not repeat” to make it one-time — you’ll choose which visits it affects.'
+                  : 'Turn this one-time job into a recurring schedule. The current job becomes the first visit.'}
+              </p>
+            )}
+            {/* One-click lawn-care presets (new jobs only) */}
+            {!isEdit && (
             <div className="flex flex-wrap gap-2">
               {([
                 { kind: 'weekly', label: 'Weekly Lawn Care' },
@@ -250,6 +282,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, onSubmit, onCa
                 </button>
               ))}
             </div>
+            )}
 
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Repeats</label>
@@ -308,8 +341,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, onSubmit, onCa
               </>
             )}
           </div>
-        </div>
-      )}
+      </div>
 
       <Textarea label="Notes" placeholder="Access instructions, gate codes, special requests..."
         {...register('notes')} />

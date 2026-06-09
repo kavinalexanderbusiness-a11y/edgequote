@@ -141,6 +141,8 @@ export default function NewQuotePage() {
         defaultValues={measurement ? {
           customer_id: measurement.customerId || '',
           address: measurement.address || '',
+          // Sensible default so a measured lawn is saveable in one tap (editable).
+          service_type: 'Lawn Mowing',
           initial_price: measurement.jobPrice || 0,
           travel_fee: measurement.travelFee || 0,
           distance_km: measurement.travelDistanceKm || 0,

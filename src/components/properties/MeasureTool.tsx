@@ -9,7 +9,7 @@ import { priceTiers, routeDensityTravel, pricingConfidence, DEFAULT_RATE_PER_100
 import { formatCurrency, formatDate, suggestTravelFee } from '@/lib/utils'
 import { Coord, haversineKm, nearbyJobCount, fetchLocatedUpcomingJobs } from '@/lib/geo'
 import { Button } from '@/components/ui/Button'
-import { Undo2, Trash2, Check, Ruler, Plus, ZoomIn, ZoomOut, RotateCcw, FileText, Car, ShieldCheck, History } from 'lucide-react'
+import { Undo2, Trash2, Check, Ruler, Plus, ZoomIn, ZoomOut, RotateCcw, FileText, Car, ShieldCheck, History, Move } from 'lucide-react'
 
 const M2_TO_SQFT = 10.7639
 const RATE_KEY = 'eq_rate_per_1000'
@@ -44,6 +44,9 @@ export function MeasureTool({ property }: { property: Property }) {
   const shapeId = useRef(0)
   const targetCoord = useRef<Coord | null>(null)
   const rafPending = useRef(false)
+  // 'draw' = clicks add points (overlays inert). 'adjust' = drag/tap points to
+  // edit/delete (map clicks do nothing). Ref mirrors state for the map closures.
+  const modeRef = useRef<'draw' | 'adjust'>('draw')
   // History tracked in a ref so concurrent saves append synchronously and never
   // drop a snapshot (React state updates are async).
   const historyRef = useRef<MeasurementSnapshot[]>(
@@ -53,6 +56,7 @@ export function MeasureTool({ property }: { property: Property }) {
   const [ready, setReady] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [active, setActive] = useState<SectionKey>('front')
+  const [mode, setMode] = useState<'draw' | 'adjust'>('draw')
   const [breakdown, setBreakdown] = useState<Record<SectionKey, number>>({ front: 0, back: 0, left: 0, right: 0, boulevard: 0, other: 0 })
   const [totalSqft, setTotalSqft] = useState(0)
   const [pointsInCurrent, setPointsInCurrent] = useState(0)
@@ -117,6 +121,7 @@ export function MeasureTool({ property }: { property: Property }) {
     currentOverlay.current = new g.maps.Polygon({
       paths: currentPath.current, strokeColor: color, strokeWeight: 2,
       fillColor: color, fillOpacity: 0.3, map: gmap.current,
+      clickable: false, // never intercept clicks meant to place the next point
     })
   }
 
@@ -154,20 +159,46 @@ export function MeasureTool({ property }: { property: Property }) {
     pts.forEach((pt, i) => {
       const isLast = i === pts.length - 1
       const isFirstSnap = i === 0 && snapActive.current && pts.length >= 3
+      // clickable:false is critical — a clickable marker sitting on the previous
+      // point swallows the click meant to place the NEXT point. These are now
+      // purely visual; closing happens via the map's snap-click or Finish button.
       const marker = new g.maps.Marker({
         position: pt,
         map: gmap.current,
+        clickable: false,
         icon: vertexIcon({ selected: isLast, snap: isFirstSnap }),
         label: { text: String(i + 1), color: isFirstSnap || isLast ? '#0B0B0B' : color, fontSize: '11px', fontWeight: '700' },
         zIndex: 1000 + i,
-        cursor: i === 0 && pts.length >= 3 ? 'pointer' : 'crosshair',
       })
-      marker.addListener('mouseover', () => marker.setIcon(vertexIcon({ hover: true, selected: isLast, snap: isFirstSnap })))
-      marker.addListener('mouseout', () => marker.setIcon(vertexIcon({ selected: isLast, snap: isFirstSnap })))
-      // Tap the first point to close the shape.
-      if (i === 0 && pts.length >= 3) marker.addListener('click', () => commitCurrent(activeRef.current))
       vertexMarkers.current.push(marker)
     })
+  }
+
+  // Instant "click registered" confirmation — a quick pulse at the exact spot,
+  // zoom-independent, purely cosmetic and never clickable.
+  function flashClick(latLng: any) {
+    const g = window.google
+    if (!gmap.current) return
+    const color = sectionDef(activeRef.current).color
+    const pulse = new g.maps.Marker({
+      position: latLng, map: gmap.current, clickable: false, zIndex: 3000,
+      icon: { path: g.maps.SymbolPath.CIRCLE, scale: 7, fillColor: color, fillOpacity: 0.45, strokeColor: '#FFFFFF', strokeWeight: 2 },
+    })
+    let frame = 0
+    const FRAMES = 18
+    const tick = () => {
+      frame++
+      const t = frame / FRAMES
+      pulse.setIcon({
+        path: g.maps.SymbolPath.CIRCLE,
+        scale: 7 + t * 18,
+        fillColor: color, fillOpacity: 0.4 * (1 - t),
+        strokeColor: '#FFFFFF', strokeOpacity: 1 - t, strokeWeight: 2,
+      })
+      if (frame < FRAMES) requestAnimationFrame(tick)
+      else pulse.setMap(null)
+    }
+    requestAnimationFrame(tick)
   }
 
   function updatePreview(cursor: any) {
@@ -182,7 +213,7 @@ export function MeasureTool({ property }: { property: Property }) {
       preview.current = new g.maps.Polyline({
         path: pts, strokeColor: sectionDef(activeRef.current).color, strokeOpacity: 0.7, strokeWeight: 2,
         icons: [{ icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 3 }, offset: '0', repeat: '10px' }],
-        map: gmap.current,
+        map: gmap.current, clickable: false,
       })
     } else {
       preview.current.setPath(pts)
@@ -203,21 +234,26 @@ export function MeasureTool({ property }: { property: Property }) {
     }
   }
 
-  // Commit the in-progress shape into an editable polygon tagged with a section.
+  // Commit the in-progress shape into a section-tagged polygon. It's created
+  // INERT (editable+clickable false) so it can never eat a draw-mode click; the
+  // Adjust toggle flips it editable when the user wants to fine-tune.
   function commitCurrent(section: SectionKey) {
     if (currentPath.current.length < 3) return
     const g = window.google
     const color = sectionDef(section).color
     if (currentOverlay.current) { currentOverlay.current.setMap(null); currentOverlay.current = null }
+    const adjust = modeRef.current === 'adjust'
     const polygon = new g.maps.Polygon({
       paths: currentPath.current, strokeColor: color, strokeWeight: 2,
-      fillColor: color, fillOpacity: 0.32, editable: true, map: gmap.current,
+      fillColor: color, fillOpacity: 0.32, editable: adjust, clickable: adjust, map: gmap.current,
     })
     const path = polygon.getPath()
     // Live area while dragging vertices (throttled to one recompute per frame).
     ;['set_at', 'insert_at', 'remove_at'].forEach(ev => path.addListener(ev, scheduleRecompute))
-    // Right-click a vertex to delete it (keep at least a triangle).
-    polygon.addListener('rightclick', (e: any) => {
+    // Tap/click a vertex to delete it — touch-friendly, only active in Adjust
+    // mode (the polygon is only clickable then). Keeps a triangle minimum.
+    polygon.addListener('click', (e: any) => {
+      if (modeRef.current !== 'adjust') return
       if (e.vertex != null && path.getLength() > 3) { path.removeAt(e.vertex); recompute() }
     })
     shapes.current.push({ id: ++shapeId.current, section, polygon })
@@ -228,7 +264,32 @@ export function MeasureTool({ property }: { property: Property }) {
     recompute()
   }
 
+  // Flip every finished section between inert (draw) and editable (adjust).
+  function setShapesInteractive(on: boolean) {
+    shapes.current.forEach(s => s.polygon.setOptions({ editable: on, clickable: on }))
+  }
+
+  function enterDrawMode() {
+    if (modeRef.current === 'draw') return
+    modeRef.current = 'draw'; setMode('draw')
+    setShapesInteractive(false)
+  }
+
+  function toggleAdjust() {
+    if (modeRef.current === 'draw') {
+      // Park any in-progress shape, then make finished sections editable.
+      if (currentPath.current.length >= 3) commitCurrent(activeRef.current)
+      else resetCurrent()
+      modeRef.current = 'adjust'; setMode('adjust')
+      setShapesInteractive(true)
+    } else {
+      enterDrawMode()
+    }
+  }
+
   function selectSection(k: SectionKey) {
+    // Picking a section means you're drawing — leave Adjust mode.
+    enterDrawMode()
     // Auto-commit an in-progress shape to the section it was drawn in.
     if (currentPath.current.length >= 3) commitCurrent(activeRef.current)
     setActive(k)
@@ -311,6 +372,10 @@ export function MeasureTool({ property }: { property: Property }) {
           center, zoom: 20, mapTypeId: 'satellite', tilt: 0,
           streetViewControl: false, fullscreenControl: false, mapTypeControl: false,
           zoomControl: false, draggableCursor: 'crosshair', draggingCursor: 'grabbing',
+          // Reliable single-click point placement: don't let a fast 2nd click
+          // become a zoom, don't let Google POI pins eat clicks, and keep all
+          // gestures inside the map so a tap always registers as a click.
+          disableDoubleClickZoom: true, clickableIcons: false, gestureHandling: 'greedy',
         })
         // Overlay used purely to expose the pixel projection for snap detection.
         const ov = new g.maps.OverlayView()
@@ -321,6 +386,10 @@ export function MeasureTool({ property }: { property: Property }) {
         projection.current = ov
 
         gmap.current.addListener('click', (e: any) => {
+          // In Adjust mode the map is for editing points, not adding them.
+          if (modeRef.current === 'adjust') return
+          // Confirm every registered click immediately, before anything else.
+          flashClick(e.latLng)
           if (snapActive.current && currentPath.current.length >= 3) {
             commitCurrent(activeRef.current)
             return
@@ -328,7 +397,10 @@ export function MeasureTool({ property }: { property: Property }) {
           currentPath.current = [...currentPath.current, e.latLng]
           redrawCurrent(); redrawVertexMarkers(); recompute()
         })
-        gmap.current.addListener('mousemove', (e: any) => onMouseMove(e.latLng))
+        gmap.current.addListener('mousemove', (e: any) => {
+          if (modeRef.current === 'adjust') return
+          onMouseMove(e.latLng)
+        })
         setReady(true)
         loadTravelAndDensity(center)
       } catch (e) {
@@ -504,29 +576,44 @@ export function MeasureTool({ property }: { property: Property }) {
         )}
         {/* Active-section pill */}
         {ready && (
-          <div className="absolute top-3 left-3 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-bg-secondary/90 border border-border-strong text-xs font-medium" style={{ color: activeColor }}>
-            <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: activeColor }} />
-            Tracing: {sectionDef(active).label}
-            {pointsInCurrent >= 3 && <span className="text-ink-faint">· tap point 1 to close</span>}
+          <div className="absolute top-3 left-3 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-bg-secondary/90 border border-border-strong text-xs font-medium" style={{ color: mode === 'adjust' ? '#F59E0B' : activeColor }}>
+            <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: mode === 'adjust' ? '#F59E0B' : activeColor }} />
+            {mode === 'adjust'
+              ? 'Adjusting — drag a point to move, tap to delete'
+              : <>Tracing: {sectionDef(active).label}{pointsInCurrent >= 3 && <span className="text-ink-faint"> · tap point 1 to close</span>}</>}
           </div>
         )}
       </div>
 
       {/* Drawing controls — large targets */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        <Button variant="secondary" onClick={() => commitCurrent(active)} disabled={pointsInCurrent < 3} className="h-11">
+        <Button variant="secondary" onClick={() => commitCurrent(active)} disabled={mode === 'adjust' || pointsInCurrent < 3} className="h-11">
           <Plus className="w-4 h-4" /> Finish section
         </Button>
-        <Button variant="secondary" onClick={undo} disabled={pointsInCurrent === 0 && shapes.current.length === 0} className="h-11">
+        <Button variant="secondary" onClick={undo} disabled={mode === 'adjust' || (pointsInCurrent === 0 && shapes.current.length === 0)} className="h-11">
           <Undo2 className="w-4 h-4" /> Undo point
         </Button>
-        <Button variant="secondary" onClick={resetCurrent} disabled={pointsInCurrent === 0} className="h-11">
+        <Button variant="secondary" onClick={resetCurrent} disabled={mode === 'adjust' || pointsInCurrent === 0} className="h-11">
           <RotateCcw className="w-4 h-4" /> Reset shape
         </Button>
         <Button variant="secondary" onClick={clearAll} disabled={pointsInCurrent === 0 && shapes.current.length === 0} className="h-11">
           <Trash2 className="w-4 h-4" /> Clear all
         </Button>
       </div>
+
+      {/* Adjust mode — touch-friendly point editing (drag to move, tap to delete) */}
+      {shapes.current.length > 0 && (
+        <button
+          type="button"
+          onClick={toggleAdjust}
+          className={`w-full h-11 rounded-xl border text-sm font-medium flex items-center justify-center gap-2 transition-colors ${
+            mode === 'adjust' ? 'border-amber-500/50 bg-amber-500/10 text-amber-400' : 'border-border text-ink-muted hover:text-ink'
+          }`}
+        >
+          <Move className="w-4 h-4" />
+          {mode === 'adjust' ? 'Done adjusting — back to drawing' : 'Adjust points · drag to move, tap to delete'}
+        </button>
+      )}
 
       {/* Live breakdown + total */}
       <div className="bg-bg-secondary border border-border rounded-xl px-4 py-3 space-y-2">
@@ -675,9 +762,11 @@ export function MeasureTool({ property }: { property: Property }) {
       )}
 
       <p className="text-xs text-ink-faint">
-        Pick a section, tap each corner to trace it. Each point is numbered; the dot turns
-        <span className="text-emerald-400 font-medium"> green</span> when you&apos;re close enough to close the shape — tap to finish.
-        Drag any placed point to adjust (area updates live); right-click a point to delete it.
+        Pick a section, tap each corner to trace it. Each tap pulses to confirm it registered, and points are numbered.
+        On desktop the first dot turns <span className="text-emerald-400 font-medium">green</span> when you&apos;re close enough to close —
+        tap to finish (or use <span className="text-ink font-medium">Finish section</span> anytime). To fix a finished section, tap
+        <span className="text-amber-400 font-medium"> Adjust points</span> — then drag a point to move it or tap a point to delete it
+        (works on touch). Pick a section again to go back to drawing.
       </p>
     </div>
   )

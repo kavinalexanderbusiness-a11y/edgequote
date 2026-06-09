@@ -64,7 +64,32 @@ export function QuoteMeasure({ address, travelFee, onApply, onClose }: Props) {
     currentOverlay.current = new g.maps.Polygon({
       paths: currentPath.current, strokeColor: '#00C896', strokeWeight: 2,
       fillColor: '#00C896', fillOpacity: 0.3, map: gmap.current,
+      clickable: false, // never intercept a click meant to place the next point
     })
+  }
+
+  // Instant "click registered" pulse at the exact spot (zoom-independent).
+  function flashClick(latLng: any) {
+    const g = window.google
+    if (!gmap.current) return
+    const pulse = new g.maps.Marker({
+      position: latLng, map: gmap.current, clickable: false, zIndex: 3000,
+      icon: { path: g.maps.SymbolPath.CIRCLE, scale: 7, fillColor: '#00C896', fillOpacity: 0.45, strokeColor: '#FFFFFF', strokeWeight: 2 },
+    })
+    let frame = 0
+    const FRAMES = 18
+    const tick = () => {
+      frame++
+      const t = frame / FRAMES
+      pulse.setIcon({
+        path: g.maps.SymbolPath.CIRCLE, scale: 7 + t * 18,
+        fillColor: '#00C896', fillOpacity: 0.4 * (1 - t),
+        strokeColor: '#FFFFFF', strokeOpacity: 1 - t, strokeWeight: 2,
+      })
+      if (frame < FRAMES) requestAnimationFrame(tick)
+      else pulse.setMap(null)
+    }
+    requestAnimationFrame(tick)
   }
 
   function updatePreview(cursor: any) {
@@ -81,7 +106,7 @@ export function QuoteMeasure({ address, travelFee, onApply, onClose }: Props) {
       preview.current = new g.maps.Polyline({
         path: pts, strokeColor: '#00C896', strokeOpacity: 0.7, strokeWeight: 2,
         icons: [{ icon: { path: 'M 0,-1 0,1', strokeOpacity: 1, scale: 3 }, offset: '0', repeat: '10px' }],
-        map: gmap.current,
+        map: gmap.current, clickable: false,
       })
     } else {
       preview.current.setPath(pts)
@@ -117,8 +142,12 @@ export function QuoteMeasure({ address, travelFee, onApply, onClose }: Props) {
         gmap.current = new Map(mapEl.current, {
           center, zoom: 20, mapTypeId: 'satellite', tilt: 0,
           streetViewControl: false, fullscreenControl: false, mapTypeControl: false,
+          draggableCursor: 'crosshair',
+          // Reliable single-click placement (see MeasureTool for the rationale).
+          disableDoubleClickZoom: true, clickableIcons: false, gestureHandling: 'greedy',
         })
         gmap.current.addListener('click', (e: any) => {
+          flashClick(e.latLng)
           currentPath.current = [...currentPath.current, e.latLng]
           redrawCurrent(); recompute()
         })
