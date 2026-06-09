@@ -7,7 +7,8 @@ import { Property } from '@/types'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
-import { MapPin, Home, User, Ruler } from 'lucide-react'
+import { formatDate } from '@/lib/utils'
+import { MapPin, Home, User, Ruler, History } from 'lucide-react'
 
 export default function PropertiesPage() {
   const [properties, setProperties] = useState<Property[]>([])
@@ -44,7 +45,10 @@ export default function PropertiesPage() {
         </div>
       ) : (
         <div className="space-y-3">
-          {properties.map(property => (
+          {properties.map(property => {
+            const hist = Array.isArray(property.measurement_history) ? property.measurement_history : []
+            const last = hist.length ? hist[hist.length - 1] : null
+            return (
             <Card key={property.id}>
               <CardBody>
                 <div className="flex items-start justify-between gap-4">
@@ -80,6 +84,13 @@ export default function PropertiesPage() {
                           {property.fence_length ? `Fence ${property.fence_length} ft` : ''}
                         </p>
                       )}
+                      {last && (
+                        <p className="text-xs text-ink-faint flex items-center gap-1">
+                          <History className="w-3 h-3" />
+                          Last measured {formatDate(last.date)} · {(last.total_sqft ?? last.lawn_sqft ?? 0).toLocaleString()} ft²
+                          {hist.length > 1 && <span className="text-ink-faint">· {hist.length} measurements</span>}
+                        </p>
+                      )}
                     </div>
                   </div>
                   <div className="flex flex-col items-end gap-2 shrink-0">
@@ -97,7 +108,8 @@ export default function PropertiesPage() {
                 </div>
               </CardBody>
             </Card>
-          ))}
+            )
+          })}
         </div>
       )}
     </div>

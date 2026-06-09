@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { Coord, DaySuggestion, geocodeAddress, suggestBestDays } from '@/lib/geo'
+import { Coord, DaySuggestion, LocatedJob, geocodeAddress, suggestBestDays, fetchLocatedUpcomingJobs, todayLocalISO } from '@/lib/geo'
 import { Sparkles, MapPin, Clock, Navigation } from 'lucide-react'
 
 interface Props {
@@ -12,13 +12,6 @@ interface Props {
   onPick?: (date: string, s: DaySuggestion) => void   // omit for read-only display
   onTop?: (s: DaySuggestion | null) => void           // report #1 pick for telemetry
 }
-
-function localToday(): string {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
-interface LocatedJob { id: string; scheduled_date: string; lat: number | null; lng: number | null }
 
 // "Where should I schedule this to save the most driving?" — surfaces the days
 // that already have jobs clustered near this property. Shared route math lives
@@ -54,15 +47,8 @@ export function BestDaySuggestions({ coord, address, excludeJobId, onPick, onTop
     let active = true
     async function load() {
       const { data: { user } } = await supabase.auth.getUser()
-      const { data } = await supabase
-        .from('jobs')
-        .select('id, scheduled_date, properties(lat, lng)')
-        .eq('user_id', user!.id)
-        .gte('scheduled_date', localToday())
-        .in('status', ['scheduled', 'in_progress'])
+      const rows = await fetchLocatedUpcomingJobs(supabase, user!.id)
       if (!active) return
-      const rows = ((data as unknown as { id: string; scheduled_date: string; properties?: { lat: number | null; lng: number | null } | null }[]) || [])
-        .map(r => ({ id: r.id, scheduled_date: r.scheduled_date, lat: r.properties?.lat ?? null, lng: r.properties?.lng ?? null }))
       setJobs(rows)
       setLoading(false)
     }
@@ -71,7 +57,7 @@ export function BestDaySuggestions({ coord, address, excludeJobId, onPick, onTop
   }, [supabase])
 
   const suggestions = target
-    ? suggestBestDays(target, jobs.filter(j => j.id !== excludeJobId), { fromISO: localToday() })
+    ? suggestBestDays(target, jobs.filter(j => j.id !== excludeJobId), { fromISO: todayLocalISO() })
     : []
 
   // Report the top suggestion upward for telemetry whenever it changes.

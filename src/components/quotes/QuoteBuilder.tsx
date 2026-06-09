@@ -12,7 +12,8 @@ import { Button } from '@/components/ui/Button'
 import { Toggle } from '@/components/ui/Toggle'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
-import { calculateQuote, formatCurrency, suggestTravelFee } from '@/lib/utils'
+import { formatCurrency, suggestTravelFee } from '@/lib/utils'
+import { laborSuggestion } from '@/lib/pricing'
 import { BestDaySuggestions } from '@/components/schedule/BestDaySuggestions'
 import { Clock, DollarSign, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles } from 'lucide-react'
 
@@ -45,6 +46,8 @@ export function QuoteBuilder({
         weekly_price: 0,
         biweekly_price: 0,
         monthly_price: 0,
+        measured_sqft: 0,
+        suggested_price: 0,
         overgrowth_multiplier: 1,
         distance_km: 0,
         hours: 2,
@@ -61,7 +64,7 @@ export function QuoteBuilder({
   const [calcMsg, setCalcMsg] = useState<string | null>(null)
   const [showMeasure, setShowMeasure] = useState(false)
   const [includeTravel, setIncludeTravel] = useState(true)
-  const [initialManual, setInitialManual] = useState<boolean>(!!(isEdit && (defaultValues?.initial_price ?? 0) > 0))
+  const [initialManual, setInitialManual] = useState<boolean>((defaultValues?.initial_price ?? 0) > 0)
   const [showBestDays, setShowBestDays] = useState(false)
 
   const hours = watch('hours') || 0
@@ -80,9 +83,7 @@ export function QuoteBuilder({
   const biweeklyPrice = Number(watch('biweekly_price')) || 0
   const monthlyPrice = Number(watch('monthly_price')) || 0
 
-  const effectiveRate = Number(rate) * (overgrowth || 1)
-  const { subtotal } = calculateQuote(Number(hours), Number(crewSize), effectiveRate, Number(travelFee))
-  const suggestedInitial = Math.round(subtotal)
+  const suggestedInitial = laborSuggestion(Number(hours), Number(crewSize), Number(rate), overgrowth || 1)
   const effectiveTotal = initialPrice + Number(travelFee || 0)
 
   useEffect(() => {
@@ -406,7 +407,12 @@ export function QuoteBuilder({
           address={address}
           travelFee={Number(travelFee) || 0}
           onClose={() => setShowMeasure(false)}
-          onApply={(price) => { setValue('initial_price', price); setInitialManual(true); setShowMeasure(false) }}
+          onApply={(price, totalSqft, suggested) => {
+            setValue('initial_price', price)
+            setValue('measured_sqft', totalSqft)
+            setValue('suggested_price', suggested)
+            setInitialManual(true); setShowMeasure(false)
+          }}
         />
       )}
     </form>

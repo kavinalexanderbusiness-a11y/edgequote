@@ -3,11 +3,13 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Customer, Job, JobFormValues, Quote, RecurFreq, RecurrenceScope } from '@/types'
+import { Customer, Job, JobFormValues, Quote, RecurrenceScope } from '@/types'
 import { Calendar, CalendarView } from '@/components/schedule/Calendar'
 import { JobForm, Recurrence, SuggestionMeta } from '@/components/schedule/JobForm'
 import { ScopeDialog } from '@/components/schedule/ScopeDialog'
-import { generateOccurrenceDates, jobsInScope, shiftDate, dayDelta } from '@/lib/recurrence'
+import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel } from '@/lib/recurrence'
+import type { JobRecurrence } from '@/types'
+import { createDraftInvoiceForCompletedJob } from '@/lib/invoicing'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
@@ -45,6 +47,8 @@ export default function SchedulePage() {
   const [moveMode, setMoveMode] = useState(false)
   const [movingJob, setMovingJob] = useState<Job | null>(null)
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null)
+  const [banner, setBanner] = useState<string | null>(null)
+  const [recurrenceLabels, setRecurrenceLabels] = useState<Record<string, string>>({})
 
   // When arriving from an accepted quote (?quote=…), open a prefilled new-job form.
   const [quoteCtx, setQuoteCtx] = useState<Quote | null>(null)
@@ -54,16 +58,22 @@ export default function SchedulePage() {
 
   const fetchJobs = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
-    const [jRes, cRes] = await Promise.all([
+    const [jRes, cRes, rRes] = await Promise.all([
       supabase
         .from('jobs')
         .select('*, customers(id, name, phone), properties(id, address, lat, lng)')
         .eq('user_id', user!.id)
         .order('scheduled_date'),
       supabase.from('customers').select('*').eq('user_id', user!.id).order('name'),
+      supabase.from('job_recurrences').select('*').eq('user_id', user!.id),
     ])
     setJobs((jRes.data as Job[]) || [])
     setCustomers((cRes.data as Customer[]) || [])
+    const labels: Record<string, string> = {}
+    for (const r of (rRes.data as JobRecurrence[]) || []) {
+      labels[r.id] = recurrenceLabel(r.interval_unit, r.interval_count, r.freq)
+    }
+    setRecurrenceLabels(labels)
     setLoading(false)
   }, [supabase])
 
@@ -138,28 +148,40 @@ export default function SchedulePage() {
       crew_size: Number(values.crew_size) || 1,
       status: values.status,
       notes: values.notes || null,
+      actual_minutes: values.actual_minutes ? Number(values.actual_minutes) : null,
       suggested_date: meta?.suggestedDate ?? null,
       suggested_nearby_count: meta?.suggestedNearby ?? null,
     }
 
-    if (recurrence.repeat === 'none') {
-      await supabase.from('jobs').insert({ ...base, scheduled_date: values.scheduled_date, recurrence_id: null })
+    if (!recurrence.unit) {
+      const { error } = await supabase.from('jobs').insert({ ...base, scheduled_date: values.scheduled_date, recurrence_id: null })
+      if (error) { setBanner('Could not save the job: ' + error.message); return }
     } else {
-      const freq = recurrence.repeat as RecurFreq
-      const { data: rec } = await supabase
+      // Keep legacy `freq` populated where the interval maps to an old value.
+      const legacyFreq =
+        recurrence.unit === 'week' && recurrence.count === 1 ? 'weekly'
+        : recurrence.unit === 'week' && recurrence.count === 2 ? 'biweekly'
+        : recurrence.unit === 'month' && recurrence.count === 1 ? 'monthly'
+        : null
+      const { data: rec, error: recError } = await supabase
         .from('job_recurrences')
         .insert({
           user_id: user!.id,
-          freq,
+          freq: legacyFreq,
+          interval_unit: recurrence.unit,
+          interval_count: recurrence.count,
           start_date: values.scheduled_date,
           end_date: recurrence.endDate,
+          end_count: recurrence.endCount,
           customer_id: values.customer_id || null,
         })
         .select()
         .single()
-      const dates = generateOccurrenceDates(values.scheduled_date, freq, recurrence.endDate)
-      const rows = dates.map(d => ({ ...base, scheduled_date: d, recurrence_id: rec?.id ?? null }))
-      await supabase.from('jobs').insert(rows)
+      if (recError) { setBanner('Could not save the recurrence: ' + recError.message); return }
+      const dates = generateOccurrences(values.scheduled_date, recurrence.unit, recurrence.count, recurrence.endDate, recurrence.endCount)
+      const rows = dates.map((d: string) => ({ ...base, scheduled_date: d, recurrence_id: rec?.id ?? null }))
+      const { error } = await supabase.from('jobs').insert(rows)
+      if (error) { setBanner('Could not save the jobs: ' + error.message); return }
     }
 
     if (quoteCtx && quoteCtx.status === 'accepted') {
@@ -172,6 +194,7 @@ export default function SchedulePage() {
 
   // Apply field edits (and a date shift for future/all) across a recurrence scope.
   async function applyEdit(job: Job, values: JobFormValues, scope: RecurrenceScope) {
+    // Fields that propagate across the chosen recurrence scope.
     const fields = {
       customer_id: values.customer_id || null,
       property_id: values.property_id || null,
@@ -181,15 +204,31 @@ export default function SchedulePage() {
       end_time: values.end_time || null,
       duration_minutes: values.duration_minutes ? Number(values.duration_minutes) : null,
       crew_size: Number(values.crew_size) || 1,
-      status: values.status,
       notes: values.notes || null,
+    }
+    // Per-visit outcome — status and actual time belong ONLY to the visit being
+    // edited, never stamped across siblings (that would fabricate actuals).
+    const perVisit = {
+      status: values.status,
+      actual_minutes: values.actual_minutes ? Number(values.actual_minutes) : null,
     }
     const targets = jobsInScope(job, jobs, scope)
     const delta = dayDelta(job.scheduled_date, values.scheduled_date)
-    await Promise.all(targets.map(t => supabase.from('jobs').update({
+    const results = await Promise.all(targets.map(t => supabase.from('jobs').update({
       ...fields,
+      ...(t.id === job.id ? perVisit : {}),
       scheduled_date: scope === 'this' ? values.scheduled_date : shiftDate(t.scheduled_date, delta),
     }).eq('id', t.id)))
+    const failed = results.find(r => r.error)
+    if (failed?.error) setBanner('Could not save the job: ' + failed.error.message)
+
+    // Completing a recurring visit auto-creates a draft invoice for that visit.
+    if (values.status === 'completed' && job.recurrence_id) {
+      const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed' })
+      if (res.created) setBanner(`Draft invoice ${res.invoiceNumber} created from the completed visit — review it in Invoices.`)
+      else if (res.reason === 'exists') setBanner('That visit already has an invoice.')
+    }
+
     await fetchJobs()
     setEditing(null)
   }
@@ -311,6 +350,16 @@ export default function SchedulePage() {
         </div>
       )}
 
+      {banner && (
+        <div className="flex items-center justify-between gap-3 text-sm text-accent bg-accent/10 border border-accent/20 rounded-xl px-4 py-2.5">
+          <span>{banner}</span>
+          <div className="flex items-center gap-3 shrink-0">
+            <button onClick={() => router.push('/dashboard/invoices')} className="underline font-medium">Invoices</button>
+            <button onClick={() => setBanner(null)} className="text-ink-faint hover:text-ink">✕</button>
+          </div>
+        </div>
+      )}
+
       {/* Controls */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-2 flex-wrap">
@@ -378,6 +427,7 @@ export default function SchedulePage() {
                 crew_size: editing.crew_size,
                 status: editing.status,
                 notes: editing.notes || '',
+                actual_minutes: editing.actual_minutes || 0,
               } : (quotePrefill ?? customerPrefill ?? { scheduled_date: formDate })}
               onSubmit={editing ? handleEdit : handleAdd}
               onCancel={closeForm}
@@ -405,6 +455,7 @@ export default function SchedulePage() {
           onSelectDay={handleDayTap}
           onSelectJob={handleJobTap}
           movingJobId={movingJob?.id ?? null}
+          recurrenceLabels={recurrenceLabels}
         />
       )}
 

@@ -1,10 +1,34 @@
 import { parseISO, addDays, format } from 'date-fns'
+import type { SupabaseClient } from '@supabase/supabase-js'
 
 // ── Single source of truth for geo math shared by the Route Planner and the
 // Best-Day Suggester. Keep all distance/geocode logic here so route ordering
 // and scheduling recommendations never drift apart.
 
 export interface Coord { lat: number; lng: number }
+
+// Local (not UTC) yyyy-MM-dd — the one place this is defined so every
+// "scheduled_date >= today" window stays in lock-step.
+export function todayLocalISO(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+export interface LocatedJob { id: string; scheduled_date: string; lat: number | null; lng: number | null }
+
+// The shared definition of "an upcoming located job" used for BOTH route-density
+// pricing and best-day suggestions, so the two features can never disagree on
+// which jobs count.
+export async function fetchLocatedUpcomingJobs(supabase: SupabaseClient, userId: string): Promise<LocatedJob[]> {
+  const { data } = await supabase
+    .from('jobs')
+    .select('id, scheduled_date, properties(lat, lng)')
+    .eq('user_id', userId)
+    .gte('scheduled_date', todayLocalISO())
+    .in('status', ['scheduled', 'in_progress'])
+  return ((data as unknown as { id: string; scheduled_date: string; properties?: { lat: number | null; lng: number | null } | null }[]) || [])
+    .map(r => ({ id: r.id, scheduled_date: r.scheduled_date, lat: r.properties?.lat ?? null, lng: r.properties?.lng ?? null }))
+}
 
 // Straight-line (Haversine) distance in km.
 export function haversineKm(a: Coord, b: Coord): number {
@@ -43,6 +67,24 @@ export interface DaySuggestion {
   avgKm: number       // mean distance from the target to the nearby stops
   nearestKm: number   // closest existing stop that day
   addedDriveMin: number // estimated extra driving to slot this stop in
+}
+
+// How many existing located jobs sit within driving range of a target property,
+// and how close the nearest one is. Powers the route-density travel discount and
+// pricing-confidence scoring — same radius the Best-Day Suggester uses.
+export function nearbyJobCount(
+  target: Coord,
+  jobs: { lat: number | null; lng: number | null }[],
+  radiusKm: number = NEARBY_RADIUS_KM,
+): { count: number; nearestKm: number | null } {
+  const dists = jobs
+    .filter(j => j.lat != null && j.lng != null)
+    .map(j => haversineKm(target, { lat: j.lat as number, lng: j.lng as number }))
+    .filter(km => km <= radiusKm)
+  return {
+    count: dists.length,
+    nearestKm: dists.length ? Math.round(Math.min(...dists) * 10) / 10 : null,
+  }
 }
 
 interface DatedPoint { scheduled_date: string; lat: number | null; lng: number | null }

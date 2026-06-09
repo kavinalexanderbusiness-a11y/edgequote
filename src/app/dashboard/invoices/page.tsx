@@ -63,7 +63,7 @@ export default function InvoicesPage() {
   }
 
   const outstanding = invoices
-    .filter(i => i.status !== 'paid')
+    .filter(i => i.status === 'unpaid' || i.status === 'sent')
     .reduce((sum, i) => sum + Number(i.amount || 0), 0)
   const paidTotal = invoices
     .filter(i => i.status === 'paid')

@@ -15,13 +15,15 @@ export default async function DashboardPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
-  const { data: quotes } = await supabase
-    .from('quotes')
-    .select('*')
-    .eq('user_id', user!.id)
-    .order('created_at', { ascending: false })
+  const [{ data: quotes }, { data: invoices }] = await Promise.all([
+    supabase.from('quotes').select('*').eq('user_id', user!.id).order('created_at', { ascending: false }),
+    supabase.from('invoices').select('amount, status').eq('user_id', user!.id),
+  ])
 
   const allQuotes: Quote[] = quotes || []
+  const allInvoices = (invoices as { amount: number; status: string }[]) || []
+  const collectedRevenue = allInvoices.filter(i => i.status === 'paid').reduce((s, i) => s + Number(i.amount || 0), 0)
+  const outstandingRevenue = allInvoices.filter(i => i.status === 'unpaid' || i.status === 'sent').reduce((s, i) => s + Number(i.amount || 0), 0)
 
   // Monthly revenue = total of quotes created this calendar month
   const now = new Date()
@@ -47,6 +49,8 @@ export default async function DashboardPage() {
       .reduce((sum, q) => sum + Number(q.total), 0),
     monthlyRevenue,
     conversionRate,
+    collectedRevenue,
+    outstandingRevenue,
   }
 
   const recent = allQuotes.slice(0, 8)

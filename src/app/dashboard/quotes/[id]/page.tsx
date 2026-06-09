@@ -3,13 +3,13 @@
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Quote, Customer, QuoteFormValues, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
+import { Quote, Customer, QuoteFormValues, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS, CONFIDENCE_COLORS } from '@/types'
 import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Button } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatCurrency, formatDate, applyOvergrowth, generateQuoteNumber } from '@/lib/utils'
 import { needsFollowUp, daysSince, logFollowUpPatch, markWonPatch } from '@/lib/followup'
 import { Edit2, ArrowLeft, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X } from 'lucide-react'
 
@@ -67,7 +67,7 @@ export default function QuoteDetailPage() {
     }
 
     const mult = Number(values.overgrowth_multiplier) || 1
-    const finalRate = mult === 0 ? Number(values.rate) : Number(values.rate) * mult
+    const finalRate = applyOvergrowth(Number(values.rate), mult)
 
     const { data, error } = await supabase
       .from('quotes')
@@ -89,6 +89,8 @@ export default function QuoteDetailPage() {
         crew_size: Number(values.crew_size),
         rate: finalRate,
         travel_fee: Number(values.travel_fee),
+        measured_sqft: Number(values.measured_sqft) || null,
+        suggested_price: Number(values.suggested_price) || null,
         status: values.status,
       })
       .eq('id', id)
@@ -243,8 +245,7 @@ export default function QuoteDetailPage() {
         .from('quotes')
         .select('id', { count: 'exact', head: true })
         .eq('user_id', user!.id)
-      const num = String((count || 0) + 1).padStart(4, '0')
-      const quote_number = `EPS-${new Date().getFullYear()}-${num}`
+      const quote_number = generateQuoteNumber((count || 0) + 1)
 
       const { data, error } = await supabase.from('quotes').insert({
         quote_number,
@@ -266,6 +267,17 @@ export default function QuoteDetailPage() {
         rate: quote.rate,
         travel_fee: quote.travel_fee,
         property_id: quote.property_id,
+        // Carry measurement provenance so a duplicate keeps its breakdown/analysis.
+        measured_sqft: quote.measured_sqft,
+        suggested_price: quote.suggested_price,
+        front_lawn_sqft: quote.front_lawn_sqft,
+        back_lawn_sqft: quote.back_lawn_sqft,
+        left_side_sqft: quote.left_side_sqft,
+        right_side_sqft: quote.right_side_sqft,
+        boulevard_sqft: quote.boulevard_sqft,
+        other_sqft: quote.other_sqft,
+        travel_distance_km: quote.travel_distance_km,
+        pricing_confidence: quote.pricing_confidence,
         issued_date: new Date().toISOString().split('T')[0],
         status: 'draft',
         user_id: user!.id,
@@ -311,6 +323,20 @@ export default function QuoteDetailPage() {
   const customerPhone = customers.find(c => c.id === quote.customer_id)?.phone || null
   const canInvoice = quote.status === 'accepted' || quote.status === 'scheduled' || quote.status === 'completed'
 
+  // Measurement provenance + pricing analysis (suggested vs. actual).
+  const measSections = [
+    { label: 'Front Lawn', v: quote.front_lawn_sqft },
+    { label: 'Back Lawn', v: quote.back_lawn_sqft },
+    { label: 'Left Side', v: quote.left_side_sqft },
+    { label: 'Right Side', v: quote.right_side_sqft },
+    { label: 'Boulevard', v: quote.boulevard_sqft },
+    { label: 'Other', v: quote.other_sqft },
+  ].filter(s => s.v != null && Number(s.v) > 0)
+  const hasMeasurement = (quote.measured_sqft != null && Number(quote.measured_sqft) > 0) || measSections.length > 0
+  const suggestedPrice = quote.suggested_price != null ? Number(quote.suggested_price) : null
+  const actualPrice = Number(quote.total)
+  const priceDiff = suggestedPrice != null ? actualPrice - suggestedPrice : null
+
   if (editing) return (
     <div className="max-w-5xl space-y-6">
       <PageHeader title={`Edit ${quote.quote_number}`} />
@@ -329,6 +355,8 @@ export default function QuoteDetailPage() {
           weekly_price: quote.weekly_price || 0,
           biweekly_price: quote.biweekly_price || 0,
           monthly_price: quote.monthly_price || 0,
+          measured_sqft: quote.measured_sqft || 0,
+          suggested_price: quote.suggested_price || 0,
           overgrowth_multiplier: 1,
           distance_km: 0,
           hours: quote.hours,
@@ -549,6 +577,65 @@ export default function QuoteDetailPage() {
           </div>
         </CardBody>
       </Card>
+
+      {/* Measurements + pricing analysis — handy when reviewing pricing later */}
+      {(hasMeasurement || suggestedPrice != null) && (
+        <Card>
+          <CardBody className="space-y-4">
+            {hasMeasurement && (
+              <div>
+                <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-2">Measurements</p>
+                <div className="space-y-1.5">
+                  {measSections.map(s => (
+                    <div key={s.label} className="flex justify-between text-sm">
+                      <span className="text-ink-muted">{s.label}</span>
+                      <span className="text-ink font-medium">{Number(s.v).toLocaleString()} sq ft</span>
+                    </div>
+                  ))}
+                  {quote.measured_sqft != null && Number(quote.measured_sqft) > 0 && (
+                    <div className="flex justify-between text-sm pt-1.5 border-t border-border">
+                      <span className="text-sm font-semibold text-ink">Total</span>
+                      <span className="text-ink font-bold">{Number(quote.measured_sqft).toLocaleString()} sq ft</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {suggestedPrice != null && (
+              <div className={hasMeasurement ? 'pt-4 border-t border-border' : ''}>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Pricing analysis</p>
+                  {quote.pricing_confidence && CONFIDENCE_COLORS[quote.pricing_confidence] && (
+                    <span className={`inline-flex items-center text-[10px] font-semibold border rounded-full px-2 py-0.5 ${CONFIDENCE_COLORS[quote.pricing_confidence]}`}>
+                      {CONFIDENCE_LABELS[quote.pricing_confidence]}
+                    </span>
+                  )}
+                </div>
+                <div className="space-y-1.5">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-ink-muted">Suggested price</span>
+                    <span className="text-ink font-medium">{formatCurrency(suggestedPrice)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-ink-muted">Actual quote price</span>
+                    <span className="text-ink font-medium">{formatCurrency(actualPrice)}</span>
+                  </div>
+                  {priceDiff != null && (
+                    <div className="flex justify-between text-sm pt-1.5 border-t border-border">
+                      <span className="text-ink-muted">Difference</span>
+                      <span className={`font-semibold ${priceDiff >= 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                        {priceDiff >= 0 ? '+' : '−'}{formatCurrency(Math.abs(priceDiff))}
+                        <span className="text-ink-faint font-normal"> {priceDiff >= 0 ? 'above' : 'below'} suggested</span>
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </CardBody>
+        </Card>
+      )}
     </div>
   )
 }

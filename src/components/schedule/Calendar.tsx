@@ -18,6 +18,7 @@ interface CalendarProps {
   onSelectDay: (date: Date) => void
   onSelectJob: (job: Job) => void
   movingJobId?: string | null
+  recurrenceLabels?: Record<string, string>
 }
 
 function jobsOnDay(jobs: Job[], day: Date): Job[] {
@@ -26,7 +27,7 @@ function jobsOnDay(jobs: Job[], day: Date): Job[] {
     .sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''))
 }
 
-function JobChip({ job, onSelect, isMoving }: { job: Job; onSelect: (j: Job) => void; isMoving?: boolean }) {
+function JobChip({ job, onSelect, isMoving, recurLabel }: { job: Job; onSelect: (j: Job) => void; isMoving?: boolean; recurLabel?: string }) {
   return (
     <button
       onClick={(e) => { e.stopPropagation(); onSelect(job) }}
@@ -35,7 +36,7 @@ function JobChip({ job, onSelect, isMoving }: { job: Job; onSelect: (j: Job) => 
         JOB_STATUS_COLORS[job.status],
         isMoving && 'ring-2 ring-accent ring-offset-1 ring-offset-bg opacity-60'
       )}
-      title={job.title}
+      title={recurLabel ? `${job.title} · ${recurLabel} (recurring)` : job.title}
     >
       <span className="flex items-center gap-0.5">
         {job.recurrence_id && <Repeat className="w-2.5 h-2.5 shrink-0 opacity-70" />}
@@ -45,7 +46,8 @@ function JobChip({ job, onSelect, isMoving }: { job: Job; onSelect: (j: Job) => 
   )
 }
 
-export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, movingJobId }: CalendarProps) {
+export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, movingJobId, recurrenceLabels }: CalendarProps) {
+  const recurLabelFor = (job: Job) => job.recurrence_id ? recurrenceLabels?.[job.recurrence_id] : undefined
   const weekdayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
   const monthDays = useMemo(() => {
@@ -94,7 +96,7 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, movingJ
                 </div>
                 <div className="space-y-0.5">
                   {dayJobs.slice(0, 3).map(job => (
-                    <JobChip key={job.id} job={job} onSelect={onSelectJob} isMoving={job.id === movingJobId} />
+                    <JobChip key={job.id} job={job} onSelect={onSelectJob} isMoving={job.id === movingJobId} recurLabel={recurLabelFor(job)} />
                   ))}
                   {dayJobs.length > 3 && (
                     <span className="text-[10px] text-ink-faint px-1">+{dayJobs.length - 3} more</span>
@@ -135,7 +137,7 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, movingJ
                 </div>
                 <div className="space-y-1">
                   {dayJobs.map(job => (
-                    <JobChip key={job.id} job={job} onSelect={onSelectJob} />
+                    <JobChip key={job.id} job={job} onSelect={onSelectJob} recurLabel={recurLabelFor(job)} />
                   ))}
                 </div>
               </button>
@@ -177,6 +179,7 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, movingJ
                 <span className="flex items-center gap-1.5 text-sm font-semibold">
                   {job.recurrence_id && <Repeat className="w-3 h-3 shrink-0 opacity-70" />}
                   {job.title}
+                  {recurLabelFor(job) && <span className="text-[10px] font-medium opacity-70">· {recurLabelFor(job)}</span>}
                 </span>
                 {job.start_time && (
                   <span className="text-xs">{job.start_time.slice(0, 5)}{job.end_time ? `–${job.end_time.slice(0, 5)}` : ''}</span>

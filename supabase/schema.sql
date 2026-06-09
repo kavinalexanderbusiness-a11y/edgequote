@@ -136,3 +136,35 @@ create index customers_name_idx    on public.customers(name);
 create index quotes_user_id_idx    on public.quotes(user_id);
 create index quotes_status_idx     on public.quotes(status);
 create index quotes_created_idx    on public.quotes(created_at desc);
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-09 — Measurement sections, travel + pricing
+-- intelligence capture. Idempotent; safe to re-run.
+-- ════════════════════════════════════════════════════════════
+
+-- Measurement provenance + per-section breakdown + travel/confidence capture.
+-- (measured_sqft / suggested_price were added in a prior step; included here so a
+--  fresh deploy from this file reproduces a complete quotes table.)
+alter table public.quotes
+  add column if not exists measured_sqft      numeric,
+  add column if not exists suggested_price    numeric,
+  add column if not exists front_lawn_sqft    numeric,
+  add column if not exists back_lawn_sqft     numeric,
+  add column if not exists left_side_sqft     numeric,
+  add column if not exists right_side_sqft    numeric,
+  add column if not exists boulevard_sqft     numeric,
+  add column if not exists other_sqft         numeric,
+  add column if not exists travel_distance_km numeric,
+  add column if not exists pricing_confidence text;
+
+-- Constrain confidence to the known set (NULL allowed for un-scored quotes).
+alter table public.quotes drop constraint if exists quotes_pricing_confidence_chk;
+alter table public.quotes add constraint quotes_pricing_confidence_chk
+  check (pricing_confidence is null or pricing_confidence in ('high','medium','low'));
+
+-- Actual minutes on site (planned vs. actual time → future pricing intelligence).
+alter table public.jobs
+  add column if not exists actual_minutes integer;
+
+-- properties.measurement_history (jsonb) already exists and now stores versioned
+-- snapshots { date, total_sqft, sections{...}, rate_per_1000 } — never overwritten.

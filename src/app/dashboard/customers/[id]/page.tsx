@@ -4,7 +4,9 @@ import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
-import { Customer, Property, Quote, Job, Invoice, JobRecurrence, RECUR_FREQ_LABELS } from '@/types'
+import { Customer, Property, Quote, Job, Invoice, JobRecurrence } from '@/types'
+import { needsFollowUp, daysSince } from '@/lib/followup'
+import { recurrenceLabel, recurringCustomerLabel } from '@/lib/recurrence'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -12,9 +14,11 @@ import { formatCurrency, formatDate, getInitials } from '@/lib/utils'
 import {
   ArrowLeft, Phone, MessageSquare, FilePlus, CalendarPlus, Mail, MapPin, Repeat,
   FileText, Send, RotateCw, CheckCircle2, Wrench, Receipt, DollarSign, Sparkles, Users,
+  Edit2, ExternalLink, Ruler, AlertTriangle, StickyNote, Wallet,
 } from 'lucide-react'
 
 const WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
+const OPEN_INVOICE = new Set(['unpaid', 'sent'])
 
 function localToday(): string {
   const d = new Date()
@@ -47,12 +51,18 @@ export default function CustomerDetailPage() {
 
   const [customer, setCustomer] = useState<Customer | null>(null)
   const [referrer, setReferrer] = useState<{ id: string; name: string } | null>(null)
+  const [referredCustomers, setReferredCustomers] = useState<{ id: string; name: string }[]>([])
+  const [referredRevenue, setReferredRevenue] = useState(0)
   const [properties, setProperties] = useState<Property[]>([])
   const [quotes, setQuotes] = useState<Quote[]>([])
   const [jobs, setJobs] = useState<Job[]>([])
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [recurrences, setRecurrences] = useState<JobRecurrence[]>([])
   const [loading, setLoading] = useState(true)
+
+  const [editingNotes, setEditingNotes] = useState(false)
+  const [notesValue, setNotesValue] = useState('')
+  const [savingNotes, setSavingNotes] = useState(false)
 
   useEffect(() => {
     async function load() {
@@ -66,15 +76,25 @@ export default function CustomerDetailPage() {
       ])
       const cust = cRes.data as Customer | null
       setCustomer(cust)
+      setNotesValue(cust?.notes || '')
       setProperties((pRes.data as Property[]) || [])
       setQuotes((qRes.data as Quote[]) || [])
       setJobs((jRes.data as Job[]) || [])
       setInvoices((iRes.data as Invoice[]) || [])
 
-      // Optional lookups — tolerate not-yet-migrated columns/tables.
       if (cust?.referred_by_customer_id) {
         const { data } = await supabase.from('customers').select('id, name').eq('id', cust.referred_by_customer_id).maybeSingle()
         if (data) setReferrer(data as { id: string; name: string })
+      }
+      // Advocates: who this customer referred, and the revenue they generated.
+      const { data: referred } = await supabase.from('customers').select('id, name').eq('referred_by_customer_id', id)
+      const referredList = (referred as { id: string; name: string }[]) || []
+      setReferredCustomers(referredList)
+      if (referredList.length > 0) {
+        const { data: rq } = await supabase.from('quotes').select('total, status').in('customer_id', referredList.map(r => r.id))
+        const rev = ((rq as { total: number; status: string }[]) || [])
+          .filter(q => WON.has(q.status)).reduce((s, q) => s + Number(q.total || 0), 0)
+        setReferredRevenue(rev)
       }
       const { data: recs } = await supabase.from('job_recurrences').select('*').eq('customer_id', id)
       if (recs) setRecurrences(recs as JobRecurrence[])
@@ -84,21 +104,68 @@ export default function CustomerDetailPage() {
     load()
   }, [id])
 
+  async function saveNotes() {
+    if (!customer) return
+    setSavingNotes(true)
+    await supabase.from('customers').update({ notes: notesValue || null }).eq('id', customer.id)
+    setCustomer({ ...customer, notes: notesValue || null })
+    setSavingNotes(false)
+    setEditingNotes(false)
+  }
+
   if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading customer...</div>
   if (!customer) return <div className="text-center py-16 text-sm text-red-400">Customer not found.</div>
 
-  // ── Lifetime value ──
-  const wonQuotes = quotes.filter(q => WON.has(q.status))
-  const totalRevenue = wonQuotes.reduce((s, q) => s + Number(q.total || 0), 0)
-  const avgJobValue = wonQuotes.length > 0 ? totalRevenue / wonQuotes.length : 0
-  const paidTotal = invoices.filter(i => i.status === 'paid').reduce((s, i) => s + Number(i.amount || 0), 0)
-
-  // ── Upcoming work ──
   const today = localToday()
+
+  // ── Revenue (three separate truths) ──
+  const wonQuotes = quotes.filter(q => WON.has(q.status))
+  const bookedRevenue = wonQuotes.reduce((s, q) => s + Number(q.total || 0), 0)
+  const collectedRevenue = invoices.filter(i => i.status === 'paid').reduce((s, i) => s + Number(i.amount || 0), 0)
+  const outstandingRevenue = invoices.filter(i => OPEN_INVOICE.has(i.status)).reduce((s, i) => s + Number(i.amount || 0), 0)
+  const avgJobValue = wonQuotes.length > 0 ? bookedRevenue / wonQuotes.length : 0
+
+  // ── Upcoming + retention ──
   const upcoming = jobs
     .filter(j => j.scheduled_date >= today && (j.status === 'scheduled' || j.status === 'in_progress'))
     .sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date))
   const nextVisit = upcoming[0] || null
+  const completed = jobs.filter(j => j.status === 'completed')
+  const lastServicedDate = completed.length > 0
+    ? completed.map(j => j.scheduled_date).sort().slice(-1)[0]
+    : null
+  const lastServicedDays = daysSince(lastServicedDate)
+  const hasRecurring = recurrences.length > 0 || jobs.some(j => j.recurrence_id)
+  const primaryRec = recurrences[0] || null
+  const recurringStatus = primaryRec
+    ? recurringCustomerLabel(primaryRec.interval_unit, primaryRec.interval_count, primaryRec.freq)
+    : hasRecurring ? 'Recurring' : null
+  const remainingVisits = (rid: string) =>
+    jobs.filter(j => j.recurrence_id === rid && j.scheduled_date >= today && (j.status === 'scheduled' || j.status === 'in_progress')).length
+
+  const warnings: { tone: 'red' | 'amber'; text: string }[] = []
+  if (hasRecurring && upcoming.length === 0) {
+    warnings.push({ tone: 'red', text: 'Recurring customer with no future visits scheduled — their series has run out.' })
+  } else if (upcoming.length === 0 && completed.length > 0) {
+    warnings.push({ tone: 'amber', text: 'No upcoming visits scheduled.' })
+  }
+  if (lastServicedDays != null && lastServicedDays > 60) {
+    warnings.push({ tone: 'amber', text: `Last serviced ${lastServicedDays} days ago — may be worth a check-in.` })
+  }
+
+  // ── Open items (what needs action) ──
+  interface OpenItem { key: string; icon: typeof FileText; label: string; sub: string; href: string; tone: string }
+  const openItems: OpenItem[] = []
+  for (const q of quotes.filter(needsFollowUp)) {
+    openItems.push({ key: `fu-${q.id}`, icon: RotateCw, label: `Follow up: ${q.quote_number}`, sub: `${q.service_type} · ${formatCurrency(Number(q.total))}${q.sent_at ? ` · sent ${daysSince(q.sent_at)}d ago` : ''}`, href: `/dashboard/quotes/${q.id}`, tone: 'text-amber-400' })
+  }
+  for (const q of quotes.filter(q => q.status === 'accepted')) {
+    openItems.push({ key: `sch-${q.id}`, icon: CalendarPlus, label: `Schedule: ${q.quote_number}`, sub: `${q.service_type} · ${formatCurrency(Number(q.total))}`, href: `/dashboard/schedule?quote=${q.id}`, tone: 'text-accent' })
+  }
+  for (const inv of invoices.filter(i => OPEN_INVOICE.has(i.status))) {
+    const overdue = !!inv.due_date && inv.due_date < today
+    openItems.push({ key: `inv-${inv.id}`, icon: Receipt, label: `${overdue ? 'Overdue' : 'Unpaid'} invoice ${inv.invoice_number}`, sub: `${formatCurrency(Number(inv.amount))}${inv.due_date ? ` · due ${formatDate(inv.due_date)}` : ''}`, href: '/dashboard/invoices', tone: overdue ? 'text-red-400' : 'text-amber-400' })
+  }
 
   // ── Timeline ──
   const events: TimelineEvent[] = []
@@ -119,13 +186,12 @@ export default function CustomerDetailPage() {
   events.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
 
   const phone = customer.phone
-  const isHighValue = totalRevenue >= 2000
+  const isHighValue = bookedRevenue >= 2000
 
-  const stats = [
-    { label: 'Total Revenue', value: formatCurrency(totalRevenue), sub: 'booked (won quotes)' },
-    { label: 'Accepted Jobs', value: String(wonQuotes.length), sub: `of ${quotes.length} quote${quotes.length !== 1 ? 's' : ''}` },
-    { label: 'Avg Job Value', value: formatCurrency(avgJobValue), sub: 'per won quote' },
-    { label: 'Invoices', value: String(invoices.length), sub: `${formatCurrency(paidTotal)} paid` },
+  const revenueCards = [
+    { label: 'Booked Revenue', value: formatCurrency(bookedRevenue), sub: 'Won quotes', icon: DollarSign, color: 'text-accent' },
+    { label: 'Collected', value: formatCurrency(collectedRevenue), sub: 'Invoices paid', icon: Wallet, color: 'text-emerald-400' },
+    { label: 'Outstanding', value: formatCurrency(outstandingRevenue), sub: 'Billed, unpaid', icon: AlertTriangle, color: 'text-amber-400' },
   ]
 
   return (
@@ -136,6 +202,13 @@ export default function CustomerDetailPage() {
         </button>
         <PageHeader title={customer.name} description={`Customer since ${formatDate(customer.created_at)}`} />
       </div>
+
+      {/* Retention warnings — top, highly visible */}
+      {warnings.map((w, i) => (
+        <div key={i} className={`flex items-center gap-2 text-sm rounded-xl px-4 py-2.5 border ${w.tone === 'red' ? 'text-red-400 bg-red-500/10 border-red-500/20' : 'text-amber-400 bg-amber-500/10 border-amber-500/20'}`}>
+          <AlertTriangle className="w-4 h-4 shrink-0" /> {w.text}
+        </div>
+      ))}
 
       {/* Identity + quick actions */}
       <Card>
@@ -152,6 +225,11 @@ export default function CustomerDetailPage() {
                     <Sparkles className="w-3 h-3" /> High value
                   </span>
                 )}
+                {recurringStatus && (
+                  <span className="text-[10px] uppercase tracking-wide text-emerald-400 border border-emerald-500/30 bg-emerald-500/10 rounded px-1.5 py-0.5 font-semibold flex items-center gap-1">
+                    <Repeat className="w-3 h-3" /> {recurringStatus}
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-x-4 gap-y-1 mt-1 flex-wrap text-sm">
                 {customer.phone && <a href={`tel:${customer.phone}`} className="flex items-center gap-1 text-accent hover:underline"><Phone className="w-3.5 h-3.5" />{customer.phone}</a>}
@@ -165,6 +243,9 @@ export default function CustomerDetailPage() {
                   <Link href={`/dashboard/customers/${referrer.id}`} className="text-xs text-ink-muted hover:text-ink flex items-center gap-1">
                     <Users className="w-3 h-3" /> Referred by {referrer.name}
                   </Link>
+                )}
+                {lastServicedDays != null && (
+                  <span className="text-xs text-ink-faint">Last serviced {lastServicedDays}d ago</span>
                 )}
               </div>
             </div>
@@ -188,15 +269,91 @@ export default function CustomerDetailPage() {
         </CardBody>
       </Card>
 
-      {/* Lifetime value */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {stats.map(s => (
-          <Card key={s.label} className="p-5">
-            <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide">{s.label}</p>
-            <p className="text-2xl font-bold text-ink tracking-tight mt-2">{s.value}</p>
-            <p className="text-xs text-ink-faint mt-1">{s.sub}</p>
-          </Card>
-        ))}
+      {/* Notes & access info — prominent, quick-edit */}
+      <Card>
+        <CardHeader className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><StickyNote className="w-4 h-4 text-accent" /> Notes & Access Info</h2>
+          {!editingNotes && (
+            <button onClick={() => setEditingNotes(true)} className="text-xs text-accent hover:underline flex items-center gap-1">
+              <Edit2 className="w-3 h-3" /> Edit
+            </button>
+          )}
+        </CardHeader>
+        <CardBody>
+          {editingNotes ? (
+            <div className="space-y-2">
+              <textarea
+                value={notesValue}
+                onChange={e => setNotesValue(e.target.value)}
+                rows={4}
+                autoFocus
+                placeholder="Gate codes, dog info, preferred contact, billing notes, access instructions, equipment restrictions..."
+                className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
+              />
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={saveNotes} loading={savingNotes}>Save</Button>
+                <Button size="sm" variant="ghost" onClick={() => { setNotesValue(customer.notes || ''); setEditingNotes(false) }}>Cancel</Button>
+              </div>
+            </div>
+          ) : customer.notes ? (
+            <p className="text-sm text-ink whitespace-pre-wrap">{customer.notes}</p>
+          ) : (
+            <button onClick={() => setEditingNotes(true)} className="text-sm text-ink-faint hover:text-ink-muted transition-colors">
+              No notes yet — add gate codes, dog info, access instructions…
+            </button>
+          )}
+        </CardBody>
+      </Card>
+
+      {/* Open items — what needs action */}
+      <Card className={openItems.length > 0 ? 'border-amber-500/30' : ''}>
+        <CardHeader className="flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 text-amber-400" />
+          <h2 className="text-sm font-semibold text-ink">Open Items</h2>
+          {openItems.length > 0 && <span className="ml-auto text-xs font-semibold text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-full px-2 py-0.5">{openItems.length}</span>}
+        </CardHeader>
+        <CardBody className="p-0">
+          {openItems.length === 0 ? (
+            <p className="px-5 py-6 text-center text-sm text-ink-muted">Nothing needs action right now. 🎉</p>
+          ) : (
+            <div className="divide-y divide-border">
+              {openItems.map(item => {
+                const Icon = item.icon
+                return (
+                  <Link key={item.key} href={item.href} className="flex items-center gap-3 px-5 py-3 hover:bg-surface-raised transition-colors">
+                    <Icon className={`w-4 h-4 shrink-0 ${item.tone}`} />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-ink truncate">{item.label}</p>
+                      <p className="text-xs text-ink-muted truncate">{item.sub}</p>
+                    </div>
+                  </Link>
+                )
+              })}
+            </div>
+          )}
+        </CardBody>
+      </Card>
+
+      {/* Revenue — three separate truths */}
+      <div className="grid grid-cols-3 gap-4">
+        {revenueCards.map(c => {
+          const Icon = c.icon
+          return (
+            <Card key={c.label} className="p-4 sm:p-5">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide">{c.label}</p>
+                <Icon className={`w-4 h-4 ${c.color}`} />
+              </div>
+              <p className="text-xl sm:text-2xl font-bold text-ink tracking-tight mt-2">{c.value}</p>
+              <p className="text-xs text-ink-faint mt-1">{c.sub}</p>
+            </Card>
+          )
+        })}
+      </div>
+      <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-ink-muted -mt-2">
+        <span>Accepted jobs: <span className="text-ink font-medium">{wonQuotes.length}</span> of {quotes.length}</span>
+        <span>Avg job value: <span className="text-ink font-medium">{formatCurrency(avgJobValue)}</span></span>
+        <span>Invoices: <span className="text-ink font-medium">{invoices.length}</span></span>
       </div>
 
       {/* Upcoming work */}
@@ -209,11 +366,16 @@ export default function CustomerDetailPage() {
         <CardBody className="space-y-3">
           {recurrences.length > 0 && (
             <div className="flex flex-wrap gap-2">
-              {recurrences.map(r => (
-                <span key={r.id} className="text-xs flex items-center gap-1 text-accent border border-accent/20 bg-accent/10 rounded-lg px-2.5 py-1">
-                  <Repeat className="w-3 h-3" /> {RECUR_FREQ_LABELS[r.freq]}{r.end_date ? ` until ${formatDate(r.end_date)}` : ' · ongoing'}
-                </span>
-              ))}
+              {recurrences.map(r => {
+                const remaining = remainingVisits(r.id)
+                return (
+                  <span key={r.id} className="text-xs flex items-center gap-1 text-accent border border-accent/20 bg-accent/10 rounded-lg px-2.5 py-1">
+                    <Repeat className="w-3 h-3" /> {recurrenceLabel(r.interval_unit, r.interval_count, r.freq)}
+                    {r.end_date ? ` until ${formatDate(r.end_date)}` : r.end_count ? ` · ${remaining} of ${r.end_count} left` : ' · ongoing'}
+                    {!r.end_date && !r.end_count && remaining > 0 ? ` · ${remaining} upcoming` : ''}
+                  </span>
+                )
+              })}
             </div>
           )}
           {upcoming.length === 0 ? (
@@ -287,6 +449,7 @@ export default function CustomerDetailPage() {
                 p.driveway_area != null && `Driveway ${p.driveway_area} ft²`,
                 p.lot_size != null && `Lot ${p.lot_size} ft²`,
               ].filter(Boolean) as string[]
+              const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p.address)}`
               return (
                 <div key={p.id} className="rounded-xl border border-border p-3">
                   <div className="flex items-start justify-between gap-2">
@@ -301,12 +464,47 @@ export default function CustomerDetailPage() {
                   <p className="text-[11px] text-ink-faint mt-2">
                     {p.lat != null && p.lng != null ? `${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}` : 'No coordinates yet'}
                   </p>
+                  {/* Property actions — one tap each */}
+                  <div className="grid grid-cols-4 gap-1.5 mt-3">
+                    <a href={mapsUrl} target="_blank" rel="noopener noreferrer" title="Open in Google Maps" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
+                      <ExternalLink className="w-3.5 h-3.5" /> Maps
+                    </a>
+                    <Link href={`/dashboard/quotes/new?customer=${customer.id}`} title="New quote" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
+                      <FilePlus className="w-3.5 h-3.5" /> Quote
+                    </Link>
+                    <Link href={`/dashboard/schedule?customer=${customer.id}`} title="Schedule job" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
+                      <CalendarPlus className="w-3.5 h-3.5" /> Job
+                    </Link>
+                    <Link href={`/dashboard/properties/measure?id=${p.id}`} title="Re-measure property" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
+                      <Ruler className="w-3.5 h-3.5" /> Measure
+                    </Link>
+                  </div>
                 </div>
               )
             })}
           </CardBody>
         </Card>
       </div>
+
+      {/* Referrals — advocates this customer brought in */}
+      {referredCustomers.length > 0 && (
+        <Card>
+          <CardHeader className="flex items-center gap-2">
+            <Users className="w-4 h-4 text-accent" />
+            <h2 className="text-sm font-semibold text-ink">Referrals from {customer.name.split(' ')[0]}</h2>
+            <span className="ml-auto text-xs text-ink-muted">{referredCustomers.length} referred · <span className="text-accent font-semibold">{formatCurrency(referredRevenue)}</span> generated</span>
+          </CardHeader>
+          <CardBody>
+            <div className="flex flex-wrap gap-2">
+              {referredCustomers.map(r => (
+                <Link key={r.id} href={`/dashboard/customers/${r.id}`} className="text-xs flex items-center gap-1 text-ink border border-border rounded-lg px-2.5 py-1 hover:border-border-strong transition-colors">
+                  {r.name}
+                </Link>
+              ))}
+            </div>
+          </CardBody>
+        </Card>
+      )}
     </div>
   )
 }

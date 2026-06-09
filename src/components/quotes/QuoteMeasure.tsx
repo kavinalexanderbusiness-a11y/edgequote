@@ -2,22 +2,17 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { loadGoogleMaps } from '@/lib/googleMaps'
+import { priceTiers, recommendedJobPrice, DEFAULT_RATE_PER_1000 } from '@/lib/pricing'
 import { Button } from '@/components/ui/Button'
 import { X, Undo2, Trash2, Plus, Ruler } from 'lucide-react'
 
 const M2_TO_SQFT = 10.7639
-
-const TIERS = [
-  { key: 'budget', label: 'Budget', mult: 0.85 },
-  { key: 'market', label: 'Market', mult: 1.0 },
-  { key: 'recommended', label: 'Recommended', mult: 1.10 },
-  { key: 'premium', label: 'Premium', mult: 1.25 },
-]
+const RATE_KEY = 'eq_rate_per_1000' // shared with the property Measurement Tool
 
 interface Props {
   address: string
   travelFee: number
-  onApply: (price: number, totalSqft: number) => void
+  onApply: (price: number, totalSqft: number, suggested: number) => void
   onClose: () => void
 }
 
@@ -35,7 +30,18 @@ export function QuoteMeasure({ address, travelFee, onApply, onClose }: Props) {
   const [totalSqft, setTotalSqft] = useState(0)
   const [points, setPoints] = useState(0)
   const [shapes, setShapes] = useState(0)
-  const [ratePer1000, setRatePer1000] = useState(0)
+  const [ratePer1000, setRatePer1000] = useState(DEFAULT_RATE_PER_1000)
+  const [overgrowth, setOvergrowth] = useState(1)
+
+  // Seed/remember the rate locally so it matches the property Measurement Tool.
+  useEffect(() => {
+    const stored = typeof window !== 'undefined' ? window.localStorage.getItem(RATE_KEY) : null
+    if (stored) setRatePer1000(Number(stored) || DEFAULT_RATE_PER_1000)
+  }, [])
+  function updateRate(v: number) {
+    setRatePer1000(v)
+    if (typeof window !== 'undefined') window.localStorage.setItem(RATE_KEY, String(v))
+  }
 
   function areaOf(p: any[]): number {
     const g = window.google
@@ -105,6 +111,8 @@ export function QuoteMeasure({ address, travelFee, onApply, onClose }: Props) {
           } catch { /* ignore */ }
         }
         if (!center) center = { lat: 51.0447, lng: -114.0719 }
+        // Re-check after the geocode await — the modal may have been closed.
+        if (cancelled || !mapEl.current) return
 
         gmap.current = new Map(mapEl.current, {
           center, zoom: 20, mapTypeId: 'satellite', tilt: 0,
@@ -121,7 +129,17 @@ export function QuoteMeasure({ address, travelFee, onApply, onClose }: Props) {
       }
     }
     init()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      // This modal mounts/unmounts on every open — tear down the map so we don't
+      // leak a Map instance + listeners each time.
+      const g = window.google
+      if (g?.maps?.event && gmap.current) g.maps.event.clearInstanceListeners(gmap.current)
+      committedOverlays.current.forEach(o => o.setMap(null)); committedOverlays.current = []
+      currentOverlay.current?.setMap(null); currentOverlay.current = null
+      preview.current?.setMap(null); preview.current = null
+      gmap.current = null
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -156,7 +174,7 @@ export function QuoteMeasure({ address, travelFee, onApply, onClose }: Props) {
     setTotalSqft(0); setPoints(0); setShapes(0)
   }
 
-  const marketPrice = (totalSqft / 1000) * ratePer1000
+  const tiers = priceTiers({ sqft: totalSqft, ratePer1000, overgrowth })
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center p-0 sm:p-4">
@@ -203,35 +221,43 @@ export function QuoteMeasure({ address, travelFee, onApply, onClose }: Props) {
                     <span className="text-lg font-bold text-ink">{totalSqft.toLocaleString()} sq ft</span>
                     {shapes > 0 && <span className="text-xs text-ink-faint">({shapes} + current)</span>}
                   </div>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number" min="0" step="1" placeholder="0"
-                      value={ratePer1000 || ''}
-                      onChange={e => setRatePer1000(Number(e.target.value) || 0)}
-                      className="w-24 bg-bg border border-border-strong rounded-lg px-2.5 py-2 text-base sm:text-sm text-ink outline-none focus:border-accent"
-                    />
-                    <span className="text-xs text-ink-muted">$ / 1,000 sq ft (market)</span>
+                  <div className="flex items-center gap-3">
+                    <label className="flex items-center gap-1.5 text-xs text-ink-muted">
+                      <input
+                        type="number" min="0" step="1" placeholder="0"
+                        value={ratePer1000 || ''}
+                        onChange={e => updateRate(Number(e.target.value) || 0)}
+                        className="w-20 bg-bg border border-border-strong rounded-lg px-2.5 py-2 text-base sm:text-sm text-ink outline-none focus:border-accent"
+                      />
+                      $ / 1,000 ft²
+                    </label>
+                    <label className="flex items-center gap-1.5 text-xs text-ink-muted">
+                      <input
+                        type="number" min="0" step="0.05"
+                        value={overgrowth}
+                        onChange={e => setOvergrowth(Number(e.target.value) || 1)}
+                        className="w-16 bg-bg border border-border-strong rounded-lg px-2.5 py-2 text-base sm:text-sm text-ink outline-none focus:border-accent"
+                      />
+                      Condition
+                    </label>
                   </div>
                 </div>
 
                 {ratePer1000 > 0 && totalSqft > 0 ? (
                   <div className="border-t border-border pt-3">
-                    <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-2">Suggested prices (incl. ${Number(travelFee || 0).toLocaleString()} travel)</p>
+                    <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-2">Suggested job price{Number(travelFee || 0) > 0 ? ` · $${Number(travelFee).toLocaleString()} travel stays on the quote` : ''}</p>
                     <div className="grid grid-cols-2 gap-2">
-                      {TIERS.map(t => {
-                        const tierTotal = Math.round(marketPrice * t.mult + Number(travelFee || 0))
-                        return (
-                          <button
-                            key={t.key}
-                            type="button"
-                            onClick={() => onApply(tierTotal, totalSqft)}
-                            className={`text-left rounded-xl border px-3 py-2.5 transition-all hover:border-accent ${t.key === 'recommended' ? 'border-accent/40 bg-accent/5' : 'border-border'}`}
-                          >
-                            <p className="text-[11px] uppercase tracking-wide text-ink-faint">{t.label}</p>
-                            <p className="text-lg font-bold text-ink">${tierTotal.toLocaleString()}</p>
-                          </button>
-                        )
-                      })}
+                      {tiers.map(t => (
+                        <button
+                          key={t.tier}
+                          type="button"
+                          onClick={() => onApply(t.amount, totalSqft, t.amount + Number(travelFee || 0))}
+                          className={`text-left rounded-xl border px-3 py-2.5 transition-all hover:border-accent ${t.recommended ? 'border-accent/40 bg-accent/5' : 'border-border'}`}
+                        >
+                          <p className="text-[11px] uppercase tracking-wide text-ink-faint flex items-center gap-1">{t.label}{t.recommended && <span className="text-accent">★</span>}</p>
+                          <p className="text-lg font-bold text-ink">${t.amount.toLocaleString()}</p>
+                        </button>
+                      ))}
                     </div>
                     <p className="text-xs text-ink-faint mt-2">Tap a price to use it on the quote.</p>
                   </div>
@@ -245,7 +271,10 @@ export function QuoteMeasure({ address, travelFee, onApply, onClose }: Props) {
               <div className="flex items-center justify-end gap-2">
                 <Button variant="ghost" onClick={onClose}>Cancel</Button>
                 {ratePer1000 > 0 && totalSqft > 0 && (
-                  <Button onClick={() => onApply(Math.round(marketPrice * 1.10 + Number(travelFee || 0)), totalSqft)}>
+                  <Button onClick={() => {
+                    const rec = recommendedJobPrice({ sqft: totalSqft, ratePer1000, overgrowth })
+                    onApply(rec, totalSqft, rec + Number(travelFee || 0))
+                  }}>
                     Use recommended
                   </Button>
                 )}

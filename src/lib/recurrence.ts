@@ -1,38 +1,68 @@
 import { addDays, addMonths, format, parseISO, differenceInCalendarDays } from 'date-fns'
-import type { Job, RecurFreq, RecurrenceScope } from '@/types'
+import type { Job, RecurUnit, RecurrenceScope } from '@/types'
 
-// Safety caps so an open-ended series never materialises unbounded rows.
-const MAX_OCCURRENCES = 104          // ~2 years weekly with an end date
-const OPEN_ENDED_HORIZON = 26        // visits to pre-create when "never ends"
+// Safety caps so a series never materialises unbounded rows.
+const HARD_CAP = 260            // ~5 years weekly — absolute ceiling
+const OPEN_ENDED_HORIZON = 26   // visits to pre-create when there's no end
 
-function step(d: Date, freq: RecurFreq): Date {
-  if (freq === 'weekly') return addDays(d, 7)
-  if (freq === 'biweekly') return addDays(d, 14)
-  return addMonths(d, 1)
+function stepUnit(d: Date, unit: RecurUnit, count: number): Date {
+  if (unit === 'day') return addDays(d, count)
+  if (unit === 'week') return addDays(d, count * 7)
+  return addMonths(d, count)
 }
 
 /**
- * Materialise the visit dates for a series. `startISO`/`endISO` are yyyy-MM-dd.
- * Open-ended series (endISO null) generate a rolling horizon of visits.
+ * Materialise the visit dates for a series. Supports any interval (count + unit)
+ * and three end modes: end_date, end after N visits, or open-ended (rolling horizon).
  */
-export function generateOccurrenceDates(startISO: string, freq: RecurFreq, endISO: string | null): string[] {
+export function generateOccurrences(
+  startISO: string,
+  unit: RecurUnit,
+  count: number,
+  endDate: string | null,
+  endCount: number | null,
+): string[] {
   const start = parseISO(startISO)
-  const cap = endISO ? MAX_OCCURRENCES : OPEN_ENDED_HORIZON
+  const cap = endCount && endCount > 0
+    ? Math.min(endCount, HARD_CAP)
+    : endDate ? HARD_CAP : OPEN_ENDED_HORIZON
   const dates: string[] = []
   let d = start
   for (let i = 0; i < cap; i++) {
     const iso = format(d, 'yyyy-MM-dd')
-    if (endISO && iso > endISO) break
+    if (endDate && iso > endDate) break
     dates.push(iso)
-    d = step(d, freq)
+    d = stepUnit(d, unit, Math.max(1, count))
   }
   return dates
 }
 
+/** Human label for a cadence, e.g. "Weekly", "Every 3 weeks", "Every 10 days". */
+export function recurrenceLabel(unit: RecurUnit | null, count: number | null, freq?: string | null): string {
+  if (!unit || !count) {
+    if (freq === 'weekly') return 'Weekly'
+    if (freq === 'biweekly') return 'Every 2 weeks'
+    if (freq === 'monthly') return 'Monthly'
+    return 'Recurring'
+  }
+  if (unit === 'week' && count === 1) return 'Weekly'
+  if (unit === 'week' && count === 2) return 'Every 2 weeks'
+  if (unit === 'month' && count === 1) return 'Monthly'
+  return count === 1 ? `Every ${unit}` : `Every ${count} ${unit}s`
+}
+
+/** Short customer-facing status, e.g. "Weekly Customer", "Custom Schedule". */
+export function recurringCustomerLabel(unit: RecurUnit | null, count: number | null, freq?: string | null): string {
+  const l = recurrenceLabel(unit, count, freq)
+  if (l === 'Weekly') return 'Weekly Customer'
+  if (l === 'Every 2 weeks') return 'Bi-Weekly Customer'
+  if (l === 'Monthly') return 'Monthly Customer'
+  return 'Custom Schedule'
+}
+
 /**
  * The jobs an Apple-style scope touches, relative to an anchor visit.
- * `this` → just the anchor; `future` → anchor + later visits in the series;
- * `all` → every visit in the series.
+ * `this` → just the anchor; `future` → anchor + later visits; `all` → every visit.
  */
 export function jobsInScope(anchor: Job, allJobs: Job[], scope: RecurrenceScope): Job[] {
   if (!anchor.recurrence_id || scope === 'this') return [anchor]

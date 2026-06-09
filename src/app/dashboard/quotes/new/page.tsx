@@ -3,9 +3,27 @@
 import { useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Customer, QuoteFormValues, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
+import { Customer, QuoteFormValues, ServiceTemplate, TravelFeeTier, BusinessSettings, LawnSections, PricingConfidence } from '@/types'
 import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
 import { PageHeader } from '@/components/layout/PageHeader'
+import { applyOvergrowth, generateQuoteNumber } from '@/lib/utils'
+
+interface MeasurementPayload {
+  customerId: string | null
+  propertyId: string | null
+  address: string
+  sqft: number
+  sections?: LawnSections
+  jobPrice: number
+  travelFee?: number
+  includeTravel?: boolean
+  travelIsCustom?: boolean
+  travelDistanceKm?: number | null
+  suggestedPrice: number
+  ratePer1000?: number
+  overgrowth?: number
+  confidence?: PricingConfidence
+}
 
 export default function NewQuotePage() {
   const router = useRouter()
@@ -15,9 +33,20 @@ export default function NewQuotePage() {
   const [templates, setTemplates] = useState<ServiceTemplate[]>([])
   const [tiers, setTiers] = useState<TravelFeeTier[]>([])
   const [settings, setSettings] = useState<BusinessSettings | null>(null)
+  const [measurement, setMeasurement] = useState<MeasurementPayload | null>(null)
   const [loading, setLoading] = useState(true)
 
   const supabase = createClient()
+
+  // Consume a handoff from the Measurement Tool (one-time).
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const raw = window.sessionStorage.getItem('eq_measurement')
+    if (raw) {
+      try { setMeasurement(JSON.parse(raw) as MeasurementPayload) } catch { /* ignore */ }
+      window.sessionStorage.removeItem('eq_measurement')
+    }
+  }, [])
 
   useEffect(() => {
     async function load() {
@@ -45,8 +74,7 @@ export default function NewQuotePage() {
       .from('quotes')
       .select('*', { count: 'exact', head: true })
       .eq('user_id', user!.id)
-    const num = String((count || 0) + 1).padStart(4, '0')
-    const quote_number = `EPS-${num}`
+    const quote_number = generateQuoteNumber((count || 0) + 1)
 
     let customerName = values.customer_name
     if (values.customer_id && values.customer_id !== '__manual') {
@@ -55,7 +83,7 @@ export default function NewQuotePage() {
     }
 
     const mult = Number(values.overgrowth_multiplier) || 1
-    const finalRate = mult === 0 ? Number(values.rate) : Number(values.rate) * mult
+    const finalRate = applyOvergrowth(Number(values.rate), mult)
 
     const { data, error } = await supabase.from('quotes').insert({
       quote_number,
@@ -77,6 +105,17 @@ export default function NewQuotePage() {
       crew_size: Number(values.crew_size),
       rate: finalRate,
       travel_fee: Number(values.travel_fee),
+      measured_sqft: measurement?.sqft ?? (Number(values.measured_sqft) || null),
+      suggested_price: measurement?.suggestedPrice ?? (Number(values.suggested_price) || null),
+      front_lawn_sqft: measurement?.sections?.front ?? null,
+      back_lawn_sqft: measurement?.sections?.back ?? null,
+      left_side_sqft: measurement?.sections?.left ?? null,
+      right_side_sqft: measurement?.sections?.right ?? null,
+      boulevard_sqft: measurement?.sections?.boulevard ?? null,
+      other_sqft: measurement?.sections?.other ?? null,
+      travel_distance_km: measurement?.travelDistanceKm ?? null,
+      pricing_confidence: measurement?.confidence ?? null,
+      property_id: measurement?.propertyId ?? null,
       status: values.status,
       user_id: user!.id,
     }).select().single()
@@ -98,7 +137,16 @@ export default function NewQuotePage() {
         templates={templates}
         tiers={tiers}
         settings={settings}
-        defaultCustomerId={defaultCustomerId}
+        defaultCustomerId={measurement?.customerId || defaultCustomerId}
+        defaultValues={measurement ? {
+          customer_id: measurement.customerId || '',
+          address: measurement.address || '',
+          initial_price: measurement.jobPrice || 0,
+          travel_fee: measurement.travelFee || 0,
+          distance_km: measurement.travelDistanceKm || 0,
+          custom_travel_required: measurement.travelIsCustom || false,
+          overgrowth_multiplier: measurement.overgrowth || 1,
+        } : undefined}
         onSubmit={handleSubmit}
       />
     </div>
