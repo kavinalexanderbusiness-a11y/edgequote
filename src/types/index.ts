@@ -134,6 +134,9 @@ export interface Job {
   crew_size: number
   status: JobStatus
   notes: string | null
+  // Per-visit price. Manual override — when set it wins over the linked quote's
+  // cadence price (the one source for what a visit is worth).
+  price: number | null
   // Actual minutes spent on site (entered on completion). Foundation for future
   // pricing intelligence: estimated vs. actual time per job.
   actual_minutes: number | null
@@ -167,6 +170,7 @@ export interface JobFormValues {
   status: JobStatus
   notes: string
   actual_minutes: number
+  price: number
 }
 
 export const JOB_STATUS_LABELS: Record<JobStatus, string> = {

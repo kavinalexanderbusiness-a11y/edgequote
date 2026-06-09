@@ -3,21 +3,24 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useState } from 'react'
-import { LayoutDashboard, Users, FileText, Plus, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Navigation, Receipt, Menu, X, HeartPulse, BarChart3 } from 'lucide-react'
+import { LayoutDashboard, Users, FileText, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Navigation, Receipt, Menu, X, HeartPulse, BarChart3, Gauge } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 
-const nav = [
-  { label: 'Dashboard',    href: '/dashboard',              icon: LayoutDashboard },
-  { label: 'Customers',    href: '/dashboard/customers',    icon: Users },
-  { label: 'Reactivation', href: '/dashboard/reactivation', icon: HeartPulse },
-  { label: 'Properties',   href: '/dashboard/properties',   icon: Home },
-  { label: 'Schedule',     href: '/dashboard/schedule',     icon: CalendarDays },
-  { label: 'Routes',       href: '/dashboard/routes',       icon: Navigation },
-  { label: 'Profitability', href: '/dashboard/profitability', icon: BarChart3 },
-  { label: 'Quotes',       href: '/dashboard/quotes',       icon: FileText },
-  { label: 'Invoices',     href: '/dashboard/invoices',     icon: Receipt },
-  { label: 'New Quote',    href: '/dashboard/quotes/new',   icon: Plus },
+// Operational pages first (everyday work), then insight dashboards.
+const navMain = [
+  { label: 'Dashboard',  href: '/dashboard',            icon: LayoutDashboard },
+  { label: 'Schedule',   href: '/dashboard/schedule',   icon: CalendarDays },
+  { label: 'Routes',     href: '/dashboard/routes',     icon: Navigation },
+  { label: 'Customers',  href: '/dashboard/customers',  icon: Users },
+  { label: 'Properties', href: '/dashboard/properties', icon: Home },
+  { label: 'Quotes',     href: '/dashboard/quotes',     icon: FileText },
+  { label: 'Invoices',   href: '/dashboard/invoices',   icon: Receipt },
+]
+const navInsights = [
+  { label: 'Profitability',    href: '/dashboard/profitability',   icon: BarChart3 },
+  { label: 'Pricing Recovery', href: '/dashboard/pricing-recovery', icon: Gauge },
+  { label: 'Reactivation',     href: '/dashboard/reactivation',    icon: HeartPulse },
 ]
 
 export function Sidebar() {
@@ -41,10 +44,18 @@ export function Sidebar() {
     return (
       <>
         <nav className="flex-1 px-3 py-4 flex flex-col gap-0.5 overflow-y-auto">
-          {nav.map(({ label, href, icon: Icon }) => {
-            const active = href === '/dashboard'
-              ? pathname === '/dashboard'
-              : pathname.startsWith(href)
+          {navMain.map(({ label, href, icon: Icon }) => {
+            const active = href === '/dashboard' ? pathname === '/dashboard' : pathname.startsWith(href)
+            return (
+              <Link key={href} href={href} onClick={onNavigate} className={linkClass(active)}>
+                <Icon className="w-4 h-4" />
+                {label}
+              </Link>
+            )
+          })}
+          <p className="px-3 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-wider text-ink-faint">Insights</p>
+          {navInsights.map(({ label, href, icon: Icon }) => {
+            const active = pathname.startsWith(href)
             return (
               <Link key={href} href={href} onClick={onNavigate} className={linkClass(active)}>
                 <Icon className="w-4 h-4" />

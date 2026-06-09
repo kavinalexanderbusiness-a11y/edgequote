@@ -6,7 +6,7 @@
 
 import { Coord } from '@/lib/geo'
 import { routeKmEstimate, routeStats } from '@/lib/route'
-import { quoteVisitAmount, effectiveFreq } from '@/lib/invoicing'
+import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
 
 export interface ProfitJob {
   id: string
@@ -17,6 +17,7 @@ export interface ProfitJob {
   recurrence_id: string | null
   duration_minutes: number | null
   actual_minutes: number | null
+  price: number | null
   lat: number | null
   lng: number | null
   city: string | null
@@ -52,7 +53,7 @@ export function jobValue(j: ProfitJob, ctx: ProfitContext): number {
   const q = j.quote_id ? ctx.quotesById[j.quote_id] : null
   const rec = j.recurrence_id ? ctx.recById[j.recurrence_id] : null
   const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
-  return quoteVisitAmount(q as unknown as Record<string, unknown>, freq)
+  return jobVisitValue(j.price, q as unknown as Record<string, unknown>, freq)
 }
 
 export interface RouteProfit {

@@ -166,6 +166,10 @@ alter table public.quotes add constraint quotes_pricing_confidence_chk
 alter table public.jobs
   add column if not exists actual_minutes integer;
 
+-- Per-visit price (manual override — wins over the linked quote's cadence price).
+alter table public.jobs
+  add column if not exists price numeric;
+
 -- Configurable lawn pricing (consumed by the centralized pricing engine).
 alter table public.business_settings
   add column if not exists pricing_base_charge      numeric default 28,

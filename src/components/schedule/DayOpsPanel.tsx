@@ -5,13 +5,13 @@ import { createClient } from '@/lib/supabase/client'
 import { Job, JobStatus, JobRecurrence, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
 import { Coord } from '@/lib/geo'
 import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, routeStats, directionsUrl } from '@/lib/route'
-import { quoteVisitAmount, effectiveFreq } from '@/lib/invoicing'
+import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
 import { formatCurrency, cn } from '@/lib/utils'
 import { format } from 'date-fns'
 import { Button } from '@/components/ui/Button'
 import {
   DollarSign, Clock, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
-  MapPin, Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal,
+  MapPin, Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle,
 } from 'lucide-react'
 
 export interface QuoteLite {
@@ -43,6 +43,7 @@ export interface QuickPatch {
   duration_minutes: number | null
   status: JobStatus
   notes: string | null
+  price: number | null
 }
 
 export function DayOpsPanel({
@@ -52,7 +53,7 @@ export function DayOpsPanel({
   const supabase = createClient()
   const [quickId, setQuickId] = useState<string | null>(null)
   const [moveId, setMoveId] = useState<string | null>(null)
-  const [qv, setQv] = useState<{ start_time: string; crew_size: number; duration_minutes: number; status: JobStatus; notes: string }>({ start_time: '', crew_size: 1, duration_minutes: 0, status: 'scheduled', notes: '' })
+  const [qv, setQv] = useState<{ start_time: string; crew_size: number; duration_minutes: number; status: JobStatus; notes: string; price: number }>({ start_time: '', crew_size: 1, duration_minutes: 0, status: 'scheduled', notes: '', price: 0 })
   const [savingQuick, setSavingQuick] = useState(false)
 
   function openQuick(job: Job) {
@@ -63,6 +64,7 @@ export function DayOpsPanel({
       duration_minutes: job.duration_minutes || 0,
       status: job.status,
       notes: job.notes || '',
+      price: Number(job.price) || 0,
     })
   }
   async function saveQuick(job: Job) {
@@ -73,6 +75,7 @@ export function DayOpsPanel({
       duration_minutes: qv.duration_minutes ? Number(qv.duration_minutes) : null,
       status: qv.status,
       notes: qv.notes || null,
+      price: qv.price ? Number(qv.price) : null,
     })
     setSavingQuick(false)
     setQuickId(null)
@@ -86,7 +89,7 @@ export function DayOpsPanel({
     const q = job.quote_id ? quotesById[job.quote_id] : null
     const rec = job.recurrence_id ? recurrences[job.recurrence_id] : null
     const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
-    return quoteVisitAmount(q as unknown as Record<string, unknown>, freq)
+    return jobVisitValue(job.price, q as unknown as Record<string, unknown>, freq)
   }
 
   const active = jobs.filter(j => j.status !== 'cancelled')
@@ -225,7 +228,11 @@ export function DayOpsPanel({
                           {job.recurrence_id && <Repeat className="w-3 h-3 shrink-0 opacity-70" />}
                           <span className={cn('truncate', done && 'line-through opacity-80')}>{job.customers?.name || job.title}</span>
                         </span>
-                        {value > 0 && <span className="text-sm font-bold shrink-0">{formatCurrency(value)}</span>}
+                        {value > 0
+                          ? <span className="text-sm font-bold shrink-0">{formatCurrency(value)}</span>
+                          : <button onClick={e => { e.stopPropagation(); openQuick(job) }} className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5 flex items-center gap-1 hover:bg-amber-500/20">
+                              <AlertTriangle className="w-3 h-3" /> Set price
+                            </button>}
                       </div>
                       <div className="flex items-center gap-1.5 text-xs opacity-80 mt-0.5 flex-wrap">
                         {job.service_type && <span className="truncate">{job.service_type}</span>}
@@ -262,6 +269,10 @@ export function DayOpsPanel({
                       {/* Inline quick edit — small changes without the full form */}
                       {quickId === job.id && (
                         <div className="mt-2 rounded-lg border border-border bg-bg-secondary p-2.5 space-y-2" onClick={e => e.stopPropagation()}>
+                          <label className="text-[10px] uppercase tracking-wide text-ink-faint block">Price ($/visit)
+                            <input type="number" min="0" step="5" placeholder="e.g. 55" value={qv.price || ''} onChange={e => setQv(v => ({ ...v, price: Number(e.target.value) || 0 }))}
+                              className="w-full mt-0.5 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none focus:border-accent" />
+                          </label>
                           <div className="grid grid-cols-3 gap-2">
                             <label className="text-[10px] uppercase tracking-wide text-ink-faint">Time
                               <input type="time" value={qv.start_time} onChange={e => setQv(v => ({ ...v, start_time: e.target.value }))}

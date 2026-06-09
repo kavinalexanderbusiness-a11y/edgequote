@@ -8,6 +8,7 @@ import { Select } from '@/components/ui/Select'
 import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
 import { Customer, Property, JobFormValues, JobStatus, RecurUnit } from '@/types'
+import { formatCurrency } from '@/lib/utils'
 import { recurrenceLabel } from '@/lib/recurrence'
 import { BestDaySuggestions } from '@/components/schedule/BestDaySuggestions'
 import { DaySuggestion } from '@/lib/geo'
@@ -33,6 +34,7 @@ interface JobFormProps {
   // Existing series for the job being edited, so the Repeat controls pre-fill.
   initialRecurrence?: Recurrence
   allowAddAnother?: boolean
+  suggestedPrice?: number // quote-derived per-visit price, shown as the price hint
   onSubmit: (values: JobFormValues, recurrence: Recurrence, meta?: SuggestionMeta, opts?: { addAnother?: boolean }) => Promise<void>
   onCancel: () => void
   isEdit?: boolean
@@ -91,7 +93,7 @@ function recurrenceToUi(r?: Recurrence) {
   }
 }
 
-export function JobForm({ customers, defaultValues, excludeJobId, initialRecurrence, allowAddAnother, onSubmit, onCancel, isEdit }: JobFormProps) {
+export function JobForm({ customers, defaultValues, excludeJobId, initialRecurrence, allowAddAnother, suggestedPrice, onSubmit, onCancel, isEdit }: JobFormProps) {
   const supabase = createClient()
   const [properties, setProperties] = useState<Property[]>([])
   const [topSuggestion, setTopSuggestion] = useState<DaySuggestion | null>(null)
@@ -121,6 +123,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
         status: 'scheduled',
         notes: '',
         actual_minutes: 0,
+        price: 0,
         ...defaultValues,
       },
     })
@@ -216,6 +219,10 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
 
       <Input label="Service Type" placeholder="e.g. Lawn Mowing"
         {...register('service_type')} />
+
+      <Input label="Price ($/visit)" type="number" step="5" min="0"
+        hint={suggestedPrice ? `Leave 0 to use the linked quote (${formatCurrency(suggestedPrice)}). Type to override.` : 'Per-visit price — leave 0 if a linked quote sets it.'}
+        {...register('price', { min: 0 })} />
 
       <Input label="Date" type="date"
         error={errors.scheduled_date?.message}

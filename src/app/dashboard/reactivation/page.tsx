@@ -4,13 +4,13 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { Customer } from '@/types'
-import { quoteVisitAmount, effectiveFreq } from '@/lib/invoicing'
+import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Phone, MessageSquare, FileText, CalendarPlus, HeartPulse, DollarSign, Percent, TrendingUp, AlertTriangle } from 'lucide-react'
 
-interface JobLite { customer_id: string | null; scheduled_date: string; status: string; service_type: string | null; quote_id: string | null; recurrence_id: string | null }
+interface JobLite { customer_id: string | null; scheduled_date: string; status: string; service_type: string | null; quote_id: string | null; recurrence_id: string | null; price: number | null }
 interface QuoteLite { id: string; customer_id: string | null; total: number | null; service_type: string; created_at: string; initial_price: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null }
 
 type Bucket = '12+' | '6+' | '3+'
@@ -52,7 +52,7 @@ export default function ReactivationPage() {
       const { data: { user } } = await supabase.auth.getUser()
       const [cRes, jRes, qRes, rRes] = await Promise.all([
         supabase.from('customers').select('*').eq('user_id', user!.id),
-        supabase.from('jobs').select('customer_id, scheduled_date, status, service_type, quote_id, recurrence_id').eq('user_id', user!.id),
+        supabase.from('jobs').select('customer_id, scheduled_date, status, service_type, quote_id, recurrence_id, price').eq('user_id', user!.id),
         supabase.from('quotes').select('id, customer_id, total, service_type, created_at, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
         supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user!.id),
       ])
@@ -75,7 +75,7 @@ export default function ReactivationPage() {
         const q = j.quote_id ? quotesById[j.quote_id] : null
         const rec = j.recurrence_id ? recById[j.recurrence_id] : null
         const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
-        return quoteVisitAmount(q as unknown as Record<string, unknown>, freq)
+        return jobVisitValue(j.price, q as unknown as Record<string, unknown>, freq)
       }
 
       const risks: RiskCustomer[] = []

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Customer, Job, JobFormValues, Quote, RecurrenceScope, RecurUnit } from '@/types'
@@ -11,7 +11,7 @@ import { JobForm, Recurrence, SuggestionMeta } from '@/components/schedule/JobFo
 import { ScopeDialog } from '@/components/schedule/ScopeDialog'
 import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel } from '@/lib/recurrence'
 import type { JobRecurrence } from '@/types'
-import { createDraftInvoiceForCompletedJob } from '@/lib/invoicing'
+import { createDraftInvoiceForCompletedJob, quoteVisitAmount, jobVisitValue, effectiveFreq } from '@/lib/invoicing'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
@@ -73,6 +73,18 @@ export default function SchedulePage() {
   const [recurrences, setRecurrences] = useState<Record<string, JobRecurrence>>({})
   const [quotesById, setQuotesById] = useState<Record<string, QuoteLite>>({})
   const [baseCoord, setBaseCoord] = useState<Coord | null>(null)
+
+  // Effective per-visit price for every job (manual price > linked quote).
+  const valueByJobId = useMemo(() => {
+    const m: Record<string, number> = {}
+    for (const j of jobs) {
+      const q = j.quote_id ? quotesById[j.quote_id] : null
+      const rec = j.recurrence_id ? recurrences[j.recurrence_id] : null
+      const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
+      m[j.id] = jobVisitValue(j.price, q as unknown as Record<string, unknown>, freq)
+    }
+    return m
+  }, [jobs, quotesById, recurrences])
 
   // When arriving from an accepted quote (?quote=…), open a prefilled new-job form.
   const [quoteCtx, setQuoteCtx] = useState<Quote | null>(null)
@@ -193,6 +205,7 @@ export default function SchedulePage() {
       crew_size: Number(values.crew_size) || 1,
       status: values.status,
       notes: values.notes || null,
+      price: Number(values.price) > 0 ? Number(values.price) : null,
       actual_minutes: values.actual_minutes ? Number(values.actual_minutes) : null,
       suggested_date: meta?.suggestedDate ?? null,
       suggested_nearby_count: meta?.suggestedNearby ?? null,
@@ -261,6 +274,7 @@ export default function SchedulePage() {
       crew_size: Number(values.crew_size) || 1,
       status: 'scheduled' as const,
       notes: values.notes || null,
+      price: Number(values.price) > 0 ? Number(values.price) : null,
       recurrence_id: recurrenceId,
     }
   }
@@ -278,6 +292,7 @@ export default function SchedulePage() {
       duration_minutes: values.duration_minutes ? Number(values.duration_minutes) : null,
       crew_size: Number(values.crew_size) || 1,
       notes: values.notes || null,
+      price: Number(values.price) > 0 ? Number(values.price) : null,
     }
     // Status and actual time belong ONLY to the edited visit, never its siblings.
     const perVisit = {
@@ -495,6 +510,7 @@ export default function SchedulePage() {
       duration_minutes: patch.duration_minutes,
       status: patch.status,
       notes: patch.notes,
+      price: patch.price,
     }).eq('id', job.id)
     if (error) { setBanner('Could not save the job: ' + error.message); return }
     if (patch.status === 'completed' && job.status !== 'completed' && job.recurrence_id) {
@@ -523,7 +539,7 @@ export default function SchedulePage() {
       quote_id: j.quote_id, recurrence_id: j.recurrence_id, title: j.title, service_type: j.service_type,
       scheduled_date: j.scheduled_date, start_time: j.start_time, end_time: j.end_time,
       duration_minutes: j.duration_minutes, crew_size: j.crew_size, status: j.status, notes: j.notes,
-      actual_minutes: j.actual_minutes, suggested_date: j.suggested_date, suggested_nearby_count: j.suggested_nearby_count,
+      price: j.price, actual_minutes: j.actual_minutes, suggested_date: j.suggested_date, suggested_nearby_count: j.suggested_nearby_count,
     }
   }
 
@@ -694,7 +710,16 @@ export default function SchedulePage() {
                 status: editing.status,
                 notes: editing.notes || '',
                 actual_minutes: editing.actual_minutes || 0,
+                price: editing.price ?? 0,
               } : (quotePrefill ?? customerPrefill ?? { scheduled_date: formDate })}
+              suggestedPrice={editing?.quote_id
+                ? quoteVisitAmount(
+                    quotesById[editing.quote_id] as unknown as Record<string, unknown>,
+                    editing.recurrence_id && recurrences[editing.recurrence_id]
+                      ? effectiveFreq(recurrences[editing.recurrence_id].freq, recurrences[editing.recurrence_id].interval_unit, recurrences[editing.recurrence_id].interval_count)
+                      : null,
+                  ) || undefined
+                : undefined}
               onSubmit={editing ? handleEdit : handleAdd}
               onCancel={closeForm}
               isEdit={!!editing}
@@ -729,6 +754,7 @@ export default function SchedulePage() {
           onMarkDone={markJobDone}
           onMoveJob={(job, iso) => moveJobToDate(job, new Date(iso + 'T00:00:00'))}
           recurrenceLabels={recurrenceLabels}
+          valueByJobId={valueByJobId}
         />
       )}
 

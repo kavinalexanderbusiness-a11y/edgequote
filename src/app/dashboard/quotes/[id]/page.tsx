@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
 import { formatCurrency, formatDate, applyOvergrowth, generateQuoteNumber } from '@/lib/utils'
 import { needsFollowUp, daysSince, logFollowUpPatch, markWonPatch } from '@/lib/followup'
-import { Edit2, ArrowLeft, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X } from 'lucide-react'
+import { Edit2, ArrowLeft, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Send } from 'lucide-react'
 
 function localToday(): string {
   const d = new Date()
@@ -128,6 +128,20 @@ export default function QuoteDetailPage() {
       setPdfLoading(false)
     }
   }
+
+  // One tap to "send": hand the PDF to the device AND mark the quote sent
+  // (stamping sent_at arms the follow-up clock) — instead of two separate steps.
+  async function handleSendQuote() {
+    if (!quote) return
+    await handleOpenPdf()
+    if (quote.status === 'draft') {
+      const nowIso = new Date().toISOString()
+      await supabase.from('quotes').update({ status: 'sent' }).eq('id', quote.id)
+      await supabase.from('quotes').update({ sent_at: nowIso }).eq('id', quote.id).is('sent_at', null)
+      setQuote({ ...quote, status: 'sent', sent_at: quote.sent_at ?? nowIso })
+    }
+  }
+
   async function handleScheduleJob(dateOverride?: string) {
     if (!quote) return
     setScheduling(true)
@@ -385,7 +399,18 @@ export default function QuoteDetailPage() {
           description={`Created ${formatDate(quote.created_at)}`}
           action={
             <div className="flex flex-wrap items-center gap-2">
+              {/* Primary deliver action — leads the row */}
+              {quote.status === 'draft' ? (
+                <Button onClick={handleSendQuote} size="sm" loading={pdfLoading}>
+                  <Send className="w-3.5 h-3.5" /> PDF &amp; mark sent
+                </Button>
+              ) : (
+                <Button onClick={handleOpenPdf} size="sm" loading={pdfLoading}>
+                  <FileDown className="w-3.5 h-3.5" /> Open PDF
+                </Button>
+              )}
               <QuoteStatusControl
+                key={quote.status}
                 quoteId={quote.id}
                 status={quote.status}
                 onChanged={(s) => {
@@ -403,13 +428,10 @@ export default function QuoteDetailPage() {
                   <FileText className="w-3.5 h-3.5" /> Convert to Invoice
                 </Button>
               )}
-              <Button onClick={handleOpenPdf} variant="secondary" size="sm" loading={pdfLoading}>
-                <FileDown className="w-3.5 h-3.5" /> Open PDF
-              </Button>
-              <Button onClick={() => setEditing(true)} variant="secondary" size="sm">
+              <Button onClick={() => setEditing(true)} variant="ghost" size="sm">
                 <Edit2 className="w-3.5 h-3.5" /> Edit
               </Button>
-              <Button onClick={handleDuplicate} variant="secondary" size="sm" loading={duplicating}>
+              <Button onClick={handleDuplicate} variant="ghost" size="sm" loading={duplicating}>
                 <Copy className="w-3.5 h-3.5" /> Duplicate
               </Button>
             </div>

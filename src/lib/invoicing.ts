@@ -45,6 +45,14 @@ export function quoteVisitAmount(quote: Record<string, unknown> | null | undefin
   return Number(quote.initial_price) || Number(quote.total) || 0
 }
 
+// A visit's value with the job-level manual price taking precedence over the
+// quote-derived price. THE single definition of "what is this visit worth".
+export function jobVisitValue(jobPrice: number | null | undefined, quote: Record<string, unknown> | null | undefined, freq: string | null): number {
+  const p = Number(jobPrice)
+  if (Number.isFinite(p) && p > 0) return p
+  return quoteVisitAmount(quote, freq)
+}
+
 // When a recurring visit is completed, create a DRAFT invoice for that visit,
 // pulling customer/property/service/pricing from the originating quote.
 // Never sends. De-dupes by job_id so a visit can't be double-invoiced.
@@ -70,7 +78,7 @@ export async function createDraftInvoiceForCompletedJob(supabase: Supa, job: Job
     quote = q as Record<string, unknown> | null
   }
 
-  const amount = quoteVisitAmount(quote, freq)
+  const amount = jobVisitValue(job.price, quote, freq)
 
   // Customer + property details (denormalised onto the invoice for history).
   let customerName = ''

@@ -11,11 +11,12 @@ import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
 import { Toggle } from '@/components/ui/Toggle'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { Collapsible } from '@/components/ui/Collapsible'
 import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
 import { formatCurrency, suggestTravelFee } from '@/lib/utils'
 import { laborSuggestion, pricingConfigFromSettings } from '@/lib/pricing'
 import { BestDaySuggestions } from '@/components/schedule/BestDaySuggestions'
-import { Clock, DollarSign, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles } from 'lucide-react'
+import { Clock, DollarSign, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, SlidersHorizontal, CheckCircle2 } from 'lucide-react'
 
 interface QuoteBuilderProps {
   customers: Customer[]
@@ -83,8 +84,21 @@ export function QuoteBuilder({
   const biweeklyPrice = Number(watch('biweekly_price')) || 0
   const monthlyPrice = Number(watch('monthly_price')) || 0
 
+  const notes = watch('notes')
+  const measuredSqft = Number(watch('measured_sqft')) || 0
   const suggestedInitial = laborSuggestion(Number(hours), Number(crewSize), Number(rate), overgrowth || 1)
   const effectiveTotal = initialPrice + Number(travelFee || 0)
+
+  // One-line summaries so collapsed sections still reveal their state.
+  const recSummary = [
+    weeklyPrice > 0 && `Wk ${formatCurrency(weeklyPrice)}`,
+    biweeklyPrice > 0 && `Bi ${formatCurrency(biweeklyPrice)}`,
+    monthlyPrice > 0 && `Mo ${formatCurrency(monthlyPrice)}`,
+  ].filter(Boolean).join(' · ')
+  const travelSummary = Number(travelFee) > 0
+    ? `${formatCurrency(Number(travelFee))}${distanceKm > 0 ? ` · ${distanceKm} km` : ''}`
+    : (includeTravel ? 'No fee yet' : 'Absorbing travel')
+  const laborSummary = `${Number(hours) || 0} hr · ${crewSize} crew · ${formatCurrency(Number(rate))}/hr`
 
   useEffect(() => {
     if (!customerId || customerId === '__manual') return
@@ -186,19 +200,28 @@ export function QuoteBuilder({
   const showManualName = !customerId || customerId === '__manual'
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)}>
+    <form onSubmit={handleSubmit(onSubmit)} className="pb-24 lg:pb-0">
       <div className="grid lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-5">
+        <div className="lg:col-span-2 space-y-4">
+          {/* ── FAST PATH — Customer → Property → Service → Price → Save ── */}
           <Card>
-            <CardHeader><h2 className="text-sm font-semibold text-ink">Customer</h2></CardHeader>
+            <CardHeader className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-ink">{isEdit ? 'Quote details' : 'New quote'}</h2>
+              {initialManual && (
+                <span className="text-[10px] uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5">Manual price</span>
+              )}
+            </CardHeader>
             <CardBody className="space-y-4">
+              {/* Customer */}
               <Controller name="customer_id" control={control}
-                render={({ field }) => (<Select label="Select Customer" options={customerOptions} {...field} />)} />
+                render={({ field }) => (<Select label="Customer" options={customerOptions} {...field} />)} />
               {showManualName && (
                 <Input label="Customer Name" placeholder="Full name"
                   error={errors.customer_name?.message}
                   {...register('customer_name', { required: 'Customer name is required' })} />
               )}
+
+              {/* Property */}
               <Controller name="address" control={control}
                 rules={{ required: 'Address is required' }}
                 render={({ field }) => (
@@ -211,53 +234,29 @@ export function QuoteBuilder({
                     error={errors.address?.message}
                   />
                 )} />
-              <Button type="button" variant="secondary" size="sm"
-                onClick={() => { if (!address) { setCalcMsg('Enter an address first.'); return } setShowMeasure(true) }}>
-                <Ruler className="w-3.5 h-3.5" /> Measure & price from satellite
-              </Button>
-            </CardBody>
-          </Card>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                <Button type="button" variant="secondary" size="sm"
+                  onClick={() => { if (!address) { setCalcMsg('Enter an address first.'); return } setShowMeasure(true) }}>
+                  <Ruler className="w-3.5 h-3.5" /> Measure &amp; price from satellite
+                </Button>
+                {measuredSqft > 0 && (
+                  <span className="inline-flex items-center gap-1 text-xs text-emerald-400">
+                    <CheckCircle2 className="w-3.5 h-3.5" /> {Math.round(measuredSqft).toLocaleString()} sq ft measured
+                  </span>
+                )}
+              </div>
 
-          <Card>
-            <CardHeader><h2 className="text-sm font-semibold text-ink">Service & Labour (suggestion)</h2></CardHeader>
-            <CardBody className="space-y-4">
+              {/* Service */}
               <Controller name="service_template_id" control={control}
-                render={({ field }) => (<Select label="Service (from your templates)" options={templateOptions} {...field} />)} />
+                render={({ field }) => (<Select label="Service" options={templateOptions} {...field} />)} />
               <Input label="Service Name" placeholder="e.g. Lawn Mowing"
                 error={errors.service_type?.message}
                 {...register('service_type', { required: 'Service is required' })} />
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <Input label="Estimated Hours" type="number" step="0.25" min="0"
-                  error={errors.hours?.message}
-                  {...register('hours', { required: 'Required', min: { value: 0.25, message: 'Min 0.25' } })} />
-                <Input label="Crew Size" type="number" min="1" max="20"
-                  error={errors.crew_size?.message}
-                  {...register('crew_size', { required: 'Required', min: { value: 1, message: 'Min 1' } })} />
-              </div>
-
-              <Input label="Adjustment Multiplier" type="number" step="0.05" min="0"
-                hint="Multiplies the rate. e.g. 0.75 (easy), 1.0 (standard), 1.25 (overgrown). Any decimal."
-                {...register('overgrowth_multiplier', { min: 0 })} />
-
-              <Input label="Base Rate ($/man-hour)" type="number" step="5" min="0"
-                hint="The multiplier adjusts this. Only used to suggest the Initial price below."
-                error={errors.rate?.message}
-                {...register('rate', { required: 'Required', min: { value: 0, message: 'Rate cannot be negative' } })} />
-            </CardBody>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-ink">Pricing</h2>
-              {initialManual && (
-                <span className="text-[10px] uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5">Manual Pricing Active</span>
-              )}
-            </CardHeader>
-            <CardBody className="space-y-4">
+              {/* Price */}
               <div>
-                <Input label="Initial / First Visit Price ($)" type="number" step="1" min="0"
-                  hint={initialManual ? 'You set this manually — it overrides the labour suggestion.' : `Suggested from labour: ${formatCurrency(suggestedInitial)}. Type to override.`}
+                <Input label="Price ($, first visit)" type="number" step="1" min="0"
+                  hint={initialManual ? 'Manual — overrides the labour suggestion.' : `Suggested ${formatCurrency(suggestedInitial)} from labour. Type to override.`}
                   {...register('initial_price', { min: 0, onChange: () => setInitialManual(true) })} />
                 {initialManual && (
                   <button type="button" onClick={() => setInitialManual(false)}
@@ -266,95 +265,106 @@ export function QuoteBuilder({
                   </button>
                 )}
               </div>
-
-              <div className="bg-bg-tertiary border border-border rounded-xl p-4 space-y-3">
-                <div className="flex items-center gap-2 text-xs font-semibold text-ink-muted uppercase tracking-wide">
-                  <Repeat className="w-3.5 h-3.5" /> Recurring Maintenance Options (optional)
-                </div>
-                <p className="text-xs text-ink-faint">Fill any you want to offer. They show on the quote as options the customer can pick.</p>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  <Input label="Weekly ($/visit)" type="number" step="1" min="0" {...register('weekly_price', { min: 0 })} />
-                  <Input label="Bi-Weekly ($/visit)" type="number" step="1" min="0" {...register('biweekly_price', { min: 0 })} />
-                  <Input label="Monthly ($/visit)" type="number" step="1" min="0" {...register('monthly_price', { min: 0 })} />
-                </div>
-              </div>
-
-              <div className="bg-bg-tertiary border border-border rounded-xl p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-xs font-semibold text-ink-muted uppercase tracking-wide">
-                    <Car className="w-3.5 h-3.5" /> Travel
-                  </div>
-                  <Button type="button" variant="secondary" size="sm" onClick={() => calculateDistance()} loading={calcLoading}>
-                    <MapPin className="w-3.5 h-3.5" /> Calculate Distance
-                  </Button>
-                </div>
-                {calcMsg && <p className="text-xs text-accent">{calcMsg}</p>}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
-                  <Input label="Distance (km)" type="number" step="1" min="0"
-                    {...register('distance_km', { min: 0 })} />
-                  <Input label="Travel Fee ($)" type="number" step="5" min="0"
-                    {...register('travel_fee', { min: 0 })} />
-                </div>
-                {travelSuggestion && (
-                  <div className="text-sm">
-                    {travelSuggestion.isCustom ? (
-                      <span className="text-amber-400">{travelSuggestion.tierLabel}: custom fee required</span>
-                    ) : (
-                      <span className="text-ink-muted">{travelSuggestion.tierLabel}: <span className="text-accent font-semibold">{formatCurrency(travelSuggestion.fee || 0)}</span></span>
-                    )}
-                  </div>
-                )}
-                {customTravelRequired && (
-                  <div className="flex items-start gap-2 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
-                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                    Beyond your furthest travel tier — enter a custom travel fee above.
-                  </div>
-                )}
-                {travelSuggestion && !travelSuggestion.isCustom && (
-                  <Button type="button" variant="secondary" size="sm" onClick={applySuggestedTravel}>
-                    Apply suggested travel fee
-                  </Button>
-                )}
-                <div className="pt-1 space-y-2">
-                  <Toggle checked={includeTravel} onChange={toggleIncludeTravel}
-                    label={includeTravel ? 'Charging travel fee' : 'Absorbing travel — no fee'} />
-                  <Controller name="show_travel_separately" control={control}
-                    render={({ field }) => (
-                      <Toggle checked={field.value} onChange={field.onChange}
-                        label={field.value ? 'Show travel as separate line on PDF' : 'Travel rolled into total on PDF'} />
-                    )} />
-                </div>
-              </div>
-
-              <Textarea label="Notes" placeholder="Job-specific details, access instructions, gate codes..."
-                {...register('notes')} />
             </CardBody>
           </Card>
 
-          <Card>
-            <CardHeader><h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Sparkles className="w-4 h-4 text-accent" /> Best scheduling opportunities</h2></CardHeader>
-            <CardBody>
+          {/* ── ADVANCED — collapsed by default; open only when needed ── */}
+          <Collapsible title="Labour calculator" icon={Calculator} summary={laborSummary}>
+            <p className="text-xs text-ink-faint">Adjusts the suggested price above. Most mowing quotes can skip this and just type a price.</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Input label="Estimated Hours" type="number" step="0.25" min="0"
+                error={errors.hours?.message}
+                {...register('hours', { required: 'Required', min: { value: 0.25, message: 'Min 0.25' } })} />
+              <Input label="Crew Size" type="number" min="1" max="20"
+                error={errors.crew_size?.message}
+                {...register('crew_size', { required: 'Required', min: { value: 1, message: 'Min 1' } })} />
+            </div>
+            <Input label="Adjustment Multiplier" type="number" step="0.05" min="0"
+              hint="Multiplies the rate. e.g. 0.75 (easy), 1.0 (standard), 1.25 (overgrown)."
+              {...register('overgrowth_multiplier', { min: 0 })} />
+            <Input label="Base Rate ($/man-hour)" type="number" step="5" min="0"
+              hint="Only used to suggest the price above."
+              error={errors.rate?.message}
+              {...register('rate', { required: 'Required', min: { value: 0, message: 'Rate cannot be negative' } })} />
+          </Collapsible>
+
+          <Collapsible title="Recurring pricing" icon={Repeat} summary={recSummary || 'One-time quote'}>
+            <p className="text-xs text-ink-faint">Fill any cadence you want to offer — they appear on the quote as options the customer can pick.</p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <Input label="Weekly ($/visit)" type="number" step="1" min="0" {...register('weekly_price', { min: 0 })} />
+              <Input label="Bi-Weekly ($/visit)" type="number" step="1" min="0" {...register('biweekly_price', { min: 0 })} />
+              <Input label="Monthly ($/visit)" type="number" step="1" min="0" {...register('monthly_price', { min: 0 })} />
+            </div>
+          </Collapsible>
+
+          <Collapsible title="Travel" icon={Car} summary={travelSummary}>
+            <div className="flex justify-end">
+              <Button type="button" variant="secondary" size="sm" onClick={() => calculateDistance()} loading={calcLoading}>
+                <MapPin className="w-3.5 h-3.5" /> Calculate Distance
+              </Button>
+            </div>
+            {calcMsg && <p className="text-xs text-accent">{calcMsg}</p>}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
+              <Input label="Distance (km)" type="number" step="1" min="0" {...register('distance_km', { min: 0 })} />
+              <Input label="Travel Fee ($)" type="number" step="5" min="0" {...register('travel_fee', { min: 0 })} />
+            </div>
+            {travelSuggestion && (
+              <div className="text-sm">
+                {travelSuggestion.isCustom ? (
+                  <span className="text-amber-400">{travelSuggestion.tierLabel}: custom fee required</span>
+                ) : (
+                  <span className="text-ink-muted">{travelSuggestion.tierLabel}: <span className="text-accent font-semibold">{formatCurrency(travelSuggestion.fee || 0)}</span></span>
+                )}
+              </div>
+            )}
+            {customTravelRequired && (
+              <div className="flex items-start gap-2 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                Beyond your furthest travel tier — enter a custom travel fee above.
+              </div>
+            )}
+            {travelSuggestion && !travelSuggestion.isCustom && (
+              <Button type="button" variant="secondary" size="sm" onClick={applySuggestedTravel}>
+                Apply suggested travel fee
+              </Button>
+            )}
+            <div className="pt-1 space-y-2">
+              <Toggle checked={includeTravel} onChange={toggleIncludeTravel}
+                label={includeTravel ? 'Charging travel fee' : 'Absorbing travel — no fee'} />
+              <Controller name="show_travel_separately" control={control}
+                render={({ field }) => (
+                  <Toggle checked={field.value} onChange={field.onChange}
+                    label={field.value ? 'Show travel as separate line on PDF' : 'Travel rolled into total on PDF'} />
+                )} />
+            </div>
+          </Collapsible>
+
+          <Collapsible title="Notes" icon={FileText} summary={notes ? String(notes).slice(0, 40) : 'None'}>
+            <Textarea label="Notes" placeholder="Job-specific details, access instructions, gate codes..."
+              {...register('notes')} />
+          </Collapsible>
+
+          <Collapsible title="Scheduling & status" icon={SlidersHorizontal}>
+            <Controller name="status" control={control}
+              render={({ field }) => (<Select label="Quote Status" options={statusOptions} {...field} />)} />
+            <div className="pt-1">
+              <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide flex items-center gap-2 mb-2">
+                <Sparkles className="w-3.5 h-3.5 text-accent" /> Best days to schedule
+              </p>
               {!address ? (
-                <p className="text-xs text-ink-faint">Enter a service address to see the best days to schedule near your existing jobs.</p>
+                <p className="text-xs text-ink-faint">Enter a service address to see the best days near your existing jobs.</p>
               ) : !showBestDays ? (
                 <Button type="button" variant="secondary" size="sm" onClick={() => setShowBestDays(true)}>
-                  <Sparkles className="w-3.5 h-3.5" /> Find best days to schedule
+                  <Sparkles className="w-3.5 h-3.5" /> Find best days
                 </Button>
               ) : (
                 <BestDaySuggestions address={address} />
               )}
-            </CardBody>
-          </Card>
-
-          <Card>
-            <CardBody>
-              <Controller name="status" control={control}
-                render={({ field }) => (<Select label="Quote Status" options={statusOptions} {...field} />)} />
-            </CardBody>
-          </Card>
+            </div>
+          </Collapsible>
         </div>
 
-        <div className="space-y-4">
+        <div className="hidden lg:block space-y-4">
           <Card className="sticky top-6">
             <CardHeader className="flex items-center gap-2">
               <Calculator className="w-4 h-4 text-accent" />
@@ -399,6 +409,18 @@ export function QuoteBuilder({
               </div>
             </CardBody>
           </Card>
+        </div>
+      </div>
+
+      {/* Mobile sticky save bar — always reachable without scrolling */}
+      <div className="lg:hidden fixed bottom-0 left-0 right-0 z-30 px-4 py-2.5 bg-bg-secondary/95 backdrop-blur border-t border-border flex items-center justify-between gap-3">
+        <div className="leading-tight min-w-0">
+          <p className="text-[10px] uppercase tracking-wide text-ink-faint">First invoice</p>
+          <p className="text-xl font-bold text-accent leading-none">{formatCurrency(effectiveTotal)}</p>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <Button type="button" variant="ghost" size="sm" onClick={() => router.back()}>Cancel</Button>
+          <Button type="submit" size="lg" loading={isSubmitting}>{isEdit ? 'Update' : 'Save Quote'}</Button>
         </div>
       </div>
 
