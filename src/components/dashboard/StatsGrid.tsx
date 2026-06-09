@@ -1,4 +1,4 @@
-import { FileText, DollarSign, CheckCircle, Clock, TrendingUp, Percent, Wallet, AlertCircle } from 'lucide-react'
+import { FileText, DollarSign, CheckCircle, Clock, TrendingUp, Percent, Wallet, AlertCircle, CalendarCheck } from 'lucide-react'
 import { DashboardStats } from '@/types'
 import { formatCurrency } from '@/lib/utils'
 import { Card } from '@/components/ui/Card'
@@ -46,6 +46,14 @@ export function StatsGrid({ stats }: StatsGridProps) {
       value: stats.acceptedJobs.toString(),
       sub: formatCurrency(stats.acceptedRevenue) + ' won',
       icon: CheckCircle,
+      color: 'text-emerald-400',
+      bg: 'bg-emerald-500/10',
+    },
+    {
+      label: 'Jobs Done',
+      value: stats.jobsDone.toString(),
+      sub: stats.jobsDoneThisMonth + ' this month',
+      icon: CalendarCheck,
       color: 'text-emerald-400',
       bg: 'bg-emerald-500/10',
     },

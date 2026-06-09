@@ -4,15 +4,14 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { loadGoogleMaps } from '@/lib/googleMaps'
 import { createClient } from '@/lib/supabase/client'
-import { Property, BusinessSettings, TravelFeeTier, MeasurementSnapshot, LawnSections, PricingConfidence, CONFIDENCE_LABELS, CONFIDENCE_COLORS } from '@/types'
-import { priceTiers, routeDensityTravel, pricingConfidence, DEFAULT_RATE_PER_1000, PriceTier } from '@/lib/pricing'
-import { formatCurrency, formatDate, suggestTravelFee } from '@/lib/utils'
+import { Property, BusinessSettings, MeasurementSnapshot, LawnSections, PricingConfidence, CONFIDENCE_LABELS, CONFIDENCE_COLORS } from '@/types'
+import { priceTiers, routeDensityTravel, pricingConfidence, travelFeeForDistance, pricingConfigFromSettings, PricingConfig, DEFAULT_PRICING, PriceTier } from '@/lib/pricing'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import { Coord, haversineKm, nearbyJobCount, fetchLocatedUpcomingJobs } from '@/lib/geo'
 import { Button } from '@/components/ui/Button'
 import { Undo2, Trash2, Check, Ruler, Plus, ZoomIn, ZoomOut, RotateCcw, FileText, Car, ShieldCheck, History, Move } from 'lucide-react'
 
 const M2_TO_SQFT = 10.7639
-const RATE_KEY = 'eq_rate_per_1000'
 const SNAP_PX = 16 // closing snap threshold in screen pixels
 
 const SECTIONS = [
@@ -60,17 +59,18 @@ export function MeasureTool({ property }: { property: Property }) {
   const [breakdown, setBreakdown] = useState<Record<SectionKey, number>>({ front: 0, back: 0, left: 0, right: 0, boulevard: 0, other: 0 })
   const [totalSqft, setTotalSqft] = useState(0)
   const [pointsInCurrent, setPointsInCurrent] = useState(0)
-  const [ratePer1000, setRatePer1000] = useState(DEFAULT_RATE_PER_1000)
   const [overgrowth, setOvergrowth] = useState(1)
   const [selectedTier, setSelectedTier] = useState<PriceTier>('recommended')
   const [saving, setSaving] = useState(false)
   const [creating, setCreating] = useState(false)
   const [savedSqft, setSavedSqft] = useState<number | null>(property.lawn_sqft)
 
+  // Pricing config from Settings (defaults until loaded) — the source of truth.
+  const [cfg, setCfg] = useState<PricingConfig>(DEFAULT_PRICING)
+
   // Travel + route density (pulled from Settings + your existing jobs).
   const [distanceKm, setDistanceKm] = useState<number | null>(null)
   const [baseTravelFee, setBaseTravelFee] = useState(0)
-  const [travelIsCustom, setTravelIsCustom] = useState(false)
   const [nearbyCount, setNearbyCount] = useState(0)
   const [includeTravel, setIncludeTravel] = useState(true)
 
@@ -79,15 +79,6 @@ export function MeasureTool({ property }: { property: Property }) {
     Array.isArray(property.measurement_history) ? property.measurement_history : []
   )
 
-  // Remember the rate locally so it's typed once, ever.
-  useEffect(() => {
-    const stored = typeof window !== 'undefined' ? window.localStorage.getItem(RATE_KEY) : null
-    if (stored) setRatePer1000(Number(stored) || DEFAULT_RATE_PER_1000)
-  }, [])
-  function updateRate(v: number) {
-    setRatePer1000(v)
-    if (typeof window !== 'undefined') window.localStorage.setItem(RATE_KEY, String(v))
-  }
 
   function areaOfPath(path: any): number {
     const g = window.google
@@ -304,13 +295,13 @@ export function MeasureTool({ property }: { property: Property }) {
   async function loadTravelAndDensity(target: Coord | null) {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
-    const [settingsRes, tiersRes, located] = await Promise.all([
+    const [settingsRes, located] = await Promise.all([
       supabase.from('business_settings').select('*').eq('user_id', user.id).maybeSingle(),
-      supabase.from('travel_fee_tiers').select('*').eq('user_id', user.id).order('sort_order'),
       fetchLocatedUpcomingJobs(supabase, user.id),
     ])
     const settings = settingsRes.data as BusinessSettings | null
-    const tiers = (tiersRes.data as TravelFeeTier[]) || []
+    const pricingCfg = pricingConfigFromSettings(settings)
+    setCfg(pricingCfg)
 
     // Distance: prefer driving distance (matches Quote Builder), fall back to straight-line.
     let km: number | null = null
@@ -328,11 +319,7 @@ export function MeasureTool({ property }: { property: Property }) {
       km = Math.round(haversineKm({ lat: settings.base_lat, lng: settings.base_lng }, target) * 10) / 10
     }
     setDistanceKm(km)
-    if (km != null && tiers.length) {
-      const sugg = suggestTravelFee(km, tiers)
-      setTravelIsCustom(sugg.isCustom)
-      setBaseTravelFee(sugg.isCustom ? 0 : (sugg.fee ?? 0))
-    }
+    setBaseTravelFee(travelFeeForDistance(km, pricingCfg))
 
     // Route density — how many located jobs sit near this property.
     if (target) setNearbyCount(nearbyJobCount(target, located).count)
@@ -472,7 +459,7 @@ export function MeasureTool({ property }: { property: Property }) {
       date: new Date().toISOString(),
       total_sqft: total,
       sections,
-      rate_per_1000: ratePer1000,
+      rate_per_1000: cfg.mowRatePer1000,
     }
     // Append from the ref (synchronous) so back-to-back saves can't drop a
     // snapshot; keep the baseline + most recent 20 so the blob stays bounded.
@@ -498,7 +485,7 @@ export function MeasureTool({ property }: { property: Property }) {
     const { total, sections } = await persistMeasurement()
     // Price off the SAME (per-section-rounded) total we persist, so jobPrice,
     // measured_sqft and suggested_price are all derived from one area figure.
-    const tiersForTotal = priceTiers({ sqft: total, ratePer1000, overgrowth })
+    const tiersForTotal = priceTiers(total, cfg, overgrowth)
     const chosen = tiersForTotal.find(t => t.tier === selectedTier) ?? tiersForTotal.find(t => t.recommended)!
     const payload = {
       customerId: property.customer_id,
@@ -509,12 +496,10 @@ export function MeasureTool({ property }: { property: Property }) {
       jobPrice: chosen.amount,
       travelFee: effectiveTravel,
       includeTravel,
-      travelIsCustom,
       travelDistanceKm: distanceKm,
       // "Suggested" = the tool's number for the tier the rep actually picked, so
       // a later manual edit in the builder is what surfaces as a difference.
       suggestedPrice: chosen.amount + effectiveTravel,
-      ratePer1000,
       overgrowth,
       confidence,
     }
@@ -522,7 +507,7 @@ export function MeasureTool({ property }: { property: Property }) {
     router.push('/dashboard/quotes/new?from=measurement')
   }
 
-  const tierList = priceTiers({ sqft: totalSqft, ratePer1000, overgrowth })
+  const tierList = priceTiers(totalSqft, cfg, overgrowth)
   const travelComp = routeDensityTravel(baseTravelFee, nearbyCount)
   const effectiveTravel = includeTravel ? travelComp.fee : 0
   const chosenJob = (tierList.find(t => t.tier === selectedTier) ?? tierList.find(t => t.recommended))?.amount ?? 0
@@ -637,16 +622,10 @@ export function MeasureTool({ property }: { property: Property }) {
       <div className="bg-bg-secondary border border-border rounded-xl px-4 py-3 space-y-3">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Suggested job price</span>
-          <div className="flex items-center gap-3 text-xs">
-            <label className="flex items-center gap-1.5 text-ink-muted">$/1,000ft²
-              <input type="number" min="0" step="1" value={ratePer1000 || ''} onChange={e => updateRate(Number(e.target.value) || 0)}
-                className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none focus:border-accent" />
-            </label>
-            <label className="flex items-center gap-1.5 text-ink-muted">Condition
-              <input type="number" min="0" step="0.05" value={overgrowth} onChange={e => setOvergrowth(Number(e.target.value) || 1)}
-                className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none focus:border-accent" />
-            </label>
-          </div>
+          <label className="flex items-center gap-1.5 text-xs text-ink-muted">Condition
+            <input type="number" min="0" step="0.05" value={overgrowth} onChange={e => setOvergrowth(Number(e.target.value) || 1)}
+              className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none focus:border-accent" />
+          </label>
         </div>
         {totalSqft > 0 ? (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -682,30 +661,26 @@ export function MeasureTool({ property }: { property: Property }) {
               {includeTravel ? 'Charging travel' : 'Travel off'}
             </button>
           </div>
-          {travelIsCustom ? (
-            <p className="text-xs text-amber-400">Beyond your furthest travel tier — set a custom travel fee on the quote.</p>
-          ) : (
-            <div className="space-y-1 text-sm">
-              <div className="flex items-center justify-between text-ink-muted">
-                <span>Distance from base</span>
-                <span className="text-ink">{distanceKm != null ? `${distanceKm} km` : '—'}</span>
-              </div>
-              <div className="flex items-center justify-between text-ink-muted">
-                <span>Base travel fee</span>
-                <span className="text-ink">{formatCurrency(travelComp.baseFee)}</span>
-              </div>
-              {travelComp.discountPct > 0 && includeTravel && (
-                <div className="flex items-center justify-between text-emerald-400">
-                  <span>Route density discount ({nearbyCount} nearby job{nearbyCount !== 1 ? 's' : ''})</span>
-                  <span>−{Math.round(travelComp.discountPct * 100)}%</span>
-                </div>
-              )}
-              <div className="flex items-center justify-between pt-1 border-t border-border">
-                <span className="text-ink-muted">Travel applied</span>
-                <span className="font-semibold text-ink">{formatCurrency(effectiveTravel)}</span>
-              </div>
+          <div className="space-y-1 text-sm">
+            <div className="flex items-center justify-between text-ink-muted">
+              <span>Distance from base</span>
+              <span className="text-ink">{distanceKm != null ? `${distanceKm} km` : '—'}</span>
             </div>
-          )}
+            <div className="flex items-center justify-between text-ink-muted">
+              <span>Base travel fee</span>
+              <span className="text-ink">{formatCurrency(travelComp.baseFee)}</span>
+            </div>
+            {travelComp.discountPct > 0 && includeTravel && (
+              <div className="flex items-center justify-between text-emerald-400">
+                <span>Route density discount ({nearbyCount} nearby job{nearbyCount !== 1 ? 's' : ''})</span>
+                <span>−{Math.round(travelComp.discountPct * 100)}%</span>
+              </div>
+            )}
+            <div className="flex items-center justify-between pt-1 border-t border-border">
+              <span className="text-ink-muted">Travel applied</span>
+              <span className="font-semibold text-ink">{formatCurrency(effectiveTravel)}</span>
+            </div>
+          </div>
         </div>
       )}
 

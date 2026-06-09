@@ -80,25 +80,32 @@ export function BestDaySuggestions({ coord, address, excludeJobId, onPick, onTop
 
   return (
     <div className="space-y-2.5">
-      {/* Recommended */}
-      <button
-        type="button"
-        disabled={!onPick}
-        onClick={() => onPick?.(best.date, best)}
-        className={`w-full text-left rounded-xl border border-accent/40 bg-accent/10 p-3 ${onPick ? 'hover:bg-accent/15 transition-colors cursor-pointer' : 'cursor-default'}`}
-      >
-        <div className="flex items-center justify-between">
+      {onPick && (
+        <p className="text-xs text-ink-faint">Recommended based on nearby jobs — you can still pick any date.</p>
+      )}
+
+      {/* Recommended (suggestion only — applies via the explicit button) */}
+      <div className="w-full rounded-xl border border-accent/40 bg-accent/10 p-3">
+        <div className="flex items-center justify-between gap-2">
           <span className="flex items-center gap-1.5 text-sm font-semibold text-ink">
             <Sparkles className="w-3.5 h-3.5 text-accent" /> Recommended: {best.weekday}
           </span>
-          {onPick && <span className="text-[10px] uppercase tracking-wide text-accent font-semibold">Use this day</span>}
+          {onPick && (
+            <button
+              type="button"
+              onClick={() => onPick(best.date, best)}
+              className="shrink-0 h-8 px-3 rounded-lg bg-accent text-black text-xs font-semibold hover:opacity-90 active:scale-95 transition-transform"
+            >
+              Use This Day
+            </button>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1.5 text-xs text-ink-muted">
           <span className="flex items-center gap-1"><MapPin className="w-3 h-3" /> {best.nearbyCount} nearby job{best.nearbyCount !== 1 ? 's' : ''}</span>
           <span className="flex items-center gap-1"><Navigation className="w-3 h-3" /> ~{best.avgKm} km avg</span>
           <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> +{best.addedDriveMin} min drive</span>
         </div>
-      </button>
+      </div>
 
       {/* Alternatives */}
       {alts.length > 0 && (

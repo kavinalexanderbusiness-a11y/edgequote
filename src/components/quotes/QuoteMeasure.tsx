@@ -2,21 +2,21 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { loadGoogleMaps } from '@/lib/googleMaps'
-import { priceTiers, recommendedJobPrice, DEFAULT_RATE_PER_1000 } from '@/lib/pricing'
+import { priceTiers, recommendedJobPrice, PricingConfig } from '@/lib/pricing'
 import { Button } from '@/components/ui/Button'
 import { X, Undo2, Trash2, Plus, Ruler } from 'lucide-react'
 
 const M2_TO_SQFT = 10.7639
-const RATE_KEY = 'eq_rate_per_1000' // shared with the property Measurement Tool
 
 interface Props {
   address: string
   travelFee: number
+  cfg: PricingConfig
   onApply: (price: number, totalSqft: number, suggested: number) => void
   onClose: () => void
 }
 
-export function QuoteMeasure({ address, travelFee, onApply, onClose }: Props) {
+export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Props) {
   const mapEl = useRef<HTMLDivElement>(null)
   const gmap = useRef<any>(null)
   const committedOverlays = useRef<any[]>([])
@@ -30,18 +30,7 @@ export function QuoteMeasure({ address, travelFee, onApply, onClose }: Props) {
   const [totalSqft, setTotalSqft] = useState(0)
   const [points, setPoints] = useState(0)
   const [shapes, setShapes] = useState(0)
-  const [ratePer1000, setRatePer1000] = useState(DEFAULT_RATE_PER_1000)
   const [overgrowth, setOvergrowth] = useState(1)
-
-  // Seed/remember the rate locally so it matches the property Measurement Tool.
-  useEffect(() => {
-    const stored = typeof window !== 'undefined' ? window.localStorage.getItem(RATE_KEY) : null
-    if (stored) setRatePer1000(Number(stored) || DEFAULT_RATE_PER_1000)
-  }, [])
-  function updateRate(v: number) {
-    setRatePer1000(v)
-    if (typeof window !== 'undefined') window.localStorage.setItem(RATE_KEY, String(v))
-  }
 
   function areaOf(p: any[]): number {
     const g = window.google
@@ -203,7 +192,7 @@ export function QuoteMeasure({ address, travelFee, onApply, onClose }: Props) {
     setTotalSqft(0); setPoints(0); setShapes(0)
   }
 
-  const tiers = priceTiers({ sqft: totalSqft, ratePer1000, overgrowth })
+  const tiers = priceTiers(totalSqft, cfg, overgrowth)
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center p-0 sm:p-4">
@@ -250,29 +239,18 @@ export function QuoteMeasure({ address, travelFee, onApply, onClose }: Props) {
                     <span className="text-lg font-bold text-ink">{totalSqft.toLocaleString()} sq ft</span>
                     {shapes > 0 && <span className="text-xs text-ink-faint">({shapes} + current)</span>}
                   </div>
-                  <div className="flex items-center gap-3">
-                    <label className="flex items-center gap-1.5 text-xs text-ink-muted">
-                      <input
-                        type="number" min="0" step="1" placeholder="0"
-                        value={ratePer1000 || ''}
-                        onChange={e => updateRate(Number(e.target.value) || 0)}
-                        className="w-20 bg-bg border border-border-strong rounded-lg px-2.5 py-2 text-base sm:text-sm text-ink outline-none focus:border-accent"
-                      />
-                      $ / 1,000 ft²
-                    </label>
-                    <label className="flex items-center gap-1.5 text-xs text-ink-muted">
-                      <input
-                        type="number" min="0" step="0.05"
-                        value={overgrowth}
-                        onChange={e => setOvergrowth(Number(e.target.value) || 1)}
-                        className="w-16 bg-bg border border-border-strong rounded-lg px-2.5 py-2 text-base sm:text-sm text-ink outline-none focus:border-accent"
-                      />
-                      Condition
-                    </label>
-                  </div>
+                  <label className="flex items-center gap-1.5 text-xs text-ink-muted">
+                    <input
+                      type="number" min="0" step="0.05"
+                      value={overgrowth}
+                      onChange={e => setOvergrowth(Number(e.target.value) || 1)}
+                      className="w-16 bg-bg border border-border-strong rounded-lg px-2.5 py-2 text-base sm:text-sm text-ink outline-none focus:border-accent"
+                    />
+                    Condition
+                  </label>
                 </div>
 
-                {ratePer1000 > 0 && totalSqft > 0 ? (
+                {totalSqft > 0 ? (
                   <div className="border-t border-border pt-3">
                     <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-2">Suggested job price{Number(travelFee || 0) > 0 ? ` · $${Number(travelFee).toLocaleString()} travel stays on the quote` : ''}</p>
                     <div className="grid grid-cols-2 gap-2">
@@ -292,16 +270,16 @@ export function QuoteMeasure({ address, travelFee, onApply, onClose }: Props) {
                   </div>
                 ) : (
                   <div className="border-t border-border pt-3 text-xs text-ink-faint">
-                    Enter your $ / 1,000 sq ft rate to see suggested prices.
+                    Trace the lawn to see suggested prices (set rates in Settings).
                   </div>
                 )}
               </div>
 
               <div className="flex items-center justify-end gap-2">
                 <Button variant="ghost" onClick={onClose}>Cancel</Button>
-                {ratePer1000 > 0 && totalSqft > 0 && (
+                {totalSqft > 0 && (
                   <Button onClick={() => {
-                    const rec = recommendedJobPrice({ sqft: totalSqft, ratePer1000, overgrowth })
+                    const rec = recommendedJobPrice(totalSqft, cfg, overgrowth)
                     onApply(rec, totalSqft, rec + Number(travelFee || 0))
                   }}>
                     Use recommended

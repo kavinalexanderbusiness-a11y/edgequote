@@ -15,13 +15,15 @@ export default async function DashboardPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
-  const [{ data: quotes }, { data: invoices }] = await Promise.all([
+  const [{ data: quotes }, { data: invoices }, { data: jobs }] = await Promise.all([
     supabase.from('quotes').select('*').eq('user_id', user!.id).order('created_at', { ascending: false }),
     supabase.from('invoices').select('amount, status').eq('user_id', user!.id),
+    supabase.from('jobs').select('status, scheduled_date').eq('user_id', user!.id),
   ])
 
   const allQuotes: Quote[] = quotes || []
   const allInvoices = (invoices as { amount: number; status: string }[]) || []
+  const allJobs = (jobs as { status: string; scheduled_date: string }[]) || []
   const collectedRevenue = allInvoices.filter(i => i.status === 'paid').reduce((s, i) => s + Number(i.amount || 0), 0)
   const outstandingRevenue = allInvoices.filter(i => i.status === 'unpaid' || i.status === 'sent').reduce((s, i) => s + Number(i.amount || 0), 0)
 
@@ -39,6 +41,12 @@ export default async function DashboardPage() {
     ? Math.round((acceptedCount / decidedCount) * 100)
     : 0
 
+  // Done (completed) jobs feed reporting.
+  const doneJobs = allJobs.filter(j => j.status === 'completed')
+  const monthStartISO = `${monthStart.getFullYear()}-${String(monthStart.getMonth() + 1).padStart(2, '0')}-01`
+  const jobsDone = doneJobs.length
+  const jobsDoneThisMonth = doneJobs.filter(j => j.scheduled_date >= monthStartISO).length
+
   const stats: DashboardStats = {
     totalQuotes: allQuotes.length,
     revenueQuoted: allQuotes.reduce((sum, q) => sum + Number(q.total), 0),
@@ -51,6 +59,8 @@ export default async function DashboardPage() {
     conversionRate,
     collectedRevenue,
     outstandingRevenue,
+    jobsDone,
+    jobsDoneThisMonth,
   }
 
   const recent = allQuotes.slice(0, 8)

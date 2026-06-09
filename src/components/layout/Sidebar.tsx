@@ -3,19 +3,21 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useState } from 'react'
-import { LayoutDashboard, Users, FileText, Plus, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Navigation, Receipt, Menu, X } from 'lucide-react'
+import { LayoutDashboard, Users, FileText, Plus, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Navigation, Receipt, Menu, X, HeartPulse, BarChart3 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 
 const nav = [
-  { label: 'Dashboard',  href: '/dashboard',              icon: LayoutDashboard },
-  { label: 'Customers',  href: '/dashboard/customers',    icon: Users },
-  { label: 'Properties', href: '/dashboard/properties',   icon: Home },
-  { label: 'Schedule',   href: '/dashboard/schedule',     icon: CalendarDays },
-  { label: 'Routes',     href: '/dashboard/routes',       icon: Navigation },
-  { label: 'Quotes',     href: '/dashboard/quotes',       icon: FileText },
-  { label: 'Invoices',   href: '/dashboard/invoices',     icon: Receipt },
-  { label: 'New Quote',  href: '/dashboard/quotes/new',   icon: Plus },
+  { label: 'Dashboard',    href: '/dashboard',              icon: LayoutDashboard },
+  { label: 'Customers',    href: '/dashboard/customers',    icon: Users },
+  { label: 'Reactivation', href: '/dashboard/reactivation', icon: HeartPulse },
+  { label: 'Properties',   href: '/dashboard/properties',   icon: Home },
+  { label: 'Schedule',     href: '/dashboard/schedule',     icon: CalendarDays },
+  { label: 'Routes',       href: '/dashboard/routes',       icon: Navigation },
+  { label: 'Profitability', href: '/dashboard/profitability', icon: BarChart3 },
+  { label: 'Quotes',       href: '/dashboard/quotes',       icon: FileText },
+  { label: 'Invoices',     href: '/dashboard/invoices',     icon: Receipt },
+  { label: 'New Quote',    href: '/dashboard/quotes/new',   icon: Plus },
 ]
 
 export function Sidebar() {

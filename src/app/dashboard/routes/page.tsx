@@ -8,19 +8,9 @@ import { Button } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
 import { format } from 'date-fns'
-import { Coord, haversineKm, geocodeAddress } from '@/lib/geo'
+import { Coord, geocodeAddress } from '@/lib/geo'
+import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute } from '@/lib/route'
 import { MapPin, Navigation, AlertTriangle, ExternalLink, Route as RouteIcon, Home } from 'lucide-react'
-
-interface Stop {
-  jobId: string
-  title: string
-  address: string
-  propertyId: string | null
-  lat: number | null
-  lng: number | null
-  order: number
-  legKm: number | null
-}
 
 export default function RoutesPage() {
   const supabase = createClient()
@@ -30,7 +20,7 @@ export default function RoutesPage() {
   const [loading, setLoading] = useState(true)
   const [working, setWorking] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
-  const [orderedStops, setOrderedStops] = useState<Stop[] | null>(null)
+  const [orderedStops, setOrderedStops] = useState<OrderedRouteStop[] | null>(null)
   const [totalKm, setTotalKm] = useState<number | null>(null)
   const [mapsUrl, setMapsUrl] = useState<string | null>(null)
 
@@ -82,117 +72,35 @@ export default function RoutesPage() {
         await supabase.from('business_settings').update({ base_lat: c.lat, base_lng: c.lng }).eq('user_id', user!.id)
       }
 
-      // 2) Build stops, geocoding any property that is missing coordinates
-      const stops: Stop[] = []
-      let geocodedCount = 0
-      for (const job of jobs) {
-        const prop = job.properties
-        let lat = prop?.lat ?? null
-        let lng = prop?.lng ?? null
-        const address = prop?.address || job.title
+      // 2) Build stops + geocode any missing coords (shared engine).
+      const stops: RouteStop[] = jobs.map(job => ({
+        jobId: job.id,
+        title: job.title,
+        address: job.properties?.address || job.title,
+        propertyId: job.properties?.id ?? null,
+        lat: job.properties?.lat ?? null,
+        lng: job.properties?.lng ?? null,
+      }))
+      const geocodedCount = await geocodeMissingStops(supabase, stops)
 
-        if ((lat == null || lng == null) && address) {
-          const c = await geocodeAddress(address)
-          if (c) {
-            lat = c.lat
-            lng = c.lng
-            geocodedCount++
-            // Save back to the property so we don't re-geocode next time
-            if (prop?.id) {
-              await supabase.from('properties').update({ lat: c.lat, lng: c.lng }).eq('id', prop.id)
-            }
-          }
-        }
+      // 3) Order the stops via the shared optimization engine.
+      const result = await optimizeRoute(baseCoord, stops)
 
-        stops.push({
-          jobId: job.id,
-          title: job.title,
-          address,
-          propertyId: prop?.id ?? null,
-          lat, lng,
-          order: 0,
-          legKm: null,
-        })
-      }
-
-      const located = stops.filter(s => s.lat != null && s.lng != null)
-      const missing = stops.filter(s => s.lat == null || s.lng == null)
-
-      if (located.length === 0) {
+      if (result.ordered.length === 0) {
         setMsg('None of today\u2019s jobs have a locatable address yet. Add proper addresses to the properties.')
         setWorking(false)
         return
       }
 
-      // 3) Order the stops. Prefer Google's real-road optimization;
-      //    fall back to a straight-line nearest-neighbour if that fails.
-      let ordered: Stop[] = []
-      let total = 0
-      let usedGoogle = false
+      setOrderedStops(result.ordered)
+      setTotalKm(result.totalKm)
+      setMapsUrl(result.mapsUrl)
 
-      try {
-        const res = await fetch('/api/route', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            base: baseCoord,
-            stops: located.map(s => ({ lat: s.lat, lng: s.lng })),
-          }),
-        })
-        const data = await res.json()
-        if (res.ok && Array.isArray(data.order)) {
-          ordered = data.order.map((idx: number, i: number) => ({
-            ...located[idx],
-            order: i + 1,
-            legKm: typeof data.legKm?.[i] === 'number' ? data.legKm[i] : null,
-          }))
-          total = typeof data.totalKm === 'number' ? data.totalKm : 0
-          usedGoogle = true
-        }
-      } catch {
-        // ignore — fall back below
-      }
-
-      if (!usedGoogle) {
-        // Fallback: nearest-neighbour from base (closest first)
-        const remaining = [...located]
-        let current: Coord = baseCoord
-        while (remaining.length > 0) {
-          let bestIdx = 0
-          let bestDist = Infinity
-          for (let i = 0; i < remaining.length; i++) {
-            const d = haversineKm(current, { lat: remaining[i].lat!, lng: remaining[i].lng! })
-            if (d < bestDist) { bestDist = d; bestIdx = i }
-          }
-          const next = remaining.splice(bestIdx, 1)[0]
-          next.legKm = Math.round(bestDist * 10) / 10
-          total += bestDist
-          ordered.push(next)
-          current = { lat: next.lat!, lng: next.lng! }
-        }
-        ordered.forEach((s, i) => { s.order = i + 1 })
-        total = Math.round(total * 10) / 10
-      }
-
-      // 4) Build a Google Maps multi-stop directions URL (round trip to base)
-      const baseParam = `${baseCoord.lat},${baseCoord.lng}`
-      const waypoints = ordered.map(s => `${s.lat},${s.lng}`).join('|')
-      const u = new URL('https://www.google.com/maps/dir/')
-      u.searchParams.set('api', '1')
-      u.searchParams.set('origin', baseParam)
-      u.searchParams.set('destination', baseParam)
-      if (waypoints) u.searchParams.set('waypoints', waypoints)
-      u.searchParams.set('travelmode', 'driving')
-
-      setOrderedStops(ordered)
-      setTotalKm(total)
-      setMapsUrl(u.toString())
-
-      let info = usedGoogle
-        ? `Optimized ${ordered.length} stop${ordered.length !== 1 ? 's' : ''} by driving distance (round trip).`
-        : `Ordered ${ordered.length} stop${ordered.length !== 1 ? 's' : ''} (estimate — enable Directions API for real roads).`
+      let info = result.usedGoogle
+        ? `Optimized ${result.ordered.length} stop${result.ordered.length !== 1 ? 's' : ''} by driving distance (round trip).`
+        : `Ordered ${result.ordered.length} stop${result.ordered.length !== 1 ? 's' : ''} (estimate — enable Directions API for real roads).`
       if (geocodedCount > 0) info += ` Located ${geocodedCount} new address${geocodedCount !== 1 ? 'es' : ''}.`
-      if (missing.length > 0) info += ` ${missing.length} job(s) skipped (no locatable address).`
+      if (result.missing.length > 0) info += ` ${result.missing.length} job(s) skipped (no locatable address).`
       setMsg(info)
     } catch {
       setMsg('Something went wrong while optimizing. Please try again.')

@@ -13,7 +13,7 @@ import { Toggle } from '@/components/ui/Toggle'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
 import { formatCurrency, suggestTravelFee } from '@/lib/utils'
-import { laborSuggestion } from '@/lib/pricing'
+import { laborSuggestion, pricingConfigFromSettings } from '@/lib/pricing'
 import { BestDaySuggestions } from '@/components/schedule/BestDaySuggestions'
 import { Clock, DollarSign, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles } from 'lucide-react'
 
@@ -406,6 +406,7 @@ export function QuoteBuilder({
         <QuoteMeasure
           address={address}
           travelFee={Number(travelFee) || 0}
+          cfg={pricingConfigFromSettings(settings)}
           onClose={() => setShowMeasure(false)}
           onApply={(price, totalSqft, suggested) => {
             setValue('initial_price', price)

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useForm, Controller } from 'react-hook-form'
 import { createClient } from '@/lib/supabase/client'
 import { Input } from '@/components/ui/Input'
@@ -32,7 +32,8 @@ interface JobFormProps {
   excludeJobId?: string
   // Existing series for the job being edited, so the Repeat controls pre-fill.
   initialRecurrence?: Recurrence
-  onSubmit: (values: JobFormValues, recurrence: Recurrence, meta?: SuggestionMeta) => Promise<void>
+  allowAddAnother?: boolean
+  onSubmit: (values: JobFormValues, recurrence: Recurrence, meta?: SuggestionMeta, opts?: { addAnother?: boolean }) => Promise<void>
   onCancel: () => void
   isEdit?: boolean
 }
@@ -40,7 +41,7 @@ interface JobFormProps {
 const STATUS_OPTIONS: { value: JobStatus; label: string }[] = [
   { value: 'scheduled', label: 'Scheduled' },
   { value: 'in_progress', label: 'In Progress' },
-  { value: 'completed', label: 'Completed' },
+  { value: 'completed', label: 'Done' },
   { value: 'cancelled', label: 'Cancelled' },
 ]
 
@@ -90,10 +91,11 @@ function recurrenceToUi(r?: Recurrence) {
   }
 }
 
-export function JobForm({ customers, defaultValues, excludeJobId, initialRecurrence, onSubmit, onCancel, isEdit }: JobFormProps) {
+export function JobForm({ customers, defaultValues, excludeJobId, initialRecurrence, allowAddAnother, onSubmit, onCancel, isEdit }: JobFormProps) {
   const supabase = createClient()
   const [properties, setProperties] = useState<Property[]>([])
   const [topSuggestion, setTopSuggestion] = useState<DaySuggestion | null>(null)
+  const addAnotherRef = useRef(false)
 
   // Recurrence state — pre-filled from an existing series when editing.
   const ui0 = recurrenceToUi(initialRecurrence)
@@ -110,7 +112,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
         customer_id: '',
         property_id: '',
         title: '',
-        service_type: '',
+        service_type: 'Lawn Mowing', // most jobs are mows — quick-add ready
         scheduled_date: '',
         start_time: '',
         end_time: '',
@@ -122,6 +124,10 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
         ...defaultValues,
       },
     })
+
+  // Quick-add: only Customer / Service / Date show; everything else is collapsed.
+  const [showMore, setShowMore] = useState(false)
+  const adv = isEdit || showMore
 
   const customerId = watch('customer_id')
   const status = watch('status')
@@ -186,11 +192,21 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
 
   return (
     <form
-      onSubmit={handleSubmit((values) => onSubmit(
-        values,
-        buildRecurrence(),
-        { suggestedDate: topSuggestion?.date ?? null, suggestedNearby: topSuggestion?.nearbyCount ?? null },
-      ))}
+      onSubmit={handleSubmit((values) => {
+        // Quick-add never types a title — derive it from service + customer.
+        if (!values.title?.trim()) {
+          const cust = customers.find(c => c.id === values.customer_id)?.name
+          values.title = `${values.service_type || 'Job'}${cust ? ` — ${cust}` : ''}`
+        }
+        const addAnother = addAnotherRef.current
+        addAnotherRef.current = false
+        return onSubmit(
+          values,
+          buildRecurrence(),
+          { suggestedDate: topSuggestion?.date ?? null, suggestedNearby: topSuggestion?.nearbyCount ?? null },
+          { addAnother },
+        )
+      })}
       className="space-y-4"
     >
       <Controller name="customer_id" control={control}
@@ -198,17 +214,12 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
           <Select label="Customer" options={customerOptions} {...field} />
         )} />
 
-      <Controller name="property_id" control={control}
-        render={({ field }) => (
-          <Select label="Property" options={propertyOptions} {...field} />
-        )} />
-
-      <Input label="Job Title" placeholder="e.g. Lawn Mowing — 123 Main St"
-        error={errors.title?.message}
-        {...register('title', { required: 'Required' })} />
-
       <Input label="Service Type" placeholder="e.g. Lawn Mowing"
         {...register('service_type')} />
+
+      <Input label="Date" type="date"
+        error={errors.scheduled_date?.message}
+        {...register('scheduled_date', { required: 'Required' })} />
 
       {(propCoord || selProp?.address) && (
         <div className="bg-bg-tertiary border border-border rounded-xl p-4 space-y-3">
@@ -225,12 +236,29 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
         </div>
       )}
 
+      {!isEdit && (
+        <button type="button" onClick={() => setShowMore(v => !v)}
+          className="text-xs font-medium text-accent hover:underline">
+          {showMore ? '− Fewer options' : '+ More options (property, time, crew, repeat, notes)'}
+        </button>
+      )}
+
+      {adv && (
+      <div className="space-y-4">
+      <Controller name="property_id" control={control}
+        render={({ field }) => (
+          <Select label="Property" options={propertyOptions} {...field} />
+        )} />
+
+      <Input label="Job Title" placeholder="Auto-named from service + customer if blank"
+        error={errors.title?.message}
+        {...register('title')} />
+
       <div className="grid grid-cols-2 gap-4">
-        <Input label="Date" type="date"
-          error={errors.scheduled_date?.message}
-          {...register('scheduled_date', { required: 'Required' })} />
         <Input label="Duration (minutes)" type="number" step="1" min="0"
           {...register('duration_minutes', { min: 0 })} />
+        <Input label="Crew Size" type="number" min="1"
+          {...register('crew_size', { min: { value: 1, message: 'Min 1' } })} />
       </div>
 
       <div className="grid grid-cols-2 gap-4">
@@ -238,14 +266,10 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
         <Input label="End Time" type="time" {...register('end_time')} />
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
-        <Input label="Crew Size" type="number" min="1"
-          {...register('crew_size', { min: { value: 1, message: 'Min 1' } })} />
-        <Controller name="status" control={control}
-          render={({ field }) => (
-            <Select label="Status" options={STATUS_OPTIONS} {...field} />
-          )} />
-      </div>
+      <Controller name="status" control={control}
+        render={({ field }) => (
+          <Select label="Status" options={STATUS_OPTIONS} {...field} />
+        )} />
 
       {status === 'completed' && (
         <Input label="Actual time on site (minutes)" type="number" min="0" step="5"
@@ -345,11 +369,18 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
 
       <Textarea label="Notes" placeholder="Access instructions, gate codes, special requests..."
         {...register('notes')} />
+      </div>
+      )}
 
-      <div className="flex items-center gap-2 pt-2">
-        <Button type="submit" loading={isSubmitting}>
+      <div className="flex items-center gap-2 pt-2 flex-wrap">
+        <Button type="submit" loading={isSubmitting} onClick={() => { addAnotherRef.current = false }}>
           {isEdit ? 'Update Job' : 'Add Job'}
         </Button>
+        {allowAddAnother && (
+          <Button type="submit" variant="secondary" onClick={() => { addAnotherRef.current = true }}>
+            Save &amp; add another
+          </Button>
+        )}
         <Button type="button" variant="ghost" onClick={onCancel}>Cancel</Button>
       </div>
     </form>

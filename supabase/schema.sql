@@ -166,5 +166,13 @@ alter table public.quotes add constraint quotes_pricing_confidence_chk
 alter table public.jobs
   add column if not exists actual_minutes integer;
 
+-- Configurable lawn pricing (consumed by the centralized pricing engine).
+alter table public.business_settings
+  add column if not exists pricing_base_charge      numeric default 28,
+  add column if not exists pricing_mow_rate         numeric default 15,
+  add column if not exists pricing_recommended_mult numeric default 1.0,
+  add column if not exists pricing_premium_mult     numeric default 1.2,
+  add column if not exists pricing_travel_rate      numeric default 1.5;
+
 -- properties.measurement_history (jsonb) already exists and now stores versioned
 -- snapshots { date, total_sqft, sections{...}, rate_per_1000 } — never overwritten.

@@ -12,7 +12,6 @@ import { Button } from '@/components/ui/Button'
 import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { useForm, Controller } from 'react-hook-form'
 import { Upload, Plus, Trash2, Check } from 'lucide-react'
-import { formatCurrency } from '@/lib/utils'
 
 export default function SettingsPage() {
   const { settings, tiers, loading, refresh } = useBusinessData()
@@ -37,6 +36,11 @@ export default function SettingsPage() {
         website: settings.website || '',
         base_address: settings.base_address || '',
         default_rate: settings.default_rate || 50,
+        pricing_base_charge: settings.pricing_base_charge ?? 28,
+        pricing_mow_rate: settings.pricing_mow_rate ?? 15,
+        pricing_recommended_mult: settings.pricing_recommended_mult ?? 1.0,
+        pricing_premium_mult: settings.pricing_premium_mult ?? 1.2,
+        pricing_travel_rate: settings.pricing_travel_rate ?? 1.5,
         terms_text: settings.terms_text || '',
       })
       setLogoUrl(settings.logo_url)
@@ -71,7 +75,16 @@ export default function SettingsPage() {
   async function onSubmit(values: BusinessSettingsFormValues) {
     const { data: { user } } = await supabase.auth.getUser()
     await supabase.from('business_settings')
-      .update({ ...values, default_rate: Number(values.default_rate), base_lat: null, base_lng: null })
+      .update({
+        ...values,
+        default_rate: Number(values.default_rate),
+        pricing_base_charge: Number(values.pricing_base_charge),
+        pricing_mow_rate: Number(values.pricing_mow_rate),
+        pricing_recommended_mult: Number(values.pricing_recommended_mult),
+        pricing_premium_mult: Number(values.pricing_premium_mult),
+        pricing_travel_rate: Number(values.pricing_travel_rate),
+        base_lat: null, base_lng: null,
+      })
       .eq('user_id', user!.id)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
@@ -166,6 +179,39 @@ export default function SettingsPage() {
               )} />
             <Input label="Default Labour Rate ($/man-hour)" type="number" step="5" min="50" {...register('default_rate')} />
             <Textarea label="PDF Terms & Conditions" rows={5} {...register('terms_text')} />
+          </CardBody>
+        </Card>
+
+        <Card className="mt-6">
+          <CardHeader>
+            <div>
+              <h2 className="text-sm font-semibold text-ink">Lawn Pricing</h2>
+              <p className="text-xs text-ink-faint mt-0.5">Drives suggested measurement prices. Recommended = base price × multiplier.</p>
+            </div>
+          </CardHeader>
+          <CardBody className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Input label="Base / minimum charge ($)" type="number" step="1" min="0"
+                hint="The show-up minimum for any lawn."
+                {...register('pricing_base_charge')} />
+              <Input label="Mowing rate ($ / 1,000 sq ft)" type="number" step="1" min="0"
+                hint="Added on top of the base, per 1,000 sq ft."
+                {...register('pricing_mow_rate')} />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Input label="Recommended multiplier" type="number" step="0.05" min="0"
+                hint="1.0 = the realistic everyday quote (not inflated)."
+                {...register('pricing_recommended_mult')} />
+              <Input label="Premium multiplier" type="number" step="0.05" min="0"
+                hint="The upsell tier, e.g. 1.2."
+                {...register('pricing_premium_mult')} />
+            </div>
+            <Input label="Travel rate ($ / km)" type="number" step="0.25" min="0"
+              hint="Driving distance from base × this rate (route-density discounts apply automatically)."
+              {...register('pricing_travel_rate')} />
+            <p className="text-xs text-ink-faint">
+              Defaults are tuned for Calgary mow+trim+edge: ~$40 small, ~$50–60 medium, ~$70–80 large lawns.
+            </p>
           </CardBody>
           <div className="px-6 py-4 border-t border-border flex justify-end">
             <Button type="submit" loading={isSubmitting}>

@@ -1,10 +1,12 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Customer, Job, JobFormValues, Quote, RecurrenceScope, RecurUnit } from '@/types'
 import { Calendar, CalendarView } from '@/components/schedule/Calendar'
+import { DayOpsPanel, QuoteLite, QuickPatch } from '@/components/schedule/DayOpsPanel'
+import { Coord, geocodeAddress } from '@/lib/geo'
 import { JobForm, Recurrence, SuggestionMeta } from '@/components/schedule/JobForm'
 import { ScopeDialog } from '@/components/schedule/ScopeDialog'
 import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel } from '@/lib/recurrence'
@@ -61,12 +63,16 @@ export default function SchedulePage() {
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Job | null>(null)
   const [formDate, setFormDate] = useState<string>('')
-  const [moveMode, setMoveMode] = useState(false)
-  const [movingJob, setMovingJob] = useState<Job | null>(null)
+  const [formSeq, setFormSeq] = useState(0) // bump to remount a fresh add form
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null)
   const [banner, setBanner] = useState<string | null>(null)
+  // One-click undo for the last move/delete/done.
+  const [undoAction, setUndoAction] = useState<{ label: string; run: () => Promise<void> } | null>(null)
+  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [recurrenceLabels, setRecurrenceLabels] = useState<Record<string, string>>({})
   const [recurrences, setRecurrences] = useState<Record<string, JobRecurrence>>({})
+  const [quotesById, setQuotesById] = useState<Record<string, QuoteLite>>({})
+  const [baseCoord, setBaseCoord] = useState<Coord | null>(null)
 
   // When arriving from an accepted quote (?quote=…), open a prefilled new-job form.
   const [quoteCtx, setQuoteCtx] = useState<Quote | null>(null)
@@ -76,7 +82,7 @@ export default function SchedulePage() {
 
   const fetchJobs = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
-    const [jRes, cRes, rRes] = await Promise.all([
+    const [jRes, cRes, rRes, qRes, sRes] = await Promise.all([
       supabase
         .from('jobs')
         .select('*, customers(id, name, phone), properties(id, address, lat, lng)')
@@ -84,6 +90,8 @@ export default function SchedulePage() {
         .order('scheduled_date'),
       supabase.from('customers').select('*').eq('user_id', user!.id).order('name'),
       supabase.from('job_recurrences').select('*').eq('user_id', user!.id),
+      supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
+      supabase.from('business_settings').select('base_lat, base_lng, base_address').eq('user_id', user!.id).maybeSingle(),
     ])
     setJobs((jRes.data as Job[]) || [])
     setCustomers((cRes.data as Customer[]) || [])
@@ -95,6 +103,22 @@ export default function SchedulePage() {
     }
     setRecurrenceLabels(labels)
     setRecurrences(recMap)
+
+    const qMap: Record<string, QuoteLite> = {}
+    for (const q of (qRes.data as QuoteLite[]) || []) qMap[q.id] = q
+    setQuotesById(qMap)
+
+    // Base coordinate for route optimization (geocode the address once if needed).
+    const s = sRes.data as { base_lat: number | null; base_lng: number | null; base_address: string | null } | null
+    if (s?.base_lat != null && s?.base_lng != null) {
+      setBaseCoord({ lat: s.base_lat, lng: s.base_lng })
+    } else if (s?.base_address) {
+      const c = await geocodeAddress(s.base_address)
+      if (c) {
+        setBaseCoord(c)
+        supabase.from('business_settings').update({ base_lat: c.lat, base_lng: c.lng }).eq('user_id', user!.id)
+      }
+    }
     setLoading(false)
   }, [supabase])
 
@@ -154,7 +178,7 @@ export default function SchedulePage() {
     }
   }
 
-  async function handleAdd(values: JobFormValues, recurrence: Recurrence, meta?: SuggestionMeta) {
+  async function handleAdd(values: JobFormValues, recurrence: Recurrence, meta?: SuggestionMeta, opts?: { addAnother?: boolean }) {
     const { data: { user } } = await supabase.auth.getUser()
     const base = {
       user_id: user!.id,
@@ -210,7 +234,16 @@ export default function SchedulePage() {
     }
 
     await fetchJobs()
-    closeForm()
+    // Save & Add Another: keep the date, open a fresh form immediately.
+    if (opts?.addAnother && !quoteCtx && !customerPrefill) {
+      setFormDate(values.scheduled_date)
+      setEditing(null)
+      setShowForm(true)
+      setFormSeq(s => s + 1)
+      setBanner('Job added — add another.')
+    } else {
+      closeForm()
+    }
   }
 
   // The propagating field set for a generated occurrence (no per-visit outcome).
@@ -375,20 +408,32 @@ export default function SchedulePage() {
   async function applyMove(job: Job, newDate: string, scope: RecurrenceScope) {
     const delta = dayDelta(job.scheduled_date, newDate)
     const targets = jobsInScope(job, jobs, scope)
+    const prev = targets.map(t => ({ id: t.id, scheduled_date: t.scheduled_date }))
     await Promise.all(targets.map(t =>
       supabase.from('jobs').update({ scheduled_date: shiftDate(t.scheduled_date, delta) }).eq('id', t.id)
     ))
     await fetchJobs()
+    offerUndo(`Moved ${targets.length} visit${targets.length !== 1 ? 's' : ''}`, async () => {
+      await Promise.all(prev.map(p => supabase.from('jobs').update({ scheduled_date: p.scheduled_date }).eq('id', p.id)))
+    })
   }
 
   async function applyDelete(job: Job, scope: RecurrenceScope) {
     const targets = jobsInScope(job, jobs, scope)
+    const snapshot = targets.map(jobInsertRow)
+    const r = (scope === 'all' && job.recurrence_id) ? recurrences[job.recurrence_id] : null
+    const recRow = r ? {
+      id: r.id, user_id: r.user_id, freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count,
+      start_date: r.start_date, end_date: r.end_date, end_count: r.end_count, customer_id: r.customer_id,
+    } : null
     await supabase.from('jobs').delete().in('id', targets.map(t => t.id))
-    if (scope === 'all' && job.recurrence_id) {
-      await supabase.from('job_recurrences').delete().eq('id', job.recurrence_id)
-    }
+    if (recRow) await supabase.from('job_recurrences').delete().eq('id', job.recurrence_id)
     await fetchJobs()
     setEditing(null)
+    offerUndo(`Deleted ${targets.length} visit${targets.length !== 1 ? 's' : ''}`, async () => {
+      if (recRow) await supabase.from('job_recurrences').insert(recRow)
+      if (snapshot.length) await supabase.from('jobs').insert(snapshot)
+    })
   }
 
   async function handleEdit(values: JobFormValues, recurrence: Recurrence) {
@@ -417,21 +462,84 @@ export default function SchedulePage() {
       setPendingAction({ type: 'delete', job: editing })
       return
     }
+    const row = jobInsertRow(editing)
     await supabase.from('jobs').delete().eq('id', editing.id)
     await fetchJobs()
     setEditing(null)
+    offerUndo('Job deleted', async () => { await supabase.from('jobs').insert(row) })
+  }
+
+  // One-tap "Done" from the calendar — marks ONLY this visit (no scope prompt),
+  // and drafts an invoice for a completed recurring visit.
+  async function markJobDone(job: Job) {
+    const prevStatus = job.status
+    const { error } = await supabase.from('jobs').update({ status: 'completed' }).eq('id', job.id)
+    if (error) { setBanner('Could not mark done: ' + error.message); return }
+    let invoiceCreated = false
+    if (job.recurrence_id) {
+      const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed' })
+      if (res.created) { invoiceCreated = true; setBanner(`Draft invoice ${res.invoiceNumber} created. Review in Invoices.`) }
+    }
+    await fetchJobs()
+    offerUndo('Marked done', async () => {
+      await supabase.from('jobs').update({ status: prevStatus }).eq('id', job.id)
+      if (invoiceCreated) await supabase.from('invoices').delete().eq('job_id', job.id).eq('status', 'draft')
+    })
+  }
+
+  // Inline quick-edit from the day panel — small per-visit changes, no full form.
+  async function quickSaveJob(job: Job, patch: QuickPatch) {
+    const { error } = await supabase.from('jobs').update({
+      start_time: patch.start_time,
+      crew_size: patch.crew_size,
+      duration_minutes: patch.duration_minutes,
+      status: patch.status,
+      notes: patch.notes,
+    }).eq('id', job.id)
+    if (error) { setBanner('Could not save the job: ' + error.message); return }
+    if (patch.status === 'completed' && job.status !== 'completed' && job.recurrence_id) {
+      const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed' })
+      if (res.created) setBanner(`Saved — draft invoice ${res.invoiceNumber} created.`)
+    }
+    await fetchJobs()
+  }
+
+  // ── Undo ────────────────────────────────────────────────────────────────────
+  function offerUndo(label: string, run: () => Promise<void>) {
+    setUndoAction({ label, run })
+    if (undoTimer.current) clearTimeout(undoTimer.current)
+    undoTimer.current = setTimeout(() => setUndoAction(null), 8000)
+  }
+  async function runUndo() {
+    const a = undoAction
+    if (undoTimer.current) clearTimeout(undoTimer.current)
+    setUndoAction(null)
+    if (a) { await a.run(); await fetchJobs() }
+  }
+  // Insertable job row (strips joined customers/properties) for delete-undo.
+  function jobInsertRow(j: Job) {
+    return {
+      id: j.id, user_id: j.user_id, customer_id: j.customer_id, property_id: j.property_id,
+      quote_id: j.quote_id, recurrence_id: j.recurrence_id, title: j.title, service_type: j.service_type,
+      scheduled_date: j.scheduled_date, start_time: j.start_time, end_time: j.end_time,
+      duration_minutes: j.duration_minutes, crew_size: j.crew_size, status: j.status, notes: j.notes,
+      actual_minutes: j.actual_minutes, suggested_date: j.suggested_date, suggested_nearby_count: j.suggested_nearby_count,
+    }
   }
 
   async function moveJobToDate(job: Job, date: Date) {
     const newDate = format(date, 'yyyy-MM-dd')
-    if (newDate === job.scheduled_date) { setMovingJob(null); return }
-    setMovingJob(null)
+    if (newDate === job.scheduled_date) return
     if (job.recurrence_id) {
       setPendingAction({ type: 'move', job, newDate })
       return
     }
+    const prevDate = job.scheduled_date
     setJobs(prev => prev.map(j => j.id === job.id ? { ...j, scheduled_date: newDate } : j))
     await supabase.from('jobs').update({ scheduled_date: newDate }).eq('id', job.id)
+    offerUndo('Job moved', async () => {
+      await supabase.from('jobs').update({ scheduled_date: prevDate }).eq('id', job.id)
+    })
   }
 
   async function handleScopeChoice(scope: RecurrenceScope) {
@@ -444,18 +552,17 @@ export default function SchedulePage() {
   }
 
   function handleDayTap(day: Date) {
-    if (moveMode) {
-      if (movingJob) moveJobToDate(movingJob, day)
-      return
+    // In month/week, tapping a day EXPANDS it (shows all its jobs) instead of
+    // jumping straight to a new-job form. In day view, tapping adds a job.
+    if (view === 'day') {
+      openNewJob(day)
+    } else {
+      setCursor(day)
+      setView('day')
     }
-    openNewJob(day)
   }
 
   function handleJobTap(job: Job) {
-    if (moveMode) {
-      setMovingJob(prev => prev?.id === job.id ? null : job)
-      return
-    }
     setEditing(job)
     setShowForm(false)
   }
@@ -488,7 +595,7 @@ export default function SchedulePage() {
         title="Schedule"
         description={`${jobs.length} job${jobs.length !== 1 ? 's' : ''} on the calendar`}
         action={
-          <Button onClick={() => openNewJob(new Date())}>
+          <Button onClick={() => openNewJob(cursor)}>
             <Plus className="w-4 h-4" /> Add Job
           </Button>
         }
@@ -506,6 +613,17 @@ export default function SchedulePage() {
           <div className="flex items-center gap-3 shrink-0">
             <button onClick={() => router.push('/dashboard/invoices')} className="underline font-medium">Invoices</button>
             <button onClick={() => setBanner(null)} className="text-ink-faint hover:text-ink">✕</button>
+          </div>
+        </div>
+      )}
+
+      {/* Undo toast — restore the last move / delete / done */}
+      {undoAction && (
+        <div className="flex items-center justify-between gap-3 text-sm bg-ink text-bg border border-border-strong rounded-xl px-4 py-2.5 shadow-lg">
+          <span className="font-medium">{undoAction.label}</span>
+          <div className="flex items-center gap-3 shrink-0">
+            <button onClick={runUndo} className="font-bold underline">Undo</button>
+            <button onClick={() => setUndoAction(null)} className="opacity-60 hover:opacity-100">✕</button>
           </div>
         </div>
       )}
@@ -536,13 +654,6 @@ export default function SchedulePage() {
             </button>
           ))}
         </div>
-        <Button
-          variant={moveMode ? 'primary' : 'secondary'}
-          size="sm"
-          onClick={() => { setMoveMode(m => !m); setMovingJob(null) }}
-        >
-          {moveMode ? 'Done Moving' : 'Move Jobs'}
-        </Button>
       </div>
 
       {/* Form */}
@@ -563,9 +674,10 @@ export default function SchedulePage() {
           </CardHeader>
           <CardBody>
             <JobForm
-              key={editing?.id ?? 'new'}
+              key={editing?.id ?? `new-${formSeq}`}
               customers={customers}
               excludeJobId={editing?.id}
+              allowAddAnother={!editing && !quoteCtx && !customerPrefill}
               initialRecurrence={editing?.recurrence_id && recurrences[editing.recurrence_id]
                 ? recFromRow(recurrences[editing.recurrence_id])
                 : undefined}
@@ -591,16 +703,22 @@ export default function SchedulePage() {
         </Card>
       )}
 
-      {moveMode && (
-        <div className="text-sm text-accent bg-accent/10 border border-accent/20 rounded-xl px-4 py-2.5">
-          {movingJob
-            ? <>Moving <span className="font-semibold">{movingJob.title}</span> — tap a day to drop it. (Tap the job again to cancel.)</>
-            : 'Move mode on — tap a job to pick it up, then tap the day to move it to.'}
-        </div>
-      )}
-
       {loading ? (
         <div className="text-center py-16 text-sm text-ink-muted">Loading schedule...</div>
+      ) : view === 'day' ? (
+        <DayOpsPanel
+          date={format(cursor, 'yyyy-MM-dd')}
+          dateLabel={format(cursor, 'EEEE, MMMM d, yyyy')}
+          jobs={jobs.filter(j => j.scheduled_date === format(cursor, 'yyyy-MM-dd'))}
+          quotesById={quotesById}
+          recurrences={recurrences}
+          baseCoord={baseCoord}
+          onOpenJob={(job) => { setEditing(job); setShowForm(false) }}
+          onMarkDone={markJobDone}
+          onMove={(job, iso) => moveJobToDate(job, new Date(iso + 'T00:00:00'))}
+          onAddJob={() => openNewJob(cursor)}
+          onQuickSave={quickSaveJob}
+        />
       ) : (
         <Calendar
           view={view}
@@ -608,7 +726,8 @@ export default function SchedulePage() {
           jobs={jobs}
           onSelectDay={handleDayTap}
           onSelectJob={handleJobTap}
-          movingJobId={movingJob?.id ?? null}
+          onMarkDone={markJobDone}
+          onMoveJob={(job, iso) => moveJobToDate(job, new Date(iso + 'T00:00:00'))}
           recurrenceLabels={recurrenceLabels}
         />
       )}

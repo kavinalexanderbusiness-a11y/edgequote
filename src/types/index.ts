@@ -172,7 +172,7 @@ export interface JobFormValues {
 export const JOB_STATUS_LABELS: Record<JobStatus, string> = {
   scheduled: 'Scheduled',
   in_progress: 'In Progress',
-  completed: 'Completed',
+  completed: 'Done',
   cancelled: 'Cancelled',
 }
 
@@ -334,6 +334,8 @@ export interface DashboardStats {
   conversionRate: number
   collectedRevenue: number
   outstandingRevenue: number
+  jobsDone: number
+  jobsDoneThisMonth: number
 }
 
 export interface BusinessSettings {
@@ -351,6 +353,12 @@ export interface BusinessSettings {
   base_lat: number | null
   base_lng: number | null
   default_rate: number
+  // Configurable lawn pricing (consumed by the centralized pricing engine).
+  pricing_base_charge: number | null
+  pricing_mow_rate: number | null
+  pricing_recommended_mult: number | null
+  pricing_premium_mult: number | null
+  pricing_travel_rate: number | null
   terms_text: string | null
   user_id: string
 }
@@ -398,6 +406,11 @@ export interface BusinessSettingsFormValues {
   website: string
   base_address: string
   default_rate: number
+  pricing_base_charge: number
+  pricing_mow_rate: number
+  pricing_recommended_mult: number
+  pricing_premium_mult: number
+  pricing_travel_rate: number
   terms_text: string
 }
 
