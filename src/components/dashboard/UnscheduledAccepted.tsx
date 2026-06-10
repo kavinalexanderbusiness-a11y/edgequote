@@ -26,7 +26,9 @@ export function UnscheduledAccepted() {
     const { data: { user } } = await supabase.auth.getUser()
     const [qRes, jRes] = await Promise.all([
       supabase.from('quotes').select('*').eq('user_id', user!.id).eq('status', 'accepted').order('created_at', { ascending: false }),
-      supabase.from('jobs').select('quote_id').eq('user_id', user!.id).not('quote_id', 'is', null),
+      // Cancelled jobs must NOT count as "scheduled" — an accepted quote whose
+      // only job was cancelled would otherwise vanish from this safety net.
+      supabase.from('jobs').select('quote_id').eq('user_id', user!.id).not('quote_id', 'is', null).neq('status', 'cancelled'),
     ])
     const scheduled = new Set((jRes.data || []).map((j: { quote_id: string | null }) => j.quote_id))
     setQuotes(((qRes.data as Quote[]) || []).filter(q => !scheduled.has(q.id)))

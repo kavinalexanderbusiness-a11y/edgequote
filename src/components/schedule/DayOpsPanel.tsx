@@ -4,14 +4,13 @@ import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Job, JobStatus, JobRecurrence, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
 import { Coord } from '@/lib/geo'
-import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, routeStats, directionsUrl } from '@/lib/route'
+import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, routeStats, directionsUrl, computeDayEtas, roughFinishEstimate, dayLoad, DEFAULT_JOB_MIN } from '@/lib/route'
 import { jobVisitValue, effectiveFreq, quoteVisitAmount } from '@/lib/invoicing'
 import { formatCurrency, cn } from '@/lib/utils'
-import { format } from 'date-fns'
 import { Button } from '@/components/ui/Button'
 import {
   DollarSign, Clock, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
-  MapPin, Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, Trash2,
+  MapPin, Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, Trash2, CloudRain,
 } from 'lucide-react'
 
 export interface QuoteLite {
@@ -35,6 +34,9 @@ interface Props {
   onMove: (job: Job, newDateISO: string) => void
   onDeleteJob: (job: Job) => void
   onSetPrice: (job: Job, price: number | null) => Promise<void>
+  workStartTime: string
+  capacityHours: number
+  onRainDelay: () => void
   onAddJob: () => void
   onQuickSave: (job: Job, patch: QuickPatch) => Promise<void>
 }
@@ -50,7 +52,7 @@ export interface QuickPatch {
 
 export function DayOpsPanel({
   date, dateLabel, jobs, quotesById, recurrences, baseCoord,
-  onOpenJob, onMarkDone, onMove, onDeleteJob, onSetPrice, onAddJob, onQuickSave,
+  onOpenJob, onMarkDone, onMove, onDeleteJob, onSetPrice, workStartTime, capacityHours, onRainDelay, onAddJob, onQuickSave,
 }: Props) {
   const supabase = createClient()
   const [quickId, setQuickId] = useState<string | null>(null)
@@ -140,10 +142,6 @@ export function DayOpsPanel({
     .map(j => ({ lat: j.properties!.lat as number, lng: j.properties!.lng as number }))
   const totalStops = locatedCoords.length
   const completionPct = active.length ? Math.round((completed.length / active.length) * 100) : 0
-  const remainingMin = remaining.reduce((s, j) => s + (j.duration_minutes || 0), 0)
-  const estFinish = active.length === 0 ? '—'
-    : remaining.length === 0 ? 'Done'
-    : remainingMin > 0 ? format(new Date(Date.now() + remainingMin * 60000), 'h:mm a') : 'Now'
 
   // Optimize the day's route via the shared engine. Re-runs only when the set of
   // active jobs (or the base) changes — not when a status flips — so marking Done
@@ -183,12 +181,46 @@ export function DayOpsPanel({
   })
   const stats = route && totalStops > 0 ? routeStats(locatedCoords, route.totalKm) : null
 
+  // Real-world timing: work start + route order + drive legs + job durations →
+  // an arrival time per stop and the day's estimated finish (ONE engine, lib/route).
+  const durByJob: Record<string, number> = {}
+  for (const j of active) durByJob[j.id] = j.duration_minutes || DEFAULT_JOB_MIN
+  const etas = route && route.ordered.length > 0 ? computeDayEtas(workStartTime, route.ordered, durByJob) : null
+  const etaByJob: Record<string, string> = {}
+  if (etas) for (const s of etas.stops) etaByJob[s.jobId] = s.arrival
+  const laborTotalMin = active.reduce((s, j) => s + (j.duration_minutes || DEFAULT_JOB_MIN), 0)
+  const estFinish = active.length === 0 ? '—'
+    : remaining.length === 0 ? 'Done'
+    : (etas?.finish ?? roughFinishEstimate(workStartTime, laborTotalMin, active.length).finish)
+  const load = dayLoad(laborTotalMin + (stats ? stats.driveMinutes : active.length * 10), capacityHours)
+
   return (
     <div className="rounded-card border border-border bg-bg-secondary overflow-hidden">
       {/* Header: date + add */}
       <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-3 bg-gradient-to-r from-accent/5 to-transparent">
-        <p className="text-sm font-bold text-ink">{dateLabel}</p>
-        <Button size="sm" onClick={onAddJob}><Plus className="w-4 h-4" /> Add job</Button>
+        <div className="min-w-0 flex items-center gap-2">
+          <p className="text-sm font-bold text-ink truncate">{dateLabel}</p>
+          {active.length > 0 && (
+            <span className={cn(
+              'text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 border shrink-0',
+              load.state === 'overloaded' ? 'text-red-400 border-red-500/30 bg-red-500/10'
+                : load.state === 'room' ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'
+                : 'text-ink-muted border-border bg-bg-tertiary'
+            )}>
+              {load.state === 'overloaded' ? `Over by ${Math.round(-load.spareMin / 6) / 10}h`
+                : load.state === 'room' ? `Room for ~${Math.round(load.spareMin / 6) / 10}h`
+                : 'Full day'}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {remaining.length > 0 && (
+            <Button size="sm" variant="secondary" onClick={onRainDelay} title="Bump all remaining jobs to your next work day">
+              <CloudRain className="w-4 h-4" /> Rain delay
+            </Button>
+          )}
+          <Button size="sm" onClick={onAddJob}><Plus className="w-4 h-4" /> Add job</Button>
+        </div>
       </div>
 
       {/* Daily revenue forecast — the first thing you see */}
@@ -318,6 +350,9 @@ export function DayOpsPanel({
                         </div>
                       )}
                       <div className="flex items-center gap-1.5 text-xs opacity-80 mt-0.5 flex-wrap">
+                        {!done && etaByJob[job.id] && (
+                          <span className="font-semibold text-accent shrink-0">ETA {etaByJob[job.id]}</span>
+                        )}
                         {job.service_type && <span className="truncate">{job.service_type}</span>}
                         {job.start_time && <span>· {job.start_time.slice(0, 5)}</span>}
                         <span className="px-1.5 py-0.5 rounded border border-current/30 text-[10px] font-semibold uppercase tracking-wide">{JOB_STATUS_LABELS[job.status]}</span>

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/Button'
@@ -13,6 +13,16 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [brand, setBrand] = useState<{ url: string | null; scale: number }>({ url: null, scale: 100 })
+
+  // Best-effort branding: settings aren't readable pre-auth (RLS), so reuse the
+  // logo cached by the sidebar on this device. Falls back to default branding.
+  useEffect(() => {
+    try {
+      const cached = window.localStorage.getItem('eq-logo')
+      if (cached) { const c = JSON.parse(cached); if (c?.url) setBrand({ url: c.url, scale: c.scale || 100 }) }
+    } catch { /* ignore */ }
+  }, [])
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
@@ -43,9 +53,15 @@ export default function LoginPage() {
       <div className="w-full max-w-sm relative">
         {/* Logo */}
         <div className="flex flex-col items-center mb-8">
-          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-accent to-emerald-700 flex items-center justify-center mb-4 shadow-lg shadow-accent/20">
-            <Zap className="w-6 h-6 text-black fill-black" />
-          </div>
+          {brand.url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={brand.url} alt="Logo" className="object-contain mb-4"
+              style={{ height: Math.min(96, Math.round(48 * (brand.scale / 100))), maxWidth: 220 }} />
+          ) : (
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-accent to-emerald-700 flex items-center justify-center mb-4 shadow-lg shadow-accent/20">
+              <Zap className="w-6 h-6 text-black fill-black" />
+            </div>
+          )}
           <h1 className="text-xl font-bold text-ink">EdgeQuote AI</h1>
           <p className="text-sm text-ink-muted mt-1">Edge Property Services — Internal Tool</p>
         </div>

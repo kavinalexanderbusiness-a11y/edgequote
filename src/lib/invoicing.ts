@@ -1,12 +1,14 @@
 import type { createClient } from '@/lib/supabase/client'
 import type { Job } from '@/types'
+import { localTodayISO, maxNumericSuffix } from '@/lib/utils'
+import { addDays, format, parseISO } from 'date-fns'
 
 type Supa = ReturnType<typeof createClient>
 
 export interface AutoInvoiceResult {
   created: boolean
   invoiceNumber?: string
-  reason?: 'not-recurring' | 'exists' | 'error'
+  reason?: 'not-recurring' | 'exists' | 'no-amount' | 'error'
 }
 
 // Resolve a recurring cadence to weekly/biweekly/monthly. The legacy `freq`
@@ -79,6 +81,8 @@ export async function createDraftInvoiceForCompletedJob(supabase: Supa, job: Job
   }
 
   const amount = jobVisitValue(job.price, quote, freq)
+  // Never draft a $0 invoice — an unpriced visit pollutes billing history forever.
+  if (!(amount > 0)) return { created: false, reason: 'no-amount' }
 
   // Customer + property details (denormalised onto the invoice for history).
   let customerName = ''
@@ -94,13 +98,14 @@ export async function createDraftInvoiceForCompletedJob(supabase: Supa, job: Job
   if (!customerName && quote) customerName = String(quote.customer_name || '')
   if (!address && quote) address = (quote.address as string) ?? null
 
-  // Sequential INV-#### number.
-  const { count } = await supabase.from('invoices').select('id', { count: 'exact', head: true }).eq('user_id', user.id)
-  const invoiceNumber = `INV-${String((count || 0) + 1).padStart(4, '0')}`
+  // Sequential INV-#### from the highest EXISTING number — a row count would
+  // reissue a number after any delete and two invoices would share it.
+  const { data: nums } = await supabase.from('invoices').select('invoice_number').eq('user_id', user.id)
+  const invoiceNumber = `INV-${String(maxNumericSuffix(((nums as { invoice_number: string }[]) || []).map(n => n.invoice_number)) + 1).padStart(4, '0')}`
 
-  const today = new Date().toISOString().slice(0, 10)
-  const due = new Date()
-  due.setDate(due.getDate() + 14)
+  // Local dates — evening completions must not stamp tomorrow (UTC) as issued.
+  const today = localTodayISO()
+  const dueISO = format(addDays(parseISO(today), 14), 'yyyy-MM-dd')
 
   const { error } = await supabase.from('invoices').insert({
     user_id: user.id,
@@ -115,7 +120,7 @@ export async function createDraftInvoiceForCompletedJob(supabase: Supa, job: Job
     amount,
     status: 'draft',
     issued_date: today,
-    due_date: due.toISOString().slice(0, 10),
+    due_date: dueISO,
     notes: `Auto-generated from completed ${freq || 'recurring'} visit on ${job.scheduled_date}.`,
   })
 

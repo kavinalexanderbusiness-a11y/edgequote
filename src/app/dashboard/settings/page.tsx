@@ -11,7 +11,16 @@ import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
 import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { useForm, Controller } from 'react-hook-form'
-import { Upload, Plus, Trash2, Check } from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { ThemePref, getThemePref, applyThemePref } from '@/lib/theme'
+import { Upload, Plus, Trash2, Check, Sun, Moon, Monitor } from 'lucide-react'
+
+// Mon→Sun display, mapped to date-fns getDay indices (Sun=0…Sat=6).
+const WEEKDAYS = [
+  { i: 1, l: 'Monday' }, { i: 2, l: 'Tuesday' }, { i: 3, l: 'Wednesday' }, { i: 4, l: 'Thursday' },
+  { i: 5, l: 'Friday' }, { i: 6, l: 'Saturday' }, { i: 0, l: 'Sunday' },
+]
+const DEFAULT_WORK_DAYS = [5, 6, 0] // Fri/Sat/Sun
 
 export default function SettingsPage() {
   const { settings, tiers, loading, refresh } = useBusinessData()
@@ -21,6 +30,23 @@ export default function SettingsPage() {
   const [uploading, setUploading] = useState(false)
   const [saved, setSaved] = useState(false)
   const [localTiers, setLocalTiers] = useState<Partial<TravelFeeTier>[]>([])
+  const [workDays, setWorkDays] = useState<number[]>(DEFAULT_WORK_DAYS)
+  const toggleDay = (i: number) => setWorkDays(prev => prev.includes(i) ? prev.filter(x => x !== i) : [...prev, i])
+  const [workStart, setWorkStart] = useState('08:00')
+  const [capacityHours, setCapacityHours] = useState('8')
+  const [themePref, setThemePref] = useState<ThemePref>('dark')
+  const [logoScale, setLogoScale] = useState(100)
+
+  useEffect(() => { setThemePref(getThemePref()) }, [])
+  function pickTheme(p: ThemePref) { setThemePref(p); applyThemePref(p) }
+
+  async function persistLogoScale(v: number) {
+    setLogoScale(v)
+    const { data: { user } } = await supabase.auth.getUser()
+    await supabase.from('business_settings').update({ logo_scale: v }).eq('user_id', user!.id)
+    // Sidebar/login read this cache so the logo scales everywhere immediately.
+    try { window.localStorage.setItem('eq-logo', JSON.stringify({ url: logoUrl, scale: v })) } catch { /* ignore */ }
+  }
 
   const { register, handleSubmit, reset, control, formState: { isSubmitting } } =
     useForm<BusinessSettingsFormValues>()
@@ -44,6 +70,10 @@ export default function SettingsPage() {
         terms_text: settings.terms_text || '',
       })
       setLogoUrl(settings.logo_url)
+      setWorkDays(settings.preferred_work_days?.length ? settings.preferred_work_days : DEFAULT_WORK_DAYS)
+      setWorkStart(settings.work_start_time || '08:00')
+      setCapacityHours(String(settings.daily_capacity_hours ?? 8))
+      setLogoScale(settings.logo_scale && settings.logo_scale >= 50 ? settings.logo_scale : 100)
     }
   }, [settings, reset])
 
@@ -68,6 +98,7 @@ export default function SettingsPage() {
       await supabase.from('business_settings')
         .update({ logo_url: url })
         .eq('user_id', user!.id)
+      try { window.localStorage.setItem('eq-logo', JSON.stringify({ url, scale: logoScale })) } catch { /* ignore */ }
     }
     setUploading(false)
   }
@@ -83,6 +114,9 @@ export default function SettingsPage() {
         pricing_recommended_mult: Number(values.pricing_recommended_mult),
         pricing_premium_mult: Number(values.pricing_premium_mult),
         pricing_travel_rate: Number(values.pricing_travel_rate),
+        preferred_work_days: workDays,
+        work_start_time: /^\d{1,2}:\d{2}$/.test(workStart) ? workStart : '08:00',
+        daily_capacity_hours: Number(capacityHours) > 0 ? Number(capacityHours) : 8,
         base_lat: null, base_lng: null,
       })
       .eq('user_id', user!.id)
@@ -129,12 +163,13 @@ export default function SettingsPage() {
 
       <Card>
         <CardHeader><h2 className="text-sm font-semibold text-ink">Branding</h2></CardHeader>
-        <CardBody className="space-y-4">
-          <div className="flex items-center gap-5">
+        <CardBody className="space-y-5">
+          <div className="flex items-center gap-5 flex-wrap">
             <div className="w-32 h-32 rounded-xl border border-border-strong bg-black flex items-center justify-center overflow-hidden shrink-0">
               {logoUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={logoUrl} alt="Logo" className="w-full h-full object-contain" />
+                <img src={logoUrl} alt="Logo" className="object-contain transition-all"
+                  style={{ width: `${Math.min(logoScale, 200)}%`, height: `${Math.min(logoScale, 200)}%`, maxWidth: 'none' }} />
               ) : (
                 <span className="text-xs text-ink-faint text-center px-2">No logo uploaded</span>
               )}
@@ -146,9 +181,56 @@ export default function SettingsPage() {
                 <input type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} disabled={uploading} />
               </label>
               <p className="text-xs text-ink-faint mt-2 max-w-xs">
-                Upload your official Edge Property Services logo. Used on PDF quotes and throughout the app.
+                Upload your official Edge Property Services logo. Used in the sidebar, on the login screen and on PDF quotes &amp; invoices.
               </p>
             </div>
+          </div>
+
+          {logoUrl && (
+            <div className="space-y-2.5">
+              <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Logo size <span className="text-ink-faint normal-case font-normal">— live preview above</span></p>
+              <div className="flex items-center gap-2 flex-wrap">
+                {([['Small', 75], ['Medium', 100], ['Large', 150]] as const).map(([label, v]) => (
+                  <button key={label} type="button" onClick={() => persistLogoScale(v)}
+                    className={cn('px-3.5 py-2 rounded-lg text-xs font-medium border transition-colors',
+                      logoScale === v ? 'bg-accent text-black border-accent' : 'bg-surface border-border-strong text-ink-muted hover:text-ink')}>
+                    {label}
+                  </button>
+                ))}
+                <div className="flex items-center gap-2 flex-1 min-w-[180px]">
+                  <input type="range" min={50} max={200} step={5} value={logoScale}
+                    onChange={e => setLogoScale(Number(e.target.value))}
+                    onPointerUp={e => persistLogoScale(Number((e.target as HTMLInputElement).value))}
+                    className="flex-1 accent-[rgb(var(--c-accent))]" />
+                  <span className="text-xs font-semibold text-ink w-11 text-right">{logoScale}%</span>
+                </div>
+              </div>
+            </div>
+          )}
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <div>
+            <h2 className="text-sm font-semibold text-ink">Appearance</h2>
+            <p className="text-xs text-ink-faint mt-0.5">Applies across the whole app and is remembered on this device.</p>
+          </div>
+        </CardHeader>
+        <CardBody>
+          <div className="grid grid-cols-3 gap-2 max-w-md">
+            {([
+              { p: 'light' as ThemePref, label: 'Light', Icon: Sun },
+              { p: 'dark' as ThemePref, label: 'Dark', Icon: Moon },
+              { p: 'system' as ThemePref, label: 'System', Icon: Monitor },
+            ]).map(({ p, label, Icon }) => (
+              <button key={p} type="button" onClick={() => pickTheme(p)}
+                className={cn('h-16 rounded-xl border text-sm font-medium flex flex-col items-center justify-center gap-1.5 transition-colors',
+                  themePref === p ? 'border-accent bg-accent/10 text-ink' : 'border-border-strong bg-surface text-ink-muted hover:text-ink')}>
+                <Icon className={cn('w-4 h-4', themePref === p && 'text-accent')} />
+                {label}
+              </button>
+            ))}
           </div>
         </CardBody>
       </Card>
@@ -179,6 +261,52 @@ export default function SettingsPage() {
               )} />
             <Input label="Default Labour Rate ($/man-hour)" type="number" step="5" min="50" {...register('default_rate')} />
             <Textarea label="PDF Terms & Conditions" rows={5} {...register('terms_text')} />
+          </CardBody>
+        </Card>
+
+        <Card className="mt-6">
+          <CardHeader>
+            <div>
+              <h2 className="text-sm font-semibold text-ink">Work Schedule</h2>
+              <p className="text-xs text-ink-faint mt-0.5">Drives the weekly scheduler, per-stop arrival times and the day-load signal.</p>
+            </div>
+          </CardHeader>
+          <CardBody className="space-y-5">
+            <div>
+              <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-2">Preferred work days</p>
+              <div className="flex flex-wrap gap-2">
+                {WEEKDAYS.map(w => {
+                  const on = workDays.includes(w.i)
+                  return (
+                    <button key={w.i} type="button" onClick={() => toggleDay(w.i)}
+                      className={cn(
+                        'px-3.5 py-2 rounded-xl text-sm font-medium border transition-colors flex items-center gap-1.5',
+                        on ? 'bg-accent text-black border-accent' : 'bg-surface border-border-strong text-ink-muted hover:text-ink'
+                      )}>
+                      <span className={cn('w-3.5 h-3.5 rounded border flex items-center justify-center', on ? 'border-black/40 bg-black/10' : 'border-border-strong')}>
+                        {on && <Check className="w-3 h-3" />}
+                      </span>
+                      {w.l}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Work day start time</label>
+                <input type="time" value={workStart} onChange={e => setWorkStart(e.target.value)}
+                  className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" />
+                <p className="text-xs text-ink-faint">Arrival times for each stop and the estimated finish are computed from this.</p>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Daily capacity (hours)</label>
+                <input type="number" min="1" max="16" step="0.5" value={capacityHours} onChange={e => setCapacityHours(e.target.value)}
+                  className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" />
+                <p className="text-xs text-ink-faint">Days past this show as overloaded; days with an hour+ spare show room for more jobs.</p>
+              </div>
+            </div>
+            <p className="text-xs text-ink-faint">Save (below) to apply.</p>
           </CardBody>
         </Card>
 

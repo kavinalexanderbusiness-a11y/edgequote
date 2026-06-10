@@ -1,8 +1,10 @@
-import { TodayJobs } from '@/components/dashboard/TodayJobs'
+import { WeekendOutlook } from '@/components/dashboard/WeekendOutlook'
+import { DashboardSections } from '@/components/dashboard/DashboardSections'
 import { createClient } from '@/lib/supabase/server'
 import { StatsGrid } from '@/components/dashboard/StatsGrid'
 import { RecentQuotes } from '@/components/dashboard/RecentQuotes'
 import { UnscheduledAccepted } from '@/components/dashboard/UnscheduledAccepted'
+import { MissedJobs } from '@/components/dashboard/MissedJobs'
 import { FollowUpQuotes } from '@/components/dashboard/FollowUpQuotes'
 import { AcquisitionInsights } from '@/components/dashboard/AcquisitionInsights'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -15,10 +17,11 @@ export default async function DashboardPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
-  const [{ data: quotes }, { data: invoices }, { data: jobs }] = await Promise.all([
+  const [{ data: quotes }, { data: invoices }, { data: jobs }, { data: settingsRow }] = await Promise.all([
     supabase.from('quotes').select('*').eq('user_id', user!.id).order('created_at', { ascending: false }),
     supabase.from('invoices').select('amount, status').eq('user_id', user!.id),
     supabase.from('jobs').select('status, scheduled_date').eq('user_id', user!.id),
+    supabase.from('business_settings').select('dashboard_cards').eq('user_id', user!.id).maybeSingle(),
   ])
 
   const allQuotes: Quote[] = quotes || []
@@ -81,14 +84,18 @@ export default async function DashboardPage() {
           </Link>
         }
       />
-      <StatsGrid stats={stats} />
-      <FollowUpQuotes />
-      <UnscheduledAccepted />
-      <div className="grid lg:grid-cols-2 gap-6">
-        <TodayJobs />
-        <RecentQuotes quotes={recent} />
-      </div>
-      <AcquisitionInsights />
+      <DashboardSections
+        initialPrefs={(settingsRow as { dashboard_cards: { order: string[]; hidden: string[] } | null } | null)?.dashboard_cards ?? null}
+        sections={{
+          stats: <StatsGrid stats={stats} />,
+          missed: <MissedJobs />,
+          followups: <FollowUpQuotes />,
+          unscheduled: <UnscheduledAccepted />,
+          weekend: <WeekendOutlook />,
+          recent: <RecentQuotes quotes={recent} />,
+          acquisition: <AcquisitionInsights />,
+        }}
+      />
     </div>
   )
 }

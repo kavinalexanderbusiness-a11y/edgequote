@@ -2,8 +2,8 @@
 
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { useState } from 'react'
-import { LayoutDashboard, Users, FileText, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Navigation, Receipt, Menu, X, HeartPulse, BarChart3, Gauge, ShieldCheck } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { LayoutDashboard, Users, FileText, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Navigation, Receipt, Menu, X, HeartPulse, BarChart3, Gauge, ShieldCheck, Map as MapIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 
@@ -18,6 +18,7 @@ const navMain = [
   { label: 'Invoices',   href: '/dashboard/invoices',   icon: Receipt },
 ]
 const navInsights = [
+  { label: 'Saturation Map',   href: '/dashboard/saturation',      icon: MapIcon },
   { label: 'Profitability',    href: '/dashboard/profitability',   icon: BarChart3 },
   { label: 'Data Quality',     href: '/dashboard/data-quality',    icon: ShieldCheck },
   { label: 'Pricing Recovery', href: '/dashboard/pricing-recovery', icon: Gauge },
@@ -28,6 +29,29 @@ export function Sidebar() {
   const pathname = usePathname()
   const router = useRouter()
   const [open, setOpen] = useState(false)
+  const [brand, setBrand] = useState<{ url: string | null; scale: number }>({ url: null, scale: 100 })
+
+  // Uploaded logo + size from Branding settings (cached for the login screen).
+  useEffect(() => {
+    let active = true
+    async function load() {
+      try {
+        const cached = window.localStorage.getItem('eq-logo')
+        if (cached) { const c = JSON.parse(cached); if (active && c?.url) setBrand({ url: c.url, scale: c.scale || 100 }) }
+      } catch { /* ignore */ }
+      const supabase = createClient()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+      const { data } = await supabase.from('business_settings').select('logo_url, logo_scale').eq('user_id', user.id).maybeSingle()
+      const s = data as { logo_url: string | null; logo_scale: number | null } | null
+      if (!active) return
+      const next = { url: s?.logo_url ?? null, scale: s?.logo_scale && s.logo_scale >= 50 ? s.logo_scale : 100 }
+      setBrand(next)
+      try { window.localStorage.setItem('eq-logo', JSON.stringify(next)) } catch { /* ignore */ }
+    }
+    load()
+    return () => { active = false }
+  }, [])
 
   async function handleSignOut() {
     const supabase = createClient()
@@ -88,14 +112,22 @@ export function Sidebar() {
     )
   }
 
+  // Logo height scales with the Branding setting (base 32px at 100%).
+  const logoPx = Math.round(32 * (brand.scale / 100))
   const logo = (
-    <div className="flex items-center gap-2.5">
-      <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-accent to-emerald-700 flex items-center justify-center">
-        <Zap className="w-4 h-4 text-black fill-black" />
-      </div>
-      <div>
-        <p className="text-sm font-bold text-ink leading-none">EdgeQuote</p>
-        <p className="text-[10px] text-ink-faint leading-none mt-0.5">Edge Property Services</p>
+    <div className="flex items-center gap-2.5 min-w-0">
+      {brand.url ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={brand.url} alt="Logo" className="object-contain shrink-0"
+          style={{ height: logoPx, maxHeight: 56, maxWidth: 160 }} />
+      ) : (
+        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-accent to-emerald-700 flex items-center justify-center shrink-0">
+          <Zap className="w-4 h-4 text-black fill-black" />
+        </div>
+      )}
+      <div className="min-w-0">
+        <p className="text-sm font-bold text-ink leading-none truncate">EdgeQuote</p>
+        <p className="text-[10px] text-ink-faint leading-none mt-0.5 truncate">Edge Property Services</p>
       </div>
     </div>
   )

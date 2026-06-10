@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Customer, QuoteFormValues, ServiceTemplate, TravelFeeTier, BusinessSettings, LawnSections, PricingConfidence } from '@/types'
 import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
 import { PageHeader } from '@/components/layout/PageHeader'
-import { applyOvergrowth, generateQuoteNumber } from '@/lib/utils'
+import { applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 
 interface MeasurementPayload {
@@ -70,12 +70,13 @@ export default function NewQuotePage() {
   async function handleSubmit(values: QuoteFormValues) {
     const { data: { user } } = await supabase.auth.getUser()
 
-    // New format: EPS-#### (zero-padded, auto-increment)
-    const { count } = await supabase
+    // Next number from the highest EXISTING quote number — a row count would
+    // reissue a number after any delete and two quotes would share it.
+    const { data: qnums } = await supabase
       .from('quotes')
-      .select('*', { count: 'exact', head: true })
+      .select('quote_number')
       .eq('user_id', user!.id)
-    const quote_number = generateQuoteNumber((count || 0) + 1)
+    const quote_number = generateQuoteNumber(maxNumericSuffix(((qnums as { quote_number: string }[]) || []).map(n => n.quote_number)) + 1)
 
     // Every quote gets a real customer + property (create or match — no dupes, no orphans).
     let customerId: string | null = values.customer_id && values.customer_id !== '__manual' ? values.customer_id : null
@@ -116,7 +117,7 @@ export default function NewQuotePage() {
       overgrowth_multiplier: mult,
       custom_travel_required: values.custom_travel_required,
       show_travel_separately: values.show_travel_separately,
-      issued_date: new Date().toISOString().split('T')[0],
+      issued_date: localTodayISO(),
       notes: values.notes || null,
       hours: Number(values.hours),
       crew_size: Number(values.crew_size),
@@ -138,6 +139,19 @@ export default function NewQuotePage() {
     }).select().single()
 
     if (!error && data) {
+      // A measurement taken inside the builder previously lived ONLY on the quote —
+      // the property stayed "unmeasured" and sqft-based pricing suggestions never
+      // fired for it. Persist it back to the property (newest measurement wins).
+      const measuredSqft = measurement?.sqft ?? (Number(values.measured_sqft) || 0)
+      if (propertyId && measuredSqft > 0) {
+        const { data: prop } = await supabase.from('properties').select('measurement_history').eq('id', propertyId).maybeSingle()
+        const hist = Array.isArray((prop as { measurement_history: unknown } | null)?.measurement_history)
+          ? (prop as { measurement_history: unknown[] }).measurement_history : []
+        await supabase.from('properties').update({
+          lawn_sqft: measuredSqft,
+          measurement_history: [...hist, { date: new Date().toISOString(), total_sqft: measuredSqft, sections: measurement?.sections ?? undefined }],
+        }).eq('id', propertyId)
+      }
       // Tell the next screen the lead became a customer (created or matched).
       if (typeof window !== 'undefined' && (createdCustomer || matchedBy)) {
         window.sessionStorage.setItem('eq_quote_save_customer', JSON.stringify({ created: createdCustomer, name: customerName, matchedBy }))

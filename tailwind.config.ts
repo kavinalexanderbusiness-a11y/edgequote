@@ -8,29 +8,32 @@ const config: Config = {
   ],
   theme: {
     extend: {
+      // Theme tokens live as CSS variables (globals.css) so Light/Dark/System
+      // switch without touching components. Channel triplets keep Tailwind's
+      // /opacity modifiers (bg-accent/10 etc.) working.
       colors: {
         bg: {
-          DEFAULT: '#080C12',
-          secondary: '#0D1420',
-          tertiary: '#111927',
+          DEFAULT: 'rgb(var(--c-bg) / <alpha-value>)',
+          secondary: 'rgb(var(--c-bg-secondary) / <alpha-value>)',
+          tertiary: 'rgb(var(--c-bg-tertiary) / <alpha-value>)',
         },
         surface: {
-          DEFAULT: '#141E2E',
-          raised: '#1A2640',
+          DEFAULT: 'rgb(var(--c-surface) / <alpha-value>)',
+          raised: 'rgb(var(--c-surface-raised) / <alpha-value>)',
         },
         border: {
-          DEFAULT: 'rgba(255,255,255,0.07)',
-          strong: 'rgba(255,255,255,0.12)',
+          DEFAULT: 'var(--c-border)',
+          strong: 'var(--c-border-strong)',
         },
         accent: {
-          DEFAULT: '#00C896',
-          hover: '#00dba6',
-          dim: 'rgba(0,200,150,0.12)',
+          DEFAULT: 'rgb(var(--c-accent) / <alpha-value>)',
+          hover: 'rgb(var(--c-accent-hover) / <alpha-value>)',
+          dim: 'var(--c-accent-dim)',
         },
         ink: {
-          DEFAULT: '#F0F4FF',
-          muted: '#8A9AB8',
-          faint: '#5A6880',
+          DEFAULT: 'rgb(var(--c-ink) / <alpha-value>)',
+          muted: 'rgb(var(--c-ink-muted) / <alpha-value>)',
+          faint: 'rgb(var(--c-ink-faint) / <alpha-value>)',
         },
       },
       fontFamily: {

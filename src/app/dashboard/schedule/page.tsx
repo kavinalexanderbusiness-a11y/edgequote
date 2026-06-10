@@ -16,7 +16,7 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { cn } from '@/lib/utils'
-import { format, addMonths, addWeeks, addDays, subMonths, subWeeks, subDays } from 'date-fns'
+import { format, addMonths, addWeeks, addDays, subMonths, subWeeks, subDays, parseISO, getDay } from 'date-fns'
 import { Plus, X, ChevronLeft, ChevronRight, Trash2 } from 'lucide-react'
 
 function localToday(): string {
@@ -74,6 +74,9 @@ export default function SchedulePage() {
   const [recurrences, setRecurrences] = useState<Record<string, JobRecurrence>>({})
   const [quotesById, setQuotesById] = useState<Record<string, QuoteLite>>({})
   const [baseCoord, setBaseCoord] = useState<Coord | null>(null)
+  const [preferredWorkDays, setPreferredWorkDays] = useState<number[]>([5, 6, 0])
+  const [workStartTime, setWorkStartTime] = useState('08:00')
+  const [capacityHours, setCapacityHours] = useState(8)
 
   // Effective per-visit price for every job (manual price > linked quote).
   const valueByJobId = useMemo(() => {
@@ -104,7 +107,7 @@ export default function SchedulePage() {
       supabase.from('customers').select('*').eq('user_id', user!.id).order('name'),
       supabase.from('job_recurrences').select('*').eq('user_id', user!.id),
       supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
-      supabase.from('business_settings').select('base_lat, base_lng, base_address').eq('user_id', user!.id).maybeSingle(),
+      supabase.from('business_settings').select('base_lat, base_lng, base_address, preferred_work_days, work_start_time, daily_capacity_hours').eq('user_id', user!.id).maybeSingle(),
     ])
     setJobs((jRes.data as Job[]) || [])
     setCustomers((cRes.data as Customer[]) || [])
@@ -122,14 +125,17 @@ export default function SchedulePage() {
     setQuotesById(qMap)
 
     // Base coordinate for route optimization (geocode the address once if needed).
-    const s = sRes.data as { base_lat: number | null; base_lng: number | null; base_address: string | null } | null
+    const s = sRes.data as { base_lat: number | null; base_lng: number | null; base_address: string | null; preferred_work_days: number[] | null; work_start_time: string | null; daily_capacity_hours: number | null } | null
+    setPreferredWorkDays(s?.preferred_work_days?.length ? s.preferred_work_days : [5, 6, 0])
+    setWorkStartTime(s?.work_start_time || '08:00')
+    setCapacityHours(s?.daily_capacity_hours && s.daily_capacity_hours > 0 ? s.daily_capacity_hours : 8)
     if (s?.base_lat != null && s?.base_lng != null) {
       setBaseCoord({ lat: s.base_lat, lng: s.base_lng })
     } else if (s?.base_address) {
       const c = await geocodeAddress(s.base_address)
       if (c) {
         setBaseCoord(c)
-        supabase.from('business_settings').update({ base_lat: c.lat, base_lng: c.lng }).eq('user_id', user!.id)
+        await supabase.from('business_settings').update({ base_lat: c.lat, base_lng: c.lng }).eq('user_id', user!.id)
       }
     }
     setLoading(false)
@@ -512,6 +518,7 @@ export default function SchedulePage() {
     if (job.recurrence_id) {
       const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed' })
       if (res.created) { invoiceCreated = true; setBanner(`Draft invoice ${res.invoiceNumber} created. Review in Invoices.`) }
+      else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this visit has no price. Set a price to bill it.')
     }
     await fetchJobs()
     offerUndo('Marked done', async () => {
@@ -630,6 +637,32 @@ export default function SchedulePage() {
       duration_minutes: j.duration_minutes, crew_size: j.crew_size, status: j.status, notes: j.notes,
       price: j.price, actual_minutes: j.actual_minutes, suggested_date: j.suggested_date, suggested_nearby_count: j.suggested_nearby_count,
     }
+  }
+
+  // Next date on/after `fromISO`+1 whose weekday is a preferred work day.
+  function nextWorkday(fromISO: string): string {
+    const pref = preferredWorkDays.length ? new Set(preferredWorkDays) : null
+    let d = addDays(parseISO(fromISO), 1)
+    for (let i = 0; i < 21; i++) {
+      if (!pref || pref.has(getDay(d))) return format(d, 'yyyy-MM-dd')
+      d = addDays(d, 1)
+    }
+    return format(addDays(parseISO(fromISO), 1), 'yyyy-MM-dd')
+  }
+
+  // Rain delay: bump every remaining (not done/cancelled) job on a day to the next
+  // work day, in one tap, with Undo. Reuses the move primitive over the day's set.
+  async function rainDelayDay(dateISO: string) {
+    const dayJobs = jobs.filter(j => j.scheduled_date === dateISO && j.status !== 'cancelled' && j.status !== 'completed')
+    if (!dayJobs.length) { setBanner('No jobs to bump on this day.'); return }
+    const to = nextWorkday(dateISO)
+    const ids = dayJobs.map(j => j.id)
+    const { error } = await supabase.from('jobs').update({ scheduled_date: to }).in('id', ids)
+    if (error) { setBanner('Could not bump the day: ' + error.message); return }
+    await fetchJobs()
+    setCursor(parseISO(to + 'T00:00:00'))
+    offerUndo(`Rain delay — bumped ${ids.length} job${ids.length !== 1 ? 's' : ''} to ${format(parseISO(to + 'T00:00:00'), 'EEE, MMM d')}`,
+      async () => { await supabase.from('jobs').update({ scheduled_date: dateISO }).in('id', ids) })
   }
 
   async function moveJobToDate(job: Job, date: Date) {
@@ -838,6 +871,9 @@ export default function SchedulePage() {
           onMove={(job, iso) => moveJobToDate(job, new Date(iso + 'T00:00:00'))}
           onDeleteJob={deleteJob}
           onSetPrice={setJobPrice}
+          workStartTime={workStartTime}
+          capacityHours={capacityHours}
+          onRainDelay={() => rainDelayDay(format(cursor, 'yyyy-MM-dd'))}
           onAddJob={() => openNewJob(cursor)}
           onQuickSave={quickSaveJob}
         />

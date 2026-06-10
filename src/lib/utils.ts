@@ -14,12 +14,35 @@ export function formatCurrency(amount: number): string {
   }).format(amount)
 }
 
+// Date-only strings ('2026-06-12') parse as UTC midnight, which renders as the
+// PREVIOUS day in Calgary — anchor them to local midnight before formatting.
+export function parseLocalDate(dateStr: string): Date {
+  return new Date(/^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? dateStr + 'T00:00:00' : dateStr)
+}
+
 export function formatDate(dateStr: string): string {
   return new Intl.DateTimeFormat('en-CA', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
-  }).format(new Date(dateStr))
+  }).format(parseLocalDate(dateStr))
+}
+
+// Local (not UTC) yyyy-MM-dd — evening work must not stamp tomorrow's date.
+export function localTodayISO(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+// Highest trailing number across existing document numbers ('EPS-2026-0007' → 7).
+// Count-based numbering collides after a delete; max-suffix+1 never does.
+export function maxNumericSuffix(values: (string | null | undefined)[]): number {
+  let max = 0
+  for (const v of values) {
+    const m = (v || '').match(/(\d+)\s*$/)
+    if (m) max = Math.max(max, parseInt(m[1], 10))
+  }
+  return max
 }
 
 export function calculateQuote(

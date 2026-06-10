@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
 import { format } from 'date-fns'
 import { Coord, geocodeAddress } from '@/lib/geo'
-import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, routeStats } from '@/lib/route'
+import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, routeStats, computeDayEtas, DEFAULT_JOB_MIN } from '@/lib/route'
 import {
   ProfitJob, ProfitQuote, ProfitContext, RecInfo, Grade, GRADE_COLORS,
   dayProfitability, jobValue, improvementSuggestions,
@@ -36,6 +36,7 @@ export default function RoutesPage() {
   const [dayJobs, setDayJobs] = useState<DayJob[]>([])
   const [ctx, setCtx] = useState<ProfitContext>(EMPTY_CTX)
   const [route, setRoute] = useState<RouteState | null>(null)
+  const [workStart, setWorkStart] = useState('08:00')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -50,7 +51,7 @@ export default function RoutesPage() {
         .order('start_time', { nullsFirst: true }),
       supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
       supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user!.id),
-      supabase.from('business_settings').select('base_lat, base_lng, base_address').eq('user_id', user!.id).maybeSingle(),
+      supabase.from('business_settings').select('base_lat, base_lng, base_address, work_start_time').eq('user_id', user!.id).maybeSingle(),
     ])
 
     const quotesById: Record<string, ProfitQuote> = {}
@@ -68,11 +69,12 @@ export default function RoutesPage() {
     }))
 
     // Resolve base (geocode once, cache back to settings).
-    const s = sRes.data as { base_lat: number | null; base_lng: number | null; base_address: string | null } | null
+    const s = sRes.data as { base_lat: number | null; base_lng: number | null; base_address: string | null; work_start_time: string | null } | null
+    setWorkStart(s?.work_start_time || '08:00')
     let base: Coord | null = s?.base_lat != null && s?.base_lng != null ? { lat: s.base_lat, lng: s.base_lng } : null
     if (!base && s?.base_address) {
       const c = await geocodeAddress(s.base_address)
-      if (c) { base = c; supabase.from('business_settings').update({ base_lat: c.lat, base_lng: c.lng }).eq('user_id', user!.id) }
+      if (c) { base = c; await supabase.from('business_settings').update({ base_lat: c.lat, base_lng: c.lng }).eq('user_id', user!.id) }
     }
 
     // Locate any stop missing coords (shared engine; writes back to the property).
@@ -117,6 +119,14 @@ export default function RoutesPage() {
     () => (route?.ordered || []).map(s => ({ lat: s.lat as number, lng: s.lng as number, order: s.order, title: s.title })),
     [route],
   )
+  // Arrival time per stop + day finish, from the shared timing engine.
+  const etas = useMemo(() => {
+    if (!route || route.ordered.length === 0) return null
+    const dur: Record<string, number> = {}
+    for (const j of dayJobs) dur[j.id] = j.duration_minutes || DEFAULT_JOB_MIN
+    return computeDayEtas(workStart, route.ordered, dur)
+  }, [route, dayJobs, workStart])
+  const etaByJob = useMemo(() => Object.fromEntries((etas?.stops || []).map(s => [s.jobId, s.arrival])), [etas])
   const titleById = useMemo(() => Object.fromEntries(dayJobs.map(j => [j.id, j.title])), [dayJobs])
   const hasBase = !!ctx.base
   const activeCount = dayJobs.filter(j => j.status !== 'cancelled').length
@@ -165,6 +175,7 @@ export default function RoutesPage() {
                   <p className="text-xs text-ink-muted">
                     {profit.stops} stop{profit.stops !== 1 ? 's' : ''}
                     {route && route.ordered.length > 0 && ` · ~${route.totalKm} km ${route.usedGoogle ? 'real-road' : 'est.'} round trip`}
+                    {etas && <span className="text-accent font-medium"> · done ~{etas.finish}</span>}
                   </p>
                 </div>
               </div>
@@ -238,7 +249,7 @@ export default function RoutesPage() {
               <div className="px-4 py-3 border-b border-border flex items-center gap-2">
                 <Navigation className="w-4 h-4 text-accent" />
                 <h2 className="text-sm font-semibold text-ink">Route breakdown</h2>
-                <span className="ml-auto text-xs text-ink-faint">value per stop · leg distance</span>
+                <span className="ml-auto text-xs text-ink-faint">arrival · value · leg</span>
               </div>
               <CardBody className="space-y-2">
                 <div className="flex items-center gap-3 p-2.5 rounded-xl bg-surface border border-border">
@@ -259,6 +270,7 @@ export default function RoutesPage() {
                         <p className="text-xs text-ink-muted truncate">{stop.address}</p>
                       </div>
                       <div className="text-right shrink-0">
+                        {etaByJob[stop.jobId] && <p className="text-[11px] text-accent font-semibold">{etaByJob[stop.jobId]}</p>}
                         <p className="text-sm font-semibold text-ink">{v > 0 ? formatCurrency(v) : '—'}</p>
                         {stop.legKm != null && <p className="text-[11px] text-ink-faint">{stop.legKm} km leg</p>}
                       </div>

@@ -9,7 +9,8 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Button } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
-import { formatCurrency, formatDate, applyOvergrowth, generateQuoteNumber } from '@/lib/utils'
+import { formatCurrency, formatDate, applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
+import { addDays, format as formatDfn, parseISO } from 'date-fns'
 import { needsFollowUp, daysSince, logFollowUpPatch, markWonPatch } from '@/lib/followup'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { Edit2, ArrowLeft, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Send } from 'lucide-react'
@@ -246,16 +247,17 @@ export default function QuoteDetailPage() {
         return
       }
 
-      // Generate INV-#### from current count
-      const { count } = await supabase
+      // INV-#### from the highest existing number — count-based numbering
+      // reissues a number after any delete (duplicate customer-facing docs).
+      const { data: nums } = await supabase
         .from('invoices')
-        .select('id', { count: 'exact', head: true })
+        .select('invoice_number')
         .eq('user_id', user!.id)
-      const num = (count || 0) + 1
-      const invoiceNumber = `INV-${String(num).padStart(4, '0')}`
+      const invoiceNumber = `INV-${String(maxNumericSuffix(((nums as { invoice_number: string }[]) || []).map(n => n.invoice_number)) + 1).padStart(4, '0')}`
 
-      const due = new Date()
-      due.setDate(due.getDate() + 14)
+      // Local dates — UTC stamping dates evening invoices tomorrow.
+      const issued = localTodayISO()
+      const dueISO = formatDfn(addDays(parseISO(issued), 14), 'yyyy-MM-dd')
 
       const { error } = await supabase.from('invoices').insert({
         user_id: user!.id,
@@ -268,8 +270,8 @@ export default function QuoteDetailPage() {
         service_type: quote.service_type,
         amount: quote.total,
         status: 'unpaid',
-        issued_date: new Date().toISOString().slice(0, 10),
-        due_date: due.toISOString().slice(0, 10),
+        issued_date: issued,
+        due_date: dueISO,
         notes: quote.notes,
       })
 
@@ -290,11 +292,11 @@ export default function QuoteDetailPage() {
     setDuplicating(true)
     try {
       const { data: { user } } = await supabase.auth.getUser()
-      const { count } = await supabase
+      const { data: qnums } = await supabase
         .from('quotes')
-        .select('id', { count: 'exact', head: true })
+        .select('quote_number')
         .eq('user_id', user!.id)
-      const quote_number = generateQuoteNumber((count || 0) + 1)
+      const quote_number = generateQuoteNumber(maxNumericSuffix(((qnums as { quote_number: string }[]) || []).map(n => n.quote_number)) + 1)
 
       const { data, error } = await supabase.from('quotes').insert({
         quote_number,
@@ -327,7 +329,7 @@ export default function QuoteDetailPage() {
         other_sqft: quote.other_sqft,
         travel_distance_km: quote.travel_distance_km,
         pricing_confidence: quote.pricing_confidence,
-        issued_date: new Date().toISOString().split('T')[0],
+        issued_date: localTodayISO(),
         status: 'draft',
         user_id: user!.id,
       }).select().single()

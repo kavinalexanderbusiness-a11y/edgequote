@@ -178,5 +178,26 @@ alter table public.business_settings
   add column if not exists pricing_premium_mult     numeric default 1.2,
   add column if not exists pricing_travel_rate      numeric default 1.5;
 
+-- Preferred work days for the weekly scheduler. date-fns getDay indices
+-- (0=Sun … 6=Sat). Default {5,6,0} = Fri/Sat/Sun. The scheduler strongly prefers
+-- these days so routes cluster across the owner's actual work week.
+alter table public.business_settings
+  add column if not exists preferred_work_days integer[] default '{5,6,0}';
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-10 — Work-day timing, branding scale,
+-- dashboard layout. Idempotent; safe to re-run.
+-- ════════════════════════════════════════════════════════════
+
+-- Work day start ('HH:mm') drives per-stop arrival ETAs + estimated finish.
+-- Daily capacity (hours) powers the overloaded / room-for-more day signals.
+-- logo_scale = uploaded-logo display size in percent (sidebar, login, PDFs).
+-- dashboard_cards = home layout: { "order": [...], "hidden": [...] }.
+alter table public.business_settings
+  add column if not exists work_start_time      text    default '08:00',
+  add column if not exists daily_capacity_hours numeric default 8,
+  add column if not exists logo_scale           numeric default 100,
+  add column if not exists dashboard_cards      jsonb;
+
 -- properties.measurement_history (jsonb) already exists and now stores versioned
 -- snapshots { date, total_sqft, sections{...}, rate_per_1000 } — never overwritten.

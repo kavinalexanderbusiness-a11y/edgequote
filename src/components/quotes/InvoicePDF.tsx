@@ -58,7 +58,8 @@ function money(n: number) {
   return new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(n)
 }
 function dateStr(s: string | null) {
-  const d = s ? new Date(s) : new Date()
+  // Date-only strings must anchor to LOCAL midnight or the PDF prints yesterday.
+  const d = s ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(s) ? s + 'T00:00:00' : s) : new Date()
   return new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: 'long', day: 'numeric' }).format(d)
 }
 
@@ -81,7 +82,12 @@ export function InvoiceDocument({ invoice, settings }: InvoicePDFProps) {
         <View style={styles.headerRow}>
           <View>
             {settings?.logo_url ? (
-              <Image src={settings.logo_url} style={styles.logo} />
+              // Logo size honours the Branding setting (logo_scale %, capped for layout).
+              <Image src={settings.logo_url} style={{
+                ...styles.logo,
+                width: Math.min(200, 130 * (((settings.logo_scale && settings.logo_scale >= 50 ? settings.logo_scale : 100)) / 100)),
+                height: Math.min(105, 70 * (((settings.logo_scale && settings.logo_scale >= 50 ? settings.logo_scale : 100)) / 100)),
+              }} />
             ) : (
               <Text style={styles.companyName}>{company}</Text>
             )}

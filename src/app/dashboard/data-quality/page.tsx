@@ -13,11 +13,12 @@ import {
   ProfitJob, ProfitQuote, ProfitContext, RecInfo, jobValue,
 } from '@/lib/profitability'
 import { ensureCustomerAndProperty, findCustomerMatch } from '@/lib/customers'
+import { geocodeAddress } from '@/lib/geo'
 import {
   CoverageRow, coveragePct, overallScore, scoreGrade, scoreLabel, DQ_GRADE_COLORS,
 } from '@/lib/dataQuality'
 import {
-  ShieldCheck, UserPlus, Home, AlertTriangle, CheckCircle2, ArrowRight, DollarSign, Link2, Users, FileText,
+  ShieldCheck, UserPlus, Home, AlertTriangle, CheckCircle2, ArrowRight, DollarSign, Link2, Users, FileText, MapPin,
 } from 'lucide-react'
 
 interface QRow {
@@ -25,7 +26,7 @@ interface QRow {
   address: string; property_id: string | null; status: string
 }
 type DQJob = ProfitJob & { title: string; property_id: string | null }
-interface PRow { id: string; customer_id: string | null; address: string }
+interface PRow { id: string; customer_id: string | null; address: string; lat: number | null; lng: number | null }
 
 const EMPTY_CTX: ProfitContext = { quotesById: {}, recById: {}, base: null, today: format(new Date(), 'yyyy-MM-dd') }
 
@@ -46,7 +47,7 @@ export default function DataQualityPage() {
       supabase.from('quotes').select('id, quote_number, customer_id, customer_name, address, property_id, status, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
       supabase.from('jobs').select('id, title, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, property_id, properties(lat, lng, city, postal_code)').eq('user_id', user!.id),
       supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user!.id),
-      supabase.from('properties').select('id, customer_id, address').eq('user_id', user!.id),
+      supabase.from('properties').select('id, customer_id, address, lat, lng').eq('user_id', user!.id),
     ])
 
     setCustomers((cRes.data as Customer[]) || [])
@@ -84,6 +85,13 @@ export default function DataQualityPage() {
     const jobsNoPrice = jobs.filter(j => j.price == null).length
     const propsNoCustomer = properties.filter(p => !p.customer_id).length
 
+    // Located = properties with coordinates. Every geo feature (routes, best-day,
+    // saturation map) silently drops null-coordinate properties, so this is a
+    // first-class coverage dimension. Only count properties that HAVE an address.
+    const locatable = properties.filter(p => (p.address || '').trim().length >= 5)
+    const propsUngeocoded = locatable.filter(p => p.lat == null || p.lng == null)
+    const located = locatable.length - propsUngeocoded.length
+
     const totalLinkables = quotes.length + jobs.length
     const custCovered = (quotes.length - quotesNoCustomer.length) + (jobs.length - jobsNoCustomer.length)
     const propCovered = (quotes.length - quotes.filter(q => !q.property_id).length) + (jobs.length - jobs.filter(j => !j.property_id).length)
@@ -91,13 +99,14 @@ export default function DataQualityPage() {
     const rows: CoverageRow[] = [
       { key: 'customer', label: 'Customer coverage', covered: custCovered, total: totalLinkables, pct: coveragePct(custCovered, totalLinkables), hint: 'Quotes & jobs linked to a real customer' },
       { key: 'property', label: 'Property coverage', covered: propCovered, total: totalLinkables, pct: coveragePct(propCovered, totalLinkables), hint: 'Quotes & jobs linked to a property' },
+      { key: 'located', label: 'Properties located', covered: located, total: locatable.length, pct: coveragePct(located, locatable.length), hint: 'Properties with map coordinates (drives routes & maps)' },
       { key: 'quote', label: 'Job → quote linkage', covered: jobs.length - jobsNoQuote, total: jobs.length, pct: coveragePct(jobs.length - jobsNoQuote, jobs.length), hint: 'Jobs tied to a quote for pricing' },
       { key: 'revenue', label: 'Revenue coverage', covered: jobsWithValue, total: activeJobs.length, pct: coveragePct(jobsWithValue, activeJobs.length), hint: 'Active jobs that produce a $ value' },
     ]
     return {
       rows, score: overallScore(rows),
       quotesNoCustomer, quotesNoProperty, jobsNoCustomer,
-      jobsNoQuote, jobsNoPrice, propsNoCustomer,
+      jobsNoQuote, jobsNoPrice, propsNoCustomer, propsUngeocoded,
       activeJobs: activeJobs.length, jobsWithValue,
       propertiesTotal: properties.length,
     }
@@ -150,6 +159,20 @@ export default function DataQualityPage() {
     finally { setWorking(null) }
   }
 
+  // Backfill coordinates for every property with an address but no lat/lng.
+  // Sequential — geocoding hits an external API (same throttle as fixAllProperties).
+  async function geocodeAllProperties() {
+    setWorking('geo-all')
+    try {
+      for (const p of m.propsUngeocoded) {
+        const c = await geocodeAddress(p.address)
+        if (c) await supabase.from('properties').update({ lat: c.lat, lng: c.lng }).eq('id', p.id)
+      }
+      await load()
+    } catch (e) { alert('Could not geocode properties: ' + (e instanceof Error ? e.message : 'error')) }
+    finally { setWorking(null) }
+  }
+
   async function repairJobCustomer(j: DQJob) {
     setWorking(j.id)
     try {
@@ -172,7 +195,7 @@ export default function DataQualityPage() {
 
   if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Checking data quality…</div>
 
-  const allClean = m.quotesNoCustomer.length === 0 && m.quotesNoProperty.length === 0 && m.jobsNoCustomer.length === 0 && m.jobsNoPrice === 0 && m.jobsNoQuote === 0
+  const allClean = m.quotesNoCustomer.length === 0 && m.quotesNoProperty.length === 0 && m.jobsNoCustomer.length === 0 && m.jobsNoPrice === 0 && m.jobsNoQuote === 0 && m.propsUngeocoded.length === 0
 
   return (
     <div className="max-w-3xl space-y-6">
@@ -268,6 +291,25 @@ export default function DataQualityPage() {
               </Button>
             </div>
           ))}
+        </Section>
+      )}
+
+      {/* Ungeocoded properties — every geo feature drops these */}
+      {m.propsUngeocoded.length > 0 && (
+        <Section icon={MapPin} title={`${m.propsUngeocoded.length} propert${m.propsUngeocoded.length !== 1 ? 'ies' : 'y'} not located`}
+          subtitle="No map coordinates — these vanish from routes, best-day suggestions and the saturation map."
+          action={
+            <Button size="sm" loading={working === 'geo-all'} onClick={geocodeAllProperties}>
+              <MapPin className="w-3.5 h-3.5" /> Geocode all {m.propsUngeocoded.length}
+            </Button>
+          }>
+          {m.propsUngeocoded.slice(0, 40).map(p => (
+            <div key={p.id} className="flex items-center gap-2 rounded-xl border border-border p-3">
+              <MapPin className="w-3.5 h-3.5 text-ink-faint shrink-0" />
+              <p className="text-sm text-ink truncate">{p.address}</p>
+            </div>
+          ))}
+          {m.propsUngeocoded.length > 40 && <p className="text-xs text-ink-faint">+{m.propsUngeocoded.length - 40} more — all included in “Geocode all”.</p>}
         </Section>
       )}
 

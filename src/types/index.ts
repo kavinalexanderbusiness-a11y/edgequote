@@ -368,6 +368,17 @@ export interface BusinessSettings {
   pricing_premium_mult: number | null
   pricing_travel_rate: number | null
   terms_text: string | null
+  // Weekday indices the owner works (0=Sun … 6=Sat). The weekly scheduler strongly
+  // prefers these days. Default {5,6,0} = Fri/Sat/Sun.
+  preferred_work_days: number[] | null
+  // 'HH:mm' the work day starts — drives per-stop ETAs + estimated finish.
+  work_start_time: string | null
+  // Soft daily cap (drive + on-site hours) for overload / room-for-more signals.
+  daily_capacity_hours: number | null
+  // Uploaded-logo display scale in percent (100 = default size).
+  logo_scale: number | null
+  // Dashboard layout: section order + hidden sections.
+  dashboard_cards: { order: string[]; hidden: string[] } | null
   user_id: string
 }
 

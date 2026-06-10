@@ -59,7 +59,11 @@ export function MeasureTool({ property }: { property: Property }) {
   const [breakdown, setBreakdown] = useState<Record<SectionKey, number>>({ front: 0, back: 0, left: 0, right: 0, boulevard: 0, other: 0 })
   const [totalSqft, setTotalSqft] = useState(0)
   const [pointsInCurrent, setPointsInCurrent] = useState(0)
-  const [overgrowth, setOvergrowth] = useState(1)
+  // Raw string so '0.5' is typeable — coercing each keystroke with `|| 1` made
+  // sub-1 multipliers impossible and could turn '.5' keystrokes into 15×.
+  const [overgrowthRaw, setOvergrowthRaw] = useState('1')
+  const ogParsed = parseFloat(overgrowthRaw)
+  const overgrowth = Number.isFinite(ogParsed) && ogParsed > 0 ? ogParsed : 1
   const [selectedTier, setSelectedTier] = useState<PriceTier>('recommended')
   const [saving, setSaving] = useState(false)
   const [creating, setCreating] = useState(false)
@@ -623,7 +627,7 @@ export function MeasureTool({ property }: { property: Property }) {
         <div className="flex items-center justify-between flex-wrap gap-3">
           <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Suggested job price</span>
           <label className="flex items-center gap-1.5 text-xs text-ink-muted">Condition
-            <input type="number" min="0" step="0.05" value={overgrowth} onChange={e => setOvergrowth(Number(e.target.value) || 1)}
+            <input type="number" min="0" step="0.05" value={overgrowthRaw} onChange={e => setOvergrowthRaw(e.target.value)}
               className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none focus:border-accent" />
           </label>
         </div>

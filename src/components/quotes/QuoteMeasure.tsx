@@ -30,7 +30,11 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
   const [totalSqft, setTotalSqft] = useState(0)
   const [points, setPoints] = useState(0)
   const [shapes, setShapes] = useState(0)
-  const [overgrowth, setOvergrowth] = useState(1)
+  // Raw string so '0.5' is typeable — coercing each keystroke with `|| 1` made
+  // sub-1 multipliers impossible and could turn '.5' keystrokes into 15×.
+  const [overgrowthRaw, setOvergrowthRaw] = useState('1')
+  const ogParsed = parseFloat(overgrowthRaw)
+  const overgrowth = Number.isFinite(ogParsed) && ogParsed > 0 ? ogParsed : 1
 
   function areaOf(p: any[]): number {
     const g = window.google
@@ -242,8 +246,8 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
                   <label className="flex items-center gap-1.5 text-xs text-ink-muted">
                     <input
                       type="number" min="0" step="0.05"
-                      value={overgrowth}
-                      onChange={e => setOvergrowth(Number(e.target.value) || 1)}
+                      value={overgrowthRaw}
+                      onChange={e => setOvergrowthRaw(e.target.value)}
                       className="w-16 bg-bg border border-border-strong rounded-lg px-2.5 py-2 text-base sm:text-sm text-ink outline-none focus:border-accent"
                     />
                     Condition

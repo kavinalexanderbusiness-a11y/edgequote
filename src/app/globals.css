@@ -3,8 +3,49 @@
 @tailwind utilities;
 
 @layer base {
-  :root {
+  /* Theme tokens. Dark is the default; [data-theme='light'] overrides.
+     Channel triplets (R G B) feed Tailwind's rgb(var() / <alpha-value>). */
+  :root,
+  :root[data-theme='dark'] {
     color-scheme: dark;
+    --c-bg: 8 12 18;
+    --c-bg-secondary: 13 20 32;
+    --c-bg-tertiary: 17 25 39;
+    --c-surface: 20 30 46;
+    --c-surface-raised: 26 38 64;
+    --c-border: rgba(255, 255, 255, 0.07);
+    --c-border-strong: rgba(255, 255, 255, 0.12);
+    --c-accent: 0 200 150;
+    --c-accent-hover: 0 219 166;
+    --c-accent-dim: rgba(0, 200, 150, 0.12);
+    --c-ink: 240 244 255;
+    --c-ink-muted: 138 154 184;
+    --c-ink-faint: 90 104 128;
+    --scrollbar-thumb: rgba(255, 255, 255, 0.1);
+    --scrollbar-thumb-hover: rgba(255, 255, 255, 0.2);
+    --autofill-bg: #111927;
+    --autofill-text: #f0f4ff;
+  }
+
+  :root[data-theme='light'] {
+    color-scheme: light;
+    --c-bg: 243 246 250;
+    --c-bg-secondary: 255 255 255;
+    --c-bg-tertiary: 241 245 249;
+    --c-surface: 255 255 255;
+    --c-surface-raised: 248 250 252;
+    --c-border: rgba(15, 23, 42, 0.1);
+    --c-border-strong: rgba(15, 23, 42, 0.18);
+    --c-accent: 0 169 127; /* slightly deeper green for contrast on white */
+    --c-accent-hover: 0 150 113;
+    --c-accent-dim: rgba(0, 169, 127, 0.12);
+    --c-ink: 15 23 42;
+    --c-ink-muted: 71 85 105;
+    --c-ink-faint: 148 163 184;
+    --scrollbar-thumb: rgba(15, 23, 42, 0.15);
+    --scrollbar-thumb-hover: rgba(15, 23, 42, 0.28);
+    --autofill-bg: #f1f5f9;
+    --autofill-text: #0f172a;
   }
 
   * {
@@ -16,8 +57,8 @@
   }
 
   body {
-    background-color: #080C12;
-    color: #F0F4FF;
+    background-color: rgb(var(--c-bg));
+    color: rgb(var(--c-ink));
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
@@ -25,8 +66,8 @@
   input:-webkit-autofill,
   input:-webkit-autofill:hover,
   input:-webkit-autofill:focus {
-    -webkit-box-shadow: 0 0 0px 1000px #111927 inset;
-    -webkit-text-fill-color: #F0F4FF;
+    -webkit-box-shadow: 0 0 0px 1000px var(--autofill-bg) inset;
+    -webkit-text-fill-color: var(--autofill-text);
     transition: background-color 5000s ease-in-out 0s;
   }
 
@@ -39,10 +80,10 @@
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: rgba(255,255,255,0.1);
+    background: var(--scrollbar-thumb);
     border-radius: 3px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: rgba(255,255,255,0.2);
+    background: var(--scrollbar-thumb-hover);
   }
 }

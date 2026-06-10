@@ -1,5 +1,6 @@
 import { parseISO, addDays, format } from 'date-fns'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
 
 // ── Single source of truth for geo math shared by the Route Planner and the
 // Best-Day Suggester. Keep all distance/geocode logic here so route ordering
@@ -28,6 +29,49 @@ export async function fetchLocatedUpcomingJobs(supabase: SupabaseClient, userId:
     .in('status', ['scheduled', 'in_progress'])
   return ((data as unknown as { id: string; scheduled_date: string; properties?: { lat: number | null; lng: number | null } | null }[]) || [])
     .map(r => ({ id: r.id, scheduled_date: r.scheduled_date, lat: r.properties?.lat ?? null, lng: r.properties?.lng ?? null }))
+}
+
+// A richer upcoming-job row for the weekly scheduler: location + hours + the
+// per-visit revenue (via the ONE valuation engine), so density/balance/revenue
+// modes all read from the same data without a separate engine.
+export interface SchedJob {
+  id: string
+  scheduled_date: string
+  lat: number | null
+  lng: number | null
+  durationMin: number
+  value: number
+}
+
+const DEFAULT_VISIT_MIN = 45 // assumed on-site time when a job has no duration
+
+export async function fetchUpcomingSchedulingJobs(supabase: SupabaseClient, userId: string): Promise<SchedJob[]> {
+  const [jRes, qRes, rRes] = await Promise.all([
+    supabase.from('jobs')
+      .select('id, scheduled_date, status, duration_minutes, price, quote_id, recurrence_id, properties(lat, lng)')
+      .eq('user_id', userId).gte('scheduled_date', todayLocalISO()).in('status', ['scheduled', 'in_progress']),
+    supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', userId),
+    supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', userId),
+  ])
+  const quotesById: Record<string, Record<string, unknown>> = {}
+  for (const q of (qRes.data as Record<string, unknown>[]) || []) quotesById[q.id as string] = q
+  const recById: Record<string, { freq: string | null; interval_unit: string | null; interval_count: number | null }> = {}
+  for (const r of (rRes.data as { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null }[]) || []) recById[r.id] = r
+
+  return ((jRes.data as unknown as Array<Record<string, unknown> & { properties?: { lat: number | null; lng: number | null } | null }>) || [])
+    .map(j => {
+      const quote = j.quote_id ? quotesById[j.quote_id as string] : null
+      const rec = j.recurrence_id ? recById[j.recurrence_id as string] : null
+      const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
+      return {
+        id: j.id as string,
+        scheduled_date: j.scheduled_date as string,
+        lat: j.properties?.lat ?? null,
+        lng: j.properties?.lng ?? null,
+        durationMin: (j.duration_minutes as number) || DEFAULT_VISIT_MIN,
+        value: Math.round(jobVisitValue(j.price as number | null, quote, freq)),
+      }
+    })
 }
 
 // Straight-line (Haversine) distance in km.

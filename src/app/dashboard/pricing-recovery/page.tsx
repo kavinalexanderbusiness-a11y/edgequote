@@ -3,9 +3,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
+import { jobVisitValue, quoteVisitAmount, effectiveFreq } from '@/lib/invoicing'
 import { pricingConfigFromSettings, recommendedJobPrice, PricingConfig } from '@/lib/pricing'
-import { generateQuoteNumber, formatCurrency } from '@/lib/utils'
+import { generateQuoteNumber, formatCurrency, maxNumericSuffix, localTodayISO } from '@/lib/utils'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -17,7 +17,7 @@ interface JobRow {
   price: number | null; customerName: string; lawn_sqft: number | null; address: string | null
 }
 interface QuoteRow {
-  id: string; customer_id: string | null; property_id: string | null; service_type: string | null
+  id: string; quote_number: string; customer_id: string | null; property_id: string | null; service_type: string | null
   total: number | null; initial_price: number | null; weekly_price: number | null; biweekly_price: number | null
   monthly_price: number | null; measured_sqft: number | null
 }
@@ -46,7 +46,7 @@ export default function PricingRecoveryPage() {
     const { data: { user } } = await supabase.auth.getUser()
     const [jRes, qRes, rRes, sRes] = await Promise.all([
       supabase.from('jobs').select('id, customer_id, property_id, quote_id, recurrence_id, service_type, status, scheduled_date, price, customers(name), properties(lawn_sqft, address)').eq('user_id', user!.id),
-      supabase.from('quotes').select('id, customer_id, property_id, service_type, total, initial_price, weekly_price, biweekly_price, monthly_price, measured_sqft').eq('user_id', user!.id),
+      supabase.from('quotes').select('id, quote_number, customer_id, property_id, service_type, total, initial_price, weekly_price, biweekly_price, monthly_price, measured_sqft').eq('user_id', user!.id),
       supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user!.id),
       supabase.from('business_settings').select('*').eq('user_id', user!.id).maybeSingle(),
     ])
@@ -126,6 +126,32 @@ export default function PricingRecoveryPage() {
       }
     }
 
+    // Underpriced: a PRICED recurring series whose per-visit price is materially
+    // below what the measured lawn recommends — recurring money left on the table
+    // every visit. Only when we have a real sqft basis (no false alarms).
+    // `current` comes from the SOURCE OF TRUTH (quote cadence when linked, manual
+    // job price otherwise) — never an arbitrary visit's override. Only series with
+    // future visits count: the bump can't (and must not) re-price billed history.
+    const underpricedSeries: Array<{ recId: string; cadence: string | null; sample: JobRow; visits: number; futureVisits: number; current: number; recommended: number; quoteId: string | null }> = []
+    for (const [recId, list] of Object.entries(seriesMap)) {
+      const sample = list[0]
+      const cadence = cadenceOf(recId)
+      const quoteId = (list.map(j => j.quote_id).find(Boolean) as string | undefined) || null
+      const current = quoteId
+        ? Math.round(quoteVisitAmount(quotesById[quoteId] as unknown as Record<string, unknown>, cadence))
+        : Math.round(valueOf(sample))
+      if (current <= 0) continue
+      if (mispricedSeries.some(mp => mp.recId === recId)) continue // that section already handles it
+      const futureVisits = list.filter(j => j.status !== 'completed').length
+      if (futureVisits === 0) continue // fully billed — nothing left to raise
+      const sqft = sqftForProperty(sample.property_id, sample.lawn_sqft)
+      if (sqft <= 0) continue
+      const recommended = recommendedJobPrice(sqft, cfg)
+      if (recommended <= 0 || current >= recommended * 0.85) continue
+      underpricedSeries.push({ recId, cadence, sample, visits: list.length, futureVisits, current, recommended, quoteId })
+    }
+    underpricedSeries.sort((a, b) => (b.recommended - b.current) * b.futureVisits - (a.recommended - a.current) * a.futureVisits)
+
     // one-time unpriced, grouped by customer
     const oneTimeUnpriced = oneTime.filter(j => valueOf(j) <= 0)
     const byCust: Record<string, JobRow[]> = {}
@@ -156,7 +182,8 @@ export default function PricingRecoveryPage() {
       quotesLinkedPct: total ? Math.round((withQuote / total) * 100) : 0,
       recurringCoveragePct: recurringJobs.length ? Math.round((recurringCovered / recurringJobs.length) * 100) : 100,
       missingRevenue: Math.round(missingRevenue),
-      unpricedSeries, mispricedSeries, oneTimeGroups, businessAvg,
+      upside: underpricedSeries.reduce((s, u) => s + (u.recommended - u.current) * u.futureVisits, 0),
+      unpricedSeries, mispricedSeries, underpricedSeries, oneTimeGroups, businessAvg,
     }
   }, [jobs, quotes, recById, cfg])
 
@@ -166,7 +193,8 @@ export default function PricingRecoveryPage() {
   async function applyNewPrice(recId: string, sample: JobRow, cadence: string | null, price: number) {
     setWorking(recId)
     const { data: { user } } = await supabase.auth.getUser()
-    const quote_number = generateQuoteNumber(quotes.length + 1)
+    // Max-suffix, never count — counts reissue numbers after deletes.
+    const quote_number = generateQuoteNumber(maxNumericSuffix(quotes.map(q => q.quote_number)) + 1)
     const field = cadenceField(cadence)
     const insert: Record<string, unknown> = {
       user_id: user!.id, quote_number,
@@ -174,7 +202,7 @@ export default function PricingRecoveryPage() {
       address: sample.address || '', service_type: sample.service_type || 'Lawn Mowing',
       property_id: sample.property_id, initial_price: price, status: 'accepted',
       custom_travel_required: false, show_travel_separately: false,
-      issued_date: new Date().toISOString().slice(0, 10),
+      issued_date: localTodayISO(),
     }
     if (field) insert[field] = price
     const { data: q, error } = await supabase.from('quotes').insert(insert).select('id').single()
@@ -193,6 +221,30 @@ export default function PricingRecoveryPage() {
     const q = quotes.find(x => x.id === quoteId)
     if (q && !(Number(q.initial_price) > 0)) patch.initial_price = price
     await supabase.from('quotes').update(patch).eq('id', quoteId)
+    await load(); setWorking(null)
+  }
+
+  // Raise an underpriced series to the recommended price. Writes to the quote
+  // cadence price (single source of truth) when linked; clears future overrides so
+  // they derive the bump. Completed/billed visits that DERIVE the quote are frozen
+  // first at the quote's OLD cadence value (their true billed amount — mirrors the
+  // schedule's price engine), so raising the quote never rewrites billed history.
+  async function bumpUnderpriced(s: { recId: string; cadence: string | null; current: number; quoteId: string | null }, price: number) {
+    setWorking(s.recId)
+    const series = jobs.filter(j => j.recurrence_id === s.recId)
+    const nonCompleted = series.filter(j => j.status !== 'completed').map(j => j.id)
+    const field = cadenceField(s.cadence)
+    if (s.quoteId && field) {
+      const q = quotes.find(x => x.id === s.quoteId)
+      const freezeVal = Math.round(quoteVisitAmount(q as unknown as Record<string, unknown>, s.cadence))
+      const completedNull = series.filter(j => j.status === 'completed' && j.price == null).map(j => j.id)
+      if (completedNull.length && freezeVal > 0) await supabase.from('jobs').update({ price: freezeVal }).in('id', completedNull)
+      await supabase.from('quotes').update({ [field]: price }).eq('id', s.quoteId)
+      if (nonCompleted.length) await supabase.from('jobs').update({ price: null }).in('id', nonCompleted)
+    } else if (nonCompleted.length) {
+      // No quote owns this series — the price lives on the future visits themselves.
+      await supabase.from('jobs').update({ price }).in('id', nonCompleted)
+    }
     await load(); setWorking(null)
   }
 
@@ -232,10 +284,10 @@ export default function PricingRecoveryPage() {
       {/* Missing revenue */}
       <div className="grid grid-cols-2 gap-3">
         <Metric icon={DollarSign} tone="text-accent" label="Revenue missing from reports" value={formatCurrency(m.missingRevenue)} sub="booked value of all unpriced visits (estimated)" />
-        <Metric icon={TrendingUp} tone="text-emerald-400" label="Series to fix" value={`${m.unpricedSeries.length + m.mispricedSeries.length + m.oneTimeGroups.length}`} sub="apply the suggestions below to recover it" />
+        <Metric icon={TrendingUp} tone="text-emerald-400" label="Items to fix" value={`${m.unpricedSeries.length + m.mispricedSeries.length + m.underpricedSeries.length + m.oneTimeGroups.length}`} sub={m.upside > 0 ? `incl. +${formatCurrency(m.upside)} from raising underpriced series` : 'apply the suggestions below to recover it'} />
       </div>
 
-      {m.score === 100 && m.mispricedSeries.length === 0 ? (
+      {m.score === 100 && m.mispricedSeries.length === 0 && m.underpricedSeries.length === 0 ? (
         <Card><CardBody className="text-center py-12 text-sm text-ink-muted">
           <Check className="w-6 h-6 mx-auto mb-2 text-emerald-400" /> Every job is priced. Reports and growth dashboards are running on real revenue.
         </CardBody></Card>
@@ -272,6 +324,25 @@ export default function PricingRecoveryPage() {
                 source={s.suggestion.source} price={price} onPrice={v => setEdits(e => ({ ...e, [key]: v }))}
                 missing={`${formatCurrency((price - s.current) * s.visits)} delta`}
                 primary={{ label: `Set ${cadenceLabel(s.cadence).toLowerCase()} price ${formatCurrency(price)}`, loading: working === s.recId, onClick: () => setRecurringPrice(s.recId, s.quoteId, s.cadence, price), icon: Check }}
+              />
+            )
+          })}
+        </Section>
+      )}
+
+      {/* Priced below the measured-lawn recommendation — recurring upside */}
+      {m.underpricedSeries.length > 0 && (
+        <Section title="Priced below recommended" sub={`${m.underpricedSeries.length} series under the measured-lawn rate · +${formatCurrency(m.upside)} upside`} icon={TrendingUp}>
+          {m.underpricedSeries.map(s => {
+            const key = `up-${s.recId}`
+            const price = priceFor(key, s.recommended)
+            return (
+              <RecoveryRow key={s.recId}
+                title={s.sample.customerName} sub={`${cadenceLabel(s.cadence)} · ${s.futureVisits} upcoming visit${s.futureVisits !== 1 ? 's' : ''} · now ${formatCurrency(s.current)}/visit`}
+                source={`measured lawn → recommended ${formatCurrency(s.recommended)}/visit`}
+                price={price} onPrice={v => setEdits(e => ({ ...e, [key]: v }))}
+                missing={`+${formatCurrency(Math.max(0, price - s.current) * s.futureVisits)}`}
+                primary={{ label: `Raise to ${formatCurrency(price)}/visit`, loading: working === s.recId, onClick: () => bumpUnderpriced(s, price), icon: TrendingUp }}
               />
             )
           })}

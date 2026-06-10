@@ -10,8 +10,7 @@ import { Button } from '@/components/ui/Button'
 import { Customer, Property, JobFormValues, JobStatus, RecurUnit } from '@/types'
 import { formatCurrency } from '@/lib/utils'
 import { recurrenceLabel } from '@/lib/recurrence'
-import { BestDaySuggestions } from '@/components/schedule/BestDaySuggestions'
-import { DaySuggestion } from '@/lib/geo'
+import { WeeklyScheduler } from '@/components/schedule/WeeklyScheduler'
 import { Repeat, Sparkles } from 'lucide-react'
 
 // Flexible recurrence: any interval (count + unit), three end modes.
@@ -96,7 +95,6 @@ function recurrenceToUi(r?: Recurrence) {
 export function JobForm({ customers, defaultValues, excludeJobId, initialRecurrence, allowAddAnother, suggestedPrice, onSubmit, onCancel, isEdit }: JobFormProps) {
   const supabase = createClient()
   const [properties, setProperties] = useState<Property[]>([])
-  const [topSuggestion, setTopSuggestion] = useState<DaySuggestion | null>(null)
   const addAnotherRef = useRef(false)
 
   // Recurrence state — pre-filled from an existing series when editing.
@@ -206,7 +204,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
         return onSubmit(
           values,
           buildRecurrence(),
-          { suggestedDate: topSuggestion?.date ?? null, suggestedNearby: topSuggestion?.nearbyCount ?? null },
+          { suggestedDate: null, suggestedNearby: null },
           { addAnother },
         )
       })}
@@ -231,14 +229,15 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
       {(propCoord || selProp?.address) && (
         <div className="bg-bg-tertiary border border-border rounded-xl p-4 space-y-3">
           <div className="flex items-center gap-2 text-xs font-semibold text-ink-muted uppercase tracking-wide">
-            <Sparkles className="w-3.5 h-3.5 text-accent" /> Best day to schedule
+            <Sparkles className="w-3.5 h-3.5 text-accent" /> Plan this job into your week
           </div>
-          <BestDaySuggestions
+          <WeeklyScheduler
             coord={propCoord}
             address={selProp?.address ?? null}
             excludeJobId={excludeJobId}
+            targetHours={(Number(watch('duration_minutes')) || 45) / 60}
+            targetValue={Number(watch('price')) || suggestedPrice || 0}
             onPick={(date) => setValue('scheduled_date', date, { shouldValidate: true })}
-            onTop={setTopSuggestion}
           />
         </div>
       )}

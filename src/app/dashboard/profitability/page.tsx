@@ -46,10 +46,14 @@ export default function ProfitabilityPage() {
   const [jobs, setJobs] = useState<ProfitJob[]>([])
   const [ctx, setCtx] = useState<ProfitContext>({ quotesById: {}, recById: {}, base: null, today: format(new Date(), 'yyyy-MM-dd') })
   const [period, setPeriod] = useState<Period>('day')
+  const [showUpcoming, setShowUpcoming] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   useEffect(() => {
     async function load() {
+      try {
       const { data: { user } } = await supabase.auth.getUser()
+      if (!user) { setLoadError('Session expired — sign in again.'); return }
       const [jRes, qRes, rRes, sRes] = await Promise.all([
         supabase.from('jobs').select('id, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, properties(lat, lng, city, postal_code)').eq('user_id', user!.id),
         supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
@@ -76,10 +80,14 @@ export default function ProfitabilityPage() {
       let base: Coord | null = s?.base_lat != null && s?.base_lng != null ? { lat: s.base_lat, lng: s.base_lng } : null
       if (!base && s?.base_address) {
         const c = await geocodeAddress(s.base_address)
-        if (c) { base = c; supabase.from('business_settings').update({ base_lat: c.lat, base_lng: c.lng }).eq('user_id', user!.id) }
+        if (c) { base = c; await supabase.from('business_settings').update({ base_lat: c.lat, base_lng: c.lng }).eq('user_id', user!.id) }
       }
       setCtx({ quotesById, recById, base, today: format(new Date(), 'yyyy-MM-dd') })
-      setLoading(false)
+      } catch (e) {
+        setLoadError(e instanceof Error ? e.message : 'Could not load profitability data.')
+      } finally {
+        setLoading(false) // never strand the page on the spinner
+      }
     }
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -94,6 +102,12 @@ export default function ProfitabilityPage() {
       .filter(r => r.jobsTotal > 0)
       .sort((a, b) => b.date.localeCompare(a.date))
   }, [jobs, ctx])
+
+  // Day view splits past performance from future bookings — open-ended recurring
+  // series materialize months ahead, and 60 future "Booked" cards were burying
+  // every actual past route off-screen.
+  const pastRoutes = useMemo(() => routes.filter(r => !r.future), [routes])
+  const upcomingRoutes = useMemo(() => routes.filter(r => r.future).sort((a, b) => a.date.localeCompare(b.date)), [routes])
 
   const weeks = useMemo(() => aggregate(routes, r => {
     const w = startOfWeek(parseISO(r.date))
@@ -133,6 +147,12 @@ export default function ProfitabilityPage() {
   return (
     <div className="max-w-4xl space-y-6">
       <PageHeader title="Route Profitability" description="Which routes, days and neighborhoods make the most per hour" />
+
+      {loadError && (
+        <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5">
+          {loadError} <button onClick={() => window.location.reload()} className="underline font-medium ml-1">Retry</button>
+        </div>
+      )}
 
       <div className="text-xs text-ink-muted bg-bg-secondary border border-border rounded-xl px-4 py-2.5">
         <span className="font-medium text-ink">Revenue = booked route value</span> (cadence-priced), not collected cash. $/hr is projected from planned time until you log <span className="text-ink">actual minutes</span>; completion counts only past-due days.
@@ -180,7 +200,18 @@ export default function ProfitabilityPage() {
       {routes.length === 0 ? (
         <Card><CardBody className="text-center py-12 text-sm text-ink-muted">No jobs to analyze yet.</CardBody></Card>
       ) : period === 'day' ? (
-        <div className="space-y-3">{routes.slice(0, 60).map(r => <RouteCard key={r.date} r={r} />)}</div>
+        <div className="space-y-3">
+          {upcomingRoutes.length > 0 && (
+            <button onClick={() => setShowUpcoming(v => !v)}
+              className="w-full text-left rounded-xl border border-border bg-bg-secondary px-4 py-2.5 text-sm text-ink-muted hover:text-ink transition-colors">
+              {showUpcoming ? '▾' : '▸'} {upcomingRoutes.length} upcoming booked day{upcomingRoutes.length !== 1 ? 's' : ''} · {formatCurrency(upcomingRoutes.reduce((s, r) => s + r.revenue, 0))} on the books
+            </button>
+          )}
+          {showUpcoming && upcomingRoutes.slice(0, 30).map(r => <RouteCard key={r.date} r={r} />)}
+          {pastRoutes.length === 0 ? (
+            <Card><CardBody className="text-center py-8 text-sm text-ink-muted">No completed days yet — past routes appear here once you work them.</CardBody></Card>
+          ) : pastRoutes.slice(0, 60).map(r => <RouteCard key={r.date} r={r} />)}
+        </div>
       ) : (
         <div className="space-y-2">
           {(period === 'week' ? weeks : months).map(a => <AggCard key={a.key} a={a} />)}
