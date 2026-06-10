@@ -87,15 +87,39 @@ export function haversineKm(a: Coord, b: Coord): number {
 
 // Geocode an address via the shared /api/geocode route.
 export async function geocodeAddress(address: string): Promise<Coord | null> {
-  const res = await fetch('/api/geocode', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ address }),
-  })
-  const data = await res.json()
-  if (res.ok && typeof data.lat === 'number' && typeof data.lng === 'number') {
-    return { lat: data.lat, lng: data.lng }
-  }
+  const full = await geocodeAddressDetailed(address)
+  return full ? { lat: full.lat, lng: full.lng } : null
+}
+
+// Same call, but also returns the resolved community/neighborhood name so a
+// single geocode can populate both coordinates AND the area name.
+export async function geocodeAddressDetailed(address: string): Promise<{ lat: number; lng: number; neighborhood: string | null } | null> {
+  try {
+    const res = await fetch('/api/geocode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ address }),
+    })
+    const data = await res.json()
+    if (res.ok && typeof data.lat === 'number' && typeof data.lng === 'number') {
+      return { lat: data.lat, lng: data.lng, neighborhood: data.neighborhood ?? null }
+    }
+  } catch { /* network/JSON failure → null */ }
+  return null
+}
+
+// Reverse lookup: coordinates → real community name ("Queensland"), district as
+// fallback. Used to backfill properties.neighborhood — stored once, never re-fetched.
+export async function reverseNeighborhood(lat: number, lng: number): Promise<string | null> {
+  try {
+    const res = await fetch('/api/geocode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lat, lng }),
+    })
+    const data = await res.json()
+    if (res.ok && typeof data.neighborhood === 'string' && data.neighborhood) return data.neighborhood
+  } catch { /* ignore */ }
   return null
 }
 

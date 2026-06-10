@@ -31,6 +31,9 @@ export interface Property {
   postal_code: string | null
   lat: number | null
   lng: number | null
+  // Real community name ("Queensland"), reverse-geocoded once from lat/lng.
+  // All neighborhood analytics prefer this over the postal FSA prefix.
+  neighborhood: string | null
   lot_size: number | null
   lawn_sqft: number | null
   fence_length: number | null

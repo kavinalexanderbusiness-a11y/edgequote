@@ -17,7 +17,9 @@ import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { cn } from '@/lib/utils'
 import { format, addMonths, addWeeks, addDays, subMonths, subWeeks, subDays, parseISO, getDay } from 'date-fns'
-import { Plus, X, ChevronLeft, ChevronRight, Trash2 } from 'lucide-react'
+import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket } from 'lucide-react'
+import { OptimizeSchedule } from '@/components/schedule/OptimizeSchedule'
+import type { PlannedMove } from '@/lib/optimizer'
 
 function localToday(): string {
   const d = new Date()
@@ -77,6 +79,7 @@ export default function SchedulePage() {
   const [preferredWorkDays, setPreferredWorkDays] = useState<number[]>([5, 6, 0])
   const [workStartTime, setWorkStartTime] = useState('08:00')
   const [capacityHours, setCapacityHours] = useState(8)
+  const [showOptimize, setShowOptimize] = useState(false)
 
   // Effective per-visit price for every job (manual price > linked quote).
   const valueByJobId = useMemo(() => {
@@ -639,6 +642,26 @@ export default function SchedulePage() {
     }
   }
 
+  // Apply a whole-schedule optimization: batch the date moves (grouped by target
+  // day), offer one Undo that restores every original date.
+  async function applyOptimization(moves: PlannedMove[]) {
+    if (!moves.length) return
+    const byTo: Record<string, string[]> = {}
+    for (const m of moves) (byTo[m.to] ||= []).push(m.jobId)
+    for (const [to, ids] of Object.entries(byTo)) {
+      const { error } = await supabase.from('jobs').update({ scheduled_date: to }).in('id', ids)
+      if (error) { setBanner('Optimization partially applied — ' + error.message); break }
+    }
+    await fetchJobs()
+    const byFrom: Record<string, string[]> = {}
+    for (const m of moves) (byFrom[m.from] ||= []).push(m.jobId)
+    offerUndo(`Schedule optimized — ${moves.length} job${moves.length !== 1 ? 's' : ''} moved`, async () => {
+      for (const [from, ids] of Object.entries(byFrom)) {
+        await supabase.from('jobs').update({ scheduled_date: from }).in('id', ids)
+      }
+    })
+  }
+
   // Next date on/after `fromISO`+1 whose weekday is a preferred work day.
   function nextWorkday(fromISO: string): string {
     const pref = preferredWorkDays.length ? new Set(preferredWorkDays) : null
@@ -735,9 +758,14 @@ export default function SchedulePage() {
         title="Schedule"
         description={`${jobs.length} job${jobs.length !== 1 ? 's' : ''} on the calendar`}
         action={
-          <Button onClick={() => openNewJob(cursor)}>
-            <Plus className="w-4 h-4" /> Add Job
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={() => setShowOptimize(true)} title="Optimize the whole future schedule">
+              <Rocket className="w-4 h-4" /> Optimize
+            </Button>
+            <Button onClick={() => openNewJob(cursor)}>
+              <Plus className="w-4 h-4" /> Add Job
+            </Button>
+          </div>
         }
       />
 
@@ -898,6 +926,19 @@ export default function SchedulePage() {
           destructive={pendingAction.type === 'delete'}
           onChoose={handleScopeChoice}
           onCancel={() => setPendingAction(null)}
+        />
+      )}
+
+      {showOptimize && (
+        <OptimizeSchedule
+          jobs={jobs}
+          recurrences={recurrences}
+          valueByJobId={valueByJobId}
+          baseCoord={baseCoord}
+          preferredWorkDays={preferredWorkDays}
+          capacityHours={capacityHours}
+          onApply={applyOptimization}
+          onClose={() => setShowOptimize(false)}
         />
       )}
     </div>

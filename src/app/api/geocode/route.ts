@@ -1,12 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server'
 
+// Pull the best human area name from Google address components.
+// Priority: community/neighborhood → sublocality (district) → null.
+// (City-level fallback is handled by the shared neighborhoodKey engine.)
+function extractNeighborhood(results: Array<{ address_components?: Array<{ long_name: string; types: string[] }> }>): string | null {
+  for (const wanted of ['neighborhood', 'sublocality_level_1', 'sublocality']) {
+    for (const r of results || []) {
+      const hit = r.address_components?.find(c => c.types.includes(wanted))
+      if (hit?.long_name) return hit.long_name
+    }
+  }
+  return null
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     const address = (body.address || '').trim()
+    const lat = typeof body.lat === 'number' ? body.lat : null
+    const lng = typeof body.lng === 'number' ? body.lng : null
 
-    if (!address) {
-      return NextResponse.json({ error: 'Address is empty.' }, { status: 422 })
+    if (!address && (lat == null || lng == null)) {
+      return NextResponse.json({ error: 'Provide an address, or lat+lng for reverse lookup.' }, { status: 422 })
     }
 
     const key = process.env.GOOGLE_MAPS_API_KEY
@@ -15,7 +30,8 @@ export async function POST(req: NextRequest) {
     }
 
     const url = new URL('https://maps.googleapis.com/maps/api/geocode/json')
-    url.searchParams.set('address', address)
+    if (address) url.searchParams.set('address', address)
+    else url.searchParams.set('latlng', `${lat},${lng}`)
     url.searchParams.set('key', key)
 
     const res = await fetch(url.toString())
@@ -26,6 +42,13 @@ export async function POST(req: NextRequest) {
         { error: `Google: ${data.status}${data.error_message ? ' — ' + data.error_message : ''}` },
         { status: 422 }
       )
+    }
+
+    const neighborhood = extractNeighborhood(data?.results || [])
+
+    // Reverse lookup: the caller only wants the area name.
+    if (!address) {
+      return NextResponse.json({ neighborhood })
     }
 
     const result = data?.results?.[0]
@@ -41,6 +64,7 @@ export async function POST(req: NextRequest) {
       lat: loc.lat,
       lng: loc.lng,
       formatted: result.formatted_address || address,
+      neighborhood,
     })
   } catch {
     return NextResponse.json({ error: 'Geocoding failed (server error).' }, { status: 500 })

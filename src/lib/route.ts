@@ -3,7 +3,7 @@
 // calendar Day Operations panel so they can never order a day differently.
 
 import { parseISO, addDays, format, getDay } from 'date-fns'
-import { Coord, haversineKm, geocodeAddress, NEARBY_RADIUS_KM, SchedJob } from '@/lib/geo'
+import { Coord, haversineKm, geocodeAddressDetailed, NEARBY_RADIUS_KM, SchedJob } from '@/lib/geo'
 import type { createClient } from '@/lib/supabase/client'
 
 type Supa = ReturnType<typeof createClient>
@@ -36,10 +36,16 @@ export async function geocodeMissingStops(supabase: Supa, stops: RouteStop[]): P
   let n = 0
   for (const s of stops) {
     if ((s.lat == null || s.lng == null) && s.address) {
-      const c = await geocodeAddress(s.address)
+      const c = await geocodeAddressDetailed(s.address)
       if (c) {
         s.lat = c.lat; s.lng = c.lng; n++
-        if (s.propertyId) await supabase.from('properties').update({ lat: c.lat, lng: c.lng }).eq('id', s.propertyId)
+        if (s.propertyId) {
+          // One geocode fills coords AND the community name (neighborhood
+          // analytics read properties.neighborhood — one source of truth).
+          const patch: Record<string, unknown> = { lat: c.lat, lng: c.lng }
+          if (c.neighborhood) patch.neighborhood = c.neighborhood
+          await supabase.from('properties').update(patch).eq('id', s.propertyId)
+        }
       }
     }
   }
@@ -78,6 +84,12 @@ export function nearestNeighborRoute(base: Coord, located: RouteStop[]): { order
 // Quick total-km estimate for a set of coords (profitability dashboard — no API).
 export function routeKmEstimate(base: Coord, located: { lat: number; lng: number }[]): number {
   return located.length ? nnOrder(base, located).totalKm : 0
+}
+
+// Cluster tightness when no base is configured: walk the stops from the first
+// one. Still measures how spread out a day is, just without the home leg.
+export function clusterKmEstimate(located: { lat: number; lng: number }[]): number {
+  return located.length > 1 ? routeKmEstimate(located[0], located.slice(1)) : 0
 }
 
 // Order stops into an efficient driving route. Prefers Google's real-road
@@ -125,7 +137,7 @@ export async function optimizeRoute(base: Coord, stops: RouteStop[]): Promise<Ro
   return { ordered, totalKm: total, usedGoogle, missing, mapsUrl: u.toString() }
 }
 
-const AVG_SPEED_KM_PER_MIN = 0.5 // ~30 km/h urban
+export const AVG_SPEED_KM_PER_MIN = 0.5 // ~30 km/h urban
 
 // Density stats for a set of located stops + the optimized total distance.
 export function routeStats(

@@ -55,7 +55,7 @@ export default function ProfitabilityPage() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) { setLoadError('Session expired — sign in again.'); return }
       const [jRes, qRes, rRes, sRes] = await Promise.all([
-        supabase.from('jobs').select('id, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, properties(lat, lng, city, postal_code)').eq('user_id', user!.id),
+        supabase.from('jobs').select('id, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, properties(lat, lng, city, postal_code, neighborhood)').eq('user_id', user!.id),
         supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
         supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user!.id),
         supabase.from('business_settings').select('base_lat, base_lng, base_address').eq('user_id', user!.id).maybeSingle(),
@@ -66,13 +66,14 @@ export default function ProfitabilityPage() {
       const recById: Record<string, RecInfo> = {}
       for (const r of (rRes.data as (RecInfo & { id: string })[]) || []) recById[r.id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count }
 
-      const rows = ((jRes.data as unknown as Array<Omit<ProfitJob, 'lat' | 'lng' | 'city' | 'postal_code'> & { properties?: { lat: number | null; lng: number | null; city: string | null; postal_code: string | null } | null }>) || [])
+      const rows = ((jRes.data as unknown as Array<Omit<ProfitJob, 'lat' | 'lng' | 'city' | 'postal_code' | 'neighborhood'> & { properties?: { lat: number | null; lng: number | null; city: string | null; postal_code: string | null; neighborhood: string | null } | null }>) || [])
         .map(j => ({
           id: j.id, scheduled_date: j.scheduled_date, status: j.status, service_type: j.service_type,
           quote_id: j.quote_id, recurrence_id: j.recurrence_id, duration_minutes: j.duration_minutes,
           actual_minutes: j.actual_minutes, price: j.price, customer_id: j.customer_id,
           lat: j.properties?.lat ?? null, lng: j.properties?.lng ?? null,
           city: j.properties?.city ?? null, postal_code: j.properties?.postal_code ?? null,
+          neighborhood: j.properties?.neighborhood ?? null,
         } as ProfitJob))
       setJobs(rows)
 

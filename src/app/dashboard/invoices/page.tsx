@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Invoice, InvoiceStatus, INVOICE_STATUS_LABELS, INVOICE_STATUS_COLORS, BusinessSettings } from '@/types'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -82,14 +82,49 @@ export default function InvoicesPage() {
     if (error) { setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: inv.status } : i)); alert('Could not update status: ' + error.message) }
   }
 
-  // Drafts are deletable — a bad auto-draft must not pollute history forever.
-  async function deleteDraft(inv: Invoice) {
-    if (inv.status !== 'draft') return
-    if (!confirm(`Delete draft ${inv.invoice_number}? This can't be undone.`)) return
+  // ── Undo (same pattern as the Schedule page) ──
+  const [undoAction, setUndoAction] = useState<{ label: string; run: () => Promise<void> } | null>(null)
+  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  function offerUndo(label: string, run: () => Promise<void>) {
+    setUndoAction({ label, run })
+    if (undoTimer.current) clearTimeout(undoTimer.current)
+    undoTimer.current = setTimeout(() => setUndoAction(null), 8000)
+  }
+  async function runUndo() {
+    const a = undoAction
+    if (undoTimer.current) clearTimeout(undoTimer.current)
+    setUndoAction(null)
+    if (a) { await a.run(); await fetchInvoices() }
+  }
+
+  // Insertable row (strips the joined customers object) so Undo can restore the
+  // invoice with the SAME id — every relationship (job, quote, customer,
+  // property) reconnects exactly as it was. The job itself is never touched.
+  function invoiceInsertRow(i: Invoice) {
+    return {
+      id: i.id, user_id: i.user_id, quote_id: i.quote_id, customer_id: i.customer_id,
+      property_id: i.property_id, job_id: i.job_id, invoice_number: i.invoice_number,
+      customer_name: i.customer_name, address: i.address, service_type: i.service_type,
+      amount: i.amount, status: i.status, issued_date: i.issued_date, due_date: i.due_date,
+      notes: i.notes,
+    }
+  }
+
+  // Delete any invoice — confirm first, with a stronger warning for Paid
+  // (it's part of your collected-revenue history). Undo restores it fully.
+  async function deleteInvoice(inv: Invoice) {
+    const msg = inv.status === 'paid'
+      ? `${inv.invoice_number} is PAID (${formatCurrency(Number(inv.amount))}) — deleting it removes collected revenue from your records. Delete anyway?`
+      : `Delete ${inv.invoice_number} (${formatCurrency(Number(inv.amount))})?`
+    if (!confirm(msg)) return
     setDeletingId(inv.id)
+    const row = invoiceInsertRow(inv)
     const { error } = await supabase.from('invoices').delete().eq('id', inv.id)
     if (error) alert('Could not delete: ' + error.message)
-    else setInvoices(prev => prev.filter(i => i.id !== inv.id))
+    else {
+      setInvoices(prev => prev.filter(i => i.id !== inv.id))
+      offerUndo(`Deleted ${inv.invoice_number}`, async () => { await supabase.from('invoices').insert(row) })
+    }
     setDeletingId(null)
   }
 
@@ -113,6 +148,17 @@ export default function InvoicesPage() {
       {loadError && (
         <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5">
           {loadError} <button onClick={() => { setLoading(true); fetchInvoices() }} className="underline font-medium ml-1">Retry</button>
+        </div>
+      )}
+
+      {/* Undo toast — restore the last deleted invoice */}
+      {undoAction && (
+        <div className="flex items-center justify-between gap-3 text-sm bg-ink text-bg border border-border-strong rounded-xl px-4 py-2.5 shadow-lg">
+          <span className="font-medium">{undoAction.label}</span>
+          <div className="flex items-center gap-3 shrink-0">
+            <button onClick={runUndo} className="font-bold underline">Undo</button>
+            <button onClick={() => setUndoAction(null)} className="opacity-60 hover:opacity-100">✕</button>
+          </div>
         </div>
       )}
 
@@ -198,12 +244,10 @@ export default function InvoicesPage() {
                       {inv.status === 'paid' && <Check className="w-3 h-3" />}
                       {INVOICE_STATUS_LABELS[inv.status]}
                     </button>
-                    {inv.status === 'draft' && (
-                      <Button onClick={() => deleteDraft(inv)} variant="ghost" size="sm" loading={deletingId === inv.id}
-                        className="hover:text-red-400" title="Delete draft">
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </Button>
-                    )}
+                    <Button onClick={() => deleteInvoice(inv)} variant="ghost" size="sm" loading={deletingId === inv.id}
+                      className="hover:text-red-400" title="Delete invoice">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </Button>
                   </div>
                 </div>
               </CardBody>

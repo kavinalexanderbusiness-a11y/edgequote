@@ -199,5 +199,12 @@ alter table public.business_settings
   add column if not exists logo_scale           numeric default 100,
   add column if not exists dashboard_cards      jsonb;
 
+-- Real community name ("Queensland"), reverse-geocoded once from the property's
+-- coordinates. All neighborhood analytics prefer this over the postal FSA prefix
+-- (fallback chain: neighborhood → FSA → city). Backfill via Data Quality →
+-- "Name all"; new geocodes fill it automatically.
+alter table public.properties
+  add column if not exists neighborhood text;
+
 -- properties.measurement_history (jsonb) already exists and now stores versioned
 -- snapshots { date, total_sqft, sections{...}, rate_per_1000 } — never overwritten.

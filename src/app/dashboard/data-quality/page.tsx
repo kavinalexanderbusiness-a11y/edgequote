@@ -13,7 +13,7 @@ import {
   ProfitJob, ProfitQuote, ProfitContext, RecInfo, jobValue,
 } from '@/lib/profitability'
 import { ensureCustomerAndProperty, findCustomerMatch } from '@/lib/customers'
-import { geocodeAddress } from '@/lib/geo'
+import { geocodeAddressDetailed, reverseNeighborhood } from '@/lib/geo'
 import {
   CoverageRow, coveragePct, overallScore, scoreGrade, scoreLabel, DQ_GRADE_COLORS,
 } from '@/lib/dataQuality'
@@ -26,7 +26,7 @@ interface QRow {
   address: string; property_id: string | null; status: string
 }
 type DQJob = ProfitJob & { title: string; property_id: string | null }
-interface PRow { id: string; customer_id: string | null; address: string; lat: number | null; lng: number | null }
+interface PRow { id: string; customer_id: string | null; address: string; lat: number | null; lng: number | null; neighborhood: string | null }
 
 const EMPTY_CTX: ProfitContext = { quotesById: {}, recById: {}, base: null, today: format(new Date(), 'yyyy-MM-dd') }
 
@@ -45,9 +45,9 @@ export default function DataQualityPage() {
     const [cRes, qRes, jRes, rRes, pRes] = await Promise.all([
       supabase.from('customers').select('*').eq('user_id', user!.id).order('name'),
       supabase.from('quotes').select('id, quote_number, customer_id, customer_name, address, property_id, status, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
-      supabase.from('jobs').select('id, title, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, property_id, properties(lat, lng, city, postal_code)').eq('user_id', user!.id),
+      supabase.from('jobs').select('id, title, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, property_id, properties(lat, lng, city, postal_code, neighborhood)').eq('user_id', user!.id),
       supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user!.id),
-      supabase.from('properties').select('id, customer_id, address, lat, lng').eq('user_id', user!.id),
+      supabase.from('properties').select('id, customer_id, address, lat, lng, neighborhood').eq('user_id', user!.id),
     ])
 
     setCustomers((cRes.data as Customer[]) || [])
@@ -67,6 +67,7 @@ export default function DataQualityPage() {
       actual_minutes: j.actual_minutes, price: j.price, customer_id: j.customer_id, property_id: j.property_id,
       lat: j.properties?.lat ?? null, lng: j.properties?.lng ?? null,
       city: j.properties?.city ?? null, postal_code: j.properties?.postal_code ?? null,
+      neighborhood: j.properties?.neighborhood ?? null,
     })))
     setProperties((pRes.data as PRow[]) || [])
     setLoading(false)
@@ -91,6 +92,9 @@ export default function DataQualityPage() {
     const locatable = properties.filter(p => (p.address || '').trim().length >= 5)
     const propsUngeocoded = locatable.filter(p => p.lat == null || p.lng == null)
     const located = locatable.length - propsUngeocoded.length
+    // Located but no real community name yet — neighborhood analytics fall back
+    // to the postal prefix for these until resolved.
+    const propsUnnamed = properties.filter(p => p.lat != null && p.lng != null && !(p.neighborhood || '').trim())
 
     const totalLinkables = quotes.length + jobs.length
     const custCovered = (quotes.length - quotesNoCustomer.length) + (jobs.length - jobsNoCustomer.length)
@@ -106,7 +110,7 @@ export default function DataQualityPage() {
     return {
       rows, score: overallScore(rows),
       quotesNoCustomer, quotesNoProperty, jobsNoCustomer,
-      jobsNoQuote, jobsNoPrice, propsNoCustomer, propsUngeocoded,
+      jobsNoQuote, jobsNoPrice, propsNoCustomer, propsUngeocoded, propsUnnamed,
       activeJobs: activeJobs.length, jobsWithValue,
       propertiesTotal: properties.length,
     }
@@ -161,15 +165,34 @@ export default function DataQualityPage() {
 
   // Backfill coordinates for every property with an address but no lat/lng.
   // Sequential — geocoding hits an external API (same throttle as fixAllProperties).
+  // One call also resolves the real community name.
   async function geocodeAllProperties() {
     setWorking('geo-all')
     try {
       for (const p of m.propsUngeocoded) {
-        const c = await geocodeAddress(p.address)
-        if (c) await supabase.from('properties').update({ lat: c.lat, lng: c.lng }).eq('id', p.id)
+        const c = await geocodeAddressDetailed(p.address)
+        if (c) {
+          const patch: Record<string, unknown> = { lat: c.lat, lng: c.lng }
+          if (c.neighborhood) patch.neighborhood = c.neighborhood
+          await supabase.from('properties').update(patch).eq('id', p.id)
+        }
       }
       await load()
     } catch (e) { alert('Could not geocode properties: ' + (e instanceof Error ? e.message : 'error')) }
+    finally { setWorking(null) }
+  }
+
+  // Resolve real community names ("Queensland", not "T2J") for located properties.
+  // Stored once on the property — every neighborhood surface reads it from there.
+  async function nameAllNeighborhoods() {
+    setWorking('name-all')
+    try {
+      for (const p of m.propsUnnamed) {
+        const name = await reverseNeighborhood(p.lat as number, p.lng as number)
+        if (name) await supabase.from('properties').update({ neighborhood: name }).eq('id', p.id)
+      }
+      await load()
+    } catch (e) { alert('Could not resolve neighborhoods: ' + (e instanceof Error ? e.message : 'error')) }
     finally { setWorking(null) }
   }
 
@@ -195,7 +218,7 @@ export default function DataQualityPage() {
 
   if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Checking data quality…</div>
 
-  const allClean = m.quotesNoCustomer.length === 0 && m.quotesNoProperty.length === 0 && m.jobsNoCustomer.length === 0 && m.jobsNoPrice === 0 && m.jobsNoQuote === 0 && m.propsUngeocoded.length === 0
+  const allClean = m.quotesNoCustomer.length === 0 && m.quotesNoProperty.length === 0 && m.jobsNoCustomer.length === 0 && m.jobsNoPrice === 0 && m.jobsNoQuote === 0 && m.propsUngeocoded.length === 0 && m.propsUnnamed.length === 0
 
   return (
     <div className="max-w-3xl space-y-6">
@@ -310,6 +333,26 @@ export default function DataQualityPage() {
             </div>
           ))}
           {m.propsUngeocoded.length > 40 && <p className="text-xs text-ink-faint">+{m.propsUngeocoded.length - 40} more — all included in “Geocode all”.</p>}
+        </Section>
+      )}
+
+      {/* Located properties without a real community name — analytics show the
+          postal prefix (T2J) instead of the neighborhood (Queensland) until fixed */}
+      {m.propsUnnamed.length > 0 && (
+        <Section icon={MapPin} title={`${m.propsUnnamed.length} propert${m.propsUnnamed.length !== 1 ? 'ies' : 'y'} without a neighborhood name`}
+          subtitle="Resolve real community names so the map and rankings say “Queensland”, not “T2J”."
+          action={
+            <Button size="sm" loading={working === 'name-all'} onClick={nameAllNeighborhoods}>
+              <MapPin className="w-3.5 h-3.5" /> Name all {m.propsUnnamed.length}
+            </Button>
+          }>
+          {m.propsUnnamed.slice(0, 40).map(p => (
+            <div key={p.id} className="flex items-center gap-2 rounded-xl border border-border p-3">
+              <MapPin className="w-3.5 h-3.5 text-ink-faint shrink-0" />
+              <p className="text-sm text-ink truncate">{p.address}</p>
+            </div>
+          ))}
+          {m.propsUnnamed.length > 40 && <p className="text-xs text-ink-faint">+{m.propsUnnamed.length - 40} more — all included in “Name all”.</p>}
         </Section>
       )}
 

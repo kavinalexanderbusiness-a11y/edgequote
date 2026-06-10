@@ -22,6 +22,7 @@ export interface ProfitJob {
   lng: number | null
   city: string | null
   postal_code: string | null
+  neighborhood: string | null // real community name (reverse-geocoded, stored on the property)
   customer_id: string | null
 }
 
@@ -135,9 +136,12 @@ export function improvementSuggestions(p: RouteProfit): string[] {
   return s
 }
 
-// Neighborhood = postal FSA (first 3 chars) → city → Unknown. Shared so the
-// Saturation Map / Neighborhood Revenue features group the same way.
-export function neighborhoodKey(postal: string | null, city: string | null): string {
+// THE one geographic naming engine. Priority: real community/district name
+// (properties.neighborhood, reverse-geocoded once and stored) → postal FSA
+// prefix → city → Unknown. "Queensland" beats "T2J" for business decisions;
+// the FSA only appears for properties that haven't been resolved yet.
+export function neighborhoodKey(postal: string | null, city: string | null, neighborhood?: string | null): string {
+  if (neighborhood && neighborhood.trim()) return neighborhood.trim()
   if (postal && postal.trim().length >= 3) return postal.trim().slice(0, 3).toUpperCase()
   if (city && city.trim()) return city.trim()
   return 'Unknown'
@@ -157,7 +161,7 @@ export function neighborhoodProfitability(jobs: ProfitJob[], ctx: ProfitContext)
   const map: Record<string, { revenue: number; jobs: number; labor: number; custs: Set<string> }> = {}
   for (const j of jobs) {
     if (j.status === 'cancelled') continue
-    const key = neighborhoodKey(j.postal_code, j.city)
+    const key = neighborhoodKey(j.postal_code, j.city, j.neighborhood)
     const e = (map[key] ||= { revenue: 0, jobs: 0, labor: 0, custs: new Set<string>() })
     e.revenue += jobValue(j, ctx)
     e.jobs += 1

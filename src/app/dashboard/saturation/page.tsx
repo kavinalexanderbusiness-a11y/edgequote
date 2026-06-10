@@ -16,7 +16,7 @@ import { format } from 'date-fns'
 import { Trophy, Sprout, TrendingDown, TrendingUp, Users, Repeat, FileText, MapPin, Navigation } from 'lucide-react'
 
 type SatJob = ProfitJob & { property_id: string | null }
-interface PropRow { id: string; customer_id: string; address: string; lat: number | null; lng: number | null; city: string | null; postal_code: string | null }
+interface PropRow { id: string; customer_id: string; address: string; lat: number | null; lng: number | null; city: string | null; postal_code: string | null; neighborhood: string | null }
 interface QRow { id: string; status: string; customer_id: string | null; property_id: string | null; customer_name: string; total: number | null; initial_price: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null }
 
 type HoodTag = 'saturated' | 'warm' | 'expand' | 'growing'
@@ -39,6 +39,8 @@ interface HoodRow {
   revPerHour: number
   pendingQuotes: number
   pendingValue: number
+  decidedQuotes: number
+  conversionPct: number
   tag: HoodTag
   color: string
 }
@@ -72,8 +74,8 @@ export default function SaturationPage() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) { setLoadError('Session expired — sign in again.'); return }
       const [jRes, pRes, qRes, cRes, rRes, sRes] = await Promise.all([
-        supabase.from('jobs').select('id, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, property_id, properties(lat, lng, city, postal_code)').eq('user_id', user!.id),
-        supabase.from('properties').select('id, customer_id, address, lat, lng, city, postal_code').eq('user_id', user!.id),
+        supabase.from('jobs').select('id, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, property_id, properties(lat, lng, city, postal_code, neighborhood)').eq('user_id', user!.id),
+        supabase.from('properties').select('id, customer_id, address, lat, lng, city, postal_code, neighborhood').eq('user_id', user!.id),
         supabase.from('quotes').select('id, status, customer_id, property_id, customer_name, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
         supabase.from('customers').select('id, name').eq('user_id', user!.id),
         supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user!.id),
@@ -91,6 +93,7 @@ export default function SaturationPage() {
         actual_minutes: j.actual_minutes, price: j.price, customer_id: j.customer_id, property_id: j.property_id,
         lat: j.properties?.lat ?? null, lng: j.properties?.lng ?? null,
         city: j.properties?.city ?? null, postal_code: j.properties?.postal_code ?? null,
+        neighborhood: j.properties?.neighborhood ?? null,
       })))
       setProperties((pRes.data as PropRow[]) || [])
       setQuotes((qRes.data as QRow[]) || [])
@@ -166,7 +169,7 @@ export default function SaturationPage() {
     const centroid: Record<string, { lat: number; lng: number; n: number }> = {}
     for (const j of active) {
       if (j.lat == null || j.lng == null) continue
-      const k = neighborhoodKey(j.postal_code, j.city)
+      const k = neighborhoodKey(j.postal_code, j.city, j.neighborhood)
       const e = (centroid[k] ||= { lat: 0, lng: 0, n: 0 })
       e.lat += j.lat; e.lng += j.lng; e.n++
     }
@@ -175,18 +178,25 @@ export default function SaturationPage() {
     const recurringByHood: Record<string, Set<string>> = {}
     for (const p of properties) {
       if (!recurringProps.has(p.id)) continue
-      const k = neighborhoodKey(p.postal_code, p.city)
+      const k = neighborhoodKey(p.postal_code, p.city, p.neighborhood)
       ;(recurringByHood[k] ||= new Set()).add(p.customer_id)
     }
-    // Pending quote demand per hood.
+    // Quote demand + conversion per hood (decided = anything past draft).
     const pendingByHood: Record<string, { n: number; value: number }> = {}
+    const convByHood: Record<string, { decided: number; won: number }> = {}
     for (const q of quotes) {
-      if (q.status !== 'draft' && q.status !== 'sent') continue
       const p = q.property_id ? propsById[q.property_id] : null
       if (!p) continue
-      const k = neighborhoodKey(p.postal_code, p.city)
-      const e = (pendingByHood[k] ||= { n: 0, value: 0 })
-      e.n++; e.value += Number(q.total) || 0
+      const k = neighborhoodKey(p.postal_code, p.city, p.neighborhood)
+      if (q.status === 'draft' || q.status === 'sent') {
+        const e = (pendingByHood[k] ||= { n: 0, value: 0 })
+        e.n++; e.value += Number(q.total) || 0
+      }
+      if (q.status !== 'draft') {
+        const c = (convByHood[k] ||= { decided: 0, won: 0 })
+        c.decided++
+        if (q.status === 'accepted' || q.status === 'scheduled' || q.status === 'completed' || q.status === 'paid') c.won++
+      }
     }
 
     const avgRevPerJob = hoodsBase.length
@@ -196,6 +206,7 @@ export default function SaturationPage() {
     const hoods: HoodRow[] = hoodsBase.map(h => {
       const c = centroid[h.key]
       const pending = pendingByHood[h.key] || { n: 0, value: 0 }
+      const conv = convByHood[h.key] || { decided: 0, won: 0 }
       const recur = recurringByHood[h.key]?.size || 0
       const tag: HoodTag = h.customers >= 4 ? 'saturated'
         : pending.value > 0 ? 'warm'
@@ -210,6 +221,8 @@ export default function SaturationPage() {
         revenue: h.revenue, jobs: h.jobs, customers: h.customers,
         recurringCustomers: recur, revPerJob: h.revPerJob, revPerHour: h.revPerHour,
         pendingQuotes: pending.n, pendingValue: Math.round(pending.value),
+        decidedQuotes: conv.decided,
+        conversionPct: conv.decided > 0 ? Math.round((conv.won / conv.decided) * 100) : 0,
         tag, color: GRADE_COLORS[grade],
       }
     })
@@ -236,7 +249,19 @@ export default function SaturationPage() {
       .sort((a, b) => b.pendingValue - a.pendingValue || b.revPerJob - a.revPerJob)
     const best = [...known].sort((a, b) => b.revenue - a.revenue).slice(0, 3)
 
-    return { points, hoods, mapHoods, best, opportunities, strongest, weakest, unknownHood }
+    // Neighborhood intelligence — the winner per business question. One line each;
+    // all from the same hood rows so the names/numbers match the map and lists.
+    const top = <T,>(arr: T[], score: (t: T) => number) =>
+      arr.reduce<T | null>((b, x) => (score(x) > 0 && (!b || score(x) > score(b)) ? x : b), null)
+    const intel = {
+      revenue: top(known, h => h.revenue),
+      density: top(known, h => h.jobs),
+      recurring: top(known, h => h.recurringCustomers),
+      conversion: top(known.filter(h => h.decidedQuotes >= 2), h => h.conversionPct),
+      growth: opportunities[0] ?? null,
+    }
+
+    return { points, hoods, mapHoods, best, opportunities, strongest, weakest, unknownHood, intel }
   }, [jobs, properties, quotes, customersById, ctx])
 
   if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Mapping your service area…</div>
@@ -268,6 +293,25 @@ export default function SaturationPage() {
 
       {!ctx.base && (
         <p className="text-xs text-amber-400">Set a base address in Settings to anchor the map and route math.</p>
+      )}
+
+      {/* Neighborhood intelligence — one winner per business question */}
+      {(m.intel.revenue || m.intel.density || m.intel.recurring || m.intel.conversion || m.intel.growth) && (
+        <Card>
+          <div className="px-4 py-3 border-b border-border flex items-center gap-2">
+            <Trophy className="w-4 h-4 text-accent" />
+            <h2 className="text-sm font-semibold text-ink">Neighborhood intelligence</h2>
+          </div>
+          <CardBody className="p-0">
+            <div className="divide-y divide-border">
+              {m.intel.revenue && <IntelRow label="Top revenue" hood={m.intel.revenue.key} stat={formatCurrency(m.intel.revenue.revenue) + ' booked'} />}
+              {m.intel.density && <IntelRow label="Highest density" hood={m.intel.density.key} stat={`${m.intel.density.jobs} stops · ${m.intel.density.customers} customers`} />}
+              {m.intel.recurring && <IntelRow label="Best recurring" hood={m.intel.recurring.key} stat={`${m.intel.recurring.recurringCustomers} recurring customer${m.intel.recurring.recurringCustomers !== 1 ? 's' : ''}`} />}
+              {m.intel.conversion && <IntelRow label="Best conversion" hood={m.intel.conversion.key} stat={`${m.intel.conversion.conversionPct}% of ${m.intel.conversion.decidedQuotes} quotes won`} />}
+              {m.intel.growth && <IntelRow label="Biggest growth opportunity" hood={m.intel.growth.key} stat={m.intel.growth.pendingValue > 0 ? `${formatCurrency(m.intel.growth.pendingValue)} in pending quotes` : `${formatCurrency(m.intel.growth.revPerJob)}/job, only ${m.intel.growth.customers} customer${m.intel.growth.customers !== 1 ? 's' : ''}`} />}
+            </div>
+          </CardBody>
+        </Card>
       )}
 
       {/* Actionable panels */}
@@ -362,6 +406,18 @@ export default function SaturationPage() {
       <p className="text-xs text-ink-faint">
         Neighborhood = postal area (FSA), valued by the same engines as <Link href="/dashboard/profitability" className="text-accent hover:underline">Profitability</Link> and <Link href="/dashboard/routes" className="text-accent hover:underline">Routes</Link>. Area $/hr excludes drive time, so area grades cap at C — day grades on Profitability include driving.
       </p>
+    </div>
+  )
+}
+
+function IntelRow({ label, hood, stat }: { label: string; hood: string; stat: string }) {
+  return (
+    <div className="px-4 py-2.5 flex items-center gap-3">
+      <span className="text-xs text-ink-muted w-44 shrink-0">{label}</span>
+      <span className="text-sm font-bold text-ink min-w-0 truncate flex items-center gap-1.5">
+        <MapPin className="w-3.5 h-3.5 text-accent shrink-0" /> {hood}
+      </span>
+      <span className="ml-auto text-xs text-ink-muted shrink-0">{stat}</span>
     </div>
   )
 }

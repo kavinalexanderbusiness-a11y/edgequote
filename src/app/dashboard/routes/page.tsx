@@ -44,7 +44,7 @@ export default function RoutesPage() {
     const { data: { user } } = await supabase.auth.getUser()
     const [jRes, qRes, rRes, sRes] = await Promise.all([
       supabase.from('jobs')
-        .select('id, title, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, properties(id, address, lat, lng, city, postal_code)')
+        .select('id, title, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, properties(id, address, lat, lng, city, postal_code, neighborhood)')
         .eq('user_id', user!.id)
         .eq('scheduled_date', date)
         .in('status', ['scheduled', 'in_progress', 'completed'])
@@ -65,6 +65,7 @@ export default function RoutesPage() {
       actual_minutes: j.actual_minutes, price: j.price, customer_id: j.customer_id,
       lat: j.properties?.lat ?? null, lng: j.properties?.lng ?? null,
       city: j.properties?.city ?? null, postal_code: j.properties?.postal_code ?? null,
+      neighborhood: j.properties?.neighborhood ?? null,
       address: j.properties?.address || j.title, propertyId: j.properties?.id ?? null,
     }))
 
