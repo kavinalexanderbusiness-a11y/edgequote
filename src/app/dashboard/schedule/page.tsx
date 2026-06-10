@@ -28,6 +28,7 @@ type PendingAction =
   | { type: 'edit'; job: Job; values: JobFormValues; recurrence: Recurrence }
   | { type: 'move'; job: Job; newDate: string }
   | { type: 'delete'; job: Job }
+  | { type: 'price'; job: Job; price: number | null }
 
 // Map an interval back to the legacy `freq` column where it lines up.
 function legacyFreqFor(unit: RecurUnit | null, count: number): string | null {
@@ -537,12 +538,75 @@ export default function SchedulePage() {
     await fetchJobs()
   }
 
-  // First-class price edit from the Day panel — updates ONLY the job's price.
-  // null clears the manual override so the linked quote's cadence price applies.
+  // First-class price edit from the Day panel.
+  //  • One-time job → update its price directly.
+  //  • Recurring job → choose scope (This / This & Future / All), then apply with
+  //    the quote cadence price as the single source of truth (see applyPriceChange).
   async function setJobPrice(job: Job, price: number | null) {
+    if (job.recurrence_id) {
+      setPendingAction({ type: 'price', job, price })
+      return
+    }
     const { error } = await supabase.from('jobs').update({ price }).eq('id', job.id)
     if (error) { setBanner('Could not update price: ' + error.message); return }
     await fetchJobs()
+  }
+
+  // The quote cadence column a recurring job's price maps to (interval-aware).
+  function cadenceField(job: Job): 'weekly_price' | 'biweekly_price' | 'monthly_price' | null {
+    const rec = job.recurrence_id ? recurrences[job.recurrence_id] : null
+    const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
+    return freq === 'weekly' ? 'weekly_price' : freq === 'biweekly' ? 'biweekly_price' : freq === 'monthly' ? 'monthly_price' : null
+  }
+
+  // Apply a recurring price change with the quote as the SINGLE SOURCE OF TRUTH.
+  // When the series is linked to a quote, the recurring price is written to the
+  // quote's cadence column and the affected visits are cleared so they DERIVE it
+  // (never a divergent jobs.price). Already-billed/past visits are frozen at their
+  // current value so history and issued invoices are preserved.
+  async function applyPriceChange(job: Job, newPrice: number | null, scope: RecurrenceScope) {
+    const rec = job.recurrence_id ? recurrences[job.recurrence_id] : null
+    const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
+    const field = cadenceField(job)
+    const quote = job.quote_id ? quotesById[job.quote_id] : null
+    const writesQuote = !!(job.quote_id && field && newPrice != null && (scope === 'future' || scope === 'all'))
+    const series = jobs.filter(j => j.recurrence_id === job.recurrence_id)
+
+    // Undo snapshot — every series job's price + the quote cadence value.
+    const jobSnap = series.map(j => ({ id: j.id, price: j.price }))
+    let quoteSnap: { id: string; field: string; value: number | null } | null = null
+
+    if (newPrice == null) {
+      // Revert: clear overrides on the scoped visits → they derive the quote again.
+      const ids = jobsInScope(job, jobs, scope).map(t => t.id)
+      if (ids.length) await supabase.from('jobs').update({ price: null }).in('id', ids)
+    } else if (writesQuote) {
+      const q = quote as unknown as Record<string, unknown>
+      quoteSnap = { id: job.quote_id!, field: field!, value: Number(q[field!]) || null }
+      const oldVal = Math.round(quoteVisitAmount(q, freq))
+      const freezeIds = scope === 'all'
+        ? series.filter(j => j.status === 'completed' && j.price == null).map(j => j.id)        // protect billed history
+        : series.filter(j => j.scheduled_date < job.scheduled_date && j.price == null).map(j => j.id) // past stays put
+      const clearIds = scope === 'all'
+        ? series.filter(j => j.status !== 'completed').map(j => j.id)
+        : series.filter(j => j.scheduled_date >= job.scheduled_date).map(j => j.id)
+      if (freezeIds.length && oldVal > 0) await supabase.from('jobs').update({ price: oldVal }).in('id', freezeIds)
+      await supabase.from('quotes').update({ [field!]: newPrice }).eq('id', job.quote_id)
+      if (clearIds.length) await supabase.from('jobs').update({ price: null }).in('id', clearIds)
+    } else {
+      // No quote (or "This visit only") → the price lives on the scoped job(s).
+      const ids = jobsInScope(job, jobs, scope).map(t => t.id)
+      if (ids.length) await supabase.from('jobs').update({ price: newPrice }).in('id', ids)
+    }
+
+    await fetchJobs()
+    const dest = writesQuote ? `the quote's ${freq} price` : scope === 'this' ? 'this visit' : 'the series visits'
+    offerUndo(`Price saved to ${dest}`, async () => {
+      if (quoteSnap) await supabase.from('quotes').update({ [quoteSnap.field]: quoteSnap.value }).eq('id', quoteSnap.id)
+      const nullIds = jobSnap.filter(s => s.price == null).map(s => s.id)
+      if (nullIds.length) await supabase.from('jobs').update({ price: null }).in('id', nullIds)
+      for (const s of jobSnap.filter(s => s.price != null)) await supabase.from('jobs').update({ price: s.price }).eq('id', s.id)
+    })
   }
 
   // ── Undo ────────────────────────────────────────────────────────────────────
@@ -590,6 +654,7 @@ export default function SchedulePage() {
     if (action.type === 'edit') await applyEdit(action.job, action.values, action.recurrence, scope)
     else if (action.type === 'move') await applyMove(action.job, action.newDate, scope)
     else if (action.type === 'delete') await applyDelete(action.job, scope)
+    else if (action.type === 'price') await applyPriceChange(action.job, action.price, scope)
   }
 
   function handleDayTap(day: Date) {
@@ -628,7 +693,8 @@ export default function SchedulePage() {
   const viewButtons: CalendarView[] = ['month', 'week', 'day']
 
   const pendingVerb = pendingAction?.type === 'delete' ? 'Delete'
-    : pendingAction?.type === 'move' ? 'Move' : 'Save changes to'
+    : pendingAction?.type === 'move' ? 'Move'
+    : pendingAction?.type === 'price' ? 'Update price for' : 'Save changes to'
 
   return (
     <div className="max-w-5xl space-y-6">

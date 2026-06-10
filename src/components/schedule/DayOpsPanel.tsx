@@ -289,6 +289,11 @@ export function DayOpsPanel({
                       {/* Clean price-only editor — first-class, opens inline */}
                       {priceId === job.id && (
                         <div className="mt-2 rounded-lg border border-border bg-bg-secondary p-2.5 space-y-2" onClick={e => e.stopPropagation()}>
+                          {job.recurrence_id && (
+                            <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
+                              <Repeat className="w-3 h-3" /> Recurring series pricing
+                            </div>
+                          )}
                           <label className="text-[10px] uppercase tracking-wide text-ink-faint block">Price ($/visit)
                             <input type="number" min="0" step="5" autoFocus
                               placeholder={qVal > 0 ? `${qVal} from quote` : 'e.g. 55'}

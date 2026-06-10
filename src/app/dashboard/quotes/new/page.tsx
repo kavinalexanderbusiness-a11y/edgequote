@@ -81,6 +81,8 @@ export default function NewQuotePage() {
     let customerId: string | null = values.customer_id && values.customer_id !== '__manual' ? values.customer_id : null
     let propertyId: string | null = measurement?.propertyId ?? null
     let customerName = values.customer_name
+    let createdCustomer = false
+    let matchedBy: string | null = null
     try {
       const ensured = await ensureCustomerAndProperty(
         supabase, user!.id,
@@ -90,6 +92,8 @@ export default function NewQuotePage() {
       customerId = ensured.customerId
       customerName = ensured.customerName
       propertyId = measurement?.propertyId ?? ensured.propertyId
+      createdCustomer = ensured.createdCustomer
+      matchedBy = ensured.matchedBy
     } catch {
       const c = customers.find(c => c.id === values.customer_id)
       if (c) customerName = c.name
@@ -134,6 +138,10 @@ export default function NewQuotePage() {
     }).select().single()
 
     if (!error && data) {
+      // Tell the next screen the lead became a customer (created or matched).
+      if (typeof window !== 'undefined' && (createdCustomer || matchedBy)) {
+        window.sessionStorage.setItem('eq_quote_save_customer', JSON.stringify({ created: createdCustomer, name: customerName, matchedBy }))
+      }
       router.push(`/dashboard/quotes/${data.id}`)
     } else if (error) {
       alert('Could not save quote: ' + error.message)

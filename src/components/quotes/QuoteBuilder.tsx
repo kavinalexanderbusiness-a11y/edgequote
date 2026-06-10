@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useForm, Controller } from 'react-hook-form'
 import { useRouter } from 'next/navigation'
 import { Input } from '@/components/ui/Input'
@@ -15,8 +15,9 @@ import { Collapsible } from '@/components/ui/Collapsible'
 import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
 import { formatCurrency, suggestTravelFee } from '@/lib/utils'
 import { laborSuggestion, pricingConfigFromSettings } from '@/lib/pricing'
+import { findCustomerMatch } from '@/lib/customers'
 import { BestDaySuggestions } from '@/components/schedule/BestDaySuggestions'
-import { Clock, DollarSign, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, SlidersHorizontal, CheckCircle2 } from 'lucide-react'
+import { Clock, DollarSign, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, SlidersHorizontal, CheckCircle2, Users } from 'lucide-react'
 
 interface QuoteBuilderProps {
   customers: Customer[]
@@ -86,8 +87,20 @@ export function QuoteBuilder({
   const biweeklyPrice = Number(watch('biweekly_price')) || 0
   const monthlyPrice = Number(watch('monthly_price')) || 0
 
+  const manualName = watch('customer_name')
+  const manualPhone = watch('customer_phone')
+  const manualEmail = watch('customer_email')
   const notes = watch('notes')
   const measuredSqft = Number(watch('measured_sqft')) || 0
+
+  // Live duplicate detection — when entering a brand-new lead, surface a likely
+  // existing customer so we link instead of creating a duplicate. Reuses the
+  // single matching engine (phone/email/address confident, name not).
+  const isManualEntry = !customerId || customerId === '__manual'
+  const likelyMatch = useMemo(
+    () => (isManualEntry ? findCustomerMatch(customers, { name: manualName, phone: manualPhone, email: manualEmail, address }) : null),
+    [isManualEntry, customers, manualName, manualPhone, manualEmail, address],
+  )
   const suggestedInitial = laborSuggestion(Number(hours), Number(crewSize), Number(rate), overgrowth || 1)
   const effectiveTotal = initialPrice + Number(travelFee || 0)
 
@@ -231,6 +244,27 @@ export function QuoteBuilder({
                     <Input label="Email (optional)" type="email" placeholder="jane@example.com"
                       {...register('customer_email')} />
                   </div>
+
+                  {/* Likely-match prompt — use the existing customer instead of duplicating */}
+                  {likelyMatch && (
+                    <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 space-y-2">
+                      <p className="text-xs text-ink flex items-start gap-1.5">
+                        <Users className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+                        <span>
+                          {likelyMatch.confident
+                            ? <>Looks like an existing customer — <span className="font-semibold">{likelyMatch.customer.name}</span> (same {likelyMatch.reason}).</>
+                            : <>Possible existing customer — <span className="font-semibold">{likelyMatch.customer.name}</span> (same name).</>}
+                          {' '}<span className="text-ink-muted">Use them to avoid a duplicate?</span>
+                        </span>
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <Button type="button" size="sm" onClick={() => setValue('customer_id', likelyMatch.customer.id)}>
+                          Use {likelyMatch.customer.name.split(' ')[0]}
+                        </Button>
+                        <span className="text-[10px] text-ink-faint">or keep typing to save as new</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 

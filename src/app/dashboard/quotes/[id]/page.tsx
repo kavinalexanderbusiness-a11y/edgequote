@@ -36,9 +36,28 @@ export default function QuoteDetailPage() {
   const [convertMsg, setConvertMsg] = useState<string | null>(null)
   const [showSchedulePrompt, setShowSchedulePrompt] = useState(false)
   const [duplicating, setDuplicating] = useState(false)
+  const [savedCustomerMsg, setSavedCustomerMsg] = useState<string | null>(null)
 
 
   const supabase = createClient()
+
+  // One-time confirmation handed over from the New Quote save (lead → customer).
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const raw = window.sessionStorage.getItem('eq_quote_save_customer')
+    if (!raw) return
+    window.sessionStorage.removeItem('eq_quote_save_customer')
+    try {
+      const m = JSON.parse(raw) as { created: boolean; name: string; matchedBy: string | null }
+      setSavedCustomerMsg(
+        m.created
+          ? `New customer ${m.name} and their property were created and linked to this quote.`
+          : m.matchedBy
+            ? `Linked to existing customer ${m.name} (matched by ${m.matchedBy}) — no duplicate created.`
+            : null
+      )
+    } catch { /* ignore */ }
+  }, [])
 
   useEffect(() => {
     async function load() {
@@ -454,6 +473,15 @@ export default function QuoteDetailPage() {
           }
         />
       </div>
+
+      {savedCustomerMsg && (
+        <div className="flex items-center justify-between gap-3 text-sm bg-emerald-500/10 border border-emerald-500/20 rounded-xl px-4 py-3">
+          <span className="flex items-center gap-2 text-emerald-300">
+            <Check className="w-4 h-4 shrink-0" /> {savedCustomerMsg}
+          </span>
+          <button onClick={() => setSavedCustomerMsg(null)} className="text-ink-faint hover:text-ink shrink-0">✕</button>
+        </div>
+      )}
 
       {showSchedulePrompt && (
         <div className="flex items-center justify-between flex-wrap gap-3 text-sm bg-accent/10 border border-accent/20 rounded-xl px-4 py-3">
