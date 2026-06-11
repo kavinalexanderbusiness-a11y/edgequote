@@ -16,6 +16,11 @@ interface MeasurementPayload {
   sqft: number
   sections?: LawnSections
   jobPrice: number
+  // Selected recurring structure from the pricing recommendation package.
+  cadence?: 'one_time' | 'weekly' | 'biweekly' | 'monthly' | null
+  weekly?: number | null
+  biweekly?: number | null
+  monthly?: number | null
   travelFee?: number
   includeTravel?: boolean
   travelIsCustom?: boolean
@@ -179,6 +184,11 @@ export default function NewQuotePage() {
           // Sensible default so a measured lawn is saveable in one tap (editable).
           service_type: 'Lawn Mowing',
           initial_price: measurement.jobPrice || 0,
+          // Selected cadence from the pricing package — the full structure
+          // arrives pre-filled, no manual entry.
+          weekly_price: measurement.weekly || 0,
+          biweekly_price: measurement.biweekly || 0,
+          monthly_price: measurement.monthly || 0,
           travel_fee: measurement.travelFee || 0,
           distance_km: measurement.travelDistanceKm || 0,
           custom_travel_required: measurement.travelIsCustom || false,

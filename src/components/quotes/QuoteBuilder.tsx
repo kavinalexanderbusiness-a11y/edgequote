@@ -477,10 +477,15 @@ export function QuoteBuilder({
           travelFee={Number(travelFee) || 0}
           cfg={pricingConfigFromSettings(settings)}
           onClose={() => setShowMeasure(false)}
-          onApply={(price, totalSqft, suggested) => {
-            setValue('initial_price', price)
-            setValue('measured_sqft', totalSqft)
-            setValue('suggested_price', suggested)
+          onApply={(sel) => {
+            // Fill the selected pricing STRUCTURE — first visit always at the
+            // one-time price, plus the chosen cadence's recurring price field.
+            setValue('initial_price', sel.oneTime)
+            if (sel.cadence === 'weekly') setValue('weekly_price', sel.weekly)
+            else if (sel.cadence === 'biweekly') setValue('biweekly_price', sel.biweekly)
+            else if (sel.cadence === 'monthly') setValue('monthly_price', sel.monthly)
+            setValue('measured_sqft', sel.totalSqft)
+            setValue('suggested_price', sel.suggested)
             setInitialManual(true); setShowMeasure(false)
           }}
         />

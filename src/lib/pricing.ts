@@ -163,3 +163,139 @@ export function laborSuggestion(hours: number, crew: number, ratePerHour: number
   const og = overgrowth > 0 ? overgrowth : 1
   return roundUpToNice(Math.max(0, hours) * Math.max(0, crew) * Math.max(0, ratePerHour) * og)
 }
+
+// ── Pricing recommendation package ───────────────────────────────────────────
+// One measurement → the complete answer: what to charge per cadence, what each
+// option is worth per season, which one to push, whether the property is worth
+// pursuing, and how low is too low. All derived from the SAME recommended price
+// + tier multipliers above — never a second pricing system.
+
+export type CadenceKey = 'one_time' | 'weekly' | 'biweekly' | 'monthly'
+
+// On-site time estimate from lawn size (mow+trim+edge, solo): ~20 min setup/
+// minimum plus ~1 min per 150 ft². Feeds the prospect $/hr estimate.
+export function estimateVisitMinutes(sqft: number): number {
+  if (sqft <= 0) return 45
+  return Math.round(Math.min(75, Math.max(20, 20 + sqft / 150)))
+}
+
+// Calgary mowing season ≈ April–October.
+export const SEASON_VISITS: Record<Exclude<CadenceKey, 'one_time'>, number> = {
+  weekly: 28,
+  biweekly: 14,
+  monthly: 7,
+}
+
+// Cadence price vs the one-time price: weekly earns a loyalty discount (easy,
+// regular cuts), bi-weekly a smaller one, monthly costs MORE per visit (a month
+// of growth is a harder cut).
+const CADENCE_MULT: Record<Exclude<CadenceKey, 'one_time'>, number> = {
+  weekly: 0.75,
+  biweekly: 0.85,
+  monthly: 1.1,
+}
+
+export interface CadenceOption {
+  cadence: Exclude<CadenceKey, 'one_time'>
+  price: number
+  visits: number
+  annual: number
+}
+
+export interface PricingGuidance {
+  suggested: number
+  rangeLow: number     // market tier
+  rangeHigh: number
+  minimum: number      // don't quote below this
+  avoidBelow: number   // budget tier — walking-away territory
+}
+
+export interface RouteValueVerdict {
+  verdict: 'excellent' | 'good' | 'marginal'
+  bullets: string[]
+}
+
+export interface PricingPackage {
+  oneTime: number
+  options: CadenceOption[]          // weekly / biweekly / monthly
+  recommended: { cadence: CadenceKey; reasons: string[] }
+  routeValue: RouteValueVerdict
+  guidance: PricingGuidance         // for the recommended cadence's price
+}
+
+export function pricingGuidance(price: number, cfg: PricingConfig): PricingGuidance {
+  return {
+    suggested: price,
+    rangeLow: roundToStep(price * cfg.marketMult),
+    rangeHigh: roundToStep(price * 1.1),
+    minimum: roundToStep(price * cfg.marketMult),
+    avoidBelow: roundToStep(price * cfg.budgetMult),
+  }
+}
+
+export function pricingPackage(
+  sqft: number,
+  cfg: PricingConfig,
+  ctx: { overgrowth?: number; nearbyCount: number; neighborhoodName?: string | null },
+): PricingPackage {
+  const oneTime = recommendedJobPrice(sqft, cfg, ctx.overgrowth ?? 1)
+  const options: CadenceOption[] = (['weekly', 'biweekly', 'monthly'] as const).map(c => {
+    const price = roundToStep(oneTime * CADENCE_MULT[c])
+    return { cadence: c, price, visits: SEASON_VISITS[c], annual: price * SEASON_VISITS[c] }
+  })
+  const weekly = options[0]
+
+  // Which cadence to push: weekly always carries the highest season revenue, so
+  // it wins whenever the stop fits the route. An isolated property gets the
+  // bi-weekly pitch — easier yes, less commitment to a lone stop.
+  const nearby = Math.max(0, ctx.nearbyCount || 0)
+  const recommended = nearby >= 1
+    ? {
+        cadence: 'weekly' as CadenceKey,
+        reasons: [
+          `Highest season revenue — $${weekly.annual.toLocaleString()} vs $${options[1].annual.toLocaleString()} bi-weekly`,
+          `Fits your existing route (${nearby} job${nearby !== 1 ? 's' : ''} nearby)`,
+          'Strong recurring value — easy, regular cuts',
+        ],
+      }
+    : {
+        cadence: 'biweekly' as CadenceKey,
+        reasons: [
+          'Better price acceptance for a new area',
+          `Strong season revenue — $${options[1].annual.toLocaleString()}`,
+          'Lower commitment to an isolated stop while the route grows',
+        ],
+      }
+
+  // Is this property worth pursuing? Same signals as the travel-density rule.
+  const hood = ctx.neighborhoodName?.trim()
+  const routeValue: RouteValueVerdict = nearby >= 3
+    ? {
+        verdict: 'excellent',
+        bullets: [
+          `${nearby} jobs already nearby — strong route density`,
+          hood ? `${hood} is an active area for you` : 'The truck is already in this area',
+          `Weekly value: $${weekly.annual.toLocaleString()}/season`,
+        ],
+      }
+    : nearby >= 1
+      ? {
+          verdict: 'good',
+          bullets: [
+            `${nearby} job${nearby !== 1 ? 's' : ''} nearby — builds route density`,
+            `Weekly value: $${weekly.annual.toLocaleString()}/season`,
+            hood ? `Grows your ${hood} cluster` : 'Helps anchor a route in this area',
+          ],
+        }
+      : {
+          verdict: 'marginal',
+          bullets: [
+            'Isolated — no nearby jobs on the schedule',
+            `Weekly value: $${weekly.annual.toLocaleString()}/season`,
+            'Worth it at full price + travel, or as a beachhead for door-knocking',
+          ],
+        }
+
+  const recPrice = recommended.cadence === 'weekly' ? weekly.price : options[1].price
+  return { oneTime, options, recommended, routeValue, guidance: pricingGuidance(recPrice, cfg) }
+}

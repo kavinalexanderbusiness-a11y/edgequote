@@ -1,22 +1,59 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { createClient } from '@/lib/supabase/client'
 import { loadGoogleMaps } from '@/lib/googleMaps'
-import { priceTiers, recommendedJobPrice, PricingConfig } from '@/lib/pricing'
+import { pricingPackage, estimateVisitMinutes, PricingConfig, CadenceKey } from '@/lib/pricing'
+import { Coord } from '@/lib/geo'
+import { ProspectContext, loadProspectContext, assessProspect } from '@/lib/prospect'
+import { PricePackagePanel, CadenceSelection } from '@/components/pricing/PricePackagePanel'
+import { ProspectCard } from '@/components/pricing/ProspectCard'
 import { Button } from '@/components/ui/Button'
 import { X, Undo2, Trash2, Plus, Ruler } from 'lucide-react'
 
 const M2_TO_SQFT = 10.7639
 
+// Everything the builder needs to fill the quote's pricing structure in one tap.
+export interface MeasureApplyPayload {
+  cadence: CadenceKey
+  price: number       // the selected cadence's per-visit price
+  oneTime: number
+  weekly: number
+  biweekly: number
+  monthly: number
+  totalSqft: number
+  suggested: number   // one-time + travel (pricing-analysis provenance)
+}
+
 interface Props {
   address: string
   travelFee: number
   cfg: PricingConfig
-  onApply: (price: number, totalSqft: number, suggested: number) => void
+  onApply: (sel: MeasureApplyPayload) => void
   onClose: () => void
 }
 
 export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Props) {
+  const supabase = createClient()
+  const [center, setCenter] = useState<Coord | null>(null)
+  const [hoodName, setHoodName] = useState<string | null>(null)
+  const [prospect, setProspect] = useState<ProspectContext | null>(null)
+
+  // Business context for the recommendation + verdict (same engines as the
+  // travel-density discount and neighborhood analytics).
+  useEffect(() => {
+    if (!center) return
+    let active = true
+    async function load() {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user || !center) return
+      const ctx = await loadProspectContext(supabase, user.id, center)
+      if (active) setProspect(ctx)
+    }
+    load()
+    return () => { active = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [center])
   const mapEl = useRef<HTMLDivElement>(null)
   const gmap = useRef<any>(null)
   const committedOverlays = useRef<any[]>([])
@@ -125,9 +162,13 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
               body: JSON.stringify({ address }),
             })
             const data = await res.json()
-            if (res.ok && typeof data.lat === 'number') center = { lat: data.lat, lng: data.lng }
+            if (res.ok && typeof data.lat === 'number') {
+              center = { lat: data.lat, lng: data.lng }
+              if (typeof data.neighborhood === 'string') setHoodName(data.neighborhood)
+            }
           } catch { /* ignore */ }
         }
+        if (center) setCenter(center) // route-density context for the pricing package
         if (!center) center = { lat: 51.0447, lng: -114.0719 }
         // Re-check after the geocode await — the modal may have been closed.
         if (cancelled || !mapEl.current) return
@@ -196,7 +237,28 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
     setTotalSqft(0); setPoints(0); setShapes(0)
   }
 
-  const tiers = priceTiers(totalSqft, cfg, overgrowth)
+  // The complete recommendation package — same engine the property MeasureTool
+  // and travel-density discount use; nearby = located upcoming jobs within range.
+  const nearby = prospect?.nearbyJobs ?? 0
+  const pkg = totalSqft > 0 ? pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount: nearby, neighborhoodName: hoodName }) : null
+  // The business verdict: should I take this customer?
+  const assessment = pkg && prospect
+    ? assessProspect(pkg, prospect, { distanceKm: null, travelFee: Number(travelFee) || 0, neighborhoodName: hoodName, estimatedMinutes: estimateVisitMinutes(totalSqft) })
+    : null
+
+  function applySelection(sel: CadenceSelection) {
+    if (!pkg) return
+    onApply({
+      cadence: sel.cadence,
+      price: sel.price,
+      oneTime: pkg.oneTime,
+      weekly: pkg.options[0].price,
+      biweekly: pkg.options[1].price,
+      monthly: pkg.options[2].price,
+      totalSqft,
+      suggested: pkg.oneTime + Number(travelFee || 0),
+    })
+  }
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center p-0 sm:p-4">
@@ -254,38 +316,25 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
                   </label>
                 </div>
 
-                {totalSqft > 0 ? (
-                  <div className="border-t border-border pt-3">
-                    <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-2">Suggested job price{Number(travelFee || 0) > 0 ? ` · $${Number(travelFee).toLocaleString()} travel stays on the quote` : ''}</p>
-                    <div className="grid grid-cols-2 gap-2">
-                      {tiers.map(t => (
-                        <button
-                          key={t.tier}
-                          type="button"
-                          onClick={() => onApply(t.amount, totalSqft, t.amount + Number(travelFee || 0))}
-                          className={`text-left rounded-xl border px-3 py-2.5 transition-all hover:border-accent ${t.recommended ? 'border-accent/40 bg-accent/5' : 'border-border'}`}
-                        >
-                          <p className="text-[11px] uppercase tracking-wide text-ink-faint flex items-center gap-1">{t.label}{t.recommended && <span className="text-accent">★</span>}</p>
-                          <p className="text-lg font-bold text-ink">${t.amount.toLocaleString()}</p>
-                        </button>
-                      ))}
-                    </div>
-                    <p className="text-xs text-ink-faint mt-2">Tap a price to use it on the quote.</p>
+                {pkg ? (
+                  <div className="border-t border-border pt-3 space-y-3">
+                    <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-2">
+                      Pricing recommendation{Number(travelFee || 0) > 0 ? ` · $${Number(travelFee).toLocaleString()} travel stays on the quote` : ''}
+                    </p>
+                    <PricePackagePanel pkg={pkg} onUse={applySelection} />
+                    {assessment && <ProspectCard a={assessment} />}
                   </div>
                 ) : (
                   <div className="border-t border-border pt-3 text-xs text-ink-faint">
-                    Trace the lawn to see suggested prices (set rates in Settings).
+                    Trace the lawn to see the full pricing recommendation (set rates in Settings).
                   </div>
                 )}
               </div>
 
               <div className="flex items-center justify-end gap-2">
                 <Button variant="ghost" onClick={onClose}>Cancel</Button>
-                {totalSqft > 0 && (
-                  <Button onClick={() => {
-                    const rec = recommendedJobPrice(totalSqft, cfg, overgrowth)
-                    onApply(rec, totalSqft, rec + Number(travelFee || 0))
-                  }}>
+                {pkg && (
+                  <Button onClick={() => applySelection({ cadence: pkg.recommended.cadence, price: pkg.recommended.cadence === 'weekly' ? pkg.options[0].price : pkg.recommended.cadence === 'biweekly' ? pkg.options[1].price : pkg.recommended.cadence === 'monthly' ? pkg.options[2].price : pkg.oneTime })}>
                     Use recommended
                   </Button>
                 )}

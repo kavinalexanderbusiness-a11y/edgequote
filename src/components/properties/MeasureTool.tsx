@@ -5,7 +5,10 @@ import { useRouter } from 'next/navigation'
 import { loadGoogleMaps } from '@/lib/googleMaps'
 import { createClient } from '@/lib/supabase/client'
 import { Property, BusinessSettings, MeasurementSnapshot, LawnSections, PricingConfidence, CONFIDENCE_LABELS, CONFIDENCE_COLORS } from '@/types'
-import { priceTiers, routeDensityTravel, pricingConfidence, travelFeeForDistance, pricingConfigFromSettings, PricingConfig, DEFAULT_PRICING, PriceTier } from '@/lib/pricing'
+import { priceTiers, routeDensityTravel, pricingConfidence, travelFeeForDistance, pricingConfigFromSettings, PricingConfig, DEFAULT_PRICING, PriceTier, pricingPackage, estimateVisitMinutes } from '@/lib/pricing'
+import { PricePackagePanel, CadenceSelection } from '@/components/pricing/PricePackagePanel'
+import { ProspectContext, loadProspectContext, assessProspect } from '@/lib/prospect'
+import { ProspectCard } from '@/components/pricing/ProspectCard'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { Coord, haversineKm, nearbyJobCount, fetchLocatedUpcomingJobs } from '@/lib/geo'
 import { Button } from '@/components/ui/Button'
@@ -77,6 +80,7 @@ export function MeasureTool({ property }: { property: Property }) {
   const [baseTravelFee, setBaseTravelFee] = useState(0)
   const [nearbyCount, setNearbyCount] = useState(0)
   const [includeTravel, setIncludeTravel] = useState(true)
+  const [prospect, setProspect] = useState<ProspectContext | null>(null)
 
   // Versioned measurement history for this property (never overwritten).
   const [history, setHistory] = useState<MeasurementSnapshot[]>(
@@ -327,6 +331,11 @@ export function MeasureTool({ property }: { property: Property }) {
 
     // Route density — how many located jobs sit near this property.
     if (target) setNearbyCount(nearbyJobCount(target, located).count)
+
+    // Business-verdict context (nearby recurring, pending quotes, hood revenue).
+    if (target) {
+      try { setProspect(await loadProspectContext(supabase, user.id, target)) } catch { /* card just won't render */ }
+    }
   }
 
   useEffect(() => {
@@ -483,7 +492,7 @@ export function MeasureTool({ property }: { property: Property }) {
     setSaving(false)
   }
 
-  async function createQuote() {
+  async function createQuote(sel?: CadenceSelection) {
     if (totalSqft <= 0) return
     setCreating(true)
     const { total, sections } = await persistMeasurement()
@@ -491,19 +500,27 @@ export function MeasureTool({ property }: { property: Property }) {
     // measured_sqft and suggested_price are all derived from one area figure.
     const tiersForTotal = priceTiers(total, cfg, overgrowth)
     const chosen = tiersForTotal.find(t => t.tier === selectedTier) ?? tiersForTotal.find(t => t.recommended)!
+    // Cadence path: first visit at the one-time price + the selected recurring
+    // price field — the full structure, no manual entry in the builder.
+    const pkgT = pricingPackage(total, cfg, { overgrowth, nearbyCount })
+    const jobPrice = sel ? pkgT.oneTime : chosen.amount
     const payload = {
       customerId: property.customer_id,
       propertyId: property.id,
       address: property.address,
       sqft: total,
       sections,
-      jobPrice: chosen.amount,
+      jobPrice,
+      cadence: sel?.cadence ?? null,
+      weekly: sel?.cadence === 'weekly' ? pkgT.options[0].price : null,
+      biweekly: sel?.cadence === 'biweekly' ? pkgT.options[1].price : null,
+      monthly: sel?.cadence === 'monthly' ? pkgT.options[2].price : null,
       travelFee: effectiveTravel,
       includeTravel,
       travelDistanceKm: distanceKm,
-      // "Suggested" = the tool's number for the tier the rep actually picked, so
+      // "Suggested" = the tool's number for the option the rep actually picked, so
       // a later manual edit in the builder is what surfaces as a difference.
-      suggestedPrice: chosen.amount + effectiveTravel,
+      suggestedPrice: jobPrice + effectiveTravel,
       overgrowth,
       confidence,
     }
@@ -652,6 +669,22 @@ export function MeasureTool({ property }: { property: Property }) {
         )}
       </div>
 
+      {/* Pricing recommendation package — cadence prices, season value, verdict.
+          "Use X" creates the quote with that structure in one tap. */}
+      {totalSqft > 0 && (() => {
+        const pkg = pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood })
+        const assessment = prospect
+          ? assessProspect(pkg, prospect, { distanceKm, travelFee: effectiveTravel, neighborhoodName: property.neighborhood, estimatedMinutes: estimateVisitMinutes(totalSqft) })
+          : null
+        return (
+          <div className="bg-bg-secondary border border-border rounded-xl px-4 py-3 space-y-3">
+            <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Pricing recommendation</span>
+            <PricePackagePanel pkg={pkg} onUse={sel => createQuote(sel)} />
+            {assessment && <ProspectCard a={assessment} />}
+          </div>
+        )
+      })()}
+
       {/* Travel — distance, route-density discount, toggle */}
       {totalSqft > 0 && (
         <div className="bg-bg-secondary border border-border rounded-xl px-4 py-3 space-y-3">
@@ -705,7 +738,7 @@ export function MeasureTool({ property }: { property: Property }) {
               <span className="text-2xl font-bold text-accent">{formatCurrency(chosenTotal)}</span>
             </div>
           </div>
-          <Button onClick={createQuote} loading={creating} size="lg" className="w-full">
+          <Button onClick={() => createQuote()} loading={creating} size="lg" className="w-full">
             <FileText className="w-4 h-4" /> Create Quote — {formatCurrency(chosenTotal)}
           </Button>
           <div className="flex items-center justify-center gap-3">
