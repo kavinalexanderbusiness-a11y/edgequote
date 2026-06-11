@@ -22,7 +22,7 @@ export interface ProspectContext {
   nearestKm: number | null
   nearbyRecurring: number     // of those, how many are recurring visits
   nearbyPendingQuotes: number // pending (draft/sent) quotes within range
-  hoods: { key: string; revenue: number }[] // booked revenue per area (shared engine)
+  hoods: { key: string; revenue: number; customers: number }[] // per-area booked revenue + customer count (shared engine)
 }
 
 // One fetch, computed with the same engines every analytics page uses.
@@ -71,7 +71,7 @@ export async function loadProspectContext(supabase: Supa, userId: string, center
     if (haversineKm(center, { lat: q.properties.lat, lng: q.properties.lng }) <= NEARBY_RADIUS_KM) nearbyPendingQuotes++
   }
 
-  const hoods = neighborhoodProfitability(jobs, ctx).map(h => ({ key: h.key, revenue: h.revenue }))
+  const hoods = neighborhoodProfitability(jobs, ctx).map(h => ({ key: h.key, revenue: h.revenue, customers: h.customers }))
   return { nearbyJobs, nearestKm, nearbyRecurring, nearbyPendingQuotes, hoods }
 }
 
@@ -93,6 +93,21 @@ export interface ProspectAssessment {
   }
   growth: { bullets: string[]; narrative: string | null }
   routeImpact: RouteImpact
+  // What this customer UNLOCKS — beachhead into a new area, or domination of one
+  // you already work. Null when there's no area name to anchor it.
+  expansion: {
+    kind: 'beachhead' | 'domination'
+    hood: string
+    current: string[]
+    potential: string[]
+    reason: string
+  } | null
+  // Area revenue rank today vs after winning this customer (shared hood revenue).
+  competitive: { hood: string; currentRank: number | null; projectedRank: number; totalAreas: number } | null
+  // Season value compounded — recurring customers are worth far more than one visit.
+  lifetime: { cadenceLabel: string; oneYear: number; threeYear: number; fiveYear: number }
+  // Does this stop make the BUSINESS stronger? Asset vs liability.
+  routeOwnership: { stars: 1 | 2 | 3 | 4 | 5; label: 'Route Asset' | 'Solid Addition' | 'Route Liability'; reasons: string[] }
 }
 
 export function assessProspect(
@@ -169,6 +184,75 @@ export function assessProspect(
       ? `$${opts.travelFee} travel charged${ctx.nearbyJobs >= 1 ? ' (route discount applied)' : ''}`
       : opts.distanceKm != null ? `${opts.distanceKm} km from base, no fee` : 'No travel data'
 
+  // ── Route expansion opportunity: what does winning this customer UNLOCK? ──
+  const hoodRow = hood ? ctx.hoods.find(h => h.key === hood) ?? null : null
+  const hoodCustomers = hoodRow?.customers ?? 0
+  const hoodRevenue = hoodRow?.revenue ?? 0
+  const expansion = hood ? (
+    hoodCustomers >= 3
+      ? {
+          kind: 'domination' as const,
+          hood,
+          current: [`${hoodCustomers} customers`, `$${hoodRevenue.toLocaleString()} booked`],
+          potential: ['Strengthens an existing route', 'Increases route density', 'Reduces drive time per stop'],
+          reason: 'This customer helps dominate an area you already own.',
+        }
+      : {
+          kind: 'beachhead' as const,
+          hood,
+          current: hoodCustomers > 0
+            ? [`${hoodCustomers} customer${hoodCustomers !== 1 ? 's' : ''}`, `$${hoodRevenue.toLocaleString()} booked`]
+            : ['No customers here yet'],
+          potential: [
+            ...(ctx.nearbyPendingQuotes > 0 ? [`${ctx.nearbyPendingQuotes} pending quote${ctx.nearbyPendingQuotes !== 1 ? 's' : ''} nearby — warm demand`] : []),
+            recurring ? 'A recurring anchor for door-knocking & referrals' : 'A first foothold in the area',
+            'Could become a major route',
+          ],
+          reason: 'This customer is a beachhead opportunity.',
+        }
+  ) : null
+
+  // ── Competitive value: area revenue rank today vs after winning ──
+  let competitive: ProspectAssessment['competitive'] = null
+  if (hood && ctx.hoods.length > 0) {
+    const sorted = [...ctx.hoods].sort((a, b) => b.revenue - a.revenue)
+    const currentIdx = sorted.findIndex(h => h.key === hood)
+    const projected = 1 + ctx.hoods.filter(h => h.key !== hood && h.revenue > hoodRevenue + annual).length
+    competitive = {
+      hood,
+      currentRank: currentIdx >= 0 ? currentIdx + 1 : null,
+      projectedRank: projected,
+      totalAreas: ctx.hoods.length + (currentIdx >= 0 ? 0 : 1),
+    }
+  }
+
+  // ── Lifetime projection: the season value compounded over the years ──
+  const lifetime = {
+    cadenceLabel: cadence === 'one_time' ? 'One-time service' : cadence === 'weekly' ? 'Weekly service' : cadence === 'biweekly' ? 'Bi-weekly service' : 'Monthly service',
+    oneYear: annual,
+    threeYear: annual * 3,
+    fiveYear: annual * 5,
+  }
+
+  // ── Route ownership: does this stop make the business stronger? ──
+  let own = 3
+  if (routeImpact === 'strengthens') own += 2
+  else if (routeImpact === 'isolated') own -= 2
+  if (recurring) own += 1; else own -= 1
+  if (competitive?.currentRank != null && competitive.currentRank <= 3 && ctx.hoods.length >= 3) own += 1
+  if (annual < 500) own -= 1
+  const ownStars = Math.max(1, Math.min(5, own)) as 1 | 2 | 3 | 4 | 5
+  const routeOwnership = {
+    stars: ownStars,
+    label: (ownStars >= 4 ? 'Route Asset' : ownStars === 3 ? 'Solid Addition' : 'Route Liability') as 'Route Asset' | 'Solid Addition' | 'Route Liability',
+    reasons: [
+      routeImpact === 'strengthens' ? 'Strengthens an existing route' : routeImpact === 'neutral' ? 'Near one existing stop' : 'Isolated stop',
+      recurring ? 'Recurring service' : 'One-time service',
+      competitive?.currentRank != null && competitive.currentRank <= 3 ? 'Strong neighborhood' : hoodCustomers > 0 ? 'Growing neighborhood' : 'Unproven area',
+      ...(annual < 500 ? ['Low season revenue'] : []),
+    ],
+  }
+
   return {
     score, verdict, reasons,
     stars: starsClamped, starReasons,
@@ -182,6 +266,10 @@ export function assessProspect(
     },
     growth: { bullets: growthBullets, narrative },
     routeImpact,
+    expansion,
+    competitive,
+    lifetime,
+    routeOwnership,
   }
 }
 

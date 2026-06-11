@@ -89,6 +89,69 @@ export function ProspectCard({ a }: { a: ProspectAssessment }) {
           <TrendingUp className="w-3.5 h-3.5 shrink-0 mt-0.5" /> {a.growth.narrative}
         </p>
       )}
+
+      {/* Route expansion opportunity — what winning this customer UNLOCKS */}
+      {a.expansion && (
+        <div className="rounded-lg border border-border bg-bg-secondary px-3 py-2.5">
+          <p className="text-xs font-bold text-emerald-400">
+            🟢 {a.expansion.kind === 'domination' ? 'Route Domination Opportunity' : 'Route Expansion Opportunity'}
+            <span className="text-ink font-semibold"> · {a.expansion.hood}</span>
+          </p>
+          <div className="grid grid-cols-2 gap-2 mt-1.5">
+            <div>
+              <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-0.5">Current</p>
+              {a.expansion.current.map((c, i) => <p key={i} className="text-[11px] text-ink-muted">• {c}</p>)}
+            </div>
+            <div>
+              <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-0.5">Potential</p>
+              {a.expansion.potential.map((p, i) => <p key={i} className="text-[11px] text-ink-muted">• {p}</p>)}
+            </div>
+          </div>
+          <p className="text-[11px] italic text-ink mt-1.5">“{a.expansion.reason}”</p>
+        </div>
+      )}
+
+      {/* Competitive value + lifetime projection */}
+      <div className="grid sm:grid-cols-2 gap-2">
+        {a.competitive && (
+          <div className="rounded-lg border border-border bg-bg-secondary px-3 py-2.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint mb-1">Area rank — {a.competitive.hood}</p>
+            <p className="text-sm font-bold text-ink">
+              {a.competitive.currentRank != null ? `#${a.competitive.currentRank}` : 'Unranked'}
+              <span className="text-ink-faint font-normal"> → </span>
+              <span className={a.competitive.projectedRank <= 3 ? 'text-emerald-400' : 'text-ink'}>#{a.competitive.projectedRank}</span>
+              <span className="text-[11px] text-ink-faint font-normal"> of {a.competitive.totalAreas} areas</span>
+            </p>
+            <p className="text-[11px] text-ink-muted mt-0.5">Revenue rank after winning this customer</p>
+          </div>
+        )}
+        <div className="rounded-lg border border-border bg-bg-secondary px-3 py-2.5">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint mb-1">Lifetime value — {a.lifetime.cadenceLabel}</p>
+          <div className="grid grid-cols-3 gap-1.5 text-center">
+            <Metric label="1 year" value={`$${a.lifetime.oneYear.toLocaleString()}`} />
+            <Metric label="3 years" value={`$${a.lifetime.threeYear.toLocaleString()}`} />
+            <Metric label="5 years" value={`$${a.lifetime.fiveYear.toLocaleString()}`} />
+          </div>
+        </div>
+      </div>
+
+      {/* Route ownership — does this stop make the business stronger? */}
+      <div className="rounded-lg border border-border bg-bg-secondary px-3 py-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint">Route ownership</p>
+          <p className={cn('text-xs font-bold',
+            a.routeOwnership.label === 'Route Asset' ? 'text-emerald-400'
+              : a.routeOwnership.label === 'Solid Addition' ? 'text-amber-400' : 'text-red-400')}>
+            {a.routeOwnership.label}
+          </p>
+        </div>
+        <div className="flex items-center gap-0.5 mt-1">
+          {[1, 2, 3, 4, 5].map(i => (
+            <Star key={i} className={cn('w-4 h-4', i <= a.routeOwnership.stars ? 'text-amber-400 fill-amber-400' : 'text-ink-faint')} />
+          ))}
+        </div>
+        <p className="text-[11px] text-ink-muted mt-1">{a.routeOwnership.reasons.join(' · ')}</p>
+      </div>
     </div>
   )
 }
