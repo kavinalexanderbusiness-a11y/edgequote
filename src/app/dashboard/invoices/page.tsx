@@ -82,6 +82,14 @@ export default function InvoicesPage() {
     if (error) { setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: inv.status } : i)); alert('Could not update status: ' + error.message) }
   }
 
+  // One tap straight to paid — the most common action on billing day shouldn't
+  // require cycling through "sent".
+  async function markPaid(inv: Invoice) {
+    setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: 'paid' as InvoiceStatus } : i))
+    const { error } = await supabase.from('invoices').update({ status: 'paid' }).eq('id', inv.id)
+    if (error) { setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: inv.status } : i)); alert('Could not update status: ' + error.message) }
+  }
+
   // ── Undo (same pattern as the Schedule page) ──
   const [undoAction, setUndoAction] = useState<{ label: string; run: () => Promise<void> } | null>(null)
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -244,6 +252,11 @@ export default function InvoicesPage() {
                       {inv.status === 'paid' && <Check className="w-3 h-3" />}
                       {INVOICE_STATUS_LABELS[inv.status]}
                     </button>
+                    {(inv.status === 'unpaid' || inv.status === 'sent') && (
+                      <Button onClick={() => markPaid(inv)} variant="secondary" size="sm" title="Mark paid">
+                        <Check className="w-3.5 h-3.5" /> Paid
+                      </Button>
+                    )}
                     <Button onClick={() => deleteInvoice(inv)} variant="ghost" size="sm" loading={deletingId === inv.id}
                       className="hover:text-red-400" title="Delete invoice">
                       <Trash2 className="w-3.5 h-3.5" />

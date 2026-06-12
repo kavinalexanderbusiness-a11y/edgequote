@@ -15,10 +15,12 @@ import { createDraftInvoiceForCompletedJob, quoteVisitAmount, jobVisitValue, eff
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
-import { cn } from '@/lib/utils'
+import { cn, minutesBetween } from '@/lib/utils'
 import { format, addMonths, addWeeks, addDays, subMonths, subWeeks, subDays, parseISO, getDay } from 'date-fns'
 import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket } from 'lucide-react'
 import { OptimizeSchedule } from '@/components/schedule/OptimizeSchedule'
+import { RainDelayCenter } from '@/components/schedule/RainDelayCenter'
+import { CloudRain } from 'lucide-react'
 import type { PlannedMove } from '@/lib/optimizer'
 
 function localToday(): string {
@@ -55,6 +57,7 @@ export default function SchedulePage() {
   const searchParams = useSearchParams()
   const quoteId = searchParams.get('quote')
   const customerParam = searchParams.get('customer')
+  const focusRec = searchParams.get('focus')
 
   const [jobs, setJobs] = useState<Job[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
@@ -80,6 +83,7 @@ export default function SchedulePage() {
   const [workStartTime, setWorkStartTime] = useState('08:00')
   const [capacityHours, setCapacityHours] = useState(8)
   const [showOptimize, setShowOptimize] = useState(false)
+  const [showRainCenter, setShowRainCenter] = useState(false)
 
   // Effective per-visit price for every job (manual price > linked quote).
   const valueByJobId = useMemo(() => {
@@ -187,6 +191,21 @@ export default function SchedulePage() {
     setCustomerPrefill({ customer_id: customerParam, scheduled_date: localToday() })
     setShowForm(true)
   }, [customerParam, quoteId])
+
+  // Edit Schedule deep link (?focus=<recurrenceId>) — open the next upcoming
+  // visit of that series for editing, so changes can be applied to the whole
+  // series via the existing scope picker. Jumps the calendar to that visit.
+  useEffect(() => {
+    if (!focusRec || jobs.length === 0) return
+    const next = jobs
+      .filter(j => j.recurrence_id === focusRec && j.scheduled_date >= localToday() && (j.status === 'scheduled' || j.status === 'in_progress'))
+      .sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date))[0]
+    if (next) {
+      setCursor(parseISO(next.scheduled_date + 'T00:00:00'))
+      setEditing(next)
+      setShowForm(false)
+    }
+  }, [focusRec, jobs])
 
   function closeForm() {
     setShowForm(false)
@@ -511,21 +530,36 @@ export default function SchedulePage() {
     if (editing) await deleteJob(editing)
   }
 
-  // One-tap "Done" from the calendar — marks ONLY this visit (no scope prompt),
-  // and drafts an invoice for a completed recurring visit.
-  async function markJobDone(job: Job) {
-    const prevStatus = job.status
-    const { error } = await supabase.from('jobs').update({ status: 'completed' }).eq('id', job.id)
-    if (error) { setBanner('Could not mark done: ' + error.message); return }
+  // ▶ Check in: stamps arrival/start, status becomes In Progress.
+  async function startJob(job: Job) {
+    const prev = { status: job.status, started_at: job.started_at }
+    const now = new Date().toISOString()
+    const { error } = await supabase.from('jobs').update({ status: 'in_progress', started_at: now }).eq('id', job.id)
+    if (error) { setBanner('Could not start the job: ' + error.message); return }
+    await fetchJobs()
+    offerUndo('Job started', async () => {
+      await supabase.from('jobs').update(prev).eq('id', job.id)
+    })
+  }
+
+  // ✓ Check out: stamps completion, derives actual_minutes from check-in →
+  // check-out (the ONE timing value every engine reads), drafts the invoice.
+  // Also the calendar's one-tap Done (works without a check-in — no actual then).
+  async function completeJob(job: Job) {
+    const prev = { status: job.status, completed_at: job.completed_at, actual_minutes: job.actual_minutes }
+    const now = new Date().toISOString()
+    const actual = job.started_at ? minutesBetween(job.started_at, now) : job.actual_minutes
+    const { error } = await supabase.from('jobs').update({ status: 'completed', completed_at: now, actual_minutes: actual }).eq('id', job.id)
+    if (error) { setBanner('Could not complete the job: ' + error.message); return }
     let invoiceCreated = false
     if (job.recurrence_id) {
-      const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed' })
+      const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed', actual_minutes: actual })
       if (res.created) { invoiceCreated = true; setBanner(`Draft invoice ${res.invoiceNumber} created. Review in Invoices.`) }
       else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this visit has no price. Set a price to bill it.')
     }
     await fetchJobs()
-    offerUndo('Marked done', async () => {
-      await supabase.from('jobs').update({ status: prevStatus }).eq('id', job.id)
+    offerUndo('Job completed', async () => {
+      await supabase.from('jobs').update(prev).eq('id', job.id)
       if (invoiceCreated) await supabase.from('invoices').delete().eq('job_id', job.id).eq('status', 'draft')
     })
   }
@@ -642,9 +676,9 @@ export default function SchedulePage() {
     }
   }
 
-  // Apply a whole-schedule optimization: batch the date moves (grouped by target
-  // day), offer one Undo that restores every original date.
-  async function applyOptimization(moves: PlannedMove[]) {
+  // Apply a batch of date moves (optimizer or rain delay): grouped by target
+  // day, with one Undo that restores every original date.
+  async function applyOptimization(moves: Pick<PlannedMove, 'jobId' | 'from' | 'to'>[]) {
     if (!moves.length) return
     const byTo: Record<string, string[]> = {}
     for (const m of moves) (byTo[m.to] ||= []).push(m.jobId)
@@ -655,7 +689,7 @@ export default function SchedulePage() {
     await fetchJobs()
     const byFrom: Record<string, string[]> = {}
     for (const m of moves) (byFrom[m.from] ||= []).push(m.jobId)
-    offerUndo(`Schedule optimized — ${moves.length} job${moves.length !== 1 ? 's' : ''} moved`, async () => {
+    offerUndo(`${moves.length} job${moves.length !== 1 ? 's' : ''} moved`, async () => {
       for (const [from, ids] of Object.entries(byFrom)) {
         await supabase.from('jobs').update({ scheduled_date: from }).in('id', ids)
       }
@@ -759,6 +793,9 @@ export default function SchedulePage() {
         description={`${jobs.length} job${jobs.length !== 1 ? 's' : ''} on the calendar`}
         action={
           <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={() => setShowRainCenter(true)} title="Rained out? Bump a whole day to the next work days">
+              <CloudRain className="w-4 h-4" /> Rain
+            </Button>
             <Button variant="secondary" onClick={() => setShowOptimize(true)} title="Optimize the whole future schedule">
               <Rocket className="w-4 h-4" /> Optimize
             </Button>
@@ -895,7 +932,8 @@ export default function SchedulePage() {
           recurrences={recurrences}
           baseCoord={baseCoord}
           onOpenJob={(job) => { setEditing(job); setShowForm(false) }}
-          onMarkDone={markJobDone}
+          onStartJob={startJob}
+          onMarkDone={completeJob}
           onMove={(job, iso) => moveJobToDate(job, new Date(iso + 'T00:00:00'))}
           onDeleteJob={deleteJob}
           onSetPrice={setJobPrice}
@@ -912,7 +950,7 @@ export default function SchedulePage() {
           jobs={jobs}
           onSelectDay={handleDayTap}
           onSelectJob={handleJobTap}
-          onMarkDone={markJobDone}
+          onMarkDone={completeJob}
           onMoveJob={(job, iso) => moveJobToDate(job, new Date(iso + 'T00:00:00'))}
           recurrenceLabels={recurrenceLabels}
           valueByJobId={valueByJobId}
@@ -939,6 +977,19 @@ export default function SchedulePage() {
           capacityHours={capacityHours}
           onApply={applyOptimization}
           onClose={() => setShowOptimize(false)}
+        />
+      )}
+
+      {showRainCenter && (
+        <RainDelayCenter
+          jobs={jobs}
+          recurrences={recurrences}
+          valueByJobId={valueByJobId}
+          baseCoord={baseCoord}
+          preferredWorkDays={preferredWorkDays}
+          capacityHours={capacityHours}
+          onApply={applyOptimization}
+          onClose={() => setShowRainCenter(false)}
         />
       )}
     </div>

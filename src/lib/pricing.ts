@@ -11,7 +11,7 @@
 //   3,500+ ft²      → $80+
 // Recommended (the everyday quote) = base × 1.0, deliberately NOT inflated.
 
-import type { PricingConfidence } from '@/types'
+import type { PricingConfidence, SavedRecommendation, MeasurementSnapshot } from '@/types'
 
 export type PriceTier = 'budget' | 'market' | 'recommended' | 'premium'
 
@@ -174,8 +174,14 @@ export type CadenceKey = 'one_time' | 'weekly' | 'biweekly' | 'monthly'
 
 // On-site time estimate from lawn size (mow+trim+edge, solo): ~20 min setup/
 // minimum plus ~1 min per 150 ft². Feeds the prospect $/hr estimate.
-export function estimateVisitMinutes(sqft: number): number {
+// When the owner's OWN check-in/check-out data exists (observed minutes per
+// 1,000 ft² from completed timed jobs), it replaces the generic model — every
+// completed job makes future estimates more accurate.
+export function estimateVisitMinutes(sqft: number, observedMinPer1000?: number | null): number {
   if (sqft <= 0) return 45
+  if (observedMinPer1000 && observedMinPer1000 > 0) {
+    return Math.round(Math.min(90, Math.max(15, (sqft / 1000) * observedMinPer1000)))
+  }
   return Math.round(Math.min(75, Math.max(20, 20 + sqft / 150)))
 }
 
@@ -298,4 +304,52 @@ export function pricingPackage(
 
   const recPrice = recommended.cadence === 'weekly' ? weekly.price : options[1].price
   return { oneTime, options, recommended, routeValue, guidance: pricingGuidance(recPrice, cfg) }
+}
+
+// ── Saved measurement recommendations ─────────────────────────────────────────
+// The package above, flattened for storage in a property's measurement_history
+// snapshot — so quotes/jobs can suggest measured prices without re-measuring.
+
+export function buildSavedRecommendation(
+  pkg: PricingPackage,
+  estMinutes: number,
+  extras?: { score?: string | null; hood?: string | null },
+): SavedRecommendation {
+  return {
+    one_time: pkg.oneTime,
+    weekly: pkg.options[0].price,
+    biweekly: pkg.options[1].price,
+    monthly: pkg.options[2].price,
+    cadence: pkg.recommended.cadence,
+    season_weekly: pkg.options[0].annual,
+    season_biweekly: pkg.options[1].annual,
+    season_monthly: pkg.options[2].annual,
+    est_minutes: estMinutes,
+    score: extras?.score ?? null,
+    hood: extras?.hood ?? null,
+  }
+}
+
+// Latest snapshot that carries a recommendation (newest wins).
+export function latestSavedRecommendation(history: MeasurementSnapshot[] | null | undefined):
+  { rec: SavedRecommendation; sqft: number; date: string } | null {
+  if (!Array.isArray(history)) return null
+  for (let i = history.length - 1; i >= 0; i--) {
+    const h = history[i]
+    if (h?.recommendation) return { rec: h.recommendation, sqft: h.total_sqft ?? h.lawn_sqft ?? 0, date: h.date }
+  }
+  return null
+}
+
+// Is a saved recommendation stale? Pricing/rates drift, so anything older than
+// a season cycle (12 months) should prompt a recalculation. nowMs is injected so
+// callers (and tests) control "now" — pass Date.now() at the call site.
+export function recommendationIsStale(dateISO: string, nowMs: number): boolean {
+  const TWELVE_MONTHS_MS = 365 * 24 * 60 * 60 * 1000
+  return nowMs - new Date(dateISO).getTime() > TWELVE_MONTHS_MS
+}
+
+// Saved price for a cadence key ('one_time' | 'weekly' | 'biweekly' | 'monthly').
+export function savedPriceFor(rec: SavedRecommendation, cadence: CadenceKey): number {
+  return cadence === 'weekly' ? rec.weekly : cadence === 'biweekly' ? rec.biweekly : cadence === 'monthly' ? rec.monthly : rec.one_time
 }

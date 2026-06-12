@@ -209,6 +209,7 @@ export default function RoutesPage() {
             <Metric label="Drive" value={profit.hasDriveData ? `${profit.driveKm} km` : '—'} />
             <Metric label="Drive time" value={profit.hasDriveData ? `${profit.driveMinutes} min` : '—'} />
             <Metric label="On-site" value={`${Math.round(profit.laborMinutes / 60 * 10) / 10}h`} />
+            <Metric label="Min/stop" value={profit.stops > 0 ? `${Math.round(profit.laborMinutes / profit.stops)}m` : '—'} />
             <Metric label="Total hours" value={`${profit.totalHours}h`} />
             <Metric label="Avg leg" value={profit.hasDriveData ? `${profit.avgLegKm} km` : '—'} />
             <Metric label="Clusters" value={String(clusters)} />

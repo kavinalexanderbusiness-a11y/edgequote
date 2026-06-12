@@ -13,9 +13,11 @@ import { Toggle } from '@/components/ui/Toggle'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Collapsible } from '@/components/ui/Collapsible'
 import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
-import { formatCurrency, suggestTravelFee } from '@/lib/utils'
-import { laborSuggestion, pricingConfigFromSettings } from '@/lib/pricing'
+import { formatCurrency, formatDate, suggestTravelFee } from '@/lib/utils'
+import { laborSuggestion, pricingConfigFromSettings, latestSavedRecommendation, recommendationIsStale } from '@/lib/pricing'
 import { findCustomerMatch } from '@/lib/customers'
+import { createClient } from '@/lib/supabase/client'
+import type { MeasurementSnapshot, SavedRecommendation } from '@/types'
 import { BestDaySuggestions } from '@/components/schedule/BestDaySuggestions'
 import { Clock, DollarSign, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, SlidersHorizontal, CheckCircle2, Users } from 'lucide-react'
 
@@ -70,6 +72,9 @@ export function QuoteBuilder({
   const [includeTravel, setIncludeTravel] = useState(true)
   const [initialManual, setInitialManual] = useState<boolean>((defaultValues?.initial_price ?? 0) > 0)
   const [showBestDays, setShowBestDays] = useState(false)
+  // Saved recommendation from the customer's latest property measurement — the
+  // source of truth for suggested prices (no re-measuring needed).
+  const [savedRec, setSavedRec] = useState<{ rec: SavedRecommendation; sqft: number; date: string } | null>(null)
 
   const hours = watch('hours') || 0
   const crewSize = watch('crew_size') || 1
@@ -126,6 +131,28 @@ export function QuoteBuilder({
       }
     }
   }, [customerId, customers, setValue, isEdit])
+
+  // Pull the latest measurement recommendation for the selected customer's
+  // primary property — measured prices become the suggestion, no re-measuring.
+  useEffect(() => {
+    if (!customerId || customerId === '__manual') { setSavedRec(null); return }
+    let active = true
+    async function load() {
+      const supabase = createClient()
+      const { data } = await supabase
+        .from('properties')
+        .select('measurement_history')
+        .eq('customer_id', customerId)
+        .order('is_primary', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (!active) return
+      const hist = (data as { measurement_history: MeasurementSnapshot[] } | null)?.measurement_history
+      setSavedRec(latestSavedRecommendation(hist))
+    }
+    load()
+    return () => { active = false }
+  }, [customerId])
 
   useEffect(() => {
     if (!templateId) return
@@ -299,6 +326,35 @@ export function QuoteBuilder({
               <Input label="Service Name" placeholder="e.g. Lawn Mowing"
                 error={errors.service_type?.message}
                 {...register('service_type', { required: 'Service is required' })} />
+
+              {/* Saved measurement — the pricing source of truth for this property */}
+              {savedRec && (
+                <div className="rounded-xl border border-accent/30 bg-accent/5 p-3 space-y-2">
+                  <p className="text-[11px] font-semibold text-accent uppercase tracking-wide">
+                    Measured property · {savedRec.sqft.toLocaleString()} ft² · {formatCurrency(savedRec.rec[savedRec.rec.cadence === 'one_time' ? 'one_time' : savedRec.rec.cadence])}/{savedRec.rec.cadence === 'one_time' ? 'visit' : savedRec.rec.cadence} recommended
+                  </p>
+                  <p className="text-xs text-ink-muted">
+                    One-Time <span className="text-ink font-semibold">${savedRec.rec.one_time}</span> · Weekly <span className="text-ink font-semibold">${savedRec.rec.weekly}</span> · Bi-Weekly <span className="text-ink font-semibold">${savedRec.rec.biweekly}</span> · Monthly <span className="text-ink font-semibold">${savedRec.rec.monthly}</span>
+                  </p>
+                  <p className="text-[11px] text-ink-faint">Calculated {formatDate(savedRec.date)}</p>
+                  <button type="button"
+                    onClick={() => {
+                      setValue('initial_price', savedRec.rec.one_time)
+                      setValue('weekly_price', savedRec.rec.weekly)
+                      setValue('biweekly_price', savedRec.rec.biweekly)
+                      setValue('monthly_price', savedRec.rec.monthly)
+                      setValue('measured_sqft', savedRec.sqft)
+                      setValue('suggested_price', savedRec.rec.one_time)
+                      setInitialManual(true)
+                    }}
+                    className="text-xs font-semibold text-accent hover:underline">
+                    Use measured prices →
+                  </button>
+                  {recommendationIsStale(savedRec.date, Date.now()) && (
+                    <p className="text-[11px] text-amber-400">⚠ Pricing recommendations may be outdated. Consider recalculating.</p>
+                  )}
+                </div>
+              )}
 
               {/* Price */}
               <div>

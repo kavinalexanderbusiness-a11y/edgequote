@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { loadGoogleMaps } from '@/lib/googleMaps'
 import { createClient } from '@/lib/supabase/client'
 import { Property, BusinessSettings, MeasurementSnapshot, LawnSections, PricingConfidence, CONFIDENCE_LABELS, CONFIDENCE_COLORS } from '@/types'
-import { priceTiers, routeDensityTravel, pricingConfidence, travelFeeForDistance, pricingConfigFromSettings, PricingConfig, DEFAULT_PRICING, PriceTier, pricingPackage, estimateVisitMinutes } from '@/lib/pricing'
+import { priceTiers, routeDensityTravel, pricingConfidence, travelFeeForDistance, pricingConfigFromSettings, PricingConfig, DEFAULT_PRICING, PriceTier, pricingPackage, estimateVisitMinutes, buildSavedRecommendation } from '@/lib/pricing'
 import { PricePackagePanel, CadenceSelection } from '@/components/pricing/PricePackagePanel'
 import { ProspectContext, loadProspectContext, assessProspect } from '@/lib/prospect'
 import { ProspectCard } from '@/components/pricing/ProspectCard'
@@ -15,7 +15,12 @@ import { Button } from '@/components/ui/Button'
 import { Undo2, Trash2, Check, Ruler, Plus, ZoomIn, ZoomOut, RotateCcw, FileText, Car, ShieldCheck, History, Move } from 'lucide-react'
 
 const M2_TO_SQFT = 10.7639
-const SNAP_PX = 16 // closing snap threshold in screen pixels
+const SNAP_PX = 24 // closing snap threshold in screen pixels (generous for touch)
+
+// Subtle haptic confirmation on phones — a tap should FEEL registered.
+function buzz(ms = 12) {
+  try { if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate(ms) } catch { /* unsupported */ }
+}
 
 const SECTIONS = [
   { key: 'front',     label: 'Front Lawn', color: '#00C896' },
@@ -138,7 +143,8 @@ export function MeasureTool({ property }: { property: Property }) {
   function vertexIcon(opts: { selected?: boolean; snap?: boolean; hover?: boolean }) {
     const g = window.google
     const color = sectionDef(activeRef.current).color
-    const r = opts.snap || opts.hover ? 12 : opts.selected ? 10 : 8
+    // Generous radii — these are finger targets in the field, not mouse targets.
+    const r = opts.snap || opts.hover ? 14 : opts.selected ? 11 : 9
     return {
       path: g.maps.SymbolPath.CIRCLE,
       scale: r,
@@ -390,11 +396,19 @@ export function MeasureTool({ property }: { property: Property }) {
           if (modeRef.current === 'adjust') return
           // Confirm every registered click immediately, before anything else.
           flashClick(e.latLng)
-          if (snapActive.current && currentPath.current.length >= 3) {
-            commitCurrent(activeRef.current)
-            return
+          // Close on tap of point 1 — checked DIRECTLY by pixel distance so it
+          // works on touch too (hover-snap only ever fired on desktop mousemove).
+          const pts = currentPath.current
+          if (pts.length >= 3) {
+            const a = toPixel(pts[0]); const b = toPixel(e.latLng)
+            if (snapActive.current || (a && b && Math.hypot(a.x - b.x, a.y - b.y) <= SNAP_PX)) {
+              buzz(25)
+              commitCurrent(activeRef.current)
+              return
+            }
           }
-          currentPath.current = [...currentPath.current, e.latLng]
+          buzz()
+          currentPath.current = [...pts, e.latLng]
           redrawCurrent(); redrawVertexMarkers(); recompute()
         })
         gmap.current.addListener('mousemove', (e: any) => {
@@ -464,14 +478,22 @@ export function MeasureTool({ property }: { property: Property }) {
   }
 
   // Persist the total + append a versioned snapshot to history (never overwrite).
+  // The snapshot carries the FULL recommendation package, so quotes and jobs can
+  // suggest measured prices later without re-measuring.
   async function persistMeasurement(): Promise<{ total: number; sections: LawnSections }> {
     if (currentPath.current.length >= 3) commitCurrent(activeRef.current)
     const sections = currentSections()
     const total = Math.round(Object.values(sections).reduce((a, b) => a + b, 0))
+    const pkgSave = pricingPackage(total, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood })
+    const estMin = estimateVisitMinutes(total, prospect?.observedMinPer1000)
+    const scoreSave = prospect
+      ? assessProspect(pkgSave, prospect, { distanceKm, travelFee: effectiveTravel, neighborhoodName: property.neighborhood, estimatedMinutes: estMin, timedJobs: prospect.timedJobs }).score
+      : null
     const snapshot: MeasurementSnapshot = {
       date: new Date().toISOString(),
       total_sqft: total,
       sections,
+      recommendation: total > 0 ? buildSavedRecommendation(pkgSave, estMin, { score: scoreSave, hood: property.neighborhood }) : null,
       rate_per_1000: cfg.mowRatePer1000,
     }
     // Append from the ref (synchronous) so back-to-back saves can't drop a
@@ -674,7 +696,11 @@ export function MeasureTool({ property }: { property: Property }) {
       {totalSqft > 0 && (() => {
         const pkg = pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood })
         const assessment = prospect
-          ? assessProspect(pkg, prospect, { distanceKm, travelFee: effectiveTravel, neighborhoodName: property.neighborhood, estimatedMinutes: estimateVisitMinutes(totalSqft) })
+          ? assessProspect(pkg, prospect, {
+              distanceKm, travelFee: effectiveTravel, neighborhoodName: property.neighborhood,
+              estimatedMinutes: estimateVisitMinutes(totalSqft, prospect.observedMinPer1000),
+              timedJobs: prospect.timedJobs,
+            })
           : null
         return (
           <div className="bg-bg-secondary border border-border rounded-xl px-4 py-3 space-y-3">
@@ -764,9 +790,13 @@ export function MeasureTool({ property }: { property: Property }) {
           )}
           <div className="space-y-1">
             {[...history].reverse().slice(0, 6).map((h, i) => (
-              <div key={i} className="flex items-center justify-between text-sm">
-                <span className="text-ink-muted">{formatDate(h.date)}</span>
-                <span className="text-ink font-medium">{(h.total_sqft ?? h.lawn_sqft ?? 0).toLocaleString()} sq ft</span>
+              <div key={i} className="flex items-center justify-between gap-2 text-sm">
+                <span className="text-ink-muted shrink-0">{formatDate(h.date)}</span>
+                {/* Recommendation history — see how pricing evolved over time */}
+                {h.recommendation && (
+                  <span className="text-xs text-accent font-medium truncate">Wk ${h.recommendation.weekly} · Bi ${h.recommendation.biweekly} · Mo ${h.recommendation.monthly}</span>
+                )}
+                <span className="text-ink font-medium shrink-0">{(h.total_sqft ?? h.lawn_sqft ?? 0).toLocaleString()} sq ft</span>
               </div>
             ))}
           </div>

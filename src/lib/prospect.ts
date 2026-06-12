@@ -23,6 +23,10 @@ export interface ProspectContext {
   nearbyRecurring: number     // of those, how many are recurring visits
   nearbyPendingQuotes: number // pending (draft/sent) quotes within range
   hoods: { key: string; revenue: number; customers: number }[] // per-area booked revenue + customer count (shared engine)
+  // The owner's REAL pace from check-in/check-out data: median minutes per
+  // 1,000 ft² across completed timed jobs on measured lawns (null until ≥3).
+  observedMinPer1000: number | null
+  timedJobs: number
 }
 
 // One fetch, computed with the same engines every analytics page uses.
@@ -30,7 +34,7 @@ export async function loadProspectContext(supabase: Supa, userId: string, center
   const today = format(new Date(), 'yyyy-MM-dd')
   const [jRes, qRes, rRes] = await Promise.all([
     supabase.from('jobs')
-      .select('id, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, properties(lat, lng, city, postal_code, neighborhood)')
+      .select('id, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, properties(lat, lng, city, postal_code, neighborhood, lawn_sqft)')
       .eq('user_id', userId),
     supabase.from('quotes').select('id, status, property_id, total, initial_price, weekly_price, biweekly_price, monthly_price, properties(lat, lng)').eq('user_id', userId),
     supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', userId),
@@ -72,7 +76,18 @@ export async function loadProspectContext(supabase: Supa, userId: string, center
   }
 
   const hoods = neighborhoodProfitability(jobs, ctx).map(h => ({ key: h.key, revenue: h.revenue, customers: h.customers }))
-  return { nearbyJobs, nearestKm, nearbyRecurring, nearbyPendingQuotes, hoods }
+
+  // Personal pace from timed jobs (check-in/check-out) on measured lawns.
+  const rates: number[] = []
+  for (const j of ((jRes.data as unknown as Array<Record<string, any>>) || [])) {
+    const sqft = Number(j.properties?.lawn_sqft)
+    const actual = Number(j.actual_minutes)
+    if (j.status === 'completed' && actual > 0 && sqft >= 300) rates.push(actual / (sqft / 1000))
+  }
+  rates.sort((a, b) => a - b)
+  const observedMinPer1000 = rates.length >= 3 ? Math.round(rates[Math.floor(rates.length / 2)] * 10) / 10 : null
+
+  return { nearbyJobs, nearestKm, nearbyRecurring, nearbyPendingQuotes, hoods, observedMinPer1000, timedJobs: rates.length }
 }
 
 export type ProspectScore = 'A+' | Grade
@@ -90,6 +105,7 @@ export interface ProspectAssessment {
     annual: number
     travelImpact: string
     routeImpact: string
+    timeBasis: string       // where the time estimate came from (calibrated vs model)
   }
   growth: { bullets: string[]; narrative: string | null }
   routeImpact: RouteImpact
@@ -113,7 +129,7 @@ export interface ProspectAssessment {
 export function assessProspect(
   pkg: PricingPackage,
   ctx: ProspectContext,
-  opts: { distanceKm?: number | null; travelFee?: number; neighborhoodName?: string | null; estimatedMinutes?: number },
+  opts: { distanceKm?: number | null; travelFee?: number; neighborhoodName?: string | null; estimatedMinutes?: number; timedJobs?: number },
 ): ProspectAssessment {
   const cadence: CadenceKey = pkg.recommended.cadence
   const opt = pkg.options.find(o => o.cadence === cadence)
@@ -263,6 +279,9 @@ export function assessProspect(
       travelImpact,
       routeImpact: routeImpact === 'strengthens' ? 'Tightens an existing route'
         : routeImpact === 'neutral' ? 'Near one existing stop' : 'Opens a new solo trip',
+      timeBasis: (opts.timedJobs ?? 0) >= 3
+        ? `~${onSiteMin} min on-site — calibrated from ${opts.timedJobs} of your timed jobs`
+        : `~${onSiteMin} min on-site (size model) — time jobs with Start/Complete to calibrate`,
     },
     growth: { bullets: growthBullets, narrative },
     routeImpact,

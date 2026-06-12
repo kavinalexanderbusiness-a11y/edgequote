@@ -4,13 +4,13 @@ import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Job, JobStatus, JobRecurrence, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
 import { Coord } from '@/lib/geo'
-import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, routeStats, directionsUrl, computeDayEtas, roughFinishEstimate, dayLoad, DEFAULT_JOB_MIN } from '@/lib/route'
+import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, routeStats, directionsUrl, computeDayEtas, roughFinishEstimate, dayLoad, minutesToTime12, DEFAULT_JOB_MIN } from '@/lib/route'
 import { jobVisitValue, effectiveFreq, quoteVisitAmount } from '@/lib/invoicing'
-import { formatCurrency, cn } from '@/lib/utils'
+import { formatCurrency, cn, localTodayISO } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
 import {
   DollarSign, Clock, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
-  MapPin, Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, Trash2, CloudRain,
+  MapPin, Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, Trash2, CloudRain, Play, Timer,
 } from 'lucide-react'
 
 export interface QuoteLite {
@@ -30,6 +30,7 @@ interface Props {
   recurrences: Record<string, JobRecurrence>
   baseCoord: Coord | null
   onOpenJob: (job: Job) => void
+  onStartJob: (job: Job) => void
   onMarkDone: (job: Job) => void
   onMove: (job: Job, newDateISO: string) => void
   onDeleteJob: (job: Job) => void
@@ -52,7 +53,7 @@ export interface QuickPatch {
 
 export function DayOpsPanel({
   date, dateLabel, jobs, quotesById, recurrences, baseCoord,
-  onOpenJob, onMarkDone, onMove, onDeleteJob, onSetPrice, workStartTime, capacityHours, onRainDelay, onAddJob, onQuickSave,
+  onOpenJob, onStartJob, onMarkDone, onMove, onDeleteJob, onSetPrice, workStartTime, capacityHours, onRainDelay, onAddJob, onQuickSave,
 }: Props) {
   const supabase = createClient()
   const [quickId, setQuickId] = useState<string | null>(null)
@@ -189,10 +190,39 @@ export function DayOpsPanel({
   const etaByJob: Record<string, string> = {}
   if (etas) for (const s of etas.stops) etaByJob[s.jobId] = s.arrival
   const laborTotalMin = active.reduce((s, j) => s + (j.duration_minutes || DEFAULT_JOB_MIN), 0)
-  const estFinish = active.length === 0 ? '—'
-    : remaining.length === 0 ? 'Done'
-    : (etas?.finish ?? roughFinishEstimate(workStartTime, laborTotalMin, active.length).finish)
   const load = dayLoad(laborTotalMin + (stats ? stats.driveMinutes : active.length * 10), capacityHours)
+
+  // ── Live day tracking (check-in/check-out data) ──
+  const isToday = date === localTodayISO()
+  const inProgress = active.find(j => j.status === 'in_progress') ?? null
+  const tsTo12 = (iso: string) => { const t = new Date(iso); return minutesToTime12(t.getHours() * 60 + t.getMinutes()) }
+  const elapsedMin = (iso: string) => Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000))
+  const firstStart = active.map(j => j.started_at).filter(Boolean).sort()[0] as string | undefined
+  const workedMin = completed.reduce((s, j) => s + (j.actual_minutes || 0), 0)
+    + (inProgress?.started_at ? elapsedMin(inProgress.started_at) : 0)
+  const live = isToday && (!!inProgress || (!!firstStart && completed.length > 0))
+  // Re-render each minute while a job is running so elapsed/finish stay current.
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    if (!isToday || !inProgress) return
+    const t = setInterval(() => setTick(x => x + 1), 60000)
+    return () => clearInterval(t)
+  }, [isToday, inProgress])
+  // Finish estimate: live (now + what's left) once the day is underway, else the
+  // planned route ETAs from work start.
+  let estFinish: string
+  if (active.length === 0) estFinish = '—'
+  else if (remaining.length === 0) estFinish = 'Done'
+  else if (live) {
+    const now = new Date()
+    const curElapsed = inProgress?.started_at ? elapsedMin(inProgress.started_at) : 0
+    const remainingLabor = remaining.reduce((s, j) => s + (j.duration_minutes || DEFAULT_JOB_MIN), 0)
+      - (inProgress ? Math.min(curElapsed, inProgress.duration_minutes || DEFAULT_JOB_MIN) : 0)
+    const remainingLegs = remaining.filter(j => j.id !== inProgress?.id).length * 10
+    estFinish = minutesToTime12(now.getHours() * 60 + now.getMinutes() + Math.max(5, remainingLabor) + remainingLegs)
+  } else {
+    estFinish = etas?.finish ?? roughFinishEstimate(workStartTime, laborTotalMin, active.length).finish
+  }
 
   return (
     <div className="rounded-card border border-border bg-bg-secondary overflow-hidden">
@@ -231,6 +261,22 @@ export function DayOpsPanel({
         <Metric icon={ListChecks} label="Jobs left" value={String(remaining.length)} />
         <Metric icon={Hourglass} label="Est. finish" value={estFinish} />
       </div>
+
+      {/* Live day tracking — appears once the day is underway */}
+      {live && (
+        <div className="px-4 py-2 border-b border-border bg-sky-400/5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+          <span className="flex items-center gap-1.5 font-semibold text-sky-300"><Timer className="w-3.5 h-3.5" /> Live</span>
+          {firstStart && <span className="text-ink-muted">Started <span className="text-ink font-medium">{tsTo12(firstStart)}</span></span>}
+          {inProgress && (
+            <span className="text-ink-muted">Now at <span className="text-ink font-medium">{inProgress.customers?.name || inProgress.title}</span>
+              {inProgress.started_at && <span className="text-sky-300"> · {elapsedMin(inProgress.started_at)}m</span>}
+            </span>
+          )}
+          <span className="text-ink-muted">Done <span className="text-ink font-medium">{completed.length}/{active.length}</span></span>
+          <span className="text-ink-muted">Worked <span className="text-ink font-medium">{Math.floor(workedMin / 60)}h {workedMin % 60}m</span></span>
+          <span className="text-ink-muted">Finish <span className="text-ink font-medium">~{estFinish}</span></span>
+        </div>
+      )}
 
       {active.length === 0 ? (
         <button onClick={onAddJob} className="w-full text-center py-12 text-sm text-ink-muted hover:text-ink transition-colors">
@@ -286,9 +332,11 @@ export function DayOpsPanel({
                   <div className="flex items-start gap-2.5">
                     <div className={cn(
                       'w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5',
-                      done ? 'bg-emerald-500/20 text-emerald-300' : 'bg-accent text-black'
+                      done ? 'bg-emerald-500/20 text-emerald-300'
+                        : job.status === 'in_progress' ? 'bg-sky-400 text-black animate-pulse'
+                        : 'bg-accent text-black'
                     )}>
-                      {done ? <Check className="w-4 h-4" /> : (order ?? '–')}
+                      {done ? <Check className="w-4 h-4" /> : job.status === 'in_progress' ? <Play className="w-3.5 h-3.5 fill-current" /> : (order ?? '–')}
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">
@@ -350,8 +398,19 @@ export function DayOpsPanel({
                         </div>
                       )}
                       <div className="flex items-center gap-1.5 text-xs opacity-80 mt-0.5 flex-wrap">
-                        {!done && etaByJob[job.id] && (
+                        {job.status === 'scheduled' && etaByJob[job.id] && (
                           <span className="font-semibold text-accent shrink-0">ETA {etaByJob[job.id]}</span>
+                        )}
+                        {job.status === 'in_progress' && job.started_at && (
+                          <span className="font-semibold text-sky-300 shrink-0">▶ {tsTo12(job.started_at)} · {elapsedMin(job.started_at)}m</span>
+                        )}
+                        {done && job.started_at && job.completed_at && (
+                          <span className="font-semibold text-emerald-300 shrink-0">{tsTo12(job.started_at)}–{tsTo12(job.completed_at)} · {job.actual_minutes ?? '?'}m</span>
+                        )}
+                        {done && job.actual_minutes != null && job.duration_minutes != null && job.duration_minutes > 0 && (
+                          <span className={cn('text-[10px] font-semibold shrink-0', job.actual_minutes > job.duration_minutes ? 'text-amber-400' : 'text-emerald-400')}>
+                            ({job.actual_minutes > job.duration_minutes ? '+' : ''}{job.actual_minutes - job.duration_minutes}m vs est {job.duration_minutes}m)
+                          </span>
                         )}
                         {job.service_type && <span className="truncate">{job.service_type}</span>}
                         {job.start_time && <span>· {job.start_time.slice(0, 5)}</span>}
@@ -360,9 +419,10 @@ export function DayOpsPanel({
 
                       {/* One-tap actions */}
                       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                        {job.status === 'scheduled' && <ActionBtn onClick={() => onStartJob(job)} icon={Play} label="Start" tone="sky" />}
+                        {job.status === 'in_progress' && <ActionBtn onClick={() => onMarkDone(job)} icon={CheckCircle2} label="Complete" tone="emerald" />}
                         <ActionBtn onClick={() => (quickId === job.id ? setQuickId(null) : openQuick(job))} icon={SlidersHorizontal} label="Quick" />
                         <ActionBtn onClick={() => onOpenJob(job)} icon={Pencil} label="Open" />
-                        {!done && <ActionBtn onClick={() => onMarkDone(job)} icon={CheckCircle2} label="Done" tone="emerald" />}
                         <ActionBtn onClick={() => setMoveId(moveId === job.id ? null : job.id)} icon={Move} label="Move" />
                         <a
                           href={directionsUrl({ lat: job.properties?.lat ?? null, lng: job.properties?.lng ?? null, address: job.properties?.address }, baseCoord)}
@@ -450,7 +510,7 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: str
   )
 }
 
-function ActionBtn({ onClick, icon: Icon, label, tone }: { onClick: () => void; icon: typeof Pencil; label: string; tone?: 'emerald' }) {
+function ActionBtn({ onClick, icon: Icon, label, tone }: { onClick: () => void; icon: typeof Pencil; label: string; tone?: 'emerald' | 'sky' }) {
   return (
     <button
       onClick={onClick}
@@ -458,7 +518,9 @@ function ActionBtn({ onClick, icon: Icon, label, tone }: { onClick: () => void; 
         'h-8 px-2.5 rounded-lg border text-xs font-medium flex items-center gap-1 active:scale-95 transition-transform',
         tone === 'emerald'
           ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25'
-          : 'border-current/30 hover:bg-black/10'
+          : tone === 'sky'
+            ? 'bg-sky-400/15 border-sky-400/30 text-sky-300 hover:bg-sky-400/25'
+            : 'border-current/30 hover:bg-black/10'
       )}
     >
       <Icon className="w-3.5 h-3.5" /> {label}

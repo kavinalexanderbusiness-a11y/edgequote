@@ -13,7 +13,8 @@ import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { useForm, Controller } from 'react-hook-form'
 import { cn } from '@/lib/utils'
 import { ThemePref, getThemePref, applyThemePref } from '@/lib/theme'
-import { Upload, Plus, Trash2, Check, Sun, Moon, Monitor } from 'lucide-react'
+import { ServiceSeasons, ServiceSeason, DEFAULT_SEASONS, settingsToSeasons, seasonLabel } from '@/lib/seasons'
+import { Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange } from 'lucide-react'
 
 // Mon→Sun display, mapped to date-fns getDay indices (Sun=0…Sat=6).
 const WEEKDAYS = [
@@ -36,6 +37,7 @@ export default function SettingsPage() {
   const [capacityHours, setCapacityHours] = useState('8')
   const [themePref, setThemePref] = useState<ThemePref>('dark')
   const [logoScale, setLogoScale] = useState(100)
+  const [seasons, setSeasons] = useState<ServiceSeasons>(DEFAULT_SEASONS)
 
   useEffect(() => { setThemePref(getThemePref()) }, [])
   function pickTheme(p: ThemePref) { setThemePref(p); applyThemePref(p) }
@@ -74,6 +76,7 @@ export default function SettingsPage() {
       setWorkStart(settings.work_start_time || '08:00')
       setCapacityHours(String(settings.daily_capacity_hours ?? 8))
       setLogoScale(settings.logo_scale && settings.logo_scale >= 50 ? settings.logo_scale : 100)
+      setSeasons(settingsToSeasons(settings.service_seasons))
     }
   }, [settings, reset])
 
@@ -117,6 +120,7 @@ export default function SettingsPage() {
         preferred_work_days: workDays,
         work_start_time: /^\d{1,2}:\d{2}$/.test(workStart) ? workStart : '08:00',
         daily_capacity_hours: Number(capacityHours) > 0 ? Number(capacityHours) : 8,
+        service_seasons: seasons,
         base_lat: null, base_lng: null,
       })
       .eq('user_id', user!.id)
@@ -313,6 +317,33 @@ export default function SettingsPage() {
         <Card className="mt-6">
           <CardHeader>
             <div>
+              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><CalendarRange className="w-4 h-4 text-accent" /> Service Seasons</h2>
+              <p className="text-xs text-ink-faint mt-0.5">Recurring lawn &amp; snow services default to ending at season end. Off-season customers won&apos;t show as lapsed in Reactivation.</p>
+            </div>
+          </CardHeader>
+          <CardBody className="space-y-5">
+            <SeasonEditor
+              icon={<Sun className="w-4 h-4 text-amber-400" />}
+              title="Lawn Season"
+              hint="Weekly/Bi-Weekly Mowing, Monthly Lawn Care, Fertilization"
+              season={seasons.lawn}
+              onChange={s => setSeasons(prev => ({ ...prev, lawn: s }))}
+            />
+            <SeasonEditor
+              icon={<Snowflake className="w-4 h-4 text-sky-400" />}
+              title="Snow Season"
+              hint="Snow Removal, Snow Blowing, Snow Clearing (can wrap the new year)"
+              season={seasons.snow}
+              onChange={s => setSeasons(prev => ({ ...prev, snow: s }))}
+            />
+            <button type="button" onClick={() => setSeasons(DEFAULT_SEASONS)}
+              className="text-xs text-accent hover:underline">Reset to Calgary defaults (Apr 15 → Oct 31 · Nov 1 → Mar 31)</button>
+          </CardBody>
+        </Card>
+
+        <Card className="mt-6">
+          <CardHeader>
+            <div>
               <h2 className="text-sm font-semibold text-ink">Lawn Pricing</h2>
               <p className="text-xs text-ink-faint mt-0.5">Drives suggested measurement prices. Recommended = base price × multiplier.</p>
             </div>
@@ -375,6 +406,41 @@ export default function SettingsPage() {
           ))}
         </CardBody>
       </Card>
+    </div>
+  )
+}
+
+const MONTH_OPTS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  .map((m, i) => ({ value: i + 1, label: m }))
+
+function SeasonEditor({ icon, title, hint, season, onChange }: {
+  icon: React.ReactNode; title: string; hint: string; season: ServiceSeason; onChange: (s: ServiceSeason) => void
+}) {
+  const set = (patch: Partial<ServiceSeason>) => onChange({ ...season, ...patch })
+  const dayField = (val: number, key: 'startDay' | 'endDay') => (
+    <input type="number" min={1} max={31} value={val}
+      onChange={e => set({ [key]: Math.min(31, Math.max(1, Number(e.target.value) || 1)) })}
+      className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2 text-sm text-ink outline-none focus:border-accent" />
+  )
+  const monthField = (val: number, key: 'startMonth' | 'endMonth') => (
+    <select value={val} onChange={e => set({ [key]: Number(e.target.value) })}
+      className="bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2 text-sm text-ink outline-none focus:border-accent">
+      {MONTH_OPTS.map(o => <option key={o.value} value={o.value} className="bg-bg-secondary">{o.label}</option>)}
+    </select>
+  )
+  return (
+    <div className="rounded-xl border border-border p-3">
+      <div className="flex items-center gap-2 mb-1">
+        {icon}
+        <span className="text-sm font-semibold text-ink">{title}</span>
+        <span className="ml-auto text-xs font-medium text-accent">{seasonLabel(season)}</span>
+      </div>
+      <p className="text-[11px] text-ink-faint mb-2">{hint}</p>
+      <div className="flex items-center gap-2 flex-wrap text-xs text-ink-muted">
+        <span>Starts</span>{monthField(season.startMonth, 'startMonth')}{dayField(season.startDay, 'startDay')}
+        <span className="mx-1">→</span>
+        <span>Ends</span>{monthField(season.endMonth, 'endMonth')}{dayField(season.endDay, 'endDay')}
+      </div>
     </div>
   )
 }

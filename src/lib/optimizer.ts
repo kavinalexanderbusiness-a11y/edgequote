@@ -74,6 +74,125 @@ export interface OptimizationResult {
   lockedBilled: number   // future jobs left alone because they're already invoiced
 }
 
+// ── Rain delay planning ──────────────────────────────────────────────────────
+// Redistribute one rained-out day across the NEXT preferred work days, capacity-
+// aware and series-safe. Same locks as the optimizer (billed jobs never move);
+// jobs with a set start time DO move (rain forces it) but are flagged so the
+// owner confirms with the customer.
+
+export interface RainDayPlan {
+  date: string
+  jobs: number
+  revenue: number
+  laborMin: number
+}
+
+export interface RainMove extends PlannedMove { hasSetTime: boolean }
+
+export interface RainTargetDay {
+  date: string
+  beforeMin: number   // existing load (labor+drive)
+  afterMin: number    // load after absorbing moved jobs
+  beforeKm: number
+  afterKm: number
+  added: number
+  overCapacity: boolean
+}
+
+export interface RainDelayPlan {
+  day: RainDayPlan
+  moves: RainMove[]
+  unmovable: { jobId: string; title: string; customerName: string; reason: string }[]
+  targets: RainTargetDay[]
+  driveKmBefore: number   // delayed day's route km that disappears
+  driveKmAfter: number    // extra km added across target days
+}
+
+export function planRainDelay(jobs: OptJob[], dayISO: string, opts: Omit<OptOptions, 'mode'>): RainDelayPlan {
+  const capMin = (opts.capacityHours > 0 ? opts.capacityHours : 8) * 60
+  const prefSet = opts.preferredDays.length ? new Set(opts.preferredDays) : null
+
+  const dayJobs = jobs.filter(j => j.scheduled_date === dayISO && j.status !== 'cancelled' && j.status !== 'completed')
+  const movable = dayJobs.filter(j => !j.invoiced)
+  const billed = dayJobs.filter(j => j.invoiced)
+
+  // Next-visit ceiling per series: a bumped visit must stay BEFORE its next sibling.
+  const nextSibling = (j: OptJob): string | null => {
+    if (!j.recurrence_id) return null
+    const later = jobs
+      .filter(x => x.recurrence_id === j.recurrence_id && x.id !== j.id && x.status !== 'cancelled' && x.scheduled_date > dayISO)
+      .map(x => x.scheduled_date).sort()
+    return later[0] ?? null
+  }
+
+  // Candidate target days: next preferred work days after the rained-out day.
+  const targetDates: string[] = []
+  let d = addDays(parseISO(dayISO), 1)
+  for (let i = 0; i < 21 && targetDates.length < 5; i++) {
+    if (!prefSet || prefSet.has(getDay(d))) targetDates.push(format(d, 'yyyy-MM-dd'))
+    d = addDays(d, 1)
+  }
+
+  // Existing load per target day (all non-cancelled jobs already there).
+  const existing = new Map<string, OptJob[]>()
+  for (const t of targetDates) existing.set(t, jobs.filter(j => j.scheduled_date === t && j.status !== 'cancelled'))
+  const loadOf = (list: { duration_minutes: number | null; lat: number | null; lng: number | null }[]) => {
+    const labor = list.reduce((s, j) => s + (j.duration_minutes || DEFAULT_JOB_MIN), 0)
+    const located = list.filter(j => j.lat != null && j.lng != null).map(j => ({ lat: j.lat as number, lng: j.lng as number }))
+    const km = opts.base ? routeKmEstimate(opts.base, located) : clusterKmEstimate(located)
+    return { labor, km, total: labor + Math.round(km / AVG_SPEED_KM_PER_MIN) }
+  }
+
+  // Greedy fill: keep route order, pour into the first target day with capacity
+  // room (and before the series' next visit); overflow rolls to later days.
+  const assignedTo = new Map<string, OptJob[]>()
+  for (const t of targetDates) assignedTo.set(t, [])
+  const moves: RainMove[] = []
+  const unmovable: RainDelayPlan['unmovable'] = []
+
+  for (const j of [...movable].sort((a, b) => (a.start_time || '99').localeCompare(b.start_time || '99'))) {
+    const ceiling = nextSibling(j)
+    let placed = false
+    for (const t of targetDates) {
+      if (ceiling && t >= ceiling) break // any later day is past the next visit too
+      const current = loadOf([...existing.get(t)!, ...assignedTo.get(t)!])
+      const jobMin = (j.duration_minutes || DEFAULT_JOB_MIN) + 10
+      if (current.total + jobMin > capMin && targetDates.some(t2 => t2 > t && (!ceiling || t2 < ceiling))) continue
+      assignedTo.get(t)!.push(j)
+      moves.push({ jobId: j.id, title: j.title, customerName: j.customerName, from: dayISO, to: t, value: j.value, recurring: !!j.recurrence_id, hasSetTime: !!j.start_time })
+      placed = true
+      break
+    }
+    if (!placed) unmovable.push({ jobId: j.id, title: j.title, customerName: j.customerName, reason: ceiling ? `next visit is ${ceiling} — skip this one instead` : 'no capacity in range' })
+  }
+  for (const j of billed) unmovable.push({ jobId: j.id, title: j.title, customerName: j.customerName, reason: 'already invoiced' })
+
+  const dayLoadNow = loadOf(dayJobs)
+  const targets: RainTargetDay[] = targetDates
+    .filter(t => assignedTo.get(t)!.length > 0)
+    .map(t => {
+      const before = loadOf(existing.get(t)!)
+      const after = loadOf([...existing.get(t)!, ...assignedTo.get(t)!])
+      return {
+        date: t, beforeMin: before.total, afterMin: after.total,
+        beforeKm: Math.round(before.km * 10) / 10, afterKm: Math.round(after.km * 10) / 10,
+        added: assignedTo.get(t)!.length, overCapacity: after.total > capMin,
+      }
+    })
+
+  return {
+    day: {
+      date: dayISO,
+      jobs: dayJobs.length,
+      revenue: Math.round(dayJobs.reduce((s, j) => s + j.value, 0)),
+      laborMin: dayJobs.reduce((s, j) => s + (j.duration_minutes || DEFAULT_JOB_MIN), 0),
+    },
+    moves, unmovable, targets,
+    driveKmBefore: Math.round(dayLoadNow.km * 10) / 10,
+    driveKmAfter: Math.round(targets.reduce((s, t) => s + (t.afterKm - t.beforeKm), 0) * 10) / 10,
+  }
+}
+
 // Mode weights — all terms expressed in MINUTES so they compose meaningfully.
 // over = minutes beyond daily capacity (heavily penalized everywhere),
 // spread = stddev of active-day total minutes (workload balance),

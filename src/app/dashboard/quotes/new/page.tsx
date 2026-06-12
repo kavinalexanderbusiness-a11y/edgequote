@@ -7,6 +7,7 @@ import { Customer, QuoteFormValues, ServiceTemplate, TravelFeeTier, BusinessSett
 import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
+import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes } from '@/lib/pricing'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 
 interface MeasurementPayload {
@@ -146,15 +147,21 @@ export default function NewQuotePage() {
     if (!error && data) {
       // A measurement taken inside the builder previously lived ONLY on the quote —
       // the property stayed "unmeasured" and sqft-based pricing suggestions never
-      // fired for it. Persist it back to the property (newest measurement wins).
+      // fired for it. Persist it back to the property (newest measurement wins),
+      // WITH the full recommendation package so future quotes/jobs suggest these
+      // prices without re-measuring. (Prices don't depend on route context.)
       const measuredSqft = measurement?.sqft ?? (Number(values.measured_sqft) || 0)
       if (propertyId && measuredSqft > 0) {
+        const cfg = pricingConfigFromSettings(settings)
+        const pkg = pricingPackage(measuredSqft, cfg, { overgrowth: Number(values.overgrowth_multiplier) || 1, nearbyCount: 0 })
+        const rec = buildSavedRecommendation(pkg, estimateVisitMinutes(measuredSqft))
+        if (measurement?.cadence && measurement.cadence !== 'one_time') rec.cadence = measurement.cadence
         const { data: prop } = await supabase.from('properties').select('measurement_history').eq('id', propertyId).maybeSingle()
         const hist = Array.isArray((prop as { measurement_history: unknown } | null)?.measurement_history)
           ? (prop as { measurement_history: unknown[] }).measurement_history : []
         await supabase.from('properties').update({
           lawn_sqft: measuredSqft,
-          measurement_history: [...hist, { date: new Date().toISOString(), total_sqft: measuredSqft, sections: measurement?.sections ?? undefined }],
+          measurement_history: [...hist, { date: new Date().toISOString(), total_sqft: measuredSqft, sections: measurement?.sections ?? undefined, recommendation: rec }],
         }).eq('id', propertyId)
       }
       // Tell the next screen the lead became a customer (created or matched).

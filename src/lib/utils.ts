@@ -34,6 +34,12 @@ export function localTodayISO(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
+// Whole minutes between two ISO timestamps (check-in → check-out), min 1.
+export function minutesBetween(startISO: string, endISO: string): number {
+  const ms = new Date(endISO).getTime() - new Date(startISO).getTime()
+  return Math.max(1, Math.round(ms / 60000))
+}
+
 // Highest trailing number across existing document numbers ('EPS-2026-0007' → 7).
 // Count-based numbering collides after a delete; max-suffix+1 never does.
 export function maxNumericSuffix(values: (string | null | undefined)[]): number {

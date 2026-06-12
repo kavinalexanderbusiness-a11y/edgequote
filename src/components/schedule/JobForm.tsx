@@ -8,10 +8,15 @@ import { Select } from '@/components/ui/Select'
 import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
 import { Customer, Property, JobFormValues, JobStatus, RecurUnit } from '@/types'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import { recurrenceLabel } from '@/lib/recurrence'
+import { latestSavedRecommendation, savedPriceFor, recommendationIsStale, CadenceKey } from '@/lib/pricing'
+import {
+  ServiceSeasons, DEFAULT_SEASONS, settingsToSeasons, serviceCategory, seasonForService,
+  seasonEndDateFor, estimateSeasonVisits, seasonLabel,
+} from '@/lib/seasons'
 import { WeeklyScheduler } from '@/components/schedule/WeeklyScheduler'
-import { Repeat, Sparkles } from 'lucide-react'
+import { Repeat, Sparkles, Snowflake, Sun, AlertTriangle, CalendarRange } from 'lucide-react'
 
 // Flexible recurrence: any interval (count + unit), three end modes.
 export interface Recurrence {
@@ -70,10 +75,12 @@ function presetToInterval(preset: RepeatPreset, customUnit: RecurUnit, customCou
   }
 }
 
+type EndMode = 'season' | 'on' | 'after' | 'never'
+
 // Map an existing series back onto the Repeat UI controls so editing pre-fills.
 function recurrenceToUi(r?: Recurrence) {
   if (!r || !r.unit) {
-    return { preset: 'none' as RepeatPreset, customUnit: 'week' as RecurUnit, customCount: 3, endMode: 'never' as const, endDate: '', endCount: 10 }
+    return { preset: 'none' as RepeatPreset, customUnit: 'week' as RecurUnit, customCount: 3, endMode: 'never' as EndMode, endDate: '', endCount: 10 }
   }
   let preset: RepeatPreset = 'custom'
   if (r.unit === 'week' && r.count === 1) preset = 'w1'
@@ -81,7 +88,9 @@ function recurrenceToUi(r?: Recurrence) {
   else if (r.unit === 'week' && r.count === 3) preset = 'w3'
   else if (r.unit === 'week' && r.count === 4) preset = 'w4'
   else if (r.unit === 'month' && r.count === 1) preset = 'm1'
-  const endMode: 'never' | 'on' | 'after' = r.endDate ? 'on' : r.endCount ? 'after' : 'never'
+  // An existing end_date pre-fills as a specific date (we can't know post-hoc
+  // whether it was originally a season pick — treat as 'on' for safe editing).
+  const endMode: EndMode = r.endDate ? 'on' : r.endCount ? 'after' : 'never'
   return {
     preset,
     customUnit: r.unit,
@@ -102,9 +111,13 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   const [preset, setPreset] = useState<RepeatPreset>(ui0.preset)
   const [customUnit, setCustomUnit] = useState<RecurUnit>(ui0.customUnit)
   const [customCount, setCustomCount] = useState(ui0.customCount)
-  const [endMode, setEndMode] = useState<'never' | 'on' | 'after'>(ui0.endMode)
+  const [endMode, setEndMode] = useState<EndMode>(ui0.endMode)
   const [endDate, setEndDate] = useState(ui0.endDate)
   const [endCount, setEndCount] = useState(ui0.endCount)
+  const [seasons, setSeasons] = useState<ServiceSeasons>(DEFAULT_SEASONS)
+  // Existing recurring series on the selected property — for duplicate detection.
+  const [propSeries, setPropSeries] = useState<{ id: string; service_type: string | null; unit: string | null; count: number | null }[]>([])
+  const [dupAck, setDupAck] = useState(false) // owner chose "create anyway"
 
   const { register, handleSubmit, watch, setValue, control, formState: { errors, isSubmitting } } =
     useForm<JobFormValues>({
@@ -133,18 +146,63 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   const customerId = watch('customer_id')
   const status = watch('status')
   const selectedPropertyId = watch('property_id')
+  const serviceType = watch('service_type')
+  const scheduledDate = watch('scheduled_date')
   const selProp = properties.find(p => p.id === selectedPropertyId)
   const propCoord = selProp && selProp.lat != null && selProp.lng != null
     ? { lat: selProp.lat, lng: selProp.lng } : null
 
   const interval = presetToInterval(preset, customUnit, customCount)
 
+  // ── Seasonal recurrence ──
+  // The service's season (lawn/snow), if any, and the season-end date for a
+  // series starting on the job's scheduled date.
+  const serviceSeason = seasonForService(serviceType, seasons)
+  const category = serviceCategory(serviceType)
+  const seasonEndDate = serviceSeason && scheduledDate ? seasonEndDateFor(scheduledDate, serviceSeason) : null
+  // The effective end date the series will use, given the chosen end mode.
+  const effectiveEndDate =
+    endMode === 'season' ? seasonEndDate
+    : endMode === 'on' && endDate ? endDate
+    : null
+  // Live visit-count estimate for the chosen cadence + end.
+  const visitEstimate = interval && scheduledDate && effectiveEndDate
+    ? estimateSeasonVisits(scheduledDate, effectiveEndDate, interval.unit, interval.count)
+    : null
+
+  // Duplicate detection: does this property ALREADY have an active recurring
+  // series in the same category (lawn vs snow) as the one being created?
+  const duplicateSeries = interval && category !== 'year_round'
+    ? propSeries.find(s => serviceCategory(s.service_type) === category)
+    : null
+  const showDuplicateWarning = !!duplicateSeries && !dupAck
+
+  // When the service is seasonal, default the end mode to Season End — but only
+  // until the user touches the control, and never when editing an existing job.
+  const endTouched = useRef(false)
+  useEffect(() => {
+    if (isEdit || endTouched.current) return
+    setEndMode(serviceSeason ? 'season' : 'never')
+  }, [serviceSeason, isEdit])
+
+  // Saved measurement recommendation for the selected property — the pricing
+  // source of truth. Maps the chosen cadence to its measured price (same custom-
+  // cadence mapping as effectiveFreq: 3wk≈biweekly, 4wk+≈monthly).
+  const savedRec = latestSavedRecommendation(selProp?.measurement_history)
+  const cadenceForInterval: CadenceKey = !interval ? 'one_time'
+    : interval.unit === 'month' || (interval.unit === 'week' && interval.count >= 4) ? 'monthly'
+    : interval.unit === 'week' && interval.count === 1 ? 'weekly'
+    : 'biweekly'
+  const measuredPrice = savedRec ? savedPriceFor(savedRec.rec, cadenceForInterval) : null
+
   function buildRecurrence(): Recurrence {
     if (!interval) return { unit: null, count: 1, endDate: null, endCount: null }
     return {
       unit: interval.unit,
       count: interval.count,
-      endDate: endMode === 'on' && endDate ? endDate : null,
+      // Season End resolves to the season's end DATE (stored as a normal end_date,
+      // so the recurrence engine needs no season awareness).
+      endDate: endMode === 'season' ? seasonEndDate : (endMode === 'on' && endDate ? endDate : null),
       endCount: endMode === 'after' ? Math.max(1, endCount) : null,
     }
   }
@@ -156,7 +214,24 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     if (!watch('title')) {
       setValue('title', svc + (selProp?.address ? ` — ${selProp.address}` : ''))
     }
+    // Selecting Weekly/Bi-Weekly/Monthly auto-suggests the measured price for
+    // that cadence (only when the price hasn't been typed yet).
+    const rec = latestSavedRecommendation(selProp?.measurement_history)
+    if (rec && !(Number(watch('price')) > 0)) {
+      setValue('price', savedPriceFor(rec.rec, kind))
+    }
   }
+
+  // Load configured service seasons once (falls back to Calgary defaults).
+  useEffect(() => {
+    async function loadSeasons() {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+      const { data } = await supabase.from('business_settings').select('service_seasons').eq('user_id', user.id).maybeSingle()
+      setSeasons(settingsToSeasons((data as { service_seasons: unknown } | null)?.service_seasons))
+    }
+    loadSeasons()
+  }, [supabase])
 
   // Load properties for the selected customer
   useEffect(() => {
@@ -176,6 +251,38 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     loadProps()
   }, [customerId, supabase, setValue, watch])
 
+  // Existing recurring series on the selected property — for duplicate detection.
+  // A series is "active" if it has any future or undated visit on the calendar.
+  useEffect(() => {
+    if (!selectedPropertyId || isEdit) { setPropSeries([]); return }
+    let active = true
+    async function loadSeries() {
+      const { data: jobs } = await supabase
+        .from('jobs')
+        .select('recurrence_id, service_type, scheduled_date, status')
+        .eq('property_id', selectedPropertyId)
+        .not('recurrence_id', 'is', null)
+      const rows = (jobs as { recurrence_id: string; service_type: string | null; scheduled_date: string; status: string }[]) || []
+      const today = new Date().toISOString().slice(0, 10)
+      // recurrence_ids that still have a future, non-cancelled visit booked.
+      const activeRecIds = new Set<string>()
+      const stByRec: Record<string, string | null> = {}
+      for (const j of rows) {
+        if (j.status !== 'cancelled' && j.scheduled_date >= today) activeRecIds.add(j.recurrence_id)
+        if (!(j.recurrence_id in stByRec)) stByRec[j.recurrence_id] = j.service_type
+      }
+      if (activeRecIds.size === 0) { if (active) setPropSeries([]); return }
+      const { data: recs } = await supabase
+        .from('job_recurrences')
+        .select('id, interval_unit, interval_count')
+        .in('id', Array.from(activeRecIds))
+      const recRows = (recs as { id: string; interval_unit: string | null; interval_count: number | null }[]) || []
+      if (active) setPropSeries(recRows.map(r => ({ id: r.id, service_type: stByRec[r.id] ?? null, unit: r.interval_unit, count: r.interval_count })))
+    }
+    loadSeries()
+    return () => { active = false }
+  }, [selectedPropertyId, isEdit, supabase])
+
   const customerOptions = [
     { value: '', label: 'Select a customer...' },
     ...customers.map(c => ({ value: c.id, label: c.name })),
@@ -187,7 +294,8 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   ]
 
   const endSummary =
-    endMode === 'after' ? `ends after ${Math.max(1, endCount)} visit${endCount !== 1 ? 's' : ''}`
+    endMode === 'season' && seasonEndDate ? `ends at season end (${formatDate(seasonEndDate)})`
+    : endMode === 'after' ? `ends after ${Math.max(1, endCount)} visit${endCount !== 1 ? 's' : ''}`
     : endMode === 'on' && endDate ? `until ${endDate}`
     : 'no end date (kept rolling on your calendar)'
 
@@ -218,9 +326,25 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
       <Input label="Service Type" placeholder="e.g. Lawn Mowing"
         {...register('service_type')} />
 
-      <Input label="Price ($/visit)" type="number" step="5" min="0"
-        hint={suggestedPrice ? `Leave 0 to use the linked quote (${formatCurrency(suggestedPrice)}). Type to override.` : 'Per-visit price — leave 0 if a linked quote sets it.'}
-        {...register('price', { min: 0 })} />
+      <div>
+        <Input label="Price ($/visit)" type="number" step="5" min="0"
+          hint={measuredPrice && measuredPrice > 0
+            ? `Measured property: ${formatCurrency(measuredPrice)} ${cadenceForInterval === 'one_time' ? 'one-time' : cadenceForInterval} recommended.`
+            : suggestedPrice ? `Leave 0 to use the linked quote (${formatCurrency(suggestedPrice)}). Type to override.` : 'Per-visit price — leave 0 if a linked quote sets it.'}
+          {...register('price', { min: 0 })} />
+        {measuredPrice != null && measuredPrice > 0 && (
+          <button type="button" onClick={() => setValue('price', measuredPrice)}
+            className="text-xs text-accent hover:underline mt-1.5">
+            Use measured price ({formatCurrency(measuredPrice)})
+          </button>
+        )}
+        {savedRec && measuredPrice != null && measuredPrice > 0 && (
+          <p className="text-[11px] text-ink-faint mt-1">
+            Calculated {formatDate(savedRec.date)}
+            {recommendationIsStale(savedRec.date, Date.now()) && <span className="text-amber-400"> · ⚠ may be outdated, consider recalculating</span>}
+          </p>
+        )}
+      </div>
 
       <Input label="Date" type="date"
         error={errors.scheduled_date?.message}
@@ -298,6 +422,40 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
                   : 'Turn this one-time job into a recurring schedule. The current job becomes the first visit.'}
               </p>
             )}
+
+            {/* Duplicate recurring schedule warning */}
+            {interval && showDuplicateWarning && duplicateSeries && (
+              <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 space-y-2">
+                <p className="text-xs font-semibold text-amber-300 flex items-center gap-1.5">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                  This property already has a recurring {category === 'snow' ? 'snow' : 'mowing'} schedule
+                  {duplicateSeries.unit && <span className="font-normal text-ink-muted"> ({recurrenceLabel(duplicateSeries.unit as RecurUnit, duplicateSeries.count)})</span>}.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <a href={`/dashboard/customers/${customerId}`} target="_blank" rel="noopener noreferrer"
+                    className="text-xs font-medium px-2.5 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong">
+                    View existing schedule
+                  </a>
+                  <button type="button" onClick={() => { setPreset('none'); setDupAck(true) }}
+                    className="text-xs font-medium px-2.5 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong">
+                    Add one-time visit instead
+                  </button>
+                  <button type="button" onClick={() => setDupAck(true)}
+                    className="text-xs font-medium px-2.5 py-1 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20">
+                    Create another schedule anyway
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Season chip — what season this service belongs to */}
+            {serviceSeason && (
+              <p className="text-xs text-ink-muted flex items-center gap-1.5">
+                {category === 'snow' ? <Snowflake className="w-3.5 h-3.5 text-sky-400" /> : <Sun className="w-3.5 h-3.5 text-amber-400" />}
+                {category === 'snow' ? 'Snow' : 'Lawn'} service · season {seasonLabel(serviceSeason)}
+              </p>
+            )}
+
             {/* One-click lawn-care presets (new jobs only) */}
             {!isEdit && (
             <div className="flex flex-wrap gap-2">
@@ -350,14 +508,24 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
                   <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Ends</label>
                   <select
                     value={endMode}
-                    onChange={(e) => setEndMode(e.target.value as 'never' | 'on' | 'after')}
+                    onChange={(e) => { endTouched.current = true; setEndMode(e.target.value as EndMode) }}
                     className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
                   >
+                    {serviceSeason && <option value="season" className="bg-bg-secondary">Season end (recommended)</option>}
+                    <option value="on" className="bg-bg-secondary">Specific date</option>
+                    <option value="after" className="bg-bg-secondary">Number of visits</option>
                     <option value="never" className="bg-bg-secondary">Never ends</option>
-                    <option value="on" className="bg-bg-secondary">Ends on date</option>
-                    <option value="after" className="bg-bg-secondary">Ends after N visits</option>
                   </select>
                 </div>
+                {endMode === 'season' && (
+                  <div className="rounded-xl border border-accent/20 bg-accent/5 px-3 py-2 flex items-center gap-2">
+                    <CalendarRange className="w-4 h-4 text-accent shrink-0" />
+                    <p className="text-xs text-ink">
+                      Ends at season end{serviceSeason ? ` (${seasonLabel(serviceSeason)})` : ''}
+                      {seasonEndDate ? <span className="text-ink-muted"> · {formatDate(seasonEndDate)}</span> : <span className="text-amber-400"> · set a start date to compute</span>}
+                    </p>
+                  </div>
+                )}
                 {endMode === 'on' && (
                   <Input label="End date" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
                 )}
@@ -368,6 +536,12 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
                 <p className="text-xs text-ink-faint">
                   Repeats {recurrenceLabel(interval!.unit, interval!.count).toLowerCase()}, {endSummary}.
                 </p>
+                {/* Live visit-count estimate */}
+                {visitEstimate != null && visitEstimate > 0 && (
+                  <p className="text-xs font-semibold text-accent">
+                    {recurrenceLabel(interval!.unit, interval!.count)} · {scheduledDate ? formatDate(scheduledDate) : '?'} → {effectiveEndDate ? formatDate(effectiveEndDate) : '?'} · ≈ {visitEstimate} visit{visitEstimate !== 1 ? 's' : ''}
+                  </p>
+                )}
               </>
             )}
           </div>

@@ -206,5 +206,61 @@ alter table public.business_settings
 alter table public.properties
   add column if not exists neighborhood text;
 
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-10 — Neighbor leads (door-knock prospects).
+-- Prospects stay SEPARATE from customers: no customer record is
+-- created until conversion, then linked via converted_customer_id.
+-- ════════════════════════════════════════════════════════════
+create table if not exists public.neighbor_leads (
+  id                    uuid primary key default uuid_generate_v4(),
+  created_at            timestamptz not null default now(),
+  user_id               uuid not null references auth.users(id) on delete cascade,
+
+  address               text not null,
+  latitude              double precision,
+  longitude             double precision,
+  neighborhood          text,
+  notes                 text,
+
+  status                text not null default 'prospect'
+                        check (status in ('prospect','contacted','quoted','won','lost')),
+
+  -- Where this lead came from (the anchor customer whose neighbor it is).
+  source_customer_id    uuid references public.customers(id) on delete set null,
+  source_property_id    uuid references public.properties(id) on delete set null,
+  source_quote_id       uuid references public.quotes(id) on delete set null,
+  -- Filled on conversion — the ONLY link between a lead and a customer record.
+  converted_customer_id uuid references public.customers(id) on delete set null
+);
+
+alter table public.neighbor_leads enable row level security;
+create policy "neighbor_leads: select own" on public.neighbor_leads for select using (auth.uid() = user_id);
+create policy "neighbor_leads: insert own" on public.neighbor_leads for insert with check (auth.uid() = user_id);
+create policy "neighbor_leads: update own" on public.neighbor_leads for update using (auth.uid() = user_id);
+create policy "neighbor_leads: delete own" on public.neighbor_leads for delete using (auth.uid() = user_id);
+
+create index if not exists neighbor_leads_user_idx   on public.neighbor_leads(user_id);
+create index if not exists neighbor_leads_status_idx on public.neighbor_leads(status);
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-10 — Job check-in/check-out timestamps.
+-- ▶ Start Job stamps started_at (arrival); ✓ Complete Job stamps
+-- completed_at and auto-fills actual_minutes from the difference.
+-- One timing system: actual_minutes stays the value every engine
+-- (profitability, routes, pricing) already reads.
+-- ════════════════════════════════════════════════════════════
+alter table public.jobs
+  add column if not exists started_at   timestamptz,
+  add column if not exists completed_at timestamptz;
+
 -- properties.measurement_history (jsonb) already exists and now stores versioned
 -- snapshots { date, total_sqft, sections{...}, rate_per_1000 } — never overwritten.
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-12 — Service seasons (lawn/snow).
+-- Recurring lawn/snow services default to their season's end date.
+-- Stored as recurring month/day anchors: { lawn:{startMonth,startDay,
+-- endMonth,endDay}, snow:{...} }. null = Calgary defaults in code.
+-- ════════════════════════════════════════════════════════════
+alter table public.business_settings
+  add column if not exists service_seasons jsonb;

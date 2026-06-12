@@ -54,6 +54,7 @@ export function ProspectCard({ a }: { a: ProspectAssessment }) {
         <div className="mt-1.5 space-y-0.5">
           <p className="text-[11px] text-ink-muted">• Travel: {a.financial.travelImpact}</p>
           <p className="text-[11px] text-ink-muted">• Route: {a.financial.routeImpact}</p>
+          <p className="text-[11px] text-ink-faint">• {a.financial.timeBasis}</p>
         </div>
       </div>
 

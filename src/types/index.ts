@@ -48,10 +48,28 @@ export interface Property {
 
 // One versioned measurement. Stored as an element of properties.measurement_history
 // (jsonb) so re-measuring a property APPENDS a new snapshot instead of overwriting.
+// The full pricing recommendation captured WITH a measurement — the source of
+// truth for suggested prices on quotes/jobs until the next measurement or
+// recalculation. Built by lib/pricing's pricingPackage (never a second system).
+export interface SavedRecommendation {
+  one_time: number
+  weekly: number
+  biweekly: number
+  monthly: number
+  cadence: 'one_time' | 'weekly' | 'biweekly' | 'monthly' // recommended frequency
+  season_weekly: number
+  season_biweekly: number
+  season_monthly: number
+  est_minutes: number
+  score?: string | null  // prospect score at measurement time (A+…F)
+  hood?: string | null   // neighborhood name at measurement time
+}
+
 export interface MeasurementSnapshot {
   date: string            // ISO timestamp the measurement was taken
   total_sqft: number      // sum of all lawn sections
   sections?: LawnSections // per-section breakdown (front/back/left/right/boulevard/other)
+  recommendation?: SavedRecommendation | null
   rate_per_1000?: number | null
   // legacy single-figure fields kept for older snapshots
   lawn_sqft?: number | null
@@ -140,9 +158,14 @@ export interface Job {
   // Per-visit price. Manual override — when set it wins over the linked quote's
   // cadence price (the one source for what a visit is worth).
   price: number | null
-  // Actual minutes spent on site (entered on completion). Foundation for future
-  // pricing intelligence: estimated vs. actual time per job.
+  // Actual minutes spent on site. Auto-calculated from started_at → completed_at
+  // by the check-in/check-out flow (manually editable). THE timing value every
+  // engine reads (profitability, routes, pricing calibration).
   actual_minutes: number | null
+  // Check-in/check-out: ▶ Start stamps started_at (arrival), ✓ Complete stamps
+  // completed_at and derives actual_minutes.
+  started_at: string | null
+  completed_at: string | null
   // Best-day suggester telemetry: what was recommended vs. what was picked,
   // so recommendation quality can be measured later.
   suggested_date: string | null
@@ -382,6 +405,10 @@ export interface BusinessSettings {
   logo_scale: number | null
   // Dashboard layout: section order + hidden sections.
   dashboard_cards: { order: string[]; hidden: string[] } | null
+  // Service seasons (lawn/snow) as recurring month/day anchors. Drives the
+  // "Season End" recurrence default and seasonal reactivation suppression.
+  // null = use Calgary defaults (lib/seasons DEFAULT_SEASONS).
+  service_seasons: { lawn?: unknown; snow?: unknown } | null
   user_id: string
 }
 

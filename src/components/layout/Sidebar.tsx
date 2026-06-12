@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { LayoutDashboard, Users, FileText, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Navigation, Receipt, Menu, X, HeartPulse, BarChart3, Gauge, ShieldCheck, Map as MapIcon } from 'lucide-react'
+import { LayoutDashboard, Users, FileText, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Navigation, Receipt, Menu, X, HeartPulse, BarChart3, Gauge, ShieldCheck, Map as MapIcon, Target, CalendarCheck } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 
@@ -18,7 +18,9 @@ const navMain = [
   { label: 'Invoices',   href: '/dashboard/invoices',   icon: Receipt },
 ]
 const navInsights = [
+  { label: 'Weekly Review',    href: '/dashboard/review',          icon: CalendarCheck },
   { label: 'Saturation Map',   href: '/dashboard/saturation',      icon: MapIcon },
+  { label: 'Neighbor Leads',   href: '/dashboard/neighbors',       icon: Target },
   { label: 'Profitability',    href: '/dashboard/profitability',   icon: BarChart3 },
   { label: 'Data Quality',     href: '/dashboard/data-quality',    icon: ShieldCheck },
   { label: 'Pricing Recovery', href: '/dashboard/pricing-recovery', icon: Gauge },

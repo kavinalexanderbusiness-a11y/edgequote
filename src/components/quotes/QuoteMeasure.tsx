@@ -243,7 +243,11 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
   const pkg = totalSqft > 0 ? pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount: nearby, neighborhoodName: hoodName }) : null
   // The business verdict: should I take this customer?
   const assessment = pkg && prospect
-    ? assessProspect(pkg, prospect, { distanceKm: null, travelFee: Number(travelFee) || 0, neighborhoodName: hoodName, estimatedMinutes: estimateVisitMinutes(totalSqft) })
+    ? assessProspect(pkg, prospect, {
+        distanceKm: null, travelFee: Number(travelFee) || 0, neighborhoodName: hoodName,
+        estimatedMinutes: estimateVisitMinutes(totalSqft, prospect.observedMinPer1000),
+        timedJobs: prospect.timedJobs,
+      })
     : null
 
   function applySelection(sel: CadenceSelection) {

@@ -6,7 +6,8 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { Customer, Property, Quote, Job, Invoice, JobRecurrence } from '@/types'
 import { needsFollowUp, daysSince } from '@/lib/followup'
-import { recurrenceLabel, recurringCustomerLabel } from '@/lib/recurrence'
+import { recurrenceLabel, recurringCustomerLabel, buildServicePlans, ServicePlan } from '@/lib/recurrence'
+import { settingsToSeasons, DEFAULT_SEASONS, ServiceSeasons } from '@/lib/seasons'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -14,7 +15,7 @@ import { formatCurrency, formatDate, getInitials } from '@/lib/utils'
 import {
   ArrowLeft, Phone, MessageSquare, FilePlus, CalendarPlus, Mail, MapPin, Repeat,
   FileText, Send, RotateCw, CheckCircle2, Wrench, Receipt, DollarSign, Sparkles, Users,
-  Edit2, ExternalLink, Ruler, AlertTriangle, StickyNote, Wallet,
+  Edit2, ExternalLink, Ruler, AlertTriangle, StickyNote, Wallet, Timer,
 } from 'lucide-react'
 
 const WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
@@ -58,6 +59,8 @@ export default function CustomerDetailPage() {
   const [jobs, setJobs] = useState<Job[]>([])
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [recurrences, setRecurrences] = useState<JobRecurrence[]>([])
+  const [seasons, setSeasons] = useState<ServiceSeasons>(DEFAULT_SEASONS)
+  const [pausing, setPausing] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
   const [editingNotes, setEditingNotes] = useState(false)
@@ -99,6 +102,9 @@ export default function CustomerDetailPage() {
       const { data: recs } = await supabase.from('job_recurrences').select('*').eq('customer_id', id)
       if (recs) setRecurrences(recs as JobRecurrence[])
 
+      const { data: settings } = await supabase.from('business_settings').select('service_seasons').eq('user_id', user!.id).maybeSingle()
+      setSeasons(settingsToSeasons((settings as { service_seasons: unknown } | null)?.service_seasons))
+
       setLoading(false)
     }
     load()
@@ -113,10 +119,28 @@ export default function CustomerDetailPage() {
     setEditingNotes(false)
   }
 
+  // Pause a schedule: cancel its FUTURE scheduled/in-progress visits (past visits
+  // and the recurrence row are preserved, so it can be rebuilt later). Reuses the
+  // jobs.status='cancelled' system — no new "paused" state needed.
+  async function pauseSchedule(plan: ServicePlan) {
+    const todayISO = localToday()
+    const futureIds = jobs
+      .filter(j => j.recurrence_id === plan.recurrenceId && j.scheduled_date >= todayISO && (j.status === 'scheduled' || j.status === 'in_progress'))
+      .map(j => j.id)
+    if (futureIds.length === 0) return
+    if (!confirm(`Pause ${plan.serviceName}? This cancels ${futureIds.length} upcoming visit${futureIds.length !== 1 ? 's' : ''}. Past visits are kept, and you can schedule it again anytime.`)) return
+    setPausing(plan.recurrenceId)
+    const { error } = await supabase.from('jobs').update({ status: 'cancelled' }).in('id', futureIds)
+    if (error) alert('Could not pause: ' + error.message)
+    else setJobs(prev => prev.map(j => futureIds.includes(j.id) ? { ...j, status: 'cancelled' } : j))
+    setPausing(null)
+  }
+
   if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading customer...</div>
   if (!customer) return <div className="text-center py-16 text-sm text-red-400">Customer not found.</div>
 
   const today = localToday()
+  const servicePlans = buildServicePlans(recurrences, jobs, seasons, today)
 
   // ── Revenue (three separate truths) ──
   const wonQuotes = quotes.filter(q => WON.has(q.status))
@@ -188,10 +212,22 @@ export default function CustomerDetailPage() {
   const phone = customer.phone
   const isHighValue = bookedRevenue >= 2000
 
+  // Service history from check-in/check-out data — real durations, not estimates.
+  const timedVisits = completed.filter(j => Number(j.actual_minutes) > 0)
+  const avgDuration = timedVisits.length
+    ? Math.round(timedVisits.reduce((s, j) => s + Number(j.actual_minutes), 0) / timedVisits.length)
+    : null
+
   const revenueCards = [
     { label: 'Booked Revenue', value: formatCurrency(bookedRevenue), sub: 'Won quotes', icon: DollarSign, color: 'text-accent' },
     { label: 'Collected', value: formatCurrency(collectedRevenue), sub: 'Invoices paid', icon: Wallet, color: 'text-emerald-400' },
     { label: 'Outstanding', value: formatCurrency(outstandingRevenue), sub: 'Billed, unpaid', icon: AlertTriangle, color: 'text-amber-400' },
+    {
+      label: 'Service History',
+      value: `${completed.length} visit${completed.length !== 1 ? 's' : ''}`,
+      sub: `${avgDuration != null ? `~${avgDuration} min avg` : 'No timed visits yet'}${lastServicedDate ? ` · last ${formatDate(lastServicedDate)}` : ''}`,
+      icon: Timer, color: 'text-sky-400',
+    },
   ]
 
   return (
@@ -334,8 +370,8 @@ export default function CustomerDetailPage() {
         </CardBody>
       </Card>
 
-      {/* Revenue — three separate truths */}
-      <div className="grid grid-cols-3 gap-4">
+      {/* Revenue + service history */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {revenueCards.map(c => {
           const Icon = c.icon
           return (
@@ -356,6 +392,27 @@ export default function CustomerDetailPage() {
         <span>Invoices: <span className="text-ink font-medium">{invoices.length}</span></span>
       </div>
 
+      {/* Current Service Plan — the recurring schedule at a glance */}
+      {servicePlans.length > 0 && (
+        <Card>
+          <CardHeader className="flex items-center gap-2">
+            <Repeat className="w-4 h-4 text-accent" />
+            <h2 className="text-sm font-semibold text-ink">Current Service Plan</h2>
+          </CardHeader>
+          <CardBody className="space-y-3">
+            {servicePlans.map(plan => (
+              <ServicePlanRow
+                key={plan.recurrenceId}
+                plan={plan}
+                customerId={id}
+                pausing={pausing === plan.recurrenceId}
+                onPause={() => pauseSchedule(plan)}
+              />
+            ))}
+          </CardBody>
+        </Card>
+      )}
+
       {/* Upcoming work */}
       <Card>
         <CardHeader className="flex items-center gap-2">
@@ -364,7 +421,7 @@ export default function CustomerDetailPage() {
           {nextVisit && <span className="ml-auto text-xs text-ink-muted">Next visit: <span className="text-accent font-semibold">{formatDate(nextVisit.scheduled_date)}</span></span>}
         </CardHeader>
         <CardBody className="space-y-3">
-          {recurrences.length > 0 && (
+          {recurrences.length > 0 && servicePlans.length === 0 && (
             <div className="flex flex-wrap gap-2">
               {recurrences.map(r => {
                 const remaining = remainingVisits(r.id)
@@ -505,6 +562,58 @@ export default function CustomerDetailPage() {
           </CardBody>
         </Card>
       )}
+    </div>
+  )
+}
+
+// One recurring schedule, summarised — visible without opening the calendar.
+function ServicePlanRow({ plan, customerId, pausing, onPause }: {
+  plan: ServicePlan; customerId: string; pausing: boolean; onPause: () => void
+}) {
+  return (
+    <div className={`rounded-xl border p-3 ${plan.paused ? 'border-border bg-bg-tertiary' : 'border-accent/20 bg-accent/5'}`}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-bold text-ink flex items-center gap-1.5">
+            <Repeat className={`w-3.5 h-3.5 shrink-0 ${plan.paused ? 'text-ink-faint' : 'text-accent'}`} />
+            {plan.serviceName}
+            {plan.paused && <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint border border-border rounded px-1.5 py-0.5">Paused</span>}
+          </p>
+          <p className="text-xs text-ink-muted mt-0.5">
+            {plan.cadenceLabel}
+            {plan.weekday && <> · {plan.weekday}</>}
+            {plan.windowLabel && <> · {plan.windowLabel}</>}
+          </p>
+          <p className="text-xs mt-0.5">
+            {plan.paused
+              ? <span className="text-ink-faint">No upcoming visits — schedule it again to resume</span>
+              : <span className="text-accent font-semibold">{plan.remaining} visit{plan.remaining !== 1 ? 's' : ''} remaining{plan.nextVisitDate ? ` · next ${formatDate(plan.nextVisitDate)}` : ''}</span>}
+          </p>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2 mt-2.5">
+        <Link href={`/dashboard/schedule?customer=${customerId}`}
+          className="text-xs font-medium px-2.5 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong transition-colors">
+          View schedule
+        </Link>
+        {!plan.paused && plan.nextVisitDate && (
+          <Link href={`/dashboard/schedule?focus=${plan.recurrenceId}`}
+            className="text-xs font-medium px-2.5 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong transition-colors">
+            Edit schedule
+          </Link>
+        )}
+        {!plan.paused && plan.remaining > 0 && (
+          <Button variant="ghost" size="sm" loading={pausing} onClick={onPause} className="hover:text-amber-400">
+            Pause schedule
+          </Button>
+        )}
+        {plan.paused && (
+          <Link href={`/dashboard/schedule?customer=${customerId}`}
+            className="text-xs font-medium px-2.5 py-1 rounded-lg border border-emerald-500/25 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors">
+            Resume / reschedule
+          </Link>
+        )}
+      </div>
     </div>
   )
 }

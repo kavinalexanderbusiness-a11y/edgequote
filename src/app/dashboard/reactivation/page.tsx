@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { Customer } from '@/types'
 import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
+import { seasonForService, isWithinSeason, settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
@@ -68,12 +69,14 @@ export default function ReactivationPage() {
   useEffect(() => {
     async function load() {
       const { data: { user } } = await supabase.auth.getUser()
-      const [cRes, jRes, qRes, rRes] = await Promise.all([
+      const [cRes, jRes, qRes, rRes, sRes] = await Promise.all([
         supabase.from('customers').select('*').eq('user_id', user!.id),
         supabase.from('jobs').select('customer_id, scheduled_date, status, service_type, quote_id, recurrence_id, price').eq('user_id', user!.id),
         supabase.from('quotes').select('id, customer_id, status, total, service_type, created_at, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
         supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user!.id),
+        supabase.from('business_settings').select('service_seasons').eq('user_id', user!.id).maybeSingle(),
       ])
+      const seasons: ServiceSeasons = settingsToSeasons((sRes.data as { service_seasons: unknown } | null)?.service_seasons)
       const customers = (cRes.data as Customer[]) || []
       const jobs = (jRes.data as JobLite[]) || []
       const quotes = (qRes.data as QuoteLite[]) || []
@@ -122,6 +125,19 @@ export default function ReactivationPage() {
           }
         }
         if (hadComeback) reactivated++
+
+        // SEASONAL DORMANCY: a recurring lawn/snow customer whose series ended
+        // because the SEASON ended is not lost — they're dormant until next
+        // season. Suppress them from every at-risk list while we're OUT of their
+        // service season. They only resurface once their season has arrived again
+        // and they STILL have no schedule (handled because `upcoming` is false and
+        // isWithinSeason(today) becomes true, so this guard stops suppressing).
+        const recService = recJob?.service_type ?? completed[completed.length - 1]?.service_type ?? null
+        const recSeason = recJob ? seasonForService(recService, seasons) : null
+        const seasonallyDormant = !!recSeason && !isWithinSeason(today, recSeason)
+        if (recJob && !upcoming && seasonallyDormant) {
+          continue // off-season — don't treat a naturally-ended seasonal series as lost
+        }
 
         // RAN-OUT (urgent): a recurring customer with no future visit booked. Caught
         // here regardless of days-since, so it can't slip through the 90-day buckets.
