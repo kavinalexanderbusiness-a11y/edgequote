@@ -17,7 +17,7 @@ import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { cn, minutesBetween } from '@/lib/utils'
 import { format, addMonths, addWeeks, addDays, subMonths, subWeeks, subDays, parseISO, getDay } from 'date-fns'
-import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repeat, Lightbulb } from 'lucide-react'
+import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repeat, Lightbulb, Info } from 'lucide-react'
 import { OptimizeSchedule } from '@/components/schedule/OptimizeSchedule'
 import { RainDelayCenter } from '@/components/schedule/RainDelayCenter'
 import { CloudRain } from 'lucide-react'
@@ -82,6 +82,10 @@ export default function SchedulePage() {
   const [recurrenceLabels, setRecurrenceLabels] = useState<Record<string, string>>({})
   const [recurrences, setRecurrences] = useState<Record<string, JobRecurrence>>({})
   const [quotesById, setQuotesById] = useState<Record<string, QuoteLite>>({})
+  // Future jobs that already have an invoice = immutable locks. The proactive
+  // cards AND the optimizer modal must read the SAME set, or they disagree about
+  // what can move.
+  const [invoicedJobIds, setInvoicedJobIds] = useState<Set<string>>(new Set())
   const [baseCoord, setBaseCoord] = useState<Coord | null>(null)
   const [preferredWorkDays, setPreferredWorkDays] = useState<number[]>([5, 6, 0])
   const [workStartTime, setWorkStartTime] = useState('08:00')
@@ -120,7 +124,7 @@ export default function SchedulePage() {
       id: j.id, scheduled_date: j.scheduled_date, status: j.status,
       recurrence_id: j.recurrence_id, start_time: j.start_time, duration_minutes: j.duration_minutes,
       lat: j.properties?.lat ?? null, lng: j.properties?.lng ?? null,
-      value: valueByJobId[j.id] || 0, invoiced: false,
+      value: valueByJobId[j.id] || 0, invoiced: invoicedJobIds.has(j.id),
       title: j.title, customerName: j.customers?.name || j.title, customerId: j.customer_id,
       neighborhood: j.properties?.neighborhood ?? null,
       ...(() => { const p = resolvePrefs(j.customers, j.properties); return { preferredDays: p.preferredDays, avoidDays: p.avoidDays } })(),
@@ -130,7 +134,7 @@ export default function SchedulePage() {
     return analyzeSchedule(optJobs, {
       today: localToday(), base: baseCoord, preferredDays: preferredWorkDays, capacityHours, recurrences: recs,
     })
-  }, [jobs, valueByJobId, recurrences, baseCoord, preferredWorkDays, capacityHours])
+  }, [jobs, valueByJobId, recurrences, baseCoord, preferredWorkDays, capacityHours, invoicedJobIds])
 
   const visibleSuggestions = suggestions.filter(s => !dismissedSuggestions.has(s.id))
 
@@ -196,7 +200,7 @@ export default function SchedulePage() {
 
   const fetchJobs = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
-    const [jRes, cRes, rRes, qRes, sRes] = await Promise.all([
+    const [jRes, cRes, rRes, qRes, sRes, iRes] = await Promise.all([
       supabase
         .from('jobs')
         .select('*, customers(id, name, phone, preferred_days, avoid_days, pref_time_start, pref_time_end), properties(id, address, lat, lng, neighborhood, preferred_days, avoid_days, pref_time_start, pref_time_end)')
@@ -206,8 +210,10 @@ export default function SchedulePage() {
       supabase.from('job_recurrences').select('*').eq('user_id', user!.id),
       supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
       supabase.from('business_settings').select('base_lat, base_lng, base_address, preferred_work_days, work_start_time, daily_capacity_hours').eq('user_id', user!.id).maybeSingle(),
+      supabase.from('invoices').select('job_id').eq('user_id', user!.id).not('job_id', 'is', null),
     ])
     setJobs((jRes.data as Job[]) || [])
+    setInvoicedJobIds(new Set(((iRes.data as { job_id: string }[]) || []).map(r => r.job_id)))
     setCustomers((cRes.data as Customer[]) || [])
     const labels: Record<string, string> = {}
     const recMap: Record<string, JobRecurrence> = {}
@@ -966,28 +972,28 @@ export default function SchedulePage() {
           {visibleSuggestions.map(s => (
             <div key={s.id}
               className={cn('rounded-xl border p-3 flex items-start gap-3',
-                s.severity === 'high' ? 'border-amber-500/40 bg-amber-500/10' : 'border-accent/25 bg-accent/5')}>
+                s.kind === 'stuck' ? 'border-border bg-bg-tertiary'
+                  : s.severity === 'high' ? 'border-amber-500/40 bg-amber-500/10'
+                  : 'border-accent/25 bg-accent/5')}>
               {s.kind === 'overload'
                 ? <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-                : s.kind === 'recurring'
-                  ? <Repeat className="w-4 h-4 text-accent shrink-0 mt-0.5" />
-                  : <Lightbulb className="w-4 h-4 text-accent shrink-0 mt-0.5" />}
+                : s.kind === 'stuck'
+                  ? <Info className="w-4 h-4 text-ink-muted shrink-0 mt-0.5" />
+                  : s.kind === 'recurring'
+                    ? <Repeat className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+                    : <Lightbulb className="w-4 h-4 text-accent shrink-0 mt-0.5" />}
               <div className="min-w-0 flex-1">
-                <p className={cn('text-sm font-semibold', s.severity === 'high' ? 'text-amber-300' : 'text-ink')}>{s.title}</p>
+                <p className={cn('text-sm font-semibold', s.kind === 'stuck' ? 'text-ink' : s.severity === 'high' ? 'text-amber-300' : 'text-ink')}>{s.title}</p>
                 <p className="text-xs text-ink-muted mt-0.5">{s.detail}</p>
-                <div className="flex flex-wrap items-center gap-2 mt-2">
-                  <Button size="sm" variant="secondary" onClick={() => launchOptimizer({ scope: s.scope, mode: s.mode, anchorDate: s.anchorDate })}>
-                    <Rocket className="w-3.5 h-3.5" /> {s.kind === 'overload' ? `Optimize ${format(parseISO(s.anchorDate + 'T00:00:00'), 'EEE')}` : 'Optimize'}
-                  </Button>
-                  {s.kind === 'overload' && (
-                    <>
-                      <button onClick={() => launchOptimizer({ scope: 'weekend', mode: 'balanced', anchorDate: s.anchorDate })}
-                        className="text-xs font-medium text-accent hover:underline">Optimize weekend</button>
-                      <button onClick={() => launchOptimizer({ scope: 'week', mode: 'balanced', anchorDate: s.anchorDate })}
-                        className="text-xs font-medium text-accent hover:underline">Optimize week</button>
-                    </>
-                  )}
-                </div>
+                {s.actionable && (
+                  <div className="flex flex-wrap items-center gap-2 mt-2">
+                    {/* The CTA runs the EXACT scope/mode/anchor that was simulated to
+                        produce the moves, so it can never come back "already optimized". */}
+                    <Button size="sm" variant="secondary" onClick={() => launchOptimizer({ scope: s.scope, mode: s.mode, anchorDate: s.anchorDate })}>
+                      <Rocket className="w-3.5 h-3.5" /> {s.kind === 'overload' ? `Rebalance ${format(parseISO(s.anchorDate + 'T00:00:00'), 'EEE')}’s week` : s.kind === 'underutil' ? 'Consolidate' : 'Optimize'}
+                    </Button>
+                  </div>
+                )}
               </div>
               <button onClick={() => setDismissedSuggestions(prev => new Set(prev).add(s.id))}
                 className="text-ink-faint hover:text-ink shrink-0" title="Dismiss">
@@ -1145,6 +1151,7 @@ export default function SchedulePage() {
           initialScope={optimizeLaunch?.scope}
           initialMode={optimizeLaunch?.mode}
           autoRun={optimizeLaunch?.autoRun}
+          invoicedIds={invoicedJobIds}
           onApply={applyOptimization}
           onClose={() => { setShowOptimize(false); setOptimizeLaunch(null) }}
         />

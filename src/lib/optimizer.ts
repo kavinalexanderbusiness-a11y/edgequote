@@ -120,6 +120,11 @@ export interface PlannedMove {
   to: string
   value: number
   recurring: boolean
+  // Set when the move lands the job onto a day its area already clusters (a peer
+  // in the same grid cell). Lets the proactive cards report REAL, validated
+  // cluster merges instead of a raw heuristic count.
+  groupsCluster?: boolean
+  clusterNeighborhood?: string | null
 }
 
 export interface OptimizationResult {
@@ -135,6 +140,7 @@ export interface OptimizationResult {
   lockedTimes: number    // future jobs left alone because they have a set start time
   lockedBilled: number   // future jobs left alone because they're already invoiced
   stableKept: number     // recurring customers kept on their established weekday
+  groupedIntoCluster: number // moves that landed a job onto an existing cluster
   blockedMoves: number   // candidate moves rejected to protect recurring series
   warnings: string[]     // pre-Apply safety notes (series conflicts avoided/blocked)
   reasons: string[]      // plain-language WHY this is better
@@ -654,7 +660,7 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
     const from = original.get(j.id)!
     const to = assign.get(j.id)!
     if (from === to) continue
-    moves.push({ jobId: j.id, title: j.title, customerName: j.customerName, from, to, value: j.value, recurring: !!j.recurrence_id })
+    const move: PlannedMove = { jobId: j.id, title: j.title, customerName: j.customerName, from, to, value: j.value, recurring: !!j.recurrence_id }
     // Did this land in an existing cluster (same cell already on the target day)?
     if (j.lat != null && j.lng != null) {
       const cell = cellKey(j.lat, j.lng)
@@ -663,8 +669,14 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
         const o = byId.get(id)!
         return o.lat != null && o.lng != null && cellKey(o.lat, o.lng) === cell
       })
-      if (peers) { groupedIntoCluster++; if (j.neighborhood) strengthenedHoods.add(j.neighborhood) }
+      if (peers) {
+        groupedIntoCluster++
+        move.groupsCluster = true
+        move.clusterNeighborhood = j.neighborhood ?? null
+        if (j.neighborhood) strengthenedHoods.add(j.neighborhood)
+      }
     }
+    moves.push(move)
   }
   moves.sort((a, b) => a.to.localeCompare(b.to))
   const daysAffected = new Set(moves.flatMap(m => [m.from, m.to])).size
@@ -693,7 +705,7 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
     mode: opts.mode, scope: opts.scope,
     before, after, moves, daysAffected, kmSaved, minutesSaved,
     movableCount: movable.length, lockedTimes, lockedBilled, stableKept,
-    blockedMoves, warnings, reasons,
+    groupedIntoCluster, blockedMoves, warnings, reasons,
   }
 }
 
@@ -703,20 +715,45 @@ function fmtDur(min: number): string {
 
 // ── Proactive auto-suggestions ────────────────────────────────────────────────
 // Owner-style observations that surface on the Schedule page WITHOUT opening the
-// optimizer: overloaded days, isolated jobs that belong in a cluster, and
-// recurring customers who'd strengthen a route by shifting day. Each suggestion
-// carries the scope/mode to fix it in one click. Bounded work — a few scoped
-// optimize runs at most.
+// optimizer. CRITICAL INVARIANT: every card is backed by a real optimizeSchedule()
+// simulation — the SAME function (and the same inputs: prefs, capacity, base,
+// recurrences, invoiced locks) the Optimize button runs. A card may only claim a
+// move the optimizer would actually make, so the page can never recommend
+// something the optimizer immediately calls "already optimized". When a day is
+// genuinely overloaded but no legal move exists (cadence / preferences / capacity
+// / locks), we show a NON-actionable explanation instead of a dead "Optimize" CTA.
 
 export interface ScheduleSuggestion {
   id: string
-  kind: 'overload' | 'cluster' | 'recurring' | 'underutil'
+  kind: 'overload' | 'cluster' | 'recurring' | 'underutil' | 'stuck'
   severity: 'high' | 'medium'
   title: string
   detail: string
+  // actionable = a validated optimizer move exists; the card shows an Optimize CTA
+  // wired to the SAME scope/mode/anchor that produced the move. Non-actionable
+  // cards are explanations only (no CTA).
+  actionable: boolean
   scope: OptimizeScope
   anchorDate: string
   mode: OptimizeMode
+}
+
+// Why an overloaded day can't be auto-balanced — derived from the day's own jobs
+// against the optimizer's movability rules (mirrors the `movable` gate). Honest
+// and specific so the card explains the constraint instead of dead-ending.
+function explainStuckDay(dayJobs: OptJob[]): string {
+  const movable = dayJobs.filter(j => j.status === 'scheduled' && !j.invoiced && !j.start_time)
+  if (movable.length === 0) {
+    const billed = dayJobs.some(j => j.invoiced)
+    const timed = dayJobs.some(j => !!j.start_time)
+    const locks = [billed ? 'already billed' : null, timed ? 'have a committed start time' : null].filter(Boolean).join(' or ')
+    return `Every visit that day is ${locks || 'locked'}, so none can be rescheduled. Free one up to rebalance.`
+  }
+  const reasons: string[] = []
+  if (movable.some(j => j.recurrence_id)) reasons.push('held to a recurring cadence')
+  if (movable.some(j => j.avoidDays && j.avoidDays.length > 0)) reasons.push('limited by customer day preferences')
+  reasons.push('the other work days in range are just as full')
+  return `Its visits can't move — ${reasons.join(', ')}. Add capacity or relax a constraint to rebalance.`
 }
 
 export function analyzeSchedule(jobs: OptJob[], base: Omit<OptOptions, 'mode' | 'scope' | 'anchorDate'>): ScheduleSuggestion[] {
@@ -735,7 +772,10 @@ export function analyzeSchedule(jobs: OptJob[], base: Omit<OptOptions, 'mode' | 
     return { total: labor + Math.round(km / AVG_SPEED_KM_PER_MIN) }
   }
 
-  // 1) Overloaded days — run a week-scoped balanced fix to quantify the win.
+  // 1) Overloaded days — for each, SIMULATE the exact balanced/week optimize the
+  // card's button would run. Only claim a fix if the optimizer actually moves a
+  // job OFF that day; otherwise show a non-actionable explanation of why it's
+  // stuck (so we never show a dead "Optimize" CTA the optimizer can't honour).
   const overloaded = Object.entries(byDate)
     .map(([date, list]) => ({ date, over: loadOf(list).total - capMin, count: list.length }))
     .filter(d => d.over > 20)
@@ -744,76 +784,60 @@ export function analyzeSchedule(jobs: OptJob[], base: Omit<OptOptions, 'mode' | 
   for (const d of overloaded) {
     const res = optimizeSchedule(jobs, { ...base, mode: 'balanced', scope: 'week', anchorDate: d.date })
     const dayName = format(parseISO(d.date + 'T00:00:00'), 'EEEE')
-    const fixed = res.after.overloadedDays < res.before.overloadedDays
-    const moved = res.moves.length
-    out.push({
-      id: `overload-${d.date}`, kind: 'overload', severity: 'high',
-      title: `${dayName} is overloaded by ${fmtDur(d.over)}.`,
-      detail: moved > 0
-        ? `Moving ${moved} job${moved !== 1 ? 's' : ''} would save ${res.kmSaved > 0 ? `${res.kmSaved} km and ` : ''}${fixed ? 'bring the day under capacity' : 'ease the day'}.`
-        : `Consider moving a job to a lighter day, or splitting the route.`,
-      scope: 'week', anchorDate: d.date, mode: 'balanced',
-    })
-  }
-
-  // 2) Isolated jobs — located future jobs whose cluster cell holds ≥3 jobs over
-  // the next weeks but that sit alone on their own day.
-  const cellDays: Record<string, Set<string>> = {}
-  const cellCount: Record<string, number> = {}
-  for (const j of future) {
-    if (j.lat == null || j.lng == null) continue
-    const c = cellKey(j.lat, j.lng)
-    ;(cellDays[c] ||= new Set()).add(j.scheduled_date)
-    cellCount[c] = (cellCount[c] || 0) + 1
-  }
-  let isolated = 0
-  for (const j of future) {
-    if (j.lat == null || j.lng == null) continue
-    const c = cellKey(j.lat, j.lng)
-    const alone = byDate[j.scheduled_date].filter(o => o.lat != null && o.lng != null && cellKey(o.lat, o.lng) === c).length === 1
-    if (alone && cellCount[c] >= 3 && cellDays[c].size > 1) isolated++
-  }
-  if (isolated >= 2) {
-    out.push({
-      id: 'cluster-merge', kind: 'cluster', severity: 'medium',
-      title: `${isolated} isolated jobs could merge into existing clusters.`,
-      detail: 'Grouping them onto their cluster day cuts driving and tightens routes.',
-      scope: 'future', anchorDate: base.today, mode: 'density',
-    })
-  }
-
-  // 3) Recurring-into-cluster — a recurring customer alone in their area on their
-  // day, while that area has a cluster on another nearby day.
-  for (const j of future) {
-    if (out.filter(s => s.kind === 'recurring').length >= 1) break
-    if (!j.recurrence_id || j.lat == null || j.lng == null) continue
-    const c = cellKey(j.lat, j.lng)
-    const alone = byDate[j.scheduled_date].filter(o => o.lat != null && o.lng != null && cellKey(o.lat, o.lng) === c).length === 1
-    if (!alone) continue
-    // Another day (within ~a week) where this cell clusters (≥2 jobs).
-    let clusterDay: string | null = null
-    for (const [date, list] of Object.entries(byDate)) {
-      if (date === j.scheduled_date) continue
-      if (Math.abs(parseISO(date).getTime() - parseISO(j.scheduled_date).getTime()) > 8 * 86400000) continue
-      const here = list.filter(o => o.lat != null && o.lng != null && cellKey(o.lat, o.lng) === c).length
-      if (here >= 2) { clusterDay = date; break }
-    }
-    if (clusterDay) {
-      const fromName = format(parseISO(j.scheduled_date + 'T00:00:00'), 'EEEE')
-      const toName = format(parseISO(clusterDay + 'T00:00:00'), 'EEEE')
-      const area = j.neighborhood ? `your ${j.neighborhood} route` : 'that route'
+    const leaves = res.moves.filter(m => m.from === d.date)
+    if (leaves.length > 0 && res.after.overloadedDays <= res.before.overloadedDays) {
+      const fixed = res.after.overloadedDays < res.before.overloadedDays
       out.push({
-        id: `recurring-${j.id}`, kind: 'recurring', severity: 'medium',
-        title: `Moving ${j.customerName} from ${fromName} to ${toName} would strengthen ${area}.`,
-        detail: 'They sit alone now, but that area already clusters on the other day.',
-        scope: 'week', anchorDate: j.scheduled_date, mode: 'density',
+        id: `overload-${d.date}`, kind: 'overload', severity: 'high', actionable: true,
+        title: `${dayName} is overloaded by ${fmtDur(d.over)}.`,
+        detail: `Moving ${leaves.length} job${leaves.length !== 1 ? 's' : ''} off ${dayName} would ${res.kmSaved > 0 ? `save ${res.kmSaved} km and ` : ''}${fixed ? 'bring the day under capacity' : 'ease the day'}.`,
+        scope: 'week', anchorDate: d.date, mode: 'balanced',
+      })
+    } else {
+      out.push({
+        id: `overload-${d.date}`, kind: 'stuck', severity: 'medium', actionable: false,
+        title: `${dayName} is overloaded by ${fmtDur(d.over)}, but it can't be auto-balanced.`,
+        detail: explainStuckDay(byDate[d.date]),
+        scope: 'week', anchorDate: d.date, mode: 'balanced',
       })
     }
   }
 
-  // 4) Underutilized days — a light WORK day whose handful of jobs could fold into
-  // a busier day, saving a whole base trip. The inverse of the overload card: a
-  // density week-optimize that empties the day proves the consolidation is real.
+  // 2) + 3) Cluster + recurring opportunities — derived from ONE density/future
+  // simulation. Every "isolated job" we report is a move the optimizer actually
+  // made (cadence-validated, score-improving), so the count is real and clicking
+  // reproduces it. This replaces the old raw heuristic counter (which could read
+  // hundreds of "isolated" jobs the optimizer would never touch).
+  const densityRes = optimizeSchedule(jobs, { ...base, mode: 'density', scope: 'future', anchorDate: base.today })
+  const grouped = densityRes.moves.filter(m => m.groupsCluster)
+
+  if (grouped.length >= 2) {
+    out.push({
+      id: 'cluster-merge', kind: 'cluster', severity: 'medium', actionable: true,
+      title: `${grouped.length} job${grouped.length !== 1 ? 's' : ''} can be grouped into existing clusters.`,
+      detail: 'Optimizing for density would shift them onto a day their area already clusters, cutting driving.',
+      scope: 'future', anchorDate: base.today, mode: 'density',
+    })
+  }
+
+  // A specific recurring customer the optimizer would fold into a cluster —
+  // phrased with real dates (never "Friday → Friday"), since it IS a real move.
+  const recMove = grouped.find(m => m.recurring)
+  if (recMove) {
+    const toLbl = format(parseISO(recMove.to + 'T00:00:00'), 'EEE, MMM d')
+    const fromLbl = format(parseISO(recMove.from + 'T00:00:00'), 'EEE, MMM d')
+    const area = recMove.clusterNeighborhood ? `your ${recMove.clusterNeighborhood} route` : 'that route'
+    out.push({
+      id: `recurring-${recMove.jobId}`, kind: 'recurring', severity: 'medium', actionable: true,
+      title: `Shifting ${recMove.customerName} to ${toLbl} would strengthen ${area}.`,
+      detail: `Their ${fromLbl} visit sits alone; that area already clusters on ${toLbl}.`,
+      scope: 'future', anchorDate: base.today, mode: 'density',
+    })
+  }
+
+  // 4) Underutilized days — a light WORK day whose handful of jobs the optimizer
+  // can fold into a busier day, saving a whole base trip (already simulation-
+  // backed: only shown when a density week-optimize actually frees the day).
   const prefSet = base.preferredDays.length ? new Set(base.preferredDays) : null
   const dayList = Object.entries(byDate)
     .map(([date, list]) => ({ date, count: list.length, load: loadOf(list).total }))
@@ -821,7 +845,7 @@ export function analyzeSchedule(jobs: OptJob[], base: Omit<OptOptions, 'mode' | 
     .sort((a, b) => a.date.localeCompare(b.date))
   for (const d of dayList) {
     if (out.some(s => s.kind === 'underutil')) break          // at most one
-    if (out.some(s => s.kind === 'overload' && s.anchorDate === d.date)) continue
+    if (out.some(s => (s.kind === 'overload' || s.kind === 'stuck') && s.anchorDate === d.date)) continue
     const widx = getDay(parseISO(d.date + 'T00:00:00'))
     if (prefSet && !prefSet.has(widx)) continue               // an off day isn't "underutilized"
     if (d.count > 2 || d.load >= capMin * 0.4) continue       // must be genuinely light
@@ -829,7 +853,7 @@ export function analyzeSchedule(jobs: OptJob[], base: Omit<OptOptions, 'mode' | 
     if (res.moves.length === 0 || res.after.activeDays >= res.before.activeDays) continue // no trip actually saved
     const dayName = format(parseISO(d.date + 'T00:00:00'), 'EEEE')
     out.push({
-      id: `underutil-${d.date}`, kind: 'underutil', severity: 'medium',
+      id: `underutil-${d.date}`, kind: 'underutil', severity: 'medium', actionable: true,
       title: `${dayName} has only ${d.count} job${d.count !== 1 ? 's' : ''} — consolidating could save a base trip.`,
       detail: res.kmSaved > 0
         ? `Folding ${dayName}'s work into a busier day frees the day and saves ${res.kmSaved} km of driving.`

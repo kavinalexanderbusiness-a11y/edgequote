@@ -38,23 +38,29 @@ interface Props {
   initialScope?: OptimizeScope
   initialMode?: OptimizeMode
   autoRun?: boolean                  // run immediately on open (from a suggestion)
+  // Future jobs that already have an invoice (immutable locks). Passed from the
+  // page so the modal and the proactive cards read the SAME locks; falls back to
+  // its own fetch when omitted.
+  invoicedIds?: Set<string>
   onApply: (moves: PlannedMove[]) => Promise<void>
   onClose: () => void
 }
 
 // 🚀 The whole-schedule optimizer UI: pick a mode, see Current vs Optimized,
 // review every proposed move, then Apply (undo-able) or Cancel.
-export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, preferredWorkDays, capacityHours, anchorDate, initialScope, initialMode, autoRun, onApply, onClose }: Props) {
+export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, preferredWorkDays, capacityHours, anchorDate, initialScope, initialMode, autoRun, invoicedIds: invoicedIdsProp, onApply, onClose }: Props) {
   const supabase = createClient()
   const [mode, setMode] = useState<OptimizeMode>(initialMode ?? 'recommended')
   const [scope, setScope] = useState<OptimizeScope>(initialScope ?? 'future')
-  const [invoicedIds, setInvoicedIds] = useState<Set<string> | null>(null)
+  const [invoicedIds, setInvoicedIds] = useState<Set<string> | null>(invoicedIdsProp ?? null)
   const [running, setRunning] = useState(false)
   const [applying, setApplying] = useState(false)
   const [result, setResult] = useState<OptimizationResult | null>(null)
 
-  // Billed jobs are immutable — fetch which future jobs already have an invoice.
+  // Billed jobs are immutable. Prefer the page-supplied set (so the modal and the
+  // proactive cards share the SAME locks); otherwise fetch it ourselves.
   useEffect(() => {
+    if (invoicedIdsProp) { setInvoicedIds(invoicedIdsProp); return }
     let active = true
     async function load() {
       const { data } = await supabase.from('invoices').select('job_id').not('job_id', 'is', null)
@@ -62,7 +68,7 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
     }
     load()
     return () => { active = false }
-  }, [supabase])
+  }, [supabase, invoicedIdsProp])
 
   function run(selectedMode: OptimizeMode, selectedScope: OptimizeScope) {
     setMode(selectedMode)
