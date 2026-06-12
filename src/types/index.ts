@@ -16,6 +16,13 @@ export interface Customer {
   tags: string[]
   acquisition_source: string | null
   referred_by_customer_id: string | null
+  // Scheduling preferences (customer-wide default; a property may override per
+  // field — see lib/preferences). Honoured by manual scheduling, the optimizer
+  // and the weekly Best-Day picker. getDay weekday indices (0=Sun…6=Sat).
+  preferred_days: number[] | null
+  avoid_days: number[] | null
+  pref_time_start: string | null // 'HH:mm'
+  pref_time_end: string | null   // 'HH:mm'
   user_id: string
 }
 
@@ -43,6 +50,12 @@ export interface Property {
   notes: string | null
   measurement_history: MeasurementSnapshot[]
   is_primary: boolean
+  // Optional per-property override of the customer's scheduling preferences.
+  // A set field wins over the customer default for that field only.
+  preferred_days: number[] | null
+  avoid_days: number[] | null
+  pref_time_start: string | null // 'HH:mm'
+  pref_time_end: string | null   // 'HH:mm'
   customers?: Pick<Customer, 'id' | 'name' | 'email' | 'phone'>
 }
 
@@ -170,8 +183,8 @@ export interface Job {
   // so recommendation quality can be measured later.
   suggested_date: string | null
   suggested_nearby_count: number | null
-  customers?: Pick<Customer, 'id' | 'name' | 'phone'>
-  properties?: Pick<Property, 'id' | 'address' | 'lat' | 'lng' | 'neighborhood'>
+  customers?: Pick<Customer, 'id' | 'name' | 'phone' | 'preferred_days' | 'avoid_days' | 'pref_time_start' | 'pref_time_end'>
+  properties?: Pick<Property, 'id' | 'address' | 'lat' | 'lng' | 'neighborhood' | 'preferred_days' | 'avoid_days' | 'pref_time_start' | 'pref_time_end'>
 }
 
 // Apple-style edit scope for recurring jobs.

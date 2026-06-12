@@ -6,10 +6,11 @@ import { createClient } from '@/lib/supabase/client'
 import { Job, JobRecurrence } from '@/types'
 import { Coord } from '@/lib/geo'
 import { optimizeSchedule, OptimizationResult, OptimizeMode, OptimizeScope, OptJob, PlannedMove } from '@/lib/optimizer'
+import { resolvePrefs } from '@/lib/preferences'
 import { localTodayISO, formatCurrency, cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
-import { Rocket, X, Trophy, Scale, DollarSign, Target, ArrowRight, Repeat, Check, Navigation, Clock, Gauge, CalendarDays, Lightbulb } from 'lucide-react'
+import { Rocket, X, Trophy, Scale, DollarSign, Target, ArrowRight, Repeat, Check, Navigation, Clock, Gauge, CalendarDays, Lightbulb, AlertTriangle, ShieldCheck } from 'lucide-react'
 
 const MODES: { key: OptimizeMode; label: string; sub: string; Icon: typeof Trophy }[] = [
   { key: 'recommended', label: 'Smart Recommended', sub: 'Best overall balance', Icon: Target },
@@ -83,7 +84,9 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
         invoiced: invoicedIds?.has(j.id) ?? false,
         title: j.title,
         customerName: j.customers?.name || j.title,
+        customerId: j.customer_id,
         neighborhood: j.properties?.neighborhood ?? null,
+        ...(() => { const p = resolvePrefs(j.customers, j.properties); return { preferredDays: p.preferredDays, avoidDays: p.avoidDays } })(),
       }))
       const recs: Record<string, { freq: string | null; interval_unit: string | null; interval_count: number | null }> = {}
       for (const [id, r] of Object.entries(recurrences)) recs[id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count }
@@ -229,6 +232,22 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
                       </div>
                     </div>
                   </>
+                )}
+
+                {/* Recurring-series safety gate — shown before Apply */}
+                {result.warnings.length > 0 && (
+                  <div className="space-y-1">
+                    {result.warnings.map((wmsg, i) => {
+                      const blocked = result.blockedMoves > 0 && i === 0
+                      return (
+                        <p key={i} className={cn('text-[11px] flex items-start gap-1.5',
+                          blocked ? 'text-amber-400' : 'text-emerald-400')}>
+                          {blocked ? <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" /> : <ShieldCheck className="w-3.5 h-3.5 shrink-0 mt-px" />}
+                          {wmsg}
+                        </p>
+                      )
+                    })}
+                  </div>
                 )}
 
                 {(result.lockedTimes > 0 || result.lockedBilled > 0) && (

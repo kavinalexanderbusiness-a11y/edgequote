@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Job, JobStatus, JobRecurrence, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
 import { Coord } from '@/lib/geo'
-import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, routeStats, directionsUrl, computeDayEtas, roughFinishEstimate, dayLoad, minutesToTime12, DEFAULT_JOB_MIN } from '@/lib/route'
+import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, nearestNeighborRoute, roundTripMapsUrl, routeStats, directionsUrl, computeDayEtas, roughFinishEstimate, dayLoad, minutesToTime12, DEFAULT_JOB_MIN } from '@/lib/route'
+import { buildRoadDistance } from '@/lib/distance'
 import { jobVisitValue, effectiveFreq, quoteVisitAmount } from '@/lib/invoicing'
 import { formatCurrency, cn, localTodayISO } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
@@ -118,7 +119,7 @@ export function DayOpsPanel({
     setSavingQuick(false)
     setQuickId(null)
   }
-  const [route, setRoute] = useState<{ ordered: OrderedRouteStop[]; totalKm: number; mapsUrl: string | null; usedGoogle: boolean } | null>(null)
+  const [route, setRoute] = useState<{ ordered: OrderedRouteStop[]; totalKm: number; mapsUrl: string | null; usedGoogle: boolean; usedRoad: boolean } | null>(null)
   const [routing, setRouting] = useState(false)
   const lastKey = useRef<string>('')
 
@@ -164,8 +165,21 @@ export function DayOpsPanel({
         lng: job.properties?.lng ?? null,
       }))
       await geocodeMissingStops(supabase, stops)
+      const located = stops.filter(s => s.lat != null && s.lng != null)
+      // Prefer cached real-road distances (fetched once, reused) for ordering and
+      // km; fall back to the Directions API / haversine when none are available.
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user && located.length > 1) {
+        const { dist, usedRoad } = await buildRoadDistance(supabase, user.id, [baseCoord, ...located.map(s => ({ lat: s.lat as number, lng: s.lng as number }))])
+        if (usedRoad) {
+          const nn = nearestNeighborRoute(baseCoord, located, dist)
+          if (alive) setRoute({ ordered: nn.ordered, totalKm: nn.totalKm, mapsUrl: roundTripMapsUrl(baseCoord, nn.ordered), usedGoogle: true, usedRoad: true })
+          if (alive) setRouting(false)
+          return
+        }
+      }
       const res = await optimizeRoute(baseCoord, stops)
-      if (alive) setRoute({ ordered: res.ordered, totalKm: res.totalKm, mapsUrl: res.mapsUrl, usedGoogle: res.usedGoogle })
+      if (alive) setRoute({ ordered: res.ordered, totalKm: res.totalKm, mapsUrl: res.mapsUrl, usedGoogle: res.usedGoogle, usedRoad: false })
       if (alive) setRouting(false)
     }
     run()
@@ -311,6 +325,7 @@ export function DayOpsPanel({
             ) : route && stats ? (
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1.5 text-xs text-ink-muted">
                 <span className="flex items-center gap-1"><Navigation className="w-3 h-3" /> ~{route.totalKm} km</span>
+                {route.usedRoad && <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-400 border border-emerald-500/30 bg-emerald-500/10 rounded px-1.5 py-0.5">Real-road</span>}
                 <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> ~{stats.driveMinutes} min driving</span>
                 <span className="flex items-center gap-1"><MapPin className="w-3 h-3" /> {stats.clusters} cluster{stats.clusters !== 1 ? 's' : ''}</span>
                 <span>{stats.avgLegKm} km avg between stops</span>

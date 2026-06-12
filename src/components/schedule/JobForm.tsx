@@ -16,6 +16,7 @@ import {
   seasonEndDateFor, estimateSeasonVisits, seasonLabel,
 } from '@/lib/seasons'
 import { WeeklyScheduler } from '@/components/schedule/WeeklyScheduler'
+import { resolvePrefs, type PrefSource } from '@/lib/preferences'
 import { Repeat, Sparkles, Snowflake, Sun, AlertTriangle, CalendarRange } from 'lucide-react'
 
 // Flexible recurrence: any interval (count + unit), three end modes.
@@ -39,6 +40,17 @@ interface JobFormProps {
   initialRecurrence?: Recurrence
   allowAddAnother?: boolean
   suggestedPrice?: number // quote-derived per-visit price, shown as the price hint
+  // Soft cadence/preference warnings for the chosen date+time (page-supplied, so
+  // the timeline + recurrence rules stay in one place). Returns owner-facing notes.
+  warnFor?: (input: {
+    jobId?: string
+    customerId: string
+    date: string
+    startTime: string | null
+    customerPrefs: PrefSource | null
+    propertyPrefs: PrefSource | null
+    customerName: string | null
+  }) => string[]
   onSubmit: (values: JobFormValues, recurrence: Recurrence, meta?: SuggestionMeta, opts?: { addAnother?: boolean }) => Promise<void>
   onCancel: () => void
   isEdit?: boolean
@@ -101,7 +113,7 @@ function recurrenceToUi(r?: Recurrence) {
   }
 }
 
-export function JobForm({ customers, defaultValues, excludeJobId, initialRecurrence, allowAddAnother, suggestedPrice, onSubmit, onCancel, isEdit }: JobFormProps) {
+export function JobForm({ customers, defaultValues, excludeJobId, initialRecurrence, allowAddAnother, suggestedPrice, warnFor, onSubmit, onCancel, isEdit }: JobFormProps) {
   const supabase = createClient()
   const [properties, setProperties] = useState<Property[]>([])
   const addAnotherRef = useRef(false)
@@ -148,9 +160,27 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   const selectedPropertyId = watch('property_id')
   const serviceType = watch('service_type')
   const scheduledDate = watch('scheduled_date')
+  const startTime = watch('start_time')
   const selProp = properties.find(p => p.id === selectedPropertyId)
   const propCoord = selProp && selProp.lat != null && selProp.lng != null
     ? { lat: selProp.lat, lng: selProp.lng } : null
+
+  // Soft cadence/preference warnings for the chosen date+time (Feature 1 & 2).
+  const selectedCustomer = customers.find(c => c.id === customerId)
+  // Effective scheduling prefs (customer default + property override) for the
+  // best-day picker — boosts the customer's preferred days, hides avoided ones.
+  const effectivePrefs = resolvePrefs((selectedCustomer ?? null) as PrefSource | null, (selProp ?? null) as PrefSource | null)
+  const scheduleWarnings = warnFor && customerId && scheduledDate
+    ? warnFor({
+        jobId: excludeJobId,
+        customerId,
+        date: scheduledDate,
+        startTime: startTime || null,
+        customerPrefs: (selectedCustomer ?? null) as PrefSource | null,
+        propertyPrefs: (selProp ?? null) as PrefSource | null,
+        customerName: selectedCustomer?.name ?? null,
+      })
+    : []
 
   const interval = presetToInterval(preset, customUnit, customCount)
 
@@ -350,6 +380,17 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
         error={errors.scheduled_date?.message}
         {...register('scheduled_date', { required: 'Required' })} />
 
+      {/* Soft cadence / customer-preference warnings — informational, never blocking */}
+      {scheduleWarnings.length > 0 && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 space-y-1">
+          {scheduleWarnings.map((w, i) => (
+            <p key={i} className="text-xs text-amber-300 flex items-start gap-1.5">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" /> {w}
+            </p>
+          ))}
+        </div>
+      )}
+
       {(propCoord || selProp?.address) && (
         <div className="bg-bg-tertiary border border-border rounded-xl p-4 space-y-3">
           <div className="flex items-center gap-2 text-xs font-semibold text-ink-muted uppercase tracking-wide">
@@ -361,6 +402,8 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
             excludeJobId={excludeJobId}
             targetHours={(Number(watch('duration_minutes')) || 45) / 60}
             targetValue={Number(watch('price')) || suggestedPrice || 0}
+            customerPreferredDays={effectivePrefs.preferredDays}
+            customerAvoidDays={effectivePrefs.avoidDays}
             onPick={(date) => setValue('scheduled_date', date, { shouldValidate: true })}
           />
         </div>

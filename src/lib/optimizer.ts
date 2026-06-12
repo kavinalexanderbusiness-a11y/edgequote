@@ -31,7 +31,13 @@ export interface OptJob {
   invoiced: boolean      // already billed — immutable
   title: string
   customerName: string
+  customerId: string | null    // groups a customer's visits into one timeline
   neighborhood?: string | null // real area name, for cluster-aware reasons
+  // Resolved scheduling preferences (customer default + property override). The
+  // optimizer never moves a visit onto an avoid day, and is nudged toward the
+  // customer's preferred weekdays. getDay indices; empty/undefined = no preference.
+  preferredDays?: number[] | null
+  avoidDays?: number[] | null
 }
 
 export interface OptOptions {
@@ -129,6 +135,8 @@ export interface OptimizationResult {
   lockedTimes: number    // future jobs left alone because they have a set start time
   lockedBilled: number   // future jobs left alone because they're already invoiced
   stableKept: number     // recurring customers kept on their established weekday
+  blockedMoves: number   // candidate moves rejected to protect recurring series
+  warnings: string[]     // pre-Apply safety notes (series conflicts avoided/blocked)
   reasons: string[]      // plain-language WHY this is better
 }
 
@@ -260,31 +268,136 @@ export function planRainDelay(jobs: OptJob[], dayISO: string, opts: Omit<OptOpti
 //
 // Modes (owner-facing names): Max Profit (revenue), Max Density (density),
 // Balanced Workload (balanced), Smart Recommended (recommended).
-const WEIGHTS: Record<OptimizeMode, { km: number; over: number; spread: number; days: number; cluster: number; stability: number }> = {
+// Priority order (owner): cadence > weekday stability > workload > driving >
+// revenue. Cadence is a HARD constraint (validated, never weighted). Stability
+// is weighted ABOVE the workload terms in every mode so a customer's established
+// day is protected unless the gain is large. Week-crossing is penalised heavily
+// so balancing stays within the day/weekend/week before reaching into future weeks.
+const WEIGHTS: Record<OptimizeMode, { km: number; over: number; spread: number; days: number; cluster: number; stability: number; weekCross: number; pref: number }> = {
   // Max Density: drive as little as possible, tightest routes.
-  density:     { km: 1.2, over: 1.0, spread: 0.0, days: 0.2, cluster: 0.6, stability: 0.4 },
+  density:     { km: 1.2, over: 1.0, spread: 0.0, days: 0.2, cluster: 0.6, stability: 1.0, weekCross: 1.5, pref: 1.0 },
   // Balanced Workload: even hours, no overloaded days.
-  balanced:    { km: 0.3, over: 2.5, spread: 1.4, days: 0.0, cluster: 0.2, stability: 0.5 },
+  balanced:    { km: 0.3, over: 2.5, spread: 1.4, days: 0.0, cluster: 0.2, stability: 1.6, weekCross: 1.5, pref: 1.2 },
   // Max Profit: revenue per hour — cut drive time, fill strong clusters first.
-  revenue:     { km: 0.8, over: 2.0, spread: 0.0, days: 0.9, cluster: 0.9, stability: 0.5 },
-  // Smart Recommended: best overall blend incl. customer convenience (stability).
-  recommended: { km: 0.8, over: 1.6, spread: 0.5, days: 0.4, cluster: 0.5, stability: 0.8 },
+  revenue:     { km: 0.8, over: 2.0, spread: 0.0, days: 0.9, cluster: 0.9, stability: 1.2, weekCross: 1.5, pref: 1.0 },
+  // Smart Recommended: best overall blend incl. customer convenience (stability + prefs).
+  recommended: { km: 0.7, over: 1.6, spread: 0.6, days: 0.4, cluster: 0.5, stability: 1.8, weekCross: 2.0, pref: 1.5 },
 }
 const DAY_OVERHEAD_MIN = 45  // proxy cost of opening another working day
 const CLUSTER_CELL_MIN = 25  // proxy cost of an extra neighborhood-cell on a day
 const STABILITY_MIN = 40     // proxy cost of moving a recurring customer off their day
+const WEEK_CROSS_MIN = 90    // proxy cost of moving a job out of its original week
+const PREF_MIN = 50          // proxy cost of a visit sitting off the customer's preferred day
 const CLUSTER_GRID = 80      // ~1.4 km cells: round lat/lng × this, floor, ÷ back
 
 function cellKey(lat: number, lng: number): string {
   return `${Math.round(lat * CLUSTER_GRID)},${Math.round(lng * CLUSTER_GRID)}`
 }
 
+// The recurrence-rule lookup shape shared by the optimizer AND the manual
+// scheduling guards (drag-drop, job-form date picker).
+export type CadenceRecs = Record<string, { freq: string | null; interval_unit: string | null; interval_count: number | null }>
+
+// Cadence interval in days (for spacing validation). Falls back to weekly.
+export function cadenceDaysFor(recurrenceId: string | null, recs: CadenceRecs): number {
+  if (!recurrenceId) return 7
+  const r = recs[recurrenceId]
+  if (r?.interval_unit === 'day') return Math.max(1, r.interval_count ?? 1)
+  if (r?.interval_unit === 'week') return 7 * Math.max(1, r.interval_count ?? 1)
+  if (r?.interval_unit === 'month') return 30 * Math.max(1, r.interval_count ?? 1)
+  const f = r ? effectiveFreq(r.freq, r.interval_unit, r.interval_count) : null
+  return f === 'weekly' ? 7 : f === 'biweekly' ? 14 : f === 'monthly' ? 30 : 7
+}
+
+// The minimum spacing (days) a visit must keep from its nearest sibling on either
+// side — the cadence "floor" used to reject collisions/compression. 60% of the
+// nominal interval, never below 2 days. ONE definition for optimizer + manual.
+export function cadenceFloorFor(recurrenceId: string | null, recs: CadenceRecs): number {
+  return Math.max(2, Math.round(cadenceDaysFor(recurrenceId, recs) * 0.6))
+}
+
 // How far a visit may shift without breaking its cadence promise.
-function moveWindowDays(j: OptJob, recs: OptOptions['recurrences']): number {
+function moveWindowDays(j: OptJob, recs: CadenceRecs): number {
   if (!j.recurrence_id) return 6
   const r = recs[j.recurrence_id]
   const f = r ? effectiveFreq(r.freq, r.interval_unit, r.interval_count) : null
   return f === 'weekly' ? 2 : f === 'biweekly' ? 3 : 4
+}
+
+// One timeline key for a job: same customer (or, lacking that, same series) groups
+// every visit so hand-made weekly visits are protected alongside real series.
+export function cadenceGroupKey(j: { id: string; customerId: string | null; recurrence_id: string | null }): string {
+  return j.customerId ? `c:${j.customerId}` : j.recurrence_id ? `r:${j.recurrence_id}` : `j:${j.id}`
+}
+
+const diffDaysISO = (a: string, b: string) => Math.round((parseISO(b).getTime() - parseISO(a).getTime()) / 86400000)
+
+// ── Manual-move cadence guard ─────────────────────────────────────────────────
+// The SAME timeline check the optimizer enforces, exposed for hand scheduling
+// (drag-drop + the job-form date picker). Given a visit moving onto `toDate`,
+// look at the customer's whole set of other visits and report whether the move
+// collides (two visits same day) or compresses cadence (lands inside the floor
+// gap of a neighbour). Returns a soft, owner-facing message — manual edits are
+// never blocked, only warned.
+export interface CadenceVisit {
+  id: string
+  scheduled_date: string
+  status: string
+  customerId: string | null
+  recurrence_id: string | null
+  customerName?: string | null
+}
+
+export interface ManualCadenceResult {
+  status: 'ok' | 'warn' | 'collision'
+  message: string | null
+}
+
+export function manualCadenceCheck(
+  move: { id: string; customerId: string | null; recurrence_id: string | null },
+  toDate: string,
+  allVisits: CadenceVisit[],
+  recs: CadenceRecs,
+): ManualCadenceResult {
+  const key = cadenceGroupKey(move)
+  const mates = allVisits.filter(v => v.id !== move.id && v.status !== 'cancelled' && cadenceGroupKey(v) === key)
+  if (mates.length === 0) return { status: 'ok', message: null }
+
+  const floor = cadenceFloorFor(move.recurrence_id, recs)
+  let prev: { gap: number; v: CadenceVisit } | null = null
+  let next: { gap: number; v: CadenceVisit } | null = null
+  let sameDay: CadenceVisit | null = null
+  for (const m of mates) {
+    const diff = diffDaysISO(m.scheduled_date, toDate) // (toDate − mate) in days
+    if (diff === 0) { sameDay = m; continue }
+    if (diff > 0) { if (!prev || diff < prev.gap) prev = { gap: diff, v: m } }
+    else { const g = -diff; if (!next || g < next.gap) next = { gap: g, v: m } }
+  }
+
+  const nameOf = (v: CadenceVisit) => v.customerName?.trim() || 'this customer'
+  const dayLabel = (iso: string) => format(parseISO(iso + 'T00:00:00'), 'EEE, MMM d')
+  if (sameDay) {
+    return { status: 'collision', message: `${nameOf(sameDay)} already has a visit on ${dayLabel(sameDay.scheduled_date)} — this would book two on the same day.` }
+  }
+  const tooClosePrev = prev && prev.gap < floor
+  const tooCloseNext = next && next.gap < floor
+  if (tooClosePrev || tooCloseNext) {
+    const nearer = tooCloseNext && (!tooClosePrev || next!.gap <= prev!.gap) ? next! : prev!
+    const dir = nearer === next ? 'before' : 'after'
+    const nominal = cadenceDaysFor(move.recurrence_id, recs)
+    return {
+      status: 'warn',
+      message: `This lands ${nearer.gap} day${nearer.gap !== 1 ? 's' : ''} ${dir} ${nameOf(nearer.v)}'s ${dayLabel(nearer.v.scheduled_date)} visit — usual spacing is ~${nominal} days. Break cadence?`,
+    }
+  }
+  return { status: 'ok', message: null }
+}
+
+// ISO-week key (year-week) for a date, for the week-crossing penalty.
+function isoWeekKey(dateISO: string): string {
+  const d = parseISO(dateISO)
+  const mon = addDays(d, -((getDay(d) + 6) % 7))
+  return format(mon, 'yyyy-MM-dd')
 }
 
 interface DayEval { driveMin: number; laborMin: number; km: number; totalMin: number; cells: number }
@@ -325,14 +438,45 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
   const assign = new Map<string, string>()
   for (const j of universe) assign.set(j.id, j.scheduled_date)
   const original = new Map(universe.map(j => [j.id, j.scheduled_date]))
+  const origWeek = new Map([...movable].map(j => [j.id, isoWeekKey(j.scheduled_date)]))
 
-  // Series siblings in ORIGINAL order — a moved visit must stay strictly between
-  // its neighbours so cadence ordering is never scrambled.
-  const seriesJobs: Record<string, OptJob[]> = {}
-  for (const j of universe) if (j.recurrence_id) (seriesJobs[j.recurrence_id] ||= []).push(j)
-  for (const k in seriesJobs) seriesJobs[k].sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date))
+  // ── Recurring-series integrity ──
+  // A customer's visits are ONE timeline, validated across the WHOLE schedule —
+  // every job, every week, linked by recurrence_id OR just same customer (so
+  // hand-made weekly visits are protected too). Out-of-window visits are fixed
+  // anchors; in-window ones move. This is what stops a move from colliding with,
+  // skipping, or doubling up against another visit of the same customer.
+  const customerKeyOf = (j: OptJob) => j.customerId ? `c:${j.customerId}` : j.recurrence_id ? `r:${j.recurrence_id}` : `j:${j.id}`
+  const groups: Record<string, OptJob[]> = {}
+  for (const j of jobs) {
+    if (j.status === 'cancelled') continue
+    ;(groups[customerKeyOf(j)] ||= []).push(j)
+  }
+  const matesByJobId = new Map<string, OptJob[]>()
+  for (const j of movable) matesByJobId.set(j.id, (groups[customerKeyOf(j)] || []).filter(m => m.id !== j.id))
 
   const byId = new Map(universe.map(j => [j.id, j]))
+  // Current date of any visit: its live assignment if in the search universe,
+  // else its fixed scheduled_date (past, future-out-of-window, or locked).
+  const currentDateOf = (m: OptJob) => assign.get(m.id) ?? m.scheduled_date
+
+  // Is moving job j onto `to` valid for the customer's whole timeline?
+  // Rules: no visit on the same day (duplicate/double-week), and at least the
+  // cadence floor of days from the nearest visit on either side (no compression,
+  // no skipped/doubled week, never crossing into the next occurrence).
+  function validCadence(j: OptJob, to: string): boolean {
+    const mates = matesByJobId.get(j.id)
+    if (!mates || mates.length === 0) return true
+    const floor = cadenceFloorFor(j.recurrence_id, opts.recurrences)
+    let prevGap = Infinity, nextGap = Infinity
+    for (const m of mates) {
+      const diff = diffDaysISO(currentDateOf(m), to) // (to − mate) in days
+      if (diff === 0) return false                // same-day collision
+      if (diff > 0) prevGap = Math.min(prevGap, diff)
+      else nextGap = Math.min(nextGap, -diff)
+    }
+    return prevGap >= floor && nextGap >= floor
+  }
   const dayJobs = new Map<string, Set<string>>()
   const addTo = (date: string, id: string) => { (dayJobs.get(date) ?? dayJobs.set(date, new Set()).get(date)!).add(id) }
   for (const j of universe) addTo(j.scheduled_date, j.id)
@@ -359,14 +503,35 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
   }
   const invalidate = (date: string) => cache.delete(date)
 
-  // Stability cost: a recurring movable job sitting OFF its established weekday.
+  // Stability cost: a recurring movable job sitting OFF its established weekday,
+  // PLUS a strong penalty for any job pushed out of its original week (keeps
+  // balancing within day/weekend/week before reaching into future weeks).
   function stabilityCost(): number {
     let pen = 0
     for (const j of movable) {
-      if (!j.recurrence_id) continue
-      const est = estWeekday[j.recurrence_id]
-      if (est == null) continue
-      if (getDay(parseISO(assign.get(j.id)!)) !== est) pen += STABILITY_MIN
+      if (j.recurrence_id) {
+        const est = estWeekday[j.recurrence_id]
+        if (est != null && getDay(parseISO(assign.get(j.id)!)) !== est) pen += STABILITY_MIN
+      }
+    }
+    return pen
+  }
+  function weekCrossCost(): number {
+    let pen = 0
+    for (const j of movable) {
+      if (isoWeekKey(assign.get(j.id)!) !== origWeek.get(j.id)) pen += WEEK_CROSS_MIN
+    }
+    return pen
+  }
+  // Customer scheduling preferences: a movable visit landing on an avoid day is
+  // penalised hard; landing off the customer's preferred set is a soft nudge. So
+  // the optimizer pulls visits TOWARD stated promises (and off avoided days).
+  function prefCost(): number {
+    let pen = 0
+    for (const j of movable) {
+      const wd = getDay(parseISO(assign.get(j.id)!))
+      if (j.avoidDays && j.avoidDays.includes(wd)) pen += PREF_MIN * 2
+      else if (j.preferredDays && j.preferredDays.length && !j.preferredDays.includes(wd)) pen += PREF_MIN
     }
     return pen
   }
@@ -390,19 +555,16 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
     }
     return w.km * drive + w.over * over + w.spread * spread
       + w.days * days * DAY_OVERHEAD_MIN + w.cluster * cells * CLUSTER_CELL_MIN
-      + w.stability * stabilityCost()
+      + w.stability * stabilityCost() + w.weekCross * weekCrossCost() + w.pref * prefCost()
   }
 
-  // Candidate dates: inside cadence window AND the scope's TARGET window, on a
-  // preferred work day, strictly future, keeping series order intact.
+  // Candidate dates: inside the cadence jitter window AND the scope's TARGET
+  // window, on a preferred work day, strictly future, and HARD-validated against
+  // the customer's entire visit timeline (no collisions, no cadence violations).
   function candidates(j: OptJob): string[] {
     const wd = moveWindowDays(j, opts.recurrences)
     const origin = parseISO(original.get(j.id)!)
     const out: string[] = []
-    const sibs = j.recurrence_id ? seriesJobs[j.recurrence_id] : null
-    const idx = sibs ? sibs.findIndex(s => s.id === j.id) : -1
-    const prevDate = sibs && idx > 0 ? assign.get(sibs[idx - 1].id)! : null
-    const nextDate = sibs && idx >= 0 && idx < sibs.length - 1 ? assign.get(sibs[idx + 1].id)! : null
     for (let d = -wd; d <= wd; d++) {
       if (d === 0) continue
       const date = format(addDays(origin, d), 'yyyy-MM-dd')
@@ -410,8 +572,8 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
       if (!inTarget(date)) continue
       if (date === assign.get(j.id)) continue
       if (prefSet && !prefSet.has(getDay(parseISO(date)))) continue
-      if (prevDate && date <= prevDate) continue
-      if (nextDate && date >= nextDate) continue
+      if (j.avoidDays && j.avoidDays.includes(getDay(parseISO(date)))) continue // never move onto a customer's avoid day
+      if (!validCadence(j, date)) continue // series integrity — the key guard
       out.push(date)
     }
     return out
@@ -472,6 +634,18 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
     if (!improved) break
   }
 
+  // ── Pre-Apply safety gate ──
+  // Re-validate every proposed move against the FINAL whole-schedule timeline and
+  // revert any that would conflict with a recurring visit. The search already
+  // rejects invalid candidates, so this is a defensive backstop that GUARANTEES
+  // no move ever creates a duplicate, skipped, doubled or cadence-violating visit.
+  let blockedMoves = 0
+  for (const j of movable) {
+    const to = assign.get(j.id)!
+    if (to === original.get(j.id)!) continue
+    if (!validCadence(j, to)) { applyMove(j.id, original.get(j.id)!); blockedMoves++ }
+  }
+
   const after = metricsNow()
   const moves: PlannedMove[] = []
   let groupedIntoCluster = 0
@@ -504,10 +678,22 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
     strengthenedHoods: [...strengthenedHoods], stableKept, mode: opts.mode, scope: opts.scope,
   })
 
+  const recurringMoves = moves.filter(m => m.recurring).length
+  const warnings: string[] = []
+  if (blockedMoves > 0) {
+    warnings.push(`${blockedMoves} proposed move${blockedMoves !== 1 ? 's were' : ' was'} blocked — ${blockedMoves !== 1 ? 'they' : 'it'} would conflict with a recurring visit.`)
+  }
+  if (moves.length > 0) {
+    warnings.push(recurringMoves > 0
+      ? `All ${moves.length} moves validated against each customer's full schedule — no skipped, doubled or cadence-breaking visits (${recurringMoves} recurring visit${recurringMoves !== 1 ? 's' : ''} kept on cadence).`
+      : `All ${moves.length} moves validated — no recurring-series conflicts.`)
+  }
+
   return {
     mode: opts.mode, scope: opts.scope,
     before, after, moves, daysAffected, kmSaved, minutesSaved,
-    movableCount: movable.length, lockedTimes, lockedBilled, stableKept, reasons,
+    movableCount: movable.length, lockedTimes, lockedBilled, stableKept,
+    blockedMoves, warnings, reasons,
   }
 }
 
@@ -524,7 +710,7 @@ function fmtDur(min: number): string {
 
 export interface ScheduleSuggestion {
   id: string
-  kind: 'overload' | 'cluster' | 'recurring'
+  kind: 'overload' | 'cluster' | 'recurring' | 'underutil'
   severity: 'high' | 'medium'
   title: string
   detail: string
@@ -623,6 +809,33 @@ export function analyzeSchedule(jobs: OptJob[], base: Omit<OptOptions, 'mode' | 
         scope: 'week', anchorDate: j.scheduled_date, mode: 'density',
       })
     }
+  }
+
+  // 4) Underutilized days — a light WORK day whose handful of jobs could fold into
+  // a busier day, saving a whole base trip. The inverse of the overload card: a
+  // density week-optimize that empties the day proves the consolidation is real.
+  const prefSet = base.preferredDays.length ? new Set(base.preferredDays) : null
+  const dayList = Object.entries(byDate)
+    .map(([date, list]) => ({ date, count: list.length, load: loadOf(list).total }))
+    .filter(d => d.count > 0)
+    .sort((a, b) => a.date.localeCompare(b.date))
+  for (const d of dayList) {
+    if (out.some(s => s.kind === 'underutil')) break          // at most one
+    if (out.some(s => s.kind === 'overload' && s.anchorDate === d.date)) continue
+    const widx = getDay(parseISO(d.date + 'T00:00:00'))
+    if (prefSet && !prefSet.has(widx)) continue               // an off day isn't "underutilized"
+    if (d.count > 2 || d.load >= capMin * 0.4) continue       // must be genuinely light
+    const res = optimizeSchedule(jobs, { ...base, mode: 'density', scope: 'week', anchorDate: d.date })
+    if (res.moves.length === 0 || res.after.activeDays >= res.before.activeDays) continue // no trip actually saved
+    const dayName = format(parseISO(d.date + 'T00:00:00'), 'EEEE')
+    out.push({
+      id: `underutil-${d.date}`, kind: 'underutil', severity: 'medium',
+      title: `${dayName} has only ${d.count} job${d.count !== 1 ? 's' : ''} — consolidating could save a base trip.`,
+      detail: res.kmSaved > 0
+        ? `Folding ${dayName}'s work into a busier day frees the day and saves ${res.kmSaved} km of driving.`
+        : `Folding ${dayName}'s work into a busier day frees up the whole day.`,
+      scope: 'week', anchorDate: d.date, mode: 'density',
+    })
   }
 
   return out

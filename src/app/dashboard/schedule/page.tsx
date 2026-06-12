@@ -22,7 +22,10 @@ import { OptimizeSchedule } from '@/components/schedule/OptimizeSchedule'
 import { RainDelayCenter } from '@/components/schedule/RainDelayCenter'
 import { CloudRain } from 'lucide-react'
 import { analyzeSchedule } from '@/lib/optimizer'
-import type { PlannedMove, OptimizeScope, OptimizeMode, OptJob, ScheduleSuggestion } from '@/lib/optimizer'
+import type { PlannedMove, OptimizeScope, OptimizeMode, OptJob, ScheduleSuggestion, CadenceVisit, CadenceRecs } from '@/lib/optimizer'
+import { evaluateScheduleMove } from '@/lib/scheduleWarnings'
+import { resolvePrefs } from '@/lib/preferences'
+import type { PrefSource } from '@/lib/preferences'
 
 function localToday(): string {
   const d = new Date()
@@ -88,6 +91,8 @@ export default function SchedulePage() {
   // Pre-scoped launch from an auto-suggestion (vs. the manual Optimize button).
   const [optimizeLaunch, setOptimizeLaunch] = useState<{ scope: OptimizeScope; mode: OptimizeMode; anchorDate: string; autoRun: boolean } | null>(null)
   const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(new Set())
+  // Soft warning before a hand move that breaks cadence or a customer preference.
+  const [moveConfirm, setMoveConfirm] = useState<{ job: Job; newDate: string; warnings: string[] } | null>(null)
 
   function launchOptimizer(opts?: { scope: OptimizeScope; mode: OptimizeMode; anchorDate: string }) {
     setOptimizeLaunch(opts ? { ...opts, autoRun: true } : null)
@@ -116,8 +121,9 @@ export default function SchedulePage() {
       recurrence_id: j.recurrence_id, start_time: j.start_time, duration_minutes: j.duration_minutes,
       lat: j.properties?.lat ?? null, lng: j.properties?.lng ?? null,
       value: valueByJobId[j.id] || 0, invoiced: false,
-      title: j.title, customerName: j.customers?.name || j.title,
+      title: j.title, customerName: j.customers?.name || j.title, customerId: j.customer_id,
       neighborhood: j.properties?.neighborhood ?? null,
+      ...(() => { const p = resolvePrefs(j.customers, j.properties); return { preferredDays: p.preferredDays, avoidDays: p.avoidDays } })(),
     }))
     const recs: Record<string, { freq: string | null; interval_unit: string | null; interval_count: number | null }> = {}
     for (const [id, r] of Object.entries(recurrences)) recs[id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count }
@@ -127,6 +133,60 @@ export default function SchedulePage() {
   }, [jobs, valueByJobId, recurrences, baseCoord, preferredWorkDays, capacityHours])
 
   const visibleSuggestions = suggestions.filter(s => !dismissedSuggestions.has(s.id))
+
+  // Shared cadence/preference context for manual-move warnings — every visit as a
+  // timeline node plus the recurrence rules. Rebuilds only when jobs/recurrences
+  // change, so each drag or date edit is a cheap lookup.
+  const cadenceVisits = useMemo<CadenceVisit[]>(() => jobs.map(j => ({
+    id: j.id, scheduled_date: j.scheduled_date, status: j.status,
+    customerId: j.customer_id, recurrence_id: j.recurrence_id,
+    customerName: j.customers?.name ?? null,
+  })), [jobs])
+  const cadenceRecs = useMemo<CadenceRecs>(() => {
+    const m: CadenceRecs = {}
+    for (const [id, r] of Object.entries(recurrences)) m[id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count }
+    return m
+  }, [recurrences])
+
+  // Warnings for moving an EXISTING job (drag-drop / Day Ops "Move to") to a date.
+  function moveWarnings(job: Job, newDate: string): string[] {
+    const customer = customers.find(c => c.id === job.customer_id) ?? null
+    return evaluateScheduleMove({
+      move: { id: job.id, customerId: job.customer_id, recurrence_id: job.recurrence_id },
+      toDate: newDate,
+      startTime: job.start_time,
+      allVisits: cadenceVisits,
+      recs: cadenceRecs,
+      customerPrefs: customer as PrefSource | null,
+      propertyPrefs: (job.properties ?? null) as PrefSource | null,
+      customerName: job.customers?.name ?? null,
+    }).warnings
+  }
+
+  // Warnings for the job FORM's date/time fields. The form supplies the prefs it
+  // has loaded (selected customer + property); the page supplies the timeline.
+  function formMoveWarnings(input: {
+    jobId?: string
+    customerId: string
+    date: string
+    startTime: string | null
+    customerPrefs: PrefSource | null
+    propertyPrefs: PrefSource | null
+    customerName: string | null
+  }): string[] {
+    if (!input.date || !input.customerId) return []
+    const existing = input.jobId ? jobs.find(j => j.id === input.jobId) : null
+    return evaluateScheduleMove({
+      move: { id: input.jobId ?? '__new__', customerId: input.customerId, recurrence_id: existing?.recurrence_id ?? null },
+      toDate: input.date,
+      startTime: input.startTime,
+      allVisits: cadenceVisits,
+      recs: cadenceRecs,
+      customerPrefs: input.customerPrefs,
+      propertyPrefs: input.propertyPrefs,
+      customerName: input.customerName,
+    }).warnings
+  }
 
   // When arriving from an accepted quote (?quote=…), open a prefilled new-job form.
   const [quoteCtx, setQuoteCtx] = useState<Quote | null>(null)
@@ -139,7 +199,7 @@ export default function SchedulePage() {
     const [jRes, cRes, rRes, qRes, sRes] = await Promise.all([
       supabase
         .from('jobs')
-        .select('*, customers(id, name, phone), properties(id, address, lat, lng, neighborhood)')
+        .select('*, customers(id, name, phone, preferred_days, avoid_days, pref_time_start, pref_time_end), properties(id, address, lat, lng, neighborhood, preferred_days, avoid_days, pref_time_start, pref_time_end)')
         .eq('user_id', user!.id)
         .order('scheduled_date'),
       supabase.from('customers').select('*').eq('user_id', user!.id).order('name'),
@@ -756,6 +816,14 @@ export default function SchedulePage() {
   async function moveJobToDate(job: Job, date: Date) {
     const newDate = format(date, 'yyyy-MM-dd')
     if (newDate === job.scheduled_date) return
+    // Soft guard: warn (don't block) when a hand move breaks the customer's
+    // cadence or a stated scheduling preference. Confirm, then proceed.
+    const warnings = moveWarnings(job, newDate)
+    if (warnings.length) { setMoveConfirm({ job, newDate, warnings }); return }
+    await proceedMoveJobToDate(job, newDate)
+  }
+
+  async function proceedMoveJobToDate(job: Job, newDate: string) {
     if (job.recurrence_id) {
       setPendingAction({ type: 'move', job, newDate })
       return
@@ -983,6 +1051,7 @@ export default function SchedulePage() {
               onSubmit={editing ? handleEdit : handleAdd}
               onCancel={closeForm}
               isEdit={!!editing}
+              warnFor={formMoveWarnings}
             />
           </CardBody>
             </Card>
@@ -1034,6 +1103,34 @@ export default function SchedulePage() {
           onChoose={handleScopeChoice}
           onCancel={() => setPendingAction(null)}
         />
+      )}
+
+      {/* Soft cadence / preference warning before a hand move */}
+      {moveConfirm && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setMoveConfirm(null)}>
+          <Card className="w-full max-w-md shadow-2xl" onClick={e => e.stopPropagation()}>
+            <CardHeader className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-400" />
+              <h2 className="text-sm font-semibold text-ink">Move to {format(parseISO(moveConfirm.newDate + 'T00:00:00'), 'EEE, MMM d')}?</h2>
+            </CardHeader>
+            <CardBody className="space-y-3">
+              <ul className="space-y-1.5">
+                {moveConfirm.warnings.map((w, i) => (
+                  <li key={i} className="text-sm text-amber-300 flex items-start gap-2">
+                    <span className="text-amber-400 mt-px">•</span> {w}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-ink-faint">You can still make this move — these are just reminders.</p>
+              <div className="flex items-center gap-2 pt-1">
+                <Button onClick={async () => { const mc = moveConfirm; setMoveConfirm(null); await proceedMoveJobToDate(mc.job, mc.newDate) }}>
+                  Move anyway
+                </Button>
+                <Button variant="ghost" onClick={() => setMoveConfirm(null)}>Keep current date</Button>
+              </div>
+            </CardBody>
+          </Card>
+        </div>
       )}
 
       {showOptimize && (

@@ -16,13 +16,17 @@ interface Props {
   excludeJobId?: string
   targetHours?: number   // on-site hours of the job being placed
   targetValue?: number   // per-visit revenue of the job being placed
+  // Resolved customer scheduling preferences (customer default + property override),
+  // so the best-day picker boosts preferred weekdays and excludes avoided ones.
+  customerPreferredDays?: number[]
+  customerAvoidDays?: number[]
   onPick?: (date: string, plan: DayPlan) => void
 }
 
 // Optimizes the WHOLE work week, not one job in isolation: scores every preferred
 // work day and recommends the best under three lenses (density / balance / revenue)
 // so routes naturally cluster across days. Reuses lib/geo + lib/route — no new engine.
-export function WeeklyScheduler({ coord, address, excludeJobId, targetHours, targetValue, onPick }: Props) {
+export function WeeklyScheduler({ coord, address, excludeJobId, targetHours, targetValue, customerPreferredDays, customerAvoidDays, onPick }: Props) {
   const supabase = createClient()
   const [target, setTarget] = useState<Coord | null>(coord ?? null)
   const [jobs, setJobs] = useState<SchedJob[]>([])
@@ -73,6 +77,8 @@ export function WeeklyScheduler({ coord, address, excludeJobId, targetHours, tar
     base,
     targetHours,
     targetValue,
+    customerPreferredDays,
+    customerAvoidDays,
   })
   if (!modes.days.length) return <p className="text-xs text-ink-faint">No upcoming work days in range — set your Preferred Work Days in Settings.</p>
 

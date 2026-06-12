@@ -8,6 +8,8 @@ import { Customer, Property, Quote, Job, Invoice, JobRecurrence } from '@/types'
 import { needsFollowUp, daysSince } from '@/lib/followup'
 import { recurrenceLabel, recurringCustomerLabel, buildServicePlans, ServicePlan } from '@/lib/recurrence'
 import { settingsToSeasons, DEFAULT_SEASONS, ServiceSeasons } from '@/lib/seasons'
+import { resolvePrefs, prefSummary, hasAnyPref } from '@/lib/preferences'
+import { SchedulePrefsFields, PrefsDraft, EMPTY_DRAFT, toDraft, draftToRow } from '@/components/customers/SchedulePrefsFields'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -15,7 +17,7 @@ import { formatCurrency, formatDate, getInitials } from '@/lib/utils'
 import {
   ArrowLeft, Phone, MessageSquare, FilePlus, CalendarPlus, Mail, MapPin, Repeat,
   FileText, Send, RotateCw, CheckCircle2, Wrench, Receipt, DollarSign, Sparkles, Users,
-  Edit2, ExternalLink, Ruler, AlertTriangle, StickyNote, Wallet, Timer,
+  Edit2, ExternalLink, Ruler, AlertTriangle, StickyNote, Wallet, Timer, CalendarClock,
 } from 'lucide-react'
 
 const WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
@@ -67,6 +69,14 @@ export default function CustomerDetailPage() {
   const [notesValue, setNotesValue] = useState('')
   const [savingNotes, setSavingNotes] = useState(false)
 
+  // Scheduling preferences (customer default + per-property override).
+  const [editingPrefs, setEditingPrefs] = useState(false)
+  const [prefsDraft, setPrefsDraft] = useState<PrefsDraft>(EMPTY_DRAFT)
+  const [savingPrefs, setSavingPrefs] = useState(false)
+  const [editingPropPrefs, setEditingPropPrefs] = useState<string | null>(null)
+  const [propPrefsDraft, setPropPrefsDraft] = useState<PrefsDraft>(EMPTY_DRAFT)
+  const [savingPropPrefs, setSavingPropPrefs] = useState(false)
+
   useEffect(() => {
     async function load() {
       const { data: { user } } = await supabase.auth.getUser()
@@ -117,6 +127,33 @@ export default function CustomerDetailPage() {
     setCustomer({ ...customer, notes: notesValue || null })
     setSavingNotes(false)
     setEditingNotes(false)
+  }
+
+  function startEditPrefs() {
+    setPrefsDraft(toDraft(customer))
+    setEditingPrefs(true)
+  }
+  async function savePrefs() {
+    if (!customer) return
+    setSavingPrefs(true)
+    const row = draftToRow(prefsDraft)
+    const { error } = await supabase.from('customers').update(row).eq('id', customer.id)
+    if (!error) setCustomer({ ...customer, ...row })
+    setSavingPrefs(false)
+    setEditingPrefs(false)
+  }
+
+  function startEditPropPrefs(p: Property) {
+    setPropPrefsDraft(toDraft(p))
+    setEditingPropPrefs(p.id)
+  }
+  async function savePropPrefs(propId: string) {
+    setSavingPropPrefs(true)
+    const row = draftToRow(propPrefsDraft)
+    const { error } = await supabase.from('properties').update(row).eq('id', propId)
+    if (!error) setProperties(prev => prev.map(p => p.id === propId ? { ...p, ...row } : p))
+    setSavingPropPrefs(false)
+    setEditingPropPrefs(null)
   }
 
   // Pause a schedule: cancel its FUTURE scheduled/in-progress visits (past visits
@@ -341,6 +378,35 @@ export default function CustomerDetailPage() {
         </CardBody>
       </Card>
 
+      {/* Scheduling preferences — customer-wide default (properties can override) */}
+      <Card>
+        <CardHeader className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><CalendarClock className="w-4 h-4 text-accent" /> Scheduling Preferences</h2>
+          {!editingPrefs && (
+            <button onClick={startEditPrefs} className="text-xs text-accent hover:underline flex items-center gap-1">
+              <Edit2 className="w-3 h-3" /> Edit
+            </button>
+          )}
+        </CardHeader>
+        <CardBody>
+          {editingPrefs ? (
+            <div className="space-y-3">
+              <SchedulePrefsFields value={prefsDraft} onChange={setPrefsDraft} />
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={savePrefs} loading={savingPrefs}>Save</Button>
+                <Button size="sm" variant="ghost" onClick={() => setEditingPrefs(false)}>Cancel</Button>
+              </div>
+            </div>
+          ) : prefSummary(resolvePrefs(customer)) ? (
+            <p className="text-sm text-ink">{prefSummary(resolvePrefs(customer))}</p>
+          ) : (
+            <button onClick={startEditPrefs} className="text-sm text-ink-faint hover:text-ink-muted transition-colors text-left">
+              No preferences set — add preferred/avoid days or a time window (e.g. “always Fridays, mornings”).
+            </button>
+          )}
+        </CardBody>
+      </Card>
+
       {/* Open items — what needs action */}
       <Card className={openItems.length > 0 ? 'border-amber-500/30' : ''}>
         <CardHeader className="flex items-center gap-2">
@@ -535,6 +601,34 @@ export default function CustomerDetailPage() {
                     <Link href={`/dashboard/properties/measure?id=${p.id}`} title="Re-measure property" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
                       <Ruler className="w-3.5 h-3.5" /> Measure
                     </Link>
+                  </div>
+
+                  {/* Scheduling override for this property (falls back to the customer default) */}
+                  <div className="mt-3 pt-3 border-t border-border">
+                    {editingPropPrefs === p.id ? (
+                      <div className="space-y-3">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint flex items-center gap-1.5">
+                          <CalendarClock className="w-3.5 h-3.5 text-accent" /> Scheduling override
+                        </p>
+                        <SchedulePrefsFields value={propPrefsDraft} onChange={setPropPrefsDraft} />
+                        <div className="flex items-center gap-2">
+                          <Button size="sm" onClick={() => savePropPrefs(p.id)} loading={savingPropPrefs}>Save</Button>
+                          <Button size="sm" variant="ghost" onClick={() => setEditingPropPrefs(null)}>Cancel</Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button onClick={() => startEditPropPrefs(p)} className="w-full text-left flex items-center gap-1.5 text-[11px] text-ink-muted hover:text-ink transition-colors">
+                        <CalendarClock className="w-3.5 h-3.5 text-accent shrink-0" />
+                        <span className="min-w-0 truncate">
+                          {hasAnyPref(p)
+                            ? <>Override: {prefSummary(resolvePrefs(null, p))}</>
+                            : prefSummary(resolvePrefs(customer))
+                              ? <>Using customer default · {prefSummary(resolvePrefs(customer))}</>
+                              : 'Set a scheduling override'}
+                        </span>
+                        <Edit2 className="w-3 h-3 shrink-0 ml-auto opacity-50" />
+                      </button>
+                    )}
                   </div>
                 </div>
               )

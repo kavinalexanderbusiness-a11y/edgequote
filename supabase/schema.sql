@@ -264,3 +264,63 @@ alter table public.jobs
 -- ════════════════════════════════════════════════════════════
 alter table public.business_settings
   add column if not exists service_seasons jsonb;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-12 — Per-customer/property scheduling
+-- preferences. Honoured by manual scheduling (soft warnings),
+-- the whole-schedule optimizer, and the weekly Best-Day picker so
+-- real customer commitments ("always Fridays", "never Sundays",
+-- "mornings only") are respected, not just the owner's work days.
+--
+--   preferred_days  — weekday indices (date-fns getDay: 0=Sun…6=Sat)
+--                     the customer likes; empty/null = no preference.
+--   avoid_days      — weekday indices to keep them OFF.
+--   pref_time_start / pref_time_end — 'HH:mm' preferred start window.
+--
+-- Preferences resolve per-field: a property value overrides the
+-- customer default for that field only (see lib/preferences).
+-- Idempotent; safe to re-run.
+-- ════════════════════════════════════════════════════════════
+alter table public.customers
+  add column if not exists preferred_days  integer[],
+  add column if not exists avoid_days      integer[],
+  add column if not exists pref_time_start text,
+  add column if not exists pref_time_end   text;
+
+alter table public.properties
+  add column if not exists preferred_days  integer[],
+  add column if not exists avoid_days      integer[],
+  add column if not exists pref_time_start text,
+  add column if not exists pref_time_end   text;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-12 — Road-distance cache. Pairwise real-road
+-- distances (Google Distance Matrix) for the small set of points
+-- that actually appear on routes, fetched once and reused so Day
+-- Ops route numbers are real-road instead of straight-line —
+-- without re-billing the API on every view. Keys are rounded
+-- "lat,lng" strings (≈11 m grid). Haversine remains the fallback
+-- when a pair is uncached or the API is unavailable.
+-- Idempotent; safe to re-run.
+-- ════════════════════════════════════════════════════════════
+create table if not exists public.road_distance_cache (
+  id          uuid primary key default uuid_generate_v4(),
+  created_at  timestamptz not null default now(),
+  user_id     uuid not null references auth.users(id) on delete cascade,
+
+  from_key    text not null,   -- rounded "lat,lng" of the origin
+  to_key      text not null,   -- rounded "lat,lng" of the destination
+  km          numeric not null,
+  seconds     integer,
+
+  unique (user_id, from_key, to_key)
+);
+
+alter table public.road_distance_cache enable row level security;
+create policy "road_distance_cache: select own" on public.road_distance_cache for select using (auth.uid() = user_id);
+create policy "road_distance_cache: insert own" on public.road_distance_cache for insert with check (auth.uid() = user_id);
+create policy "road_distance_cache: update own" on public.road_distance_cache for update using (auth.uid() = user_id);
+create policy "road_distance_cache: delete own" on public.road_distance_cache for delete using (auth.uid() = user_id);
+
+create index if not exists road_distance_cache_lookup_idx
+  on public.road_distance_cache(user_id, from_key, to_key);

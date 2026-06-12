@@ -52,9 +52,14 @@ export async function geocodeMissingStops(supabase: Supa, stops: RouteStop[]): P
   return n
 }
 
+// A distance function between two coords. Defaults to straight-line haversine;
+// callers can pass a cached real-road distance (lib/distance) to sharpen ordering
+// and leg/total km without changing any of the engine's call sites.
+export type DistFn = (a: Coord, b: Coord) => number
+
 // Shared nearest-neighbour core (sync, no API). One implementation used by the
 // Route Planner / Day panel fallback AND the Route Profitability estimator.
-function nnOrder(base: Coord, pts: { lat: number; lng: number }[]): { order: number[]; legKm: number[]; totalKm: number } {
+function nnOrder(base: Coord, pts: { lat: number; lng: number }[], dist: DistFn = haversineKm): { order: number[]; legKm: number[]; totalKm: number } {
   const remaining = pts.map((p, i) => ({ p, i }))
   let current = base
   let total = 0
@@ -63,7 +68,7 @@ function nnOrder(base: Coord, pts: { lat: number; lng: number }[]): { order: num
   while (remaining.length) {
     let bi = 0, bd = Infinity
     for (let k = 0; k < remaining.length; k++) {
-      const d = haversineKm(current, remaining[k].p)
+      const d = dist(current, remaining[k].p)
       if (d < bd) { bd = d; bi = k }
     }
     const n = remaining.splice(bi, 1)[0]
@@ -76,14 +81,28 @@ function nnOrder(base: Coord, pts: { lat: number; lng: number }[]): { order: num
 }
 
 // Ordered nearest-neighbour route over located stops (used as the API fallback).
-export function nearestNeighborRoute(base: Coord, located: RouteStop[]): { ordered: OrderedRouteStop[]; totalKm: number } {
-  const r = nnOrder(base, located.map(s => ({ lat: s.lat as number, lng: s.lng as number })))
+export function nearestNeighborRoute(base: Coord, located: RouteStop[], dist: DistFn = haversineKm): { ordered: OrderedRouteStop[]; totalKm: number } {
+  const r = nnOrder(base, located.map(s => ({ lat: s.lat as number, lng: s.lng as number })), dist)
   return { ordered: r.order.map((idx, i) => ({ ...located[idx], order: i + 1, legKm: r.legKm[i] })), totalKm: r.totalKm }
 }
 
 // Quick total-km estimate for a set of coords (profitability dashboard — no API).
-export function routeKmEstimate(base: Coord, located: { lat: number; lng: number }[]): number {
-  return located.length ? nnOrder(base, located).totalKm : 0
+export function routeKmEstimate(base: Coord, located: { lat: number; lng: number }[], dist: DistFn = haversineKm): number {
+  return located.length ? nnOrder(base, located, dist).totalKm : 0
+}
+
+// Round-trip Google Maps directions URL (base → stops → base). Shared so the
+// cached-road path can build the same "Open in Maps" link optimizeRoute does.
+export function roundTripMapsUrl(base: Coord, ordered: { lat: number | null; lng: number | null }[]): string {
+  const baseParam = `${base.lat},${base.lng}`
+  const waypoints = ordered.filter(s => s.lat != null && s.lng != null).map(s => `${s.lat},${s.lng}`).join('|')
+  const u = new URL('https://www.google.com/maps/dir/')
+  u.searchParams.set('api', '1')
+  u.searchParams.set('origin', baseParam)
+  u.searchParams.set('destination', baseParam)
+  if (waypoints) u.searchParams.set('waypoints', waypoints)
+  u.searchParams.set('travelmode', 'driving')
+  return u.toString()
 }
 
 // Cluster tightness when no base is configured: walk the stops from the first
@@ -176,6 +195,7 @@ export interface DayPlan {
   scheduledRevenue: number // existing revenue + the new job's value
   nearbyCount: number      // existing located jobs within radius of the target
   addedDriveMin: number    // marginal driving to slot the target into that day's route
+  customerPreferred: boolean // this weekday is in the customer's preferred set
 }
 
 export interface ScheduleModes {
@@ -196,6 +216,8 @@ export function recommendScheduleDays(
     targetHours?: number      // the job-being-scheduled's on-site hours
     targetValue?: number      // the job-being-scheduled's per-visit revenue
     radiusKm?: number
+    customerPreferredDays?: number[] // the customer's preferred weekdays (boost)
+    customerAvoidDays?: number[]     // the customer's avoid weekdays (excluded)
   },
 ): ScheduleModes {
   const horizon = opts.horizonDays ?? 28
@@ -204,6 +226,8 @@ export function recommendScheduleDays(
   const targetValue = opts.targetValue ?? 0
   const preferAll = !opts.preferredDays || opts.preferredDays.length === 0
   const pref = new Set(opts.preferredDays || [])
+  const custPref = new Set(opts.customerPreferredDays || [])
+  const custAvoid = new Set(opts.customerAvoidDays || [])
   const base = opts.base ?? null
   const from = parseISO(opts.fromISO)
 
@@ -215,6 +239,7 @@ export function recommendScheduleDays(
     const d = addDays(from, i)
     const widx = getDay(d)
     if (!preferAll && !pref.has(widx)) continue   // strong preference: only score work days
+    if (custAvoid.has(widx)) continue             // customer asked not to be booked this weekday
     const iso = format(d, 'yyyy-MM-dd')
     const dayJobs = byDate[iso] || []
     const located = dayJobs.filter(j => j.lat != null && j.lng != null).map(j => ({ lat: j.lat as number, lng: j.lng as number }))
@@ -245,19 +270,23 @@ export function recommendScheduleDays(
       scheduledRevenue: Math.round(existingRev + targetValue),
       nearbyCount: nearby.length,
       addedDriveMin,
+      customerPreferred: custPref.has(widx),
     })
   }
 
   if (!days.length) return { density: null, balanced: null, revenue: null, days: [] }
   const argmax = (score: (d: DayPlan) => number) => days.reduce((best, d) => (score(d) > score(best) ? d : best), days[0])
+  // Honour the customer's preferred weekdays as a bonus on every lens, so the
+  // recommended day lands on a promised day unless another signal is far stronger.
+  const pb = (d: DayPlan) => (d.customerPreferred ? 1 : 0)
 
   return {
     // Join the tightest existing cluster: many nearby stops, least added driving.
-    density: argmax(d => d.nearbyCount * 100 - d.addedDriveMin),
+    density: argmax(d => d.nearbyCount * 100 - d.addedDriveMin + pb(d) * 200),
     // Spread the load: the emptiest work day (tie-break: fewer jobs, slight nearby pull).
-    balanced: argmax(d => -(d.plannedHours * 10 + d.jobCount) + d.nearbyCount * 0.1),
+    balanced: argmax(d => -(d.plannedHours * 10 + d.jobCount) + d.nearbyCount * 0.1 + pb(d) * 6),
     // Richest resulting day, lightly penalised for the driving it adds.
-    revenue: argmax(d => d.scheduledRevenue - d.addedDriveMin * 3),
+    revenue: argmax(d => d.scheduledRevenue - d.addedDriveMin * 3 + pb(d) * 80),
     days,
   }
 }
