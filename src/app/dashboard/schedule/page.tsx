@@ -21,7 +21,7 @@ import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repe
 import { OptimizeSchedule } from '@/components/schedule/OptimizeSchedule'
 import { RainDelayCenter } from '@/components/schedule/RainDelayCenter'
 import { CloudRain } from 'lucide-react'
-import { analyzeSchedule } from '@/lib/optimizer'
+import { analyzeSchedule, MOVE_REASON_LABEL } from '@/lib/optimizer'
 import type { PlannedMove, OptimizeScope, OptimizeMode, OptJob, ScheduleSuggestion, CadenceVisit, CadenceRecs } from '@/lib/optimizer'
 import { evaluateScheduleMove } from '@/lib/scheduleWarnings'
 import { resolvePrefs } from '@/lib/preferences'
@@ -985,12 +985,42 @@ export default function SchedulePage() {
               <div className="min-w-0 flex-1">
                 <p className={cn('text-sm font-semibold', s.kind === 'stuck' ? 'text-ink' : s.severity === 'high' ? 'text-amber-300' : 'text-ink')}>{s.title}</p>
                 <p className="text-xs text-ink-muted mt-0.5">{s.detail}</p>
+
+                {/* Per-job dispatcher breakdown + closest legal moves (stuck days) */}
+                {s.kind === 'stuck' && s.diagnosis && (
+                  <div className="mt-2 space-y-2">
+                    {s.diagnosis.jobs.length > 0 && (
+                      <ul className="space-y-1">
+                        {s.diagnosis.jobs.map(j => (
+                          <li key={j.jobId} className="text-xs text-ink-muted flex items-start gap-1.5">
+                            <span className={cn('mt-1 w-1.5 h-1.5 rounded-full shrink-0', j.recurring ? 'bg-accent' : 'bg-ink-faint')} />
+                            <span>{j.reason}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {s.diagnosis.alternatives.length > 0 && (
+                      <div className="rounded-lg border border-border bg-bg-secondary px-2.5 py-2">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint mb-1">Closest legal moves</p>
+                        <ul className="space-y-0.5">
+                          {s.diagnosis.alternatives.map(a => (
+                            <li key={a.jobId} className="text-xs text-ink-muted">
+                              Move <span className="text-ink font-medium">{a.customerName}</span> to {format(parseISO(a.date + 'T00:00:00'), 'EEE, MMM d')}
+                              <span className="text-ink-faint"> — blocked by {MOVE_REASON_LABEL[a.reason]}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {s.actionable && (
                   <div className="flex flex-wrap items-center gap-2 mt-2">
                     {/* The CTA runs the EXACT scope/mode/anchor that was simulated to
                         produce the moves, so it can never come back "already optimized". */}
                     <Button size="sm" variant="secondary" onClick={() => launchOptimizer({ scope: s.scope, mode: s.mode, anchorDate: s.anchorDate })}>
-                      <Rocket className="w-3.5 h-3.5" /> {s.kind === 'overload' ? `Rebalance ${format(parseISO(s.anchorDate + 'T00:00:00'), 'EEE')}’s week` : s.kind === 'underutil' ? 'Consolidate' : 'Optimize'}
+                      <Rocket className="w-3.5 h-3.5" /> {s.kind === 'overload' ? (s.scope === 'month' ? 'Rebalance nearby weeks' : `Rebalance ${format(parseISO(s.anchorDate + 'T00:00:00'), 'EEE')}’s week`) : s.kind === 'underutil' ? 'Consolidate' : 'Optimize'}
                     </Button>
                   </div>
                 )}

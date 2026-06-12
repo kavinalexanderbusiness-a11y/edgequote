@@ -49,6 +49,10 @@ export interface OptOptions {
   preferredDays: number[]       // getDay indices; empty = any day allowed
   capacityHours: number
   recurrences: Record<string, { freq: string | null; interval_unit: string | null; interval_count: number | null }>
+  // When set, the result carries a per-job `diagnosis` for that date — exactly
+  // why each visit on it could (or couldn't) move, evaluated against the SAME
+  // constraints + cost model the search uses. Powers the "stuck day" explanation.
+  diagnoseDate?: string
 }
 
 // Resolve a scope into its date windows. movable = origin dates that may move;
@@ -127,6 +131,43 @@ export interface PlannedMove {
   clusterNeighborhood?: string | null
 }
 
+// ── Per-job move diagnosis (the "experienced dispatcher" explanation) ─────────
+// For a single (usually overloaded) day, why each visit on it can or cannot move,
+// plus the closest alternative destination for each and the concrete reason it was
+// rejected. Built from the SAME candidate/cadence/cost machinery the search uses.
+export type MoveBlockReason =
+  | 'locked-billed' | 'locked-time'   // can't move at all
+  | 'customer-avoid'                  // destination is a customer avoid-day
+  | 'cadence-collision'               // another visit of theirs that day
+  | 'cadence-floor'                   // too close to a neighbouring visit
+  | 'cadence-window'                  // too far off the recurring rhythm
+  | 'scope'                           // outside the optimize window (e.g. next week)
+  | 'capacity'                        // destination day already full
+  | 'stability'                       // would pull a recurring customer off their day
+  | 'no-gain'                         // legal, but wouldn't ease the day enough to justify
+
+export const MOVE_REASON_LABEL: Record<MoveBlockReason, string> = {
+  'locked-billed': 'already billed', 'locked-time': 'set start time',
+  'customer-avoid': 'customer preference', 'cadence-collision': 'cadence',
+  'cadence-floor': 'cadence', 'cadence-window': 'cadence', 'scope': 'weekly balance',
+  'capacity': 'destination capacity', 'stability': 'route stability', 'no-gain': 'no net gain',
+}
+
+export interface JobMoveDiag {
+  jobId: string
+  customerName: string
+  recurring: boolean
+  canMove: boolean                    // a legal, beneficial move exists (false at a true optimum)
+  reason: string                      // one-line prose explanation
+  closest?: { date: string; reason: MoveBlockReason; detail: string } // nearest work-day option + why it failed
+}
+
+export interface DayDiagnosis {
+  date: string
+  jobs: JobMoveDiag[]
+  alternatives: { jobId: string; customerName: string; date: string; reason: MoveBlockReason; detail: string }[]
+}
+
 export interface OptimizationResult {
   mode: OptimizeMode
   scope: OptimizeScope
@@ -144,6 +185,7 @@ export interface OptimizationResult {
   blockedMoves: number   // candidate moves rejected to protect recurring series
   warnings: string[]     // pre-Apply safety notes (series conflicts avoided/blocked)
   reasons: string[]      // plain-language WHY this is better
+  diagnosis?: DayDiagnosis // per-job move explanation for opts.diagnoseDate (if set)
 }
 
 // ── Rain delay planning ──────────────────────────────────────────────────────
@@ -701,11 +743,108 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
       : `All ${moves.length} moves validated — no recurring-series conflicts.`)
   }
 
+  // ── Per-job move diagnosis for a requested day ──
+  // Runs AFTER the search settles, against the FINAL optimized state. For each
+  // visit on the day it walks every nearby work day and records the FIRST binding
+  // reason it can't usefully move there — using the exact same cadence guard,
+  // avoid-day rule, scope window and global-cost delta the search itself uses, so
+  // the explanation can never disagree with the optimizer. (Pure: every trial
+  // move is reverted.)
+  let diagnosis: DayDiagnosis | undefined
+  if (opts.diagnoseDate) {
+    const date = opts.diagnoseDate
+    const baseCost = globalCost()
+    const movableSet = new Set(movable.map(j => j.id))
+    const fmtD = (iso: string) => format(parseISO(iso + 'T00:00:00'), 'EEE, MMM d')
+    const longDow = (iso: string) => format(parseISO(iso + 'T00:00:00'), 'EEEE')
+
+    const classify = (j: OptJob, to: string): { ok: boolean; reason: MoveBlockReason; detail: string } => {
+      const dow = getDay(parseISO(to + 'T00:00:00'))
+      if (j.avoidDays && j.avoidDays.includes(dow)) {
+        return { ok: false, reason: 'customer-avoid', detail: `${j.customerName} asked to avoid ${longDow(to)}s` }
+      }
+      // Cadence against the customer's whole timeline (collision, then floor).
+      const mates = matesByJobId.get(j.id) || []
+      let collide = false, nearestGap = Infinity, nearestMate: OptJob | null = null
+      for (const m of mates) {
+        const diff = diffDaysISO(currentDateOf(m), to)
+        if (diff === 0) { collide = true; break }
+        const g = Math.abs(diff)
+        if (g < nearestGap) { nearestGap = g; nearestMate = m }
+      }
+      if (collide) return { ok: false, reason: 'cadence-collision', detail: `${j.customerName} already has a visit that day` }
+      const floor = cadenceFloorFor(j.recurrence_id, opts.recurrences)
+      if (nearestMate && nearestGap < floor) {
+        return { ok: false, reason: 'cadence-floor', detail: `it would land ${nearestGap} day${nearestGap !== 1 ? 's' : ''} from their ${fmtD(currentDateOf(nearestMate))} visit — cadence needs ≥${floor} days` }
+      }
+      const wd = moveWindowDays(j, opts.recurrences)
+      const off = Math.abs(diffDaysISO(original.get(j.id)!, to))
+      if (j.recurrence_id && off > wd) {
+        return { ok: false, reason: 'cadence-window', detail: `it’s ${off} days off their recurring rhythm (visits flex ±${wd} days)` }
+      }
+      if (!inTarget(to)) return { ok: false, reason: 'scope', detail: 'it falls outside the stretch being balanced' }
+      // Legal move — does it actually help? Same global-cost delta the search uses.
+      const fromDate = assign.get(j.id)!
+      applyMove(j.id, to)
+      const delta = globalCost() - baseCost
+      const destOver = evalDay(to).totalMin - capMin
+      applyMove(j.id, fromDate)
+      if (delta < -MIN_GAIN) return { ok: true, reason: 'no-gain', detail: 'a beneficial move exists' }
+      if (destOver > 0) return { ok: false, reason: 'capacity', detail: `${longDow(to)} is already full (${fmtDur(destOver)} over capacity)` }
+      if (j.recurrence_id) {
+        const est = estWeekday[j.recurrence_id]
+        if (est != null && getDay(parseISO(fromDate + 'T00:00:00')) === est && dow !== est) {
+          return { ok: false, reason: 'stability', detail: `it would pull ${j.customerName} off their usual ${longDow(fromDate)} for too small a gain` }
+        }
+      }
+      if (isoWeekKey(to) !== isoWeekKey(fromDate)) {
+        return { ok: false, reason: 'scope', detail: 'it would push the visit into a different week for too little benefit' }
+      }
+      return { ok: false, reason: 'no-gain', detail: 'it wouldn’t cut driving or ease the day enough to justify' }
+    }
+
+    const onDay = [...(dayJobs.get(date) ?? [])].map(id => byId.get(id)!).filter(Boolean)
+    const jobDiags: JobMoveDiag[] = []
+    const alternatives: DayDiagnosis['alternatives'] = []
+    for (const j of onDay) {
+      if (!movableSet.has(j.id)) {
+        jobDiags.push({
+          jobId: j.id, customerName: j.customerName, recurring: !!j.recurrence_id, canMove: false,
+          reason: j.invoiced
+            ? `${j.customerName} is already billed, so the visit is locked.`
+            : `${j.customerName} has a set start time (${j.start_time}), so the visit is locked.`,
+        })
+        continue
+      }
+      const fromDate = assign.get(j.id)!
+      let canMove = false
+      let closest: JobMoveDiag['closest'] | undefined
+      for (let step = 1; step <= 14 && !canMove; step++) {
+        for (const dir of [1, -1]) {
+          const d = addDays(parseISO(fromDate + 'T00:00:00'), dir * step)
+          const to = format(d, 'yyyy-MM-dd')
+          if (to <= opts.today) continue
+          if (prefSet && !prefSet.has(getDay(d))) continue   // only real work days are credible alternatives
+          const v = classify(j, to)
+          if (v.ok) { canMove = true; break }
+          if (!closest) closest = { date: to, reason: v.reason, detail: v.detail }
+        }
+      }
+      jobDiags.push({
+        jobId: j.id, customerName: j.customerName, recurring: !!j.recurrence_id, canMove,
+        reason: closest ? `${j.customerName} can’t move — ${closest.detail}.` : `${j.customerName} has no nearby work day open to move to.`,
+        closest,
+      })
+      if (closest) alternatives.push({ jobId: j.id, customerName: j.customerName, date: closest.date, reason: closest.reason, detail: closest.detail })
+    }
+    diagnosis = { date, jobs: jobDiags, alternatives }
+  }
+
   return {
     mode: opts.mode, scope: opts.scope,
     before, after, moves, daysAffected, kmSaved, minutesSaved,
     movableCount: movable.length, lockedTimes, lockedBilled, stableKept,
-    groupedIntoCluster, blockedMoves, warnings, reasons,
+    groupedIntoCluster, blockedMoves, warnings, reasons, diagnosis,
   }
 }
 
@@ -736,6 +875,8 @@ export interface ScheduleSuggestion {
   scope: OptimizeScope
   anchorDate: string
   mode: OptimizeMode
+  // Present on 'stuck' cards: the per-job breakdown of why nothing can move.
+  diagnosis?: DayDiagnosis
 }
 
 // Why an overloaded day can't be auto-balanced — derived from the day's own jobs
@@ -782,25 +923,47 @@ export function analyzeSchedule(jobs: OptJob[], base: Omit<OptOptions, 'mode' | 
     .sort((a, b) => a.date.localeCompare(b.date))
     .slice(0, 3)
   for (const d of overloaded) {
-    const res = optimizeSchedule(jobs, { ...base, mode: 'balanced', scope: 'week', anchorDate: d.date })
     const dayName = format(parseISO(d.date + 'T00:00:00'), 'EEEE')
-    const leaves = res.moves.filter(m => m.from === d.date)
-    if (leaves.length > 0 && res.after.overloadedDays <= res.before.overloadedDays) {
-      const fixed = res.after.overloadedDays < res.before.overloadedDays
+    const relieves = (r: OptimizationResult) => r.moves.filter(m => m.from === d.date).length > 0 && r.after.overloadedDays <= r.before.overloadedDays
+    // First the least-disruptive search (balance within the week). diagnoseDate
+    // makes the result carry the per-job "why it can / can't move" breakdown.
+    const week = optimizeSchedule(jobs, { ...base, mode: 'balanced', scope: 'week', anchorDate: d.date, diagnoseDate: d.date })
+    if (relieves(week)) {
+      const leaves = week.moves.filter(m => m.from === d.date).length
+      const fixed = week.after.overloadedDays < week.before.overloadedDays
       out.push({
         id: `overload-${d.date}`, kind: 'overload', severity: 'high', actionable: true,
         title: `${dayName} is overloaded by ${fmtDur(d.over)}.`,
-        detail: `Moving ${leaves.length} job${leaves.length !== 1 ? 's' : ''} off ${dayName} would ${res.kmSaved > 0 ? `save ${res.kmSaved} km and ` : ''}${fixed ? 'bring the day under capacity' : 'ease the day'}.`,
+        detail: `Moving ${leaves} job${leaves !== 1 ? 's' : ''} off ${dayName} would ${week.kmSaved > 0 ? `save ${week.kmSaved} km and ` : ''}${fixed ? 'bring the day under capacity' : 'ease the day'}.`,
         scope: 'week', anchorDate: d.date, mode: 'balanced',
       })
-    } else {
-      out.push({
-        id: `overload-${d.date}`, kind: 'stuck', severity: 'medium', actionable: false,
-        title: `${dayName} is overloaded by ${fmtDur(d.over)}, but it can't be auto-balanced.`,
-        detail: explainStuckDay(byDate[d.date]),
-        scope: 'week', anchorDate: d.date, mode: 'balanced',
-      })
+      continue
     }
+    // The week itself is full — before declaring it impossible, evaluate the
+    // broader cross-week search (a job may relieve the day by shifting into an
+    // adjacent week if the gain outweighs the week-cross penalty).
+    const month = optimizeSchedule(jobs, { ...base, mode: 'balanced', scope: 'month', anchorDate: d.date, diagnoseDate: d.date })
+    if (relieves(month)) {
+      const leaves = month.moves.filter(m => m.from === d.date).length
+      const fixed = month.after.overloadedDays < month.before.overloadedDays
+      out.push({
+        id: `overload-${d.date}`, kind: 'overload', severity: 'high', actionable: true,
+        title: `${dayName} is overloaded by ${fmtDur(d.over)}.`,
+        detail: `Its own week is full, but shifting ${leaves} job${leaves !== 1 ? 's' : ''} into an adjacent week would ${fixed ? 'bring the day under capacity' : 'ease it'}${month.kmSaved > 0 ? ` (saves ${month.kmSaved} km)` : ''}.`,
+        scope: 'month', anchorDate: d.date, mode: 'balanced',
+      })
+      continue
+    }
+    // Genuinely stuck even allowing cross-week moves — explain with the broadest
+    // diagnosis, so per-job reasons are concrete (capacity / cadence / stability)
+    // rather than "outside this week".
+    out.push({
+      id: `overload-${d.date}`, kind: 'stuck', severity: 'medium', actionable: false,
+      title: `${dayName} is overloaded by ${fmtDur(d.over)}, but no legal move relieves it.`,
+      detail: explainStuckDay(byDate[d.date]),
+      scope: 'month', anchorDate: d.date, mode: 'balanced',
+      diagnosis: month.diagnosis,
+    })
   }
 
   // 2) + 3) Cluster + recurring opportunities — derived from ONE density/future
