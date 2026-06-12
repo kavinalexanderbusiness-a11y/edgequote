@@ -17,11 +17,12 @@ import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { cn, minutesBetween } from '@/lib/utils'
 import { format, addMonths, addWeeks, addDays, subMonths, subWeeks, subDays, parseISO, getDay } from 'date-fns'
-import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket } from 'lucide-react'
+import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repeat, Lightbulb } from 'lucide-react'
 import { OptimizeSchedule } from '@/components/schedule/OptimizeSchedule'
 import { RainDelayCenter } from '@/components/schedule/RainDelayCenter'
 import { CloudRain } from 'lucide-react'
-import type { PlannedMove } from '@/lib/optimizer'
+import { analyzeSchedule } from '@/lib/optimizer'
+import type { PlannedMove, OptimizeScope, OptimizeMode, OptJob, ScheduleSuggestion } from '@/lib/optimizer'
 
 function localToday(): string {
   const d = new Date()
@@ -84,6 +85,14 @@ export default function SchedulePage() {
   const [capacityHours, setCapacityHours] = useState(8)
   const [showOptimize, setShowOptimize] = useState(false)
   const [showRainCenter, setShowRainCenter] = useState(false)
+  // Pre-scoped launch from an auto-suggestion (vs. the manual Optimize button).
+  const [optimizeLaunch, setOptimizeLaunch] = useState<{ scope: OptimizeScope; mode: OptimizeMode; anchorDate: string; autoRun: boolean } | null>(null)
+  const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(new Set())
+
+  function launchOptimizer(opts?: { scope: OptimizeScope; mode: OptimizeMode; anchorDate: string }) {
+    setOptimizeLaunch(opts ? { ...opts, autoRun: true } : null)
+    setShowOptimize(true)
+  }
 
   // Effective per-visit price for every job (manual price > linked quote).
   const valueByJobId = useMemo(() => {
@@ -97,6 +106,28 @@ export default function SchedulePage() {
     return m
   }, [jobs, quotesById, recurrences])
 
+  // Proactive auto-suggestions (overloaded days, isolated jobs, recurring-cluster
+  // opportunities) — computed from the same engines, shown without opening the
+  // optimizer. Recomputes when jobs/settings change.
+  const suggestions = useMemo<ScheduleSuggestion[]>(() => {
+    if (jobs.length === 0) return []
+    const optJobs: OptJob[] = jobs.map(j => ({
+      id: j.id, scheduled_date: j.scheduled_date, status: j.status,
+      recurrence_id: j.recurrence_id, start_time: j.start_time, duration_minutes: j.duration_minutes,
+      lat: j.properties?.lat ?? null, lng: j.properties?.lng ?? null,
+      value: valueByJobId[j.id] || 0, invoiced: false,
+      title: j.title, customerName: j.customers?.name || j.title,
+      neighborhood: j.properties?.neighborhood ?? null,
+    }))
+    const recs: Record<string, { freq: string | null; interval_unit: string | null; interval_count: number | null }> = {}
+    for (const [id, r] of Object.entries(recurrences)) recs[id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count }
+    return analyzeSchedule(optJobs, {
+      today: localToday(), base: baseCoord, preferredDays: preferredWorkDays, capacityHours, recurrences: recs,
+    })
+  }, [jobs, valueByJobId, recurrences, baseCoord, preferredWorkDays, capacityHours])
+
+  const visibleSuggestions = suggestions.filter(s => !dismissedSuggestions.has(s.id))
+
   // When arriving from an accepted quote (?quote=…), open a prefilled new-job form.
   const [quoteCtx, setQuoteCtx] = useState<Quote | null>(null)
   const [quotePrefill, setQuotePrefill] = useState<Partial<JobFormValues> | null>(null)
@@ -108,7 +139,7 @@ export default function SchedulePage() {
     const [jRes, cRes, rRes, qRes, sRes] = await Promise.all([
       supabase
         .from('jobs')
-        .select('*, customers(id, name, phone), properties(id, address, lat, lng)')
+        .select('*, customers(id, name, phone), properties(id, address, lat, lng, neighborhood)')
         .eq('user_id', user!.id)
         .order('scheduled_date'),
       supabase.from('customers').select('*').eq('user_id', user!.id).order('name'),
@@ -796,7 +827,7 @@ export default function SchedulePage() {
             <Button variant="secondary" onClick={() => setShowRainCenter(true)} title="Rained out? Bump a whole day to the next work days">
               <CloudRain className="w-4 h-4" /> Rain
             </Button>
-            <Button variant="secondary" onClick={() => setShowOptimize(true)} title="Optimize the whole future schedule">
+            <Button variant="secondary" onClick={() => launchOptimizer()} title="Optimize your schedule — pick scope and goal">
               <Rocket className="w-4 h-4" /> Optimize
             </Button>
             <Button onClick={() => openNewJob(cursor)}>
@@ -860,6 +891,44 @@ export default function SchedulePage() {
           ))}
         </div>
       </div>
+
+      {/* Proactive optimization suggestions — appear automatically */}
+      {visibleSuggestions.length > 0 && (
+        <div className="space-y-2">
+          {visibleSuggestions.map(s => (
+            <div key={s.id}
+              className={cn('rounded-xl border p-3 flex items-start gap-3',
+                s.severity === 'high' ? 'border-amber-500/40 bg-amber-500/10' : 'border-accent/25 bg-accent/5')}>
+              {s.kind === 'overload'
+                ? <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                : s.kind === 'recurring'
+                  ? <Repeat className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+                  : <Lightbulb className="w-4 h-4 text-accent shrink-0 mt-0.5" />}
+              <div className="min-w-0 flex-1">
+                <p className={cn('text-sm font-semibold', s.severity === 'high' ? 'text-amber-300' : 'text-ink')}>{s.title}</p>
+                <p className="text-xs text-ink-muted mt-0.5">{s.detail}</p>
+                <div className="flex flex-wrap items-center gap-2 mt-2">
+                  <Button size="sm" variant="secondary" onClick={() => launchOptimizer({ scope: s.scope, mode: s.mode, anchorDate: s.anchorDate })}>
+                    <Rocket className="w-3.5 h-3.5" /> {s.kind === 'overload' ? `Optimize ${format(parseISO(s.anchorDate + 'T00:00:00'), 'EEE')}` : 'Optimize'}
+                  </Button>
+                  {s.kind === 'overload' && (
+                    <>
+                      <button onClick={() => launchOptimizer({ scope: 'weekend', mode: 'balanced', anchorDate: s.anchorDate })}
+                        className="text-xs font-medium text-accent hover:underline">Optimize weekend</button>
+                      <button onClick={() => launchOptimizer({ scope: 'week', mode: 'balanced', anchorDate: s.anchorDate })}
+                        className="text-xs font-medium text-accent hover:underline">Optimize week</button>
+                    </>
+                  )}
+                </div>
+              </div>
+              <button onClick={() => setDismissedSuggestions(prev => new Set(prev).add(s.id))}
+                className="text-ink-faint hover:text-ink shrink-0" title="Dismiss">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Edit/New job — modal overlay so Open always brings the correct job into view */}
       {(showForm || editing) && (
@@ -975,8 +1044,12 @@ export default function SchedulePage() {
           baseCoord={baseCoord}
           preferredWorkDays={preferredWorkDays}
           capacityHours={capacityHours}
+          anchorDate={optimizeLaunch?.anchorDate ?? format(cursor, 'yyyy-MM-dd')}
+          initialScope={optimizeLaunch?.scope}
+          initialMode={optimizeLaunch?.mode}
+          autoRun={optimizeLaunch?.autoRun}
           onApply={applyOptimization}
-          onClose={() => setShowOptimize(false)}
+          onClose={() => { setShowOptimize(false); setOptimizeLaunch(null) }}
         />
       )}
 

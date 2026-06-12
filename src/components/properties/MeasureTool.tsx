@@ -484,11 +484,13 @@ export function MeasureTool({ property }: { property: Property }) {
     if (currentPath.current.length >= 3) commitCurrent(activeRef.current)
     const sections = currentSections()
     const total = Math.round(Object.values(sections).reduce((a, b) => a + b, 0))
-    const pkgSave = pricingPackage(total, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood })
+    const baseSave = pricingPackage(total, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood })
     const estMin = estimateVisitMinutes(total, prospect?.observedMinPer1000)
     const scoreSave = prospect
-      ? assessProspect(pkgSave, prospect, { distanceKm, travelFee: effectiveTravel, neighborhoodName: property.neighborhood, estimatedMinutes: estMin, timedJobs: prospect.timedJobs }).score
+      ? assessProspect(baseSave, prospect, { distanceKm, travelFee: effectiveTravel, neighborhoodName: property.neighborhood, estimatedMinutes: estMin, timedJobs: prospect.timedJobs }).score
       : null
+    // Save the grade-adjusted package so stored recurring prices reflect value.
+    const pkgSave = pricingPackage(total, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood, valueGrade: scoreSave })
     const snapshot: MeasurementSnapshot = {
       date: new Date().toISOString(),
       total_sqft: total,
@@ -694,14 +696,16 @@ export function MeasureTool({ property }: { property: Property }) {
       {/* Pricing recommendation package — cadence prices, season value, verdict.
           "Use X" creates the quote with that structure in one tap. */}
       {totalSqft > 0 && (() => {
-        const pkg = pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood })
+        const basePkg = pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood })
         const assessment = prospect
-          ? assessProspect(pkg, prospect, {
+          ? assessProspect(basePkg, prospect, {
               distanceKm, travelFee: effectiveTravel, neighborhoodName: property.neighborhood,
               estimatedMinutes: estimateVisitMinutes(totalSqft, prospect.observedMinPer1000),
               timedJobs: prospect.timedJobs,
             })
           : null
+        // Grade-adjusted recurring pricing (business value, not just size).
+        const pkg = pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood, valueGrade: assessment?.score ?? null })
         return (
           <div className="bg-bg-secondary border border-border rounded-xl px-4 py-3 space-y-3">
             <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Pricing recommendation</span>

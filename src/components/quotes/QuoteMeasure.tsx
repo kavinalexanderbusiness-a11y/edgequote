@@ -239,15 +239,19 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
 
   // The complete recommendation package — same engine the property MeasureTool
   // and travel-density discount use; nearby = located upcoming jobs within range.
+  // Pass 1: base package → Pass 2: grade-adjusted recurring pricing, so recurring
+  // prices reflect the customer's business value (route grade), not just lawn size.
   const nearby = prospect?.nearbyJobs ?? 0
-  const pkg = totalSqft > 0 ? pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount: nearby, neighborhoodName: hoodName }) : null
-  // The business verdict: should I take this customer?
-  const assessment = pkg && prospect
-    ? assessProspect(pkg, prospect, {
+  const basePkg = totalSqft > 0 ? pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount: nearby, neighborhoodName: hoodName }) : null
+  const assessment = basePkg && prospect
+    ? assessProspect(basePkg, prospect, {
         distanceKm: null, travelFee: Number(travelFee) || 0, neighborhoodName: hoodName,
         estimatedMinutes: estimateVisitMinutes(totalSqft, prospect.observedMinPer1000),
         timedJobs: prospect.timedJobs,
       })
+    : null
+  const pkg = totalSqft > 0
+    ? pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount: nearby, neighborhoodName: hoodName, valueGrade: assessment?.score ?? null })
     : null
 
   function applySelection(sel: CadenceSelection) {

@@ -194,11 +194,64 @@ export const SEASON_VISITS: Record<Exclude<CadenceKey, 'one_time'>, number> = {
 
 // Cadence price vs the one-time price: weekly earns a loyalty discount (easy,
 // regular cuts), bi-weekly a smaller one, monthly costs MORE per visit (a month
-// of growth is a harder cut).
+// of growth is a harder cut). This is the NEUTRAL baseline used when the
+// customer's strategic value is unknown.
 const CADENCE_MULT: Record<Exclude<CadenceKey, 'one_time'>, number> = {
   weekly: 0.75,
   biweekly: 0.85,
   monthly: 1.1,
+}
+
+// ── Value-based recurring pricing ─────────────────────────────────────────────
+// The recurring discount should reflect the customer's BUSINESS value, not just
+// lawn size. A strategically valuable customer (A+ route asset — dense route,
+// strong neighborhood, recurring opportunity) earns competitive recurring
+// pricing because route density absorbs travel. A route liability (F — isolated,
+// long drive, weak area) should hold or raise pricing to offset the inefficiency.
+//
+// The grade is the EXISTING prospect score (route grading + ownership). We don't
+// re-grade here — we map it to how aggressive the recurring discount should be.
+
+// 0 = protective (hold/raise price), 1 = aggressive (competitive recurring).
+export function gradeAggressiveness(grade: string | null | undefined): number {
+  switch (grade) {
+    case 'A+': return 1.0
+    case 'A': return 0.85
+    case 'B': return 0.65
+    case 'C': return 0.45
+    case 'D': return 0.2
+    case 'F': return 0.0
+    default: return 0.5
+  }
+}
+
+// Confidence label per the owner's grade scale — reuses the grade, no new system.
+export function gradeConfidenceLabel(grade: string | null | undefined): string {
+  if (grade === 'A+' || grade === 'A') return 'Route Asset'
+  if (grade === 'B') return 'Good Customer'
+  if (grade === 'C') return 'Neutral'
+  if (grade === 'D') return 'Weak Customer'
+  if (grade === 'F') return 'Route Liability'
+  return 'Customer'
+}
+
+// Recurring multipliers slid by strategic value. Endpoints chosen so a $75
+// one-time lawn yields ≈$50–55 weekly for an A+ (aggressive) and ≈$70–75 for an
+// F (protective) — matching the owner's intent.
+function valueCadenceMult(agg: number): Record<Exclude<CadenceKey, 'one_time'>, number> {
+  const lerp = (lo: number, hi: number) => lo + (hi - lo) * agg
+  return {
+    weekly: lerp(0.95, 0.68),
+    biweekly: lerp(0.98, 0.80),
+    monthly: lerp(1.15, 1.05),
+  }
+}
+
+export interface ValuePricingInfo {
+  grade: string
+  confidence: string                                   // "A+ Route Asset"
+  aggressiveness: 'aggressive' | 'standard' | 'protective'
+  reasons: string[]                                    // route-aware WHY
 }
 
 export interface CadenceOption {
@@ -227,6 +280,7 @@ export interface PricingPackage {
   recommended: { cadence: CadenceKey; reasons: string[] }
   routeValue: RouteValueVerdict
   guidance: PricingGuidance         // for the recommended cadence's price
+  valuePricing?: ValuePricingInfo   // present when a customer grade was supplied
 }
 
 export function pricingGuidance(price: number, cfg: PricingConfig): PricingGuidance {
@@ -242,11 +296,16 @@ export function pricingGuidance(price: number, cfg: PricingConfig): PricingGuida
 export function pricingPackage(
   sqft: number,
   cfg: PricingConfig,
-  ctx: { overgrowth?: number; nearbyCount: number; neighborhoodName?: string | null },
+  ctx: { overgrowth?: number; nearbyCount: number; neighborhoodName?: string | null; valueGrade?: string | null },
 ): PricingPackage {
   const oneTime = recommendedJobPrice(sqft, cfg, ctx.overgrowth ?? 1)
+  // Recurring multipliers reflect strategic value when a grade is supplied;
+  // otherwise the neutral baseline (backward compatible for callers without it).
+  const grade = ctx.valueGrade ?? null
+  const agg = gradeAggressiveness(grade)
+  const mult = grade ? valueCadenceMult(agg) : CADENCE_MULT
   const options: CadenceOption[] = (['weekly', 'biweekly', 'monthly'] as const).map(c => {
-    const price = roundToStep(oneTime * CADENCE_MULT[c])
+    const price = roundToStep(oneTime * mult[c])
     return { cadence: c, price, visits: SEASON_VISITS[c], annual: price * SEASON_VISITS[c] }
   })
   const weekly = options[0]
@@ -303,7 +362,26 @@ export function pricingPackage(
         }
 
   const recPrice = recommended.cadence === 'weekly' ? weekly.price : options[1].price
-  return { oneTime, options, recommended, routeValue, guidance: pricingGuidance(recPrice, cfg) }
+
+  // Value-based explanation — only when a grade is known.
+  let valuePricing: ValuePricingInfo | undefined
+  if (grade) {
+    const reasons: string[] = []
+    if (nearby >= 3) reasons.push(`Travel absorbed by your existing ${hood ?? 'route'} — strong cluster.`)
+    else if (nearby >= 1) reasons.push(`Builds density${hood ? ` in ${hood}` : ''} — partial travel absorption.`)
+    else reasons.push(hood ? `First customer in ${hood} — beachhead pricing.` : 'Creates an isolated stop — price holds to cover the extra drive.')
+    if (agg >= 0.85) reasons.push('Strategically valuable — competitive recurring pricing to win and keep them.')
+    else if (agg <= 0.2) reasons.push('Low route value — maintain or raise pricing to offset route inefficiency.')
+    else reasons.push('Solid customer — standard recurring discount.')
+    valuePricing = {
+      grade,
+      confidence: `${grade} ${gradeConfidenceLabel(grade)}`,
+      aggressiveness: agg >= 0.85 ? 'aggressive' : agg <= 0.2 ? 'protective' : 'standard',
+      reasons,
+    }
+  }
+
+  return { oneTime, options, recommended, routeValue, guidance: pricingGuidance(recPrice, cfg), valuePricing }
 }
 
 // ── Saved measurement recommendations ─────────────────────────────────────────

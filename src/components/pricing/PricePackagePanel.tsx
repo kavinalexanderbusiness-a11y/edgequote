@@ -2,7 +2,13 @@
 
 import { PricingPackage, CadenceKey } from '@/lib/pricing'
 import { cn } from '@/lib/utils'
-import { Trophy, ShieldAlert } from 'lucide-react'
+import { Trophy, ShieldAlert, Route } from 'lucide-react'
+
+const AGG_META = {
+  aggressive: { label: 'Competitive recurring pricing', cls: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' },
+  standard: { label: 'Standard recurring discount', cls: 'text-accent border-accent/30 bg-accent/10' },
+  protective: { label: 'Hold / raise pricing', cls: 'text-amber-400 border-amber-500/30 bg-amber-500/10' },
+} as const
 
 export interface CadenceSelection { cadence: CadenceKey; price: number }
 
@@ -45,6 +51,19 @@ export function PricePackagePanel({ pkg, onUse }: { pkg: PricingPackage; onUse: 
           )
         })}
       </div>
+
+      {/* Value-based pricing: confidence + route-aware why */}
+      {pkg.valuePricing && (
+        <div className={cn('rounded-xl border px-3 py-2.5', AGG_META[pkg.valuePricing.aggressiveness].cls)}>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <p className="text-xs font-bold flex items-center gap-1.5"><Route className="w-3.5 h-3.5" /> {pkg.valuePricing.confidence}</p>
+            <span className="text-[10px] font-semibold uppercase tracking-wide">{AGG_META[pkg.valuePricing.aggressiveness].label}</span>
+          </div>
+          <ul className="mt-1 space-y-0.5">
+            {pkg.valuePricing.reasons.map((r, i) => <li key={i} className="text-[11px] text-ink-muted">• {r}</li>)}
+          </ul>
+        </div>
+      )}
 
       {/* 🏆 Which option to push, and why */}
       <div className="rounded-xl border border-accent/30 bg-accent/5 px-3 py-2.5">

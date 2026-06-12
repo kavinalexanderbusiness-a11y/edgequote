@@ -171,7 +171,7 @@ export interface Job {
   suggested_date: string | null
   suggested_nearby_count: number | null
   customers?: Pick<Customer, 'id' | 'name' | 'phone'>
-  properties?: Pick<Property, 'id' | 'address' | 'lat' | 'lng'>
+  properties?: Pick<Property, 'id' | 'address' | 'lat' | 'lng' | 'neighborhood'>
 }
 
 // Apple-style edit scope for recurring jobs.
