@@ -49,10 +49,14 @@ export function quoteVisitAmount(quote: Record<string, unknown> | null | undefin
 
 // A visit's value with the job-level manual price taking precedence over the
 // quote-derived price. THE single definition of "what is this visit worth".
-export function jobVisitValue(jobPrice: number | null | undefined, quote: Record<string, unknown> | null | undefined, freq: string | null): number {
+// `isInitial` = the anchor visit of a recurring series; it derives the quote's
+// INITIAL price (freq treated as null) rather than the cadence price, so the
+// first visit can show $150 while the rest derive $65. Defaults false →
+// identical behaviour for every existing caller (backward compatible).
+export function jobVisitValue(jobPrice: number | null | undefined, quote: Record<string, unknown> | null | undefined, freq: string | null, isInitial = false): number {
   const p = Number(jobPrice)
   if (Number.isFinite(p) && p > 0) return p
-  return quoteVisitAmount(quote, freq)
+  return quoteVisitAmount(quote, isInitial ? null : freq)
 }
 
 // When a recurring visit is completed, create a DRAFT invoice for that visit,
@@ -80,7 +84,7 @@ export async function createDraftInvoiceForCompletedJob(supabase: Supa, job: Job
     quote = q as Record<string, unknown> | null
   }
 
-  const amount = jobVisitValue(job.price, quote, freq)
+  const amount = jobVisitValue(job.price, quote, freq, job.is_initial_visit)
   // Never draft a $0 invoice — an unpriced visit pollutes billing history forever.
   if (!(amount > 0)) return { created: false, reason: 'no-amount' }
 

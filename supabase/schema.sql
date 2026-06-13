@@ -347,3 +347,15 @@ create policy "schedule_health_ignored: delete own" on public.schedule_health_ig
 
 create index if not exists schedule_health_ignored_user_idx
   on public.schedule_health_ignored(user_id);
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-13 — Explicit initial (anchor) visit. The
+-- FIRST visit of a recurring series is the "initial visit": it
+-- derives the quote's INITIAL price, while every later visit
+-- derives the cadence (weekly/biweekly/monthly) price. Modelled
+-- as a flag so editing the recurring price can never overwrite it.
+-- Existing rows default false (unchanged behaviour); new series
+-- set it on their anchor. Idempotent; safe to re-run.
+-- ════════════════════════════════════════════════════════════
+alter table public.jobs
+  add column if not exists is_initial_visit boolean not null default false;

@@ -48,7 +48,7 @@ const DEFAULT_VISIT_MIN = 45 // assumed on-site time when a job has no duration
 export async function fetchUpcomingSchedulingJobs(supabase: SupabaseClient, userId: string): Promise<SchedJob[]> {
   const [jRes, qRes, rRes] = await Promise.all([
     supabase.from('jobs')
-      .select('id, scheduled_date, status, duration_minutes, price, quote_id, recurrence_id, properties(lat, lng)')
+      .select('id, scheduled_date, status, duration_minutes, price, quote_id, recurrence_id, is_initial_visit, properties(lat, lng)')
       .eq('user_id', userId).gte('scheduled_date', todayLocalISO()).in('status', ['scheduled', 'in_progress']),
     supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', userId),
     supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', userId),
@@ -69,7 +69,7 @@ export async function fetchUpcomingSchedulingJobs(supabase: SupabaseClient, user
         lat: j.properties?.lat ?? null,
         lng: j.properties?.lng ?? null,
         durationMin: (j.duration_minutes as number) || DEFAULT_VISIT_MIN,
-        value: Math.round(jobVisitValue(j.price as number | null, quote, freq)),
+        value: Math.round(jobVisitValue(j.price as number | null, quote, freq, Boolean(j.is_initial_visit))),
       }
     })
 }

@@ -183,6 +183,9 @@ export interface Job {
   // so recommendation quality can be measured later.
   suggested_date: string | null
   suggested_nearby_count: number | null
+  // The first visit of a recurring series — derives the quote's INITIAL price,
+  // not the cadence price. Editing the recurring price never touches it.
+  is_initial_visit: boolean
   customers?: Pick<Customer, 'id' | 'name' | 'phone' | 'preferred_days' | 'avoid_days' | 'pref_time_start' | 'pref_time_end'>
   properties?: Pick<Property, 'id' | 'address' | 'lat' | 'lng' | 'neighborhood' | 'preferred_days' | 'avoid_days' | 'pref_time_start' | 'pref_time_end'>
 }

@@ -99,15 +99,19 @@ export interface ServicePlan {
   remaining: number          // future scheduled/in-progress visits booked
   nextVisitDate: string | null
   paused: boolean            // recurring history but zero future visits booked
+  initialPrice: number | null   // the anchor (initial) visit's value, when distinct
+  recurringPrice: number | null // the per-visit cadence value
 }
 
 // Build a plan per recurrence that has ANY visit (past or future). `todayISO`
-// keeps it testable/resume-safe (pass localTodayISO() at the call site).
+// keeps it testable/resume-safe (pass localTodayISO() at the call site). Pass
+// `valueOf` (a per-visit valuation) to surface the initial vs recurring price.
 export function buildServicePlans(
   recurrences: JobRecurrence[],
   jobs: Job[],
   seasons: ServiceSeasons,
   todayISO: string,
+  valueOf?: (job: Job) => number,
 ): ServicePlan[] {
   const plans: ServicePlan[] = []
   for (const r of recurrences) {
@@ -147,6 +151,16 @@ export function buildServicePlans(
       }
     }
 
+    // Initial vs recurring price — the anchor visit's value vs a recurring one.
+    let initialPrice: number | null = null
+    let recurringPrice: number | null = null
+    if (valueOf) {
+      const anchor = series.find(j => j.is_initial_visit)
+      const recurringSample = series.find(j => !j.is_initial_visit && j.status !== 'cancelled')
+      initialPrice = anchor ? Math.round(valueOf(anchor)) : null
+      recurringPrice = recurringSample ? Math.round(valueOf(recurringSample)) : null
+    }
+
     plans.push({
       recurrenceId: r.id,
       propertyId,
@@ -157,6 +171,8 @@ export function buildServicePlans(
       remaining: future.length,
       nextVisitDate: future[0]?.scheduled_date ?? null,
       paused: future.length === 0,
+      initialPrice,
+      recurringPrice,
     })
   }
   // Active plans first, then most upcoming visits.

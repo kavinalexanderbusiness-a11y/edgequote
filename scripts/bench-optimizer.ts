@@ -10,7 +10,7 @@
 import { addDays, format, getDay, parseISO } from 'date-fns'
 import { optimizeSchedule, analyzeSchedule, metricsWithMoves, cadenceFloorFor, cadenceGroupKey, cadenceServiceKey, manualCadenceCheck, scopeWindows } from '@/lib/optimizer'
 import type { OptJob, OptOptions, OptimizationResult, OptimizeMode, OptimizeScope } from '@/lib/optimizer'
-import { effectiveFreq } from '@/lib/invoicing'
+import { effectiveFreq, jobVisitValue } from '@/lib/invoicing'
 import { haversineKm } from '@/lib/geo'
 import { analyzeScheduleHealth, HealthJob } from '@/lib/scheduleHealth'
 import { generateOccurrences } from '@/lib/recurrence'
@@ -339,6 +339,24 @@ function testRecurrence(): number {
   return fails
 }
 
+// ── Initial-vs-recurring visit pricing ────────────────────────────────────────
+function testInitialVisitPricing(): number {
+  let fails = 0
+  const expect = (name: string, ok: boolean) => { if (!ok) { fails++; console.error('✗ initial-pricing: ' + name) } }
+  const quote = { initial_price: 150, weekly_price: 70, biweekly_price: 65, monthly_price: 60, total: 200 }
+  expect('initial visit → initial price ($150)', jobVisitValue(null, quote, 'biweekly', true) === 150)
+  expect('recurring visit → cadence price ($65)', jobVisitValue(null, quote, 'biweekly', false) === 65)
+  expect('manual override wins (initial)', jobVisitValue(99, quote, 'biweekly', true) === 99)
+  expect('manual override wins (recurring)', jobVisitValue(88, quote, 'biweekly', false) === 88)
+  expect('default param → recurring (backward compatible)', jobVisitValue(null, quote, 'biweekly') === 65)
+  // Editing the recurring price must NEVER move the initial price.
+  const edited = { ...quote, biweekly_price: 80 }
+  expect('initial UNCHANGED after cadence edit', jobVisitValue(null, edited, 'biweekly', true) === 150)
+  expect('recurring reflects cadence edit', jobVisitValue(null, edited, 'biweekly', false) === 80)
+  if (fails === 0) console.log('Initial-visit pricing ✓ (anchor=$150 from initial_price, recurring=cadence; recurring edits never touch the initial)')
+  return fails
+}
+
 // ── Run matrix ────────────────────────────────────────────────────────────────
 function run() {
   const gen = genSchedule(42)
@@ -361,6 +379,7 @@ function run() {
   failures += testCadenceRule()
   failures += testScheduleHealth()
   failures += testRecurrence()
+  failures += testInitialVisitPricing()
   const rows: Record<string, unknown>[] = []
   for (const c of cases) {
     const opts: OptOptions = { ...baseOpts, base: c.base === null ? null : baseOpts.base, mode: c.mode, scope: c.scope, anchorDate: c.anchor }

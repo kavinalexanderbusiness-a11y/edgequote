@@ -121,7 +121,7 @@ export default function SchedulePage() {
       const q = j.quote_id ? quotesById[j.quote_id] : null
       const rec = j.recurrence_id ? recurrences[j.recurrence_id] : null
       const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
-      m[j.id] = jobVisitValue(j.price, q as unknown as Record<string, unknown>, freq)
+      m[j.id] = jobVisitValue(j.price, q as unknown as Record<string, unknown>, freq, j.is_initial_visit)
     }
     return m
   }, [jobs, quotesById, recurrences])
@@ -514,15 +514,17 @@ export default function SchedulePage() {
         .select()
         .single()
       if (recError || !rec) { setBanner('Could not save the recurrence: ' + (recError?.message ?? 'unknown error')); return }
-      // Pricing: for a QUOTE-linked series the first visit uses the initial price
-      // and every recurring visit DERIVES the cadence price from the quote (price
-      // null) — so $150 first, then $65 biweekly. Non-quote series keep the typed
-      // per-visit price across all visits.
+      // The FIRST visit is the explicit initial visit (is_initial_visit). For a
+      // quote-linked series both prices DERIVE from the quote — the initial visit
+      // reads the quote's initial price ($150), recurring visits the cadence price
+      // ($65) — so neither is a stamped value the other can overwrite. A typed
+      // override applies to the initial visit only. Non-quote series carry the
+      // typed per-visit price on every visit.
       const typed = Number(values.price) > 0 ? Number(values.price) : null
-      const anchorPrice = typed ?? (quoteCtx ? (Number(quoteCtx.initial_price) || null) : null)
       const rows = dates.map((d: string, i: number) => ({
         ...base,
-        price: i === 0 ? anchorPrice : (quoteCtx ? null : base.price),
+        is_initial_visit: i === 0,
+        price: quoteCtx ? (i === 0 ? typed : null) : base.price,
         scheduled_date: d,
         recurrence_id: rec.id,
       }))
@@ -578,6 +580,7 @@ export default function SchedulePage() {
       notes: values.notes || null,
       price: Number(values.price) > 0 ? Number(values.price) : null,
       recurrence_id: recurrenceId,
+      is_initial_visit: false, // generated future visits are never the anchor
     }
   }
 
@@ -643,7 +646,8 @@ export default function SchedulePage() {
     if (recErr || !rec) { setBanner('Could not create the recurring series: ' + (recErr?.message ?? '')); return }
 
     await applyFieldEdits(job, values, 'this')
-    await supabase.from('jobs').update({ recurrence_id: rec.id }).eq('id', job.id)
+    // The existing one-time job becomes the series ANCHOR (initial visit).
+    await supabase.from('jobs').update({ recurrence_id: rec.id, is_initial_visit: true }).eq('id', job.id)
 
     const base = occurrenceBase(values, user!.id, rec.id, job.quote_id)
     // Quote-linked future visits derive the cadence price (price null).
@@ -904,12 +908,14 @@ export default function SchedulePage() {
       const q = quote as unknown as Record<string, unknown>
       quoteSnap = { id: job.quote_id!, field: field!, value: Number(q[field!]) || null }
       const oldVal = Math.round(quoteVisitAmount(q, freq))
+      // The initial (anchor) visit is NEVER touched by a recurring-price change —
+      // it derives the quote's initial price independently of the cadence price.
       const freezeIds = scope === 'all'
-        ? series.filter(j => j.status === 'completed' && j.price == null).map(j => j.id)        // protect billed history
-        : series.filter(j => j.scheduled_date < job.scheduled_date && j.price == null).map(j => j.id) // past stays put
+        ? series.filter(j => !j.is_initial_visit && j.status === 'completed' && j.price == null).map(j => j.id)        // protect billed history
+        : series.filter(j => !j.is_initial_visit && j.scheduled_date < job.scheduled_date && j.price == null).map(j => j.id) // past stays put
       const clearIds = scope === 'all'
-        ? series.filter(j => j.status !== 'completed').map(j => j.id)
-        : series.filter(j => j.scheduled_date >= job.scheduled_date).map(j => j.id)
+        ? series.filter(j => !j.is_initial_visit && j.status !== 'completed').map(j => j.id)
+        : series.filter(j => !j.is_initial_visit && j.scheduled_date >= job.scheduled_date).map(j => j.id)
       if (freezeIds.length && oldVal > 0) await supabase.from('jobs').update({ price: oldVal }).in('id', freezeIds)
       await supabase.from('quotes').update({ [field!]: newPrice }).eq('id', job.quote_id)
       if (clearIds.length) await supabase.from('jobs').update({ price: null }).in('id', clearIds)
@@ -949,6 +955,7 @@ export default function SchedulePage() {
       scheduled_date: j.scheduled_date, start_time: j.start_time, end_time: j.end_time,
       duration_minutes: j.duration_minutes, crew_size: j.crew_size, status: j.status, notes: j.notes,
       price: j.price, actual_minutes: j.actual_minutes, suggested_date: j.suggested_date, suggested_nearby_count: j.suggested_nearby_count,
+      is_initial_visit: j.is_initial_visit,
     }
   }
 

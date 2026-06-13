@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Customer, Property, Quote, Job, Invoice, JobRecurrence } from '@/types'
 import { needsFollowUp, daysSince } from '@/lib/followup'
 import { recurrenceLabel, recurringCustomerLabel, buildServicePlans, ServicePlan } from '@/lib/recurrence'
+import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
 import { settingsToSeasons, DEFAULT_SEASONS, ServiceSeasons } from '@/lib/seasons'
 import { resolvePrefs, prefSummary, hasAnyPref } from '@/lib/preferences'
 import { SchedulePrefsFields, PrefsDraft, EMPTY_DRAFT, toDraft, draftToRow } from '@/components/customers/SchedulePrefsFields'
@@ -177,7 +178,18 @@ export default function CustomerDetailPage() {
   if (!customer) return <div className="text-center py-16 text-sm text-red-400">Customer not found.</div>
 
   const today = localToday()
-  const servicePlans = buildServicePlans(recurrences, jobs, seasons, today)
+  // Per-visit valuation so plans can show the initial vs recurring price.
+  const quotesByIdLocal: Record<string, Quote> = {}
+  for (const q of quotes) quotesByIdLocal[q.id] = q
+  const recsByIdLocal: Record<string, JobRecurrence> = {}
+  for (const r of recurrences) recsByIdLocal[r.id] = r
+  const planValueOf = (j: Job) => {
+    const q = j.quote_id ? quotesByIdLocal[j.quote_id] : null
+    const rec = j.recurrence_id ? recsByIdLocal[j.recurrence_id] : null
+    const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
+    return jobVisitValue(j.price, q as unknown as Record<string, unknown>, freq, j.is_initial_visit)
+  }
+  const servicePlans = buildServicePlans(recurrences, jobs, seasons, today, planValueOf)
 
   // ── Revenue (three separate truths) ──
   const wonQuotes = quotes.filter(q => WON.has(q.status))
@@ -683,6 +695,14 @@ function ServicePlanRow({ plan, customerId, pausing, onPause }: {
               ? <span className="text-ink-faint">No upcoming visits — schedule it again to resume</span>
               : <span className="text-accent font-semibold">{plan.remaining} visit{plan.remaining !== 1 ? 's' : ''} remaining{plan.nextVisitDate ? ` · next ${formatDate(plan.nextVisitDate)}` : ''}</span>}
           </p>
+          {/* Initial vs recurring pricing — only when they actually differ */}
+          {(plan.recurringPrice ?? 0) > 0 && (
+            <p className="text-[11px] text-ink-muted mt-0.5">
+              {plan.initialPrice != null && plan.initialPrice !== plan.recurringPrice
+                ? <>First visit <span className="font-semibold text-ink">{formatCurrency(plan.initialPrice)}</span>, then <span className="font-semibold text-ink">{formatCurrency(plan.recurringPrice!)}</span>/visit</>
+                : <><span className="font-semibold text-ink">{formatCurrency(plan.recurringPrice!)}</span>/visit</>}
+            </p>
+          )}
         </div>
       </div>
       <div className="flex flex-wrap gap-2 mt-2.5">

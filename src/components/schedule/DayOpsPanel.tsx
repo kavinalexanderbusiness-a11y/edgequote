@@ -86,9 +86,11 @@ export function DayOpsPanel({
     if (!q) return 0
     const rec = job.recurrence_id ? recurrences[job.recurrence_id] : null
     const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
-    return quoteVisitAmount(q as unknown as Record<string, unknown>, freq)
+    // The anchor visit derives the quote's INITIAL price, not the cadence price.
+    return quoteVisitAmount(q as unknown as Record<string, unknown>, job.is_initial_visit ? null : freq)
   }
   function cadenceLabelFor(job: Job): string {
+    if (job.is_initial_visit) return 'initial visit'
     const rec = job.recurrence_id ? recurrences[job.recurrence_id] : null
     const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
     return freq ?? 'first visit'
@@ -128,7 +130,7 @@ export function DayOpsPanel({
     const q = job.quote_id ? quotesById[job.quote_id] : null
     const rec = job.recurrence_id ? recurrences[job.recurrence_id] : null
     const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
-    return jobVisitValue(job.price, q as unknown as Record<string, unknown>, freq)
+    return jobVisitValue(job.price, q as unknown as Record<string, unknown>, freq, job.is_initial_visit)
   }
 
   const active = jobs.filter(j => j.status !== 'cancelled')
