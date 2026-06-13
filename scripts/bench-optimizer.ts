@@ -13,6 +13,7 @@ import type { OptJob, OptOptions, OptimizationResult, OptimizeMode, OptimizeScop
 import { effectiveFreq } from '@/lib/invoicing'
 import { haversineKm } from '@/lib/geo'
 import { analyzeScheduleHealth, HealthJob } from '@/lib/scheduleHealth'
+import { generateOccurrences } from '@/lib/recurrence'
 
 // Seeded LCG so every run generates the identical schedule.
 function lcg(seed: number) {
@@ -318,6 +319,26 @@ function testScheduleHealth(): number {
   return fails
 }
 
+// ── Recurrence generation (foundation of the recurring-create validation) ─────
+function testRecurrence(): number {
+  let fails = 0
+  const expect = (name: string, ok: boolean) => { if (!ok) { fails++; console.error('✗ recurrence: ' + name) } }
+  // Biweekly mid-season → many visits (the user's $150/$65 example, Jun 15 → Oct 31).
+  const seasonal = generateOccurrences('2026-06-15', 'week', 2, '2026-10-31', null)
+  expect('biweekly Jun15→Oct31 generates ≥2', seasonal.length >= 2 && seasonal[0] === '2026-06-15' && seasonal[1] === '2026-06-29')
+  expect('biweekly Jun15→Oct31 has 4+ future visits', seasonal.slice(1).length >= 4)
+  // Open-ended → rolling horizon (>1, capped).
+  expect('open-ended biweekly → multiple', generateOccurrences('2026-06-15', 'week', 2, null, null).length > 1)
+  // endCount=1 → single visit (validation should reject this as "recurring").
+  expect('endCount=1 → 1 date', generateOccurrences('2026-06-15', 'week', 2, null, 1).length === 1)
+  // End date before the 2nd visit → 1 date (validation should reject).
+  expect('end before 2nd visit → 1 date', generateOccurrences('2026-06-15', 'week', 2, '2026-06-20', null).length === 1)
+  // Monthly open-ended → multiple.
+  expect('monthly open-ended → multiple', generateOccurrences('2026-06-15', 'month', 1, null, null).length > 1)
+  if (fails === 0) console.log('Recurrence generation ✓ (biweekly mid-season → 4+ future visits; single-visit configs detected)')
+  return fails
+}
+
 // ── Run matrix ────────────────────────────────────────────────────────────────
 function run() {
   const gen = genSchedule(42)
@@ -339,6 +360,7 @@ function run() {
   let failures = 0
   failures += testCadenceRule()
   failures += testScheduleHealth()
+  failures += testRecurrence()
   const rows: Record<string, unknown>[] = []
   for (const c of cases) {
     const opts: OptOptions = { ...baseOpts, base: c.base === null ? null : baseOpts.base, mode: c.mode, scope: c.scope, anchorDate: c.anchor }

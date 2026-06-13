@@ -153,7 +153,9 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     })
 
   // Quick-add: only Customer / Service / Date show; everything else is collapsed.
-  const [showMore, setShowMore] = useState(false)
+  // BUT if a recurrence is pre-filled on a new job (e.g. scheduling a recurring
+  // quote), start expanded so the carried cadence is visible and editable.
+  const [showMore, setShowMore] = useState(!isEdit && !!initialRecurrence?.unit)
   const adv = isEdit || showMore
 
   const customerId = watch('customer_id')

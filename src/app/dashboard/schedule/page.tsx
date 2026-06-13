@@ -311,6 +311,10 @@ export default function SchedulePage() {
   // When arriving from an accepted quote (?quote=…), open a prefilled new-job form.
   const [quoteCtx, setQuoteCtx] = useState<Quote | null>(null)
   const [quotePrefill, setQuotePrefill] = useState<Partial<JobFormValues> | null>(null)
+  // The quote's cadence, inferred from which recurring price it carries, so a
+  // recurring quote pre-fills the Repeat controls (instead of silently scheduling
+  // one visit). Editable in the form.
+  const [quoteRecurrence, setQuoteRecurrence] = useState<Recurrence | undefined>(undefined)
   // When arriving from a customer (?customer=…), open a new-job form for them.
   const [customerPrefill, setCustomerPrefill] = useState<Partial<JobFormValues> | null>(null)
 
@@ -392,6 +396,15 @@ export default function SchedulePage() {
         status: 'scheduled',
         notes: q.notes || '',
       })
+      // Infer the quote's cadence from the recurring price it carries so the
+      // Repeat controls pre-fill (weekly > biweekly > monthly when ambiguous).
+      const w = Number(q.weekly_price) > 0, b = Number(q.biweekly_price) > 0, m = Number(q.monthly_price) > 0
+      setQuoteRecurrence(
+        w ? { unit: 'week', count: 1, endDate: null, endCount: null }
+        : b ? { unit: 'week', count: 2, endDate: null, endCount: null }
+        : m ? { unit: 'month', count: 1, endDate: null, endCount: null }
+        : undefined,
+      )
       setEditing(null)
       setShowForm(true)
     }
@@ -429,6 +442,7 @@ export default function SchedulePage() {
     if (quoteCtx || customerPrefill) {
       setQuoteCtx(null)
       setQuotePrefill(null)
+      setQuoteRecurrence(undefined)
       setCustomerPrefill(null)
       router.replace('/dashboard/schedule')
     }
@@ -470,6 +484,15 @@ export default function SchedulePage() {
       const { error } = await supabase.from('jobs').insert({ ...base, scheduled_date: values.scheduled_date, recurrence_id: null })
       if (error) { setBanner('Could not save the job: ' + error.message); return }
     } else {
+      // Generate + VALIDATE before writing anything — a recurring service must
+      // produce at least one future visit beyond the first, or we refuse rather
+      // than silently leave a single-visit "series".
+      const dates = generateOccurrences(values.scheduled_date, recurrence.unit, recurrence.count, recurrence.endDate, recurrence.endCount)
+      const futureRecurring = dates.slice(1).filter(d => d >= localToday())
+      if (futureRecurring.length === 0) {
+        setBanner('No recurring visits were generated — this would create only the first visit. Check the cadence and end date, then try again.')
+        return
+      }
       // Keep legacy `freq` populated where the interval maps to an old value.
       const legacyFreq =
         recurrence.unit === 'week' && recurrence.count === 1 ? 'weekly'
@@ -490,11 +513,35 @@ export default function SchedulePage() {
         })
         .select()
         .single()
-      if (recError) { setBanner('Could not save the recurrence: ' + recError.message); return }
-      const dates = generateOccurrences(values.scheduled_date, recurrence.unit, recurrence.count, recurrence.endDate, recurrence.endCount)
-      const rows = dates.map((d: string) => ({ ...base, scheduled_date: d, recurrence_id: rec?.id ?? null }))
+      if (recError || !rec) { setBanner('Could not save the recurrence: ' + (recError?.message ?? 'unknown error')); return }
+      // Pricing: for a QUOTE-linked series the first visit uses the initial price
+      // and every recurring visit DERIVES the cadence price from the quote (price
+      // null) — so $150 first, then $65 biweekly. Non-quote series keep the typed
+      // per-visit price across all visits.
+      const typed = Number(values.price) > 0 ? Number(values.price) : null
+      const anchorPrice = typed ?? (quoteCtx ? (Number(quoteCtx.initial_price) || null) : null)
+      const rows = dates.map((d: string, i: number) => ({
+        ...base,
+        price: i === 0 ? anchorPrice : (quoteCtx ? null : base.price),
+        scheduled_date: d,
+        recurrence_id: rec.id,
+      }))
       const { error } = await supabase.from('jobs').insert(rows)
-      if (error) { setBanner('Could not save the jobs: ' + error.message); return }
+      if (error) {
+        // Never leave an orphan recurrence with no visits.
+        await supabase.from('job_recurrences').delete().eq('id', rec.id)
+        setBanner('Could not save the recurring visits: ' + error.message)
+        return
+      }
+      // Post-create verification — confirm future visits actually persisted.
+      const { count } = await supabase.from('jobs').select('id', { count: 'exact', head: true })
+        .eq('recurrence_id', rec.id).gt('scheduled_date', values.scheduled_date)
+      if (!count || count < 1) {
+        await supabase.from('job_recurrences').delete().eq('id', rec.id)
+        await supabase.from('jobs').delete().eq('recurrence_id', rec.id)
+        setBanner('The recurring schedule could not be created (no future visits saved) — nothing was scheduled. Please try again.')
+        return
+      }
     }
 
     if (quoteCtx && quoteCtx.status === 'accepted') {
@@ -576,6 +623,13 @@ export default function SchedulePage() {
   async function convertToRecurring(job: Job, values: JobFormValues, recurrence: Recurrence) {
     if (!recurrence.unit) return
     const { data: { user } } = await supabase.auth.getUser()
+    // Validate BEFORE creating anything — refuse a series with no future visits.
+    const dates = generateOccurrences(values.scheduled_date, recurrence.unit, recurrence.count, recurrence.endDate, recurrence.endCount)
+    const future = dates.slice(1).filter(d => d >= localToday()) // skip the anchor — it already exists
+    if (future.length === 0) {
+      setBanner('No recurring visits would be generated — check the cadence and end date. This job stays one-time.')
+      return
+    }
     const { data: rec, error: recErr } = await supabase.from('job_recurrences').insert({
       user_id: user!.id,
       freq: legacyFreqFor(recurrence.unit, recurrence.count),
@@ -591,12 +645,15 @@ export default function SchedulePage() {
     await applyFieldEdits(job, values, 'this')
     await supabase.from('jobs').update({ recurrence_id: rec.id }).eq('id', job.id)
 
-    const dates = generateOccurrences(values.scheduled_date, recurrence.unit, recurrence.count, recurrence.endDate, recurrence.endCount)
-    const future = dates.slice(1) // skip the anchor — it already exists
-    if (future.length) {
-      const base = occurrenceBase(values, user!.id, rec.id, job.quote_id)
-      const { error } = await supabase.from('jobs').insert(future.map(d => ({ ...base, scheduled_date: d })))
-      if (error) { setBanner('Series created, but adding future visits failed: ' + error.message); return }
+    const base = occurrenceBase(values, user!.id, rec.id, job.quote_id)
+    // Quote-linked future visits derive the cadence price (price null).
+    const { error } = await supabase.from('jobs').insert(future.map(d => ({ ...base, scheduled_date: d, price: job.quote_id ? null : base.price })))
+    if (error) {
+      // Roll back so we never leave a series with only its anchor.
+      await supabase.from('jobs').update({ recurrence_id: null }).eq('id', job.id)
+      await supabase.from('job_recurrences').delete().eq('id', rec.id)
+      setBanner('Could not add the future visits — kept the job as one-time. ' + error.message)
+      return
     }
     setBanner(`Now recurring — ${recurrenceLabel(recurrence.unit, recurrence.count)}. ${future.length} future visit${future.length !== 1 ? 's' : ''} added.`)
   }
@@ -628,6 +685,14 @@ export default function SchedulePage() {
   async function changeRecurrence(job: Job, values: JobFormValues, recurrence: Recurrence) {
     if (!job.recurrence_id || !recurrence.unit) return
     const { data: { user } } = await supabase.auth.getUser()
+    // Validate the NEW cadence first — never delete the existing future visits
+    // for a rule that wouldn't regenerate any.
+    const dates = generateOccurrences(values.scheduled_date, recurrence.unit, recurrence.count, recurrence.endDate, recurrence.endCount)
+    const future = dates.slice(1).filter(d => d >= localToday())
+    if (future.length === 0) {
+      setBanner('That cadence/end date would leave no future visits — the existing schedule was kept unchanged.')
+      return
+    }
     const futureIds = jobs
       .filter(j => j.recurrence_id === job.recurrence_id && j.id !== job.id && j.scheduled_date > job.scheduled_date)
       .map(j => j.id)
@@ -639,13 +704,9 @@ export default function SchedulePage() {
       end_date: recurrence.endDate,
       end_count: recurrence.endCount,
     }).eq('id', job.recurrence_id)
-    const dates = generateOccurrences(values.scheduled_date, recurrence.unit, recurrence.count, recurrence.endDate, recurrence.endCount)
-    const future = dates.slice(1)
-    if (future.length) {
-      const base = occurrenceBase(values, user!.id, job.recurrence_id, job.quote_id)
-      await supabase.from('jobs').insert(future.map(d => ({ ...base, scheduled_date: d })))
-    }
-    setBanner(`Schedule updated to ${recurrenceLabel(recurrence.unit, recurrence.count)}.`)
+    const base = occurrenceBase(values, user!.id, job.recurrence_id, job.quote_id)
+    await supabase.from('jobs').insert(future.map(d => ({ ...base, scheduled_date: d, price: job.quote_id ? null : base.price })))
+    setBanner(`Schedule updated to ${recurrenceLabel(recurrence.unit, recurrence.count)}. ${future.length} future visit${future.length !== 1 ? 's' : ''}.`)
   }
 
   // Orchestrator for an edit on a recurring job (or a one-time → one-time edit):
@@ -1190,7 +1251,7 @@ export default function SchedulePage() {
               allowAddAnother={!editing && !quoteCtx && !customerPrefill}
               initialRecurrence={editing?.recurrence_id && recurrences[editing.recurrence_id]
                 ? recFromRow(recurrences[editing.recurrence_id])
-                : undefined}
+                : (!editing ? quoteRecurrence : undefined)}
               defaultValues={editing ? {
                 customer_id: editing.customer_id || '',
                 property_id: editing.property_id || '',
