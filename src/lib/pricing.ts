@@ -238,12 +238,19 @@ export function gradeConfidenceLabel(grade: string | null | undefined): string {
 // Recurring multipliers slid by strategic value. Endpoints chosen so a $75
 // one-time lawn yields ≈$50–55 weekly for an A+ (aggressive) and ≈$70–75 for an
 // F (protective) — matching the owner's intent.
-function valueCadenceMult(agg: number): Record<Exclude<CadenceKey, 'one_time'>, number> {
-  const lerp = (lo: number, hi: number) => lo + (hi - lo) * agg
+//
+// IMPORTANT: computed INLINE with no nested closure, and the parameter is named
+// distinctly from the caller's `agg`. A previous version used a `lerp` closure
+// that captured this parameter (`agg`); when the production minifier inlined
+// this function into pricingPackage (which also has a `const agg`), it mis-
+// renamed the captured variable and emitted a stale free `agg` reference →
+// "ReferenceError: agg is not defined" at runtime (3rd measurement point). Do
+// NOT reintroduce a closure that captures a parameter sharing the caller's name.
+function valueCadenceMult(aggression: number): Record<Exclude<CadenceKey, 'one_time'>, number> {
   return {
-    weekly: lerp(0.95, 0.68),
-    biweekly: lerp(0.98, 0.80),
-    monthly: lerp(1.15, 1.05),
+    weekly: 0.95 + (0.68 - 0.95) * aggression,
+    biweekly: 0.98 + (0.80 - 0.98) * aggression,
+    monthly: 1.15 + (1.05 - 1.15) * aggression,
   }
 }
 
