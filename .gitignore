@@ -6,3 +6,5 @@ node_modules/
 out/
 *.tsbuildinfo
 .DS_Store
+# generated benchmark bundle (scripts/bench-optimizer.ts → esbuild)
+scripts/.bench.cjs

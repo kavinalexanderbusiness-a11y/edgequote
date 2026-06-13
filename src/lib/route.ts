@@ -57,27 +57,92 @@ export async function geocodeMissingStops(supabase: Supa, stops: RouteStop[]): P
 // and leg/total km without changing any of the engine's call sites.
 export type DistFn = (a: Coord, b: Coord) => number
 
-// Shared nearest-neighbour core (sync, no API). One implementation used by the
-// Route Planner / Day panel fallback AND the Route Profitability estimator.
-function nnOrder(base: Coord, pts: { lat: number; lng: number }[], dist: DistFn = haversineKm): { order: number[]; legKm: number[]; totalKm: number } {
-  const remaining = pts.map((p, i) => ({ p, i }))
-  let current = base
+// Total open-path length: base → seq[0] → … → seq[last] (no return leg).
+function pathKm(base: Coord, seq: { lat: number; lng: number }[], dist: DistFn): number {
   let total = 0
-  const order: number[] = []
-  const legKm: number[] = []
+  let current: Coord = base
+  for (const p of seq) { total += dist(current, p); current = p }
+  return total
+}
+
+// 2-opt is skipped above this size to keep the estimator cheap; real days are
+// far smaller, so in practice every route gets the improvement.
+const MAX_2OPT_STOPS = 16
+
+// Shared nearest-neighbour core (sync, no API) + 2-opt segment-reversal
+// improvement. One implementation used by the Route Planner / Day panel
+// fallback AND every km estimator, so ordering and distances never drift apart.
+// NN alone is typically 10–25% above optimal; the 2-opt polish closes most of
+// that gap. The improvement step recomputes the full path per candidate (O(n)
+// for n ≤ MAX_2OPT_STOPS), which keeps it exact for ASYMMETRIC dist functions
+// too (cached real-road distances are direction-dependent).
+function nnOrder(base: Coord, pts: { lat: number; lng: number }[], dist: DistFn = haversineKm): { order: number[]; legKm: number[]; totalKm: number } {
+  // 1) Greedy nearest-neighbour construction.
+  const remaining = pts.map((_, i) => i)
+  let current = base
+  let seq: number[] = []
   while (remaining.length) {
     let bi = 0, bd = Infinity
     for (let k = 0; k < remaining.length; k++) {
-      const d = dist(current, remaining[k].p)
+      const d = dist(current, pts[remaining[k]])
       if (d < bd) { bd = d; bi = k }
     }
-    const n = remaining.splice(bi, 1)[0]
-    order.push(n.i)
-    legKm.push(Math.round(bd * 10) / 10)
-    total += bd
-    current = { lat: n.p.lat, lng: n.p.lng }
+    const idx = remaining.splice(bi, 1)[0]
+    seq.push(idx)
+    current = pts[idx]
   }
-  return { order, legKm, totalKm: Math.round(total * 10) / 10 }
+  // 2) 2-opt improvement (fixed start at base, open path).
+  if (seq.length >= 3 && seq.length <= MAX_2OPT_STOPS) {
+    if (dist === haversineKm) {
+      // Symmetric distance → reversing a segment leaves its interior length
+      // unchanged, so each candidate is an O(1) delta on the two boundary
+      // edges. First-improvement with restart; every restart strictly
+      // shortens the path, so termination is guaranteed.
+      const tryImprove = (): boolean => {
+        for (let i = 0; i < seq.length - 1; i++) {
+          const prev = i === 0 ? base : pts[seq[i - 1]]
+          for (let j = i + 1; j < seq.length; j++) {
+            const next = j + 1 < seq.length ? pts[seq[j + 1]] : null
+            const delta = dist(prev, pts[seq[j]]) - dist(prev, pts[seq[i]])
+              + (next ? dist(pts[seq[i]], next) - dist(pts[seq[j]], next) : 0)
+            if (delta < -1e-9) {
+              for (let a = i, b = j; a < b; a++, b--) { const t = seq[a]; seq[a] = seq[b]; seq[b] = t }
+              return true
+            }
+          }
+        }
+        return false
+      }
+      for (let guard = 0; guard < 40 && tryImprove(); guard++) { /* improve until stable */ }
+    } else {
+      // Asymmetric (cached real-road) distances: a reversal changes interior
+      // leg directions too, so evaluate candidates with a full-path recompute.
+      // Only the Day Ops road path hits this — once per render, tiny n.
+      let bestKm = pathKm(base, seq.map(i => pts[i]), dist)
+      for (let sweep = 0; sweep < 8; sweep++) {
+        let improved = false
+        for (let i = 0; i < seq.length - 1; i++) {
+          for (let j = i + 1; j < seq.length; j++) {
+            const cand = seq.slice(0, i).concat(seq.slice(i, j + 1).reverse(), seq.slice(j + 1))
+            const km = pathKm(base, cand.map(k => pts[k]), dist)
+            if (km < bestKm - 1e-9) { seq = cand; bestKm = km; improved = true }
+          }
+        }
+        if (!improved) break
+      }
+    }
+  }
+  // 3) Legs + total from the final order.
+  let total = 0
+  let cur: Coord = base
+  const legKm: number[] = []
+  for (const i of seq) {
+    const d = dist(cur, pts[i])
+    legKm.push(Math.round(d * 10) / 10)
+    total += d
+    cur = pts[i]
+  }
+  return { order: seq, legKm, totalKm: Math.round(total * 10) / 10 }
 }
 
 // Ordered nearest-neighbour route over located stops (used as the API fallback).
@@ -105,10 +170,18 @@ export function roundTripMapsUrl(base: Coord, ordered: { lat: number | null; lng
   return u.toString()
 }
 
-// Cluster tightness when no base is configured: walk the stops from the first
-// one. Still measures how spread out a day is, just without the home leg.
-export function clusterKmEstimate(located: { lat: number; lng: number }[]): number {
-  return located.length > 1 ? routeKmEstimate(located[0], located.slice(1)) : 0
+// Cluster tightness when no base is configured: walk the stops from a
+// DETERMINISTIC, content-based start (the westmost point) — never from
+// "whatever happened to be first in the array". Input order must not change
+// the estimate, or the optimizer's cost landscape becomes noisy and it can
+// accept moves that only look better because the walk started elsewhere.
+export function clusterKmEstimate(located: { lat: number; lng: number }[], dist: DistFn = haversineKm): number {
+  if (located.length < 2) return 0
+  let s = 0
+  for (let i = 1; i < located.length; i++) {
+    if (located[i].lng < located[s].lng || (located[i].lng === located[s].lng && located[i].lat < located[s].lat)) s = i
+  }
+  return routeKmEstimate(located[s], located.filter((_, i) => i !== s), dist)
 }
 
 // Order stops into an efficient driving route. Prefers Google's real-road

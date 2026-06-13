@@ -1,11 +1,11 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { format, parseISO } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { Job, JobRecurrence } from '@/types'
 import { Coord } from '@/lib/geo'
-import { optimizeSchedule, OptimizationResult, OptimizeMode, OptimizeScope, OptJob, PlannedMove } from '@/lib/optimizer'
+import { optimizeSchedule, metricsWithMoves, manualCadenceCheck, OptimizationResult, OptimizeMode, OptimizeScope, OptJob, PlannedMove, CadenceVisit, CadenceRecs } from '@/lib/optimizer'
 import { resolvePrefs } from '@/lib/preferences'
 import { localTodayISO, formatCurrency, cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
@@ -56,6 +56,17 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
   const [running, setRunning] = useState(false)
   const [applying, setApplying] = useState(false)
   const [result, setResult] = useState<OptimizationResult | null>(null)
+  // Cherry-picking: moves the owner has UNTICKED (default = everything applies).
+  const [deselected, setDeselected] = useState<Set<string>>(new Set())
+  // The exact job snapshot the result was computed from — selection metrics and
+  // subset cadence validation must read the same data the engine saw.
+  const [lastOptJobs, setLastOptJobs] = useState<OptJob[] | null>(null)
+
+  const recs = useMemo<CadenceRecs>(() => {
+    const m: CadenceRecs = {}
+    for (const [id, r] of Object.entries(recurrences)) m[id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count }
+    return m
+  }, [recurrences])
 
   // Billed jobs are immutable. Prefer the page-supplied set (so the modal and the
   // proactive cards share the SAME locks); otherwise fetch it ourselves.
@@ -94,8 +105,8 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
         neighborhood: j.properties?.neighborhood ?? null,
         ...(() => { const p = resolvePrefs(j.customers, j.properties); return { preferredDays: p.preferredDays, avoidDays: p.avoidDays } })(),
       }))
-      const recs: Record<string, { freq: string | null; interval_unit: string | null; interval_count: number | null }> = {}
-      for (const [id, r] of Object.entries(recurrences)) recs[id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count }
+      setLastOptJobs(optJobs)
+      setDeselected(new Set())
       setResult(optimizeSchedule(optJobs, {
         mode: selectedMode,
         scope: selectedScope,
@@ -110,6 +121,53 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
     }, 30)
   }
 
+  // ── Cherry-pick state derived from the current selection ──
+  const selectedMoves = useMemo(
+    () => (result ? result.moves.filter(m => !deselected.has(m.jobId)) : []),
+    [result, deselected],
+  )
+  // Applying a SUBSET changes the timeline the moves were validated against
+  // (e.g. A moves onto the day B was supposed to leave). Re-validate every
+  // selected move against the partially-applied timeline and flag conflicts.
+  const subsetIssues = useMemo(() => {
+    const issues = new Map<string, string>()
+    if (!result || !lastOptJobs || deselected.size === 0) return issues
+    const selTo = new Map(selectedMoves.map(m => [m.jobId, m.to]))
+    const visits: CadenceVisit[] = lastOptJobs.map(j => ({
+      id: j.id, scheduled_date: selTo.get(j.id) ?? j.scheduled_date, status: j.status,
+      customerId: j.customerId, recurrence_id: j.recurrence_id, customerName: j.customerName,
+    }))
+    const byId = new Map(lastOptJobs.map(j => [j.id, j]))
+    for (const m of selectedMoves) {
+      const j = byId.get(m.jobId)
+      if (!j) continue
+      const r = manualCadenceCheck({ id: j.id, customerId: j.customerId, recurrence_id: j.recurrence_id }, m.to, visits, recs)
+      if (r.status !== 'ok' && r.message) issues.set(m.jobId, r.message)
+    }
+    return issues
+  }, [result, lastOptJobs, deselected, selectedMoves, recs])
+  // Live "Optimized" metrics for the selection (identical to result.after when
+  // everything is ticked — metricsWithMoves shares the engine's math).
+  const effAfter = useMemo(() => {
+    if (!result) return null
+    if (deselected.size === 0 || !lastOptJobs) return result.after
+    return metricsWithMoves(lastOptJobs, {
+      scope: result.scope, anchorDate, today: localTodayISO(), base: baseCoord, capacityHours,
+    }, selectedMoves)
+  }, [result, lastOptJobs, deselected, selectedMoves, anchorDate, baseCoord, capacityHours])
+  const selKmSaved = result && effAfter ? Math.round((result.before.totalKm - effAfter.totalKm) * 10) / 10 : 0
+  const selMinSaved = result && effAfter ? result.before.driveMinutes - effAfter.driveMinutes : 0
+  const selDaysAffected = new Set(selectedMoves.flatMap(m => [m.from, m.to])).size
+
+  function toggleMove(jobId: string) {
+    setDeselected(prev => {
+      const next = new Set(prev)
+      if (next.has(jobId)) next.delete(jobId)
+      else next.add(jobId)
+      return next
+    })
+  }
+
   // Auto-run when launched from an overload/cluster suggestion.
   useEffect(() => {
     if (autoRun && invoicedIds !== null && !result && !running) {
@@ -119,9 +177,9 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
   }, [autoRun, invoicedIds])
 
   async function apply() {
-    if (!result || result.moves.length === 0) return
+    if (!result || selectedMoves.length === 0 || subsetIssues.size > 0) return
     setApplying(true)
-    await onApply(result.moves)
+    await onApply(selectedMoves)
     setApplying(false)
     onClose()
   }
@@ -177,10 +235,10 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
 
             {result && !running && (
               <div className="space-y-4">
-                {/* Before / after */}
+                {/* Before / after — reflects the current SELECTION of moves */}
                 <div className="grid grid-cols-2 gap-3">
                   <CompareCard title="Current schedule" m={result.before} fmtDrive={fmtDrive} />
-                  <CompareCard title="Optimized" m={result.after} fmtDrive={fmtDrive} highlight />
+                  <CompareCard title={deselected.size > 0 ? `Optimized (${selectedMoves.length} of ${result.moves.length})` : 'Optimized'} m={effAfter ?? result.after} fmtDrive={fmtDrive} highlight />
                 </div>
 
                 {result.moves.length === 0 ? (
@@ -189,18 +247,18 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
                   </div>
                 ) : (
                   <>
-                    {/* Impact summary */}
+                    {/* Impact summary — live with the selection */}
                     <div className="flex flex-wrap gap-2 text-xs">
-                      <Chip label={`${result.moves.length} job${result.moves.length !== 1 ? 's' : ''} moved`} />
-                      <Chip label={`${result.daysAffected} day${result.daysAffected !== 1 ? 's' : ''} affected`} />
-                      {result.minutesSaved > 0 && <Chip tone="emerald" label={`${fmtDrive(result.minutesSaved)} driving saved`} />}
-                      {result.kmSaved > 0 && <Chip tone="emerald" label={`${result.kmSaved} km saved`} />}
-                      {result.after.revPerHour !== result.before.revPerHour && (
-                        <Chip tone={result.after.revPerHour > result.before.revPerHour ? 'emerald' : 'amber'}
-                          label={`${formatCurrency(result.before.revPerHour)}/h → ${formatCurrency(result.after.revPerHour)}/h`} />
+                      <Chip label={`${selectedMoves.length} job${selectedMoves.length !== 1 ? 's' : ''} moved`} />
+                      <Chip label={`${selDaysAffected} day${selDaysAffected !== 1 ? 's' : ''} affected`} />
+                      {selMinSaved > 0 && <Chip tone="emerald" label={`${fmtDrive(selMinSaved)} driving saved`} />}
+                      {selKmSaved > 0 && <Chip tone="emerald" label={`${selKmSaved} km saved`} />}
+                      {effAfter && effAfter.revPerHour !== result.before.revPerHour && (
+                        <Chip tone={effAfter.revPerHour > result.before.revPerHour ? 'emerald' : 'amber'}
+                          label={`${formatCurrency(result.before.revPerHour)}/h → ${formatCurrency(effAfter.revPerHour)}/h`} />
                       )}
-                      {result.before.overloadedDays > result.after.overloadedDays && (
-                        <Chip tone="emerald" label={`${result.before.overloadedDays - result.after.overloadedDays} overloaded day${result.before.overloadedDays - result.after.overloadedDays !== 1 ? 's' : ''} fixed`} />
+                      {effAfter && result.before.overloadedDays > effAfter.overloadedDays && (
+                        <Chip tone="emerald" label={`${result.before.overloadedDays - effAfter.overloadedDays} overloaded day${result.before.overloadedDays - effAfter.overloadedDays !== 1 ? 's' : ''} fixed`} />
                       )}
                     </div>
 
@@ -219,22 +277,45 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
                       </div>
                     )}
 
-                    {/* Review changes */}
+                    {/* Review changes — tick exactly the moves you want */}
                     <div className="rounded-xl border border-border overflow-hidden">
-                      <p className="px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-ink-faint bg-bg-tertiary border-b border-border">Review changes</p>
+                      <div className="px-3 py-2 flex items-center justify-between gap-2 bg-bg-tertiary border-b border-border">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">
+                          Review changes · {selectedMoves.length} of {result.moves.length} selected
+                        </p>
+                        <div className="flex items-center gap-2 text-[11px] font-medium">
+                          <button onClick={() => setDeselected(new Set())} className="text-accent hover:underline">All</button>
+                          <span className="text-ink-faint">·</span>
+                          <button onClick={() => setDeselected(new Set(result.moves.map(m => m.jobId)))} className="text-accent hover:underline">None</button>
+                        </div>
+                      </div>
                       <div className="max-h-56 overflow-y-auto divide-y divide-border">
-                        {result.moves.map(m => (
-                          <div key={m.jobId} className="px-3 py-2 flex items-center gap-2 text-xs">
-                            <span className="min-w-0 flex-1 flex items-center gap-1.5">
-                              {m.recurring && <Repeat className="w-3 h-3 text-ink-faint shrink-0" />}
-                              <span className="font-medium text-ink truncate">{m.customerName}</span>
-                              {m.value > 0 && <span className="text-ink-faint shrink-0">{formatCurrency(m.value)}</span>}
-                            </span>
-                            <span className="text-ink-muted shrink-0">{fmtDay(m.from)}</span>
-                            <ArrowRight className="w-3 h-3 text-accent shrink-0" />
-                            <span className="text-ink font-medium shrink-0">{fmtDay(m.to)}</span>
-                          </div>
-                        ))}
+                        {result.moves.map(m => {
+                          const on = !deselected.has(m.jobId)
+                          const issue = subsetIssues.get(m.jobId)
+                          return (
+                            <div key={m.jobId} className={cn('px-3 py-2', !on && 'opacity-50')}>
+                              <label className="flex items-center gap-2 text-xs cursor-pointer">
+                                <input type="checkbox" checked={on} onChange={() => toggleMove(m.jobId)}
+                                  className="w-3.5 h-3.5 shrink-0 accent-accent" />
+                                <span className="min-w-0 flex-1 flex items-center gap-1.5">
+                                  {m.recurring && <Repeat className="w-3 h-3 text-ink-faint shrink-0" />}
+                                  <span className="font-medium text-ink truncate">{m.customerName}</span>
+                                  {m.value > 0 && <span className="text-ink-faint shrink-0">{formatCurrency(m.value)}</span>}
+                                </span>
+                                <span className="text-ink-muted shrink-0">{fmtDay(m.from)}</span>
+                                <ArrowRight className="w-3 h-3 text-accent shrink-0" />
+                                <span className="text-ink font-medium shrink-0">{fmtDay(m.to)}</span>
+                              </label>
+                              {on && issue && (
+                                <p className="mt-1 ml-6 text-[11px] text-amber-400 flex items-start gap-1.5">
+                                  <AlertTriangle className="w-3 h-3 shrink-0 mt-px" />
+                                  {issue} Select its partner move too, or untick this one.
+                                </p>
+                              )}
+                            </div>
+                          )
+                        })}
                       </div>
                     </div>
                   </>
@@ -265,10 +346,20 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
                   </p>
                 )}
 
-                {/* Actions */}
+                {/* Actions — applies only the TICKED moves */}
+                {subsetIssues.size > 0 && (
+                  <p className="text-[11px] text-amber-400 flex items-start gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
+                    {subsetIssues.size} selected move{subsetIssues.size !== 1 ? 's' : ''} conflict{subsetIssues.size === 1 ? 's' : ''} with this partial selection — fix the flagged rows to apply.
+                  </p>
+                )}
                 <div className="flex items-center gap-2 pt-1">
-                  <Button onClick={apply} loading={applying} disabled={result.moves.length === 0}>
-                    <Check className="w-4 h-4" /> Apply {result.moves.length > 0 ? `${result.moves.length} change${result.moves.length !== 1 ? 's' : ''}` : 'changes'}
+                  <Button onClick={apply} loading={applying} disabled={selectedMoves.length === 0 || subsetIssues.size > 0}>
+                    <Check className="w-4 h-4" /> Apply {selectedMoves.length > 0
+                      ? (selectedMoves.length === result.moves.length
+                        ? `${selectedMoves.length} change${selectedMoves.length !== 1 ? 's' : ''}`
+                        : `${selectedMoves.length} of ${result.moves.length}`)
+                      : 'changes'}
                   </Button>
                   <Button variant="ghost" onClick={onClose}>Cancel</Button>
                   <span className="ml-auto text-[11px] text-ink-faint">Undo available after applying</span>

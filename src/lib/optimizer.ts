@@ -336,6 +336,10 @@ const CLUSTER_CELL_MIN = 25  // proxy cost of an extra neighborhood-cell on a da
 const STABILITY_MIN = 40     // proxy cost of moving a recurring customer off their day
 const WEEK_CROSS_MIN = 90    // proxy cost of moving a job out of its original week
 const PREF_MIN = 50          // proxy cost of a visit sitting off the customer's preferred day
+// Step cost for a day CROSSING the capacity line (on top of the linear over-
+// minutes term). Without it, density/profit modes will happily trade "+1 newly
+// overloaded day" for a few km — a dispatcher never makes that trade lightly.
+const OVERLOAD_DAY_STEP = 25
 const CLUSTER_GRID = 80      // ~1.4 km cells: round lat/lng × this, floor, ÷ back
 
 function cellKey(lat: number, lng: number): string {
@@ -529,16 +533,43 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
   const addTo = (date: string, id: string) => { (dayJobs.get(date) ?? dayJobs.set(date, new Set()).get(date)!).add(id) }
   for (const j of universe) addTo(j.scheduled_date, j.id)
 
-  // ── Day evaluation (route engine math + cluster cells, cached per day) ──
+  // ── Day evaluation (route engine math + cluster cells) ──
+  // daySorted keeps each day's job ids in sorted order, so a day's config key is
+  // an O(k) join with no per-call sort. evalSet can score ANY hypothetical day
+  // composition through the config cache — that's what lets the search evaluate
+  // candidate moves and swaps WITHOUT mutating state, committing only winners.
+  // Identical job sets always evaluate identically (sorted iteration), keeping
+  // the cost landscape noise-free.
+  const daySorted = new Map<string, string[]>()
+  for (const [date, ids] of dayJobs) daySorted.set(date, [...ids].sort())
+  const lowerBound = (arr: string[], id: string): number => {
+    let lo = 0, hi = arr.length
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (arr[mid] < id) lo = mid + 1; else hi = mid }
+    return lo
+  }
+  const withRemoved = (arr: string[], id: string): string[] => {
+    const i = lowerBound(arr, id)
+    return arr[i] === id ? arr.slice(0, i).concat(arr.slice(i + 1)) : arr.slice()
+  }
+  const withInserted = (arr: string[], id: string): string[] => {
+    const i = lowerBound(arr, id)
+    const out = arr.slice(0, i)
+    out.push(id)
+    for (let k = i; k < arr.length; k++) out.push(arr[k])
+    return out
+  }
   const cache = new Map<string, DayEval>()
-  function evalDay(date: string): DayEval {
-    const hit = cache.get(date)
+  const cfgCache = new Map<string, DayEval>()
+  const EMPTY_EVAL: DayEval = { driveMin: 0, laborMin: 0, km: 0, totalMin: 0, cells: 0 }
+  function evalSet(sorted: string[]): DayEval {
+    if (sorted.length === 0) return EMPTY_EVAL
+    const key = sorted.join(',')
+    const hit = cfgCache.get(key)
     if (hit) return hit
-    const ids = dayJobs.get(date)
     let laborMin = 0
     const located: { lat: number; lng: number }[] = []
     const cellSet = new Set<string>()
-    if (ids) for (const id of ids) {
+    for (const id of sorted) {
       const j = byId.get(id)!
       laborMin += j.duration_minutes || DEFAULT_JOB_MIN
       if (j.lat != null && j.lng != null) { located.push({ lat: j.lat, lng: j.lng }); cellSet.add(cellKey(j.lat, j.lng)) }
@@ -546,93 +577,201 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
     const km = opts.base ? routeKmEstimate(opts.base, located) : clusterKmEstimate(located)
     const driveMin = Math.round(km / AVG_SPEED_KM_PER_MIN)
     const e = { driveMin, laborMin, km, totalMin: driveMin + laborMin, cells: cellSet.size }
+    if (cfgCache.size < 200000) cfgCache.set(key, e)
+    return e
+  }
+  function evalDay(date: string): DayEval {
+    const hit = cache.get(date)
+    if (hit) return hit
+    const e = evalSet(daySorted.get(date) ?? [])
     cache.set(date, e)
     return e
   }
   const invalidate = (date: string) => cache.delete(date)
 
-  // Stability cost: a recurring movable job sitting OFF its established weekday,
-  // PLUS a strong penalty for any job pushed out of its original week (keeps
-  // balancing within day/weekend/week before reaching into future weeks).
-  function stabilityCost(): number {
+  // ── Incremental global cost ──
+  // The cost is a sum of per-day terms (drive / over-capacity / active-day /
+  // cluster-cells + the day-total mean & variance behind the spread term) and
+  // per-job placement penalties (stability off the established weekday, week-
+  // crossing, customer preferences). Both are kept as RUNNING AGGREGATES that
+  // applyMove updates in place, so reading the cost during the search is O(1)
+  // instead of O(days + jobs). That speed budget is what pays for swap moves
+  // and multi-start below. recomputeAggregates() rebuilds from scratch (init +
+  // drift-squash after the search settles).
+  const dateInfo = new Map<string, { dow: number; week: string }>()
+  const infoOf = (dateISO: string) => {
+    let v = dateInfo.get(dateISO)
+    if (!v) { v = { dow: getDay(parseISO(dateISO)), week: isoWeekKey(dateISO) }; dateInfo.set(dateISO, v) }
+    return v
+  }
+  // Weighted per-job placement penalty (stability + week-cross + preferences) —
+  // the same terms the old whole-schedule scans computed, per job per date.
+  function penaltyOf(j: OptJob, dateISO: string): number {
+    const { dow, week } = infoOf(dateISO)
     let pen = 0
-    for (const j of movable) {
-      if (j.recurrence_id) {
-        const est = estWeekday[j.recurrence_id]
-        if (est != null && getDay(parseISO(assign.get(j.id)!)) !== est) pen += STABILITY_MIN
-      }
+    if (j.recurrence_id) {
+      const est = estWeekday[j.recurrence_id]
+      if (est != null && dow !== est) pen += w.stability * STABILITY_MIN
     }
+    if (week !== origWeek.get(j.id)) pen += w.weekCross * WEEK_CROSS_MIN
+    if (j.avoidDays && j.avoidDays.includes(dow)) pen += w.pref * PREF_MIN * 2
+    else if (j.preferredDays && j.preferredDays.length && !j.preferredDays.includes(dow)) pen += w.pref * PREF_MIN
     return pen
   }
-  function weekCrossCost(): number {
-    let pen = 0
-    for (const j of movable) {
-      if (isoWeekKey(assign.get(j.id)!) !== origWeek.get(j.id)) pen += WEEK_CROSS_MIN
-    }
-    return pen
+  interface DayContrib { drive: number; over: number; overDay: number; active: number; cells: number; total: number }
+  const ZERO_CONTRIB: DayContrib = { drive: 0, over: 0, overDay: 0, active: 0, cells: 0, total: 0 }
+  const contribOf = (e: DayEval, size: number): DayContrib => {
+    if (size === 0) return ZERO_CONTRIB
+    const over = Math.max(0, e.totalMin - capMin)
+    return { drive: e.driveMin, over, overDay: over > 0 ? 1 : 0, active: 1, cells: Math.max(0, e.cells - 1), total: e.totalMin }
   }
-  // Customer scheduling preferences: a movable visit landing on an avoid day is
-  // penalised hard; landing off the customer's preferred set is a soft nudge. So
-  // the optimizer pulls visits TOWARD stated promises (and off avoided days).
-  function prefCost(): number {
-    let pen = 0
-    for (const j of movable) {
-      const wd = getDay(parseISO(assign.get(j.id)!))
-      if (j.avoidDays && j.avoidDays.includes(wd)) pen += PREF_MIN * 2
-      else if (j.preferredDays && j.preferredDays.length && !j.preferredDays.includes(wd)) pen += PREF_MIN
+  const dayContrib = (date: string): DayContrib => contribOf(evalDay(date), dayJobs.get(date)?.size ?? 0)
+  let aggDrive = 0, aggOver = 0, aggOverDays = 0, aggDays = 0, aggCells = 0, aggSum = 0, aggSumSq = 0, jobPenaltyTotal = 0
+  const jobPenalty = new Map<string, number>()
+  function recomputeAggregates(): void {
+    aggDrive = 0; aggOver = 0; aggOverDays = 0; aggDays = 0; aggCells = 0; aggSum = 0; aggSumSq = 0; jobPenaltyTotal = 0
+    for (const date of dayJobs.keys()) {
+      const c = dayContrib(date)
+      aggDrive += c.drive; aggOver += c.over; aggOverDays += c.overDay; aggDays += c.active; aggCells += c.cells
+      aggSum += c.total; aggSumSq += c.total * c.total
     }
-    return pen
+    jobPenalty.clear()
+    for (const j of movable) {
+      const p = penaltyOf(j, assign.get(j.id)!)
+      jobPenalty.set(j.id, p)
+      jobPenaltyTotal += p
+    }
   }
 
   function globalCost(): number {
-    let drive = 0, over = 0, days = 0, cells = 0
-    const totals: number[] = []
-    for (const [date, ids] of dayJobs) {
-      if (ids.size === 0) continue
-      const e = evalDay(date)
-      drive += e.driveMin
-      over += Math.max(0, e.totalMin - capMin)
-      days++
-      cells += Math.max(0, e.cells - 1) // first cell is free; extras cost
-      totals.push(e.totalMin)
-    }
     let spread = 0
-    if (totals.length > 1) {
-      const mean = totals.reduce((a, b) => a + b, 0) / totals.length
-      spread = Math.sqrt(totals.reduce((s, t) => s + (t - mean) ** 2, 0) / totals.length)
+    if (aggDays > 1) {
+      const mean = aggSum / aggDays
+      spread = Math.sqrt(Math.max(0, aggSumSq / aggDays - mean * mean))
     }
-    return w.km * drive + w.over * over + w.spread * spread
-      + w.days * days * DAY_OVERHEAD_MIN + w.cluster * cells * CLUSTER_CELL_MIN
-      + w.stability * stabilityCost() + w.weekCross * weekCrossCost() + w.pref * prefCost()
+    return w.km * aggDrive + w.over * (aggOver + aggOverDays * OVERLOAD_DAY_STEP) + w.spread * spread
+      + w.days * aggDays * DAY_OVERHEAD_MIN + w.cluster * aggCells * CLUSTER_CELL_MIN
+      + jobPenaltyTotal
   }
 
-  // Candidate dates: inside the cadence jitter window AND the scope's TARGET
-  // window, on a preferred work day, strictly future, and HARD-validated against
-  // the customer's entire visit timeline (no collisions, no cadence violations).
-  function candidates(j: OptJob): string[] {
+  // ── Hypothetical evaluation (the search's hot path) ──
+  // Score "what would the cost be if…" WITHOUT touching dayJobs/daySorted/the
+  // caches. Candidate day compositions go through evalSet (config-cached), and
+  // the aggregate deltas are applied arithmetically. Rejected candidates — the
+  // overwhelming majority — therefore cost two map lookups and some arithmetic
+  // instead of four mutating applyMove calls.
+  function costWith(deltas: { d: DayContrib; n: DayContrib }[], penDelta: number): number {
+    let drive = aggDrive, over = aggOver, overDays = aggOverDays, days = aggDays, cells = aggCells, sum = aggSum, sumSq = aggSumSq
+    for (const { d, n } of deltas) {
+      drive += n.drive - d.drive
+      over += n.over - d.over
+      overDays += n.overDay - d.overDay
+      days += n.active - d.active
+      cells += n.cells - d.cells
+      sum += n.total - d.total
+      sumSq += n.total * n.total - d.total * d.total
+    }
+    let spread = 0
+    if (days > 1) {
+      const mean = sum / days
+      spread = Math.sqrt(Math.max(0, sumSq / days - mean * mean))
+    }
+    return w.km * drive + w.over * (over + overDays * OVERLOAD_DAY_STEP) + w.spread * spread
+      + w.days * days * DAY_OVERHEAD_MIN + w.cluster * cells * CLUSTER_CELL_MIN
+      + (jobPenaltyTotal + penDelta)
+  }
+  // Cost if job j moved to `to` (no mutation).
+  function moveCost(j: OptJob, to: string): number {
+    const from = assign.get(j.id)!
+    const s1 = daySorted.get(from) ?? []
+    const s2 = daySorted.get(to) ?? []
+    return costWith([
+      { d: dayContrib(from), n: contribOf(evalSet(withRemoved(s1, j.id)), s1.length - 1) },
+      { d: dayContrib(to), n: contribOf(evalSet(withInserted(s2, j.id)), s2.length + 1) },
+    ], penaltyOf(j, to) - (jobPenalty.get(j.id) ?? 0))
+  }
+  // Cost if j1 (on its current day) and j2 (on day d2) traded days (no mutation).
+  function swapCost(j1: OptJob, d2: string, j2: OptJob): number {
+    const d1 = assign.get(j1.id)!
+    const s1 = daySorted.get(d1) ?? []
+    const s2 = daySorted.get(d2) ?? []
+    const n1 = withInserted(withRemoved(s1, j1.id), j2.id)
+    const n2 = withInserted(withRemoved(s2, j2.id), j1.id)
+    return costWith([
+      { d: dayContrib(d1), n: contribOf(evalSet(n1), n1.length) },
+      { d: dayContrib(d2), n: contribOf(evalSet(n2), n2.length) },
+    ], penaltyOf(j1, d2) - (jobPenalty.get(j1.id) ?? 0) + penaltyOf(j2, d1) - (jobPenalty.get(j2.id) ?? 0))
+  }
+
+  // Basic placement legality (everything EXCEPT series cadence): strictly
+  // future, inside the scope's TARGET window, on a preferred work day, never a
+  // customer avoid-day, within the job's cadence jitter window of its ORIGINAL
+  // date, and different from where it currently sits. Shared by single-move
+  // candidates and the swap neighborhood (which validates cadence post-swap,
+  // since both jobs move at once).
+  function basicTargets(j: OptJob): string[] {
     const wd = moveWindowDays(j, opts.recurrences)
     const origin = parseISO(original.get(j.id)!)
     const out: string[] = []
     for (let d = -wd; d <= wd; d++) {
-      if (d === 0) continue
       const date = format(addDays(origin, d), 'yyyy-MM-dd')
       if (date <= opts.today) continue
       if (!inTarget(date)) continue
       if (date === assign.get(j.id)) continue
-      if (prefSet && !prefSet.has(getDay(parseISO(date)))) continue
-      if (j.avoidDays && j.avoidDays.includes(getDay(parseISO(date)))) continue // never move onto a customer's avoid day
-      if (!validCadence(j, date)) continue // series integrity — the key guard
+      const { dow } = infoOf(date)
+      if (prefSet && !prefSet.has(dow)) continue
+      if (j.avoidDays && j.avoidDays.includes(dow)) continue // never move onto a customer's avoid day
       out.push(date)
     }
     return out
   }
+  function basicLegal(j: OptJob, date: string): boolean {
+    if (date <= opts.today || !inTarget(date) || date === assign.get(j.id)) return false
+    const { dow } = infoOf(date)
+    if (prefSet && !prefSet.has(dow)) return false
+    if (j.avoidDays && j.avoidDays.includes(dow)) return false
+    return Math.abs(diffDaysISO(original.get(j.id)!, date)) <= moveWindowDays(j, opts.recurrences)
+  }
+  // Candidate dates: basic legality + HARD validation against the customer's
+  // entire visit timeline (no collisions, no cadence violations).
+  function candidates(j: OptJob): string[] {
+    return basicTargets(j).filter(date => validCadence(j, date))
+  }
 
+  // Move a job and update every cost aggregate exactly: capture the two affected
+  // days' contributions before, re-evaluate after, apply the deltas. Reversible
+  // (applyMove(id, back) restores aggregates bit-for-bit modulo float rounding,
+  // which recomputeAggregates squashes after the search).
   function applyMove(id: string, to: string) {
     const from = assign.get(id)!
+    if (from === to) return
+    const oldFrom = dayContrib(from)
+    const oldTo = dayContrib(to)
     dayJobs.get(from)!.delete(id)
     addTo(to, id)
+    // Keep the sorted-id mirror in lock-step with dayJobs.
+    const sFrom = daySorted.get(from)!
+    sFrom.splice(lowerBound(sFrom, id), 1)
+    let sTo = daySorted.get(to)
+    if (!sTo) { sTo = []; daySorted.set(to, sTo) }
+    sTo.splice(lowerBound(sTo, id), 0, id)
     assign.set(id, to)
     invalidate(from); invalidate(to)
+    const newFrom = dayContrib(from)
+    const newTo = dayContrib(to)
+    aggDrive += newFrom.drive + newTo.drive - oldFrom.drive - oldTo.drive
+    aggOver += newFrom.over + newTo.over - oldFrom.over - oldTo.over
+    aggOverDays += newFrom.overDay + newTo.overDay - oldFrom.overDay - oldTo.overDay
+    aggDays += newFrom.active + newTo.active - oldFrom.active - oldTo.active
+    aggCells += newFrom.cells + newTo.cells - oldFrom.cells - oldTo.cells
+    aggSum += newFrom.total + newTo.total - oldFrom.total - oldTo.total
+    aggSumSq += newFrom.total ** 2 + newTo.total ** 2 - oldFrom.total ** 2 - oldTo.total ** 2
+    const oldPen = jobPenalty.get(id)
+    if (oldPen != null) {
+      const newPen = penaltyOf(byId.get(id)!, to)
+      jobPenalty.set(id, newPen)
+      jobPenaltyTotal += newPen - oldPen
+    }
   }
 
   // Metrics report only the days in the scope's METRICS window.
@@ -661,25 +800,120 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
   }
 
   const before = metricsNow()
+  recomputeAggregates()
 
-  // ── Greedy best-improvement search until stable ──
-  let cost = globalCost()
+  // ── Search: deterministic multi-start · single moves · swaps · pruning ──
+  // 1) Best-improvement single-job passes until stable (the classic move).
+  // 2) Pairwise SWAPS — exchange two jobs' days. Escapes local optima single
+  //    moves can't reach (two full days that can only trade, never give).
+  //    Cadence is validated POST-swap on both jobs, against the swapped state.
+  // 3) Three deterministic starting orders explore different basins; the best
+  //    final plan wins (ties → fewer moves, so least disruption).
+  // 4) Neutral-move pruning: any move that no longer pays for itself once the
+  //    dust settles is reverted, keeping the plan minimal.
+  // Every trial runs through the same applyMove/validCadence machinery, so all
+  // hard constraints hold at every intermediate step. Fully deterministic.
   const MIN_GAIN = 1
-  for (let pass = 0; pass < 4; pass++) {
-    let improved = false
-    for (const j of movable) {
-      let bestDate: string | null = null
-      let bestCost = cost
-      const fromDate = assign.get(j.id)!
-      for (const date of candidates(j)) {
-        applyMove(j.id, date)
-        const c = globalCost()
-        if (c < bestCost - MIN_GAIN) { bestCost = c; bestDate = date }
-        applyMove(j.id, fromDate)
+  if (movable.length > 0) {
+    const movableIdSet = new Set(movable.map(j => j.id))
+    const startLoad = new Map<string, number>()
+    for (const j of movable) startLoad.set(j.id, evalDay(assign.get(j.id)!).totalMin)
+    const bigN = movable.length > 500 // degenerate-size guard — still deterministic
+    const orderings: OptJob[][] = bigN ? [movable] : [
+      movable, // natural order (date ascending, as fetched)
+      [...movable].sort((a, b) => (startLoad.get(b.id)! - startLoad.get(a.id)!) || a.id.localeCompare(b.id)), // most-loaded days first
+    ]
+
+    function singlePass(order: OptJob[]): boolean {
+      let improved = false
+      for (const j of order) {
+        let bestDate: string | null = null
+        let bestCost = globalCost()
+        for (const date of candidates(j)) {
+          const c = moveCost(j, date) // hypothetical — nothing mutates
+          if (c < bestCost - MIN_GAIN) { bestCost = c; bestDate = date }
+        }
+        if (bestDate) { applyMove(j.id, bestDate); improved = true }
       }
-      if (bestDate) { applyMove(j.id, bestDate); cost = bestCost; improved = true }
+      return improved
     }
-    if (!improved) break
+
+    function swapPass(): boolean {
+      let improved = false
+      let trials = 0
+      for (const j1 of movable) {
+        if (trials > 60000) break // hard budget — deterministic truncation
+        const d1 = assign.get(j1.id)!
+        const g1 = cadenceGroupKey(j1)
+        let done = false
+        for (const d2 of basicTargets(j1)) {
+          const ids2 = daySorted.get(d2)
+          if (!ids2 || ids2.length === 0) continue
+          let partners = 0
+          for (const id2 of ids2) { // already sorted → deterministic
+            if (partners >= 4) break // bounded fan-out per day
+            if (id2 === j1.id || !movableIdSet.has(id2)) continue
+            const j2 = byId.get(id2)!
+            // Same-customer pairs trade identical dates — no gain, and their
+            // cadence interacts; different customers' cadence checks stay
+            // independent, so pre-apply validation below is exact.
+            if (cadenceGroupKey(j2) === g1) continue
+            if (!basicLegal(j2, d1)) continue
+            partners++
+            trials++
+            if (swapCost(j1, d2, j2) < globalCost() - MIN_GAIN && validCadence(j1, d2) && validCadence(j2, d1)) {
+              applyMove(j1.id, d2)
+              applyMove(j2.id, d1)
+              improved = true
+              done = true
+              break
+            }
+          }
+          if (done) break // j1 has a new day — continue with the next job
+        }
+      }
+      return improved
+    }
+
+    // Revert any move that's no longer pulling its weight (reverting to the
+    // original date is always offered the chance — it's the user's own
+    // placement — but only if the customer's timeline stays cadence-valid).
+    function prunePass(): void {
+      let pruned = true
+      while (pruned) {
+        pruned = false
+        for (const j of movable) {
+          const cur = assign.get(j.id)!
+          const orig = original.get(j.id)!
+          if (cur === orig) continue
+          if (!validCadence(j, orig)) continue
+          if (moveCost(j, orig) <= globalCost() + 1e-9) { applyMove(j.id, orig); pruned = true }
+        }
+      }
+    }
+
+    let bestCost = Infinity
+    let bestMoveCount = Infinity
+    let bestAssign: Map<string, string> | null = null
+    for (const order of orderings) {
+      for (const j of movable) applyMove(j.id, original.get(j.id)!) // reset to the real schedule
+      for (let cycle = 0; cycle < 4; cycle++) {
+        let any = false
+        for (let p = 0; p < 10 && singlePass(order); p++) any = true
+        if (!bigN) for (let sp = 0; sp < 3 && swapPass(); sp++) any = true
+        if (!any) break
+      }
+      prunePass()
+      const c = globalCost()
+      const moveCount = movable.reduce((n, j) => n + (assign.get(j.id)! !== original.get(j.id)! ? 1 : 0), 0)
+      if (c < bestCost - 1e-9 || (Math.abs(c - bestCost) <= 1e-9 && moveCount < bestMoveCount)) {
+        bestCost = c
+        bestMoveCount = moveCount
+        bestAssign = new Map(assign)
+      }
+    }
+    if (bestAssign) for (const j of movable) applyMove(j.id, bestAssign.get(j.id)!)
+    recomputeAggregates() // squash float drift before metrics/diagnosis read the cost
   }
 
   // ── Pre-Apply safety gate ──
@@ -783,12 +1017,11 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
         return { ok: false, reason: 'cadence-window', detail: `it’s ${off} days off their recurring rhythm (visits flex ±${wd} days)` }
       }
       if (!inTarget(to)) return { ok: false, reason: 'scope', detail: 'it falls outside the stretch being balanced' }
-      // Legal move — does it actually help? Same global-cost delta the search uses.
+      // Legal move — does it actually help? Same hypothetical cost the search uses.
       const fromDate = assign.get(j.id)!
-      applyMove(j.id, to)
-      const delta = globalCost() - baseCost
-      const destOver = evalDay(to).totalMin - capMin
-      applyMove(j.id, fromDate)
+      const delta = moveCost(j, to) - baseCost
+      const destSorted = daySorted.get(to) ?? []
+      const destOver = evalSet(withInserted(destSorted, j.id)).totalMin - capMin
       if (delta < -MIN_GAIN) return { ok: true, reason: 'no-gain', detail: 'a beneficial move exists' }
       if (destOver > 0) return { ok: false, reason: 'capacity', detail: `${longDow(to)} is already full (${fmtDur(destOver)} over capacity)` }
       if (j.recurrence_id) {
@@ -850,6 +1083,55 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
 
 function fmtDur(min: number): string {
   return min >= 60 ? `${Math.round((min / 60) * 10) / 10}h` : `${min}m`
+}
+
+// ── Subset metrics (cherry-pick support) ──────────────────────────────────────
+// Metrics for the schedule with an arbitrary SUBSET of proposed moves applied —
+// powers the optimizer modal's live before/after as the owner ticks individual
+// moves on and off. Same math as the engine's internal metrics (route engine +
+// capacity + scope metrics window), so with every move selected it reproduces
+// result.after exactly.
+export function metricsWithMoves(
+  jobs: OptJob[],
+  opts: Pick<OptOptions, 'scope' | 'anchorDate' | 'today' | 'base' | 'capacityHours'>,
+  moves: Pick<PlannedMove, 'jobId' | 'to'>[],
+): ScheduleMetrics {
+  const capMin = (opts.capacityHours > 0 ? opts.capacityHours : 8) * 60
+  const win = scopeWindows(opts.scope, opts.anchorDate, opts.today)
+  const inMetrics = (date: string) => date >= win.metricsStart && (win.metricsEnd == null || date <= win.metricsEnd)
+  const override = new Map(moves.map(m => [m.jobId, m.to]))
+  const byDate = new Map<string, OptJob[]>()
+  for (const j of jobs) {
+    if (j.status === 'cancelled') continue
+    const date = override.get(j.id) ?? j.scheduled_date
+    if (!inMetrics(date)) continue
+    const list = byDate.get(date)
+    if (list) list.push(j)
+    else byDate.set(date, [j])
+  }
+  let km = 0, drive = 0, labor = 0, days = 0, stops = 0, over = 0, revenue = 0
+  for (const list of byDate.values()) {
+    const laborMin = list.reduce((s, j) => s + (j.duration_minutes || DEFAULT_JOB_MIN), 0)
+    const located = list.filter(j => j.lat != null && j.lng != null).map(j => ({ lat: j.lat as number, lng: j.lng as number }))
+    const dayKm = opts.base ? routeKmEstimate(opts.base, located) : clusterKmEstimate(located)
+    const driveMin = Math.round(dayKm / AVG_SPEED_KM_PER_MIN)
+    km += dayKm; drive += driveMin; labor += laborMin; days++; stops += list.length
+    if (driveMin + laborMin > capMin) over++
+    revenue += list.reduce((s, j) => s + j.value, 0)
+  }
+  const totalHours = Math.round(((drive + labor) / 60) * 10) / 10
+  return {
+    totalKm: Math.round(km * 10) / 10,
+    driveMinutes: drive,
+    laborMinutes: labor,
+    totalHours,
+    activeDays: days,
+    stops,
+    densityScore: stops > 0 ? Math.max(0, Math.min(100, Math.round(100 - (km / stops) * 8))) : 100,
+    revenue: Math.round(revenue),
+    revPerHour: totalHours > 0 ? Math.round(revenue / totalHours) : 0,
+    overloadedDays: over,
+  }
 }
 
 // ── Proactive auto-suggestions ────────────────────────────────────────────────
@@ -1006,12 +1288,14 @@ export function analyzeSchedule(jobs: OptJob[], base: Omit<OptOptions, 'mode' | 
     .map(([date, list]) => ({ date, count: list.length, load: loadOf(list).total }))
     .filter(d => d.count > 0)
     .sort((a, b) => a.date.localeCompare(b.date))
+  let underutilSims = 0
   for (const d of dayList) {
     if (out.some(s => s.kind === 'underutil')) break          // at most one
     if (out.some(s => (s.kind === 'overload' || s.kind === 'stuck') && s.anchorDate === d.date)) continue
     const widx = getDay(parseISO(d.date + 'T00:00:00'))
     if (prefSet && !prefSet.has(widx)) continue               // an off day isn't "underutilized"
     if (d.count > 2 || d.load >= capMin * 0.4) continue       // must be genuinely light
+    if (++underutilSims > 3) break                            // bounded simulation budget
     const res = optimizeSchedule(jobs, { ...base, mode: 'density', scope: 'week', anchorDate: d.date })
     if (res.moves.length === 0 || res.after.activeDays >= res.before.activeDays) continue // no trip actually saved
     const dayName = format(parseISO(d.date + 'T00:00:00'), 'EEEE')
