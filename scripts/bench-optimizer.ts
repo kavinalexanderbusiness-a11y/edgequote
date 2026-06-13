@@ -12,6 +12,7 @@ import { optimizeSchedule, analyzeSchedule, metricsWithMoves, cadenceFloorFor, c
 import type { OptJob, OptOptions, OptimizationResult, OptimizeMode, OptimizeScope } from '@/lib/optimizer'
 import { effectiveFreq } from '@/lib/invoicing'
 import { haversineKm } from '@/lib/geo'
+import { analyzeScheduleHealth, HealthJob } from '@/lib/scheduleHealth'
 
 // Seeded LCG so every run generates the identical schedule.
 function lcg(seed: number) {
@@ -254,6 +255,69 @@ function testCadenceRule(): number {
   return fails
 }
 
+// ── Schedule Health detection (the user's spec) ───────────────────────────────
+function testScheduleHealth(): number {
+  let fails = 0
+  const expect = (name: string, ok: boolean) => { if (!ok) { fails++; console.error('✗ health: ' + name) } }
+  const base = { lat: 51.0, lng: -114.1 }
+  const TODAY_H = '2026-06-12'
+  const hj = (id: string, date: string, svc: string, cust: string, o: { rid?: string; name?: string; dur?: number; lat?: number; lng?: number; inv?: boolean } = {}): HealthJob =>
+    ({ id, scheduled_date: date, status: 'scheduled', customerId: cust, recurrence_id: o.rid ?? null, serviceType: svc, customerName: o.name ?? 'Cust', duration_minutes: o.dur ?? 45, lat: o.lat ?? 51.01, lng: o.lng ?? -114.05, start_time: null, invoiced: o.inv ?? false })
+  const D = '2026-06-26'
+
+  // duplicate-day: two mows, same customer + same day → flagged, savings > 0.
+  {
+    const r = analyzeScheduleHealth([
+      hj('a', D, 'Lawn Mowing', 'C', { name: 'Nicole Blackburn' }),
+      hj('b', D, 'Weekly Mowing', 'C', { name: 'Nicole Blackburn', lat: 51.03, lng: -114.07 }),
+    ], { today: TODAY_H, base })
+    const dup = r.issues.find(i => i.kind === 'duplicate-day')
+    expect('duplicate-day detected', !!dup && dup.removableJobIds.length === 1)
+    expect('duplicate minutesSaved > 0', r.minutesSaved > 0)
+    expect('duplicate report allMow', r.allMow === true)
+  }
+  // cross-category same day → NOT flagged (mow + fertilization is fine).
+  {
+    const r = analyzeScheduleHealth([hj('a', D, 'Lawn Mowing', 'C'), hj('b', D, 'Fertilization', 'C')], { today: TODAY_H, base })
+    expect('cross-category same day not flagged', r.issues.filter(i => i.kind === 'duplicate-day').length === 0)
+  }
+  // cadence-conflict: mows 2 days apart → flagged (high).
+  {
+    const r = analyzeScheduleHealth([hj('a', '2026-06-26', 'Lawn Mowing', 'C'), hj('b', '2026-06-28', 'Lawn Mowing', 'C')], { today: TODAY_H, base })
+    const cad = r.issues.find(i => i.kind === 'cadence-conflict')
+    expect('cadence-conflict (2d) detected high', !!cad && cad.severity === 'high')
+  }
+  // mows 4 days apart → no conflict (at the floor).
+  {
+    const r = analyzeScheduleHealth([hj('a', '2026-06-26', 'Lawn Mowing', 'C'), hj('b', '2026-06-30', 'Lawn Mowing', 'C')], { today: TODAY_H, base })
+    expect('mows 4d apart: no conflict', r.issues.filter(i => i.kind === 'cadence-conflict').length === 0)
+  }
+  // multiple-plans: two recurring mowing series for one customer.
+  {
+    const r = analyzeScheduleHealth([
+      hj('a', '2026-06-19', 'Lawn Mowing', 'C', { rid: 'rec-1', name: 'Jodi' }),
+      hj('b', '2026-07-03', 'Lawn Mowing', 'C', { rid: 'rec-1', name: 'Jodi' }),
+      hj('c', '2026-06-23', 'Lawn Mowing', 'C', { rid: 'rec-2', name: 'Jodi' }),
+      hj('d', '2026-07-07', 'Lawn Mowing', 'C', { rid: 'rec-2', name: 'Jodi' }),
+    ], { today: TODAY_H, base })
+    const mp = r.issues.find(i => i.kind === 'multiple-plans')
+    expect('multiple-plans detected', !!mp && mp.recurrenceIds.length === 2 && !!mp.keepRecurrenceId)
+  }
+  // billed duplicate stays; the non-billed one is removable.
+  {
+    const r = analyzeScheduleHealth([hj('a', D, 'Lawn Mowing', 'C', { inv: true }), hj('b', D, 'Lawn Mowing', 'C')], { today: TODAY_H, base })
+    const dup = r.issues.find(i => i.kind === 'duplicate-day')
+    expect('billed kept, non-billed removable', !!dup && dup.removableJobIds.length === 1 && dup.removableJobIds[0] === 'b')
+  }
+  // different customers never grouped.
+  {
+    const r = analyzeScheduleHealth([hj('a', D, 'Lawn Mowing', 'C1'), hj('b', D, 'Lawn Mowing', 'C2')], { today: TODAY_H, base })
+    expect('different customers not flagged', r.issues.length === 0)
+  }
+  if (fails === 0) console.log('Schedule Health ✓ (duplicate / cadence-conflict / multiple-plans, cross-category & per-customer safe)')
+  return fails
+}
+
 // ── Run matrix ────────────────────────────────────────────────────────────────
 function run() {
   const gen = genSchedule(42)
@@ -274,6 +338,7 @@ function run() {
 
   let failures = 0
   failures += testCadenceRule()
+  failures += testScheduleHealth()
   const rows: Record<string, unknown>[] = []
   for (const c of cases) {
     const opts: OptOptions = { ...baseOpts, base: c.base === null ? null : baseOpts.base, mode: c.mode, scope: c.scope, anchorDate: c.anchor }

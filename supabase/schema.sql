@@ -324,3 +324,26 @@ create policy "road_distance_cache: delete own" on public.road_distance_cache fo
 
 create index if not exists road_distance_cache_lookup_idx
   on public.road_distance_cache(user_id, from_key, to_key);
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-13 — Schedule Health ignored issues. The
+-- Schedule Health card flags duplicate / conflicting / overlapping
+-- visits before they reach Day Ops; "Ignore intentionally" stores
+-- the issue's stable key here so it stays dismissed across reloads.
+-- Idempotent; safe to re-run.
+-- ════════════════════════════════════════════════════════════
+create table if not exists public.schedule_health_ignored (
+  id          uuid primary key default uuid_generate_v4(),
+  created_at  timestamptz not null default now(),
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  issue_key   text not null,   -- stable key, e.g. "dup|c:<cust>|mow|2026-06-26"
+  unique (user_id, issue_key)
+);
+
+alter table public.schedule_health_ignored enable row level security;
+create policy "schedule_health_ignored: select own" on public.schedule_health_ignored for select using (auth.uid() = user_id);
+create policy "schedule_health_ignored: insert own" on public.schedule_health_ignored for insert with check (auth.uid() = user_id);
+create policy "schedule_health_ignored: delete own" on public.schedule_health_ignored for delete using (auth.uid() = user_id);
+
+create index if not exists schedule_health_ignored_user_idx
+  on public.schedule_health_ignored(user_id);

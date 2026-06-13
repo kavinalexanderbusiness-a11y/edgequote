@@ -27,6 +27,9 @@ import { evaluateScheduleMove } from '@/lib/scheduleWarnings'
 import { resolvePrefs } from '@/lib/preferences'
 import type { PrefSource } from '@/lib/preferences'
 import { buildRoutingRoadDistance, RoadDist } from '@/lib/distance'
+import { analyzeScheduleHealth } from '@/lib/scheduleHealth'
+import type { HealthIssue, HealthJob } from '@/lib/scheduleHealth'
+import { ScheduleHealthCard } from '@/components/schedule/ScheduleHealthCard'
 
 function localToday(): string {
   const d = new Date()
@@ -101,6 +104,10 @@ export default function SchedulePage() {
   // Cached real-road distance lookup for the optimizer + proactive cards (shared
   // so they agree). Built from the located future stops; haversine until ready.
   const [roadDist, setRoadDist] = useState<RoadDist | undefined>(undefined)
+  // Schedule Health — intentionally-ignored issue keys (persisted) + which issue
+  // is mid-action.
+  const [ignoredHealthKeys, setIgnoredHealthKeys] = useState<Set<string>>(new Set())
+  const [healthBusyKey, setHealthBusyKey] = useState<string | null>(null)
 
   function launchOptimizer(opts?: { scope: OptimizeScope; mode: OptimizeMode; anchorDate: string }) {
     setOptimizeLaunch(opts ? { ...opts, autoRun: true } : null)
@@ -224,6 +231,83 @@ export default function SchedulePage() {
     }).warnings
   }
 
+  // ── Schedule Health ──
+  // Catches duplicate / conflicting / overlapping visits before they reach Day
+  // Ops, reusing the same cadence grouping the optimizer uses.
+  const healthReport = useMemo(() => {
+    if (jobs.length === 0) return { issues: [] as HealthIssue[], duplicateStops: 0, minutesSaved: 0, allMow: false }
+    const hjobs: HealthJob[] = jobs.map(j => ({
+      id: j.id, scheduled_date: j.scheduled_date, status: j.status,
+      customerId: j.customer_id, recurrence_id: j.recurrence_id, serviceType: j.service_type,
+      customerName: j.customers?.name || j.title,
+      duration_minutes: j.duration_minutes, lat: j.properties?.lat ?? null, lng: j.properties?.lng ?? null,
+      start_time: j.start_time, invoiced: invoicedJobIds.has(j.id),
+    }))
+    return analyzeScheduleHealth(hjobs, { today: localToday(), base: baseCoord, roadDist })
+  }, [jobs, baseCoord, roadDist, invoicedJobIds])
+
+  const visibleHealthIssues = healthReport.issues.filter(i => !ignoredHealthKeys.has(i.key))
+  // Duplicate-stop savings the optimizer can't fix by moving (it reports this).
+  const healthDuplicates = useMemo(() => {
+    const dup = visibleHealthIssues.filter(i => i.kind === 'duplicate-day')
+    return { stops: dup.reduce((s, i) => s + i.removableJobIds.length, 0), minutes: dup.reduce((s, i) => s + i.minutesSaved, 0) }
+  }, [visibleHealthIssues])
+
+  function reviewHealth(issue: HealthIssue) {
+    if (issue.kind === 'multiple-plans' && issue.customerId) { router.push(`/dashboard/customers/${issue.customerId}`); return }
+    if (issue.date) { setCursor(parseISO(issue.date + 'T00:00:00')); setView('day') }
+  }
+
+  async function deleteHealth(issue: HealthIssue) {
+    if (issue.removableJobIds.length === 0) return
+    setHealthBusyKey(issue.key)
+    const rows = jobs.filter(j => issue.removableJobIds.includes(j.id)).map(jobInsertRow)
+    const { error } = await supabase.from('jobs').delete().in('id', issue.removableJobIds)
+    if (error) { setBanner('Could not remove the duplicate: ' + error.message); setHealthBusyKey(null); return }
+    await fetchJobs()
+    setHealthBusyKey(null)
+    offerUndo(`Removed ${rows.length} ${issue.isMow ? 'mowing ' : ''}visit${rows.length !== 1 ? 's' : ''}`, async () => {
+      if (rows.length) await supabase.from('jobs').insert(rows)
+    })
+  }
+
+  // Merge overlapping recurring plans: keep the dominant series, end the others
+  // (delete their future visits, detach their past visits, drop the recurrence row).
+  async function mergeHealth(issue: HealthIssue) {
+    const keepRec = issue.keepRecurrenceId
+    const others = issue.recurrenceIds.filter(r => r !== keepRec)
+    if (!keepRec || others.length === 0) return
+    setHealthBusyKey(issue.key)
+    const today = localToday()
+    const otherSet = new Set(others)
+    const futureJobs = jobs.filter(j => j.recurrence_id && otherSet.has(j.recurrence_id)
+      && j.scheduled_date >= today && (j.status === 'scheduled' || j.status === 'in_progress') && !invoicedJobIds.has(j.id))
+    const futureRows = futureJobs.map(jobInsertRow)
+    const futureIds = new Set(futureJobs.map(j => j.id))
+    const pastReattach = jobs.filter(j => j.recurrence_id && otherSet.has(j.recurrence_id) && !futureIds.has(j.id))
+      .map(j => ({ id: j.id, recurrence_id: j.recurrence_id as string }))
+    const recRows = others.map(r => recurrences[r]).filter(Boolean).map(r => ({
+      id: r.id, user_id: r.user_id, freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count,
+      start_date: r.start_date, end_date: r.end_date, end_count: r.end_count, customer_id: r.customer_id,
+    }))
+    if (futureJobs.length) await supabase.from('jobs').delete().in('id', futureJobs.map(j => j.id))
+    if (pastReattach.length) await supabase.from('jobs').update({ recurrence_id: null }).in('id', pastReattach.map(p => p.id))
+    await supabase.from('job_recurrences').delete().in('id', others)
+    await fetchJobs()
+    setHealthBusyKey(null)
+    offerUndo(`Merged ${others.length + 1} ${issue.isMow ? 'mowing ' : ''}plans into one`, async () => {
+      if (recRows.length) await supabase.from('job_recurrences').insert(recRows)
+      if (futureRows.length) await supabase.from('jobs').insert(futureRows)
+      for (const p of pastReattach) await supabase.from('jobs').update({ recurrence_id: p.recurrence_id }).eq('id', p.id)
+    })
+  }
+
+  async function ignoreHealth(issue: HealthIssue) {
+    setIgnoredHealthKeys(prev => new Set(prev).add(issue.key))
+    const { data: { user } } = await supabase.auth.getUser()
+    if (user) await supabase.from('schedule_health_ignored').upsert({ user_id: user.id, issue_key: issue.key }, { onConflict: 'user_id,issue_key' })
+  }
+
   // When arriving from an accepted quote (?quote=…), open a prefilled new-job form.
   const [quoteCtx, setQuoteCtx] = useState<Quote | null>(null)
   const [quotePrefill, setQuotePrefill] = useState<Partial<JobFormValues> | null>(null)
@@ -232,7 +316,7 @@ export default function SchedulePage() {
 
   const fetchJobs = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
-    const [jRes, cRes, rRes, qRes, sRes, iRes] = await Promise.all([
+    const [jRes, cRes, rRes, qRes, sRes, iRes, hRes] = await Promise.all([
       supabase
         .from('jobs')
         .select('*, customers(id, name, phone, preferred_days, avoid_days, pref_time_start, pref_time_end), properties(id, address, lat, lng, neighborhood, preferred_days, avoid_days, pref_time_start, pref_time_end)')
@@ -243,9 +327,11 @@ export default function SchedulePage() {
       supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
       supabase.from('business_settings').select('base_lat, base_lng, base_address, preferred_work_days, work_start_time, daily_capacity_hours').eq('user_id', user!.id).maybeSingle(),
       supabase.from('invoices').select('job_id').eq('user_id', user!.id).not('job_id', 'is', null),
+      supabase.from('schedule_health_ignored').select('issue_key').eq('user_id', user!.id),
     ])
     setJobs((jRes.data as Job[]) || [])
     setInvoicedJobIds(new Set(((iRes.data as { job_id: string }[]) || []).map(r => r.job_id)))
+    setIgnoredHealthKeys(new Set(((hRes.data as { issue_key: string }[] | null) || []).map(r => r.issue_key)))
     setCustomers((cRes.data as Customer[]) || [])
     const labels: Record<string, string> = {}
     const recMap: Record<string, JobRecurrence> = {}
@@ -998,6 +1084,18 @@ export default function SchedulePage() {
         </div>
       </div>
 
+      {/* Schedule Health — catches mistakes before they reach Day Ops */}
+      {!loading && (
+        <ScheduleHealthCard
+          issues={visibleHealthIssues}
+          busyKey={healthBusyKey}
+          onReview={reviewHealth}
+          onDelete={deleteHealth}
+          onMerge={mergeHealth}
+          onIgnore={ignoreHealth}
+        />
+      )}
+
       {/* Proactive optimization suggestions — appear automatically */}
       {visibleSuggestions.length > 0 && (
         <div className="space-y-2">
@@ -1215,6 +1313,7 @@ export default function SchedulePage() {
           autoRun={optimizeLaunch?.autoRun}
           invoicedIds={invoicedJobIds}
           roadDist={roadDist}
+          duplicateNote={healthDuplicates.stops > 0 ? healthDuplicates : undefined}
           onApply={applyOptimization}
           onClose={() => { setShowOptimize(false); setOptimizeLaunch(null) }}
         />

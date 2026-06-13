@@ -45,13 +45,16 @@ interface Props {
   // Cached real-road distance lookup (page-built, shared with the cards) so the
   // optimizer plans on real driving distance. Omitted → straight-line.
   roadDist?: (a: Coord, b: Coord) => number
+  // Duplicate stops the optimizer CAN'T fix by moving (they need deleting in
+  // Schedule Health) — reported so the owner resolves them first.
+  duplicateNote?: { stops: number; minutes: number }
   onApply: (moves: PlannedMove[]) => Promise<void>
   onClose: () => void
 }
 
 // 🚀 The whole-schedule optimizer UI: pick a mode, see Current vs Optimized,
 // review every proposed move, then Apply (undo-able) or Cancel.
-export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, preferredWorkDays, capacityHours, anchorDate, initialScope, initialMode, autoRun, invoicedIds: invoicedIdsProp, roadDist, onApply, onClose }: Props) {
+export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, preferredWorkDays, capacityHours, anchorDate, initialScope, initialMode, autoRun, invoicedIds: invoicedIdsProp, roadDist, duplicateNote, onApply, onClose }: Props) {
   const supabase = createClient()
   const [mode, setMode] = useState<OptimizeMode>(initialMode ?? 'recommended')
   const [scope, setScope] = useState<OptimizeScope>(initialScope ?? 'future')
@@ -205,6 +208,16 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
               Pick what to optimize and the goal. Route density, drive time, workload, capacity, cadence and route
               stability are weighed together. Completed, billed, past and time-committed jobs are never touched.
             </p>
+
+            {duplicateNote && (
+              <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-px" />
+                <p className="text-xs text-amber-200">
+                  Resolving {duplicateNote.stops} duplicate visit{duplicateNote.stops !== 1 ? 's' : ''} in <span className="font-semibold">Schedule Health</span> would remove {duplicateNote.stops} stop{duplicateNote.stops !== 1 ? 's' : ''}
+                  {duplicateNote.minutes > 0 && <> and save ~{duplicateNote.minutes} min</>} — the optimizer can move visits but can't delete duplicates, so fix those first for the best result.
+                </p>
+              </div>
+            )}
 
             {/* Scope picker — optimize only the area you care about */}
             <div>
