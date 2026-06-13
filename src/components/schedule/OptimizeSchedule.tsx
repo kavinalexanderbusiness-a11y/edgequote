@@ -42,13 +42,16 @@ interface Props {
   // page so the modal and the proactive cards read the SAME locks; falls back to
   // its own fetch when omitted.
   invoicedIds?: Set<string>
+  // Cached real-road distance lookup (page-built, shared with the cards) so the
+  // optimizer plans on real driving distance. Omitted → straight-line.
+  roadDist?: (a: Coord, b: Coord) => number
   onApply: (moves: PlannedMove[]) => Promise<void>
   onClose: () => void
 }
 
 // 🚀 The whole-schedule optimizer UI: pick a mode, see Current vs Optimized,
 // review every proposed move, then Apply (undo-able) or Cancel.
-export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, preferredWorkDays, capacityHours, anchorDate, initialScope, initialMode, autoRun, invoicedIds: invoicedIdsProp, onApply, onClose }: Props) {
+export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, preferredWorkDays, capacityHours, anchorDate, initialScope, initialMode, autoRun, invoicedIds: invoicedIdsProp, roadDist, onApply, onClose }: Props) {
   const supabase = createClient()
   const [mode, setMode] = useState<OptimizeMode>(initialMode ?? 'recommended')
   const [scope, setScope] = useState<OptimizeScope>(initialScope ?? 'future')
@@ -102,6 +105,7 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
         title: j.title,
         customerName: j.customers?.name || j.title,
         customerId: j.customer_id,
+        serviceType: j.service_type,
         neighborhood: j.properties?.neighborhood ?? null,
         ...(() => { const p = resolvePrefs(j.customers, j.properties); return { preferredDays: p.preferredDays, avoidDays: p.avoidDays } })(),
       }))
@@ -116,6 +120,7 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
         preferredDays: preferredWorkDays,
         capacityHours,
         recurrences: recs,
+        roadDist,
       }))
       setRunning(false)
     }, 30)
@@ -135,13 +140,13 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
     const selTo = new Map(selectedMoves.map(m => [m.jobId, m.to]))
     const visits: CadenceVisit[] = lastOptJobs.map(j => ({
       id: j.id, scheduled_date: selTo.get(j.id) ?? j.scheduled_date, status: j.status,
-      customerId: j.customerId, recurrence_id: j.recurrence_id, customerName: j.customerName,
+      customerId: j.customerId, recurrence_id: j.recurrence_id, serviceType: j.serviceType, customerName: j.customerName,
     }))
     const byId = new Map(lastOptJobs.map(j => [j.id, j]))
     for (const m of selectedMoves) {
       const j = byId.get(m.jobId)
       if (!j) continue
-      const r = manualCadenceCheck({ id: j.id, customerId: j.customerId, recurrence_id: j.recurrence_id }, m.to, visits, recs)
+      const r = manualCadenceCheck({ id: j.id, customerId: j.customerId, recurrence_id: j.recurrence_id, serviceType: j.serviceType }, m.to, visits, recs)
       if (r.status !== 'ok' && r.message) issues.set(m.jobId, r.message)
     }
     return issues
@@ -152,9 +157,9 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
     if (!result) return null
     if (deselected.size === 0 || !lastOptJobs) return result.after
     return metricsWithMoves(lastOptJobs, {
-      scope: result.scope, anchorDate, today: localTodayISO(), base: baseCoord, capacityHours,
+      scope: result.scope, anchorDate, today: localTodayISO(), base: baseCoord, capacityHours, roadDist,
     }, selectedMoves)
-  }, [result, lastOptJobs, deselected, selectedMoves, anchorDate, baseCoord, capacityHours])
+  }, [result, lastOptJobs, deselected, selectedMoves, anchorDate, baseCoord, capacityHours, roadDist])
   const selKmSaved = result && effAfter ? Math.round((result.before.totalKm - effAfter.totalKm) * 10) / 10 : 0
   const selMinSaved = result && effAfter ? result.before.driveMinutes - effAfter.driveMinutes : 0
   const selDaysAffected = new Set(selectedMoves.flatMap(m => [m.from, m.to])).size

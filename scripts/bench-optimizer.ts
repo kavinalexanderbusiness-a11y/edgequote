@@ -8,9 +8,10 @@
 //     --alias:@=./src --outfile=scripts/.bench.cjs && node scripts/.bench.cjs
 
 import { addDays, format, getDay, parseISO } from 'date-fns'
-import { optimizeSchedule, analyzeSchedule, metricsWithMoves, cadenceFloorFor, cadenceGroupKey, scopeWindows } from '@/lib/optimizer'
+import { optimizeSchedule, analyzeSchedule, metricsWithMoves, cadenceFloorFor, cadenceGroupKey, cadenceServiceKey, manualCadenceCheck, scopeWindows } from '@/lib/optimizer'
 import type { OptJob, OptOptions, OptimizationResult, OptimizeMode, OptimizeScope } from '@/lib/optimizer'
 import { effectiveFreq } from '@/lib/invoicing'
+import { haversineKm } from '@/lib/geo'
 
 // Seeded LCG so every run generates the identical schedule.
 function lcg(seed: number) {
@@ -48,7 +49,10 @@ function genSchedule(seed: number): Gen {
   }))
   const pt = (h: typeof hoods[number]) => ({ lat: h.lat + (rnd() - 0.5) * 0.008, lng: h.lng + (rnd() - 0.5) * 0.008 })
   let jid = 0
-  const push = (j: Omit<OptJob, 'id' | 'title'>) => { jid++; jobs.push({ ...j, id: `j${jid}`, title: `Job ${jid}` }) }
+  // All recurring series are mowing; one-times override with a mix so cross-
+  // category (mow vs fertilization/cleanup/snow) and same-category cases both exist.
+  const push = (j: Omit<OptJob, 'id' | 'title'>) => { jid++; jobs.push({ serviceType: 'Lawn Mowing', ...j, id: `j${jid}`, title: `Job ${jid}` }) }
+  const ONE_OFF_SVC = ['Lawn Mowing', 'Fertilization', 'Yard Cleanup', 'Snow Removal']
 
   // 18 weekly series: 4 past + 10 future visits, mostly on an established weekday.
   for (let i = 0; i < 18; i++) {
@@ -128,6 +132,7 @@ function genSchedule(seed: number): Gen {
       duration_minutes: 35 + Math.floor(rnd() * 50), lat: p.lat, lng: p.lng,
       value: 60 + Math.floor(rnd() * 60), invoiced: false,
       customerName: `OneTime ${i}`, customerId: `cust-o${i}`, neighborhood: h.name,
+      serviceType: ONE_OFF_SVC[i % 4],
       avoidDays: i % 9 === 0 ? [6] : null, preferredDays: null,
     })
   }
@@ -212,6 +217,43 @@ function validate(name: string, gen: Gen, opts: OptOptions, res: OptimizationRes
   return errs
 }
 
+// ── Same-category cadence rule (the user's spec, asserted directly) ───────────
+function testCadenceRule(): number {
+  let fails = 0
+  const recs = {}
+  const FRI = '2026-06-19'
+  type V = { id: string; scheduled_date: string; status: string; customerId: string | null; recurrence_id: string | null; serviceType: string; customerName: string }
+  const visit = (id: string, date: string, svc: string, cust: string | null = 'C', rid: string | null = null): V =>
+    ({ id, scheduled_date: date, status: 'scheduled', customerId: cust, recurrence_id: rid, serviceType: svc, customerName: 'Test' })
+  const expect = (name: string, ok: boolean) => { if (!ok) { fails++; console.error('✗ cadence-rule: ' + name) } }
+  const chk = (move: { id: string; customerId: string | null; recurrence_id: string | null; serviceType: string }, to: string, mates: V[]) =>
+    manualCadenceCheck(move, to, mates, recs).status
+
+  // Allowed: two mows ≥4 days apart.
+  expect('mow Fri→Tue (4d) allowed', chk({ id: 'x', customerId: 'C', recurrence_id: null, serviceType: 'Weekly Mowing' }, addISO(FRI, 4), [visit('m', FRI, 'Lawn Mowing')]) === 'ok')
+  expect('mow Fri→Wed (5d) allowed', chk({ id: 'x', customerId: 'C', recurrence_id: null, serviceType: 'Lawn Mowing' }, addISO(FRI, 5), [visit('m', FRI, 'Lawn Mowing')]) === 'ok')
+  // Blocked/warned: two mows <4 days apart.
+  expect('mow Fri→Mon (3d) warned', chk({ id: 'x', customerId: 'C', recurrence_id: null, serviceType: 'Lawn Mowing' }, addISO(FRI, 3), [visit('m', FRI, 'Lawn Mowing')]) === 'warn')
+  expect('mow Fri→Sun (2d) warned', chk({ id: 'x', customerId: 'C', recurrence_id: null, serviceType: 'Lawn Mowing' }, addISO(FRI, 2), [visit('m', FRI, 'Lawn Mowing')]) === 'warn')
+  expect('mow same day collision', chk({ id: 'x', customerId: 'C', recurrence_id: null, serviceType: 'Lawn Mowing' }, FRI, [visit('m', FRI, 'Lawn Mowing')]) === 'collision')
+  // Allowed: different service categories adjacent (mow + others).
+  for (const svc of ['Fertilization', 'Yard Cleanup', 'Mulch Installation', 'Snow Removal'])
+    expect(`mow + ${svc} adjacent allowed`, chk({ id: 'x', customerId: 'C', recurrence_id: null, serviceType: svc }, addISO(FRI, 1), [visit('m', FRI, 'Lawn Mowing')]) === 'ok')
+  // Per-customer: different customers' mows never conflict.
+  expect('different customers not grouped', chk({ id: 'x', customerId: 'C2', recurrence_id: null, serviceType: 'Lawn Mowing' }, addISO(FRI, 1), [visit('m', FRI, 'Lawn Mowing', 'C1')]) === 'ok')
+  // Cross-series, same customer + same category → protected.
+  expect('cross-series same-cat protected', chk({ id: 'x', customerId: 'C', recurrence_id: 'rec-B', serviceType: 'Lawn Mowing' }, addISO(FRI, 2), [visit('m', FRI, 'Lawn Mowing', 'C', 'rec-A')]) === 'warn')
+  // Service-key bucketing.
+  expect('key: Lawn Mowing → mow', cadenceServiceKey('Lawn Mowing') === 'mow')
+  expect('key: Weekly Mowing → mow', cadenceServiceKey('Weekly Mowing') === 'mow')
+  expect('key: Monthly Service → mow', cadenceServiceKey('Monthly Service') === 'mow')
+  expect('key: Fertilization ≠ mow', cadenceServiceKey('Fertilization') !== 'mow')
+  expect('key: Snow Removal ≠ mow', cadenceServiceKey('Snow Removal') !== 'mow')
+  expect('floor is flat 4', cadenceFloorFor(null, recs) === 4 && cadenceFloorFor('anything', recs) === 4)
+  if (fails === 0) console.log('Same-category cadence rule ✓ (4-day floor, per service category)')
+  return fails
+}
+
 // ── Run matrix ────────────────────────────────────────────────────────────────
 function run() {
   const gen = genSchedule(42)
@@ -231,6 +273,7 @@ function run() {
   ]
 
   let failures = 0
+  failures += testCadenceRule()
   const rows: Record<string, unknown>[] = []
   for (const c of cases) {
     const opts: OptOptions = { ...baseOpts, base: c.base === null ? null : baseOpts.base, mode: c.mode, scope: c.scope, anchorDate: c.anchor }
@@ -257,6 +300,23 @@ function run() {
       'rev/h b→a': `${res.before.revPerHour}→${res.after.revPerHour}`,
       grouped: res.groupedIntoCluster,
     })
+  }
+
+  // Road-distance threading: a deterministic synthetic road function (asymmetric-
+  // capable) must thread consistently — engine + metricsWithMoves agree, invariants
+  // hold, deterministic.
+  {
+    const fakeRoad = (a: { lat: number; lng: number }, b: { lat: number; lng: number }) => haversineKm(a, b) * 1.35 + 0.2
+    const opts: OptOptions = { ...baseOpts, mode: 'density', scope: 'future', anchorDate: TODAY, roadDist: fakeRoad }
+    const r1 = optimizeSchedule(gen.jobs, opts)
+    const r2 = optimizeSchedule(gen.jobs, opts)
+    if (JSON.stringify(r1.moves) !== JSON.stringify(r2.moves)) { failures++; console.error('✗ roadDist: NON-DETERMINISTIC') }
+    failures += validate('roadDist/density', gen, opts, r1).length
+    const mArgs = { scope: 'future' as OptimizeScope, anchorDate: TODAY, today: TODAY, base: opts.base, capacityHours: CAP_HOURS, roadDist: fakeRoad }
+    const mFull = metricsWithMoves(gen.jobs, mArgs, r1.moves)
+    if (JSON.stringify(mFull) !== JSON.stringify(r1.after)) { failures++; console.error('✗ roadDist: metricsWithMoves(all) != result.after') }
+    const haverRes = optimizeSchedule(gen.jobs, { ...baseOpts, mode: 'density', scope: 'future', anchorDate: TODAY })
+    if (failures === 0) console.log(`Road-distance threading ✓ (synthetic 1.35×: km ${haverRes.after.totalKm} haversine → ${r1.after.totalKm} road)`)
   }
 
   // analyzeSchedule end-to-end timing (the Schedule page workload).

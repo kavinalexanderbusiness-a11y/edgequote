@@ -17,7 +17,7 @@ export interface ScheduleMoveEval {
 export const NO_MOVE_WARNINGS: ScheduleMoveEval = { warnings: [], collision: false, cadenceWarn: false }
 
 export function evaluateScheduleMove(input: {
-  move: { id: string; customerId: string | null; recurrence_id: string | null }
+  move: { id: string; customerId: string | null; recurrence_id: string | null; serviceType?: string | null }
   toDate: string
   startTime?: string | null
   allVisits: CadenceVisit[]

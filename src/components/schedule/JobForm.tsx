@@ -45,6 +45,7 @@ interface JobFormProps {
   warnFor?: (input: {
     jobId?: string
     customerId: string
+    serviceType: string | null
     date: string
     startTime: string | null
     customerPrefs: PrefSource | null
@@ -174,6 +175,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     ? warnFor({
         jobId: excludeJobId,
         customerId,
+        serviceType: serviceType || null,
         date: scheduledDate,
         startTime: startTime || null,
         customerPrefs: (selectedCustomer ?? null) as PrefSource | null,

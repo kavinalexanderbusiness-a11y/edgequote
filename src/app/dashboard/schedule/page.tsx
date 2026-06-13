@@ -26,6 +26,7 @@ import type { PlannedMove, OptimizeScope, OptimizeMode, OptJob, ScheduleSuggesti
 import { evaluateScheduleMove } from '@/lib/scheduleWarnings'
 import { resolvePrefs } from '@/lib/preferences'
 import type { PrefSource } from '@/lib/preferences'
+import { buildRoutingRoadDistance, RoadDist } from '@/lib/distance'
 
 function localToday(): string {
   const d = new Date()
@@ -97,6 +98,9 @@ export default function SchedulePage() {
   const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(new Set())
   // Soft warning before a hand move that breaks cadence or a customer preference.
   const [moveConfirm, setMoveConfirm] = useState<{ job: Job; newDate: string; warnings: string[] } | null>(null)
+  // Cached real-road distance lookup for the optimizer + proactive cards (shared
+  // so they agree). Built from the located future stops; haversine until ready.
+  const [roadDist, setRoadDist] = useState<RoadDist | undefined>(undefined)
 
   function launchOptimizer(opts?: { scope: OptimizeScope; mode: OptimizeMode; anchorDate: string }) {
     setOptimizeLaunch(opts ? { ...opts, autoRun: true } : null)
@@ -126,15 +130,15 @@ export default function SchedulePage() {
       lat: j.properties?.lat ?? null, lng: j.properties?.lng ?? null,
       value: valueByJobId[j.id] || 0, invoiced: invoicedJobIds.has(j.id),
       title: j.title, customerName: j.customers?.name || j.title, customerId: j.customer_id,
-      neighborhood: j.properties?.neighborhood ?? null,
+      serviceType: j.service_type, neighborhood: j.properties?.neighborhood ?? null,
       ...(() => { const p = resolvePrefs(j.customers, j.properties); return { preferredDays: p.preferredDays, avoidDays: p.avoidDays } })(),
     }))
     const recs: Record<string, { freq: string | null; interval_unit: string | null; interval_count: number | null }> = {}
     for (const [id, r] of Object.entries(recurrences)) recs[id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count }
     return analyzeSchedule(optJobs, {
-      today: localToday(), base: baseCoord, preferredDays: preferredWorkDays, capacityHours, recurrences: recs,
+      today: localToday(), base: baseCoord, preferredDays: preferredWorkDays, capacityHours, recurrences: recs, roadDist,
     })
-  }, [jobs, valueByJobId, recurrences, baseCoord, preferredWorkDays, capacityHours, invoicedJobIds])
+  }, [jobs, valueByJobId, recurrences, baseCoord, preferredWorkDays, capacityHours, invoicedJobIds, roadDist])
 
   const visibleSuggestions = suggestions.filter(s => !dismissedSuggestions.has(s.id))
 
@@ -144,7 +148,7 @@ export default function SchedulePage() {
   const cadenceVisits = useMemo<CadenceVisit[]>(() => jobs.map(j => ({
     id: j.id, scheduled_date: j.scheduled_date, status: j.status,
     customerId: j.customer_id, recurrence_id: j.recurrence_id,
-    customerName: j.customers?.name ?? null,
+    serviceType: j.service_type, customerName: j.customers?.name ?? null,
   })), [jobs])
   const cadenceRecs = useMemo<CadenceRecs>(() => {
     const m: CadenceRecs = {}
@@ -152,11 +156,38 @@ export default function SchedulePage() {
     return m
   }, [recurrences])
 
+  // Signature of the located future stops — the effect below rebuilds the road
+  // matrix only when this SET changes (not on every status flip / mutation).
+  const futureStopSig = useMemo(() => jobs
+    .filter(j => j.scheduled_date > localToday() && j.status === 'scheduled' && j.properties?.lat != null && j.properties?.lng != null)
+    .map(j => `${j.properties!.lat},${j.properties!.lng}`)
+    .sort().join('|'), [jobs])
+
+  // Pre-warm real-road distances for the optimizer + cards (the engine is sync, so
+  // the async fetch happens here). Cost-bounded (base legs + K-nearest pairs,
+  // capped request budget); the cache persists so coverage grows across loads.
+  useEffect(() => {
+    if (!baseCoord) { setRoadDist(undefined); return }
+    const stops = jobs
+      .filter(j => j.scheduled_date > localToday() && j.status === 'scheduled' && j.properties?.lat != null && j.properties?.lng != null)
+      .map(j => ({ lat: j.properties!.lat as number, lng: j.properties!.lng as number }))
+    if (stops.length < 2) { setRoadDist(undefined); return }
+    let active = true
+    ;(async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user || !active) return
+      const { dist, usedRoad } = await buildRoutingRoadDistance(supabase, user.id, baseCoord, stops)
+      if (active && usedRoad) setRoadDist(() => dist)
+    })()
+    return () => { active = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseCoord?.lat, baseCoord?.lng, futureStopSig, supabase])
+
   // Warnings for moving an EXISTING job (drag-drop / Day Ops "Move to") to a date.
   function moveWarnings(job: Job, newDate: string): string[] {
     const customer = customers.find(c => c.id === job.customer_id) ?? null
     return evaluateScheduleMove({
-      move: { id: job.id, customerId: job.customer_id, recurrence_id: job.recurrence_id },
+      move: { id: job.id, customerId: job.customer_id, recurrence_id: job.recurrence_id, serviceType: job.service_type },
       toDate: newDate,
       startTime: job.start_time,
       allVisits: cadenceVisits,
@@ -172,6 +203,7 @@ export default function SchedulePage() {
   function formMoveWarnings(input: {
     jobId?: string
     customerId: string
+    serviceType: string | null
     date: string
     startTime: string | null
     customerPrefs: PrefSource | null
@@ -181,7 +213,7 @@ export default function SchedulePage() {
     if (!input.date || !input.customerId) return []
     const existing = input.jobId ? jobs.find(j => j.id === input.jobId) : null
     return evaluateScheduleMove({
-      move: { id: input.jobId ?? '__new__', customerId: input.customerId, recurrence_id: existing?.recurrence_id ?? null },
+      move: { id: input.jobId ?? '__new__', customerId: input.customerId, recurrence_id: existing?.recurrence_id ?? null, serviceType: input.serviceType },
       toDate: input.date,
       startTime: input.startTime,
       allVisits: cadenceVisits,
@@ -1182,6 +1214,7 @@ export default function SchedulePage() {
           initialMode={optimizeLaunch?.mode}
           autoRun={optimizeLaunch?.autoRun}
           invoicedIds={invoicedJobIds}
+          roadDist={roadDist}
           onApply={applyOptimization}
           onClose={() => { setShowOptimize(false); setOptimizeLaunch(null) }}
         />

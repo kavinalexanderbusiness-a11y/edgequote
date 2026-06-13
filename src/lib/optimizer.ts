@@ -9,7 +9,7 @@
 
 import { addDays, format, getDay, parseISO } from 'date-fns'
 import { Coord } from '@/lib/geo'
-import { routeKmEstimate, clusterKmEstimate, AVG_SPEED_KM_PER_MIN, DEFAULT_JOB_MIN } from '@/lib/route'
+import { routeKmEstimate, clusterKmEstimate, AVG_SPEED_KM_PER_MIN, DEFAULT_JOB_MIN, DistFn } from '@/lib/route'
 import { effectiveFreq } from '@/lib/invoicing'
 
 export type OptimizeMode = 'density' | 'balanced' | 'revenue' | 'recommended'
@@ -32,6 +32,7 @@ export interface OptJob {
   title: string
   customerName: string
   customerId: string | null    // groups a customer's visits into one timeline
+  serviceType?: string | null  // cadence protection applies only within the same service category
   neighborhood?: string | null // real area name, for cluster-aware reasons
   // Resolved scheduling preferences (customer default + property override). The
   // optimizer never moves a visit onto an avoid day, and is nudged toward the
@@ -53,6 +54,11 @@ export interface OptOptions {
   // why each visit on it could (or couldn't) move, evaluated against the SAME
   // constraints + cost model the search uses. Powers the "stuck day" explanation.
   diagnoseDate?: string
+  // Cached real-road distance lookup (lib/distance). When provided, EVERY route /
+  // km figure the optimizer computes uses real driving distance instead of
+  // straight-line; falls back to haversine per-pair internally. Pre-fetched by
+  // the caller (the engine itself stays sync/pure).
+  roadDist?: DistFn
 }
 
 // Resolve a scope into its date windows. movable = origin dates that may move;
@@ -361,11 +367,14 @@ export function cadenceDaysFor(recurrenceId: string | null, recs: CadenceRecs): 
   return f === 'weekly' ? 7 : f === 'biweekly' ? 14 : f === 'monthly' ? 30 : 7
 }
 
-// The minimum spacing (days) a visit must keep from its nearest sibling on either
-// side — the cadence "floor" used to reject collisions/compression. 60% of the
-// nominal interval, never below 2 days. ONE definition for optimizer + manual.
-export function cadenceFloorFor(recurrenceId: string | null, recs: CadenceRecs): number {
-  return Math.max(2, Math.round(cadenceDaysFor(recurrenceId, recs) * 0.6))
+// Minimum days between two SAME-CATEGORY visits of one customer (the "mowing
+// cadence protection"). A FLAT hard floor — enough to stop duplicate / too-close
+// mowing while leaving the optimizer and manual scheduling room to balance
+// routes. The (recurrenceId, recs) params are kept only for call-site stability;
+// the floor no longer scales with the recurrence interval.
+export const CADENCE_FLOOR_DAYS = 4
+export function cadenceFloorFor(_recurrenceId?: string | null, _recs?: CadenceRecs): number {
+  return CADENCE_FLOOR_DAYS
 }
 
 // How far a visit may shift without breaking its cadence promise.
@@ -376,10 +385,26 @@ function moveWindowDays(j: OptJob, recs: CadenceRecs): number {
   return f === 'weekly' ? 2 : f === 'biweekly' ? 3 : 4
 }
 
-// One timeline key for a job: same customer (or, lacking that, same series) groups
-// every visit so hand-made weekly visits are protected alongside real series.
-export function cadenceGroupKey(j: { id: string; customerId: string | null; recurrence_id: string | null }): string {
-  return j.customerId ? `c:${j.customerId}` : j.recurrence_id ? `r:${j.recurrence_id}` : `j:${j.id}`
+// Service-category key for cadence grouping. Cadence protection applies ONLY
+// between visits of the SAME category — so a customer's mowing and their
+// fertilization / cleanup / mulch / snow can sit on adjacent days, but two
+// MOWING visits stay ≥ the floor apart. Every recognized lawn-mowing label
+// collapses to 'mow'; any other service groups by its own normalized type, so a
+// service never blocks a DIFFERENT service. (Adjust MOW_LABEL if your mowing
+// service is named something this doesn't catch.)
+const MOW_LABEL = /mow|grass cut|lawn care|(weekly|biweekly|bi-?weekly|monthly) service/
+export function cadenceServiceKey(serviceType: string | null | undefined): string {
+  const t = (serviceType || '').toLowerCase().trim()
+  if (!t) return 'svc:other'
+  return MOW_LABEL.test(t) ? 'mow' : `svc:${t}`
+}
+
+// One cadence-timeline key for a job: same customer (or, lacking that, same
+// series) AND same service category. So hand-made weekly mows are protected
+// alongside the recurring series, but unrelated services never collide.
+export function cadenceGroupKey(j: { id: string; customerId: string | null; recurrence_id: string | null; serviceType?: string | null }): string {
+  const svc = cadenceServiceKey(j.serviceType)
+  return j.customerId ? `c:${j.customerId}|${svc}` : j.recurrence_id ? `r:${j.recurrence_id}|${svc}` : `j:${j.id}`
 }
 
 const diffDaysISO = (a: string, b: string) => Math.round((parseISO(b).getTime() - parseISO(a).getTime()) / 86400000)
@@ -397,6 +422,7 @@ export interface CadenceVisit {
   status: string
   customerId: string | null
   recurrence_id: string | null
+  serviceType?: string | null
   customerName?: string | null
 }
 
@@ -406,12 +432,13 @@ export interface ManualCadenceResult {
 }
 
 export function manualCadenceCheck(
-  move: { id: string; customerId: string | null; recurrence_id: string | null },
+  move: { id: string; customerId: string | null; recurrence_id: string | null; serviceType?: string | null },
   toDate: string,
   allVisits: CadenceVisit[],
   recs: CadenceRecs,
 ): ManualCadenceResult {
   const key = cadenceGroupKey(move)
+  // Only SAME-category visits of this customer are cadence mates.
   const mates = allVisits.filter(v => v.id !== move.id && v.status !== 'cancelled' && cadenceGroupKey(v) === key)
   if (mates.length === 0) return { status: 'ok', message: null }
 
@@ -426,20 +453,22 @@ export function manualCadenceCheck(
     else { const g = -diff; if (!next || g < next.gap) next = { gap: g, v: m } }
   }
 
+  // The shared service noun for messaging — "mowing" when this is a mow group,
+  // else just "visit".
+  const svcNoun = cadenceServiceKey(move.serviceType) === 'mow' ? 'mowing visit' : 'visit'
   const nameOf = (v: CadenceVisit) => v.customerName?.trim() || 'this customer'
   const dayLabel = (iso: string) => format(parseISO(iso + 'T00:00:00'), 'EEE, MMM d')
   if (sameDay) {
-    return { status: 'collision', message: `${nameOf(sameDay)} already has a visit on ${dayLabel(sameDay.scheduled_date)} — this would book two on the same day.` }
+    return { status: 'collision', message: `${nameOf(sameDay)} already has a ${svcNoun} on ${dayLabel(sameDay.scheduled_date)} — this would book two on the same day.` }
   }
   const tooClosePrev = prev && prev.gap < floor
   const tooCloseNext = next && next.gap < floor
   if (tooClosePrev || tooCloseNext) {
     const nearer = tooCloseNext && (!tooClosePrev || next!.gap <= prev!.gap) ? next! : prev!
     const dir = nearer === next ? 'before' : 'after'
-    const nominal = cadenceDaysFor(move.recurrence_id, recs)
     return {
       status: 'warn',
-      message: `This lands ${nearer.gap} day${nearer.gap !== 1 ? 's' : ''} ${dir} ${nameOf(nearer.v)}'s ${dayLabel(nearer.v.scheduled_date)} visit — usual spacing is ~${nominal} days. Break cadence?`,
+      message: `This lands only ${nearer.gap} day${nearer.gap !== 1 ? 's' : ''} ${dir} ${nameOf(nearer.v)}'s ${dayLabel(nearer.v.scheduled_date)} ${svcNoun} — keep ${svcNoun === 'mowing visit' ? 'mowing visits' : 'visits'} at least ${floor} days apart?`,
     }
   }
   return { status: 'ok', message: null }
@@ -492,20 +521,20 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
   const original = new Map(universe.map(j => [j.id, j.scheduled_date]))
   const origWeek = new Map([...movable].map(j => [j.id, isoWeekKey(j.scheduled_date)]))
 
-  // ── Recurring-series integrity ──
-  // A customer's visits are ONE timeline, validated across the WHOLE schedule —
-  // every job, every week, linked by recurrence_id OR just same customer (so
-  // hand-made weekly visits are protected too). Out-of-window visits are fixed
-  // anchors; in-window ones move. This is what stops a move from colliding with,
-  // skipping, or doubling up against another visit of the same customer.
-  const customerKeyOf = (j: OptJob) => j.customerId ? `c:${j.customerId}` : j.recurrence_id ? `r:${j.recurrence_id}` : `j:${j.id}`
+  // ── Same-category cadence integrity ──
+  // A customer's visits of ONE service category are a single timeline, validated
+  // across the WHOLE schedule (grouped by cadenceGroupKey = customer/series +
+  // service category, so hand-made mows are protected alongside the series, while
+  // a DIFFERENT service never blocks it). Out-of-window visits are fixed anchors;
+  // in-window ones move. This is what stops a move from colliding with or
+  // compressing another SAME-CATEGORY visit of the same customer.
   const groups: Record<string, OptJob[]> = {}
   for (const j of jobs) {
     if (j.status === 'cancelled') continue
-    ;(groups[customerKeyOf(j)] ||= []).push(j)
+    ;(groups[cadenceGroupKey(j)] ||= []).push(j)
   }
   const matesByJobId = new Map<string, OptJob[]>()
-  for (const j of movable) matesByJobId.set(j.id, (groups[customerKeyOf(j)] || []).filter(m => m.id !== j.id))
+  for (const j of movable) matesByJobId.set(j.id, (groups[cadenceGroupKey(j)] || []).filter(m => m.id !== j.id))
 
   const byId = new Map(universe.map(j => [j.id, j]))
   // Current date of any visit: its live assignment if in the search universe,
@@ -574,7 +603,7 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
       laborMin += j.duration_minutes || DEFAULT_JOB_MIN
       if (j.lat != null && j.lng != null) { located.push({ lat: j.lat, lng: j.lng }); cellSet.add(cellKey(j.lat, j.lng)) }
     }
-    const km = opts.base ? routeKmEstimate(opts.base, located) : clusterKmEstimate(located)
+    const km = opts.base ? routeKmEstimate(opts.base, located, opts.roadDist) : clusterKmEstimate(located, opts.roadDist)
     const driveMin = Math.round(km / AVG_SPEED_KM_PER_MIN)
     const e = { driveMin, laborMin, km, totalMin: driveMin + laborMin, cells: cellSet.size }
     if (cfgCache.size < 200000) cfgCache.set(key, e)
@@ -1093,7 +1122,7 @@ function fmtDur(min: number): string {
 // result.after exactly.
 export function metricsWithMoves(
   jobs: OptJob[],
-  opts: Pick<OptOptions, 'scope' | 'anchorDate' | 'today' | 'base' | 'capacityHours'>,
+  opts: Pick<OptOptions, 'scope' | 'anchorDate' | 'today' | 'base' | 'capacityHours' | 'roadDist'>,
   moves: Pick<PlannedMove, 'jobId' | 'to'>[],
 ): ScheduleMetrics {
   const capMin = (opts.capacityHours > 0 ? opts.capacityHours : 8) * 60
@@ -1113,7 +1142,7 @@ export function metricsWithMoves(
   for (const list of byDate.values()) {
     const laborMin = list.reduce((s, j) => s + (j.duration_minutes || DEFAULT_JOB_MIN), 0)
     const located = list.filter(j => j.lat != null && j.lng != null).map(j => ({ lat: j.lat as number, lng: j.lng as number }))
-    const dayKm = opts.base ? routeKmEstimate(opts.base, located) : clusterKmEstimate(located)
+    const dayKm = opts.base ? routeKmEstimate(opts.base, located, opts.roadDist) : clusterKmEstimate(located, opts.roadDist)
     const driveMin = Math.round(dayKm / AVG_SPEED_KM_PER_MIN)
     km += dayKm; drive += driveMin; labor += laborMin; days++; stops += list.length
     if (driveMin + laborMin > capMin) over++

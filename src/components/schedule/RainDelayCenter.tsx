@@ -48,6 +48,7 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
     lat: j.properties?.lat ?? null, lng: j.properties?.lng ?? null,
     value: valueByJobId[j.id] || 0, invoiced: invoicedIds?.has(j.id) ?? false,
     title: j.title, customerName: j.customers?.name || j.title, customerId: j.customer_id,
+    serviceType: j.service_type,
   })), [jobs, valueByJobId, invoicedIds])
 
   // The next 3 candidate rain days (tomorrow + 2), with their at-a-glance load.

@@ -122,3 +122,114 @@ export async function buildRoadDistance(
   }
   return { dist, usedRoad: cache.size > 0 }
 }
+
+// ── Routing road distances for the OPTIMIZER (cost-bounded) ───────────────────
+// The whole-schedule optimizer routes many candidate days over potentially
+// hundreds of stops. A full pairwise matrix would be O(N²) Distance-Matrix
+// elements — far too costly. Only the legs that ACTUALLY affect routing are
+// fetched: base↔every stop (every route starts at base) and each stop↔its K
+// nearest stops (only nearby stops ever share a tight day; far pairs use
+// haversine, which is fine for "these are far apart"). This makes cost ~linear
+// in the number of stops. A per-call request budget caps the API burst on first
+// use; uncovered pairs fall back to haversine and fill in on later loads (the
+// cache persists). The lookup treats road distance as symmetric.
+export async function buildRoutingRoadDistance(
+  supabase: SupabaseClient,
+  userId: string,
+  base: Coord | null,
+  stops: Coord[],
+  opts: { neighbors?: number; maxRequests?: number } = {},
+): Promise<{ dist: RoadDist; usedRoad: boolean; coverage: number }> {
+  const neighbors = opts.neighbors ?? 8
+  const maxRequests = opts.maxRequests ?? 40
+  const uniq = dedupeByKey(stops.filter(c => c && c.lat != null && c.lng != null))
+  if (!base || uniq.length < 1) return { dist: haversineKm, usedRoad: false, coverage: 0 }
+
+  const pts = [base, ...uniq]
+  const keys = pts.map(p => distKey(p.lat, p.lng))
+  const baseKey = keys[0]
+  const stopKeys = keys.slice(1)
+  const coordByKey = new Map<string, Coord>()
+  pts.forEach((c, i) => coordByKey.set(keys[i], c))
+
+  const cache = new Map<string, number>() // directional "from|to" → km
+  const has = (ak: string, bk: string) => cache.has(`${ak}|${bk}`) || cache.has(`${bk}|${ak}`)
+
+  // 1) Load all cached pairs among these keys.
+  try {
+    const { data } = await supabase.from('road_distance_cache')
+      .select('from_key, to_key, km').eq('user_id', userId)
+      .in('from_key', keys).in('to_key', keys)
+    for (const r of (data as { from_key: string; to_key: string; km: number }[] | null) || []) {
+      cache.set(`${r.from_key}|${r.to_key}`, Number(r.km))
+    }
+  } catch { /* proceed with haversine fallback */ }
+
+  // 2) Needed pairs. base→stops keep base as the origin (fetched first, highest
+  // value); stop↔K-nearest are canonicalized to dedupe direction.
+  const neededPairs = new Set<string>()
+  const need = new Map<string, Set<string>>() // originKey → missing destKeys
+  const addNeed = (ok: string, dk: string, canonical: boolean) => {
+    if (ok === dk) return
+    const canon = ok < dk ? `${ok}|${dk}` : `${dk}|${ok}`
+    neededPairs.add(canon)
+    if (has(ok, dk)) return
+    const origin = canonical ? (ok < dk ? ok : dk) : ok
+    const dest = canonical ? (ok < dk ? dk : ok) : dk
+    if (!need.has(origin)) need.set(origin, new Set())
+    need.get(origin)!.add(dest)
+  }
+  for (const sk of stopKeys) addNeed(baseKey, sk, false)
+  for (let i = 0; i < uniq.length; i++) {
+    const nearest = uniq
+      .map((c, j) => ({ j, d: j === i ? Infinity : haversineKm(uniq[i], c) }))
+      .sort((a, b) => a.d - b.d).slice(0, neighbors)
+    for (const { j } of nearest) addNeed(stopKeys[i], stopKeys[j], true)
+  }
+
+  // 3) Fetch missing (base origin first), bounded by the request budget.
+  const toInsert: { from_key: string; to_key: string; km: number; seconds: number | null }[] = []
+  let requests = 0
+  const origins = [...need.keys()].sort((a, b) => (a === baseKey ? -1 : b === baseKey ? 1 : 0))
+  outer: for (const ok of origins) {
+    const destArr = [...need.get(ok)!]
+    for (let i = 0; i < destArr.length; i += DISTANCE_MATRIX_MAX_ELEMENTS) {
+      if (requests >= maxRequests) break outer
+      const chunk = destArr.slice(i, i + DISTANCE_MATRIX_MAX_ELEMENTS)
+      requests++
+      let data: MatrixResponse
+      try {
+        const res = await fetch('/api/distance-matrix', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ origins: [coordByKey.get(ok)!], destinations: chunk.map(k => coordByKey.get(k)!) }),
+        })
+        if (!res.ok) break outer
+        data = await res.json()
+      } catch { break outer }
+      const row = (data.rows || [])[0] || []
+      row.forEach((cell, idx) => {
+        if (!cell) return
+        const tk = chunk[idx]
+        cache.set(`${ok}|${tk}`, cell.km)
+        toInsert.push({ from_key: ok, to_key: tk, km: cell.km, seconds: cell.seconds })
+      })
+    }
+  }
+  if (toInsert.length) {
+    try {
+      await supabase.from('road_distance_cache')
+        .upsert(toInsert.map(f => ({ user_id: userId, ...f })), { onConflict: 'user_id,from_key,to_key' })
+    } catch { /* still usable this session */ }
+  }
+
+  let covered = 0
+  for (const canon of neededPairs) { const [a, b] = canon.split('|'); if (has(a, b)) covered++ }
+  const coverage = neededPairs.size ? covered / neededPairs.size : 0
+
+  const dist: RoadDist = (a, b) => {
+    const ak = distKey(a.lat, a.lng), bk = distKey(b.lat, b.lng)
+    const v = cache.get(`${ak}|${bk}`) ?? cache.get(`${bk}|${ak}`)
+    return v != null ? v : haversineKm(a, b)
+  }
+  return { dist, usedRoad: cache.size > 0, coverage }
+}
