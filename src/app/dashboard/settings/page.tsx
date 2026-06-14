@@ -64,6 +64,7 @@ export default function SettingsPage() {
         website: settings.website || '',
         base_address: settings.base_address || '',
         default_rate: settings.default_rate || 50,
+        crew_cost_per_hour: settings.crew_cost_per_hour ?? 40,
         pricing_base_charge: settings.pricing_base_charge ?? 28,
         pricing_mow_rate: settings.pricing_mow_rate ?? 15,
         pricing_recommended_mult: settings.pricing_recommended_mult ?? 1.0,
@@ -112,6 +113,7 @@ export default function SettingsPage() {
       .update({
         ...values,
         default_rate: Number(values.default_rate),
+        crew_cost_per_hour: Number(values.crew_cost_per_hour) > 0 ? Number(values.crew_cost_per_hour) : 40,
         pricing_base_charge: Number(values.pricing_base_charge),
         pricing_mow_rate: Number(values.pricing_mow_rate),
         pricing_recommended_mult: Number(values.pricing_recommended_mult),
@@ -264,6 +266,12 @@ export default function SettingsPage() {
                 />
               )} />
             <Input label="Default Labour Rate ($/man-hour)" type="number" step="5" min="50" {...register('default_rate')} />
+            <Input
+              label="Crew Cost Per Hour ($/hr)"
+              type="number" step="5" min="0"
+              hint="What one crew-hour actually costs you (wages + overhead). Used everywhere profit is shown — the measure verdict, profitability, and suggestions. Most solo/2-person lawn crews land around $40/hr."
+              {...register('crew_cost_per_hour')}
+            />
             <Textarea label="PDF Terms & Conditions" rows={5} {...register('terms_text')} />
           </CardBody>
         </Card>

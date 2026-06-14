@@ -252,6 +252,64 @@ export const PHOTO_KIND_LABELS: Record<PhotoKind, string> = {
   general: 'Photo',
 }
 
+// An extra service added to a single visit (Fertilizer $45, Weed Control $25…).
+// The base price stays on the job/quote — these are ADDITIVE. "Future / Entire
+// plan" inserts one row per affected non-completed visit sharing a group_id.
+export interface JobLineItem {
+  id: string
+  created_at: string
+  user_id: string
+  job_id: string
+  description: string
+  amount: number
+  service_key: string | null      // normalised BI key: "fertilizer", "custom"…
+  service_category: string | null // lawn | snow | year_round (lib/seasons)
+  group_id: string | null
+  recurring: boolean
+}
+
+// Audit trail for a price change. Reason is only required on an increase.
+export interface JobPriceChange {
+  id: string
+  created_at: string
+  user_id: string
+  job_id: string | null
+  quote_id: string | null
+  scope: 'this' | 'future' | 'all' | null
+  old_amount: number | null
+  new_amount: number | null
+  reason: string | null
+  changed_by_email: string | null
+}
+
+// Reasons offered when raising a price (audit trail for upsells/surcharges).
+export type PriceReason = 'Upsell' | 'Larger than expected' | 'Extra work' | 'Travel surcharge' | 'Custom'
+export const PRICE_REASONS: PriceReason[] = ['Upsell', 'Larger than expected', 'Extra work', 'Travel surcharge', 'Custom']
+
+// Quick-add add-on templates for fast field entry. `recurringByDefault` flips the
+// scope chooser to a recurring suggestion (program services). Keys are stable for BI.
+export interface AddonTemplate { key: string; label: string; recurringByDefault?: boolean }
+export const ADDON_TEMPLATES: AddonTemplate[] = [
+  { key: 'fertilizer', label: 'Fertilizer', recurringByDefault: true },
+  { key: 'weed_control', label: 'Weed Control', recurringByDefault: true },
+  { key: 'mulch', label: 'Mulch' },
+  { key: 'spring_cleanup', label: 'Spring Cleanup' },
+  { key: 'fall_cleanup', label: 'Fall Cleanup' },
+  { key: 'shrub_trimming', label: 'Shrub Trimming' },
+  { key: 'aeration', label: 'Aeration' },
+  { key: 'overseeding', label: 'Overseeding' },
+  { key: 'hauling', label: 'Hauling' },
+  { key: 'custom', label: 'Custom' },
+]
+
+// One snapshotted row of an invoice's breakdown (stored in invoices.line_items).
+export type InvoiceLineKind = 'service' | 'addon' | 'travel'
+export interface InvoiceLineItem {
+  description: string
+  amount: number
+  kind: InvoiceLineKind
+}
+
 export type InvoiceStatus = 'draft' | 'unpaid' | 'sent' | 'paid'
 
 export interface Invoice {
@@ -272,6 +330,9 @@ export interface Invoice {
   issued_date: string | null
   due_date: string | null
   notes: string | null
+  // Snapshot breakdown for the customer (base service + add-ons + travel). Null
+  // on legacy invoices → render the single (service_type, amount) row.
+  line_items: InvoiceLineItem[] | null
   customers?: Pick<Customer, 'id' | 'name' | 'email' | 'phone'>
 }
 
@@ -426,6 +487,11 @@ export interface BusinessSettings {
   base_lat: number | null
   base_lng: number | null
   default_rate: number
+  // Fully-loaded cost of one crew-hour (labour + overhead). THE business cost
+  // basis: revenue − (hours × this) = expected profit, used everywhere profit
+  // is shown (measure verdict, customer/route/area profitability, scoring).
+  // null → fall back to DEFAULT_CREW_COST ($40/hr) from lib/economics.
+  crew_cost_per_hour: number | null
   // Configurable lawn pricing (consumed by the centralized pricing engine).
   pricing_base_charge: number | null
   pricing_mow_rate: number | null
@@ -494,6 +560,7 @@ export interface BusinessSettingsFormValues {
   website: string
   base_address: string
   default_rate: number
+  crew_cost_per_hour: number
   pricing_base_charge: number
   pricing_mow_rate: number
   pricing_recommended_mult: number

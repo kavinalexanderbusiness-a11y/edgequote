@@ -9,6 +9,8 @@ import { priceTiers, routeDensityTravel, pricingConfidence, travelFeeForDistance
 import { PricePackagePanel, CadenceSelection } from '@/components/pricing/PricePackagePanel'
 import { ProspectContext, loadProspectContext, assessProspect } from '@/lib/prospect'
 import { ProspectCard } from '@/components/pricing/ProspectCard'
+import { BusinessVerdictCard } from '@/components/pricing/BusinessVerdictCard'
+import { DEFAULT_CREW_COST, crewCostPerHour as resolveCrewCost } from '@/lib/economics'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { Coord, haversineKm, nearbyJobCount, fetchLocatedUpcomingJobs } from '@/lib/geo'
 import { Button } from '@/components/ui/Button'
@@ -79,6 +81,8 @@ export function MeasureTool({ property }: { property: Property }) {
 
   // Pricing config from Settings (defaults until loaded) — the source of truth.
   const [cfg, setCfg] = useState<PricingConfig>(DEFAULT_PRICING)
+  // Loaded crew cost ($/hr) from Settings — the basis for expected profit.
+  const [crewCost, setCrewCost] = useState<number>(DEFAULT_CREW_COST)
 
   // Travel + route density (pulled from Settings + your existing jobs).
   const [distanceKm, setDistanceKm] = useState<number | null>(null)
@@ -316,6 +320,7 @@ export function MeasureTool({ property }: { property: Property }) {
     const settings = settingsRes.data as BusinessSettings | null
     const pricingCfg = pricingConfigFromSettings(settings)
     setCfg(pricingCfg)
+    setCrewCost(resolveCrewCost(settings?.crew_cost_per_hour))
 
     // Distance: prefer driving distance (matches Quote Builder), fall back to straight-line.
     let km: number | null = null
@@ -701,7 +706,7 @@ export function MeasureTool({ property }: { property: Property }) {
           ? assessProspect(basePkg, prospect, {
               distanceKm, travelFee: effectiveTravel, neighborhoodName: property.neighborhood,
               estimatedMinutes: estimateVisitMinutes(totalSqft, prospect.observedMinPer1000),
-              timedJobs: prospect.timedJobs,
+              timedJobs: prospect.timedJobs, crewCostPerHour: crewCost,
             })
           : null
         // Grade-adjusted recurring pricing (business value, not just size).
@@ -709,8 +714,23 @@ export function MeasureTool({ property }: { property: Property }) {
         return (
           <div className="bg-bg-secondary border border-border rounded-xl px-4 py-3 space-y-3">
             <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Pricing recommendation</span>
-            <PricePackagePanel pkg={pkg} onUse={sel => createQuote(sel)} />
-            {assessment && <ProspectCard a={assessment} />}
+            {assessment ? (
+              // Decision-first: verdict + price + profit up top; options & full
+              // route/growth analysis tuck under "Full analysis".
+              <BusinessVerdictCard
+                a={assessment}
+                pkg={pkg}
+                onUse={sel => createQuote(sel)}
+                details={
+                  <div className="space-y-3 pt-1">
+                    <PricePackagePanel pkg={pkg} onUse={sel => createQuote(sel)} />
+                    <ProspectCard a={assessment} />
+                  </div>
+                }
+              />
+            ) : (
+              <PricePackagePanel pkg={pkg} onUse={sel => createQuote(sel)} />
+            )}
           </div>
         )
       })()}

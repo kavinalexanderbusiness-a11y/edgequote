@@ -2,17 +2,19 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { Job, JobStatus, JobRecurrence, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
+import { Job, JobStatus, JobRecurrence, JobLineItem, RecurrenceScope, PRICE_REASONS, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
 import { Coord } from '@/lib/geo'
 import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, nearestNeighborRoute, roundTripMapsUrl, routeStats, directionsUrl, computeDayEtas, roughFinishEstimate, dayLoad, minutesToTime12, DEFAULT_JOB_MIN } from '@/lib/route'
 import { buildRoadDistance } from '@/lib/distance'
 import { jobVisitValue, effectiveFreq, quoteVisitAmount } from '@/lib/invoicing'
+import { addonsTotal } from '@/lib/jobPricing'
 import { formatCurrency, cn, localTodayISO } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
 import { JobPhotos } from '@/components/photos/JobPhotos'
+import { JobAddons } from '@/components/schedule/JobAddons'
 import {
   DollarSign, Clock, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
-  MapPin, Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, Trash2, CloudRain, Play, Timer, Camera,
+  MapPin, Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, Trash2, CloudRain, Play, Timer, Camera, PlusCircle,
 } from 'lucide-react'
 
 export interface QuoteLite {
@@ -36,12 +38,20 @@ interface Props {
   onMarkDone: (job: Job) => void
   onMove: (job: Job, newDateISO: string) => void
   onDeleteJob: (job: Job) => void
-  onSetPrice: (job: Job, price: number | null) => Promise<void>
+  onSetPrice: (job: Job, price: number | null, reason?: string) => Promise<void>
   workStartTime: string
   capacityHours: number
   onRainDelay: () => void
   onAddJob: () => void
   onQuickSave: (job: Job, patch: QuickPatch) => Promise<void>
+  // Add-on services per visit + handlers (the JOB is the source of truth; these
+  // are additive and flow into the draft invoice automatically).
+  addonsByJobId: Record<string, JobLineItem[]>
+  onAddLineItem: (job: Job, input: { description: string; amount: number; serviceKey: string; scope: RecurrenceScope }) => Promise<void>
+  onDeleteLineItem: (item: JobLineItem) => Promise<void>
+  // The previous visit's add-ons (for the one-tap "copy previous" action).
+  getPreviousAddons: (job: Job) => { description: string; amount: number; serviceKey: string }[]
+  onCopyPreviousAddons: (job: Job) => Promise<void>
 }
 
 export interface QuickPatch {
@@ -56,6 +66,7 @@ export interface QuickPatch {
 export function DayOpsPanel({
   date, dateLabel, jobs, quotesById, recurrences, baseCoord,
   onOpenJob, onStartJob, onMarkDone, onMove, onDeleteJob, onSetPrice, workStartTime, capacityHours, onRainDelay, onAddJob, onQuickSave,
+  addonsByJobId, onAddLineItem, onDeleteLineItem, getPreviousAddons, onCopyPreviousAddons,
 }: Props) {
   const supabase = createClient()
   const [quickId, setQuickId] = useState<string | null>(null)
@@ -65,20 +76,26 @@ export function DayOpsPanel({
   // First-class price: a dedicated, price-only inline editor on every card.
   const [priceId, setPriceId] = useState<string | null>(null)
   const [priceVal, setPriceVal] = useState('')
+  const [priceReason, setPriceReason] = useState('')
   const [savingPrice, setSavingPrice] = useState(false)
   // Which job's before/after photo panel is open.
   const [photoId, setPhotoId] = useState<string | null>(null)
+  // Which job's add-on services panel is open.
+  const [addonsId, setAddonsId] = useState<string | null>(null)
 
   function openPrice(job: Job) {
-    setQuickId(null); setMoveId(null); setPhotoId(null)
+    setQuickId(null); setMoveId(null); setPhotoId(null); setAddonsId(null)
     setPriceId(job.id)
     setPriceVal(job.price != null ? String(job.price) : '')
+    setPriceReason('')
   }
   async function savePrice(job: Job) {
     setSavingPrice(true)
     const t = priceVal.trim()
     const next = t === '' ? null : (Number(t) > 0 ? Number(t) : null)
-    await onSetPrice(job, next)
+    // A reason is only meaningful on an increase (the user's rule); send it only then.
+    const isIncrease = next != null && next > Math.round(jobValue(job))
+    await onSetPrice(job, next, isIncrease ? (priceReason.trim() || undefined) : undefined)
     setSavingPrice(false)
     setPriceId(null)
   }
@@ -128,22 +145,26 @@ export function DayOpsPanel({
   const [routing, setRouting] = useState(false)
   const lastKey = useRef<string>('')
 
-  // The value of one visit of a job, from its quote (cadence-aware). One engine.
+  // The BASE value of one visit, from its quote/price (cadence-aware). One engine.
   function jobValue(job: Job): number {
     const q = job.quote_id ? quotesById[job.quote_id] : null
     const rec = job.recurrence_id ? recurrences[job.recurrence_id] : null
     const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
     return jobVisitValue(job.price, q as unknown as Record<string, unknown>, freq, job.is_initial_visit)
   }
+  // Add-ons on a visit + the TOTAL job value (base + add-ons) — the number the
+  // invoice will bill. Shown everywhere money is shown.
+  function addonsFor(job: Job): JobLineItem[] { return addonsByJobId[job.id] || [] }
+  function jobTotal(job: Job): number { return jobValue(job) + addonsTotal(addonsFor(job)) }
 
   const active = jobs.filter(j => j.status !== 'cancelled')
   const completed = active.filter(j => j.status === 'completed')
   const remaining = active.filter(j => j.status !== 'completed')
   const totalMin = active.reduce((s, j) => s + (j.duration_minutes || 0), 0)
   const estHours = Math.round((totalMin / 60) * 10) / 10
-  const totalRevenue = active.reduce((s, j) => s + jobValue(j), 0)
-  const revenueCompleted = completed.reduce((s, j) => s + jobValue(j), 0)
-  const revenueRemaining = remaining.reduce((s, j) => s + jobValue(j), 0)
+  const totalRevenue = active.reduce((s, j) => s + jobTotal(j), 0)
+  const revenueCompleted = completed.reduce((s, j) => s + jobTotal(j), 0)
+  const revenueRemaining = remaining.reduce((s, j) => s + jobTotal(j), 0)
   const locatedCoords = active
     .filter(j => j.properties?.lat != null && j.properties?.lng != null)
     .map(j => ({ lat: j.properties!.lat as number, lng: j.properties!.lng as number }))
@@ -345,7 +366,9 @@ export function DayOpsPanel({
             {sortedJobs.map(job => {
               const order = orderByJobId.get(job.id)
               const done = job.status === 'completed'
-              const value = jobValue(job)
+              const value = jobValue(job)            // base
+              const addons = addonsFor(job)
+              const total = value + addonsTotal(addons)  // base + add-ons (billed amount)
               const qVal = quoteValueFor(job)
               return (
                 <div key={job.id} className={cn('rounded-xl border px-3 py-2.5', JOB_STATUS_COLORS[job.status])}>
@@ -365,11 +388,11 @@ export function DayOpsPanel({
                           <span className={cn('truncate', done && 'line-through opacity-80')}>{job.customers?.name || job.title}</span>
                         </span>
                         <div className="flex items-center gap-1.5 shrink-0">
-                          {value > 0
+                          {total > 0
                             ? <button onClick={e => { e.stopPropagation(); priceId === job.id ? setPriceId(null) : openPrice(job) }}
-                                title="Edit price"
+                                title={addons.length ? `Base ${formatCurrency(value)} + add-ons ${formatCurrency(addonsTotal(addons))} · tap to edit base price` : 'Edit price'}
                                 className="flex items-center gap-1 text-sm font-bold text-ink rounded-md px-1.5 py-0.5 hover:bg-black/10 transition-colors">
-                                {formatCurrency(value)}<Pencil className="w-3 h-3 opacity-40" />
+                                {formatCurrency(total)}<Pencil className="w-3 h-3 opacity-40" />
                               </button>
                             : <button onClick={e => { e.stopPropagation(); priceId === job.id ? setPriceId(null) : openPrice(job) }}
                                 title="Set price"
@@ -402,6 +425,51 @@ export function DayOpsPanel({
                               onKeyDown={e => { if (e.key === 'Enter') savePrice(job) }}
                               className="w-full mt-0.5 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none focus:border-accent" />
                           </label>
+                          {/* Decision-first: the change at a glance (Original → New). */}
+                          {(() => {
+                            const current = value
+                            const next = priceVal.trim() ? Number(priceVal) : qVal
+                            if (!(next > 0) || Math.round(next) === Math.round(current)) return null
+                            return (
+                              <p className="text-xs text-ink">
+                                <span className="text-ink-faint">{formatCurrency(current)}</span>
+                                <span className="text-ink-faint mx-1">→</span>
+                                <span className="font-semibold text-accent">{formatCurrency(next)}</span>
+                              </p>
+                            )
+                          })()}
+                          {/* Reason is only asked on an INCREASE (audit trail for
+                              upsells/surcharges); decreases & corrections save instantly. */}
+                          {(() => {
+                            const next = priceVal.trim() ? Number(priceVal) : qVal
+                            const isIncrease = next > 0 && Math.round(next) > Math.round(value)
+                            if (!isIncrease) return null
+                            const presets = PRICE_REASONS.filter(r => r !== 'Custom')
+                            const isCustom = priceReason !== '' && !presets.includes(priceReason as typeof presets[number])
+                            return (
+                              <div className="space-y-1.5">
+                                <p className="text-[10px] uppercase tracking-wide text-ink-faint">Reason for increase</p>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {presets.map(r => (
+                                    <button key={r} type="button" onClick={() => setPriceReason(r)}
+                                      className={cn('text-[11px] font-medium rounded-full px-2 py-0.5 border transition-colors',
+                                        priceReason === r ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
+                                      {r}
+                                    </button>
+                                  ))}
+                                  <button type="button" onClick={() => setPriceReason(isCustom ? '' : ' ')}
+                                    className={cn('text-[11px] font-medium rounded-full px-2 py-0.5 border transition-colors',
+                                      isCustom ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
+                                    Custom
+                                  </button>
+                                </div>
+                                {isCustom && (
+                                  <input type="text" autoFocus value={priceReason.trim()} onChange={e => setPriceReason(e.target.value || ' ')}
+                                    placeholder="Describe the increase" className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-xs text-ink outline-none focus:border-accent" />
+                                )}
+                              </div>
+                            )
+                          })()}
                           {qVal > 0 && (
                             <div className="flex items-center justify-between gap-2 text-[11px]">
                               <span className="text-ink-faint">From quote · {cadenceLabelFor(job)}: <span className="text-ink-muted font-medium">{formatCurrency(qVal)}</span></span>
@@ -415,6 +483,7 @@ export function DayOpsPanel({
                               ? <span className="text-[10px] text-amber-400 ml-auto">Manual override</span>
                               : qVal > 0 ? <span className="text-[10px] text-ink-faint ml-auto">Auto from quote</span> : null}
                           </div>
+                          <p className="text-[10px] text-ink-faint">Saving updates this visit's draft invoice automatically.</p>
                         </div>
                       )}
                       <div className="flex items-center gap-1.5 text-xs opacity-80 mt-0.5 flex-wrap">
@@ -434,6 +503,14 @@ export function DayOpsPanel({
                         )}
                         {job.service_type && <span className="truncate">{job.service_type}</span>}
                         {job.start_time && <span>· {job.start_time.slice(0, 5)}</span>}
+                        {/* At-a-glance add-on indicator — names when few, else count */}
+                        {addons.length > 0 && (
+                          <button onClick={e => { e.stopPropagation(); setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setAddonsId(addonsId === job.id ? null : job.id) }}
+                            title={addons.map(a => `${a.description} ${formatCurrency(Number(a.amount))}`).join(' · ')}
+                            className="text-[10px] font-semibold text-accent border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5 shrink-0 hover:bg-accent/20">
+                            +{addons.length <= 2 ? addons.map(a => a.description).join(' + ') : `${addons.length} services`}
+                          </button>
+                        )}
                         <span className="px-1.5 py-0.5 rounded border border-current/30 text-[10px] font-semibold uppercase tracking-wide">{JOB_STATUS_LABELS[job.status]}</span>
                       </div>
 
@@ -443,7 +520,8 @@ export function DayOpsPanel({
                         {job.status === 'in_progress' && <ActionBtn onClick={() => onMarkDone(job)} icon={CheckCircle2} label="Complete" tone="emerald" />}
                         <ActionBtn onClick={() => (quickId === job.id ? setQuickId(null) : openQuick(job))} icon={SlidersHorizontal} label="Quick" />
                         <ActionBtn onClick={() => onOpenJob(job)} icon={Pencil} label="Open" />
-                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(photoId === job.id ? null : job.id) }} icon={Camera} label="Photos" />
+                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setAddonsId(null); setPhotoId(photoId === job.id ? null : job.id) }} icon={Camera} label="Photos" />
+                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setAddonsId(addonsId === job.id ? null : job.id) }} icon={PlusCircle} label={addons.length ? `Services (${addons.length})` : 'Services'} />
                         <ActionBtn onClick={() => setMoveId(moveId === job.id ? null : job.id)} icon={Move} label="Move" />
                         <a
                           href={directionsUrl({ lat: job.properties?.lat ?? null, lng: job.properties?.lng ?? null, address: job.properties?.address }, baseCoord)}
@@ -474,6 +552,22 @@ export function DayOpsPanel({
                         ) : (
                           <p className="mt-2 text-xs text-amber-400">Link a property to this job to attach photos.</p>
                         )
+                      )}
+
+                      {/* Extra services for this visit — add-ons flow into the invoice */}
+                      {addonsId === job.id && (
+                        <div className="mt-2 rounded-lg border border-border bg-bg-secondary p-2.5" onClick={e => e.stopPropagation()}>
+                          <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-2 flex items-center gap-1"><PlusCircle className="w-3 h-3" /> Extra services</p>
+                          <JobAddons
+                            baseValue={value}
+                            items={addons}
+                            isRecurring={!!job.recurrence_id}
+                            onAdd={(input) => onAddLineItem(job, input)}
+                            onDelete={onDeleteLineItem}
+                            previousAddons={getPreviousAddons(job)}
+                            onCopyPrevious={() => onCopyPreviousAddons(job)}
+                          />
+                        </div>
                       )}
 
                       {/* Inline quick edit — small changes without the full form */}

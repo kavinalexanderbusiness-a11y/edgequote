@@ -3,11 +3,12 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { LayoutDashboard, Users, FileText, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Navigation, Receipt, Menu, X, HeartPulse, BarChart3, Gauge, ShieldCheck, Map as MapIcon, Target, CalendarCheck } from 'lucide-react'
+import { LayoutDashboard, Users, FileText, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Navigation, Receipt, Menu, X, Sprout } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 
-// Operational pages first (everyday work), then insight dashboards.
+// Everyday work up top; the 7 analytics pages now live behind one "Grow" hub
+// (/dashboard/grow) so the sidebar stays short — fewer navigation decisions.
 const navMain = [
   { label: 'Dashboard',  href: '/dashboard',            icon: LayoutDashboard },
   { label: 'Schedule',   href: '/dashboard/schedule',   icon: CalendarDays },
@@ -16,15 +17,7 @@ const navMain = [
   { label: 'Properties', href: '/dashboard/properties', icon: Home },
   { label: 'Quotes',     href: '/dashboard/quotes',     icon: FileText },
   { label: 'Invoices',   href: '/dashboard/invoices',   icon: Receipt },
-]
-const navInsights = [
-  { label: 'Weekly Review',    href: '/dashboard/review',          icon: CalendarCheck },
-  { label: 'Saturation Map',   href: '/dashboard/saturation',      icon: MapIcon },
-  { label: 'Neighbor Leads',   href: '/dashboard/neighbors',       icon: Target },
-  { label: 'Profitability',    href: '/dashboard/profitability',   icon: BarChart3 },
-  { label: 'Data Quality',     href: '/dashboard/data-quality',    icon: ShieldCheck },
-  { label: 'Pricing Recovery', href: '/dashboard/pricing-recovery', icon: Gauge },
-  { label: 'Reactivation',     href: '/dashboard/reactivation',    icon: HeartPulse },
+  { label: 'Grow',       href: '/dashboard/grow',       icon: Sprout },
 ]
 
 export function Sidebar() {
@@ -73,16 +66,6 @@ export function Sidebar() {
         <nav className="flex-1 px-3 py-4 flex flex-col gap-0.5 overflow-y-auto">
           {navMain.map(({ label, href, icon: Icon }) => {
             const active = href === '/dashboard' ? pathname === '/dashboard' : pathname.startsWith(href)
-            return (
-              <Link key={href} href={href} onClick={onNavigate} className={linkClass(active)}>
-                <Icon className="w-4 h-4" />
-                {label}
-              </Link>
-            )
-          })}
-          <p className="px-3 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-wider text-ink-faint">Insights</p>
-          {navInsights.map(({ label, href, icon: Icon }) => {
-            const active = pathname.startsWith(href)
             return (
               <Link key={href} href={href} onClick={onNavigate} className={linkClass(active)}>
                 <Icon className="w-4 h-4" />

@@ -8,6 +8,8 @@ import { Coord } from '@/lib/geo'
 import { ProspectContext, loadProspectContext, assessProspect } from '@/lib/prospect'
 import { PricePackagePanel, CadenceSelection } from '@/components/pricing/PricePackagePanel'
 import { ProspectCard } from '@/components/pricing/ProspectCard'
+import { BusinessVerdictCard } from '@/components/pricing/BusinessVerdictCard'
+import { DEFAULT_CREW_COST, crewCostPerHour as resolveCrewCost } from '@/lib/economics'
 import { Button } from '@/components/ui/Button'
 import { X, Undo2, Trash2, Plus, Ruler } from 'lucide-react'
 
@@ -38,6 +40,8 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
   const [center, setCenter] = useState<Coord | null>(null)
   const [hoodName, setHoodName] = useState<string | null>(null)
   const [prospect, setProspect] = useState<ProspectContext | null>(null)
+  // Loaded crew cost ($/hr) from Settings — the basis for expected profit.
+  const [crewCost, setCrewCost] = useState<number>(DEFAULT_CREW_COST)
 
   // Business context for the recommendation + verdict (same engines as the
   // travel-density discount and neighborhood analytics).
@@ -47,8 +51,13 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
     async function load() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user || !center) return
-      const ctx = await loadProspectContext(supabase, user.id, center)
-      if (active) setProspect(ctx)
+      const [ctx, settingsRes] = await Promise.all([
+        loadProspectContext(supabase, user.id, center),
+        supabase.from('business_settings').select('crew_cost_per_hour').eq('user_id', user.id).maybeSingle(),
+      ])
+      if (!active) return
+      setProspect(ctx)
+      setCrewCost(resolveCrewCost((settingsRes.data as { crew_cost_per_hour: number | null } | null)?.crew_cost_per_hour))
     }
     load()
     return () => { active = false }
@@ -247,7 +256,7 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
     ? assessProspect(basePkg, prospect, {
         distanceKm: null, travelFee: Number(travelFee) || 0, neighborhoodName: hoodName,
         estimatedMinutes: estimateVisitMinutes(totalSqft, prospect.observedMinPer1000),
-        timedJobs: prospect.timedJobs,
+        timedJobs: prospect.timedJobs, crewCostPerHour: crewCost,
       })
     : null
   const pkg = totalSqft > 0
@@ -329,8 +338,21 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
                     <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-2">
                       Pricing recommendation{Number(travelFee || 0) > 0 ? ` · $${Number(travelFee).toLocaleString()} travel stays on the quote` : ''}
                     </p>
-                    <PricePackagePanel pkg={pkg} onUse={applySelection} />
-                    {assessment && <ProspectCard a={assessment} />}
+                    {assessment ? (
+                      <BusinessVerdictCard
+                        a={assessment}
+                        pkg={pkg}
+                        onUse={applySelection}
+                        details={
+                          <div className="space-y-3 pt-1">
+                            <PricePackagePanel pkg={pkg} onUse={applySelection} />
+                            <ProspectCard a={assessment} />
+                          </div>
+                        }
+                      />
+                    ) : (
+                      <PricePackagePanel pkg={pkg} onUse={applySelection} />
+                    )}
                   </div>
                 ) : (
                   <div className="border-t border-border pt-3 text-xs text-ink-faint">

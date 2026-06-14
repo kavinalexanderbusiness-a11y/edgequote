@@ -21,9 +21,12 @@ interface CalendarProps {
   onMoveJob?: (job: Job, newDateISO: string) => void
   recurrenceLabels?: Record<string, string>
   valueByJobId?: Record<string, number>
+  // Number of add-on services per job → a compact "+N" badge on the chip so the
+  // owner sees at a glance why a visit is worth more than usual.
+  addonCountByJobId?: Record<string, number>
 }
 
-function JobChip({ job, onSelect, onDragStart, recurLabel, value }: { job: Job; onSelect: (j: Job) => void; onDragStart?: (e: React.PointerEvent, job: Job) => void; recurLabel?: string; value?: number }) {
+function JobChip({ job, onSelect, onDragStart, recurLabel, value, addonCount }: { job: Job; onSelect: (j: Job) => void; onDragStart?: (e: React.PointerEvent, job: Job) => void; recurLabel?: string; value?: number; addonCount?: number }) {
   return (
     <button
       onClick={(e) => { e.stopPropagation(); onSelect(job) }}
@@ -39,13 +42,16 @@ function JobChip({ job, onSelect, onDragStart, recurLabel, value }: { job: Job; 
         {job.status === 'completed' && <Check className="w-2.5 h-2.5 shrink-0" />}
         {job.recurrence_id && <Repeat className="w-2.5 h-2.5 shrink-0 opacity-70" />}
         <span className={cn('truncate', job.status === 'completed' && 'line-through opacity-80')}>{job.start_time ? job.start_time.slice(0, 5) + ' ' : ''}{job.title}</span>
+        {addonCount != null && addonCount > 0 && (
+          <span className="shrink-0 text-[9px] font-bold text-accent" title={`${addonCount} add-on service${addonCount !== 1 ? 's' : ''}`}>+{addonCount}</span>
+        )}
         {value != null && <span className={cn('ml-auto shrink-0 pl-1 font-semibold', value > 0 ? 'opacity-90' : 'text-amber-400')}>{value > 0 ? `$${value}` : '$?'}</span>}
       </span>
     </button>
   )
 }
 
-export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkDone, onMoveJob, recurrenceLabels, valueByJobId }: CalendarProps) {
+export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkDone, onMoveJob, recurrenceLabels, valueByJobId, addonCountByJobId }: CalendarProps) {
   const recurLabelFor = (job: Job) => job.recurrence_id ? recurrenceLabels?.[job.recurrence_id] : undefined
   const weekdayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
@@ -173,7 +179,7 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
                 </div>
                 <div className="space-y-0.5">
                   {dayJobs.slice(0, 4).map(job => (
-                    <JobChip key={job.id} job={job} onSelect={selectJob} onDragStart={onMoveJob ? startDrag : undefined} recurLabel={recurLabelFor(job)} value={valueByJobId?.[job.id]} />
+                    <JobChip key={job.id} job={job} onSelect={selectJob} onDragStart={onMoveJob ? startDrag : undefined} recurLabel={recurLabelFor(job)} value={valueByJobId?.[job.id]} addonCount={addonCountByJobId?.[job.id]} />
                   ))}
                   {dayJobs.length > 4 && (
                     <span className="block text-[10px] font-medium text-ink-faint px-1 pt-0.5">+{dayJobs.length - 4} more</span>
@@ -216,7 +222,7 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
                 </div>
                 <div className="space-y-1">
                   {dayJobs.map(job => (
-                    <JobChip key={job.id} job={job} onSelect={selectJob} onDragStart={onMoveJob ? startDrag : undefined} recurLabel={recurLabelFor(job)} value={valueByJobId?.[job.id]} />
+                    <JobChip key={job.id} job={job} onSelect={selectJob} onDragStart={onMoveJob ? startDrag : undefined} recurLabel={recurLabelFor(job)} value={valueByJobId?.[job.id]} addonCount={addonCountByJobId?.[job.id]} />
                   ))}
                 </div>
               </button>

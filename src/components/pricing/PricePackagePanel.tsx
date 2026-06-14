@@ -12,7 +12,7 @@ const AGG_META = {
 
 export interface CadenceSelection { cadence: CadenceKey; price: number }
 
-const CADENCE_LABELS: Record<CadenceKey, string> = {
+export const CADENCE_LABELS: Record<CadenceKey, string> = {
   one_time: 'One-Time', weekly: 'Weekly', biweekly: 'Bi-Weekly', monthly: 'Monthly',
 }
 

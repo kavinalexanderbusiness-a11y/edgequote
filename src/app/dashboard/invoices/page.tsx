@@ -114,7 +114,7 @@ export default function InvoicesPage() {
       property_id: i.property_id, job_id: i.job_id, invoice_number: i.invoice_number,
       customer_name: i.customer_name, address: i.address, service_type: i.service_type,
       amount: i.amount, status: i.status, issued_date: i.issued_date, due_date: i.due_date,
-      notes: i.notes,
+      notes: i.notes, line_items: i.line_items,
     }
   }
 
@@ -236,11 +236,29 @@ export default function InvoicesPage() {
                       <p className="text-xs text-ink-muted flex items-center gap-1 mt-0.5">
                         <User className="w-3 h-3" /> {inv.customer_name}
                       </p>
-                      {inv.service_type && <p className="text-xs text-ink-faint mt-0.5 truncate">{inv.service_type}</p>}
+                      {inv.line_items && inv.line_items.length > 1 ? (
+                        // Transparent breakdown — base service + add-ons + travel.
+                        <div className="mt-1 space-y-0.5">
+                          {inv.line_items.map((li, i) => (
+                            <p key={i} className="text-xs flex items-center justify-between gap-3 max-w-[280px]">
+                              <span className="text-ink-faint truncate">{li.description}</span>
+                              <span className="text-ink-muted font-medium shrink-0">{formatCurrency(Number(li.amount))}</span>
+                            </p>
+                          ))}
+                        </div>
+                      ) : (
+                        inv.service_type && <p className="text-xs text-ink-faint mt-0.5 truncate">{inv.service_type}</p>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-3 shrink-0">
-                    <span className="text-lg font-bold text-ink">{formatCurrency(Number(inv.amount))}</span>
+                    <div className="text-right">
+                      <span className="text-lg font-bold text-ink">{formatCurrency(Number(inv.amount))}</span>
+                      {(() => {
+                        const n = (inv.line_items || []).filter(li => li.kind === 'addon').length
+                        return n > 0 ? <p className="text-[10px] font-semibold text-accent">+{n} service{n !== 1 ? 's' : ''}</p> : null
+                      })()}
+                    </div>
                     <Button onClick={() => openInvoicePdf(inv)} variant="secondary" size="sm" loading={openingId === inv.id}>
                       <FileDown className="w-3.5 h-3.5" /> PDF
                     </Button>

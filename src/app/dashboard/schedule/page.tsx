@@ -3,7 +3,8 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Customer, Job, JobFormValues, Quote, RecurrenceScope, RecurUnit } from '@/types'
+import { Customer, Job, JobFormValues, JobLineItem, Quote, RecurrenceScope, RecurUnit } from '@/types'
+import { listLineItemsByJob, addLineItems, deleteLineItem, recordPriceChange, addonsTotal, normalizeServiceKey } from '@/lib/jobPricing'
 import { Calendar, CalendarView } from '@/components/schedule/Calendar'
 import { DayOpsPanel, QuoteLite, QuickPatch } from '@/components/schedule/DayOpsPanel'
 import { Coord, geocodeAddress } from '@/lib/geo'
@@ -11,7 +12,7 @@ import { JobForm, Recurrence, SuggestionMeta } from '@/components/schedule/JobFo
 import { ScopeDialog } from '@/components/schedule/ScopeDialog'
 import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel } from '@/lib/recurrence'
 import type { JobRecurrence } from '@/types'
-import { createDraftInvoiceForCompletedJob, quoteVisitAmount, jobVisitValue, effectiveFreq } from '@/lib/invoicing'
+import { createDraftInvoiceForCompletedJob, quoteVisitAmount, jobVisitValue, effectiveFreq, syncDraftInvoiceAmounts } from '@/lib/invoicing'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
@@ -40,7 +41,7 @@ type PendingAction =
   | { type: 'edit'; job: Job; values: JobFormValues; recurrence: Recurrence }
   | { type: 'move'; job: Job; newDate: string }
   | { type: 'delete'; job: Job }
-  | { type: 'price'; job: Job; price: number | null }
+  | { type: 'price'; job: Job; price: number | null; reason?: string }
 
 // Map an interval back to the legacy `freq` column where it lines up.
 function legacyFreqFor(unit: RecurUnit | null, count: number): string | null {
@@ -90,6 +91,8 @@ export default function SchedulePage() {
   // cards AND the optimizer modal must read the SAME set, or they disagree about
   // what can move.
   const [invoicedJobIds, setInvoicedJobIds] = useState<Set<string>>(new Set())
+  // Extra-service add-ons per visit (Day Ops). Kept in sync with the draft invoice.
+  const [addonsByJobId, setAddonsByJobId] = useState<Record<string, JobLineItem[]>>({})
   const [baseCoord, setBaseCoord] = useState<Coord | null>(null)
   const [preferredWorkDays, setPreferredWorkDays] = useState<number[]>([5, 6, 0])
   const [workStartTime, setWorkStartTime] = useState('08:00')
@@ -129,6 +132,22 @@ export default function SchedulePage() {
     }
     return m
   }, [jobs, quotesById, recurrences])
+
+  // The TOTAL billable value per job = base + add-on services. Shown on the
+  // calendar chips (Total Job Value visible everywhere). The optimizer keeps
+  // using the BASE valueByJobId — add-ons are billing, not a routing signal.
+  const totalByJobId = useMemo(() => {
+    const m: Record<string, number> = {}
+    for (const j of jobs) m[j.id] = (valueByJobId[j.id] || 0) + addonsTotal(addonsByJobId[j.id])
+    return m
+  }, [jobs, valueByJobId, addonsByJobId])
+
+  // Add-on count per job → the "+N" chip badge on the calendar.
+  const addonCountByJobId = useMemo(() => {
+    const m: Record<string, number> = {}
+    for (const [id, list] of Object.entries(addonsByJobId)) if (list.length) m[id] = list.length
+    return m
+  }, [addonsByJobId])
 
   // ONE OptJob projection of the schedule, shared by the proactive cards, the
   // auto-propose-on-add check and any other engine call — so they never diverge.
@@ -375,8 +394,10 @@ export default function SchedulePage() {
       supabase.from('invoices').select('job_id').eq('user_id', user!.id).not('job_id', 'is', null),
       supabase.from('schedule_health_ignored').select('issue_key').eq('user_id', user!.id),
     ])
-    setJobs((jRes.data as Job[]) || [])
+    const loadedJobs = (jRes.data as Job[]) || []
+    setJobs(loadedJobs)
     setInvoicedJobIds(new Set(((iRes.data as { job_id: string }[]) || []).map(r => r.job_id)))
+    setAddonsByJobId(await listLineItemsByJob(supabase, user!.id, loadedJobs.map(j => j.id)))
     setIgnoredHealthKeys(new Set(((hRes.data as { issue_key: string }[] | null) || []).map(r => r.issue_key)))
     setCustomers((cRes.data as Customer[]) || [])
     const labels: Record<string, string> = {}
@@ -902,6 +923,8 @@ export default function SchedulePage() {
       const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed' })
       if (res.created) setBanner(`Saved — draft invoice ${res.invoiceNumber} created.`)
     }
+    // If the inline edit changed the price, keep its draft invoice in sync.
+    if (Number(patch.price) !== Number(job.price)) await syncDraftInvoiceAmounts(supabase, [job.id])
     await fetchJobs()
   }
 
@@ -909,14 +932,21 @@ export default function SchedulePage() {
   //  • One-time job → update its price directly.
   //  • Recurring job → choose scope (This / This & Future / All), then apply with
   //    the quote cadence price as the single source of truth (see applyPriceChange).
-  async function setJobPrice(job: Job, price: number | null) {
+  async function setJobPrice(job: Job, price: number | null, reason?: string) {
     if (job.recurrence_id) {
-      setPendingAction({ type: 'price', job, price })
+      setPendingAction({ type: 'price', job, price, reason })
       return
     }
+    const oldAmount = valueByJobId[job.id] ?? null
+    const { data: { user } } = await supabase.auth.getUser()
     const { error } = await supabase.from('jobs').update({ price }).eq('id', job.id)
     if (error) { setBanner('Could not update price: ' + error.message); return }
+    // Audit trail (old → new, reason on raises) for upsell analytics later.
+    await recordPriceChange(supabase, { userId: user!.id, jobId: job.id, scope: null, oldAmount, newAmount: price, reason, changedByEmail: user?.email })
+    // The job is the source of truth — re-price its draft invoice automatically.
+    const synced = await syncDraftInvoiceAmounts(supabase, [job.id], { reason })
     await fetchJobs()
+    if (synced > 0) setBanner('Price updated — its draft invoice was re-priced to match.')
   }
 
   // The quote cadence column a recurring job's price maps to (interval-aware).
@@ -931,13 +961,14 @@ export default function SchedulePage() {
   // quote's cadence column and the affected visits are cleared so they DERIVE it
   // (never a divergent jobs.price). Already-billed/past visits are frozen at their
   // current value so history and issued invoices are preserved.
-  async function applyPriceChange(job: Job, newPrice: number | null, scope: RecurrenceScope) {
+  async function applyPriceChange(job: Job, newPrice: number | null, scope: RecurrenceScope, reason?: string) {
     const rec = job.recurrence_id ? recurrences[job.recurrence_id] : null
     const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
     const field = cadenceField(job)
     const quote = job.quote_id ? quotesById[job.quote_id] : null
     const writesQuote = !!(job.quote_id && field && newPrice != null && (scope === 'future' || scope === 'all'))
     const series = jobs.filter(j => j.recurrence_id === job.recurrence_id)
+    const affectedIds = jobsInScope(job, jobs, scope).map(t => t.id)
 
     // Undo snapshot — every series job's price + the quote cadence value.
     const jobSnap = series.map(j => ({ id: j.id, price: j.price }))
@@ -968,14 +999,73 @@ export default function SchedulePage() {
       if (ids.length) await supabase.from('jobs').update({ price: newPrice }).in('id', ids)
     }
 
+    // Audit trail for the recurring change (old → new, reason on raises).
+    const oldAmount = Math.round(jobVisitValue(job.price, quote as unknown as Record<string, unknown>, freq, job.is_initial_visit))
+    const { data: { user: cu } } = await supabase.auth.getUser()
+    await recordPriceChange(supabase, { userId: cu!.id, jobId: job.id, quoteId: writesQuote ? job.quote_id : null, scope, oldAmount, newAmount: newPrice, reason, changedByEmail: cu?.email })
+
+    // Job = source of truth → re-price the affected visits' draft invoices.
+    const synced = await syncDraftInvoiceAmounts(supabase, affectedIds, { reason })
     await fetchJobs()
     const dest = writesQuote ? `the quote's ${freq} price` : scope === 'this' ? 'this visit' : 'the series visits'
-    offerUndo(`Price saved to ${dest}`, async () => {
+    offerUndo(`Price saved to ${dest}${synced > 0 ? ` · ${synced} draft invoice${synced !== 1 ? 's' : ''} re-priced` : ''}`, async () => {
       if (quoteSnap) await supabase.from('quotes').update({ [quoteSnap.field]: quoteSnap.value }).eq('id', quoteSnap.id)
       const nullIds = jobSnap.filter(s => s.price == null).map(s => s.id)
       if (nullIds.length) await supabase.from('jobs').update({ price: null }).in('id', nullIds)
       for (const s of jobSnap.filter(s => s.price != null)) await supabase.from('jobs').update({ price: s.price }).eq('id', s.id)
+      await syncDraftInvoiceAmounts(supabase, affectedIds) // restore invoice amounts to match
+      await fetchJobs()
     })
+  }
+
+  // ── Visit add-ons (extra services) ──
+  // Add an extra service to this visit / future / the whole plan, then keep the
+  // affected draft invoices in sync (the JOB — base + add-ons — is the truth).
+  async function addLineItemToJob(job: Job, input: { description: string; amount: number; serviceKey: string; scope: RecurrenceScope }) {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+    const targets = input.scope === 'this'
+      ? [job.id]
+      : jobsInScope(job, jobs, input.scope).filter(j => j.status !== 'completed' && j.status !== 'cancelled').map(j => j.id)
+    const ids = targets.length ? targets : [job.id]
+    await addLineItems(supabase, {
+      userId: user.id, targetJobIds: ids,
+      description: input.description, amount: input.amount, serviceKey: input.serviceKey,
+      serviceType: job.service_type, recurring: input.scope !== 'this',
+    })
+    await syncDraftInvoiceAmounts(supabase, ids)
+    await fetchJobs()
+  }
+  async function removeLineItem(item: JobLineItem) {
+    await deleteLineItem(supabase, item)
+    await syncDraftInvoiceAmounts(supabase, [item.job_id])
+    await fetchJobs()
+  }
+  // The previous visit's add-ons (most recent earlier visit of the same series, or
+  // same customer for one-offs, that had any). Drives the one-tap "copy previous".
+  function getPreviousAddons(job: Job): { description: string; amount: number; serviceKey: string }[] {
+    const prior = jobs
+      .filter(j => j.id !== job.id && j.scheduled_date < job.scheduled_date && (addonsByJobId[j.id]?.length)
+        && (job.recurrence_id ? j.recurrence_id === job.recurrence_id : !!job.customer_id && j.customer_id === job.customer_id))
+      .sort((a, b) => b.scheduled_date.localeCompare(a.scheduled_date))
+    const prev = prior[0]
+    if (!prev) return []
+    return (addonsByJobId[prev.id] || []).map(a => ({ description: a.description, amount: Number(a.amount), serviceKey: a.service_key || normalizeServiceKey(a.description) }))
+  }
+  // Copy the previous visit's add-ons onto THIS visit only (respects scope rules,
+  // never auto-recurs); skips any the visit already has.
+  async function copyPreviousAddons(job: Job) {
+    const prev = getPreviousAddons(job)
+    if (!prev.length) return
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+    const existing = new Set((addonsByJobId[job.id] || []).map(i => (i.service_key || i.description).toLowerCase()))
+    for (const a of prev) {
+      if (existing.has((a.serviceKey || a.description).toLowerCase())) continue
+      await addLineItems(supabase, { userId: user.id, targetJobIds: [job.id], description: a.description, amount: a.amount, serviceKey: a.serviceKey, serviceType: job.service_type, recurring: false })
+    }
+    await syncDraftInvoiceAmounts(supabase, [job.id])
+    await fetchJobs()
   }
 
   // ── Undo ────────────────────────────────────────────────────────────────────
@@ -1078,7 +1168,7 @@ export default function SchedulePage() {
     if (action.type === 'edit') await applyEdit(action.job, action.values, action.recurrence, scope)
     else if (action.type === 'move') await applyMove(action.job, action.newDate, scope)
     else if (action.type === 'delete') await applyDelete(action.job, scope)
-    else if (action.type === 'price') await applyPriceChange(action.job, action.price, scope)
+    else if (action.type === 'price') await applyPriceChange(action.job, action.price, scope, action.reason)
   }
 
   function handleDayTap(day: Date) {
@@ -1352,6 +1442,11 @@ export default function SchedulePage() {
           onMove={(job, iso) => moveJobToDate(job, new Date(iso + 'T00:00:00'))}
           onDeleteJob={deleteJob}
           onSetPrice={setJobPrice}
+          addonsByJobId={addonsByJobId}
+          onAddLineItem={addLineItemToJob}
+          onDeleteLineItem={removeLineItem}
+          getPreviousAddons={getPreviousAddons}
+          onCopyPreviousAddons={copyPreviousAddons}
           workStartTime={workStartTime}
           capacityHours={capacityHours}
           onRainDelay={() => rainDelayDay(format(cursor, 'yyyy-MM-dd'))}
@@ -1368,7 +1463,8 @@ export default function SchedulePage() {
           onMarkDone={completeJob}
           onMoveJob={(job, iso) => moveJobToDate(job, new Date(iso + 'T00:00:00'))}
           recurrenceLabels={recurrenceLabels}
-          valueByJobId={valueByJobId}
+          valueByJobId={totalByJobId}
+          addonCountByJobId={addonCountByJobId}
         />
       )}
 

@@ -407,3 +407,83 @@ create policy "job-photos: update own"  on storage.objects for update
   using (bucket_id = 'job-photos' and (storage.foldername(name))[1] = auth.uid()::text);
 create policy "job-photos: delete own"  on storage.objects for delete
   using (bucket_id = 'job-photos' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-13 — Job add-ons, price history, invoice
+-- breakdown. The JOB (base price + add-on services) is the single
+-- source of truth for what a visit is worth; the invoice mirrors it.
+--   • job_line_items  — extra services on a visit (Fertilizer $45…).
+--                       Attached to concrete visit rows; "future /
+--                       entire plan" inserts one row per affected
+--                       non-completed visit sharing a group_id.
+--   • job_price_changes — audit trail (old → new, reason on raises).
+--   • invoices.line_items — snapshot breakdown for the customer.
+-- All structured for later BI (frequent add-ons, upsells, avg
+-- ticket, most-profitable add-ons). Idempotent; safe to re-run.
+-- ════════════════════════════════════════════════════════════
+create table if not exists public.job_line_items (
+  id               uuid primary key default uuid_generate_v4(),
+  created_at       timestamptz not null default now(),
+  user_id          uuid not null references auth.users(id) on delete cascade,
+  job_id           uuid not null references public.jobs(id) on delete cascade,
+  description      text not null,            -- "Fertilizer", "Weed Control", custom…
+  amount           numeric not null default 0,
+  -- Normalised key for BI grouping ("fertilizer", "weed_control", "custom").
+  service_key      text,
+  -- Lawn/snow/year_round bucket (lib/seasons serviceCategory), for analytics.
+  service_category text,
+  -- Batches the rows created by one "future / entire plan" apply, so the whole
+  -- group can be edited or removed together.
+  group_id         uuid,
+  -- Informational: was this add-on applied across the plan (vs this visit only).
+  recurring        boolean not null default false
+);
+
+alter table public.job_line_items enable row level security;
+create policy "job_line_items: select own" on public.job_line_items for select using (auth.uid() = user_id);
+create policy "job_line_items: insert own" on public.job_line_items for insert with check (auth.uid() = user_id);
+create policy "job_line_items: update own" on public.job_line_items for update using (auth.uid() = user_id);
+create policy "job_line_items: delete own" on public.job_line_items for delete using (auth.uid() = user_id);
+
+create index if not exists job_line_items_job_idx   on public.job_line_items(user_id, job_id);
+create index if not exists job_line_items_group_idx on public.job_line_items(group_id);
+
+create table if not exists public.job_price_changes (
+  id               uuid primary key default uuid_generate_v4(),
+  created_at       timestamptz not null default now(),
+  user_id          uuid not null references auth.users(id) on delete cascade,
+  -- Keep the audit row even if the visit is later deleted.
+  job_id           uuid references public.jobs(id) on delete set null,
+  -- Set when the change wrote to a quote's cadence price (recurring future/all).
+  quote_id         uuid references public.quotes(id) on delete set null,
+  scope            text,                     -- 'this' | 'future' | 'all' | null(one-time)
+  old_amount       numeric,
+  new_amount       numeric,
+  reason           text,                     -- only required on a price INCREASE
+  changed_by_email text
+);
+
+alter table public.job_price_changes enable row level security;
+create policy "job_price_changes: select own" on public.job_price_changes for select using (auth.uid() = user_id);
+create policy "job_price_changes: insert own" on public.job_price_changes for insert with check (auth.uid() = user_id);
+create policy "job_price_changes: delete own" on public.job_price_changes for delete using (auth.uid() = user_id);
+
+create index if not exists job_price_changes_job_idx on public.job_price_changes(user_id, job_id);
+
+-- Snapshot of the invoice's line breakdown at the moment it was drafted/sent:
+--   [{ "description": "Weekly Mowing", "amount": 65, "kind": "service" }, …]
+-- Null/empty → render the legacy single (service_type, amount) row.
+alter table public.invoices
+  add column if not exists line_items jsonb;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-13 — Crew cost per hour. The fully-loaded cost
+-- of one crew-hour (labour + overhead). THE single business cost
+-- basis used to turn revenue into expected PROFIT everywhere:
+-- the measure-business verdict, customer / route / area
+-- profitability, suggestions, and quality scoring. Set once in
+-- Settings → Business Basics; defaults to a sensible $40/hr.
+-- Idempotent; safe to re-run.
+-- ════════════════════════════════════════════════════════════
+alter table public.business_settings
+  add column if not exists crew_cost_per_hour numeric default 40;

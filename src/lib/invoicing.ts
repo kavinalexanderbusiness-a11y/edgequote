@@ -1,5 +1,5 @@
 import type { createClient } from '@/lib/supabase/client'
-import type { Job } from '@/types'
+import type { Job, InvoiceLineItem, JobLineItem } from '@/types'
 import { localTodayISO, maxNumericSuffix } from '@/lib/utils'
 import { addDays, format, parseISO } from 'date-fns'
 
@@ -59,6 +59,99 @@ export function jobVisitValue(jobPrice: number | null | undefined, quote: Record
   return quoteVisitAmount(quote, isInitial ? null : freq)
 }
 
+// Human label for the base service line on an invoice/breakdown ("Weekly Mowing").
+function serviceLineLabel(serviceType: string | null | undefined, freq: string | null, isInitial: boolean): string {
+  const base = serviceType || 'Services rendered'
+  if (isInitial) return `Initial visit — ${base}`
+  if (!freq) return base
+  const cap = freq.charAt(0).toUpperCase() + freq.slice(1)
+  return `${cap} ${base}`
+}
+
+// THE single definition of what an invoice should show + total: the base visit
+// value (job price > quote) plus every add-on, plus a separate travel charge
+// when the quote bills travel separately. Used by the draft + the sync so the
+// breakdown and the amount can never disagree.
+export function buildInvoiceLineItems(opts: {
+  serviceType: string | null
+  baseAmount: number
+  freq: string | null
+  isInitial: boolean
+  addons?: Pick<JobLineItem, 'description' | 'amount'>[] | null
+  quote?: Record<string, unknown> | null
+}): { lineItems: InvoiceLineItem[]; total: number } {
+  const lines: InvoiceLineItem[] = []
+  const base = Math.round(opts.baseAmount)
+  if (base > 0) lines.push({ description: serviceLineLabel(opts.serviceType, opts.freq, opts.isInitial), amount: base, kind: 'service' })
+  for (const a of opts.addons || []) {
+    const amt = Math.round(Number(a.amount) || 0)
+    if (amt !== 0) lines.push({ description: a.description, amount: amt, kind: 'addon' })
+  }
+  // Separate travel charge only when the quote opted to bill it separately —
+  // otherwise it's already inside the cadence price (don't double-count).
+  const q = opts.quote
+  if (q && q.show_travel_separately && Number(q.travel_fee) > 0) {
+    lines.push({ description: 'Travel charge', amount: Math.round(Number(q.travel_fee)), kind: 'travel' })
+  }
+  const total = lines.reduce((s, l) => s + l.amount, 0)
+  return { lineItems: lines, total }
+}
+
+// Keep DRAFT invoices in sync with their job's price — the JOB is the source of
+// truth, so changing a visit's price (anywhere) re-prices its not-yet-issued
+// invoice automatically. Only DRAFT invoices are touched; sent/paid invoices are
+// immutable history. Idempotent: an invoice whose amount already matches is left
+// alone. Optionally records the reason on the invoice note. Returns how many it
+// changed.
+export async function syncDraftInvoiceAmounts(
+  supabase: Supa,
+  jobIds: string[],
+  opts?: { reason?: string },
+): Promise<number> {
+  const ids = [...new Set(jobIds.filter(Boolean))]
+  if (ids.length === 0) return 0
+  const { data: invData } = await supabase.from('invoices').select('id, job_id, amount, notes, line_items').in('job_id', ids).eq('status', 'draft')
+  const invoices = (invData as { id: string; job_id: string; amount: number; notes: string | null; line_items: InvoiceLineItem[] | null }[] | null) || []
+  if (invoices.length === 0) return 0
+
+  const jobIdsWithInv = [...new Set(invoices.map(i => i.job_id))]
+  type JobRow = { id: string; price: number | null; quote_id: string | null; recurrence_id: string | null; is_initial_visit: boolean; service_type: string | null }
+  const { data: jobData } = await supabase.from('jobs').select('id, price, quote_id, recurrence_id, is_initial_visit, service_type').in('id', jobIdsWithInv)
+  const jobsById: Record<string, JobRow> = {}
+  for (const j of (jobData as JobRow[] | null) || []) jobsById[j.id] = j
+
+  const quoteIds = [...new Set(Object.values(jobsById).map(j => j.quote_id).filter((x): x is string => !!x))]
+  const recIds = [...new Set(Object.values(jobsById).map(j => j.recurrence_id).filter((x): x is string => !!x))]
+  const quotesById: Record<string, Record<string, unknown>> = {}
+  if (quoteIds.length) { const { data } = await supabase.from('quotes').select('*').in('id', quoteIds); for (const q of (data as Record<string, unknown>[]) || []) quotesById[q.id as string] = q }
+  const recById: Record<string, { freq: string | null; interval_unit: string | null; interval_count: number | null }> = {}
+  if (recIds.length) { const { data } = await supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').in('id', recIds); for (const r of (data as { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null }[]) || []) recById[r.id] = r }
+  // Add-ons on these visits feed both the amount and the breakdown.
+  const addonsByJob: Record<string, Pick<JobLineItem, 'description' | 'amount'>[]> = {}
+  { const { data } = await supabase.from('job_line_items').select('job_id, description, amount').in('job_id', jobIdsWithInv)
+    for (const a of (data as { job_id: string; description: string; amount: number }[]) || []) (addonsByJob[a.job_id] ||= []).push({ description: a.description, amount: a.amount }) }
+
+  let changed = 0
+  for (const inv of invoices) {
+    const j = jobsById[inv.job_id]
+    if (!j) continue
+    const quote = j.quote_id ? quotesById[j.quote_id] : null
+    const rec = j.recurrence_id ? recById[j.recurrence_id] : null
+    const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
+    const base = jobVisitValue(j.price, quote, freq, j.is_initial_visit)
+    const { lineItems, total } = buildInvoiceLineItems({ serviceType: j.service_type, baseAmount: base, freq, isInitial: j.is_initial_visit, addons: addonsByJob[inv.job_id], quote })
+    const amount = Math.round(total)
+    const prev = Math.round(Number(inv.amount))
+    const sameLines = JSON.stringify(inv.line_items ?? null) === JSON.stringify(lineItems)
+    if (!(amount > 0) || (amount === prev && sameLines)) continue
+    const patch: Record<string, unknown> = { amount, line_items: lineItems }
+    if (opts?.reason?.trim() && amount !== prev) patch.notes = `${inv.notes ? inv.notes + ' · ' : ''}Re-priced $${prev} → $${amount} — ${opts.reason.trim()}`
+    await supabase.from('invoices').update(patch).eq('id', inv.id)
+    changed++
+  }
+  return changed
+}
+
 // When a recurring visit is completed, create a DRAFT invoice for that visit,
 // pulling customer/property/service/pricing from the originating quote.
 // Never sends. De-dupes by job_id so a visit can't be double-invoiced.
@@ -84,7 +177,12 @@ export async function createDraftInvoiceForCompletedJob(supabase: Supa, job: Job
     quote = q as Record<string, unknown> | null
   }
 
-  const amount = jobVisitValue(job.price, quote, freq, job.is_initial_visit)
+  // Base visit value + any add-on services on this visit → amount + breakdown.
+  const base = jobVisitValue(job.price, quote, freq, job.is_initial_visit)
+  const { data: addonRows } = await supabase.from('job_line_items').select('description, amount').eq('job_id', job.id)
+  const addons = (addonRows as Pick<JobLineItem, 'description' | 'amount'>[] | null) || []
+  const { lineItems, total } = buildInvoiceLineItems({ serviceType: job.service_type, baseAmount: base, freq, isInitial: job.is_initial_visit, addons, quote })
+  const amount = Math.round(total)
   // Never draft a $0 invoice — an unpriced visit pollutes billing history forever.
   if (!(amount > 0)) return { created: false, reason: 'no-amount' }
 
@@ -122,6 +220,7 @@ export async function createDraftInvoiceForCompletedJob(supabase: Supa, job: Job
     address,
     service_type: job.service_type,
     amount,
+    line_items: lineItems,
     status: 'draft',
     issued_date: today,
     due_date: dueISO,

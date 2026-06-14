@@ -14,6 +14,7 @@ import { effectiveFreq, jobVisitValue } from '@/lib/invoicing'
 import { haversineKm } from '@/lib/geo'
 import { analyzeScheduleHealth, HealthJob } from '@/lib/scheduleHealth'
 import { generateOccurrences } from '@/lib/recurrence'
+import { visitEconomics, crewCostPerHour, DEFAULT_CREW_COST } from '@/lib/economics'
 
 // Seeded LCG so every run generates the identical schedule.
 function lcg(seed: number) {
@@ -357,6 +358,31 @@ function testInitialVisitPricing(): number {
   return fails
 }
 
+// ── Crew-cost economics: revenue → profit is the one business metric ──────────
+function testEconomics(): number {
+  let fails = 0
+  const expect = (name: string, ok: boolean) => { if (!ok) { fails++; console.error('✗ economics: ' + name) } }
+  // $65 visit, 45 min on-site + 15 min drive = 1.0 crew-hour @ $40 → $40 cost, $25 profit.
+  const e = visitEconomics(65, 45, 15, 40)
+  expect('labour cost = 1.0 hr × $40 = $40', e.laborCost === 40)
+  expect('profit = 65 − 40 = $25', e.profit === 25)
+  expect('rev/hr = $65', e.revPerHour === 65)
+  expect('profit/hr = $25', e.profitPerHour === 25)
+  expect('margin ≈ 0.385', Math.abs(e.margin - 25 / 65) < 1e-9)
+  // A money-loser: $30 visit, 60 min on-site + 40 min drive @ $40 → ~$67 cost.
+  const loss = visitEconomics(30, 60, 40, 40)
+  expect('negative profit detected', loss.profit < 0)
+  // Zero-time guard never divides by zero.
+  const zero = visitEconomics(50, 0, 0, 40)
+  expect('zero-time → rev/hr falls back to revenue', zero.revPerHour === 50 && zero.profitPerHour === 50)
+  // crewCostPerHour resolves bad/empty values to the default.
+  expect('null crew cost → default $40', crewCostPerHour(null) === DEFAULT_CREW_COST)
+  expect('0 crew cost → default $40', crewCostPerHour(0) === DEFAULT_CREW_COST)
+  expect('valid crew cost passes through', crewCostPerHour(55) === 55)
+  if (fails === 0) console.log('Economics ✓ (revenue − crew-time cost = profit; rev/hr, profit/hr, margin; safe fallbacks)')
+  return fails
+}
+
 // ── Run matrix ────────────────────────────────────────────────────────────────
 function run() {
   const gen = genSchedule(42)
@@ -380,6 +406,7 @@ function run() {
   failures += testScheduleHealth()
   failures += testRecurrence()
   failures += testInitialVisitPricing()
+  failures += testEconomics()
   const rows: Record<string, unknown>[] = []
   for (const c of cases) {
     const opts: OptOptions = { ...baseOpts, base: c.base === null ? null : baseOpts.base, mode: c.mode, scope: c.scope, anchorDate: c.anchor }

@@ -140,12 +140,17 @@ export function InvoiceDocument({ invoice, settings }: InvoicePDFProps) {
             <Text style={[styles.th, styles.cellDesc]}>Description</Text>
             <Text style={[styles.th, styles.cellAmt]}>Amount</Text>
           </View>
-          <View style={styles.tableRow}>
-            <View style={styles.cellDesc}>
-              <Text style={styles.td}>{invoice.service_type || 'Services rendered'}</Text>
+          {(invoice.line_items && invoice.line_items.length > 0
+            ? invoice.line_items
+            : [{ description: invoice.service_type || 'Services rendered', amount: Number(invoice.amount), kind: 'service' as const }]
+          ).map((li, i) => (
+            <View style={styles.tableRow} key={i}>
+              <View style={styles.cellDesc}>
+                <Text style={styles.td}>{li.description}</Text>
+              </View>
+              <Text style={[styles.td, styles.cellAmt]}>{money(Number(li.amount))}</Text>
             </View>
-            <Text style={[styles.td, styles.cellAmt]}>{money(Number(invoice.amount))}</Text>
-          </View>
+          ))}
         </View>
 
         <View style={styles.grandRow}>

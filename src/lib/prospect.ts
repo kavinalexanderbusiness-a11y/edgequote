@@ -9,6 +9,7 @@ import { format } from 'date-fns'
 import type { createClient } from '@/lib/supabase/client'
 import { Coord, haversineKm, NEARBY_RADIUS_KM } from '@/lib/geo'
 import { AVG_SPEED_KM_PER_MIN, DEFAULT_JOB_MIN } from '@/lib/route'
+import { visitEconomics, crewCostPerHour as resolveCrewCost } from '@/lib/economics'
 import {
   ProfitJob, ProfitQuote, ProfitContext, RecInfo, Grade,
   gradeRoute, neighborhoodProfitability,
@@ -103,6 +104,13 @@ export interface ProspectAssessment {
     revPerVisit: number
     revPerHour: number      // est., on-site + drive to nearest anchor
     annual: number
+    // Profit after crew cost (labour + overhead) for the time this visit eats.
+    // All from lib/economics — the one profit engine. profitPerHour is the
+    // headline rate; laborCost is the crew-time cost subtracted from revenue.
+    expectedProfit: number
+    profitPerHour: number
+    laborCost: number
+    crewCostPerHour: number  // the rate used, so the card can show the basis
     travelImpact: string
     routeImpact: string
     timeBasis: string       // where the time estimate came from (calibrated vs model)
@@ -124,12 +132,27 @@ export interface ProspectAssessment {
   lifetime: { cadenceLabel: string; oneYear: number; threeYear: number; fiveYear: number }
   // Does this stop make the BUSINESS stronger? Asset vs liability.
   routeOwnership: { stars: 1 | 2 | 3 | 4 | 5; label: 'Route Asset' | 'Solid Addition' | 'Route Liability'; reasons: string[] }
+  // ── The decision, pre-composed ── everything a decision-first card (or the
+  // Suggestions Center) needs to render "take / maybe / pass" without redoing
+  // any math: the headline, the four money numbers, ✓/✗ reasoning, and a
+  // one-line recommendation. Built from the same signals as the score.
+  decision: {
+    call: 'take' | 'maybe' | 'pass'
+    headline: string            // "Excellent Customer" | "Decent Customer" | "Poor Fit"
+    recommendedPrice: number    // per-visit price to charge
+    expectedRevenue: number     // what the visit bills (= recommendedPrice)
+    expectedProfit: number      // after crew cost
+    revPerHour: number
+    profitPerHour: number
+    reasons: { good: boolean; text: string }[]
+    summary: string             // "Take this customer" | "Consider passing or charging more"
+  }
 }
 
 export function assessProspect(
   pkg: PricingPackage,
   ctx: ProspectContext,
-  opts: { distanceKm?: number | null; travelFee?: number; neighborhoodName?: string | null; estimatedMinutes?: number; timedJobs?: number },
+  opts: { distanceKm?: number | null; travelFee?: number; neighborhoodName?: string | null; estimatedMinutes?: number; timedJobs?: number; crewCostPerHour?: number | null },
 ): ProspectAssessment {
   const cadence: CadenceKey = pkg.recommended.cadence
   const opt = pkg.options.find(o => o.cadence === cadence)
@@ -148,12 +171,20 @@ export function assessProspect(
   const revPerKm = legKm && legKm > 0 ? Math.round((revPerVisit / legKm) * 10) / 10 : 25
   const grade = gradeRoute(revPerHour, revPerKm, legKm ?? 10, legKm != null)
 
+  // ── Profit: revenue minus the crew-time this visit eats (lib/economics) ──
+  const crewCost = resolveCrewCost(opts.crewCostPerHour)
+  const econ = visitEconomics(revPerVisit, onSiteMin, driveMin, crewCost)
+
   const routeImpact: RouteImpact = ctx.nearbyJobs >= 2 ? 'strengthens' : ctx.nearbyJobs === 1 ? 'neutral' : 'isolated'
   const recurring = cadence === 'weekly' || cadence === 'biweekly' || cadence === 'monthly'
 
   const score: ProspectScore = grade === 'A' && recurring && ctx.nearbyJobs >= 3 ? 'A+' : grade
-  const verdict = (score === 'A+' || score === 'A' || score === 'B') ? 'excellent' as const
+  let verdict = (score === 'A+' || score === 'A' || score === 'B') ? 'excellent' as const
     : score === 'C' ? 'decent' as const : 'weak' as const
+  // Profit overrides the route grade: a customer that loses money after crew
+  // cost can never be "excellent", and a thin margin caps it at "decent".
+  if (econ.profit <= 0) verdict = 'weak'
+  else if (econ.margin < 0.35 && verdict === 'excellent') verdict = 'decent'
 
   const reasons: string[] = []
   if (hood) reasons.push(hood)
@@ -163,6 +194,10 @@ export function assessProspect(
   else if (ctx.nearbyJobs >= 1) reasons.push('Builds route density')
   else if (opts.distanceKm != null && opts.distanceKm > 10) reasons.push(`Far from base (${opts.distanceKm} km)`)
   if (!recurring) reasons.push('One-time service only')
+  // Profit signal: high/healthy margin vs thin/negative after crew cost.
+  if (econ.profitPerHour >= 80) reasons.push(`Strong profit — $${econ.profitPerHour}/hr after crew cost`)
+  else if (econ.profit <= 0) reasons.push('Loses money after crew cost — raise the price')
+  else if (econ.margin < 0.35) reasons.push(`Thin margin — only $${econ.profit} profit/visit`)
 
   // ── Stars: long-term value from the same signals ──
   let stars = 3
@@ -269,6 +304,47 @@ export function assessProspect(
     ],
   }
 
+  // ── Pre-composed decision (decision-first cards + Suggestions Center) ──
+  const call: 'take' | 'maybe' | 'pass' =
+    verdict === 'excellent' ? 'take' : verdict === 'decent' ? 'maybe' : 'pass'
+  const decisionReasons: { good: boolean; text: string }[] = []
+  // Route fit
+  decisionReasons.push(
+    routeImpact === 'strengthens' ? { good: true, text: 'Strong route fit' }
+      : routeImpact === 'neutral' ? { good: true, text: 'Fits near an existing stop' }
+        : { good: false, text: 'Weak route fit' })
+  // Nearby customers
+  decisionReasons.push(
+    ctx.nearbyJobs >= 2 ? { good: true, text: 'Close to existing customers' }
+      : ctx.nearbyJobs === 1 ? { good: true, text: 'One customer nearby' }
+        : { good: false, text: 'Isolated customer' })
+  // Profit after crew cost
+  decisionReasons.push(
+    econ.profit <= 0 ? { good: false, text: 'Loses money after crew cost' }
+      : econ.profit >= 35 ? { good: true, text: `High profit — $${econ.profit}/visit` }
+        : { good: false, text: `Thin profit — $${econ.profit}/visit` })
+  // Drive time
+  if (legKm != null) {
+    if (driveMin <= 12) decisionReasons.push({ good: true, text: 'Low drive time' })
+    else if (driveMin >= 20) decisionReasons.push({ good: false, text: 'Long drive' })
+  }
+  // Long-term value
+  if (recurring && annual >= 1200) decisionReasons.push({ good: true, text: 'High long-term value' })
+  else if (!recurring) decisionReasons.push({ good: false, text: 'One-time service only' })
+  const decision = {
+    call,
+    headline: verdict === 'excellent' ? 'Excellent Customer' : verdict === 'decent' ? 'Decent Customer' : 'Poor Fit',
+    recommendedPrice: revPerVisit,
+    expectedRevenue: revPerVisit,
+    expectedProfit: econ.profit,
+    revPerHour: econ.revPerHour,
+    profitPerHour: econ.profitPerHour,
+    reasons: decisionReasons,
+    summary: call === 'take' ? 'Take this customer'
+      : call === 'maybe' ? 'Worth taking — watch the margin'
+        : 'Consider passing or charging more',
+  }
+
   return {
     score, verdict, reasons,
     stars: starsClamped, starReasons,
@@ -276,6 +352,10 @@ export function assessProspect(
       revPerVisit,
       revPerHour,
       annual,
+      expectedProfit: econ.profit,
+      profitPerHour: econ.profitPerHour,
+      laborCost: econ.laborCost,
+      crewCostPerHour: crewCost,
       travelImpact,
       routeImpact: routeImpact === 'strengthens' ? 'Tightens an existing route'
         : routeImpact === 'neutral' ? 'Near one existing stop' : 'Opens a new solo trip',
@@ -289,6 +369,7 @@ export function assessProspect(
     competitive,
     lifetime,
     routeOwnership,
+    decision,
   }
 }
 
