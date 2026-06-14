@@ -21,7 +21,7 @@ import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repe
 import { OptimizeSchedule } from '@/components/schedule/OptimizeSchedule'
 import { RainDelayCenter } from '@/components/schedule/RainDelayCenter'
 import { CloudRain } from 'lucide-react'
-import { analyzeSchedule, MOVE_REASON_LABEL } from '@/lib/optimizer'
+import { analyzeSchedule, optimizeSchedule, MOVE_REASON_LABEL } from '@/lib/optimizer'
 import type { PlannedMove, OptimizeScope, OptimizeMode, OptJob, ScheduleSuggestion, CadenceVisit, CadenceRecs } from '@/lib/optimizer'
 import { evaluateScheduleMove } from '@/lib/scheduleWarnings'
 import { resolvePrefs } from '@/lib/preferences'
@@ -101,6 +101,10 @@ export default function SchedulePage() {
   const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(new Set())
   // Soft warning before a hand move that breaks cadence or a customer preference.
   const [moveConfirm, setMoveConfirm] = useState<{ job: Job; newDate: string; warnings: string[] } | null>(null)
+  // After a job is added, auto-propose optimization — LOCAL first (the new job's
+  // week), escalating to month/all-future ONLY for a substantial gain. Carries
+  // the new job's date so the proposal is anchored around it.
+  const [autoOptimizeQueued, setAutoOptimizeQueued] = useState<{ anchorDate: string } | null>(null)
   // Cached real-road distance lookup for the optimizer + proactive cards (shared
   // so they agree). Built from the located future stops; haversine until ready.
   const [roadDist, setRoadDist] = useState<RoadDist | undefined>(undefined)
@@ -126,28 +130,66 @@ export default function SchedulePage() {
     return m
   }, [jobs, quotesById, recurrences])
 
-  // Proactive auto-suggestions (overloaded days, isolated jobs, recurring-cluster
-  // opportunities) — computed from the same engines, shown without opening the
-  // optimizer. Recomputes when jobs/settings change.
-  const suggestions = useMemo<ScheduleSuggestion[]>(() => {
-    if (jobs.length === 0) return []
-    const optJobs: OptJob[] = jobs.map(j => ({
-      id: j.id, scheduled_date: j.scheduled_date, status: j.status,
-      recurrence_id: j.recurrence_id, start_time: j.start_time, duration_minutes: j.duration_minutes,
-      lat: j.properties?.lat ?? null, lng: j.properties?.lng ?? null,
-      value: valueByJobId[j.id] || 0, invoiced: invoicedJobIds.has(j.id),
-      title: j.title, customerName: j.customers?.name || j.title, customerId: j.customer_id,
-      serviceType: j.service_type, neighborhood: j.properties?.neighborhood ?? null,
-      ...(() => { const p = resolvePrefs(j.customers, j.properties); return { preferredDays: p.preferredDays, avoidDays: p.avoidDays } })(),
-    }))
+  // ONE OptJob projection of the schedule, shared by the proactive cards, the
+  // auto-propose-on-add check and any other engine call — so they never diverge.
+  const optJobsAll = useMemo<OptJob[]>(() => jobs.map(j => ({
+    id: j.id, scheduled_date: j.scheduled_date, status: j.status,
+    recurrence_id: j.recurrence_id, start_time: j.start_time, duration_minutes: j.duration_minutes,
+    lat: j.properties?.lat ?? null, lng: j.properties?.lng ?? null,
+    value: valueByJobId[j.id] || 0, invoiced: invoicedJobIds.has(j.id),
+    title: j.title, customerName: j.customers?.name || j.title, customerId: j.customer_id,
+    serviceType: j.service_type, neighborhood: j.properties?.neighborhood ?? null,
+    ...(() => { const p = resolvePrefs(j.customers, j.properties); return { preferredDays: p.preferredDays, avoidDays: p.avoidDays } })(),
+  })), [jobs, valueByJobId, invoicedJobIds])
+
+  // The optimizer's base options (everything except mode/scope/anchorDate).
+  const optBaseOpts = useMemo(() => {
     const recs: Record<string, { freq: string | null; interval_unit: string | null; interval_count: number | null }> = {}
     for (const [id, r] of Object.entries(recurrences)) recs[id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count }
-    return analyzeSchedule(optJobs, {
-      today: localToday(), base: baseCoord, preferredDays: preferredWorkDays, capacityHours, recurrences: recs, roadDist,
-    })
-  }, [jobs, valueByJobId, recurrences, baseCoord, preferredWorkDays, capacityHours, invoicedJobIds, roadDist])
+    return { today: localToday(), base: baseCoord, preferredDays: preferredWorkDays, capacityHours, recurrences: recs, roadDist }
+  }, [recurrences, baseCoord, preferredWorkDays, capacityHours, roadDist])
+
+  // Proactive auto-suggestions (overloaded days, isolated jobs, recurring-cluster
+  // opportunities) — same engines, shown without opening the optimizer.
+  const suggestions = useMemo<ScheduleSuggestion[]>(
+    () => (optJobsAll.length === 0 ? [] : analyzeSchedule(optJobsAll, optBaseOpts)),
+    [optJobsAll, optBaseOpts],
+  )
 
   const visibleSuggestions = suggestions.filter(s => !dismissedSuggestions.has(s.id))
+
+  // Auto-propose optimization after a job is added (review-first — NEVER auto-
+  // applies). CONTEXT-AWARE escalation, anchored on the new job's date:
+  //   1) LOCAL first — the new job's WEEK. Low bar: any real gain (km / minutes /
+  //      a fixed overload / a tightened cluster / better $/h) → propose it.
+  //   2) Only if the local week has nothing worthwhile, widen to the MONTH, then
+  //      ALL-FUTURE — and propose those ONLY for a SUBSTANTIAL gain, so adding one
+  //      customer never reshuffles people months away for a couple of km.
+  // The modal it opens already shows the WHY (km/min saved, overloads fixed,
+  // clusters strengthened, $/h lift) as chips + reasons.
+  useEffect(() => {
+    if (!autoOptimizeQueued) return
+    if (loading || showForm || editing || showOptimize || pendingAction || moveConfirm || showRainCenter) return
+    const anchor = autoOptimizeQueued.anchorDate
+    setAutoOptimizeQueued(null)
+    if (optJobsAll.length === 0) return
+
+    const run = (scope: OptimizeScope) => optimizeSchedule(optJobsAll, { ...optBaseOpts, mode: 'recommended', scope, anchorDate: anchor })
+    const worthIt = (r: ReturnType<typeof run>, bar: 'local' | 'global'): boolean => {
+      if (r.moves.length === 0) return false
+      const overloadFixed = r.after.overloadedDays < r.before.overloadedDays
+      const revUp = r.after.revPerHour > r.before.revPerHour
+      return bar === 'global'
+        ? overloadFixed || r.kmSaved >= 5 || r.minutesSaved >= 30 || r.groupedIntoCluster >= 2   // substantial only
+        : overloadFixed || r.kmSaved >= 1 || r.minutesSaved >= 5 || r.groupedIntoCluster >= 1 || revUp // any real local gain
+    }
+
+    if (worthIt(run('week'), 'local')) { launchOptimizer({ scope: 'week', mode: 'recommended', anchorDate: anchor }); return }
+    if (worthIt(run('month'), 'global')) { launchOptimizer({ scope: 'month', mode: 'recommended', anchorDate: anchor }); return }
+    if (worthIt(run('future'), 'global')) { launchOptimizer({ scope: 'future', mode: 'recommended', anchorDate: anchor }); return }
+    // else: the local area is already tight and no broader change is worth it — stay quiet.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoOptimizeQueued, optJobsAll, optBaseOpts, loading, showForm, editing, showOptimize, pendingAction, moveConfirm, showRainCenter])
 
   // Shared cadence/preference context for manual-move warnings — every visit as a
   // timeline node plus the recurrence rules. Rebuilds only when jobs/recurrences
@@ -560,6 +602,7 @@ export default function SchedulePage() {
       setBanner('Job added — add another.')
     } else {
       closeForm()
+      setAutoOptimizeQueued({ anchorDate: values.scheduled_date }) // propose optimization around the new job
     }
   }
 

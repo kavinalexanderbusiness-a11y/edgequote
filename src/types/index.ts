@@ -229,6 +229,29 @@ export const JOB_STATUS_COLORS: Record<JobStatus, string> = {
   cancelled:   'bg-ink-faint/20 text-ink-muted border-ink-faint/30',
 }
 
+// Before/after (or general) photo captured on a visit. Files live in the public
+// `job-photos` storage bucket; this row is the catalogue entry. See lib/photos.
+export type PhotoKind = 'before' | 'after' | 'general'
+
+export interface JobPhoto {
+  id: string
+  created_at: string
+  user_id: string
+  job_id: string | null
+  property_id: string | null
+  customer_id: string | null
+  storage_path: string
+  kind: PhotoKind
+  caption: string | null
+  taken_at: string
+}
+
+export const PHOTO_KIND_LABELS: Record<PhotoKind, string> = {
+  before: 'Before',
+  after: 'After',
+  general: 'Photo',
+}
+
 export type InvoiceStatus = 'draft' | 'unpaid' | 'sent' | 'paid'
 
 export interface Invoice {

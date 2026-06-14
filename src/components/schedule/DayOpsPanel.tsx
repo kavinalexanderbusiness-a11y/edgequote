@@ -9,9 +9,10 @@ import { buildRoadDistance } from '@/lib/distance'
 import { jobVisitValue, effectiveFreq, quoteVisitAmount } from '@/lib/invoicing'
 import { formatCurrency, cn, localTodayISO } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
+import { JobPhotos } from '@/components/photos/JobPhotos'
 import {
   DollarSign, Clock, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
-  MapPin, Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, Trash2, CloudRain, Play, Timer,
+  MapPin, Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, Trash2, CloudRain, Play, Timer, Camera,
 } from 'lucide-react'
 
 export interface QuoteLite {
@@ -65,9 +66,11 @@ export function DayOpsPanel({
   const [priceId, setPriceId] = useState<string | null>(null)
   const [priceVal, setPriceVal] = useState('')
   const [savingPrice, setSavingPrice] = useState(false)
+  // Which job's before/after photo panel is open.
+  const [photoId, setPhotoId] = useState<string | null>(null)
 
   function openPrice(job: Job) {
-    setQuickId(null); setMoveId(null)
+    setQuickId(null); setMoveId(null); setPhotoId(null)
     setPriceId(job.id)
     setPriceVal(job.price != null ? String(job.price) : '')
   }
@@ -440,6 +443,7 @@ export function DayOpsPanel({
                         {job.status === 'in_progress' && <ActionBtn onClick={() => onMarkDone(job)} icon={CheckCircle2} label="Complete" tone="emerald" />}
                         <ActionBtn onClick={() => (quickId === job.id ? setQuickId(null) : openQuick(job))} icon={SlidersHorizontal} label="Quick" />
                         <ActionBtn onClick={() => onOpenJob(job)} icon={Pencil} label="Open" />
+                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(photoId === job.id ? null : job.id) }} icon={Camera} label="Photos" />
                         <ActionBtn onClick={() => setMoveId(moveId === job.id ? null : job.id)} icon={Move} label="Move" />
                         <a
                           href={directionsUrl({ lat: job.properties?.lat ?? null, lng: job.properties?.lng ?? null, address: job.properties?.address }, baseCoord)}
@@ -459,6 +463,17 @@ export function DayOpsPanel({
                             className="bg-bg-secondary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none focus:border-accent" />
                           <button onClick={() => setMoveId(null)} className="text-xs text-ink-faint hover:text-ink">Cancel</button>
                         </div>
+                      )}
+
+                      {/* Before/after photos for this visit — proof of work + service history */}
+                      {photoId === job.id && (
+                        job.property_id ? (
+                          <div className="mt-2 rounded-lg border border-border bg-bg-secondary p-2.5" onClick={e => e.stopPropagation()}>
+                            <JobPhotos propertyId={job.property_id} jobId={job.id} customerId={job.customer_id} variant="visit" />
+                          </div>
+                        ) : (
+                          <p className="mt-2 text-xs text-amber-400">Link a property to this job to attach photos.</p>
+                        )
                       )}
 
                       {/* Inline quick edit — small changes without the full form */}

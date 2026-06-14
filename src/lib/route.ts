@@ -156,11 +156,22 @@ export function routeKmEstimate(base: Coord, located: { lat: number; lng: number
   return located.length ? nnOrder(base, located, dist).totalKm : 0
 }
 
+// A stop's Maps locator: the real street ADDRESS when we have it (so Google
+// shows the named place, not a "dropped pin" at bare coordinates), else the
+// lat/lng. Returns null for a stop with neither.
+function stopLocator(s: { lat: number | null; lng: number | null; address?: string | null }): string | null {
+  const addr = s.address?.trim()
+  if (addr) return addr
+  if (s.lat != null && s.lng != null) return `${s.lat},${s.lng}`
+  return null
+}
+
 // Round-trip Google Maps directions URL (base → stops → base). Shared so the
 // cached-road path can build the same "Open in Maps" link optimizeRoute does.
-export function roundTripMapsUrl(base: Coord, ordered: { lat: number | null; lng: number | null }[]): string {
+// Waypoints use each stop's street address when available.
+export function roundTripMapsUrl(base: Coord, ordered: { lat: number | null; lng: number | null; address?: string | null }[]): string {
   const baseParam = `${base.lat},${base.lng}`
-  const waypoints = ordered.filter(s => s.lat != null && s.lng != null).map(s => `${s.lat},${s.lng}`).join('|')
+  const waypoints = ordered.map(stopLocator).filter((x): x is string => !!x).join('|')
   const u = new URL('https://www.google.com/maps/dir/')
   u.searchParams.set('api', '1')
   u.searchParams.set('origin', baseParam)
@@ -217,16 +228,10 @@ export async function optimizeRoute(base: Coord, stops: RouteStop[]): Promise<Ro
     total = nn.totalKm
   }
 
-  const baseParam = `${base.lat},${base.lng}`
-  const waypoints = ordered.map(s => `${s.lat},${s.lng}`).join('|')
-  const u = new URL('https://www.google.com/maps/dir/')
-  u.searchParams.set('api', '1')
-  u.searchParams.set('origin', baseParam)
-  u.searchParams.set('destination', baseParam)
-  if (waypoints) u.searchParams.set('waypoints', waypoints)
-  u.searchParams.set('travelmode', 'driving')
+  // Stop addresses (named places) for the waypoints, not bare coordinates.
+  const mapsUrl = roundTripMapsUrl(base, ordered)
 
-  return { ordered, totalKm: total, usedGoogle, missing, mapsUrl: u.toString() }
+  return { ordered, totalKm: total, usedGoogle, missing, mapsUrl }
 }
 
 export const AVG_SPEED_KM_PER_MIN = 0.5 // ~30 km/h urban
@@ -421,12 +426,14 @@ export function dayLoad(totalWorkMin: number, capacityHours: number | null | und
   return { state: spare < 0 ? 'overloaded' : spare >= 60 ? 'room' : 'full', spareMin: spare }
 }
 
-// Google Maps directions URL from base to a single stop.
-export function directionsUrl(dest: { lat: number | null; lng: number | null; address?: string }, base?: Coord | null): string {
+// Google Maps directions URL from base to a single stop. Uses the stop's street
+// ADDRESS as the destination when available (a named place, not a dropped pin),
+// falling back to coordinates.
+export function directionsUrl(dest: { lat: number | null; lng: number | null; address?: string | null }, base?: Coord | null): string {
   const u = new URL('https://www.google.com/maps/dir/')
   u.searchParams.set('api', '1')
   if (base) u.searchParams.set('origin', `${base.lat},${base.lng}`)
-  u.searchParams.set('destination', dest.lat != null && dest.lng != null ? `${dest.lat},${dest.lng}` : (dest.address || ''))
+  u.searchParams.set('destination', stopLocator(dest) ?? '')
   u.searchParams.set('travelmode', 'driving')
   return u.toString()
 }

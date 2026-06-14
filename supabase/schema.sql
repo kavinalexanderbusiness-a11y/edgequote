@@ -359,3 +359,51 @@ create index if not exists schedule_health_ignored_user_idx
 -- ════════════════════════════════════════════════════════════
 alter table public.jobs
   add column if not exists is_initial_visit boolean not null default false;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-13 — Job / property photos. Before-and-after
+-- pictures captured while running a visit (Day Ops) and shown as a
+-- visual service history on the property. Files live in the public
+-- `job-photos` storage bucket under <user_id>/<property_id>/…; this
+-- table is the catalogue (which photo belongs to which visit, its
+-- before/after tag, optional caption). Idempotent; safe to re-run.
+-- ════════════════════════════════════════════════════════════
+create table if not exists public.job_photos (
+  id           uuid primary key default uuid_generate_v4(),
+  created_at   timestamptz not null default now(),
+  user_id      uuid not null references auth.users(id) on delete cascade,
+  -- The visit the photo was taken on (null once a one-off job is deleted, but
+  -- the photo stays attached to the property as service history).
+  job_id       uuid references public.jobs(id) on delete set null,
+  property_id  uuid references public.properties(id) on delete cascade,
+  customer_id  uuid references public.customers(id) on delete set null,
+  storage_path text not null,                 -- path within the job-photos bucket
+  kind         text not null default 'after', -- 'before' | 'after' | 'general'
+  caption      text,
+  taken_at     timestamptz not null default now()
+);
+
+alter table public.job_photos enable row level security;
+create policy "job_photos: select own" on public.job_photos for select using (auth.uid() = user_id);
+create policy "job_photos: insert own" on public.job_photos for insert with check (auth.uid() = user_id);
+create policy "job_photos: update own" on public.job_photos for update using (auth.uid() = user_id);
+create policy "job_photos: delete own" on public.job_photos for delete using (auth.uid() = user_id);
+
+create index if not exists job_photos_property_idx on public.job_photos(user_id, property_id);
+create index if not exists job_photos_job_idx      on public.job_photos(user_id, job_id);
+
+-- Public storage bucket for the image files. Public so PDFs / the gallery can
+-- render them with a plain URL; writes are still owner-scoped by the policies
+-- below (the first path segment must be the uploader's user id).
+insert into storage.buckets (id, name, public)
+  values ('job-photos', 'job-photos', true)
+  on conflict (id) do nothing;
+
+create policy "job-photos: read"        on storage.objects for select
+  using (bucket_id = 'job-photos');
+create policy "job-photos: insert own"  on storage.objects for insert
+  with check (bucket_id = 'job-photos' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "job-photos: update own"  on storage.objects for update
+  using (bucket_id = 'job-photos' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "job-photos: delete own"  on storage.objects for delete
+  using (bucket_id = 'job-photos' and (storage.foldername(name))[1] = auth.uid()::text);

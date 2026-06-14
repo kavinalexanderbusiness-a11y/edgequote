@@ -14,7 +14,8 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { formatDate, formatCurrency, localTodayISO } from '@/lib/utils'
 import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes, latestSavedRecommendation, recommendationIsStale } from '@/lib/pricing'
 import { LocatedJob, fetchLocatedUpcomingJobs, nearbyJobCount } from '@/lib/geo'
-import { MapPin, Home, User, Ruler, History, RefreshCw, Trophy, DollarSign, CheckCircle2, Receipt, Timer, CalendarClock, AlertTriangle, Repeat } from 'lucide-react'
+import { JobPhotos } from '@/components/photos/JobPhotos'
+import { MapPin, Home, User, Ruler, History, RefreshCw, Trophy, DollarSign, CheckCircle2, Receipt, Timer, CalendarClock, AlertTriangle, Repeat, Camera } from 'lucide-react'
 
 // Per-property performance, aggregated from completed jobs + invoices. Reuses
 // existing data — no new tables, no new pricing math.
@@ -287,6 +288,14 @@ export default function PropertiesPage() {
                     )}
                   </div>
                 )}
+
+                {/* Photos — visual service history (before/after, proof of work) */}
+                <div className="mt-3 rounded-xl border border-border bg-bg-tertiary px-3 py-2.5">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted mb-2 flex items-center gap-1.5">
+                    <Camera className="w-3.5 h-3.5" /> Photos
+                  </p>
+                  <JobPhotos propertyId={property.id} customerId={property.customer_id} variant="gallery" />
+                </div>
               </CardBody>
             </Card>
             )
