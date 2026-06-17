@@ -487,3 +487,14 @@ alter table public.invoices
 -- ════════════════════════════════════════════════════════════
 alter table public.business_settings
   add column if not exists crew_cost_per_hour numeric default 40;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-14 — Target revenue per crew-hour. The owner's
+-- minimum acceptable revenue/hour (on-site + drive). The Suggestions
+-- Center uses it as a GUARDRAIL: customers / routes / areas earning
+-- below it are flagged with a graduated fix (raise price → improve
+-- route density → review) BEFORE ever suggesting a drop. Set in
+-- Settings → Business Basics; defaults to $60/hr. Idempotent.
+-- ════════════════════════════════════════════════════════════
+alter table public.business_settings
+  add column if not exists target_rev_per_hour numeric default 60;

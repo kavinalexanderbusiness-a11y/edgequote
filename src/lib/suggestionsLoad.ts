@@ -26,7 +26,7 @@ export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggest
     supabase.from('invoices').select('job_id, status, amount, property_id, customer_id').eq('user_id', uid),
     supabase.from('neighbor_leads').select('status, neighborhood').eq('user_id', uid),
     supabase.from('business_settings')
-      .select('crew_cost_per_hour, pricing_base_charge, pricing_mow_rate, pricing_recommended_mult, pricing_premium_mult, pricing_travel_rate, preferred_work_days, daily_capacity_hours, base_lat, base_lng, service_seasons')
+      .select('crew_cost_per_hour, target_rev_per_hour, pricing_base_charge, pricing_mow_rate, pricing_recommended_mult, pricing_premium_mult, pricing_travel_rate, preferred_work_days, daily_capacity_hours, base_lat, base_lng, service_seasons')
       .eq('user_id', uid).maybeSingle(),
   ])
 
@@ -47,6 +47,7 @@ export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggest
   const ctx: SuggestionContext = {
     today: localTodayISO(),
     crewCost: crewCostPerHour(settings?.crew_cost_per_hour as number | null | undefined),
+    targetRevPerHour: Number(settings?.target_rev_per_hour) > 0 ? Number(settings!.target_rev_per_hour) : 60,
     pricingConfig: pricingConfigFromSettings(settings as Parameters<typeof pricingConfigFromSettings>[0]),
     seasons: settingsToSeasons(settings?.service_seasons),
     baseCoord: baseLat != null && baseLng != null ? { lat: baseLat, lng: baseLng } : null,

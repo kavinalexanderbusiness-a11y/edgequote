@@ -3,11 +3,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
-import { Suggestion, SuggestionCategory, CATEGORY_META, Confidence, applyPriceRaise } from '@/lib/suggestions'
+import { Suggestion, SuggestionAction, SuggestionCategory, CATEGORY_META, Confidence, applyPriceRaise, createRecurringPlan } from '@/lib/suggestions'
 import { loadSuggestions } from '@/lib/suggestionsLoad'
 import { formatCurrency, cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
-import { Sparkles, Check, ArrowRight, Clock, Navigation, TrendingUp, Loader2, RefreshCw } from 'lucide-react'
+import { Sparkles, Check, ArrowRight, Clock, Navigation, TrendingUp, Loader2, RefreshCw, HelpCircle, Calculator } from 'lucide-react'
 
 const CONF_PILL: Record<Confidence, string> = {
   high: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
@@ -42,17 +42,25 @@ export function SuggestionsCenter() {
   }
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function apply(s: Suggestion) {
-    if (s.action.kind !== 'apply-price' || !s.action.apply) return
-    setApplyingId(s.id)
-    const res = await applyPriceRaise(supabase, s.action.apply)
-    setApplyingId(null)
-    if (res.ok) {
-      setAppliedId(s.id)
-      setNote(`${s.title} — applied. Future invoices will use the new price.`)
-      setTimeout(() => { setAppliedId(null); load() }, 1200)
-    } else {
-      setNote(res.error || 'Could not apply. Try again.')
+  async function runAction(s: Suggestion, action: SuggestionAction) {
+    if (action.kind === 'apply-price' && action.apply) {
+      setApplyingId(s.id)
+      const res = await applyPriceRaise(supabase, action.apply)
+      setApplyingId(null)
+      if (res.ok) {
+        setAppliedId(s.id)
+        setNote(`${s.title} — applied. Future invoices use the new price.`)
+        setTimeout(() => { setAppliedId(null); load() }, 1200)
+      } else setNote(res.error || 'Could not apply. Try again.')
+    } else if (action.kind === 'create-recurring' && action.plan) {
+      setApplyingId(s.id)
+      const res = await createRecurringPlan(supabase, action.plan)
+      setApplyingId(null)
+      if (res.ok) {
+        setAppliedId(s.id)
+        setNote(`Recurring plan created — ${res.count} visit${res.count !== 1 ? 's' : ''} scheduled. Review them on the Schedule.`)
+        setTimeout(() => { setAppliedId(null); load() }, 1400)
+      } else setNote(res.error || 'Could not create the plan.')
     }
   }
 
@@ -127,7 +135,7 @@ export function SuggestionsCenter() {
             {visible.map(s => (
               <SuggestionCard key={s.id} s={s}
                 applying={applyingId === s.id} applied={appliedId === s.id}
-                onApply={() => apply(s)} />
+                onAction={(a) => runAction(s, a)} />
             ))}
             {(filtered.length > visible.length || lowHidden > 0) && (
               <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
@@ -150,8 +158,23 @@ export function SuggestionsCenter() {
   )
 }
 
-function SuggestionCard({ s, applying, applied, onApply }: { s: Suggestion; applying: boolean; applied: boolean; onApply: () => void }) {
+function SuggestionCard({ s, applying, applied, onAction }: { s: Suggestion; applying: boolean; applied: boolean; onAction: (a: SuggestionAction) => void }) {
   const cat = CATEGORY_META[s.category]
+  const [showWhy, setShowWhy] = useState(false)
+  const [showCalc, setShowCalc] = useState(false)
+  const actions = s.actions && s.actions.length ? s.actions : [s.action]
+
+  function renderAction(a: SuggestionAction, i: number) {
+    if (a.kind === 'navigate') {
+      return (
+        <Link key={i} href={a.href || '#'}>
+          <Button size="sm" variant="secondary">{a.label} <ArrowRight className="w-3.5 h-3.5" /></Button>
+        </Link>
+      )
+    }
+    return <Button key={i} size="sm" onClick={() => onAction(a)} loading={applying}>{a.label}</Button>
+  }
+
   return (
     <div className="rounded-xl border border-border bg-bg-secondary p-3.5">
       <div className="flex items-start justify-between gap-2 mb-1.5">
@@ -163,10 +186,10 @@ function SuggestionCard({ s, applying, applied, onApply }: { s: Suggestion; appl
         </span>
       </div>
 
+      {/* Decision-first: recommendation + impact lead. */}
       <p className="text-sm font-bold text-ink leading-snug">{s.title}</p>
       {s.subtitle && <p className="text-xs text-ink-muted mt-0.5">{s.subtitle}</p>}
 
-      {/* Impact chips */}
       <div className="flex flex-wrap items-center gap-2 mt-2">
         {s.impact > 0 && (
           <span className="text-sm font-bold text-accent flex items-center gap-1">
@@ -181,29 +204,40 @@ function SuggestionCard({ s, applying, applied, onApply }: { s: Suggestion; appl
         )}
       </div>
 
-      {/* Why */}
-      {s.why.length > 0 && (
-        <ul className="mt-2 space-y-0.5">
+      {/* Action(s) — one tap. */}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        {applied
+          ? <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-emerald-400"><Check className="w-4 h-4" /> Done</span>
+          : actions.map(renderAction)}
+      </div>
+
+      {/* Progressive disclosure — Why / How calculated tucked away. */}
+      <div className="mt-2.5 flex items-center gap-4">
+        {s.why.length > 0 && (
+          <button onClick={() => setShowWhy(v => !v)} className="text-[11px] font-medium text-ink-faint hover:text-ink flex items-center gap-1">
+            <HelpCircle className="w-3 h-3" /> Why?
+          </button>
+        )}
+        {s.calc && s.calc.length > 0 && (
+          <button onClick={() => setShowCalc(v => !v)} className="text-[11px] font-medium text-ink-faint hover:text-ink flex items-center gap-1">
+            <Calculator className="w-3 h-3" /> How calculated?
+          </button>
+        )}
+      </div>
+      {showWhy && s.why.length > 0 && (
+        <ul className="mt-2 space-y-0.5 border-t border-border pt-2">
           {s.why.map((w, i) => (
             <li key={i} className="text-xs text-ink-muted flex gap-1.5"><span className="text-accent/60 shrink-0">•</span><span>{w}</span></li>
           ))}
         </ul>
       )}
-
-      {/* Action */}
-      <div className="mt-3">
-        {s.action.kind === 'apply-price' ? (
-          applied ? (
-            <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-emerald-400"><Check className="w-4 h-4" /> Applied</span>
-          ) : (
-            <Button size="sm" onClick={onApply} loading={applying}>{s.action.label}</Button>
-          )
-        ) : (
-          <Link href={s.action.href || '#'}>
-            <Button size="sm" variant="secondary">{s.action.label} <ArrowRight className="w-3.5 h-3.5" /></Button>
-          </Link>
-        )}
-      </div>
+      {showCalc && s.calc && s.calc.length > 0 && (
+        <ul className="mt-2 space-y-0.5 border-t border-border pt-2">
+          {s.calc.map((c, i) => (
+            <li key={i} className="text-xs text-ink-faint flex gap-1.5"><span className="shrink-0">=</span><span>{c}</span></li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }

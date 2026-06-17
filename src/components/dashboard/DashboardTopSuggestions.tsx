@@ -66,7 +66,11 @@ export function DashboardTopSuggestions() {
                     ? <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-400"><Check className="w-3.5 h-3.5" /> Done</span>
                     : <Button size="sm" onClick={() => apply(s)} loading={applyingId === s.id}>{s.action.label}</Button>
                 ) : (
-                  <Link href={s.action.href || '#'}><Button size="sm" variant="secondary">{s.action.label}</Button></Link>
+                  // navigate → its href; create-recurring (needs the weekly/biweekly
+                  // choice) → open the full feed in Grow.
+                  <Link href={s.action.kind === 'navigate' ? (s.action.href || '#') : '/dashboard/grow'}>
+                    <Button size="sm" variant="secondary">{s.action.kind === 'create-recurring' ? 'Review' : s.action.label}</Button>
+                  </Link>
                 )}
               </div>
             </div>

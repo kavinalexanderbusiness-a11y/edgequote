@@ -7,8 +7,11 @@ import { PricingConfig, recommendedJobPrice, estimateVisitMinutes, SEASON_VISITS
 import { visitEconomics } from '@/lib/economics'
 import { ProfitJob, ProfitContext, neighborhoodProfitability } from '@/lib/profitability'
 import { OptJob, OptOptions, OptimizeScope, OptimizeMode, analyzeSchedule, optimizeSchedule } from '@/lib/optimizer'
+import { dayProfitability } from '@/lib/profitability'
 import { FOLLOW_UP_DAYS } from '@/lib/followup'
-import { ServiceSeasons, serviceCategory, seasonForService, isWithinSeason } from '@/lib/seasons'
+import { generateOccurrences, dayDelta } from '@/lib/recurrence'
+import { ServiceSeasons, serviceCategory, seasonForService, seasonEndDateFor, isWithinSeason } from '@/lib/seasons'
+import { addDays, parseISO, format, getDay } from 'date-fns'
 
 // ── Suggestions Center — EdgeQuote's business advisor ────────────────────────
 // Decision-first, action-first. This is NOT another analytics view: it turns the
@@ -51,11 +54,29 @@ export interface PriceApplyPayload {
   repJobId?: string | null // a stable visit id for the audit log even when nothing is cleared
 }
 
+// One-click creation of a recurring plan from a customer's repeated one-offs.
+// All dates/price are computed in the engine (which has ctx) so the apply fn is
+// a pure DB write that mirrors the schedule page's convertToRecurring.
+export interface RecurringPlanPayload {
+  customerId: string | null
+  propertyId: string | null
+  serviceType: string | null
+  title: string
+  perVisitPrice: number
+  intervalUnit: 'week'
+  intervalCount: 1 | 2          // 1 = weekly, 2 = biweekly
+  startDate: string             // yyyy-MM-dd
+  endDate: string | null        // season end (lawn) or null
+  crewSize: number
+  durationMinutes: number | null
+}
+
 export interface SuggestionAction {
-  kind: 'apply-price' | 'navigate'
+  kind: 'apply-price' | 'navigate' | 'create-recurring'
   label: string
   href?: string
   apply?: PriceApplyPayload
+  plan?: RecurringPlanPayload
 }
 
 export interface Suggestion {
@@ -75,13 +96,16 @@ export interface Suggestion {
   distanceSavedKm?: number  // km saved (route)
   confidence: Confidence
   confidenceScore: number   // 0..100
-  why: string[]
-  action: SuggestionAction
+  why: string[]             // "Why?" — the reasons this surfaced
+  calc?: string[]           // "How calculated?" — the math, traced to real numbers
+  action: SuggestionAction  // primary action
+  actions?: SuggestionAction[] // when present, render these instead (e.g. weekly/biweekly)
 }
 
 export interface SuggestionContext {
   today: string
   crewCost: number
+  targetRevPerHour: number   // owner's minimum acceptable revenue/crew-hour (guardrail)
   pricingConfig: PricingConfig
   seasons: ServiceSeasons
   baseCoord: Coord | null
@@ -160,6 +184,30 @@ function driveMinFor(p: Property | undefined, ctx: SuggestionContext, locatedCoo
   if (!isFinite(nearest)) return 12
   return Math.round((nearest / 0.5)) // AVG_SPEED_KM_PER_MIN = 0.5
 }
+// The soonest preferred work day strictly after today — where a new recurring
+// plan's first visit lands.
+function nextWorkdayStart(ctx: SuggestionContext): string {
+  const pref = ctx.preferredDays.length ? new Set(ctx.preferredDays) : null
+  let d = addDays(parseISO(ctx.today + 'T00:00:00'), 1)
+  for (let i = 0; i < 21; i++) {
+    if (!pref || pref.has(getDay(d))) return format(d, 'yyyy-MM-dd')
+    d = addDays(d, 1)
+  }
+  return format(addDays(parseISO(ctx.today + 'T00:00:00'), 1), 'yyyy-MM-dd')
+}
+// Distinct nearby OTHER-customer stops within ~2km of a property (route-density signal).
+function nearbyCustomerStops(prop: Property | undefined, ctx: SuggestionContext, excludeCustomerId: string | null): number {
+  if (!prop || prop.lat == null || prop.lng == null) return 0
+  const here = { lat: prop.lat, lng: prop.lng }
+  const seen = new Set<string>()
+  for (const j of ctx.jobs) {
+    if (j.customer_id === excludeCustomerId) continue
+    const lat = j.properties?.lat, lng = j.properties?.lng
+    if (lat == null || lng == null) continue
+    if (haversineKm(here, { lat, lng }) <= 2 && j.customer_id) seen.add(j.customer_id)
+  }
+  return seen.size
+}
 
 // A representative recurring "series" the owner manages — one card per series.
 interface Series {
@@ -222,6 +270,25 @@ function profitJobsAndCtx(ctx: SuggestionContext): { jobs: ProfitJob[]; pctx: Pr
   return { jobs, pctx: { quotesById, recById, base: ctx.baseCoord, today: ctx.today } }
 }
 
+// The safe one-click raise action for a series: write the quote cadence price
+// (freeze past, clear future) when quote-linked & standard cadence; else navigate
+// to Pricing. Shared by the price-raise card and the below-target "raise" path.
+function raiseAction(s: Series, newPrice: number, ctx: SuggestionContext): SuggestionAction {
+  const field = cadenceField(s.cadence)
+  if (s.quote && field) {
+    const oldCadenceValue = Math.round(quoteVisitAmount(s.quote as unknown as Record<string, unknown>, s.cadence))
+    return {
+      kind: 'apply-price', label: 'Apply raise',
+      apply: {
+        quoteId: s.quote.id, cadenceField: field, newPrice, oldVisitValue: oldCadenceValue, repJobId: s.rep.id,
+        freezeJobIds: s.jobs.filter(j => !j.is_initial_visit && j.scheduled_date < ctx.today && j.price == null).map(j => j.id),
+        clearJobIds: s.futureOpen.filter(j => !j.is_initial_visit).map(j => j.id),
+      },
+    }
+  }
+  return { kind: 'navigate', label: 'Raise in Pricing', href: '/dashboard/pricing-recovery' }
+}
+
 // ── 💰 PROFIT: underpriced recurring raises ─────────────────────────────────────
 // Only fires on a MEASURED lawn with a proven (≥1 completed visit) series, so the
 // target traces to recommendedJobPrice — not the service-mixed neighbourhood
@@ -250,23 +317,11 @@ function priceRaises(ctx: SuggestionContext): Suggestion[] {
       `${s.cadence || 'recurring'} · ${vpy} visit${vpy !== 1 ? 's' : ''}/season → +$${annual}/yr`,
     ]
     if (completedVisits >= 3) why.push(`Long-term customer — ${completedVisits} visits completed`)
-
-    // One-click apply ONLY for a quote-linked series with a standard cadence
-    // column — the safe, no-drift path. The OLD value to freeze billed history is
-    // the QUOTE cadence price (not the rep visit, which may carry a manual
-    // override). Past visits (< today) freeze; future-open visits clear to derive.
-    const field = cadenceField(s.cadence)
-    const oldCadenceValue = s.quote ? Math.round(quoteVisitAmount(s.quote as unknown as Record<string, unknown>, s.cadence)) : Math.round(s.perVisit)
-    const apply: PriceApplyPayload | undefined = s.quote && field
-      ? {
-          quoteId: s.quote.id, cadenceField: field, newPrice, oldVisitValue: oldCadenceValue, repJobId: s.rep.id,
-          freezeJobIds: s.jobs.filter(j => !j.is_initial_visit && j.scheduled_date < ctx.today && j.price == null).map(j => j.id),
-          clearJobIds: s.futureOpen.filter(j => !j.is_initial_visit).map(j => j.id),
-        }
-      : undefined
-    const action: SuggestionAction = apply
-      ? { kind: 'apply-price', label: 'Apply raise', apply }
-      : { kind: 'navigate', label: 'Raise in Pricing', href: '/dashboard/pricing-recovery' }
+    const calc = [
+      `Recommended for ${sqft.toLocaleString()} ft² ≈ $${recommended}/visit (your pricing settings)`,
+      `Raise = $${Math.round(s.perVisit)} → $${newPrice} = +$${newPrice - Math.round(s.perVisit)}/visit`,
+      `Annual = +$${newPrice - Math.round(s.perVisit)} × ${vpy} visits/season = +$${annual}/yr`,
+    ]
 
     out.push({
       id: `price-${s.recurrenceId}`,
@@ -274,7 +329,8 @@ function priceRaises(ctx: SuggestionContext): Suggestion[] {
       title: `Raise ${s.customerName} from $${Math.round(s.perVisit)} → $${newPrice}`,
       subtitle: s.rep.service_type || (s.cadence ? `${s.cadence} service` : undefined),
       impact: annual, oneTime: false, revenueImpact: annual, profitImpact: annual,
-      confidence, confidenceScore: CONF_SCORE[confidence], why, action,
+      confidence, confidenceScore: CONF_SCORE[confidence], why, calc,
+      action: raiseAction(s, newPrice, ctx),
     })
   }
   return out
@@ -324,6 +380,85 @@ function addonUpsells(ctx: SuggestionContext): Suggestion[] {
         appsPerYear === 1 ? 'One-time add-on · conservative 40% take-up' : 'Recurring program (~4×/season) · conservative 40% take-up',
       ],
       action: { kind: 'navigate', label: 'View customers', href: '/dashboard/customers' },
+    })
+  }
+  return out
+}
+
+// ── 💰 PROFIT: one-off → recurring conversion ───────────────────────────────────
+// A customer who keeps booking the SAME category of one-off service but has no
+// active recurring plan is leaving recurring revenue on the table. Offer to lock
+// them in (weekly or biweekly), one click — creating a real plan + visits.
+function recurringConversions(ctx: SuggestionContext): Suggestion[] {
+  const out: Suggestion[] = []
+  const pById = propsById(ctx)
+  const qById = quoteById(ctx)
+  // Customers who ALREADY have an active plan in a category → skip that pairing.
+  const activeRec = new Set<string>()
+  for (const s of buildSeries(ctx)) {
+    if (s.futureOpen.length > 0 && s.customerId) activeRec.add(`${s.customerId}|${serviceCategory(s.rep.service_type)}`)
+  }
+  // Group non-recurring, non-cancelled jobs by customer + service category.
+  const groups: Record<string, { custId: string; cat: string; jobs: Job[] }> = {}
+  for (const j of ctx.jobs) {
+    if (j.recurrence_id || j.status === 'cancelled' || !j.customer_id) continue
+    const cat = serviceCategory(j.service_type)
+    const key = `${j.customer_id}|${cat}`
+    ;(groups[key] ||= { custId: j.customer_id, cat, jobs: [] }).jobs.push(j)
+  }
+  for (const [key, g] of Object.entries(groups)) {
+    if (activeRec.has(key)) continue                              // already has a plan in this category
+    const completed = g.jobs.filter(j => j.status === 'completed').sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date))
+    if (completed.length < 2) continue                            // need REPEATED one-offs
+    const prices = completed.map(j => jobVisitValue(j.price, (j.quote_id ? qById[j.quote_id] : null) as unknown as Record<string, unknown>, null, false)).filter(p => p > 0)
+    if (!prices.length) continue
+    const avg = round5(prices.reduce((a, b) => a + b, 0) / prices.length)
+    if (avg <= 0) continue
+    // Observed cadence from the median gap between visits → recommend weekly/biweekly.
+    const gaps: number[] = []
+    for (let i = 1; i < completed.length; i++) gaps.push(dayDelta(completed[i - 1].scheduled_date, completed[i].scheduled_date))
+    const medGap = gaps.length ? gaps.slice().sort((a, b) => a - b)[Math.floor(gaps.length / 2)] : 14
+    const recommended = medGap > 0 && medGap <= 10 ? 'weekly' : 'biweekly'
+    const weeklyAnnual = avg * SEASON_VISITS.weekly
+    const biweeklyAnnual = avg * SEASON_VISITS.biweekly
+    const recAnnual = recommended === 'weekly' ? weeklyAnnual : biweeklyAnnual
+
+    const rep = completed[completed.length - 1]
+    const prop = rep.property_id ? pById[rep.property_id] : undefined
+    const nearby = nearbyCustomerStops(prop, ctx, g.custId)
+    const startDate = nextWorkdayStart(ctx)
+    const season = seasonForService(rep.service_type, ctx.seasons)
+    if (season && !isWithinSeason(startDate, season)) continue   // don't start a seasonal plan off-season
+    const endDate = season ? seasonEndDateFor(startDate, season) : null
+    const mkPlan = (count: 1 | 2): RecurringPlanPayload => ({
+      customerId: g.custId, propertyId: rep.property_id, serviceType: rep.service_type, title: rep.title,
+      perVisitPrice: avg, intervalUnit: 'week', intervalCount: count, startDate, endDate,
+      crewSize: rep.crew_size || 1, durationMinutes: rep.duration_minutes,
+    })
+    const confidence: Confidence = completed.length >= 3 ? 'high' : 'medium'
+    const svcLabel = g.cat === 'lawn' ? 'mowing' : (rep.service_type || 'service')
+    out.push({
+      id: `convert-${key}`,
+      category: 'profit',
+      title: `Put ${rep.customers?.name || rep.title} on a recurring plan`,
+      subtitle: `${completed.length} one-off ${svcLabel} visits · no plan yet`,
+      impact: Math.round(recAnnual), oneTime: false, revenueImpact: Math.round(recAnnual), profitImpact: Math.round(recAnnual * 0.85),
+      confidence, confidenceScore: CONF_SCORE[confidence],
+      why: [
+        `${completed.length} one-off ${svcLabel} visits at avg $${avg} — re-quoted each time`,
+        nearby > 0 ? `On-route: ${nearby} nearby customer${nearby !== 1 ? 's' : ''} — recurring adds route density` : 'Locks in predictable recurring revenue',
+        `They visit ~every ${medGap || 14} days → ${recommended} fits`,
+      ],
+      calc: [
+        `Weekly: $${avg} × ${SEASON_VISITS.weekly} visits/season = $${Math.round(weeklyAnnual)}/yr`,
+        `Biweekly: $${avg} × ${SEASON_VISITS.biweekly} visits/season = $${Math.round(biweeklyAnnual)}/yr`,
+        `Per-visit price = average of ${prices.length} past one-off${prices.length !== 1 ? 's' : ''}`,
+      ],
+      action: { kind: 'create-recurring', label: `Convert to ${recommended}`, plan: mkPlan(recommended === 'weekly' ? 1 : 2) },
+      actions: [
+        { kind: 'create-recurring', label: `Weekly · +$${Math.round(weeklyAnnual)}/yr`, plan: mkPlan(1) },
+        { kind: 'create-recurring', label: `Biweekly · +$${Math.round(biweeklyAnnual)}/yr`, plan: mkPlan(2) },
+      ],
     })
   }
   return out
@@ -387,15 +522,19 @@ function routeImprovements(ctx: SuggestionContext): Suggestion[] {
   return out
 }
 
-// ── ⚠️ PROBLEMS: thin / negative-profit customers + missed jobs ──────────────────
+// ── ⚠️ PROBLEMS: below revenue/hour target (customers, routes, areas) + missed ──
+// The guardrail. A customer/route/area earning below the owner's Target Revenue
+// Per Hour is flagged with a GRADUATED fix — raise price → improve density →
+// review — never jumping straight to "drop".
 function problems(ctx: SuggestionContext): Suggestion[] {
   const out: Suggestion[] = []
+  const target = ctx.targetRevPerHour
   const series = buildSeries(ctx)
   const located = ctx.jobs.filter(j => j.properties?.lat != null && j.properties?.lng != null).map(j => ({ lat: j.properties!.lat as number, lng: j.properties!.lng as number }))
-  // Avg actual minutes per customer (calibration), for the on-site estimate.
   const actualByCust: Record<string, number[]> = {}
   for (const j of ctx.jobs) if (j.customer_id && j.status === 'completed' && Number(j.actual_minutes) > 0) (actualByCust[j.customer_id] ||= []).push(Number(j.actual_minutes))
 
+  // 1) Customers below target — graduated recommendation.
   for (const s of series) {
     if (!s.futureOpen.length || s.perVisit <= 0) continue
     const sqft = sqftFor(s.property)
@@ -403,37 +542,112 @@ function problems(ctx: SuggestionContext): Suggestion[] {
     const onSite = actuals?.length ? Math.round(actuals.reduce((a, b) => a + b, 0) / actuals.length)
       : sqft > 0 ? estimateVisitMinutes(sqft) : ONSITE_DEFAULT
     const hasGeo = s.property?.lat != null && s.property?.lng != null
-    // A "drop/reprice" call on fully GUESSED inputs (no geo AND no timed visits)
-    // is an alarming false positive — only flag when there's a real signal.
-    const hasSignal = hasGeo || (actuals?.length ?? 0) > 0
-    if (!hasSignal) continue
+    // Only flag when there's a real signal (geo or timed visits) — never on pure guesses.
+    if (!hasGeo && !(actuals?.length ?? 0)) continue
     const driveMin = driveMinFor(s.property, ctx, located)
     const econ = visitEconomics(s.perVisit, onSite, driveMin, ctx.crewCost)
-    const thin = econ.profit <= 5 || econ.margin < 0.2
-    if (!thin) continue
+    if (econ.revPerHour >= target) continue                    // meets the floor → fine
     const vpy = seriesVisitsPerYear(s)
-    // Repricing target = the price that yields a healthy 50% margin given the
-    // visit's real labour cost (visitEconomics).
-    const targetRev = econ.laborCost > 0 ? round5(econ.laborCost / 0.5) : round5(s.perVisit * 1.3)
-    const annual = Math.round(Math.max(targetRev - s.perVisit, Math.max(0, -econ.profit)) * vpy)
+    const hoursPerVisit = (onSite + driveMin) / 60
+    const annualGap = Math.round(Math.max(0, Math.round(target * hoursPerVisit) - s.perVisit) * vpy)
+
+    const recommended = sqft > 0 ? recommendedJobPrice(sqft, ctx.pricingConfig) : 0
+    const nearby = nearbyCustomerStops(s.property, ctx, s.customerId)
     const confidence: Confidence = (actuals?.length ?? 0) >= 3 && hasGeo && located.length > 1 ? 'high' : 'medium'
-    // "Drop" only when it's genuinely bleeding (<15% margin); otherwise "review".
-    const severe = econ.margin < 0.15 || econ.profit <= 0
-    const why = [
-      `Only $${econ.profit}/visit profit (${Math.round(econ.margin * 100)}% margin)`,
-      hasGeo ? `~${driveMin} min drive each way at $${ctx.crewCost}/hr crew cost` : `$${ctx.crewCost}/hr crew cost · location not set, drive estimated`,
-      `$${Math.round(s.perVisit)}/visit · ${onSite} min on site`,
+    const name = s.customerName
+    const calc = [
+      `Revenue/hr = $${Math.round(s.perVisit)} ÷ ${hoursPerVisit.toFixed(2)} h (${onSite} on-site + ${driveMin} drive) = $${econ.revPerHour}/hr`,
+      `Profit/hr = $${econ.profitPerHour}/hr after $${ctx.crewCost}/hr crew cost`,
+      `Your target is $${target}/hr → reaching it ≈ +$${annualGap}/yr`,
     ]
+    let title: string, why: string[], action: SuggestionAction
+    if (recommended > s.perVisit + 5) {
+      // FIX #1 — RAISE PRICE (measured & below recommended).
+      const newPrice = round5(Math.min(recommended, s.perVisit * 1.4))
+      title = `Raise ${name} to $${newPrice} — under your $${target}/hr target`
+      why = [
+        `$${econ.revPerHour}/hr revenue — below your $${target}/hr floor`,
+        `Below the recommended price for this ${sqft.toLocaleString()} ft² lawn`,
+        `${driveMin} min drive · ${onSite} min on site · $${Math.round(s.perVisit)}/visit`,
+      ]
+      action = raiseAction(s, newPrice, ctx)
+    } else if (nearby < 2) {
+      // FIX #2 — IMPROVE ROUTE DENSITY (isolated stop).
+      title = `Tighten the route around ${name} — under $${target}/hr`
+      why = [
+        `$${econ.revPerHour}/hr revenue — below your $${target}/hr floor`,
+        `Isolated: ${nearby} nearby customer${nearby !== 1 ? 's' : ''}, ${driveMin} min drive each way`,
+        'Add a neighbour on the same day, or move to a denser day, to lift $/hr',
+      ]
+      action = { kind: 'navigate', label: 'Build density', href: '/dashboard/saturation' }
+    } else {
+      // FIX #3 — REVIEW (can't easily raise, not isolated). Drop only as last resort.
+      title = `Review ${name} — under your $${target}/hr target`
+      why = [
+        `$${econ.revPerHour}/hr revenue, $${econ.profit}/visit profit — below your $${target}/hr floor`,
+        `${driveMin} min drive · ${onSite} min on site · $${Math.round(s.perVisit)}/visit`,
+        econ.profit <= 0 ? 'Losing money — raise the price, or drop only if it can’t be fixed' : 'Consider a small raise or a route change before anything drastic',
+      ]
+      action = { kind: 'navigate', label: 'Review customer', href: s.customerId ? `/dashboard/customers/${s.customerId}` : '/dashboard/customers' }
+    }
     out.push({
       id: `problem-${s.recurrenceId}`,
       category: 'problem',
-      title: `${severe ? 'Reprice or drop' : 'Review pricing —'} ${s.customerName}`,
+      title,
       subtitle: s.rep.service_type || undefined,
-      impact: annual, oneTime: false, profitImpact: annual, revenueImpact: 0,
-      confidence, confidenceScore: CONF_SCORE[confidence], why,
-      action: { kind: 'navigate', label: 'Review customer', href: s.customerId ? `/dashboard/customers/${s.customerId}` : '/dashboard/customers' },
+      impact: annualGap, oneTime: false, profitImpact: annualGap, revenueImpact: 0,
+      confidence, confidenceScore: CONF_SCORE[confidence], why, calc, action,
     })
   }
+
+  // 2) Routes below target — the worst upcoming work day.
+  try {
+    const { jobs: pjobs, pctx } = profitJobsAndCtx(ctx)
+    const byDate: Record<string, typeof pjobs> = {}
+    for (const j of pjobs) if (j.scheduled_date >= ctx.today && j.status !== 'cancelled' && j.lat != null) (byDate[j.scheduled_date] ||= []).push(j)
+    const dayCards = Object.entries(byDate)
+      .filter(([, dj]) => dj.length >= 3)
+      .map(([date, dj]) => ({ date, rp: dayProfitability(date, dj, pctx) }))
+      .filter(x => x.rp.revPerHour > 0 && x.rp.revPerHour < target)
+      .sort((a, b) => a.rp.revPerHour - b.rp.revPerHour)
+    for (const { date, rp } of dayCards.slice(0, 1)) {
+      const label = format(parseISO(date + 'T00:00:00'), 'EEE, MMM d')
+      out.push({
+        id: `target-route-${date}`,
+        category: 'route',
+        title: `${label} route earns $${rp.revPerHour}/hr`,
+        subtitle: `Below your $${target}/hr target`,
+        impact: Math.round((target - rp.revPerHour) * rp.totalHours), oneTime: true,
+        confidence: 'medium', confidenceScore: CONF_SCORE.medium,
+        why: [
+          `$${rp.revPerHour}/hr across ${rp.driveMinutes} min driving + ${rp.laborMinutes} min on site`,
+          'Tighten or add a stop on this day to lift $/hr',
+        ],
+        calc: [`Revenue/hr = $${rp.revenue} ÷ ${rp.totalHours.toFixed(1)} h = $${rp.revPerHour}/hr (target $${target})`],
+        action: { kind: 'navigate', label: 'Optimize the day', href: '/dashboard/schedule' },
+      })
+    }
+    // 3) Areas below target — the worst neighbourhood.
+    const hoods = neighborhoodProfitability(pjobs, pctx)
+      .filter(h => h.key !== 'Unknown' && h.customers >= 2 && h.revPerHour > 0 && h.revPerHour < target)
+      .sort((a, b) => a.revPerHour - b.revPerHour)
+    for (const h of hoods.slice(0, 1)) {
+      out.push({
+        id: `target-area-${h.key}`,
+        category: 'problem',
+        title: `${h.key} earns $${h.revPerHour}/hr — under target`,
+        subtitle: `${h.customers} customers · target $${target}/hr`,
+        impact: Math.round((target - h.revPerHour) * (h.laborMinutes / 60)), oneTime: false,
+        confidence: 'low', confidenceScore: CONF_SCORE.low,
+        why: [
+          `$${h.revPerHour}/hr across ${h.customers} customers — below your $${target}/hr floor`,
+          'Raise prices here or build route density to lift the whole area',
+        ],
+        calc: [`Revenue/hr = $${h.revenue} ÷ ${(h.laborMinutes / 60).toFixed(1)} h = $${h.revPerHour}/hr (target $${target})`],
+        action: { kind: 'navigate', label: 'See the area', href: '/dashboard/saturation' },
+      })
+    }
+  } catch { /* route/area cards are best-effort */ }
 
   // Missed jobs — overdue SCHEDULED visits sitting unbilled. (in_progress is
   // legitimately being worked, not missed.)
@@ -592,6 +806,7 @@ function retention(ctx: SuggestionContext): Suggestion[] {
 export function buildSuggestions(ctx: SuggestionContext): Suggestion[] {
   const gens: Array<() => Suggestion[]> = [
     () => priceRaises(ctx),
+    () => recurringConversions(ctx),
     () => addonUpsells(ctx),
     () => routeImprovements(ctx),
     () => problems(ctx),
@@ -652,5 +867,45 @@ export async function applyPriceRaise(
     return { ok: true }
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : 'Apply failed' }
+  }
+}
+
+// ── one-click apply (create recurring plan) ───────────────────────────────────
+// Mirrors the schedule page's convertToRecurring: GENERATE + VALIDATE before any
+// write (refuse a plan with no visits), insert the recurrence, then its visits;
+// roll the orphan recurrence back if the visit insert fails. Non-quote series →
+// the per-visit price lives on every job (no initial/cadence split).
+export async function createRecurringPlan(
+  supabase: SupabaseClient,
+  plan: RecurringPlanPayload,
+): Promise<{ ok: boolean; error?: string; count?: number }> {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { ok: false, error: 'Not signed in' }
+  try {
+    const dates = generateOccurrences(plan.startDate, plan.intervalUnit, plan.intervalCount, plan.endDate, null)
+    const future = dates.filter(d => d >= plan.startDate)
+    if (future.length === 0) return { ok: false, error: 'No visits would be generated — check the season window.' }
+    const { data: rec, error: recErr } = await supabase.from('job_recurrences').insert({
+      user_id: user.id,
+      freq: plan.intervalCount === 1 ? 'weekly' : plan.intervalCount === 2 ? 'biweekly' : null,
+      interval_unit: plan.intervalUnit, interval_count: plan.intervalCount,
+      start_date: plan.startDate, end_date: plan.endDate, end_count: null,
+      customer_id: plan.customerId,
+    }).select().single()
+    if (recErr || !rec) return { ok: false, error: recErr?.message || 'Could not create the plan' }
+    const rows = future.map(d => ({
+      user_id: user.id, customer_id: plan.customerId, property_id: plan.propertyId, quote_id: null,
+      recurrence_id: (rec as { id: string }).id, title: plan.title, service_type: plan.serviceType,
+      scheduled_date: d, crew_size: plan.crewSize, status: 'scheduled', price: plan.perVisitPrice,
+      is_initial_visit: false, duration_minutes: plan.durationMinutes,
+    }))
+    const { error: jErr } = await supabase.from('jobs').insert(rows)
+    if (jErr) {
+      await supabase.from('job_recurrences').delete().eq('id', (rec as { id: string }).id) // rollback orphan
+      return { ok: false, error: jErr.message }
+    }
+    return { ok: true, count: future.length }
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Create failed' }
   }
 }

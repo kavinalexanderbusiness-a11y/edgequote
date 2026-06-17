@@ -492,6 +492,9 @@ export interface BusinessSettings {
   // is shown (measure verdict, customer/route/area profitability, scoring).
   // null → fall back to DEFAULT_CREW_COST ($40/hr) from lib/economics.
   crew_cost_per_hour: number | null
+  // Minimum acceptable revenue per crew-hour — the Suggestions Center guardrail.
+  // null → default $60/hr.
+  target_rev_per_hour: number | null
   // Configurable lawn pricing (consumed by the centralized pricing engine).
   pricing_base_charge: number | null
   pricing_mow_rate: number | null
@@ -561,6 +564,7 @@ export interface BusinessSettingsFormValues {
   base_address: string
   default_rate: number
   crew_cost_per_hour: number
+  target_rev_per_hour: number
   pricing_base_charge: number
   pricing_mow_rate: number
   pricing_recommended_mult: number
