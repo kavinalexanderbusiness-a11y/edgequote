@@ -5,7 +5,8 @@
       "Bash(node -e 'const s=require\\(\"fs\"\\).readFileSync\\(\".next/static/chunks/4086-6dc363e8b1b1c438.js\",\"utf8\"\\);console.log\\(s.slice\\(4500,4900\\)\\)')",
       "Bash(timeout 480 npx next build)",
       "Bash(node -e ' *)",
-      "Bash(echo \"TSC errors: $\\(npx tsc --noEmit 2>&1)"
+      "Bash(echo \"TSC errors: $\\(npx tsc --noEmit 2>&1)",
+      "Bash(echo \"errors: $\\(npx tsc --noEmit 2>&1)"
     ]
   }
 }

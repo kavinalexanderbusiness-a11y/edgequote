@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils'
 import { Settings2, Check, ChevronUp, ChevronDown, EyeOff, Eye } from 'lucide-react'
 
 export const SECTION_LABELS: Record<string, string> = {
+  suggestions: 'Do this next',
   stats: 'Business stats',
   missed: 'Missed jobs',
   followups: 'Quote follow-ups',
@@ -14,7 +15,7 @@ export const SECTION_LABELS: Record<string, string> = {
   recent: 'Recent quotes',
   acquisition: 'Acquisition insights',
 }
-export const DEFAULT_ORDER = ['stats', 'missed', 'followups', 'unscheduled', 'weekend', 'recent', 'acquisition']
+export const DEFAULT_ORDER = ['suggestions', 'stats', 'missed', 'followups', 'unscheduled', 'weekend', 'recent', 'acquisition']
 
 export interface DashboardPrefs { order: string[]; hidden: string[] }
 

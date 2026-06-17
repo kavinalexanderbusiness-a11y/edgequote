@@ -7,6 +7,7 @@ import { UnscheduledAccepted } from '@/components/dashboard/UnscheduledAccepted'
 import { MissedJobs } from '@/components/dashboard/MissedJobs'
 import { FollowUpQuotes } from '@/components/dashboard/FollowUpQuotes'
 import { AcquisitionInsights } from '@/components/dashboard/AcquisitionInsights'
+import { DashboardTopSuggestions } from '@/components/dashboard/DashboardTopSuggestions'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { DashboardStats, Quote } from '@/types'
 import Link from 'next/link'
@@ -87,6 +88,7 @@ export default async function DashboardPage() {
       <DashboardSections
         initialPrefs={(settingsRow as { dashboard_cards: { order: string[]; hidden: string[] } | null } | null)?.dashboard_cards ?? null}
         sections={{
+          suggestions: <DashboardTopSuggestions />,
           stats: <StatsGrid stats={stats} />,
           missed: <MissedJobs />,
           followups: <FollowUpQuotes />,

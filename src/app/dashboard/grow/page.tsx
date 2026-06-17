@@ -3,8 +3,9 @@
 import Link from 'next/link'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card } from '@/components/ui/Card'
+import { SuggestionsCenter } from '@/components/grow/SuggestionsCenter'
 import {
-  BarChart3, Gauge, HeartPulse, Map as MapIcon, Target, ShieldCheck, CalendarCheck, ArrowRight, Sparkles,
+  BarChart3, Gauge, HeartPulse, Map as MapIcon, Target, ShieldCheck, CalendarCheck, ArrowRight,
 } from 'lucide-react'
 
 // ── Grow hub ──────────────────────────────────────────────────────────────────
@@ -50,16 +51,8 @@ export default function GrowPage() {
     <div className="max-w-5xl space-y-6">
       <PageHeader title="Grow" description="Everything that grows Edge Property Services, in one place." />
 
-      {/* Suggestions Center lands here — the action feed comes first. */}
-      <Card className="border-accent/20 bg-accent/5">
-        <div className="px-5 py-4 flex items-start gap-3">
-          <Sparkles className="w-5 h-5 text-accent shrink-0 mt-0.5" />
-          <div>
-            <p className="text-sm font-semibold text-ink">Suggestions Center — coming next</p>
-            <p className="text-xs text-ink-muted mt-0.5">A ranked feed of one-tap actions (raise a price, fill a route gap, win back a customer) will sit right here. For now, the tools below cover every angle.</p>
-          </div>
-        </div>
-      </Card>
+      {/* Suggestions Center — the action feed comes first. */}
+      <SuggestionsCenter />
 
       {GROUPS.map(group => (
         <div key={group.title} className="space-y-2">
