@@ -30,6 +30,8 @@ export function SuggestionsCenter() {
   const [items, setItems] = useState<Suggestion[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<SuggestionCategory | 'all'>('all')
+  const [showAll, setShowAll] = useState(false)
+  const [showLow, setShowLow] = useState(false)
   const [applyingId, setApplyingId] = useState<string | null>(null)
   const [appliedId, setAppliedId] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
@@ -59,7 +61,11 @@ export function SuggestionsCenter() {
     for (const s of items) c[s.category] = (c[s.category] || 0) + 1
     return c
   }, [items])
-  const visible = filter === 'all' ? items : items.filter(s => s.category === filter)
+  const CAP = 6
+  const inCategory = filter === 'all' ? items : items.filter(s => s.category === filter)
+  const lowHidden = showLow ? 0 : inCategory.filter(s => s.confidence === 'low').length
+  const filtered = showLow ? inCategory : inCategory.filter(s => s.confidence !== 'low')
+  const visible = showAll ? filtered : filtered.slice(0, CAP)
   const totalAnnual = items.filter(s => s.category === 'profit' && !s.oneTime).reduce((sum, s) => sum + s.impact, 0)
 
   return (
@@ -98,7 +104,7 @@ export function SuggestionsCenter() {
             const n = counts[f.key] || 0
             if (f.key !== 'all' && n === 0) return null
             return (
-              <button key={f.key} onClick={() => setFilter(f.key)}
+              <button key={f.key} onClick={() => { setFilter(f.key); setShowAll(false) }}
                 className={cn('text-xs font-medium rounded-full px-2.5 py-1 border transition-colors',
                   filter === f.key ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
                 {f.label} {n > 0 && <span className="opacity-70">{n}</span>}
@@ -114,14 +120,30 @@ export function SuggestionsCenter() {
           <div className="py-10 text-center text-sm text-ink-muted flex items-center justify-center gap-2">
             <Loader2 className="w-4 h-4 animate-spin" /> Analyzing pricing, routes, profit and customers…
           </div>
-        ) : visible.length === 0 ? (
+        ) : filtered.length === 0 ? (
           <div className="py-10 text-center text-sm text-ink-muted">Nothing in this category right now.</div>
         ) : (
-          visible.map(s => (
-            <SuggestionCard key={s.id} s={s}
-              applying={applyingId === s.id} applied={appliedId === s.id}
-              onApply={() => apply(s)} />
-          ))
+          <>
+            {visible.map(s => (
+              <SuggestionCard key={s.id} s={s}
+                applying={applyingId === s.id} applied={appliedId === s.id}
+                onApply={() => apply(s)} />
+            ))}
+            {(filtered.length > visible.length || lowHidden > 0) && (
+              <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                {filtered.length > visible.length && (
+                  <button onClick={() => setShowAll(true)} className="text-xs font-medium text-accent hover:underline">
+                    Show {filtered.length - visible.length} more
+                  </button>
+                )}
+                {lowHidden > 0 && (
+                  <button onClick={() => setShowLow(true)} className="text-xs font-medium text-ink-muted hover:text-ink">
+                    + {lowHidden} lower-confidence
+                  </button>
+                )}
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

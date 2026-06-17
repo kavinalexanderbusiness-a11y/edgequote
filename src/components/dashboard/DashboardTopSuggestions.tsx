@@ -31,10 +31,11 @@ export function DashboardTopSuggestions() {
     if (res.ok) { setAppliedId(s.id); setTimeout(() => { setAppliedId(null); load() }, 1200) }
   }
 
+  // Home page shows only confident, ranked actions — speculative low-confidence
+  // ideas live in the full Grow feed.
+  const top = items.filter(s => s.confidence !== 'low').slice(0, 3)
   if (loading) return null            // stay quiet until ready — no skeleton noise
-  if (items.length === 0) return null // nothing pressing → don't take up space
-
-  const top = items.slice(0, 3)
+  if (top.length === 0) return null   // nothing pressing → don't take up space
 
   return (
     <div className="rounded-card border border-accent/20 bg-gradient-to-br from-accent/[0.07] to-transparent overflow-hidden">

@@ -7,7 +7,7 @@ import { PricingConfig, recommendedJobPrice, estimateVisitMinutes, SEASON_VISITS
 import { visitEconomics } from '@/lib/economics'
 import { ProfitJob, ProfitContext, neighborhoodProfitability } from '@/lib/profitability'
 import { OptJob, OptOptions, OptimizeScope, OptimizeMode, analyzeSchedule, optimizeSchedule } from '@/lib/optimizer'
-import { needsFollowUp } from '@/lib/followup'
+import { FOLLOW_UP_DAYS } from '@/lib/followup'
 import { ServiceSeasons, serviceCategory, seasonForService, isWithinSeason } from '@/lib/seasons'
 
 // ── Suggestions Center — EdgeQuote's business advisor ────────────────────────
@@ -222,29 +222,33 @@ function profitJobsAndCtx(ctx: SuggestionContext): { jobs: ProfitJob[]; pctx: Pr
   return { jobs, pctx: { quotesById, recById, base: ctx.baseCoord, today: ctx.today } }
 }
 
-// ── 💰 PROFIT: underpriced recurring/one-time raises ────────────────────────────
-function priceRaises(ctx: SuggestionContext, hoodAvgRevPerJob: number): Suggestion[] {
+// ── 💰 PROFIT: underpriced recurring raises ─────────────────────────────────────
+// Only fires on a MEASURED lawn with a proven (≥1 completed visit) series, so the
+// target traces to recommendedJobPrice — not the service-mixed neighbourhood
+// average (which conflated mowing with one-off cleanups and produced phantom
+// raises). Unmeasured underpricing is left to the "below minimum" roadmap item.
+function priceRaises(ctx: SuggestionContext): Suggestion[] {
   const out: Suggestion[] = []
   const series = buildSeries(ctx)
   for (const s of series) {
     if (!s.futureOpen.length || s.perVisit <= 0) continue
     const sqft = sqftFor(s.property)
-    const recommended = sqft > 0 ? recommendedJobPrice(sqft, ctx.pricingConfig) : 0
-    const hoodTarget = hoodAvgRevPerJob > 0 ? round5(hoodAvgRevPerJob) : 0
-    const target = Math.max(recommended, sqft > 0 ? 0 : hoodTarget)
-    if (target <= 0) continue
-    const newPrice = round5(Math.min(target, s.perVisit * 1.4)) // never propose an absurd jump
+    if (sqft <= 0) continue                                   // need a real measurement to trust the target
+    const completedVisits = s.jobs.filter(j => j.status === 'completed').length
+    if (completedVisits < 1) continue                          // don't raise an unproven brand-new series
+    const recommended = recommendedJobPrice(sqft, ctx.pricingConfig)
+    if (recommended <= 0) continue
+    const newPrice = round5(Math.min(recommended, s.perVisit * 1.4)) // never propose an absurd jump
     if (newPrice < s.perVisit + 5) continue
     const vpy = seriesVisitsPerYear(s)
     const annual = Math.round((newPrice - s.perVisit) * vpy)
-    if (annual < 50) continue
+    if (annual < 100) continue                                 // skip trivial raises (raised floor)
 
-    const completedVisits = s.jobs.filter(j => j.status === 'completed').length
-    const confidence: Confidence = sqft > 0 && completedVisits >= 3 ? 'high' : (sqft > 0 || completedVisits >= 1) ? 'medium' : 'low'
-    const why: string[] = []
-    if (sqft > 0) why.push(`Below the recommended price for this ${sqft.toLocaleString()} ft² lawn`)
-    else if (hoodTarget > 0) why.push(`Below the neighborhood average of $${hoodTarget}/visit`)
-    why.push(`${s.cadence || 'recurring'} · ${vpy} visit${vpy !== 1 ? 's' : ''}/season → +$${annual}/yr`)
+    const confidence: Confidence = completedVisits >= 3 ? 'high' : 'medium'
+    const why: string[] = [
+      `Below the recommended price for this ${sqft.toLocaleString()} ft² lawn`,
+      `${s.cadence || 'recurring'} · ${vpy} visit${vpy !== 1 ? 's' : ''}/season → +$${annual}/yr`,
+    ]
     if (completedVisits >= 3) why.push(`Long-term customer — ${completedVisits} visits completed`)
 
     // One-click apply ONLY for a quote-linked series with a standard cadence
@@ -384,7 +388,7 @@ function routeImprovements(ctx: SuggestionContext): Suggestion[] {
 }
 
 // ── ⚠️ PROBLEMS: thin / negative-profit customers + missed jobs ──────────────────
-function problems(ctx: SuggestionContext, hoodAvgRevPerJob: number): Suggestion[] {
+function problems(ctx: SuggestionContext): Suggestion[] {
   const out: Suggestion[] = []
   const series = buildSeries(ctx)
   const located = ctx.jobs.filter(j => j.properties?.lat != null && j.properties?.lng != null).map(j => ({ lat: j.properties!.lat as number, lng: j.properties!.lng as number }))
@@ -399,16 +403,22 @@ function problems(ctx: SuggestionContext, hoodAvgRevPerJob: number): Suggestion[
     const onSite = actuals?.length ? Math.round(actuals.reduce((a, b) => a + b, 0) / actuals.length)
       : sqft > 0 ? estimateVisitMinutes(sqft) : ONSITE_DEFAULT
     const hasGeo = s.property?.lat != null && s.property?.lng != null
+    // A "drop/reprice" call on fully GUESSED inputs (no geo AND no timed visits)
+    // is an alarming false positive — only flag when there's a real signal.
+    const hasSignal = hasGeo || (actuals?.length ?? 0) > 0
+    if (!hasSignal) continue
     const driveMin = driveMinFor(s.property, ctx, located)
     const econ = visitEconomics(s.perVisit, onSite, driveMin, ctx.crewCost)
     const thin = econ.profit <= 5 || econ.margin < 0.2
     if (!thin) continue
     const vpy = seriesVisitsPerYear(s)
     // Repricing target = the price that yields a healthy 50% margin given the
-    // visit's real labour cost (visitEconomics), or the hood average if higher.
-    const targetRev = Math.max(econ.laborCost > 0 ? round5(econ.laborCost / 0.5) : round5(s.perVisit * 1.3), hoodAvgRevPerJob > 0 ? round5(hoodAvgRevPerJob) : 0)
+    // visit's real labour cost (visitEconomics).
+    const targetRev = econ.laborCost > 0 ? round5(econ.laborCost / 0.5) : round5(s.perVisit * 1.3)
     const annual = Math.round(Math.max(targetRev - s.perVisit, Math.max(0, -econ.profit)) * vpy)
     const confidence: Confidence = (actuals?.length ?? 0) >= 3 && hasGeo && located.length > 1 ? 'high' : 'medium'
+    // "Drop" only when it's genuinely bleeding (<15% margin); otherwise "review".
+    const severe = econ.margin < 0.15 || econ.profit <= 0
     const why = [
       `Only $${econ.profit}/visit profit (${Math.round(econ.margin * 100)}% margin)`,
       hasGeo ? `~${driveMin} min drive each way at $${ctx.crewCost}/hr crew cost` : `$${ctx.crewCost}/hr crew cost · location not set, drive estimated`,
@@ -417,7 +427,7 @@ function problems(ctx: SuggestionContext, hoodAvgRevPerJob: number): Suggestion[
     out.push({
       id: `problem-${s.recurrenceId}`,
       category: 'problem',
-      title: `Reprice or drop ${s.customerName}`,
+      title: `${severe ? 'Reprice or drop' : 'Review pricing —'} ${s.customerName}`,
       subtitle: s.rep.service_type || undefined,
       impact: annual, oneTime: false, profitImpact: annual, revenueImpact: 0,
       confidence, confidenceScore: CONF_SCORE[confidence], why,
@@ -425,8 +435,9 @@ function problems(ctx: SuggestionContext, hoodAvgRevPerJob: number): Suggestion[
     })
   }
 
-  // Missed jobs — overdue scheduled/in-progress visits sitting unbilled.
-  const missed = ctx.jobs.filter(j => (j.status === 'scheduled' || j.status === 'in_progress') && j.scheduled_date < ctx.today)
+  // Missed jobs — overdue SCHEDULED visits sitting unbilled. (in_progress is
+  // legitimately being worked, not missed.)
+  const missed = ctx.jobs.filter(j => j.status === 'scheduled' && j.scheduled_date < ctx.today)
   if (missed.length) {
     const qById = quoteById(ctx)
     const atRisk = missed.reduce((sum, j) => {
@@ -485,17 +496,25 @@ function growth(ctx: SuggestionContext): Suggestion[] {
       action: { kind: 'navigate', label: 'See the map', href: '/dashboard/saturation' },
     })
   }
-  // Neighbor leads not yet quoted.
+  // Neighbor leads not yet quoted — warm, on-route prospects. Rank by their real
+  // projected value (lead count × on-route customer value × conservative close
+  // rate) instead of $0, so they don't sink to the bottom of the feed.
   const openLeads = ctx.neighborLeads.filter(l => l.status === 'prospect' || l.status === 'contacted').length
   if (openLeads >= 1) {
+    const perCustomer = (avgRevPerJob > 0 ? avgRevPerJob : 50) * SEASON_VISITS_BIWEEKLY
+    const annual = Math.round(openLeads * perCustomer * 0.4) // warm on-route leads close at ~40%
     out.push({
       id: 'growth-leads',
       category: 'growth',
       title: `Follow up ${openLeads} neighbor lead${openLeads !== 1 ? 's' : ''}`,
-      subtitle: 'Prospects next to your existing routes',
-      impact: 0, oneTime: true,
+      subtitle: 'Warm prospects next to your existing routes',
+      impact: annual, oneTime: false,
       confidence: 'medium', confidenceScore: CONF_SCORE.medium,
-      why: [`${openLeads} lead${openLeads !== 1 ? 's' : ''} waiting in prospect/contacted`, 'They sit right on your current routes — low travel cost to win'],
+      why: [
+        `${openLeads} lead${openLeads !== 1 ? 's' : ''} waiting in prospect/contacted`,
+        'They sit right on your current routes — low travel cost to win',
+        `Estimate: ${openLeads} × on-route customer value × 40% close ≈ +$${annual}/yr`,
+      ],
       action: { kind: 'navigate', label: 'Open leads', href: '/dashboard/neighbors' },
     })
   }
@@ -506,10 +525,17 @@ function growth(ctx: SuggestionContext): Suggestion[] {
 function retention(ctx: SuggestionContext): Suggestion[] {
   const out: Suggestion[] = []
   const series = buildSeries(ctx)
-  // A series with NO future open visit whose season is currently active = lapsed.
+  // Customers with ANY upcoming visit (any service) are NOT lapsed — they may
+  // have a different service booked (e.g. fall aeration), so don't nag them.
+  const custWithFuture = new Set(
+    ctx.jobs.filter(j => j.customer_id && j.scheduled_date >= ctx.today && j.status !== 'completed' && j.status !== 'cancelled')
+      .map(j => j.customer_id as string),
+  )
+  // A series with NO future visit, customer fully unscheduled, season active = lapsed.
   let lapsedCount = 0, lapsedAnnual = 0
   for (const s of series) {
     if (s.futureOpen.length > 0) continue
+    if (s.customerId && custWithFuture.has(s.customerId)) continue // booked for something else
     const lastDone = [...s.jobs].reverse().find(j => j.status === 'completed')
     if (!lastDone) continue
     const season = seasonForService(s.rep.service_type, ctx.seasons)
@@ -534,8 +560,14 @@ function retention(ctx: SuggestionContext): Suggestion[] {
       action: { kind: 'navigate', label: 'Win them back', href: '/dashboard/reactivation' },
     })
   }
-  // Sent quotes that need a follow-up.
-  const toChase = ctx.quotes.filter(q => q.status === 'sent' && needsFollowUp(q))
+  // Sent quotes gone quiet ≥ the follow-up window. Computed against ctx.today
+  // (local midnight) rather than needsFollowUp's Date.now(), so a feed built in
+  // the morning is still correct at night / across midnight.
+  const daysToToday = (dateStr: string | null): number => {
+    if (!dateStr) return Infinity // sent but never timestamped → surface it
+    return Math.floor((new Date(ctx.today + 'T00:00:00').getTime() - new Date(dateStr).getTime()) / 86_400_000)
+  }
+  const toChase = ctx.quotes.filter(q => q.status === 'sent' && daysToToday(q.last_followed_up_at || q.sent_at) >= FOLLOW_UP_DAYS)
   if (toChase.length) {
     const atRisk = toChase.reduce((s, q) => s + Number(q.total || 0), 0)
     out.push({
@@ -558,27 +590,30 @@ function retention(ctx: SuggestionContext): Suggestion[] {
 
 // ── the advisor ─────────────────────────────────────────────────────────────────
 export function buildSuggestions(ctx: SuggestionContext): Suggestion[] {
-  // One neighborhood pass shared by price + problem generators.
-  let avgHoodRevPerJob = 0
-  try {
-    const { jobs, pctx } = profitJobsAndCtx(ctx)
-    const hoods = neighborhoodProfitability(jobs, pctx).filter(h => h.key !== 'Unknown' && h.customers >= 2)
-    avgHoodRevPerJob = hoods.length ? hoods.reduce((s, h) => s + h.revPerJob, 0) / hoods.length : 0
-  } catch { /* leave 0 */ }
-
   const gens: Array<() => Suggestion[]> = [
-    () => priceRaises(ctx, avgHoodRevPerJob),
+    () => priceRaises(ctx),
     () => addonUpsells(ctx),
     () => routeImprovements(ctx),
-    () => problems(ctx, avgHoodRevPerJob),
+    () => problems(ctx),
     () => growth(ctx),
     () => retention(ctx),
   ]
-  const all: Suggestion[] = []
+  let all: Suggestion[] = []
   for (const g of gens) { try { all.push(...g()) } catch { /* a failing generator never breaks the feed */ } }
-  // Rank by impact, but a RECURRING annual gain outranks a one-time amount of the
-  // same size (the spec prioritizes annual profit); ties → higher confidence.
-  const rankValue = (s: Suggestion) => s.oneTime ? s.impact * 0.5 : s.impact
+
+  // De-dupe contradictory cards for the SAME customer: a thin-margin "problem"
+  // dominates — suppress that series' plain price-raise (same action, confusing as two).
+  const problemRids = new Set(all.filter(s => s.id.startsWith('problem-') && s.id !== 'problem-missed').map(s => s.id.slice('problem-'.length)))
+  all = all.filter(s => !(s.id.startsWith('price-') && problemRids.has(s.id.slice('price-'.length))))
+
+  // Rank by EXPECTED impact: weight the magnitude by confidence (owners want
+  // trustworthy moves first, not the biggest guess), and halve speculative
+  // one-time amounts — EXCEPT missed jobs, which are money owed today and pin high.
+  const CONF_WEIGHT: Record<Confidence, number> = { high: 1, medium: 0.7, low: 0.45 }
+  const rankValue = (s: Suggestion) => {
+    const oneTimePenalty = s.oneTime && s.id !== 'problem-missed' ? 0.5 : 1
+    return s.impact * CONF_WEIGHT[s.confidence] * oneTimePenalty
+  }
   return all.sort((a, b) => (rankValue(b) - rankValue(a)) || (b.confidenceScore - a.confidenceScore))
 }
 
