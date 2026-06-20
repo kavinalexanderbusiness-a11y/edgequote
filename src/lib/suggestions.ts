@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Job, Quote, JobRecurrence, Property, Customer, JobLineItem } from '@/types'
 import { Coord, haversineKm } from '@/lib/geo'
+import { dayLoad, DEFAULT_JOB_MIN } from '@/lib/route'
+import { densityFor } from '@/lib/routeDensity'
 import { effectiveFreq, jobVisitValue, quoteVisitAmount, syncDraftInvoiceAmounts } from '@/lib/invoicing'
 import { recordPriceChange, isRecurringProgramService, normalizeServiceKey } from '@/lib/jobPricing'
 import { PricingConfig, recommendedJobPrice, estimateVisitMinutes, SEASON_VISITS } from '@/lib/pricing'
@@ -552,7 +554,9 @@ function problems(ctx: SuggestionContext): Suggestion[] {
     const annualGap = Math.round(Math.max(0, Math.round(target * hoursPerVisit) - s.perVisit) * vpy)
 
     const recommended = sqft > 0 ? recommendedJobPrice(sqft, ctx.pricingConfig) : 0
-    const nearby = nearbyCustomerStops(s.property, ctx, s.customerId)
+    // Route Density Score decides the "isolated → improve density" path.
+    const density = hasGeo ? densityFor({ lat: s.property!.lat as number, lng: s.property!.lng as number }, located) : null
+    const isolated = !density || density.tier === 'isolated'
     const confidence: Confidence = (actuals?.length ?? 0) >= 3 && hasGeo && located.length > 1 ? 'high' : 'medium'
     const name = s.customerName
     const calc = [
@@ -571,12 +575,12 @@ function problems(ctx: SuggestionContext): Suggestion[] {
         `${driveMin} min drive · ${onSite} min on site · $${Math.round(s.perVisit)}/visit`,
       ]
       action = raiseAction(s, newPrice, ctx)
-    } else if (nearby < 2) {
-      // FIX #2 — IMPROVE ROUTE DENSITY (isolated stop).
+    } else if (isolated) {
+      // FIX #2 — IMPROVE ROUTE DENSITY (isolated stop, per the density score).
       title = `Tighten the route around ${name} — under $${target}/hr`
       why = [
         `$${econ.revPerHour}/hr revenue — below your $${target}/hr floor`,
-        `Isolated: ${nearby} nearby customer${nearby !== 1 ? 's' : ''}, ${driveMin} min drive each way`,
+        `Isolated stop: ${density?.within2km ?? 0} customers within 2 km${density?.nearestKm != null ? `, nearest ${density.nearestKm} km` : ''}, ${driveMin} min drive each way`,
         'Add a neighbour on the same day, or move to a denser day, to lift $/hr',
       ]
       action = { kind: 'navigate', label: 'Build density', href: '/dashboard/saturation' }
@@ -802,6 +806,60 @@ function retention(ctx: SuggestionContext): Suggestion[] {
   return out
 }
 
+// ── 🚗 ROUTE: gap finder — fill unused schedule capacity ────────────────────────
+// Spots upcoming preferred work days running well under capacity, and — only when
+// there's something concrete to fill them with (warm neighbour leads or in-season
+// lapsed customers) — recommends doing so. Reuses the same dayLoad/capacity engine
+// Day Ops uses, so "light day" means the same thing everywhere.
+function routeGapFinder(ctx: SuggestionContext): Suggestion[] {
+  const out: Suggestion[] = []
+  const pref = ctx.preferredDays.length ? new Set(ctx.preferredDays) : null
+  let lightDays = 0, spareMin = 0
+  for (let i = 1; i <= 14; i++) {
+    const d = addDays(parseISO(ctx.today + 'T00:00:00'), i)
+    if (pref && !pref.has(getDay(d))) continue
+    const iso = format(d, 'yyyy-MM-dd')
+    const dayJobs = ctx.jobs.filter(j => j.scheduled_date === iso && j.status !== 'cancelled')
+    const laborMin = dayJobs.reduce((s, j) => s + (j.duration_minutes || DEFAULT_JOB_MIN), 0)
+    const load = dayLoad(laborMin, ctx.capacityHours)
+    if (load.spareMin >= 180) { lightDays++; spareMin += load.spareMin } // ≥3h of room = light
+  }
+  if (lightDays === 0 || spareMin < 240) return out                       // need a meaningful gap (≥4h total)
+  const spareHours = Math.round(spareMin / 60)
+
+  // Concrete fillers: warm neighbour leads + in-season lapsed customers.
+  const openLeads = ctx.neighborLeads.filter(l => l.status === 'prospect' || l.status === 'contacted').length
+  const futureCust = new Set(ctx.jobs.filter(j => j.customer_id && j.scheduled_date >= ctx.today && j.status !== 'completed' && j.status !== 'cancelled').map(j => j.customer_id as string))
+  let lapsed = 0
+  for (const s of buildSeries(ctx)) {
+    if (s.futureOpen.length || (s.customerId && futureCust.has(s.customerId))) continue
+    if (!s.jobs.some(j => j.status === 'completed')) continue
+    const season = seasonForService(s.rep.service_type, ctx.seasons)
+    if (season && !isWithinSeason(ctx.today, season)) continue
+    lapsed++
+  }
+  if (openLeads + lapsed === 0) return out                                // nothing to fill it with → stay quiet
+
+  const impact = Math.round(spareHours * ctx.targetRevPerHour)            // value of the gap if filled
+  const useLeads = openLeads > 0
+  out.push({
+    id: 'route-gap',
+    category: 'route',
+    title: `Fill ~${spareHours}h of empty capacity over the next 2 weeks`,
+    subtitle: `${lightDays} light work day${lightDays !== 1 ? 's' : ''}`,
+    impact, oneTime: true,
+    confidence: 'medium', confidenceScore: CONF_SCORE.medium,
+    why: [
+      `${lightDays} upcoming work day${lightDays !== 1 ? 's' : ''} under half capacity (~${spareHours}h free)`,
+      openLeads > 0 ? `${openLeads} warm neighbour lead${openLeads !== 1 ? 's' : ''} ready to slot in` : '',
+      lapsed > 0 ? `${lapsed} lapsed customer${lapsed !== 1 ? 's' : ''} you could win back` : '',
+    ].filter(Boolean),
+    calc: [`~${spareHours}h free × $${ctx.targetRevPerHour}/hr target ≈ $${impact} of fillable work`],
+    action: { kind: 'navigate', label: useLeads ? 'Knock nearby leads' : 'Win back customers', href: useLeads ? '/dashboard/neighbors' : '/dashboard/reactivation' },
+  })
+  return out
+}
+
 // ── the advisor ─────────────────────────────────────────────────────────────────
 export function buildSuggestions(ctx: SuggestionContext): Suggestion[] {
   const gens: Array<() => Suggestion[]> = [
@@ -809,6 +867,7 @@ export function buildSuggestions(ctx: SuggestionContext): Suggestion[] {
     () => recurringConversions(ctx),
     () => addonUpsells(ctx),
     () => routeImprovements(ctx),
+    () => routeGapFinder(ctx),
     () => problems(ctx),
     () => growth(ctx),
     () => retention(ctx),

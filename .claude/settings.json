@@ -6,7 +6,9 @@
       "Bash(timeout 480 npx next build)",
       "Bash(node -e ' *)",
       "Bash(echo \"TSC errors: $\\(npx tsc --noEmit 2>&1)",
-      "Bash(echo \"errors: $\\(npx tsc --noEmit 2>&1)"
+      "Bash(echo \"errors: $\\(npx tsc --noEmit 2>&1)",
+      "Bash(npx --yes esbuild scripts/repro-pdf.tsx --bundle --platform=node --format=cjs --jsx=automatic --alias:@=./src --external:@react-pdf/renderer --external:react --outfile=scripts/.repro-pdf.cjs)",
+      "Bash(node scripts/.repro-pdf.cjs)"
     ]
   }
 }
