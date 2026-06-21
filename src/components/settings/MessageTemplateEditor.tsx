@@ -1,0 +1,94 @@
+'use client'
+
+import { useEffect, useMemo, useState } from 'react'
+import { createClient } from '@/lib/supabase/client'
+import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { Button } from '@/components/ui/Button'
+import { Input } from '@/components/ui/Input'
+import { MSG_LABELS, MsgType, DEFAULT_TEMPLATES, MSG_VARIABLES } from '@/lib/comms/templates'
+import { MessageSquare, Check, RotateCcw, Loader2 } from 'lucide-react'
+
+const TYPES: MsgType[] = ['on_my_way', 'running_late', 'arrived', 'job_complete', 'thanks', 'review_request', 'reminder', 'quote', 'invoice']
+
+export function MessageTemplateEditor() {
+  const supabase = useMemo(() => createClient(), [])
+  const [templates, setTemplates] = useState<Partial<Record<MsgType, string>>>({})
+  const [reviewUrl, setReviewUrl] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  async function load() {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) { setLoading(false); return }
+    const { data } = await supabase.from('business_settings').select('message_templates, review_url').eq('user_id', user.id).maybeSingle()
+    const d = data as { message_templates: Partial<Record<MsgType, string>> | null; review_url: string | null } | null
+    setTemplates(d?.message_templates || {})
+    setReviewUrl(d?.review_url || '')
+    setLoading(false)
+  }
+  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function save() {
+    setSaving(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    if (user) {
+      const clean: Record<string, string> = {}
+      for (const t of TYPES) { const v = templates[t]?.trim(); if (v) clean[t] = v } // drop empties → use defaults
+      await supabase.from('business_settings').update({ message_templates: clean, review_url: reviewUrl.trim() || null }).eq('user_id', user.id)
+    }
+    setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2000)
+  }
+
+  return (
+    <Card className="mt-6">
+      <CardHeader>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><MessageSquare className="w-4 h-4 text-accent" /> Message templates</h2>
+            <p className="text-xs text-ink-faint mt-0.5">Customise the wording of every SMS/email. Leave a box blank to use the default.</p>
+          </div>
+          <Button size="sm" onClick={save} loading={saving}>{saved ? <><Check className="w-3.5 h-3.5" /> Saved</> : 'Save templates'}</Button>
+        </div>
+      </CardHeader>
+      <CardBody className="space-y-4">
+        {loading ? (
+          <p className="text-xs text-ink-muted flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…</p>
+        ) : (
+          <>
+            <Input label="Google review link" placeholder="https://g.page/r/…/review" value={reviewUrl} onChange={e => setReviewUrl(e.target.value)} hint="Used by the {{review_link}} variable in the review request." />
+
+            <div className="rounded-lg border border-border bg-bg-tertiary px-3 py-2">
+              <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-1.5">Variables you can use</p>
+              <div className="flex flex-wrap gap-1.5">
+                {MSG_VARIABLES.map(v => (
+                  <span key={v.key} className="text-[11px] font-mono rounded border border-border px-1.5 py-0.5 text-ink-muted" title={v.hint}>{`{{${v.key}}}`}</span>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              {TYPES.map(t => {
+                const val = templates[t] ?? ''
+                const usingDefault = !val.trim()
+                return (
+                  <div key={t}>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-semibold text-ink">{MSG_LABELS[t]}{usingDefault && <span className="text-ink-faint font-normal"> · using default</span>}</label>
+                      {!usingDefault && (
+                        <button onClick={() => setTemplates(prev => ({ ...prev, [t]: '' }))} className="text-[11px] text-ink-faint hover:text-ink flex items-center gap-1"><RotateCcw className="w-3 h-3" /> Reset</button>
+                      )}
+                    </div>
+                    <textarea rows={2} value={val} placeholder={DEFAULT_TEMPLATES[t]}
+                      onChange={e => setTemplates(prev => ({ ...prev, [t]: e.target.value }))}
+                      className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent placeholder:text-ink-faint" />
+                  </div>
+                )
+              })}
+            </div>
+          </>
+        )}
+      </CardBody>
+    </Card>
+  )
+}

@@ -16,6 +16,7 @@ import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { formatCurrency, formatDate, getInitials } from '@/lib/utils'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
+import { CustomerComms } from '@/components/customers/CustomerComms'
 import {
   ArrowLeft, Phone, MessageSquare, FilePlus, CalendarPlus, Mail, MapPin, Repeat,
   FileText, Send, RotateCw, CheckCircle2, Wrench, Receipt, DollarSign, Sparkles, Users,
@@ -376,6 +377,9 @@ export default function CustomerDetailPage() {
           </div>
         </CardBody>
       </Card>
+
+      {/* Communication — consent + history */}
+      <CustomerComms customerId={customer.id} smsOptIn={!!customer.sms_opt_in} emailOptIn={!!customer.email_opt_in} />
 
       {/* Notes & access info — prominent, quick-edit */}
       <Card>

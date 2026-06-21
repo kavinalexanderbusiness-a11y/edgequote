@@ -11,6 +11,7 @@ import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
 import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { CommunicationsTest } from '@/components/settings/CommunicationsTest'
+import { MessageTemplateEditor } from '@/components/settings/MessageTemplateEditor'
 import { useForm, Controller } from 'react-hook-form'
 import { cn } from '@/lib/utils'
 import { ThemePref, getThemePref, applyThemePref } from '@/lib/theme'
@@ -424,6 +425,7 @@ export default function SettingsPage() {
         </CardBody>
       </Card>
 
+      <MessageTemplateEditor />
       <CommunicationsTest />
     </div>
   )

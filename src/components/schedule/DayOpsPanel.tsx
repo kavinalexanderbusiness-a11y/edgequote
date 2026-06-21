@@ -12,9 +12,10 @@ import { formatCurrency, cn, localTodayISO } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
 import { JobPhotos } from '@/components/photos/JobPhotos'
 import { JobAddons } from '@/components/schedule/JobAddons'
+import { JobMessages } from '@/components/schedule/JobMessages'
 import {
   DollarSign, Clock, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
-  MapPin, Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, Trash2, CloudRain, Play, Timer, Camera, PlusCircle,
+  MapPin, Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, Trash2, CloudRain, Play, Timer, Camera, PlusCircle, MessageSquare,
 } from 'lucide-react'
 
 export interface QuoteLite {
@@ -82,6 +83,8 @@ export function DayOpsPanel({
   const [photoId, setPhotoId] = useState<string | null>(null)
   // Which job's add-on services panel is open.
   const [addonsId, setAddonsId] = useState<string | null>(null)
+  // Which job's one-tap messaging panel is open.
+  const [messageId, setMessageId] = useState<string | null>(null)
 
   function openPrice(job: Job) {
     setQuickId(null); setMoveId(null); setPhotoId(null); setAddonsId(null)
@@ -520,8 +523,9 @@ export function DayOpsPanel({
                         {job.status === 'in_progress' && <ActionBtn onClick={() => onMarkDone(job)} icon={CheckCircle2} label="Complete" tone="emerald" />}
                         <ActionBtn onClick={() => (quickId === job.id ? setQuickId(null) : openQuick(job))} icon={SlidersHorizontal} label="Quick" />
                         <ActionBtn onClick={() => onOpenJob(job)} icon={Pencil} label="Open" />
-                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setAddonsId(null); setPhotoId(photoId === job.id ? null : job.id) }} icon={Camera} label="Photos" />
-                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setAddonsId(addonsId === job.id ? null : job.id) }} icon={PlusCircle} label={addons.length ? `Services (${addons.length})` : 'Services'} />
+                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setAddonsId(null); setMessageId(messageId === job.id ? null : job.id) }} icon={MessageSquare} label="Message" />
+                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setAddonsId(null); setMessageId(null); setPhotoId(photoId === job.id ? null : job.id) }} icon={Camera} label="Photos" />
+                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setMessageId(null); setAddonsId(addonsId === job.id ? null : job.id) }} icon={PlusCircle} label={addons.length ? `Services (${addons.length})` : 'Services'} />
                         <ActionBtn onClick={() => setMoveId(moveId === job.id ? null : job.id)} icon={Move} label="Move" />
                         <a
                           href={directionsUrl({ lat: job.properties?.lat ?? null, lng: job.properties?.lng ?? null, address: job.properties?.address }, baseCoord)}
@@ -552,6 +556,14 @@ export function DayOpsPanel({
                         ) : (
                           <p className="mt-2 text-xs text-amber-400">Link a property to this job to attach photos.</p>
                         )
+                      )}
+
+                      {/* One-tap messages — text the customer without typing */}
+                      {messageId === job.id && (
+                        <div className="mt-2 rounded-lg border border-border bg-bg-secondary p-2.5" onClick={e => e.stopPropagation()}>
+                          <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-2 flex items-center gap-1"><MessageSquare className="w-3 h-3" /> Message customer</p>
+                          <JobMessages jobId={job.id} customerId={job.customer_id} customerName={job.customers?.name || job.title} />
+                        </div>
                       )}
 
                       {/* Extra services for this visit — add-ons flow into the invoice */}

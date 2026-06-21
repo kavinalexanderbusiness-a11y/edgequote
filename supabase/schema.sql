@@ -606,3 +606,16 @@ alter table public.notification_log enable row level security;
 create policy "notification_log: select own" on public.notification_log for select using (auth.uid() = user_id);
 create policy "notification_log: insert own" on public.notification_log for insert with check (auth.uid() = user_id);
 create index if not exists notification_log_dedupe_idx on public.notification_log(user_id, job_id, template);
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-21 — One-tap field messaging. Editable per-type
+-- message templates + Google review link (both on business_settings,
+-- so wording is customised without code), plus an "on my way" stamp
+-- on jobs so the customer portal can show a live status. Idempotent.
+-- ════════════════════════════════════════════════════════════
+alter table public.business_settings
+  add column if not exists message_templates jsonb,   -- { on_my_way: "Hi {{first_name}}…", … } — owner overrides; engine has defaults
+  add column if not exists review_url         text;   -- Google review link for {{review_link}}
+
+alter table public.jobs
+  add column if not exists on_my_way_at timestamptz;  -- set when the owner taps "On my way" → live portal status

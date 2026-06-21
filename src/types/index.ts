@@ -23,6 +23,9 @@ export interface Customer {
   avoid_days: number[] | null
   pref_time_start: string | null // 'HH:mm'
   pref_time_end: string | null   // 'HH:mm'
+  // Communication consent — gates all SMS/email sends (default off).
+  sms_opt_in: boolean
+  email_opt_in: boolean
   user_id: string
 }
 
