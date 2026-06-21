@@ -15,10 +15,12 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { formatCurrency, formatDate, getInitials } from '@/lib/utils'
+import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import {
   ArrowLeft, Phone, MessageSquare, FilePlus, CalendarPlus, Mail, MapPin, Repeat,
   FileText, Send, RotateCw, CheckCircle2, Wrench, Receipt, DollarSign, Sparkles, Users,
   Edit2, ExternalLink, Ruler, AlertTriangle, StickyNote, Wallet, Timer, CalendarClock,
+  Link2, Check,
 } from 'lucide-react'
 
 const WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
@@ -65,6 +67,22 @@ export default function CustomerDetailPage() {
   const [seasons, setSeasons] = useState<ServiceSeasons>(DEFAULT_SEASONS)
   const [pausing, setPausing] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [portalBusy, setPortalBusy] = useState(false)
+  const [portalCopied, setPortalCopied] = useState(false)
+
+  async function copyPortalLink() {
+    if (!customer) return
+    setPortalBusy(true)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+      const token = await ensurePortalToken(supabase, user.id, customer.id)
+      if (!token) { alert('Could not create the portal link. Run the customer-portal migration first.'); return }
+      const url = portalUrl(token)
+      try { await navigator.clipboard.writeText(url) } catch { window.prompt('Copy this portal link:', url) }
+      setPortalCopied(true); setTimeout(() => setPortalCopied(false), 2500)
+    } finally { setPortalBusy(false) }
+  }
 
   const [editingNotes, setEditingNotes] = useState(false)
   const [notesValue, setNotesValue] = useState('')
@@ -286,6 +304,11 @@ export default function CustomerDetailPage() {
           <ArrowLeft className="w-4 h-4" />
         </button>
         <PageHeader title={customer.name} description={`Customer since ${formatDate(customer.created_at)}`} />
+        <Button size="sm" variant="secondary" className="ml-auto shrink-0" loading={portalBusy}
+          title="Copy a private link the customer can use to view quotes, invoices, history & photos and accept quotes"
+          onClick={copyPortalLink}>
+          {portalCopied ? <><Check className="w-3.5 h-3.5" /> Link copied</> : <><Link2 className="w-3.5 h-3.5" /> Portal link</>}
+        </Button>
       </div>
 
       {/* Retention warnings — top, highly visible */}

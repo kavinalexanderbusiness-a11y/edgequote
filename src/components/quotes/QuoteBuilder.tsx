@@ -15,6 +15,8 @@ import { Collapsible } from '@/components/ui/Collapsible'
 import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
 import { formatCurrency, formatDate, suggestTravelFee } from '@/lib/utils'
 import { laborSuggestion, pricingConfigFromSettings, latestSavedRecommendation, recommendationIsStale } from '@/lib/pricing'
+import { evaluatePrice, PriceGuardrail } from '@/lib/priceGuardrails'
+import { PriceGuardrailNote } from '@/components/pricing/PriceGuardrailNote'
 import { findCustomerMatch } from '@/lib/customers'
 import { createClient } from '@/lib/supabase/client'
 import type { MeasurementSnapshot, SavedRecommendation } from '@/types'
@@ -97,6 +99,19 @@ export function QuoteBuilder({
   const manualEmail = watch('customer_email')
   const notes = watch('notes')
   const measuredSqft = Number(watch('measured_sqft')) || 0
+
+  // Smart Price Guardrails — per-cadence, never-block warnings (measured lawn +
+  // crew cost). Each filled cadence is judged against ITS own recommended price.
+  const priceGuardrails = useMemo<PriceGuardrail[]>(() => {
+    const cfg = pricingConfigFromSettings(settings)
+    const crewCost = settings?.crew_cost_per_hour && settings.crew_cost_per_hour > 0 ? settings.crew_cost_per_hour : 40
+    const out: PriceGuardrail[] = []
+    const add = (cadence: 'one_time' | 'weekly' | 'biweekly' | 'monthly', price: number) => {
+      if (price > 0) out.push(evaluatePrice({ cadence, price, sqft: measuredSqft, cfg, crewCost }))
+    }
+    add('one_time', initialPrice); add('weekly', weeklyPrice); add('biweekly', biweeklyPrice); add('monthly', monthlyPrice)
+    return out
+  }, [settings, measuredSqft, initialPrice, weeklyPrice, biweeklyPrice, monthlyPrice])
 
   // Live duplicate detection — when entering a brand-new lead, surface a likely
   // existing customer so we link instead of creating a duplicate. Reuses the
@@ -398,6 +413,7 @@ export function QuoteBuilder({
               <Input label="Bi-Weekly ($/visit)" type="number" step="1" min="0" {...register('biweekly_price', { min: 0 })} />
               <Input label="Monthly ($/visit)" type="number" step="1" min="0" {...register('monthly_price', { min: 0 })} />
             </div>
+            <PriceGuardrailNote guardrails={priceGuardrails} />
           </Collapsible>
 
           <Collapsible title="Travel" icon={Car} summary={travelSummary}>

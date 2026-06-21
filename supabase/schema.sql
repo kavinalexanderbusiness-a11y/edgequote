@@ -498,3 +498,111 @@ alter table public.business_settings
 -- ════════════════════════════════════════════════════════════
 alter table public.business_settings
   add column if not exists target_rev_per_hour numeric default 60;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-14 — Customer Portal (magic link). A customer
+-- opens /portal/<token> (no login). All reads/writes go through the
+-- SECURITY DEFINER functions below, which return ONLY the data for
+-- the token's customer — so the public anon role can never see
+-- another customer's records. Idempotent; safe to re-run.
+-- ════════════════════════════════════════════════════════════
+create table if not exists public.customer_portal_tokens (
+  token       text primary key,
+  customer_id uuid not null references public.customers(id) on delete cascade,
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  created_at  timestamptz not null default now(),
+  revoked     boolean not null default false
+);
+alter table public.customer_portal_tokens enable row level security;
+-- Owner manages their own tokens; the PUBLIC read path is the function, not this table.
+create policy "portal_tokens: select own" on public.customer_portal_tokens for select using (auth.uid() = user_id);
+create policy "portal_tokens: insert own" on public.customer_portal_tokens for insert with check (auth.uid() = user_id);
+create policy "portal_tokens: update own" on public.customer_portal_tokens for update using (auth.uid() = user_id);
+create policy "portal_tokens: delete own" on public.customer_portal_tokens for delete using (auth.uid() = user_id);
+create index if not exists portal_tokens_customer_idx on public.customer_portal_tokens(user_id, customer_id);
+
+create table if not exists public.service_requests (
+  id          uuid primary key default uuid_generate_v4(),
+  created_at  timestamptz not null default now(),
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  customer_id uuid references public.customers(id) on delete set null,
+  message     text not null,
+  status      text not null default 'new'      -- new | seen | done
+);
+alter table public.service_requests enable row level security;
+create policy "service_requests: select own" on public.service_requests for select using (auth.uid() = user_id);
+create policy "service_requests: update own" on public.service_requests for update using (auth.uid() = user_id);
+create policy "service_requests: delete own" on public.service_requests for delete using (auth.uid() = user_id);
+-- (inserts come ONLY from the portal RPC below — no anon insert policy on the table.)
+create index if not exists service_requests_user_idx on public.service_requests(user_id, status);
+
+-- Portal read: ONE function, returns ONLY the token's customer data.
+create or replace function public.get_portal_data(p_token text)
+returns json language plpgsql security definer set search_path = public as $$
+declare v_customer uuid; v_user uuid; result json;
+begin
+  select customer_id, user_id into v_customer, v_user
+    from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return null; end if;
+  select json_build_object(
+    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code from public.customers where id = v_customer) c),
+    'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, website, logo_url from public.business_settings where user_id = v_user) b),
+    'quotes', coalesce((select json_agg(q order by q.created_at desc) from (select id, quote_number, service_type, address, total, initial_price, weekly_price, biweekly_price, monthly_price, notes, status, created_at from public.quotes where customer_id = v_customer and status in ('sent','accepted','declined')) q), '[]'::json),
+    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, status, issued_date, due_date, line_items, created_at from public.invoices where customer_id = v_customer) i), '[]'::json),
+    'history', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, service_type, title, scheduled_date, status from public.jobs where customer_id = v_customer and status = 'completed') j), '[]'::json),
+    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json)
+  ) into result;
+  return result;
+end; $$;
+grant execute on function public.get_portal_data(text) to anon, authenticated;
+
+-- Accept a quote from the portal (scoped to the token's customer + a sent quote).
+create or replace function public.portal_accept_quote(p_token text, p_quote_id uuid)
+returns boolean language plpgsql security definer set search_path = public as $$
+declare v_customer uuid;
+begin
+  select customer_id into v_customer from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return false; end if;
+  update public.quotes set status = 'accepted' where id = p_quote_id and customer_id = v_customer and status = 'sent';
+  return found;
+end; $$;
+grant execute on function public.portal_accept_quote(text, uuid) to anon, authenticated;
+
+-- Submit a service request from the portal.
+create or replace function public.portal_request_service(p_token text, p_message text)
+returns boolean language plpgsql security definer set search_path = public as $$
+declare v_customer uuid; v_user uuid;
+begin
+  select customer_id, user_id into v_customer, v_user from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return false; end if;
+  if coalesce(trim(p_message), '') = '' then return false; end if;
+  insert into public.service_requests (user_id, customer_id, message) values (v_user, v_customer, left(p_message, 1000));
+  return true;
+end; $$;
+grant execute on function public.portal_request_service(text, text) to anon, authenticated;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-14 — Communications (opt-in + send log).
+-- ARCHITECTURE ONLY: sending stays DISABLED in lib/comms until
+-- Twilio/Resend credentials are set in env. These tables let the
+-- (disabled) send layer record consent + de-dupe sends. Idempotent.
+-- ════════════════════════════════════════════════════════════
+alter table public.customers
+  add column if not exists sms_opt_in   boolean not null default false,
+  add column if not exists email_opt_in boolean not null default false;
+
+create table if not exists public.notification_log (
+  id          uuid primary key default uuid_generate_v4(),
+  created_at  timestamptz not null default now(),
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  customer_id uuid references public.customers(id) on delete set null,
+  job_id      uuid references public.jobs(id) on delete set null,
+  channel     text not null,                  -- 'sms' | 'email'
+  template    text not null,                  -- 'reminder' | 'on_my_way' | 'job_complete' | 'review_request'
+  status      text not null default 'sent',   -- 'sent' | 'failed' | 'disabled' | 'skipped'
+  detail      text
+);
+alter table public.notification_log enable row level security;
+create policy "notification_log: select own" on public.notification_log for select using (auth.uid() = user_id);
+create policy "notification_log: insert own" on public.notification_log for insert with check (auth.uid() = user_id);
+create index if not exists notification_log_dedupe_idx on public.notification_log(user_id, job_id, template);

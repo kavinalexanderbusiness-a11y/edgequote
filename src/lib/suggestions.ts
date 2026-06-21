@@ -7,7 +7,7 @@ import { effectiveFreq, jobVisitValue, quoteVisitAmount, syncDraftInvoiceAmounts
 import { recordPriceChange, isRecurringProgramService, normalizeServiceKey } from '@/lib/jobPricing'
 import { PricingConfig, recommendedJobPrice, estimateVisitMinutes, SEASON_VISITS } from '@/lib/pricing'
 import { visitEconomics } from '@/lib/economics'
-import { ProfitJob, ProfitContext, neighborhoodProfitability } from '@/lib/profitability'
+import { ProfitJob, ProfitContext, neighborhoodProfitability, neighborhoodKey } from '@/lib/profitability'
 import { OptJob, OptOptions, OptimizeScope, OptimizeMode, analyzeSchedule, optimizeSchedule } from '@/lib/optimizer'
 import { dayProfitability } from '@/lib/profitability'
 import { FOLLOW_UP_DAYS } from '@/lib/followup'
@@ -690,30 +690,8 @@ function growth(ctx: SuggestionContext): Suggestion[] {
   try { hoods = neighborhoodProfitability(jobs, pctx) } catch { hoods = [] }
   const ranked = hoods.filter(h => h.key !== 'Unknown' && h.customers >= 2)
   const avgRevPerJob = ranked.length ? ranked.reduce((s, h) => s + h.revPerJob, 0) / ranked.length : 0
-  // Strong + not yet saturated → flyer / expansion target.
-  const targets = ranked.filter(h => h.revPerJob >= avgRevPerJob && h.customers < 6).sort((a, b) => b.revPerJob - a.revPerJob).slice(0, 2)
-  for (const h of targets) {
-    // Conservative annual value of one new customer = per-job revenue across a
-    // biweekly-equivalent season (the assumption is disclosed in the why bullets).
-    const annualPerCustomer = h.revPerJob * SEASON_VISITS_BIWEEKLY
-    const newCustomers = Math.max(1, Math.min(4, Math.round(h.customers * 0.5)))
-    const annual = Math.round(annualPerCustomer * newCustomers * 0.3) // conservative 30% conversion
-    if (annual < 100) continue
-    out.push({
-      id: `growth-hood-${h.key}`,
-      category: 'growth',
-      title: `Target ${h.key} for flyers`,
-      subtitle: `${h.customers} customers already · strong route density`,
-      impact: annual, oneTime: false, revenueImpact: annual,
-      confidence: 'low', confidenceScore: CONF_SCORE.low,
-      why: [
-        `${h.customers} customers, $${h.revPerJob}/job — above your $${Math.round(avgRevPerJob)} average`,
-        `Dense route here absorbs travel — new stops are nearly pure profit`,
-        `Estimate: ${newCustomers} more × ~${SEASON_VISITS_BIWEEKLY} visits/season × 30% flyer conversion ≈ +$${annual}/yr`,
-      ],
-      action: { kind: 'navigate', label: 'See the map', href: '/dashboard/saturation' },
-    })
-  }
+  // (Flyer/expansion hood targeting now lives in neighborhoodDomination — richer:
+  // density + leads + marketing focus. growth() keeps the neighbor-leads card.)
   // Neighbor leads not yet quoted — warm, on-route prospects. Rank by their real
   // projected value (lead count × on-route customer value × conservative close
   // rate) instead of $0, so they don't sink to the bottom of the feed.
@@ -860,6 +838,75 @@ function routeGapFinder(ctx: SuggestionContext): Suggestion[] {
   return out
 }
 
+// ── 📍 GROWTH: Neighborhood Domination — where to concentrate marketing ─────────
+// Per hood: revenue, customer count, route density, annual value, lead/expansion
+// opportunity → a marketing-focus recommendation. Concentrating on the hoods you
+// can OWN beats scattering flyers everywhere. Composes neighborhoodProfitability
+// + the Route Density Score + neighbor leads.
+function neighborhoodDomination(ctx: SuggestionContext): Suggestion[] {
+  const out: Suggestion[] = []
+  const { jobs, pctx } = profitJobsAndCtx(ctx)
+  let hoods: ReturnType<typeof neighborhoodProfitability> = []
+  try { hoods = neighborhoodProfitability(jobs, pctx) } catch { hoods = [] }
+  hoods = hoods.filter(h => h.key !== 'Unknown' && h.customers >= 2)
+  if (!hoods.length) return out
+
+  const allStops: Coord[] = jobs.filter(j => j.lat != null && j.lng != null).map(j => ({ lat: j.lat as number, lng: j.lng as number }))
+  const stopsByHood: Record<string, Coord[]> = {}
+  for (const j of jobs) {
+    if (j.lat == null || j.lng == null) continue
+    const key = neighborhoodKey(j.postal_code, j.city, j.neighborhood)
+    ;(stopsByHood[key] ||= []).push({ lat: j.lat, lng: j.lng })
+  }
+  const leadsByHood: Record<string, number> = {}
+  for (const l of ctx.neighborLeads) if (l.neighborhood) leadsByHood[l.neighborhood] = (leadsByHood[l.neighborhood] || 0) + 1
+  const avgRevPerJob = hoods.reduce((s, h) => s + h.revPerJob, 0) / hoods.length
+
+  const scored = hoods.map(h => {
+    const stops = stopsByHood[h.key] || []
+    const ds = stops.map(s => densityFor(s, allStops).score)
+    const avgDensity = ds.length ? Math.round(ds.reduce((a, b) => a + b, 0) / ds.length) : 0
+    const leads = leadsByHood[h.key] || 0
+    const dominanceScore = h.revenue * (1 + avgDensity / 100) * (1 + leads * 0.2) // own where you're already strong + warm
+    return { h, avgDensity, leads, strong: h.revPerJob >= avgRevPerJob, dominanceScore }
+  }).sort((a, b) => b.dominanceScore - a.dominanceScore)
+
+  for (const { h, avgDensity, leads, strong } of scored.slice(0, 2)) {
+    const dense = avgDensity >= 50
+    const focus = h.customers >= 4 && dense
+      ? 'Referral push — your tight cluster here will refer neighbours; flyers convert cheaply on a dense route'
+      : strong && h.customers < 4
+        ? 'Flyer / door-knock to expand this strong beachhead'
+        : 'Flyers + referrals to deepen this route'
+    const annualPerCustomer = Math.round(h.revPerJob * SEASON_VISITS_BIWEEKLY)
+    const newCustomers = Math.max(1, Math.min(4, leads > 0 ? leads : Math.round(h.customers * 0.5)))
+    const impact = Math.round(annualPerCustomer * newCustomers * 0.3) // conservative 30% conversion
+    if (impact < 100) continue
+    out.push({
+      id: `dominate-${h.key}`,
+      category: 'growth',
+      title: `Focus marketing on ${h.key}`,
+      subtitle: `${h.customers} customers · ${formatMoney(h.revenue)}/yr · density ${avgDensity}/100`,
+      impact, oneTime: false, revenueImpact: impact,
+      confidence: 'low', confidenceScore: CONF_SCORE.low,
+      why: [
+        `${h.customers} customers, $${h.revPerJob}/job (avg $${Math.round(avgRevPerJob)}) — ${strong ? 'above' : 'around'} your average`,
+        `Route density ${avgDensity}/100${leads > 0 ? ` · ${leads} lead${leads !== 1 ? 's' : ''} waiting` : ''}`,
+        focus,
+      ],
+      calc: [
+        `Annual value now ≈ $${h.revenue} booked across ${h.customers} customers`,
+        `+${newCustomers} customer${newCustomers !== 1 ? 's' : ''} × ~${SEASON_VISITS_BIWEEKLY} visits × $${h.revPerJob} × 30% ≈ +$${impact}/yr`,
+      ],
+      action: { kind: 'navigate', label: leads > 0 ? 'Knock the leads' : 'See the area', href: leads > 0 ? '/dashboard/neighbors' : '/dashboard/saturation' },
+    })
+  }
+  return out
+}
+
+// Compact money for subtitles ($1,250 not $1250.00).
+function formatMoney(n: number): string { return '$' + Math.round(n).toLocaleString() }
+
 // ── the advisor ─────────────────────────────────────────────────────────────────
 export function buildSuggestions(ctx: SuggestionContext): Suggestion[] {
   const gens: Array<() => Suggestion[]> = [
@@ -870,6 +917,7 @@ export function buildSuggestions(ctx: SuggestionContext): Suggestion[] {
     () => routeGapFinder(ctx),
     () => problems(ctx),
     () => growth(ctx),
+    () => neighborhoodDomination(ctx),
     () => retention(ctx),
   ]
   let all: Suggestion[] = []
