@@ -26,7 +26,13 @@ export async function sendSms(to: string, body: string): Promise<SendResult> {
       headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ To: to, From: process.env.TWILIO_FROM!, Body: body }),
     })
-    if (!res.ok) return { sent: false, reason: 'error', error: `twilio ${res.status}` }
+    if (!res.ok) {
+      // Surface Twilio's exact error (e.g. {"code":21211,"message":"Invalid 'To' Number"}).
+      const detail = await res.text().catch(() => '')
+      let msg = `Twilio ${res.status}`
+      try { const j = JSON.parse(detail); if (j?.message) msg = `Twilio ${res.status} (code ${j.code ?? '?'}): ${j.message}` } catch { if (detail) msg += `: ${detail.slice(0, 300)}` }
+      return { sent: false, reason: 'error', error: msg }
+    }
     const data = await res.json()
     return { sent: true, reason: 'sent', id: data.sid }
   } catch (e) {
@@ -43,7 +49,12 @@ export async function sendEmail(to: string, subject: string, html: string, text:
       headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY!}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ from: process.env.RESEND_FROM!, to, subject, html, text }),
     })
-    if (!res.ok) return { sent: false, reason: 'error', error: `resend ${res.status}` }
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '')
+      let msg = `Resend ${res.status}`
+      try { const j = JSON.parse(detail); if (j?.message) msg = `Resend ${res.status}: ${j.message}` } catch { if (detail) msg += `: ${detail.slice(0, 300)}` }
+      return { sent: false, reason: 'error', error: msg }
+    }
     const data = await res.json()
     return { sent: true, reason: 'sent', id: data.id }
   } catch (e) {
