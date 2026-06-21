@@ -547,10 +547,12 @@ begin
   select json_build_object(
     'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code from public.customers where id = v_customer) c),
     'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, website, logo_url from public.business_settings where user_id = v_user) b),
+    'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
     'quotes', coalesce((select json_agg(q order by q.created_at desc) from (select id, quote_number, service_type, address, total, initial_price, weekly_price, biweekly_price, monthly_price, notes, status, created_at from public.quotes where customer_id = v_customer and status in ('sent','accepted','declined')) q), '[]'::json),
-    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, status, issued_date, due_date, line_items, created_at from public.invoices where customer_id = v_customer) i), '[]'::json),
-    'history', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, service_type, title, scheduled_date, status from public.jobs where customer_id = v_customer and status = 'completed') j), '[]'::json),
-    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json)
+    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, status, issued_date, due_date, line_items, job_id, created_at from public.invoices where customer_id = v_customer) i), '[]'::json),
+    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, notes from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
+    'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, end_date from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
+    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json)
   ) into result;
   return result;
 end; $$;
@@ -619,3 +621,37 @@ alter table public.business_settings
 
 alter table public.jobs
   add column if not exists on_my_way_at timestamptz;  -- set when the owner taps "On my way" → live portal status
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-21 — Automated message toggles. Which recurring
+-- messages fire automatically. Per-customer opt-in STILL gates every
+-- send, so null (= all on) can't message anyone who hasn't consented.
+-- { reminder: bool, job_complete: bool, review: bool }. Idempotent.
+-- ════════════════════════════════════════════════════════════
+alter table public.business_settings
+  add column if not exists automations jsonb;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-21 — Suggestions Center dismiss / snooze.
+-- The advisor feed stays trustworthy when the owner can clear a
+-- decided card: a row here suppresses a suggestion by its stable
+-- key. snooze_until null = dismissed indefinitely; a date = hidden
+-- until that day (then it resurfaces if still relevant). Idempotent.
+-- ════════════════════════════════════════════════════════════
+create table if not exists public.suggestion_dismissals (
+  id             uuid primary key default uuid_generate_v4(),
+  created_at     timestamptz not null default now(),
+  user_id        uuid not null references auth.users(id) on delete cascade,
+  suggestion_key text not null,        -- Suggestion.id, e.g. "price-<rid>", "churn-<rid>", "median-<rid>"
+  snooze_until   date,                 -- null = forever; else hidden until this date
+  unique (user_id, suggestion_key)
+);
+
+alter table public.suggestion_dismissals enable row level security;
+create policy "suggestion_dismissals: select own" on public.suggestion_dismissals for select using (auth.uid() = user_id);
+create policy "suggestion_dismissals: insert own" on public.suggestion_dismissals for insert with check (auth.uid() = user_id);
+create policy "suggestion_dismissals: update own" on public.suggestion_dismissals for update using (auth.uid() = user_id);
+create policy "suggestion_dismissals: delete own" on public.suggestion_dismissals for delete using (auth.uid() = user_id);
+
+create index if not exists suggestion_dismissals_user_idx
+  on public.suggestion_dismissals(user_id);

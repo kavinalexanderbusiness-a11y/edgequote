@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Job, Quote, JobRecurrence, Property, Customer, JobLineItem } from '@/types'
 import { Coord, haversineKm } from '@/lib/geo'
 import { dayLoad, DEFAULT_JOB_MIN } from '@/lib/route'
-import { densityFor } from '@/lib/routeDensity'
+import { densityFor, locatedStops } from '@/lib/routeDensity'
 import { effectiveFreq, jobVisitValue, quoteVisitAmount, syncDraftInvoiceAmounts } from '@/lib/invoicing'
 import { recordPriceChange, isRecurringProgramService, normalizeServiceKey } from '@/lib/jobPricing'
 import { PricingConfig, recommendedJobPrice, estimateVisitMinutes, SEASON_VISITS } from '@/lib/pricing'
@@ -122,6 +122,10 @@ export interface SuggestionContext {
   lineItemsByJob: Record<string, JobLineItem[]>
   neighborLeads: { status: string | null; neighborhood: string | null }[]
   invoicedJobIds: Set<string>
+  // Suggestion keys the owner has dismissed/snoozed (still active as of today).
+  // Pre-resolved in loadSuggestions (a snooze that has expired is NOT included),
+  // so buildSuggestions just filters by membership.
+  dismissedKeys: Set<string>
 }
 
 // ── shared helpers ────────────────────────────────────────────────────────────
@@ -152,16 +156,64 @@ function seriesVisitsPerYear(s: Series): number {
 function cadenceField(cadence: string | null): PriceApplyPayload['cadenceField'] {
   return cadence === 'weekly' ? 'weekly_price' : cadence === 'biweekly' ? 'biweekly_price' : cadence === 'monthly' ? 'monthly_price' : null
 }
+// Days between visits for a series — the standard cadence when known, else derived
+// from the recurrence interval. Used by predictive churn (how overdue is "overdue").
+function cadenceIntervalDays(s: Series): number {
+  if (s.cadence === 'weekly') return 7
+  if (s.cadence === 'biweekly') return 14
+  if (s.cadence === 'monthly') return 30
+  const count = Math.max(1, s.rec.interval_count ?? 1)
+  return s.rec.interval_unit === 'day' ? count
+    : s.rec.interval_unit === 'week' ? 7 * count
+    : s.rec.interval_unit === 'month' ? 30 * count
+    : 14
+}
 function round5(n: number): number { return Math.round(n / 5) * 5 }
+
+// ── per-context memoization ─────────────────────────────────────────────────────
+// buildSuggestions runs ~9 generators over the SAME ctx; several independently
+// rebuild the series list, the quote/property lookups and the ProfitJob
+// projection — each an O(jobs) pass. Cache them per ctx object (fresh per load)
+// so the heavy work happens once, not 6×. WeakMaps drop with the ctx, no leak.
+const _quoteByIdCache = new WeakMap<SuggestionContext, Record<string, Quote>>()
+const _propsByIdCache = new WeakMap<SuggestionContext, Record<string, Property>>()
+const _seriesCache = new WeakMap<SuggestionContext, Series[]>()
+const _profitCache = new WeakMap<SuggestionContext, { jobs: ProfitJob[]; pctx: ProfitContext }>()
+const _propStopsCache = new WeakMap<SuggestionContext, Coord[]>()
+
 function quoteById(ctx: SuggestionContext): Record<string, Quote> {
-  const m: Record<string, Quote> = {}
+  let m = _quoteByIdCache.get(ctx)
+  if (m) return m
+  m = {}
   for (const q of ctx.quotes) m[q.id] = q
+  _quoteByIdCache.set(ctx, m)
   return m
 }
 function propsById(ctx: SuggestionContext): Record<string, Property> {
-  const m: Record<string, Property> = {}
+  let m = _propsByIdCache.get(ctx)
+  if (m) return m
+  m = {}
   for (const p of ctx.properties) m[p.id] = p
+  _propsByIdCache.set(ctx, m)
   return m
+}
+// Memoized series — generators call this; buildSeries does the real work once.
+function getSeries(ctx: SuggestionContext): Series[] {
+  let s = _seriesCache.get(ctx)
+  if (s) return s
+  s = buildSeries(ctx)
+  _seriesCache.set(ctx, s)
+  return s
+}
+// Located customer stops DEDUPED BY PROPERTY (one point per address). Feeding
+// densityFor the raw per-visit jobs would count a customer's own 28 seasonal
+// visits as 28 "nearby stops" — wildly inflating density. Dedupe once, reuse.
+function propertyStops(ctx: SuggestionContext): Coord[] {
+  let s = _propStopsCache.get(ctx)
+  if (s) return s
+  s = locatedStops(ctx.jobs.map(j => ({ lat: j.properties?.lat ?? null, lng: j.properties?.lng ?? null })))
+  _propStopsCache.set(ctx, s)
+  return s
 }
 // lawn_sqft from the property (latest measurement or stored), 0 when unknown.
 function sqftFor(p: Property | undefined): number {
@@ -253,6 +305,8 @@ function buildSeries(ctx: SuggestionContext): Series[] {
 }
 
 function profitJobsAndCtx(ctx: SuggestionContext): { jobs: ProfitJob[]; pctx: ProfitContext } {
+  const cached = _profitCache.get(ctx)
+  if (cached) return cached
   const pById = propsById(ctx)
   const quotesById: ProfitContext['quotesById'] = {}
   for (const q of ctx.quotes) quotesById[q.id] = { total: q.total, initial_price: q.initial_price, weekly_price: q.weekly_price, biweekly_price: q.biweekly_price, monthly_price: q.monthly_price }
@@ -269,7 +323,9 @@ function profitJobsAndCtx(ctx: SuggestionContext): { jobs: ProfitJob[]; pctx: Pr
       customer_id: j.customer_id,
     }
   })
-  return { jobs, pctx: { quotesById, recById, base: ctx.baseCoord, today: ctx.today } }
+  const result = { jobs, pctx: { quotesById, recById, base: ctx.baseCoord, today: ctx.today } }
+  _profitCache.set(ctx, result)
+  return result
 }
 
 // The safe one-click raise action for a series: write the quote cadence price
@@ -298,7 +354,7 @@ function raiseAction(s: Series, newPrice: number, ctx: SuggestionContext): Sugge
 // raises). Unmeasured underpricing is left to the "below minimum" roadmap item.
 function priceRaises(ctx: SuggestionContext): Suggestion[] {
   const out: Suggestion[] = []
-  const series = buildSeries(ctx)
+  const series = getSeries(ctx)
   for (const s of series) {
     if (!s.futureOpen.length || s.perVisit <= 0) continue
     const sqft = sqftFor(s.property)
@@ -338,6 +394,72 @@ function priceRaises(ctx: SuggestionContext): Suggestion[] {
   return out
 }
 
+// ── 💰 PROFIT: below the neighborhood median ────────────────────────────────────
+// Catches underpricing that priceRaises (measurement-gated) can't: a recurring
+// customer charged well below what the OWNER charges peers for the SAME service in
+// the SAME neighbourhood. The target is the peer median — no sqft/measurement
+// needed — so it surfaces the "you forgot to ever raise this one" customers.
+function belowMedianPricing(ctx: SuggestionContext): Suggestion[] {
+  const out: Suggestion[] = []
+  const series = getSeries(ctx)
+  // Bucket active priced series by neighbourhood + service category (mowing vs
+  // snow vs …) so the median compares like with like.
+  const buckets: Record<string, { perVisit: number; s: Series }[]> = {}
+  for (const s of series) {
+    if (s.perVisit <= 0 || !s.property) continue
+    const hood = neighborhoodKey(s.property.postal_code, s.property.city, s.property.neighborhood)
+    if (hood === 'Unknown') continue
+    const cat = serviceCategory(s.rep.service_type)
+    ;(buckets[`${hood}|${cat}`] ||= []).push({ perVisit: s.perVisit, s })
+  }
+  for (const [key, arr] of Object.entries(buckets)) {
+    if (arr.length < 3) continue                              // need real peers for a median
+    const sorted = arr.map(x => x.perVisit).sort((a, b) => a - b)
+    const median = sorted[Math.floor(sorted.length / 2)]
+    if (median <= 0) continue
+    const [hood, cat] = key.split('|')
+    const svcLabel = cat === 'lawn' ? 'mowing' : cat === 'snow' ? 'snow service' : (cat || 'service')
+    for (const { perVisit, s } of arr) {
+      if (!s.futureOpen.length) continue                     // only actionable on a live series
+      if (perVisit >= median * 0.85) continue                // not meaningfully below the pack
+      // False-positive guard: a SMALL measured lawn legitimately priced below the
+      // hood median (of bigger lawns) is NOT underpriced. If we have a measurement
+      // and the price already meets the size-appropriate recommendation, skip —
+      // priceRaises owns the measured case anyway.
+      const sqft = sqftFor(s.property)
+      if (sqft > 0) {
+        const rec = recommendedJobPrice(sqft, ctx.pricingConfig)
+        if (rec > 0 && perVisit >= rec) continue
+      }
+      const target = round5(Math.min(median, perVisit * 1.4))
+      if (target < perVisit + 5) continue
+      const vpy = seriesVisitsPerYear(s)
+      const annual = Math.round((target - perVisit) * vpy)
+      if (annual < 100) continue
+      const confidence: Confidence = arr.length >= 5 ? 'medium' : 'low'
+      out.push({
+        id: `median-${s.recurrenceId}`,
+        category: 'profit',
+        title: `Raise ${s.customerName} from $${Math.round(perVisit)} → $${target}`,
+        subtitle: `Below your ${hood} ${svcLabel} average`,
+        impact: annual, oneTime: false, revenueImpact: annual, profitImpact: annual,
+        confidence, confidenceScore: CONF_SCORE[confidence],
+        why: [
+          `$${Math.round(perVisit)}/visit vs your $${Math.round(median)} typical for ${svcLabel} in ${hood}`,
+          `${s.cadence || 'recurring'} · ${vpy} visit${vpy !== 1 ? 's' : ''}/season → +$${annual}/yr`,
+          `Based on ${arr.length} of your own ${svcLabel} customers in this area`,
+        ],
+        calc: [
+          `Median ${svcLabel} price in ${hood} = $${Math.round(median)}/visit (your ${arr.length} customers)`,
+          `Raise = $${Math.round(perVisit)} → $${target} = +$${target - Math.round(perVisit)}/visit × ${vpy} = +$${annual}/yr`,
+        ],
+        action: raiseAction(s, target, ctx),
+      })
+    }
+  }
+  return out
+}
+
 // ── 💰 PROFIT: add-on upsell programs ───────────────────────────────────────────
 function addonUpsells(ctx: SuggestionContext): Suggestion[] {
   const out: Suggestion[] = []
@@ -360,11 +482,13 @@ function addonUpsells(ctx: SuggestionContext): Suggestion[] {
   for (const [key, e] of Object.entries(buyersByKey)) {
     if (e.custIds.size < 2 || !e.amounts.length) continue // need a real signal
     const penetration = e.custIds.size / lawnCustomers.size
-    if (penetration <= 0 || penetration > 0.7) continue
+    // Require a real adoption PATTERN (≥20% already buy) and a meaningful target
+    // pool (≥2 customers) — a single coincidental add-on isn't an upsell program.
+    if (penetration < 0.2 || penetration > 0.7) continue
     const avg = Math.round(e.amounts.reduce((s, n) => s + n, 0) / e.amounts.length)
     if (avg <= 0) continue
     const candidates = [...lawnCustomers].filter(cid => !e.custIds.has(cid))
-    if (candidates.length < 1) continue
+    if (candidates.length < 2) continue
     const appsPerYear = e.program ? 4 : 1 // a season program bills ~4×; one-shots once
     const annual = Math.round(candidates.length * avg * appsPerYear * 0.4) // conservative 40% take-up
     if (annual < 50) continue
@@ -397,7 +521,7 @@ function recurringConversions(ctx: SuggestionContext): Suggestion[] {
   const qById = quoteById(ctx)
   // Customers who ALREADY have an active plan in a category → skip that pairing.
   const activeRec = new Set<string>()
-  for (const s of buildSeries(ctx)) {
+  for (const s of getSeries(ctx)) {
     if (s.futureOpen.length > 0 && s.customerId) activeRec.add(`${s.customerId}|${serviceCategory(s.rep.service_type)}`)
   }
   // Group non-recurring, non-cancelled jobs by customer + service category.
@@ -531,8 +655,10 @@ function routeImprovements(ctx: SuggestionContext): Suggestion[] {
 function problems(ctx: SuggestionContext): Suggestion[] {
   const out: Suggestion[] = []
   const target = ctx.targetRevPerHour
-  const series = buildSeries(ctx)
-  const located = ctx.jobs.filter(j => j.properties?.lat != null && j.properties?.lng != null).map(j => ({ lat: j.properties!.lat as number, lng: j.properties!.lng as number }))
+  const series = getSeries(ctx)
+  // Deduped per-property stops — NOT per visit — so density/nearest reflects how
+  // many distinct CUSTOMERS are nearby, not how often one is serviced.
+  const located = propertyStops(ctx)
   const actualByCust: Record<string, number[]> = {}
   for (const j of ctx.jobs) if (j.customer_id && j.status === 'completed' && Number(j.actual_minutes) > 0) (actualByCust[j.customer_id] ||= []).push(Number(j.actual_minutes))
 
@@ -720,18 +846,71 @@ function growth(ctx: SuggestionContext): Suggestion[] {
 // ── ❤️ RETENTION: win back ran-out/lapsed + chase quotes ─────────────────────────
 function retention(ctx: SuggestionContext): Suggestion[] {
   const out: Suggestion[] = []
-  const series = buildSeries(ctx)
+  const series = getSeries(ctx)
   // Customers with ANY upcoming visit (any service) are NOT lapsed — they may
   // have a different service booked (e.g. fall aeration), so don't nag them.
   const custWithFuture = new Set(
     ctx.jobs.filter(j => j.customer_id && j.scheduled_date >= ctx.today && j.status !== 'completed' && j.status !== 'cancelled')
       .map(j => j.customer_id as string),
   )
+  // ── PREDICTIVE CHURN ────────────────────────────────────────────────────────
+  // Catch valuable recurring customers SLIPPING before they fully lapse: overdue
+  // against their OWN cadence (last visit > 1.6× the interval ago) with nothing
+  // booked soon, while their season is active. A leading indicator — the window
+  // where a single call still saves the account. Per-customer named cards (capped),
+  // ranked by recurring value × churn probability. Distinct from the lapsed
+  // aggregate below, which it suppresses for the same customer.
+  const churnedCustomers = new Set<string>()
+  const churnCards: Suggestion[] = []
+  for (const s of series) {
+    if (s.perVisit <= 0) continue
+    const lastDone = [...s.jobs].reverse().find(j => j.status === 'completed')
+    if (!lastDone) continue
+    const completedCount = s.jobs.filter(j => j.status === 'completed').length
+    if (completedCount < 2) continue                              // need an established rhythm
+    const season = seasonForService(s.rep.service_type, ctx.seasons)
+    if (season && !isWithinSeason(ctx.today, season)) continue    // off-season dormant, not churning
+    const interval = cadenceIntervalDays(s)
+    const daysSince = dayDelta(lastDone.scheduled_date, ctx.today)
+    if (daysSince <= interval * 1.6) continue                     // still roughly on cadence
+    const nextFuture = s.futureOpen[0]?.scheduled_date || null
+    if (nextFuture && dayDelta(ctx.today, nextFuture) <= interval * 1.5) continue // booked soon → fine
+    const annualValue = Math.round(s.perVisit * seriesVisitsPerYear(s))
+    if (annualValue < 300) continue                               // focus on accounts worth saving
+    const ratio = daysSince / interval
+    const churnProb = ratio >= 2.5 ? 0.6 : 0.4
+    const impact = Math.round(annualValue * churnProb)
+    const svcLabel = serviceCategory(s.rep.service_type) === 'lawn' ? 'mowing' : (s.rep.service_type || 'service')
+    if (s.customerId) churnedCustomers.add(s.customerId)
+    churnCards.push({
+      id: `churn-${s.recurrenceId}`,
+      category: 'retention',
+      title: `Reach out to ${s.customerName} — slipping away`,
+      subtitle: `${svcLabel}: last visit ${daysSince}d ago, no follow-up booked`,
+      impact, oneTime: false, revenueImpact: annualValue,
+      confidence: completedCount >= 4 ? 'high' : 'medium',
+      confidenceScore: completedCount >= 4 ? CONF_SCORE.high : CONF_SCORE.medium,
+      why: [
+        `Last ${svcLabel} visit was ${daysSince} days ago — overdue for a ~${interval}-day cadence`,
+        nextFuture ? `Next visit not until ${format(parseISO(nextFuture + 'T00:00:00'), 'MMM d')}` : 'Nothing booked ahead',
+        `$${annualValue}/yr of recurring revenue at risk`,
+      ],
+      calc: [
+        `${daysSince}d since last visit ÷ ${interval}d cadence = ${ratio.toFixed(1)}× overdue → ~${Math.round(churnProb * 100)}% churn risk`,
+        `At-risk value = $${annualValue}/yr × ${Math.round(churnProb * 100)}% = $${impact}`,
+      ],
+      action: { kind: 'navigate', label: 'Save this customer', href: s.customerId ? `/dashboard/customers/${s.customerId}` : '/dashboard/reactivation' },
+    })
+  }
+  churnCards.sort((a, b) => b.impact - a.impact)
+  out.push(...churnCards.slice(0, 3))
+
   // A series with NO future visit, customer fully unscheduled, season active = lapsed.
   let lapsedCount = 0, lapsedAnnual = 0
   for (const s of series) {
     if (s.futureOpen.length > 0) continue
     if (s.customerId && custWithFuture.has(s.customerId)) continue // booked for something else
+    if (s.customerId && churnedCustomers.has(s.customerId)) continue // already a named churn card
     const lastDone = [...s.jobs].reverse().find(j => j.status === 'completed')
     if (!lastDone) continue
     const season = seasonForService(s.rep.service_type, ctx.seasons)
@@ -809,7 +988,7 @@ function routeGapFinder(ctx: SuggestionContext): Suggestion[] {
   const openLeads = ctx.neighborLeads.filter(l => l.status === 'prospect' || l.status === 'contacted').length
   const futureCust = new Set(ctx.jobs.filter(j => j.customer_id && j.scheduled_date >= ctx.today && j.status !== 'completed' && j.status !== 'cancelled').map(j => j.customer_id as string))
   let lapsed = 0
-  for (const s of buildSeries(ctx)) {
+  for (const s of getSeries(ctx)) {
     if (s.futureOpen.length || (s.customerId && futureCust.has(s.customerId))) continue
     if (!s.jobs.some(j => j.status === 'completed')) continue
     const season = seasonForService(s.rep.service_type, ctx.seasons)
@@ -851,12 +1030,20 @@ function neighborhoodDomination(ctx: SuggestionContext): Suggestion[] {
   hoods = hoods.filter(h => h.key !== 'Unknown' && h.customers >= 2)
   if (!hoods.length) return out
 
-  const allStops: Coord[] = jobs.filter(j => j.lat != null && j.lng != null).map(j => ({ lat: j.lat as number, lng: j.lng as number }))
+  // Dedupe to ONE stop per property, tagged with its hood. Feeding densityFor raw
+  // per-visit jobs would count a customer's many seasonal visits as many "nearby
+  // stops" → fake density. Count distinct addresses.
+  const seen = new Set<string>()
+  const allStops: Coord[] = []
   const stopsByHood: Record<string, Coord[]> = {}
   for (const j of jobs) {
     if (j.lat == null || j.lng == null) continue
-    const key = neighborhoodKey(j.postal_code, j.city, j.neighborhood)
-    ;(stopsByHood[key] ||= []).push({ lat: j.lat, lng: j.lng })
+    const key = `${j.lat.toFixed(5)},${j.lng.toFixed(5)}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    const coord = { lat: j.lat, lng: j.lng }
+    allStops.push(coord)
+    ;(stopsByHood[neighborhoodKey(j.postal_code, j.city, j.neighborhood)] ||= []).push(coord)
   }
   const leadsByHood: Record<string, number> = {}
   for (const l of ctx.neighborLeads) if (l.neighborhood) leadsByHood[l.neighborhood] = (leadsByHood[l.neighborhood] || 0) + 1
@@ -864,15 +1051,22 @@ function neighborhoodDomination(ctx: SuggestionContext): Suggestion[] {
 
   const scored = hoods.map(h => {
     const stops = stopsByHood[h.key] || []
-    const ds = stops.map(s => densityFor(s, allStops).score)
-    const avgDensity = ds.length ? Math.round(ds.reduce((a, b) => a + b, 0) / ds.length) : 0
+    const dres = stops.map(s => densityFor(s, allStops))
+    const avgDensity = dres.length ? Math.round(dres.reduce((a, d) => a + d.score, 0) / dres.length) : 0
+    const denseShare = dres.length ? dres.filter(d => d.tier === 'dense').length / dres.length : 0
     const leads = leadsByHood[h.key] || 0
-    const dominanceScore = h.revenue * (1 + avgDensity / 100) * (1 + leads * 0.2) // own where you're already strong + warm
-    return { h, avgDensity, leads, strong: h.revPerJob >= avgRevPerJob, dominanceScore }
+    // Own where you can DOMINATE: already-tight cluster (density + dense share) ×
+    // high per-customer VALUE × warm leads. revPerJob ratio favours high-value
+    // expansion over merely high-volume areas.
+    const valueRatio = avgRevPerJob > 0 ? Math.min(2, Math.max(0.5, h.revPerJob / avgRevPerJob)) : 1
+    const dominanceScore = h.revenue * (1 + avgDensity / 100) * (1 + denseShare) * (1 + leads * 0.2) * valueRatio
+    return { h, avgDensity, denseShare, leads, strong: h.revPerJob >= avgRevPerJob, dominanceScore }
   }).sort((a, b) => b.dominanceScore - a.dominanceScore)
 
-  for (const { h, avgDensity, leads, strong } of scored.slice(0, 2)) {
-    const dense = avgDensity >= 50
+  // One highest-conviction target — concentrating beats scattering, and a single
+  // grounded card beats two speculative ones (noise reduction).
+  for (const { h, avgDensity, denseShare, leads, strong } of scored.slice(0, 1)) {
+    const dense = denseShare >= 0.5 || avgDensity >= 50
     const focus = h.customers >= 4 && dense
       ? 'Referral push — your tight cluster here will refer neighbours; flyers convert cheaply on a dense route'
       : strong && h.customers < 4
@@ -880,23 +1074,28 @@ function neighborhoodDomination(ctx: SuggestionContext): Suggestion[] {
         : 'Flyers + referrals to deepen this route'
     const annualPerCustomer = Math.round(h.revPerJob * SEASON_VISITS_BIWEEKLY)
     const newCustomers = Math.max(1, Math.min(4, leads > 0 ? leads : Math.round(h.customers * 0.5)))
-    const impact = Math.round(annualPerCustomer * newCustomers * 0.3) // conservative 30% conversion
+    // Denser hoods convert door-knocks/referrals better — scale the close rate
+    // with how tight the cluster already is (0.25 isolated → ~0.45 dense).
+    const closeRate = Math.min(0.45, 0.25 + denseShare * 0.2)
+    const impact = Math.round(annualPerCustomer * newCustomers * closeRate)
     if (impact < 100) continue
+    // A dense hood with warm signal is a grounded call, not a guess → medium.
+    const confidence: Confidence = dense && (leads > 0 || h.customers >= 4) ? 'medium' : 'low'
     out.push({
       id: `dominate-${h.key}`,
       category: 'growth',
       title: `Focus marketing on ${h.key}`,
       subtitle: `${h.customers} customers · ${formatMoney(h.revenue)}/yr · density ${avgDensity}/100`,
       impact, oneTime: false, revenueImpact: impact,
-      confidence: 'low', confidenceScore: CONF_SCORE.low,
+      confidence, confidenceScore: CONF_SCORE[confidence],
       why: [
         `${h.customers} customers, $${h.revPerJob}/job (avg $${Math.round(avgRevPerJob)}) — ${strong ? 'above' : 'around'} your average`,
-        `Route density ${avgDensity}/100${leads > 0 ? ` · ${leads} lead${leads !== 1 ? 's' : ''} waiting` : ''}`,
+        `Route density ${avgDensity}/100${denseShare > 0 ? `, ${Math.round(denseShare * 100)}% on dense routes` : ''}${leads > 0 ? ` · ${leads} lead${leads !== 1 ? 's' : ''} waiting` : ''}`,
         focus,
       ],
       calc: [
         `Annual value now ≈ $${h.revenue} booked across ${h.customers} customers`,
-        `+${newCustomers} customer${newCustomers !== 1 ? 's' : ''} × ~${SEASON_VISITS_BIWEEKLY} visits × $${h.revPerJob} × 30% ≈ +$${impact}/yr`,
+        `+${newCustomers} customer${newCustomers !== 1 ? 's' : ''} × ~${SEASON_VISITS_BIWEEKLY} visits × $${h.revPerJob} × ${Math.round(closeRate * 100)}% ≈ +$${impact}/yr`,
       ],
       action: { kind: 'navigate', label: leads > 0 ? 'Knock the leads' : 'See the area', href: leads > 0 ? '/dashboard/neighbors' : '/dashboard/saturation' },
     })
@@ -911,6 +1110,7 @@ function formatMoney(n: number): string { return '$' + Math.round(n).toLocaleStr
 export function buildSuggestions(ctx: SuggestionContext): Suggestion[] {
   const gens: Array<() => Suggestion[]> = [
     () => priceRaises(ctx),
+    () => belowMedianPricing(ctx),
     () => recurringConversions(ctx),
     () => addonUpsells(ctx),
     () => routeImprovements(ctx),
@@ -923,10 +1123,23 @@ export function buildSuggestions(ctx: SuggestionContext): Suggestion[] {
   let all: Suggestion[] = []
   for (const g of gens) { try { all.push(...g()) } catch { /* a failing generator never breaks the feed */ } }
 
-  // De-dupe contradictory cards for the SAME customer: a thin-margin "problem"
-  // dominates — suppress that series' plain price-raise (same action, confusing as two).
+  // De-dupe overlapping price cards for the SAME series. Strength order:
+  // problem (below-target guardrail) > price (measured recommendation) > median
+  // (peer comparison). Keep only the strongest, so the owner sees one raise, not
+  // three for the same customer.
   const problemRids = new Set(all.filter(s => s.id.startsWith('problem-') && s.id !== 'problem-missed').map(s => s.id.slice('problem-'.length)))
-  all = all.filter(s => !(s.id.startsWith('price-') && problemRids.has(s.id.slice('price-'.length))))
+  const priceRids = new Set(all.filter(s => s.id.startsWith('price-')).map(s => s.id.slice('price-'.length)))
+  all = all.filter(s => {
+    if (s.id.startsWith('price-') && problemRids.has(s.id.slice('price-'.length))) return false
+    if (s.id.startsWith('median-')) {
+      const rid = s.id.slice('median-'.length)
+      if (problemRids.has(rid) || priceRids.has(rid)) return false
+    }
+    return true
+  })
+
+  // Drop anything the owner dismissed or snoozed (resolved to "still active" in load).
+  if (ctx.dismissedKeys.size) all = all.filter(s => !ctx.dismissedKeys.has(s.id))
 
   // Rank by EXPECTED impact: weight the magnitude by confidence (owners want
   // trustworthy moves first, not the biggest guess), and halve speculative
@@ -936,7 +1149,16 @@ export function buildSuggestions(ctx: SuggestionContext): Suggestion[] {
     const oneTimePenalty = s.oneTime && s.id !== 'problem-missed' ? 0.5 : 1
     return s.impact * CONF_WEIGHT[s.confidence] * oneTimePenalty
   }
-  return all.sort((a, b) => (rankValue(b) - rankValue(a)) || (b.confidenceScore - a.confidenceScore))
+  const ranked = all.sort((a, b) => (rankValue(b) - rankValue(a)) || (b.confidenceScore - a.confidenceScore))
+
+  // Cap the speculative tail: keep only the strongest few low-confidence ideas so
+  // the feed can't bloat into a wall of "worth a look" guesses. High/medium
+  // (trustworthy, actionable) cards are never capped.
+  const MAX_LOW = 3
+  const lows = ranked.filter(s => s.confidence === 'low')
+  if (lows.length <= MAX_LOW) return ranked
+  const keepLow = new Set(lows.slice(0, MAX_LOW).map(s => s.id))
+  return ranked.filter(s => s.confidence !== 'low' || keepLow.has(s.id))
 }
 
 // ── one-click apply (price raise) ─────────────────────────────────────────────
@@ -1015,4 +1237,32 @@ export async function createRecurringPlan(
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : 'Create failed' }
   }
+}
+
+// ── dismiss / snooze ──────────────────────────────────────────────────────────
+// Suppress a suggestion by its stable key. snoozeUntil null = dismissed
+// indefinitely; an ISO date (yyyy-MM-dd) = hidden until that day, then it
+// resurfaces if still relevant. Upsert so re-dismissing just updates the window.
+export async function dismissSuggestion(
+  supabase: SupabaseClient,
+  key: string,
+  snoozeUntil: string | null = null,
+): Promise<{ ok: boolean; error?: string }> {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { ok: false, error: 'Not signed in' }
+  const { error } = await supabase.from('suggestion_dismissals')
+    .upsert({ user_id: user.id, suggestion_key: key, snooze_until: snoozeUntil }, { onConflict: 'user_id,suggestion_key' })
+  return error ? { ok: false, error: error.message } : { ok: true }
+}
+
+// Undo a dismiss/snooze — bring the card straight back.
+export async function undismissSuggestion(
+  supabase: SupabaseClient,
+  key: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { ok: false, error: 'Not signed in' }
+  const { error } = await supabase.from('suggestion_dismissals')
+    .delete().eq('user_id', user.id).eq('suggestion_key', key)
+  return error ? { ok: false, error: error.message } : { ok: true }
 }

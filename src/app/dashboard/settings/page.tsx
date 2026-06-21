@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/Button'
 import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { CommunicationsTest } from '@/components/settings/CommunicationsTest'
 import { MessageTemplateEditor } from '@/components/settings/MessageTemplateEditor'
+import { AutomationToggles } from '@/components/settings/AutomationToggles'
 import { useForm, Controller } from 'react-hook-form'
 import { cn } from '@/lib/utils'
 import { ThemePref, getThemePref, applyThemePref } from '@/lib/theme'
@@ -425,6 +426,7 @@ export default function SettingsPage() {
         </CardBody>
       </Card>
 
+      <AutomationToggles />
       <MessageTemplateEditor />
       <CommunicationsTest />
     </div>

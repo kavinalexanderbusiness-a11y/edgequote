@@ -1,10 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { Job, Quote, JobRecurrence, Property, Customer } from '@/types'
+import { Job, Quote, JobRecurrence, Property, Customer, JobLineItem } from '@/types'
 import { localTodayISO } from '@/lib/utils'
 import { pricingConfigFromSettings } from '@/lib/pricing'
 import { crewCostPerHour } from '@/lib/economics'
 import { settingsToSeasons } from '@/lib/seasons'
-import { listLineItemsByJob } from '@/lib/jobPricing'
 import { buildSuggestions, SuggestionContext, Suggestion } from '@/lib/suggestions'
 
 // Load EVERYTHING the advisor composes, in one parallel fetch, and return the
@@ -15,7 +14,11 @@ export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggest
   if (!user) return []
   const uid = user.id
 
-  const [jRes, qRes, rRes, pRes, cRes, iRes, nRes, sRes] = await Promise.all([
+  // One parallel round-trip for the whole advisor. Line items are fetched by
+  // user_id directly (not by the jobs' ids) so they no longer serialize AFTER the
+  // jobs query — every read fires at once. Dismissals load here too.
+  const today = localTodayISO()
+  const [jRes, qRes, rRes, pRes, cRes, iRes, nRes, sRes, liRes, dRes] = await Promise.all([
     supabase.from('jobs')
       .select('*, customers(id, name, phone, preferred_days, avoid_days, pref_time_start, pref_time_end), properties(id, address, lat, lng, neighborhood, preferred_days, avoid_days, pref_time_start, pref_time_end)')
       .eq('user_id', uid),
@@ -28,6 +31,8 @@ export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggest
     supabase.from('business_settings')
       .select('crew_cost_per_hour, target_rev_per_hour, pricing_base_charge, pricing_mow_rate, pricing_recommended_mult, pricing_premium_mult, pricing_travel_rate, preferred_work_days, daily_capacity_hours, base_lat, base_lng, service_seasons')
       .eq('user_id', uid).maybeSingle(),
+    supabase.from('job_line_items').select('*').eq('user_id', uid).order('created_at', { ascending: true }),
+    supabase.from('suggestion_dismissals').select('suggestion_key, snooze_until').eq('user_id', uid),
   ])
 
   const jobs = (jRes.data as Job[]) || []
@@ -39,13 +44,22 @@ export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggest
   const invoiceRows = (iRes.data as { job_id: string | null; status: string; amount: number | null; property_id: string | null; customer_id: string | null }[]) || []
   const invoicedJobIds = new Set(invoiceRows.map(i => i.job_id).filter(Boolean) as string[])
 
-  const lineItemsByJob = await listLineItemsByJob(supabase, uid, jobs.map(j => j.id))
+  // Group line items by job locally (was a separate serial query).
+  const lineItemsByJob: Record<string, JobLineItem[]> = {}
+  for (const it of (liRes.data as JobLineItem[]) || []) (lineItemsByJob[it.job_id] ||= []).push(it)
+
+  // Resolve which dismissals are STILL active: snooze_until null = forever; a date
+  // hides the card only until that day (>= today), then it can resurface.
+  const dismissedKeys = new Set<string>()
+  for (const d of (dRes.data as { suggestion_key: string; snooze_until: string | null }[]) || []) {
+    if (d.snooze_until == null || d.snooze_until >= today) dismissedKeys.add(d.suggestion_key)
+  }
 
   const baseLat = settings?.base_lat as number | null | undefined
   const baseLng = settings?.base_lng as number | null | undefined
 
   const ctx: SuggestionContext = {
-    today: localTodayISO(),
+    today,
     crewCost: crewCostPerHour(settings?.crew_cost_per_hour as number | null | undefined),
     targetRevPerHour: Number(settings?.target_rev_per_hour) > 0 ? Number(settings!.target_rev_per_hour) : 60,
     pricingConfig: pricingConfigFromSettings(settings as Parameters<typeof pricingConfigFromSettings>[0]),
@@ -62,6 +76,7 @@ export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggest
     lineItemsByJob,
     neighborLeads: (nRes.data as { status: string | null; neighborhood: string | null }[]) || [],
     invoicedJobIds,
+    dismissedKeys,
   }
 
   return buildSuggestions(ctx)

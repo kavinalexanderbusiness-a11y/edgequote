@@ -9,6 +9,7 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Button } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
+import { SendComms } from '@/components/comms/SendComms'
 import { formatCurrency, formatDate, applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
 import { addDays, format as formatDfn, parseISO } from 'date-fns'
 import { needsFollowUp, daysSince, logFollowUpPatch, markWonPatch } from '@/lib/followup'
@@ -475,6 +476,19 @@ export default function QuoteDetailPage() {
           }
         />
       </div>
+
+      {/* Send this quote to the customer (SMS / Email / Both) */}
+      {quote.customer_id && (
+        <Card>
+          <CardBody className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-ink">Send this quote to the customer</p>
+              <p className="text-xs text-ink-muted mt-0.5">Texts/emails a personalized message with a link to view &amp; accept it in their portal.</p>
+            </div>
+            <SendComms customerId={quote.customer_id} template="quote" label="Send quote" />
+          </CardBody>
+        </Card>
+      )}
 
       {savedCustomerMsg && (
         <div className="flex items-center justify-between gap-3 text-sm bg-emerald-500/10 border border-emerald-500/20 rounded-xl px-4 py-3">

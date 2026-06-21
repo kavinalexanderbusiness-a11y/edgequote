@@ -26,6 +26,13 @@ export async function POST(req: NextRequest) {
   if (!cust) return NextResponse.json({ error: 'customer not found' }, { status: 404 })
   const c = cust as { id: string; name: string; phone: string | null; email: string | null; sms_opt_in: boolean; email_opt_in: boolean }
 
+  // Automated sends pass dedupe:true so the same template can't fire twice for the
+  // same job (e.g. a job completed, undone, completed again).
+  if (body.dedupe && jobId) {
+    const { data: prior } = await supabase.from('notification_log').select('id').eq('user_id', user.id).eq('job_id', jobId).eq('template', template).eq('status', 'sent').limit(1)
+    if (prior && prior.length) return NextResponse.json({ enabled: commsEnabled(), results: {}, skipped: 'duplicate' })
+  }
+
   const { data: bizRow } = await supabase.from('business_settings')
     .select('company_name, review_url, message_templates').eq('user_id', user.id).maybeSingle()
   const biz = bizRow as { company_name: string | null; review_url: string | null; message_templates: Partial<Record<MsgType, string>> | null } | null

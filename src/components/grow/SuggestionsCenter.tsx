@@ -3,11 +3,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
-import { Suggestion, SuggestionAction, SuggestionCategory, CATEGORY_META, Confidence, applyPriceRaise, createRecurringPlan } from '@/lib/suggestions'
+import { Suggestion, SuggestionAction, SuggestionCategory, CATEGORY_META, Confidence, applyPriceRaise, createRecurringPlan, dismissSuggestion, undismissSuggestion } from '@/lib/suggestions'
 import { loadSuggestions } from '@/lib/suggestionsLoad'
 import { formatCurrency, cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
-import { Sparkles, Check, ArrowRight, Clock, Navigation, TrendingUp, Loader2, RefreshCw, HelpCircle, Calculator } from 'lucide-react'
+import { Sparkles, Check, ArrowRight, Clock, Navigation, TrendingUp, Loader2, RefreshCw, HelpCircle, Calculator, X, BellOff, Undo2 } from 'lucide-react'
+import { addDays, format } from 'date-fns'
 
 const CONF_PILL: Record<Confidence, string> = {
   high: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
@@ -35,12 +36,31 @@ export function SuggestionsCenter() {
   const [applyingId, setApplyingId] = useState<string | null>(null)
   const [appliedId, setAppliedId] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
+  const [undo, setUndo] = useState<{ key: string; label: string } | null>(null)
 
   async function load() {
     setLoading(true)
+    setUndo(null)
     try { setItems(await loadSuggestions(supabase)) } finally { setLoading(false) }
   }
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Dismiss = hide a decided card. snoozeDays set → resurfaces after a month.
+  // Optimistic removal + one-tap Undo, so clearing the feed never loses a card.
+  async function dismiss(s: Suggestion, snoozeDays?: number) {
+    setItems(prev => prev.filter(x => x.id !== s.id))
+    setUndo({ key: s.id, label: s.title })
+    setNote(null)
+    const snoozeUntil = snoozeDays ? format(addDays(new Date(), snoozeDays), 'yyyy-MM-dd') : null
+    await dismissSuggestion(supabase, s.id, snoozeUntil)
+  }
+  async function undoDismiss() {
+    if (!undo) return
+    const key = undo.key
+    setUndo(null)
+    await undismissSuggestion(supabase, key)
+    load()
+  }
 
   async function runAction(s: Suggestion, action: SuggestionAction) {
     if (action.kind === 'apply-price' && action.apply) {
@@ -105,6 +125,15 @@ export function SuggestionsCenter() {
         </div>
       )}
 
+      {undo && (
+        <div className="px-5 py-2 bg-bg-tertiary border-b border-border text-xs text-ink-muted flex items-center justify-between gap-2">
+          <span className="truncate">Dismissed “{undo.label}”.</span>
+          <button onClick={undoDismiss} className="shrink-0 inline-flex items-center gap-1 font-semibold text-accent hover:underline">
+            <Undo2 className="w-3.5 h-3.5" /> Undo
+          </button>
+        </div>
+      )}
+
       {/* Category filter */}
       {!loading && items.length > 0 && (
         <div className="px-4 py-2.5 border-b border-border flex flex-wrap gap-1.5">
@@ -135,7 +164,8 @@ export function SuggestionsCenter() {
             {visible.map(s => (
               <SuggestionCard key={s.id} s={s}
                 applying={applyingId === s.id} applied={appliedId === s.id}
-                onAction={(a) => runAction(s, a)} />
+                onAction={(a) => runAction(s, a)}
+                onDismiss={(snoozeDays) => dismiss(s, snoozeDays)} />
             ))}
             {(filtered.length > visible.length || lowHidden > 0) && (
               <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
@@ -158,7 +188,7 @@ export function SuggestionsCenter() {
   )
 }
 
-function SuggestionCard({ s, applying, applied, onAction }: { s: Suggestion; applying: boolean; applied: boolean; onAction: (a: SuggestionAction) => void }) {
+function SuggestionCard({ s, applying, applied, onAction, onDismiss }: { s: Suggestion; applying: boolean; applied: boolean; onAction: (a: SuggestionAction) => void; onDismiss: (snoozeDays?: number) => void }) {
   const cat = CATEGORY_META[s.category]
   const [showWhy, setShowWhy] = useState(false)
   const [showCalc, setShowCalc] = useState(false)
@@ -211,18 +241,30 @@ function SuggestionCard({ s, applying, applied, onAction }: { s: Suggestion; app
           : actions.map(renderAction)}
       </div>
 
-      {/* Progressive disclosure — Why / How calculated tucked away. */}
-      <div className="mt-2.5 flex items-center gap-4">
-        {s.why.length > 0 && (
-          <button onClick={() => setShowWhy(v => !v)} className="text-[11px] font-medium text-ink-faint hover:text-ink flex items-center gap-1">
-            <HelpCircle className="w-3 h-3" /> Why?
+      {/* Progressive disclosure — Why / How calculated tucked away; dismiss/snooze on the right. */}
+      <div className="mt-2.5 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-4">
+          {s.why.length > 0 && (
+            <button onClick={() => setShowWhy(v => !v)} className="text-[11px] font-medium text-ink-faint hover:text-ink flex items-center gap-1">
+              <HelpCircle className="w-3 h-3" /> Why?
+            </button>
+          )}
+          {s.calc && s.calc.length > 0 && (
+            <button onClick={() => setShowCalc(v => !v)} className="text-[11px] font-medium text-ink-faint hover:text-ink flex items-center gap-1">
+              <Calculator className="w-3 h-3" /> How calculated?
+            </button>
+          )}
+        </div>
+        <div className="flex items-center gap-3 shrink-0">
+          <button onClick={() => onDismiss(30)} title="Snooze for a month"
+            className="text-[11px] font-medium text-ink-faint hover:text-ink flex items-center gap-1">
+            <BellOff className="w-3 h-3" /> Snooze
           </button>
-        )}
-        {s.calc && s.calc.length > 0 && (
-          <button onClick={() => setShowCalc(v => !v)} className="text-[11px] font-medium text-ink-faint hover:text-ink flex items-center gap-1">
-            <Calculator className="w-3 h-3" /> How calculated?
+          <button onClick={() => onDismiss()} title="Dismiss this suggestion"
+            className="text-[11px] font-medium text-ink-faint hover:text-ink flex items-center gap-1">
+            <X className="w-3 h-3" /> Dismiss
           </button>
-        )}
+        </div>
       </div>
       {showWhy && s.why.length > 0 && (
         <ul className="mt-2 space-y-0.5 border-t border-border pt-2">

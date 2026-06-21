@@ -13,6 +13,7 @@ import { ScopeDialog } from '@/components/schedule/ScopeDialog'
 import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel } from '@/lib/recurrence'
 import type { JobRecurrence } from '@/types'
 import { createDraftInvoiceForCompletedJob, quoteVisitAmount, jobVisitValue, effectiveFreq, syncDraftInvoiceAmounts } from '@/lib/invoicing'
+import { resolveAutomations, Automations } from '@/lib/comms/automations'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
@@ -97,6 +98,7 @@ export default function SchedulePage() {
   const [preferredWorkDays, setPreferredWorkDays] = useState<number[]>([5, 6, 0])
   const [workStartTime, setWorkStartTime] = useState('08:00')
   const [capacityHours, setCapacityHours] = useState(8)
+  const [automations, setAutomations] = useState<Automations>({ reminder: true, job_complete: true, review: true })
   const [showOptimize, setShowOptimize] = useState(false)
   const [showRainCenter, setShowRainCenter] = useState(false)
   // Pre-scoped launch from an auto-suggestion (vs. the manual Optimize button).
@@ -390,7 +392,7 @@ export default function SchedulePage() {
       supabase.from('customers').select('*').eq('user_id', user!.id).order('name'),
       supabase.from('job_recurrences').select('*').eq('user_id', user!.id),
       supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
-      supabase.from('business_settings').select('base_lat, base_lng, base_address, preferred_work_days, work_start_time, daily_capacity_hours').eq('user_id', user!.id).maybeSingle(),
+      supabase.from('business_settings').select('base_lat, base_lng, base_address, preferred_work_days, work_start_time, daily_capacity_hours, automations').eq('user_id', user!.id).maybeSingle(),
       supabase.from('invoices').select('job_id').eq('user_id', user!.id).not('job_id', 'is', null),
       supabase.from('schedule_health_ignored').select('issue_key').eq('user_id', user!.id),
     ])
@@ -414,7 +416,8 @@ export default function SchedulePage() {
     setQuotesById(qMap)
 
     // Base coordinate for route optimization (geocode the address once if needed).
-    const s = sRes.data as { base_lat: number | null; base_lng: number | null; base_address: string | null; preferred_work_days: number[] | null; work_start_time: string | null; daily_capacity_hours: number | null } | null
+    const s = sRes.data as { base_lat: number | null; base_lng: number | null; base_address: string | null; preferred_work_days: number[] | null; work_start_time: string | null; daily_capacity_hours: number | null; automations: unknown } | null
+    setAutomations(resolveAutomations(s?.automations))
     setPreferredWorkDays(s?.preferred_work_days?.length ? s.preferred_work_days : [5, 6, 0])
     setWorkStartTime(s?.work_start_time || '08:00')
     setCapacityHours(s?.daily_capacity_hours && s.daily_capacity_hours > 0 ? s.daily_capacity_hours : 8)
@@ -900,6 +903,10 @@ export default function SchedulePage() {
       const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed', actual_minutes: actual })
       if (res.created) { invoiceCreated = true; setBanner(`Draft invoice ${res.invoiceNumber} created. Review in Invoices.`) }
       else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this visit has no price. Set a price to bill it.')
+    }
+    // Automated job-complete message (opt-in + dedupe are enforced by the route).
+    if (automations.job_complete && job.customer_id) {
+      fetch('/api/comms/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ customerId: job.customer_id, template: 'job_complete', jobId: job.id, dedupe: true }) }).catch(() => {})
     }
     await fetchJobs()
     offerUndo('Job completed', async () => {

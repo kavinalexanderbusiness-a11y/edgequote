@@ -6,6 +6,7 @@ import { Invoice, InvoiceStatus, INVOICE_STATUS_LABELS, INVOICE_STATUS_COLORS, B
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { SendComms } from '@/components/comms/SendComms'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { FileText, User, Check, FileDown, Trash2 } from 'lucide-react'
 
@@ -281,6 +282,11 @@ export default function InvoicesPage() {
                     </Button>
                   </div>
                 </div>
+                {inv.customer_id && (
+                  <div className="mt-3 pt-3 border-t border-border">
+                    <SendComms customerId={inv.customer_id} template="invoice" vars={{ amount: formatCurrency(Number(inv.amount)) }} label="Send invoice" />
+                  </div>
+                )}
               </CardBody>
             </Card>
           ))}
