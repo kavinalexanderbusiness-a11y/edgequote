@@ -30,6 +30,9 @@ export function CommunicationsTest() {
   const [to, setTo] = useState('')
   const [sending, setSending] = useState(false)
   const [result, setResult] = useState<SendResult | null>(null)
+  const [emailTo, setEmailTo] = useState('')
+  const [emailSending, setEmailSending] = useState(false)
+  const [emailResult, setEmailResult] = useState<SendResult | null>(null)
 
   async function loadDiag() {
     setLoadingDiag(true)
@@ -38,16 +41,25 @@ export function CommunicationsTest() {
   }
   useEffect(() => { loadDiag() }, [])
 
+  async function runTest(channel: 'sms' | 'email', recipient: string): Promise<SendResult> {
+    try {
+      const r = await fetch('/api/comms/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: recipient.trim(), channel }) })
+      return await r.json()
+    } catch (e) {
+      return { sent: false, error: e instanceof Error ? e.message : 'Request failed' }
+    }
+  }
   async function sendTest() {
     if (!to.trim()) return
     setSending(true); setResult(null)
-    try {
-      const r = await fetch('/api/comms/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ to: to.trim(), channel: 'sms' }) })
-      setResult(await r.json())
-    } catch (e) {
-      setResult({ sent: false, error: e instanceof Error ? e.message : 'Request failed' })
-    }
+    setResult(await runTest('sms', to))
     setSending(false)
+  }
+  async function sendTestEmail() {
+    if (!emailTo.trim()) return
+    setEmailSending(true); setEmailResult(null)
+    setEmailResult(await runTest('email', emailTo))
+    setEmailSending(false)
   }
 
   return (
@@ -119,6 +131,32 @@ export function CommunicationsTest() {
                   <div className="mt-3 flex items-start gap-2 text-xs text-red-400 rounded-lg px-3 py-2 border border-red-500/30 bg-red-500/10">
                     <XCircle className="w-4 h-4 shrink-0 mt-0.5" />
                     <span><span className="font-semibold">{result.reason === 'disabled' ? 'Disabled' : 'Failed'}.</span> {result.error || 'Unknown error.'}</span>
+                  </div>
+                )
+              )}
+            </div>
+
+            {/* Test email */}
+            <div className="border-t border-border pt-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-1.5">Send a test email</p>
+              <div className="flex flex-col sm:flex-row gap-2 sm:items-end">
+                <div className="flex-1">
+                  <Input label="Your email address" type="email" placeholder="you@example.com" value={emailTo} onChange={e => setEmailTo(e.target.value)} />
+                </div>
+                <Button onClick={sendTestEmail} loading={emailSending} disabled={!emailTo.trim()}>Send test email</Button>
+              </div>
+              <p className="text-[10px] text-ink-faint mt-1">Sent from {diag.resendFrom || 'your RESEND_FROM address'} — must be on a domain verified in Resend.</p>
+
+              {emailResult && (
+                emailResult.sent ? (
+                  <div className="mt-3 flex items-start gap-2 text-xs text-emerald-400 rounded-lg px-3 py-2 border border-emerald-500/30 bg-emerald-500/10">
+                    <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span><span className="font-semibold">Test email sent.</span>{emailResult.id ? ` Resend ID ${emailResult.id}.` : ''} Check the inbox (and spam).</span>
+                  </div>
+                ) : (
+                  <div className="mt-3 flex items-start gap-2 text-xs text-red-400 rounded-lg px-3 py-2 border border-red-500/30 bg-red-500/10">
+                    <XCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span><span className="font-semibold">{emailResult.reason === 'disabled' ? 'Disabled' : 'Failed'}.</span> {emailResult.error || 'Unknown error.'}</span>
                   </div>
                 )
               )}
