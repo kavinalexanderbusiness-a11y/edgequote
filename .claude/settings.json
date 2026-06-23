@@ -27,7 +27,9 @@
       "Bash(xargs grep -l \"from.*invoices.*select\")",
       "Bash(xargs grep -l \"business_settings\")",
       "PowerShell(npx tsc --noEmit 2>&1 | Select-Object -First 30; Write-Output \"---EXIT:$LASTEXITCODE---\")",
-      "Bash(xargs grep -l \"csv\\\\|import\\\\|bulk\")"
+      "Bash(xargs grep -l \"csv\\\\|import\\\\|bulk\")",
+      "Bash(xargs grep -l \"create table.*properties\\\\|create table.*business_settings\")",
+      "Bash(xargs grep -l \"create table.*properties\\\\|CREATE TABLE.*properties\")"
     ],
     "additionalDirectories": [
       "c:\\Users\\Kavin\\.claude\\projects\\c--Users-Kavin-Downloads-edgequote-edgequote\\memory"

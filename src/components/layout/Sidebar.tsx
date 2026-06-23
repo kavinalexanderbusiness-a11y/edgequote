@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { LayoutDashboard, Users, FileText, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Navigation, Receipt, Menu, X, Sprout } from 'lucide-react'
+import { LayoutDashboard, Users, FileText, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Navigation, Receipt, Menu, X, Sprout, MessageSquare } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 
@@ -17,6 +17,7 @@ const navMain = [
   { label: 'Properties', href: '/dashboard/properties', icon: Home },
   { label: 'Quotes',     href: '/dashboard/quotes',     icon: FileText },
   { label: 'Invoices',   href: '/dashboard/invoices',   icon: Receipt },
+  { label: 'Messages',   href: '/dashboard/messages',   icon: MessageSquare },
   { label: 'Grow',       href: '/dashboard/grow',       icon: Sprout },
 ]
 
@@ -25,6 +26,7 @@ export function Sidebar() {
   const router = useRouter()
   const [open, setOpen] = useState(false)
   const [brand, setBrand] = useState<{ url: string | null; scale: number }>({ url: null, scale: 100 })
+  const [unread, setUnread] = useState(0)
 
   // Uploaded logo + size from Branding settings (cached for the login screen).
   useEffect(() => {
@@ -43,6 +45,11 @@ export function Sidebar() {
       const next = { url: s?.logo_url ?? null, scale: s?.logo_scale && s.logo_scale >= 50 ? s.logo_scale : 100 }
       setBrand(next)
       try { window.localStorage.setItem('eq-logo', JSON.stringify(next)) } catch { /* ignore */ }
+      // Unread customer messages → the Messages nav badge.
+      const { count } = await supabase.from('service_requests')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', user.id).eq('status', 'new')
+      if (active) setUnread(count || 0)
     }
     load()
     return () => { active = false }
@@ -66,10 +73,16 @@ export function Sidebar() {
         <nav className="flex-1 px-3 py-4 flex flex-col gap-0.5 overflow-y-auto">
           {navMain.map(({ label, href, icon: Icon }) => {
             const active = href === '/dashboard' ? pathname === '/dashboard' : pathname.startsWith(href)
+            const badge = label === 'Messages' && unread > 0 ? unread : 0
             return (
               <Link key={href} href={href} onClick={onNavigate} className={linkClass(active)}>
                 <Icon className="w-4 h-4" />
-                {label}
+                <span className="flex-1">{label}</span>
+                {badge > 0 && (
+                  <span className="shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-accent text-black text-[10px] font-bold flex items-center justify-center">
+                    {badge > 9 ? '9+' : badge}
+                  </span>
+                )}
               </Link>
             )
           })}

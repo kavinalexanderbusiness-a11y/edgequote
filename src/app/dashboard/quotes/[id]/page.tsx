@@ -428,53 +428,56 @@ export default function QuoteDetailPage() {
 
   return (
     <div className="max-w-3xl space-y-6">
-      <div className="flex items-center gap-3">
-        <button onClick={() => router.back()} className="text-ink-muted hover:text-ink transition-colors">
-          <ArrowLeft className="w-4 h-4" />
-        </button>
-        <PageHeader
-          title={quote.quote_number}
-          description={`Created ${formatDate(quote.created_at)}`}
-          action={
-            <div className="flex flex-wrap items-center gap-2">
-              {/* Primary deliver action — leads the row */}
-              {quote.status === 'draft' ? (
-                <Button onClick={handleSendQuote} size="sm" loading={pdfLoading}>
-                  <Send className="w-3.5 h-3.5" /> PDF &amp; mark sent
-                </Button>
-              ) : (
-                <Button onClick={handleOpenPdf} size="sm" loading={pdfLoading}>
-                  <FileDown className="w-3.5 h-3.5" /> Open PDF
-                </Button>
-              )}
-              <QuoteStatusControl
-                key={quote.status}
-                quoteId={quote.id}
-                status={quote.status}
-                onChanged={(s) => {
-                  setQuote(prev => prev ? { ...prev, status: s } : prev)
-                  if (s === 'accepted') setShowSchedulePrompt(true)
-                }}
-              />
-              {canSchedule && (
-                <Button onClick={() => handleScheduleJob()} variant="secondary" size="sm" loading={scheduling}>
-                  <CalendarPlus className="w-3.5 h-3.5" /> Schedule Job
-                </Button>
-              )}
-              {canInvoice && (
-                <Button onClick={handleConvertToInvoice} variant="secondary" size="sm" loading={converting}>
-                  <FileText className="w-3.5 h-3.5" /> Convert to Invoice
-                </Button>
-              )}
-              <Button onClick={() => setEditing(true)} variant="ghost" size="sm">
-                <Edit2 className="w-3.5 h-3.5" /> Edit
-              </Button>
-              <Button onClick={handleDuplicate} variant="ghost" size="sm" loading={duplicating}>
-                <Copy className="w-3.5 h-3.5" /> Duplicate
-              </Button>
-            </div>
-          }
-        />
+      {/* Responsive header: title + actions on one row on desktop (lg); on
+          tablet/mobile the action toolbar wraps onto its own row beneath the
+          quote number, which stays min-w-0/break-words so it's never covered. */}
+      <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+        <div className="flex items-start gap-3 min-w-0">
+          <button onClick={() => router.back()} className="mt-1 shrink-0 text-ink-muted hover:text-ink transition-colors" aria-label="Back">
+            <ArrowLeft className="w-4 h-4" />
+          </button>
+          <div className="min-w-0">
+            <h1 className="text-xl font-bold text-ink tracking-tight break-words">{quote.quote_number}</h1>
+            <p className="text-sm text-ink-muted mt-0.5">Created {formatDate(quote.created_at)}</p>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 lg:justify-end lg:shrink-0">
+          {/* Primary deliver action — leads the row */}
+          {quote.status === 'draft' ? (
+            <Button onClick={handleSendQuote} size="sm" loading={pdfLoading}>
+              <Send className="w-3.5 h-3.5" /> PDF &amp; mark sent
+            </Button>
+          ) : (
+            <Button onClick={handleOpenPdf} size="sm" loading={pdfLoading}>
+              <FileDown className="w-3.5 h-3.5" /> Open PDF
+            </Button>
+          )}
+          <QuoteStatusControl
+            key={quote.status}
+            quoteId={quote.id}
+            status={quote.status}
+            onChanged={(s) => {
+              setQuote(prev => prev ? { ...prev, status: s } : prev)
+              if (s === 'accepted') setShowSchedulePrompt(true)
+            }}
+          />
+          {canSchedule && (
+            <Button onClick={() => handleScheduleJob()} variant="secondary" size="sm" loading={scheduling}>
+              <CalendarPlus className="w-3.5 h-3.5" /> Schedule Job
+            </Button>
+          )}
+          {canInvoice && (
+            <Button onClick={handleConvertToInvoice} variant="secondary" size="sm" loading={converting}>
+              <FileText className="w-3.5 h-3.5" /> Convert to Invoice
+            </Button>
+          )}
+          <Button onClick={() => setEditing(true)} variant="ghost" size="sm">
+            <Edit2 className="w-3.5 h-3.5" /> Edit
+          </Button>
+          <Button onClick={handleDuplicate} variant="ghost" size="sm" loading={duplicating}>
+            <Copy className="w-3.5 h-3.5" /> Duplicate
+          </Button>
+        </div>
       </div>
 
       {/* Send this quote to the customer (SMS / Email / Both) */}
