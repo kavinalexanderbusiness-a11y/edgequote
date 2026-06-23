@@ -18,7 +18,8 @@ export const CADENCE_LABELS: Record<CadenceKey, string> = {
 
 // Per-cadence prices + season value, which option to push and why, and the
 // don't-go-below guidance. Tapping a price applies it to the quote. The
-// is-this-customer-worth-it verdict lives in ProspectCard, rendered beneath.
+// is-this-customer-worth-it verdict lives in DecisionSummary, which folds this
+// panel away under "View full analysis".
 export function PricePackagePanel({ pkg, onUse }: { pkg: PricingPackage; onUse: (sel: CadenceSelection) => void }) {
   const recLabel = CADENCE_LABELS[pkg.recommended.cadence]
 

@@ -7,8 +7,7 @@ import { pricingPackage, estimateVisitMinutes, PricingConfig, CadenceKey } from 
 import { Coord } from '@/lib/geo'
 import { ProspectContext, loadProspectContext, assessProspect } from '@/lib/prospect'
 import { PricePackagePanel, CadenceSelection } from '@/components/pricing/PricePackagePanel'
-import { ProspectCard } from '@/components/pricing/ProspectCard'
-import { BusinessVerdictCard } from '@/components/pricing/BusinessVerdictCard'
+import { DecisionSummary } from '@/components/pricing/DecisionSummary'
 import { DEFAULT_CREW_COST, crewCostPerHour as resolveCrewCost } from '@/lib/economics'
 import { Button } from '@/components/ui/Button'
 import { X, Undo2, Trash2, Plus, Ruler } from 'lucide-react'
@@ -339,17 +338,7 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
                       Pricing recommendation{Number(travelFee || 0) > 0 ? ` · $${Number(travelFee).toLocaleString()} travel stays on the quote` : ''}
                     </p>
                     {assessment ? (
-                      <BusinessVerdictCard
-                        a={assessment}
-                        pkg={pkg}
-                        onUse={applySelection}
-                        details={
-                          <div className="space-y-3 pt-1">
-                            <PricePackagePanel pkg={pkg} onUse={applySelection} />
-                            <ProspectCard a={assessment} />
-                          </div>
-                        }
-                      />
+                      <DecisionSummary a={assessment} pkg={pkg} onUse={applySelection} />
                     ) : (
                       <PricePackagePanel pkg={pkg} onUse={applySelection} />
                     )}

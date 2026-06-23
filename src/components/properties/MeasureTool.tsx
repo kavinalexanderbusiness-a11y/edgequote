@@ -8,8 +8,7 @@ import { Property, BusinessSettings, MeasurementSnapshot, LawnSections, PricingC
 import { priceTiers, routeDensityTravel, pricingConfidence, travelFeeForDistance, pricingConfigFromSettings, PricingConfig, DEFAULT_PRICING, PriceTier, pricingPackage, estimateVisitMinutes, buildSavedRecommendation } from '@/lib/pricing'
 import { PricePackagePanel, CadenceSelection } from '@/components/pricing/PricePackagePanel'
 import { ProspectContext, loadProspectContext, assessProspect } from '@/lib/prospect'
-import { ProspectCard } from '@/components/pricing/ProspectCard'
-import { BusinessVerdictCard } from '@/components/pricing/BusinessVerdictCard'
+import { DecisionSummary } from '@/components/pricing/DecisionSummary'
 import { DEFAULT_CREW_COST, crewCostPerHour as resolveCrewCost } from '@/lib/economics'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { Coord, haversineKm, nearbyJobCount, fetchLocatedUpcomingJobs } from '@/lib/geo'
@@ -541,9 +540,13 @@ export function MeasureTool({ property }: { property: Property }) {
       sections,
       jobPrice,
       cadence: sel?.cadence ?? null,
-      weekly: sel?.cadence === 'weekly' ? pkgT.options[0].price : null,
-      biweekly: sel?.cadence === 'biweekly' ? pkgT.options[1].price : null,
-      monthly: sel?.cadence === 'monthly' ? pkgT.options[2].price : null,
+      // Persist EXACTLY the grade-adjusted price the owner tapped on the verdict
+      // card (sel.price from DecisionSummary's "Use X — $Y" button). pkgT here is
+      // built WITHOUT the customer grade, so its option prices can differ from the
+      // displayed (grade-adjusted) ones — use sel.price so saved == shown.
+      weekly: sel?.cadence === 'weekly' ? sel.price : null,
+      biweekly: sel?.cadence === 'biweekly' ? sel.price : null,
+      monthly: sel?.cadence === 'monthly' ? sel.price : null,
       travelFee: effectiveTravel,
       includeTravel,
       travelDistanceKm: distanceKm,
@@ -715,19 +718,9 @@ export function MeasureTool({ property }: { property: Property }) {
           <div className="bg-bg-secondary border border-border rounded-xl px-4 py-3 space-y-3">
             <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Pricing recommendation</span>
             {assessment ? (
-              // Decision-first: verdict + price + profit up top; options & full
-              // route/growth analysis tuck under "Full analysis".
-              <BusinessVerdictCard
-                a={assessment}
-                pkg={pkg}
-                onUse={sel => createQuote(sel)}
-                details={
-                  <div className="space-y-3 pt-1">
-                    <PricePackagePanel pkg={pkg} onUse={sel => createQuote(sel)} />
-                    <ProspectCard a={assessment} />
-                  </div>
-                }
-              />
+              // Decision-first: five numbers + take/minimum/avoid up top; the full
+              // route/customer/growth/LTV analysis folds under "View full analysis".
+              <DecisionSummary a={assessment} pkg={pkg} onUse={sel => createQuote(sel)} />
             ) : (
               <PricePackagePanel pkg={pkg} onUse={sel => createQuote(sel)} />
             )}

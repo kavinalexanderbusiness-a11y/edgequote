@@ -12,7 +12,12 @@
       "Bash(echo \"tsc errors: $\\(npx tsc --noEmit 2>&1)",
       "Bash(awk -F= '/^RESEND_FROM=/{v=substr\\($0,index\\($0,\"=\"\\)+1\\); print \"RESEND_FROM length:\", length\\(v\\)} /^RESEND_API_KEY=/{v=substr\\($0,index\\($0,\"=\"\\)+1\\); print \"RESEND_API_KEY length:\", length\\(v\\)}' .env.local)",
       "Bash(npx --yes esbuild scripts/repro-comms.ts --bundle --platform=node --format=cjs --alias:@=./src --outfile=scripts/.repro-comms.cjs)",
-      "Bash(node scripts/.repro-comms.cjs)"
+      "Bash(node scripts/.repro-comms.cjs)",
+      "mcp__supabase__list_migrations",
+      "Bash(cat >> *)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\Kavin\\.claude\\projects\\c--Users-Kavin-Downloads-edgequote-edgequote\\memory"
     ]
   }
 }

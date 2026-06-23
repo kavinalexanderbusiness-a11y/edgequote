@@ -372,8 +372,3 @@ export function assessProspect(
     decision,
   }
 }
-
-// Visits-per-season for the financial line ("× N visits").
-export function visitsFor(cadence: CadenceKey): number {
-  return cadence === 'one_time' ? 1 : SEASON_VISITS[cadence]
-}
