@@ -1242,6 +1242,11 @@ do $$ begin
       select sr.user_id, c.id, sr.customer_id, 'inbound', 'portal', sr.message, 'received', jsonb_build_object('service_request_id', sr.id), sr.created_at
       from public.service_requests sr join public.conversations c on c.user_id = sr.user_id and c.customer_id = sr.customer_id
       where sr.customer_id is not null;
+    -- bump_conversation() counts each historical inbound row as unread. These are
+    -- pre-existing requests, not new mail — clear the counter so the freshly
+    -- backfilled inbox doesn't open with large false unread badges. Safe because
+    -- this runs only on the first apply (guarded by the empty-table check above).
+    update public.conversations set unread = 0;
   end if;
 end $$;
 

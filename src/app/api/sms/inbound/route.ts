@@ -61,14 +61,13 @@ export async function POST(req: NextRequest) {
     await sb.from('consent_changes').insert({ user_id: c.user_id, customer_id: c.id, channel: 'sms', old_value: false, new_value: true, source: 'sms', changed_by: 'customer (SMS START)' })
   }
 
-  // Get-or-create the conversation, then append the inbound message.
-  let convoId: string | null = null
-  const { data: existing } = await sb.from('conversations').select('id').eq('user_id', c.user_id).eq('customer_id', c.id).maybeSingle()
-  if (existing) convoId = (existing as { id: string }).id
-  else {
-    const { data: created } = await sb.from('conversations').insert({ user_id: c.user_id, customer_id: c.id, last_message_at: new Date().toISOString() }).select('id').single()
-    convoId = (created as { id: string } | null)?.id ?? null
-  }
+  // Get-or-create the conversation atomically. An upsert on the unique key
+  // (user_id, customer_id) means two inbound texts racing for a brand-new
+  // customer can't both miss a SELECT and drop one message on the floor.
+  const { data: convo } = await sb.from('conversations')
+    .upsert({ user_id: c.user_id, customer_id: c.id, last_message_at: new Date().toISOString() }, { onConflict: 'user_id,customer_id' })
+    .select('id').single()
+  const convoId = (convo as { id: string } | null)?.id ?? null
   if (!convoId) return twiml()
 
   await sb.from('messages').insert({

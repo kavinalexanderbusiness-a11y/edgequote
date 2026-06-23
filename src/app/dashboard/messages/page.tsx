@@ -64,7 +64,7 @@ export default function MessagesPage() {
                       {c.unread > 0 && <span className="shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-accent text-black text-[10px] font-bold flex items-center justify-center">{c.unread > 9 ? '9+' : c.unread}</span>}
                     </div>
                     <p className={cn('text-xs truncate mt-0.5', c.unread > 0 ? 'text-ink font-medium' : 'text-ink-muted')}>
-                      {c.last_direction && c.last_direction !== 'inbound' ? 'You: ' : ''}{c.last_preview || '…'}
+                      {c.last_direction === 'internal' ? 'Note: ' : c.last_direction && c.last_direction !== 'inbound' ? 'You: ' : ''}{c.last_preview || '…'}
                     </p>
                     <p className="text-[10px] text-ink-faint mt-0.5">{timeAgo(c.last_message_at)}</p>
                   </div>

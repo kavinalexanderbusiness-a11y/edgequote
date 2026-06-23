@@ -36,10 +36,18 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
       id: 'm' + m.id, at: m.created_at, channel: m.channel, body: m.body, status: m.status,
       kind: m.direction === 'inbound' ? 'in' : m.direction === 'internal' ? 'note' : 'out',
     }))
-    const logs: Item[] = (lRes.data as Log[] || []).map(l => ({
-      id: 'l' + l.id, at: l.created_at, channel: l.channel, kind: 'event',
-      body: `Sent ${MSG_LABELS[l.template as MsgType] || l.template} · ${l.channel}`, status: l.status,
-    }))
+    const logs: Item[] = (lRes.data as Log[] || []).map(l => {
+      // notification_log statuses: 'sent' | 'skipped' (no opt-in/contact) |
+      // 'disabled' (messaging not set up) | 'error'. Don't claim "Sent" unless it was.
+      const verb = l.status === 'sent' ? 'Sent'
+        : l.status === 'skipped' ? 'Not sent (no opt-in)'
+        : l.status === 'disabled' ? 'Not sent (messaging off)'
+        : 'Send failed'
+      return {
+        id: 'l' + l.id, at: l.created_at, channel: l.channel, kind: 'event', status: l.status,
+        body: `${verb} · ${MSG_LABELS[l.template as MsgType] || l.template} · ${l.channel}`,
+      }
+    })
     setItems([...msgs, ...logs].sort((a, b) => a.at.localeCompare(b.at)))
     setLoading(false)
     await supabase.from('conversations').update({ unread: 0 }).eq('user_id', user.id).eq('customer_id', customerId)
@@ -96,7 +104,8 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
 function Bubble({ it }: { it: Item }) {
   const time = (() => { try { return format(new Date(it.at), 'MMM d, h:mm a') } catch { return '' } })()
   if (it.kind === 'event') {
-    return <div className="text-center"><span className="inline-block text-[10px] text-ink-faint bg-bg-tertiary border border-border rounded-full px-2.5 py-0.5">{it.body} · {time}</span></div>
+    const notSent = it.status && it.status !== 'sent'
+    return <div className="text-center"><span className={cn('inline-block text-[10px] rounded-full px-2.5 py-0.5 border', notSent ? 'text-amber-400 bg-amber-500/10 border-amber-500/25' : 'text-ink-faint bg-bg-tertiary border-border')}>{it.body} · {time}</span></div>
   }
   if (it.kind === 'note') {
     return (
