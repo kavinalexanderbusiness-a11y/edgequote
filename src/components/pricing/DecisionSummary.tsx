@@ -49,14 +49,19 @@ function buildTags(a: ProspectAssessment, pkg: PricingPackage): { text: string; 
   if (pkg.recommended.cadence !== 'one_time') tags.push({ text: '✅ Recurring Revenue', tone: 'good' })
 
   // Margin — healthy vs thin, from the profit engine.
+  const underpriced = a.financial.expectedProfit <= 0
   if (a.financial.expectedProfit > 0 && a.financial.profitPerHour >= a.financial.crewCostPerHour)
     tags.push({ text: '✅ High Profit', tone: 'good' })
-  else if (a.financial.expectedProfit <= 0) tags.push({ text: '❌ Underpriced', tone: 'bad' })
+  else if (underpriced) tags.push({ text: '❌ Underpriced', tone: 'bad' })
   else tags.push({ text: '⚠️ Low Margin', tone: 'warn' })
 
-  // Pricing power in the area.
-  if (pkg.valuePricing?.aggressiveness === 'aggressive') tags.push({ text: '✅ Premium Area', tone: 'good' })
-  else if (pkg.valuePricing?.aggressiveness === 'protective') tags.push({ text: '⚠️ Hold Price', tone: 'warn' })
+  // Pricing power in the area — NEVER shown alongside ❌ Underpriced. The pricing-
+  // power signal is grade-derived; when the visit actually loses money the profit
+  // warning wins, so a card can never say "Premium Area" and "Underpriced" at once.
+  if (!underpriced) {
+    if (pkg.valuePricing?.aggressiveness === 'aggressive') tags.push({ text: '✅ Premium Area', tone: 'good' })
+    else if (pkg.valuePricing?.aggressiveness === 'protective') tags.push({ text: '⚠️ Hold Price', tone: 'warn' })
+  }
 
   return tags
 }
