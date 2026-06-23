@@ -7,8 +7,9 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { SendComms } from '@/components/comms/SendComms'
+import { PaymentHistory } from '@/components/payments/PaymentHistory'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
-import { FileText, User, Check, FileDown, Trash2 } from 'lucide-react'
+import { FileText, User, Check, FileDown, Trash2, CreditCard } from 'lucide-react'
 
 const STATUS_CYCLE: InvoiceStatus[] = ['unpaid', 'sent', 'paid']
 const FILTERS: { value: '' | InvoiceStatus; label: string }[] = [
@@ -28,6 +29,9 @@ export default function InvoicesPage() {
   const [openingId, setOpeningId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [filter, setFilter] = useState<'' | InvoiceStatus>('')
+  const [paymentsEnabled, setPaymentsEnabled] = useState(false)
+  const [payingId, setPayingId] = useState<string | null>(null)
+  const [toast, setToast] = useState<string | null>(null)
 
   async function fetchInvoices() {
     try {
@@ -54,6 +58,37 @@ export default function InvoicesPage() {
   }
 
   useEffect(() => { fetchInvoices() }, [])
+
+  // Payments availability + return-from-Stripe handling. ?paid=1 means the
+  // customer just completed checkout; the webhook marks the invoice paid a beat
+  // later, so we refetch after a short delay.
+  useEffect(() => {
+    fetch('/api/payments/status').then(r => r.json()).then(d => setPaymentsEnabled(!!d.enabled)).catch(() => {})
+    if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('paid') === '1') {
+      setToast('Payment received — updating the invoice…')
+      window.history.replaceState({}, '', '/dashboard/invoices')
+      setTimeout(() => fetchInvoices(), 1500)
+      setTimeout(() => setToast(null), 6000)
+    }
+  }, [])
+
+  // Create a hosted Stripe payment link for this invoice — open it (take a card
+  // now) and copy it (text it to the customer).
+  async function payNow(inv: Invoice) {
+    setPayingId(inv.id)
+    try {
+      const res = await fetch('/api/payments/checkout', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invoiceId: inv.id }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok || !d.url) { setToast(d.error || 'Could not start payment.'); setTimeout(() => setToast(null), 5000); return }
+      try { await navigator.clipboard.writeText(d.url) } catch { /* clipboard optional */ }
+      window.open(d.url, '_blank')
+      setToast('Payment link opened & copied — take a card or send the link.')
+      setTimeout(() => setToast(null), 6000)
+    } finally { setPayingId(null) }
+  }
 
   async function openInvoicePdf(inv: Invoice) {
     setOpeningId(inv.id)
@@ -153,6 +188,10 @@ export default function InvoicesPage() {
         title="Invoices"
         description={`${invoices.length} invoice${invoices.length !== 1 ? 's' : ''}`}
       />
+
+      {toast && (
+        <div className="text-sm text-ink bg-accent/10 border border-accent/30 rounded-xl px-4 py-2.5">{toast}</div>
+      )}
 
       {loadError && (
         <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5">
@@ -271,6 +310,11 @@ export default function InvoicesPage() {
                       {inv.status === 'paid' && <Check className="w-3 h-3" />}
                       {INVOICE_STATUS_LABELS[inv.status]}
                     </button>
+                    {paymentsEnabled && (inv.status === 'unpaid' || inv.status === 'sent') && (
+                      <Button onClick={() => payNow(inv)} size="sm" loading={payingId === inv.id} title="Create a Stripe payment link">
+                        <CreditCard className="w-3.5 h-3.5" /> Pay
+                      </Button>
+                    )}
                     {(inv.status === 'unpaid' || inv.status === 'sent') && (
                       <Button onClick={() => markPaid(inv)} variant="secondary" size="sm" title="Mark paid">
                         <Check className="w-3.5 h-3.5" /> Paid
@@ -292,6 +336,8 @@ export default function InvoicesPage() {
           ))}
         </div>
       )}
+
+      {!loading && !loadError && invoices.length > 0 && <PaymentHistory />}
     </div>
   )
 }

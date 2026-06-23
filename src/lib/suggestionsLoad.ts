@@ -18,7 +18,7 @@ export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggest
   // user_id directly (not by the jobs' ids) so they no longer serialize AFTER the
   // jobs query — every read fires at once. Dismissals load here too.
   const today = localTodayISO()
-  const [jRes, qRes, rRes, pRes, cRes, iRes, nRes, sRes, liRes, dRes] = await Promise.all([
+  const [jRes, qRes, rRes, pRes, cRes, iRes, nRes, sRes, liRes, dRes, woRes] = await Promise.all([
     supabase.from('jobs')
       .select('*, customers(id, name, phone, preferred_days, avoid_days, pref_time_start, pref_time_end), properties(id, address, lat, lng, neighborhood, preferred_days, avoid_days, pref_time_start, pref_time_end)')
       .eq('user_id', uid),
@@ -29,10 +29,11 @@ export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggest
     supabase.from('invoices').select('job_id, status, amount, property_id, customer_id').eq('user_id', uid),
     supabase.from('neighbor_leads').select('status, neighborhood').eq('user_id', uid),
     supabase.from('business_settings')
-      .select('crew_cost_per_hour, target_rev_per_hour, pricing_base_charge, pricing_mow_rate, pricing_recommended_mult, pricing_premium_mult, pricing_travel_rate, preferred_work_days, daily_capacity_hours, base_lat, base_lng, service_seasons')
+      .select('crew_cost_per_hour, target_rev_per_hour, pricing_base_charge, pricing_mow_rate, pricing_recommended_mult, pricing_premium_mult, pricing_travel_rate, preferred_work_days, daily_capacity_hours, work_start_time, base_lat, base_lng, service_seasons')
       .eq('user_id', uid).maybeSingle(),
     supabase.from('job_line_items').select('*').eq('user_id', uid).order('created_at', { ascending: true }),
     supabase.from('suggestion_dismissals').select('suggestion_key, snooze_until').eq('user_id', uid),
+    supabase.from('quote_outcomes').select('quote_id, reason, detail, competitor_price').eq('user_id', uid),
   ])
 
   const jobs = (jRes.data as Job[]) || []
@@ -67,6 +68,7 @@ export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggest
     baseCoord: baseLat != null && baseLng != null ? { lat: baseLat, lng: baseLng } : null,
     preferredDays: (settings?.preferred_work_days as number[] | null)?.length ? (settings!.preferred_work_days as number[]) : [5, 6, 0],
     capacityHours: Number(settings?.daily_capacity_hours) > 0 ? Number(settings!.daily_capacity_hours) : 8,
+    workStart: (settings?.work_start_time as string | null) || '08:00',
     jobs,
     quotes: (qRes.data as Quote[]) || [],
     recurrences,
@@ -77,6 +79,7 @@ export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggest
     neighborLeads: (nRes.data as { status: string | null; neighborhood: string | null }[]) || [],
     invoicedJobIds,
     dismissedKeys,
+    quoteOutcomes: (woRes.data as { quote_id: string; reason: string; detail: string | null; competitor_price: number | null }[]) || [],
   }
 
   return buildSuggestions(ctx)

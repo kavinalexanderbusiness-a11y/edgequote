@@ -9,7 +9,7 @@ import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
 import {
   Home, History, Image as ImageIcon, FileText, Receipt, MessageSquarePlus, Check, Loader2,
-  Phone, Globe, Mail, Leaf, CheckCircle2, Navigation, Play, CalendarClock, Repeat, MapPin, Ruler, Sparkles,
+  Phone, Globe, Mail, Leaf, CheckCircle2, Navigation, Play, CalendarClock, Repeat, MapPin, Ruler, Sparkles, CreditCard,
 } from 'lucide-react'
 
 // ── Premium Customer Portal ─────────────────────────────────────────────────────
@@ -58,6 +58,9 @@ export default function PortalPage() {
   const [reqMsg, setReqMsg] = useState('')
   const [reqBusy, setReqBusy] = useState<string | null>(null)
   const [reqSent, setReqSent] = useState<string | null>(null)
+  const [paymentsEnabled, setPaymentsEnabled] = useState(false)
+  const [payingId, setPayingId] = useState<string | null>(null)
+  const [justPaid, setJustPaid] = useState(false)
 
   async function load() {
     const { data: d } = await supabase.rpc('get_portal_data', { p_token: token })
@@ -65,6 +68,17 @@ export default function PortalPage() {
     setLoading(false)
   }
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Payments availability + return-from-Stripe. ?paid=1 → the webhook marks the
+  // invoice paid a beat later, so refetch shortly after.
+  useEffect(() => {
+    fetch('/api/payments/status').then(r => r.json()).then(d => setPaymentsEnabled(!!d.enabled)).catch(() => {})
+    if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('paid') === '1') {
+      setJustPaid(true)
+      window.history.replaceState({}, '', `/portal/${token}`)
+      setTimeout(() => load(), 1500)
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   function photoUrl(path: string) { return supabase.storage.from('job-photos').getPublicUrl(path).data.publicUrl }
 
@@ -80,6 +94,18 @@ export default function PortalPage() {
     const { data: ok } = await supabase.rpc('portal_request_service', { p_token: token, p_message: message.trim() })
     setReqBusy(null)
     if (ok) { setReqSent(key); if (key === 'custom') setReqMsg(''); setTimeout(() => setReqSent(null), 4000) }
+  }
+  async function pay(invoiceId: string) {
+    setPayingId(invoiceId)
+    try {
+      const res = await fetch('/api/portal/pay', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, invoiceId }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (res.ok && d.url) { window.location.href = d.url; return }
+      alert(d.error || 'Could not start payment. Please try again.')
+    } finally { setPayingId(null) }
   }
 
   // ── derived ──
@@ -155,11 +181,16 @@ export default function PortalPage() {
         </div>
 
         <div className="mt-4">
+          {justPaid && (
+            <div className="mb-3 rounded-card border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-sm font-medium px-4 py-3 flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4" /> Payment received — thank you! Your invoice will update shortly.
+            </div>
+          )}
           {tab === 'home' && <HomeTab data={data} derived={derived} biz={biz} />}
           {tab === 'service' && <ServiceTab completed={derived.completed} photosByJob={photosByJob} invoiceByJob={invoiceByJob} photoUrl={photoUrl} />}
           {tab === 'photos' && <GalleryTab photosByJob={photosByJob} jobs={data.jobs} photoUrl={photoUrl} />}
           {tab === 'quotes' && <QuotesTab quotes={data.quotes} accept={accept} accepting={accepting} />}
-          {tab === 'invoices' && <InvoicesTab invoices={data.invoices} />}
+          {tab === 'invoices' && <InvoicesTab invoices={data.invoices} paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} />}
           {tab === 'request' && (
             <RequestTab presets={REQUEST_PRESETS} reqMsg={reqMsg} setReqMsg={setReqMsg} request={request} reqBusy={reqBusy} reqSent={reqSent} biz={biz} />
           )}
@@ -390,11 +421,15 @@ function QuotesTab({ quotes, accept, accepting }: { quotes: PortalQuote[]; accep
 }
 
 // ── Invoices ──
-function InvoicesTab({ invoices }: { invoices: PortalInvoice[] }) {
+function InvoicesTab({ invoices, paymentsEnabled, pay, payingId }: {
+  invoices: PortalInvoice[]; paymentsEnabled: boolean; pay: (id: string) => void; payingId: string | null
+}) {
   if (invoices.length === 0) return <Empty text="No invoices yet." />
   return (
     <div className="space-y-3">
-      {invoices.map(inv => (
+      {invoices.map(inv => {
+        const owing = inv.status === 'unpaid' || inv.status === 'sent'
+        return (
         <div key={inv.id} className="rounded-card border border-border bg-bg-secondary p-4">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0"><p className="text-sm font-semibold text-ink">{inv.service_type || 'Services'}</p><p className="text-xs text-ink-muted">{inv.invoice_number} · {inv.issued_date ? formatDate(inv.issued_date) : formatDate(inv.created_at)}{inv.due_date ? ` · due ${formatDate(inv.due_date)}` : ''}</p></div>
@@ -405,8 +440,16 @@ function InvoicesTab({ invoices }: { invoices: PortalInvoice[] }) {
               {inv.line_items.map((li, i) => <p key={i} className="text-xs flex justify-between gap-3"><span className="text-ink-faint">{li.description}</span><span className="text-ink-muted">{formatCurrency(Number(li.amount))}</span></p>)}
             </div>
           )}
+          {paymentsEnabled && owing && (
+            <div className="mt-3">
+              <Button size="sm" onClick={() => pay(inv.id)} loading={payingId === inv.id}>
+                <CreditCard className="w-4 h-4" /> Pay {formatCurrency(Number(inv.amount))}
+              </Button>
+            </div>
+          )}
         </div>
-      ))}
+        )
+      })}
     </div>
   )
 }

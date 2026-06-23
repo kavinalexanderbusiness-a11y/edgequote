@@ -548,7 +548,12 @@ begin
     'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code from public.customers where id = v_customer) c),
     'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, website, logo_url from public.business_settings where user_id = v_user) b),
     'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
-    'quotes', coalesce((select json_agg(q order by q.created_at desc) from (select id, quote_number, service_type, address, total, initial_price, weekly_price, biweekly_price, monthly_price, notes, status, created_at from public.quotes where customer_id = v_customer and status in ('sent','accepted','declined')) q), '[]'::json),
+    -- Show the customer every quote that has left the workshop — sent, accepted,
+    -- declined, and (crucially) scheduled/completed/paid once it's been won and
+    -- booked. Only internal DRAFTS are hidden. (Was status in (sent,accepted,
+    -- declined), which made a won quote vanish from the portal the moment it was
+    -- scheduled into a job.)
+    'quotes', coalesce((select json_agg(q order by q.created_at desc) from (select id, quote_number, service_type, address, total, initial_price, weekly_price, biweekly_price, monthly_price, notes, status, created_at from public.quotes where customer_id = v_customer and status <> 'draft') q), '[]'::json),
     'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, status, issued_date, due_date, line_items, job_id, created_at from public.invoices where customer_id = v_customer) i), '[]'::json),
     'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, notes from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
     'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, end_date from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
@@ -655,3 +660,157 @@ create policy "suggestion_dismissals: delete own" on public.suggestion_dismissal
 
 create index if not exists suggestion_dismissals_user_idx
   on public.suggestion_dismissals(user_id);
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-23 — Stripe payments (Pay Now + webhook + history).
+-- Hosted Stripe Checkout. Sending stays DISABLED until STRIPE_SECRET_KEY is set
+-- (see lib/stripe). The webhook (service role) is the ONLY writer of a Stripe
+-- 'paid'; the create-session routes never trust a client-sent amount — it's
+-- built from the invoice row. Idempotent; safe to re-run.
+-- ════════════════════════════════════════════════════════════
+alter table public.invoices add column if not exists paid_at timestamptz;
+
+create table if not exists public.payments (
+  id                    uuid primary key default uuid_generate_v4(),
+  created_at            timestamptz not null default now(),
+  user_id               uuid not null references auth.users(id) on delete cascade,
+  customer_id           uuid references public.customers(id) on delete set null,
+  invoice_id            uuid references public.invoices(id) on delete set null,
+  amount                numeric not null default 0,
+  currency              text not null default 'cad',
+  provider              text not null default 'stripe',
+  stripe_session_id     text unique,                    -- idempotency: one row per checkout session
+  stripe_payment_intent text,
+  status                text not null default 'paid',   -- pending | paid | failed | refunded
+  paid_at               timestamptz
+);
+alter table public.payments enable row level security;
+-- Owner reads their own payment history. Writes are done by the service-role
+-- webhook (bypasses RLS) — there is deliberately NO anon/auth insert policy, so
+-- nothing client-side can fabricate a payment.
+create policy "payments: select own" on public.payments for select using (auth.uid() = user_id);
+create index if not exists payments_user_idx    on public.payments(user_id, created_at desc);
+create index if not exists payments_invoice_idx on public.payments(invoice_id);
+
+-- Portal pay: returns a payable invoice ONLY if it belongs to the token's
+-- customer and is still owing. Gives the (server-side) pay route the amount + ids
+-- to build a Stripe Checkout session — the client never supplies an amount.
+create or replace function public.portal_invoice_for_payment(p_token text, p_invoice_id uuid)
+returns json language plpgsql security definer set search_path = public as $$
+declare v_customer uuid; result json;
+begin
+  select customer_id into v_customer
+    from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return null; end if;
+  select to_json(i) into result from (
+    select id, invoice_number, service_type, amount, status, customer_id, user_id
+    from public.invoices
+    where id = p_invoice_id and customer_id = v_customer and status in ('unpaid','sent')
+  ) i;
+  return result;
+end; $$;
+grant execute on function public.portal_invoice_for_payment(text, uuid) to anon, authenticated;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-23 — Quote ↔ job/invoice lifecycle sync.
+-- Lifecycle: Draft → Sent → Accepted → Scheduled → Completed → Paid (+ Declined).
+-- Keeps a quote in step with the work it spawned WITHOUT completing a recurring
+-- plan after a single visit. Centralised as DB triggers so EVERY path (Day Ops,
+-- quick-save, Missed-jobs, manual mark-paid, the Stripe webhook) stays in sync —
+-- nothing client-side can bypass it. Idempotent; safe to re-run.
+-- ════════════════════════════════════════════════════════════
+
+-- A ONE-TIME job tied to a quote completes → quote advances to 'completed'.
+-- Recurring visits (recurrence_id set) NEVER complete the quote: the plan is
+-- ongoing, so it stays 'scheduled'. Only advances from an in-flight status, so a
+-- re-complete or an already-paid quote is never moved backwards.
+create or replace function public.sync_quote_on_job_complete()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.status = 'completed' and old.status is distinct from 'completed'
+     and new.quote_id is not null and new.recurrence_id is null then
+    update public.quotes set status = 'completed'
+      where id = new.quote_id and status in ('accepted','scheduled');
+  end if;
+  return new;
+end; $$;
+drop trigger if exists trg_sync_quote_on_job_complete on public.jobs;
+create trigger trg_sync_quote_on_job_complete after update of status on public.jobs
+  for each row execute function public.sync_quote_on_job_complete();
+
+-- A ONE-TIME quote's invoice is paid → quote advances to 'paid'. Guarded to
+-- quotes already 'completed' (one-time), so paying one visit of a recurring plan
+-- never marks the whole plan paid.
+create or replace function public.sync_quote_on_invoice_paid()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.status = 'paid' and old.status is distinct from 'paid' and new.quote_id is not null then
+    update public.quotes set status = 'paid'
+      where id = new.quote_id and status = 'completed';
+  end if;
+  return new;
+end; $$;
+drop trigger if exists trg_sync_quote_on_invoice_paid on public.invoices;
+create trigger trg_sync_quote_on_invoice_paid after update of status on public.invoices
+  for each row execute function public.sync_quote_on_invoice_paid();
+
+-- One-time backfill for quotes that desynced BEFORE these triggers existed:
+-- a one-time quote whose job is already completed → 'completed'; then those whose
+-- invoice is already paid → 'paid'. Recurring quotes (any recurring job) are left
+-- untouched.
+update public.quotes q set status = 'completed'
+where q.status in ('accepted','scheduled')
+  and exists (select 1 from public.jobs j  where j.quote_id = q.id and j.status = 'completed' and j.recurrence_id is null)
+  and not exists (select 1 from public.jobs j2 where j2.quote_id = q.id and j2.recurrence_id is not null);
+
+update public.quotes q set status = 'paid'
+where q.status = 'completed'
+  and exists (select 1 from public.invoices i where i.quote_id = q.id and i.status = 'paid');
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-22 — Win/Loss analysis (GROWTH). Records WHY a
+-- quote was lost (and an optional competitor price) so the Suggestions
+-- Center can feed pricing intelligence — e.g. "you keep losing on
+-- price in Queensland". Captured from the Grow → Win/Loss panel
+-- (read-only over quotes; never modifies the quotes flow). The win
+-- side is derived from quotes.status; this table only stores the
+-- loss reason. Idempotent; safe to re-run.
+-- ════════════════════════════════════════════════════════════
+create table if not exists public.quote_outcomes (
+  id               uuid primary key default uuid_generate_v4(),
+  created_at       timestamptz not null default now(),
+  user_id          uuid not null references auth.users(id) on delete cascade,
+  quote_id         uuid not null references public.quotes(id) on delete cascade,
+  reason           text not null,   -- price | competitor | no_response | timing | scope | not_needed | other
+  detail           text,
+  competitor_price numeric,
+  unique (user_id, quote_id)
+);
+
+alter table public.quote_outcomes enable row level security;
+create policy "quote_outcomes: select own" on public.quote_outcomes for select using (auth.uid() = user_id);
+create policy "quote_outcomes: insert own" on public.quote_outcomes for insert with check (auth.uid() = user_id);
+create policy "quote_outcomes: update own" on public.quote_outcomes for update using (auth.uid() = user_id);
+create policy "quote_outcomes: delete own" on public.quote_outcomes for delete using (auth.uid() = user_id);
+
+create index if not exists quote_outcomes_user_idx on public.quote_outcomes(user_id);
+
+-- ── Hardening (2026-06-23): corrective re-sync when a job becomes recurring ──
+-- Defends the "a recurring plan is never completed by one visit" invariant against
+-- client write-ordering: convert-to-recurring writes the anchor's status BEFORE
+-- it sets recurrence_id, so the job-complete trigger can momentarily mark a quote
+-- 'completed' while recurrence_id is still NULL. The instant the anchor gains a
+-- recurrence_id, pull the quote back to 'scheduled' (an ongoing plan), undoing
+-- any premature completed/paid. Independent of client ordering — DB-enforced.
+create or replace function public.resync_quote_on_job_recurring()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.recurrence_id is not null and old.recurrence_id is null and new.quote_id is not null then
+    update public.quotes set status = 'scheduled'
+      where id = new.quote_id and status in ('completed','paid');
+  end if;
+  return new;
+end; $$;
+drop trigger if exists trg_resync_quote_on_job_recurring on public.jobs;
+create trigger trg_resync_quote_on_job_recurring after update of recurrence_id on public.jobs
+  for each row execute function public.resync_quote_on_job_recurring();

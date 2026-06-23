@@ -4,6 +4,8 @@ import Link from 'next/link'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card } from '@/components/ui/Card'
 import { SuggestionsCenter } from '@/components/grow/SuggestionsCenter'
+import { CustomerHealthPanel } from '@/components/grow/CustomerHealthPanel'
+import { WinLossPanel } from '@/components/grow/WinLossPanel'
 import {
   BarChart3, Gauge, HeartPulse, Map as MapIcon, Target, ShieldCheck, CalendarCheck, ArrowRight,
 } from 'lucide-react'
@@ -53,6 +55,10 @@ export default function GrowPage() {
 
       {/* Suggestions Center — the action feed comes first. */}
       <SuggestionsCenter />
+
+      {/* Intelligence: who's slipping / who's valuable, and why quotes are lost. */}
+      <CustomerHealthPanel />
+      <WinLossPanel />
 
       {GROUPS.map(group => (
         <div key={group.title} className="space-y-2">

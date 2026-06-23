@@ -1,13 +1,16 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Job, Quote, JobRecurrence, Property, Customer, JobLineItem } from '@/types'
 import { Coord, haversineKm } from '@/lib/geo'
-import { dayLoad, DEFAULT_JOB_MIN } from '@/lib/route'
+import { dayLoad, DEFAULT_JOB_MIN, computeDayEtas, timeToMinutes } from '@/lib/route'
 import { densityFor, locatedStops } from '@/lib/routeDensity'
+import { resolvePrefs } from '@/lib/preferences'
+import { analyzeWinLoss, WLQuote, QuoteOutcomeRow, LOSS_REASON_LABEL } from '@/lib/winLoss'
 import { effectiveFreq, jobVisitValue, quoteVisitAmount, syncDraftInvoiceAmounts } from '@/lib/invoicing'
 import { recordPriceChange, isRecurringProgramService, normalizeServiceKey } from '@/lib/jobPricing'
 import { PricingConfig, recommendedJobPrice, estimateVisitMinutes, SEASON_VISITS } from '@/lib/pricing'
 import { visitEconomics } from '@/lib/economics'
-import { ProfitJob, ProfitContext, neighborhoodProfitability, neighborhoodKey } from '@/lib/profitability'
+import { learnDurations, learnedDurationFor, DurationModel } from '@/lib/duration'
+import { ProfitJob, ProfitContext, neighborhoodProfitability, neighborhoodKey, jobValue } from '@/lib/profitability'
 import { OptJob, OptOptions, OptimizeScope, OptimizeMode, analyzeSchedule, optimizeSchedule } from '@/lib/optimizer'
 import { dayProfitability } from '@/lib/profitability'
 import { FOLLOW_UP_DAYS } from '@/lib/followup'
@@ -126,6 +129,8 @@ export interface SuggestionContext {
   // Pre-resolved in loadSuggestions (a snooze that has expired is NOT included),
   // so buildSuggestions just filters by membership.
   dismissedKeys: Set<string>
+  workStart: string         // business_settings.work_start_time ('HH:mm') — ETA origin
+  quoteOutcomes: { quote_id: string; reason: string; detail: string | null; competitor_price: number | null }[]
 }
 
 // ── shared helpers ────────────────────────────────────────────────────────────
@@ -326,6 +331,90 @@ function profitJobsAndCtx(ctx: SuggestionContext): { jobs: ProfitJob[]; pctx: Pr
   const result = { jobs, pctx: { quotesById, recById, base: ctx.baseCoord, today: ctx.today } }
   _profitCache.set(ctx, result)
   return result
+}
+
+// Lifetime value per customer = sum of completed-visit value (the ONE valuation
+// engine via jobValue). Memoized — used by referral ranking and VIP churn.
+const _ltvCache = new WeakMap<SuggestionContext, Record<string, number>>()
+function getLifetimeValues(ctx: SuggestionContext): Record<string, number> {
+  let m = _ltvCache.get(ctx)
+  if (m) return m
+  const { jobs, pctx } = profitJobsAndCtx(ctx)
+  m = {}
+  for (const j of jobs) {
+    if (j.status !== 'completed' || !j.customer_id) continue
+    m[j.customer_id] = (m[j.customer_id] || 0) + jobValue(j, pctx)
+  }
+  for (const k of Object.keys(m)) m[k] = Math.round(m[k])
+  _ltvCache.set(ctx, m)
+  return m
+}
+
+// Learned on-site durations from check-in/out actuals (lib/duration). Memoized;
+// feeds capacity math so "booked solid" reflects the owner's real pace.
+const _durationCache = new WeakMap<SuggestionContext, DurationModel>()
+function getDurationModel(ctx: SuggestionContext): DurationModel {
+  let m = _durationCache.get(ctx)
+  if (m) return m
+  m = learnDurations(ctx.jobs)
+  _durationCache.set(ctx, m)
+  return m
+}
+
+// Lifetime-value threshold for a "VIP" customer — mirrors the reactivation page.
+const VIP_THRESHOLD = 1500
+
+// ── season-date helpers (cross-sell + renewal timing) ──────────────────────────
+function pad2(n: number): string { return String(n).padStart(2, '0') }
+// The NEXT start date (yyyy-MM-dd, strictly after today) of a recurring season.
+function nextSeasonStartISO(season: { startMonth: number; startDay: number }, today: string): string {
+  const y = Number(today.slice(0, 4))
+  const thisYear = `${y}-${pad2(season.startMonth)}-${pad2(season.startDay)}`
+  return thisYear > today ? thisYear : `${y + 1}-${pad2(season.startMonth)}-${pad2(season.startDay)}`
+}
+// The next end date (yyyy-MM-dd, on/after today) of a season — for "season ending soon".
+function nextSeasonEndISO(season: { endMonth: number; endDay: number }, today: string): string {
+  const y = Number(today.slice(0, 4))
+  const thisYear = `${y}-${pad2(season.endMonth)}-${pad2(season.endDay)}`
+  return thisYear >= today ? thisYear : `${y + 1}-${pad2(season.endMonth)}-${pad2(season.endDay)}`
+}
+function daysUntilISO(iso: string, today: string): number { return dayDelta(today, iso) }
+// First preferred work day on/after an ISO date (where a renewed plan begins).
+function firstWorkdayOnOrAfter(ctx: SuggestionContext, iso: string): string {
+  const pref = ctx.preferredDays.length ? new Set(ctx.preferredDays) : null
+  let d = parseISO(iso + 'T00:00:00')
+  for (let i = 0; i < 21; i++) {
+    if (!pref || pref.has(getDay(d))) return format(d, 'yyyy-MM-dd')
+    d = addDays(d, 1)
+  }
+  return iso
+}
+
+// One pass over jobs → the groupings several generators each used to recompute
+// (per-customer, completed-per-customer, the future-scheduled list). Memoized, so
+// the whole feed shares one O(jobs) scan instead of one per generator.
+interface JobIndex {
+  byCustomer: Record<string, Job[]>
+  completedByCustomer: Record<string, Job[]>
+  futureScheduled: Job[]
+}
+const _jobIndexCache = new WeakMap<SuggestionContext, JobIndex>()
+function getJobIndex(ctx: SuggestionContext): JobIndex {
+  let m = _jobIndexCache.get(ctx)
+  if (m) return m
+  const byCustomer: Record<string, Job[]> = {}
+  const completedByCustomer: Record<string, Job[]> = {}
+  const futureScheduled: Job[] = []
+  for (const j of ctx.jobs) {
+    if (j.customer_id) {
+      (byCustomer[j.customer_id] ||= []).push(j)
+      if (j.status === 'completed') (completedByCustomer[j.customer_id] ||= []).push(j)
+    }
+    if (j.scheduled_date >= ctx.today && j.status !== 'cancelled' && j.status !== 'completed') futureScheduled.push(j)
+  }
+  m = { byCustomer, completedByCustomer, futureScheduled }
+  _jobIndexCache.set(ctx, m)
+  return m
 }
 
 // The safe one-click raise action for a series: write the quote cadence price
@@ -862,6 +951,7 @@ function retention(ctx: SuggestionContext): Suggestion[] {
   // aggregate below, which it suppresses for the same customer.
   const churnedCustomers = new Set<string>()
   const churnCards: Suggestion[] = []
+  const ltv = getLifetimeValues(ctx)
   for (const s of series) {
     if (s.perVisit <= 0) continue
     const lastDone = [...s.jobs].reverse().find(j => j.status === 'completed')
@@ -879,29 +969,37 @@ function retention(ctx: SuggestionContext): Suggestion[] {
     if (annualValue < 300) continue                               // focus on accounts worth saving
     const ratio = daysSince / interval
     const churnProb = ratio >= 2.5 ? 0.6 : 0.4
-    const impact = Math.round(annualValue * churnProb)
+    // LTV-WEIGHTED: the most EXPENSIVE customer to lose ranks first, not just the
+    // one with the highest per-visit price. A proven high-lifetime account gets a
+    // heavier weight (and VIP framing) so reach-out minutes go where they matter.
+    const custLtv = s.customerId ? (ltv[s.customerId] || 0) : 0
+    const isVip = custLtv >= VIP_THRESHOLD
+    const ltvWeight = isVip ? 1.5 : custLtv >= 800 ? 1.2 : 1.0
+    const impact = Math.round(annualValue * churnProb * ltvWeight)
     const svcLabel = serviceCategory(s.rep.service_type) === 'lawn' ? 'mowing' : (s.rep.service_type || 'service')
     if (s.customerId) churnedCustomers.add(s.customerId)
+    const confidence: Confidence = isVip || completedCount >= 4 ? 'high' : 'medium'
     churnCards.push({
       id: `churn-${s.recurrenceId}`,
       category: 'retention',
-      title: `Reach out to ${s.customerName} — slipping away`,
+      title: isVip ? `⭐ VIP at risk — reach out to ${s.customerName}` : `Reach out to ${s.customerName} — slipping away`,
       subtitle: `${svcLabel}: last visit ${daysSince}d ago, no follow-up booked`,
       impact, oneTime: false, revenueImpact: annualValue,
-      confidence: completedCount >= 4 ? 'high' : 'medium',
-      confidenceScore: completedCount >= 4 ? CONF_SCORE.high : CONF_SCORE.medium,
+      confidence, confidenceScore: CONF_SCORE[confidence],
       why: [
+        custLtv > 0 ? `Lifetime value $${custLtv.toLocaleString()}${isVip ? ' — a top customer' : ''}` : 'Established recurring customer',
         `Last ${svcLabel} visit was ${daysSince} days ago — overdue for a ~${interval}-day cadence`,
         nextFuture ? `Next visit not until ${format(parseISO(nextFuture + 'T00:00:00'), 'MMM d')}` : 'Nothing booked ahead',
         `$${annualValue}/yr of recurring revenue at risk`,
       ],
       calc: [
         `${daysSince}d since last visit ÷ ${interval}d cadence = ${ratio.toFixed(1)}× overdue → ~${Math.round(churnProb * 100)}% churn risk`,
-        `At-risk value = $${annualValue}/yr × ${Math.round(churnProb * 100)}% = $${impact}`,
+        `At-risk value = $${annualValue}/yr × ${Math.round(churnProb * 100)}%${ltvWeight !== 1 ? ` × ${ltvWeight} LTV weight` : ''} = $${impact}`,
       ],
       action: { kind: 'navigate', label: 'Save this customer', href: s.customerId ? `/dashboard/customers/${s.customerId}` : '/dashboard/reactivation' },
     })
   }
+  // Highest-VALUE at-risk first (LTV-weighted impact), capped to keep the feed tight.
   churnCards.sort((a, b) => b.impact - a.impact)
   out.push(...churnCards.slice(0, 3))
 
@@ -986,7 +1084,7 @@ function routeGapFinder(ctx: SuggestionContext): Suggestion[] {
 
   // Concrete fillers: warm neighbour leads + in-season lapsed customers.
   const openLeads = ctx.neighborLeads.filter(l => l.status === 'prospect' || l.status === 'contacted').length
-  const futureCust = new Set(ctx.jobs.filter(j => j.customer_id && j.scheduled_date >= ctx.today && j.status !== 'completed' && j.status !== 'cancelled').map(j => j.customer_id as string))
+  const futureCust = new Set(getJobIndex(ctx).futureScheduled.map(j => j.customer_id).filter(Boolean) as string[])
   let lapsed = 0
   for (const s of getSeries(ctx)) {
     if (s.futureOpen.length || (s.customerId && futureCust.has(s.customerId))) continue
@@ -1055,32 +1153,45 @@ function neighborhoodDomination(ctx: SuggestionContext): Suggestion[] {
     const avgDensity = dres.length ? Math.round(dres.reduce((a, d) => a + d.score, 0) / dres.length) : 0
     const denseShare = dres.length ? dres.filter(d => d.tier === 'dense').length / dres.length : 0
     const leads = leadsByHood[h.key] || 0
-    // Own where you can DOMINATE: already-tight cluster (density + dense share) ×
-    // high per-customer VALUE × warm leads. revPerJob ratio favours high-value
-    // expansion over merely high-volume areas.
+    // STREET-LEVEL: the tightest concentration of homes you already serve — the
+    // biggest count within 500 m of a single stop. That cluster is the exact
+    // block to door-knock (the cheapest customer is the empty house you drive past).
+    let tightCluster = 0, clusterCenter: Coord | null = null
+    for (const s of stops) {
+      let c = 1
+      for (const t of stops) if (t !== s && haversineKm(s, t) <= 0.5) c++
+      if (c > tightCluster) { tightCluster = c; clusterCenter = s }
+    }
+    // Own where you can DOMINATE: already-tight cluster (density + dense share +
+    // a concentrated block) × high per-customer VALUE × warm leads.
     const valueRatio = avgRevPerJob > 0 ? Math.min(2, Math.max(0.5, h.revPerJob / avgRevPerJob)) : 1
-    const dominanceScore = h.revenue * (1 + avgDensity / 100) * (1 + denseShare) * (1 + leads * 0.2) * valueRatio
-    return { h, avgDensity, denseShare, leads, strong: h.revPerJob >= avgRevPerJob, dominanceScore }
+    const dominanceScore = h.revenue * (1 + avgDensity / 100) * (1 + denseShare) * (1 + tightCluster * 0.1) * (1 + leads * 0.2) * valueRatio
+    return { h, avgDensity, denseShare, leads, tightCluster, clusterCenter, strong: h.revPerJob >= avgRevPerJob, dominanceScore }
   }).sort((a, b) => b.dominanceScore - a.dominanceScore)
 
-  // One highest-conviction target — concentrating beats scattering, and a single
-  // grounded card beats two speculative ones (noise reduction).
-  for (const { h, avgDensity, denseShare, leads, strong } of scored.slice(0, 1)) {
+  // The best target first; a SECOND only if it's high-confidence (filtered below).
+  // Concentrating beats scattering — but a genuinely strong second block shouldn't
+  // be hidden behind the single top hood.
+  for (const { h, avgDensity, denseShare, leads, tightCluster, strong } of scored.slice(0, 3)) {
     const dense = denseShare >= 0.5 || avgDensity >= 50
-    const focus = h.customers >= 4 && dense
-      ? 'Referral push — your tight cluster here will refer neighbours; flyers convert cheaply on a dense route'
-      : strong && h.customers < 4
-        ? 'Flyer / door-knock to expand this strong beachhead'
-        : 'Flyers + referrals to deepen this route'
+    const hasBlock = tightCluster >= 3   // a real concentrated block to knock
+    const focus = hasBlock
+      ? `Door-knock the block where ${tightCluster} of your customers already cluster — highest-conversion, lowest-drive expansion`
+      : h.customers >= 4 && dense
+        ? 'Referral push — your tight cluster here will refer neighbours; flyers convert cheaply on a dense route'
+        : strong && h.customers < 4
+          ? 'Flyer / door-knock to expand this strong beachhead'
+          : 'Flyers + referrals to deepen this route'
     const annualPerCustomer = Math.round(h.revPerJob * SEASON_VISITS_BIWEEKLY)
     const newCustomers = Math.max(1, Math.min(4, leads > 0 ? leads : Math.round(h.customers * 0.5)))
-    // Denser hoods convert door-knocks/referrals better — scale the close rate
-    // with how tight the cluster already is (0.25 isolated → ~0.45 dense).
-    const closeRate = Math.min(0.45, 0.25 + denseShare * 0.2)
+    // Denser hoods AND a tight block convert door-knocks/referrals better — scale
+    // the close rate with cluster tightness (0.25 isolated → ~0.5 tight block).
+    const closeRate = Math.min(0.5, 0.25 + denseShare * 0.2 + (hasBlock ? 0.05 : 0))
     const impact = Math.round(annualPerCustomer * newCustomers * closeRate)
     if (impact < 100) continue
-    // A dense hood with warm signal is a grounded call, not a guess → medium.
-    const confidence: Confidence = dense && (leads > 0 || h.customers >= 4) ? 'medium' : 'low'
+    // A dense hood with a concentrated block / warm leads is a grounded call → bump.
+    const confidence: Confidence = (tightCluster >= 4 || (dense && leads > 0)) ? 'high'
+      : dense && (leads > 0 || h.customers >= 4) ? 'medium' : 'low'
     out.push({
       id: `dominate-${h.key}`,
       category: 'growth',
@@ -1090,7 +1201,9 @@ function neighborhoodDomination(ctx: SuggestionContext): Suggestion[] {
       confidence, confidenceScore: CONF_SCORE[confidence],
       why: [
         `${h.customers} customers, $${h.revPerJob}/job (avg $${Math.round(avgRevPerJob)}) — ${strong ? 'above' : 'around'} your average`,
-        `Route density ${avgDensity}/100${denseShare > 0 ? `, ${Math.round(denseShare * 100)}% on dense routes` : ''}${leads > 0 ? ` · ${leads} lead${leads !== 1 ? 's' : ''} waiting` : ''}`,
+        hasBlock
+          ? `Tightest block: ${tightCluster} homes within 500 m — concentrate door-knocking there`
+          : `Route density ${avgDensity}/100${denseShare > 0 ? `, ${Math.round(denseShare * 100)}% on dense routes` : ''}${leads > 0 ? ` · ${leads} lead${leads !== 1 ? 's' : ''} waiting` : ''}`,
         focus,
       ],
       calc: [
@@ -1100,11 +1213,528 @@ function neighborhoodDomination(ctx: SuggestionContext): Suggestion[] {
       action: { kind: 'navigate', label: leads > 0 ? 'Knock the leads' : 'See the area', href: leads > 0 ? '/dashboard/neighbors' : '/dashboard/saturation' },
     })
   }
-  return out
+  // Keep the top target; add a second only when it's a high-confidence opportunity.
+  if (out.length <= 1) return out
+  return [out[0], ...out.slice(1).filter(c => c.confidence === 'high')].slice(0, 2)
 }
 
 // Compact money for subtitles ($1,250 not $1250.00).
 function formatMoney(n: number): string { return '$' + Math.round(n).toLocaleString() }
+
+// ── 💰 PROFIT: capacity-aware pricing — charge a premium when booked solid ───────
+// The demand-side mirror of routeGapFinder. When the next few weeks are at/over
+// capacity (using LEARNED durations, not just typed ones), the profit move is to
+// price new work UP or waitlist — never discount. Reuses the same dayLoad engine.
+function capacityPricing(ctx: SuggestionContext): Suggestion[] {
+  const out: Suggestion[] = []
+  const pref = ctx.preferredDays.length ? new Set(ctx.preferredDays) : null
+  const model = getDurationModel(ctx)
+  const capMinPerDay = ctx.capacityHours * 60
+  if (capMinPerDay <= 0) return out
+
+  // Sum learned labour per preferred work day over the next 4 weeks, by ISO week.
+  const weeks: Record<string, { start: string; workdays: number; labor: number; cap: number; fullDays: number }> = {}
+  for (let i = 1; i <= 28; i++) {
+    const d = addDays(parseISO(ctx.today + 'T00:00:00'), i)
+    if (pref && !pref.has(getDay(d))) continue
+    const iso = format(d, 'yyyy-MM-dd')
+    const dayJobs = ctx.jobs.filter(j => j.scheduled_date === iso && j.status !== 'cancelled')
+    const labor = dayJobs.reduce((s, j) => s + learnedDurationFor(j, model), 0)
+    const wk = format(d, "RRRR-'W'II")
+    const e = (weeks[wk] ||= { start: iso, workdays: 0, labor: 0, cap: 0, fullDays: 0 })
+    if (iso < e.start) e.start = iso
+    e.workdays++; e.labor += labor; e.cap += capMinPerDay
+    if (labor >= capMinPerDay * 0.9) e.fullDays++
+  }
+  const overloaded = Object.values(weeks)
+    .filter(w => w.workdays >= 2 && w.cap > 0 && w.labor / w.cap >= 0.85)
+    .sort((a, b) => a.start.localeCompare(b.start))
+  if (overloaded.length === 0) return out
+
+  // Average value of FUTURE booked visits — what a premium would apply to.
+  // (Reuses the memoized future-scheduled list — one shared scan, not per-generator.)
+  const qById = quoteById(ctx)
+  const futureVals: number[] = []
+  for (const j of getJobIndex(ctx).futureScheduled) {
+    const rec = j.recurrence_id ? ctx.recurrences[j.recurrence_id] : null
+    const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
+    const q = j.quote_id ? qById[j.quote_id] : null
+    const v = jobVisitValue(j.price, q as unknown as Record<string, unknown>, freq, j.is_initial_visit)
+    if (v > 0) futureVals.push(v)
+  }
+  if (!futureVals.length) return out
+  const avgVisit = Math.round(futureVals.reduce((a, b) => a + b, 0) / futureVals.length)
+  // The premium LEARNS from your quotes: win rate = pricing power, and WHY you lose
+  // refines it. High win rate → bigger premium; low → nudge gently. Falls back to a
+  // flat 10% until there are enough decided quotes.
+  let won = 0, lost = 0
+  for (const q of ctx.quotes) {
+    if (q.status === 'accepted' || q.status === 'scheduled' || q.status === 'completed' || q.status === 'paid') won++
+    else if (q.status === 'declined') lost++
+  }
+  const winRate = won + lost >= 4 ? won / (won + lost) : null
+  // Learn from the LOSS REASONS: if you mostly lose on PRICE, the market is at your
+  // ceiling — recommending a premium would lose more work. Suppress when it's the
+  // dominant loss reason; minimise it when it's a meaningful share (avoid noise).
+  const priceLosses = ctx.quoteOutcomes.filter(o => o.reason === 'price').length
+  const priceLossRate = lost >= 3 ? priceLosses / lost : 0
+  if (priceLossRate >= 0.5) return out // losing mostly on price → never tell them to raise
+  let PREMIUM_PCT = winRate == null ? 0.1 : winRate >= 0.6 ? 0.15 : winRate >= 0.4 ? 0.1 : 0.05
+  if (priceLossRate >= 0.3) PREMIUM_PCT = Math.min(PREMIUM_PCT, 0.05) // price-sensitive → keep it gentle
+  const premiumPerJob = round5(avgVisit * PREMIUM_PCT)
+  if (premiumPerJob < 5) return out
+  // Conservative: ~1 premium-priced new job per overloaded week.
+  const impact = premiumPerJob * overloaded.length
+  const soonest = overloaded[0]
+  const util = Math.round((soonest.labor / soonest.cap) * 100)
+  const weekLabel = format(parseISO(soonest.start + 'T00:00:00'), 'MMM d')
+  out.push({
+    id: 'capacity-pricing',
+    category: 'profit',
+    title: overloaded.length === 1
+      ? `Week of ${weekLabel} is booked solid — price new work at a premium`
+      : `${overloaded.length} of the next 4 weeks are booked solid — raise new-quote pricing`,
+    subtitle: 'Charge a premium or waitlist while you’re full',
+    impact, oneTime: true, revenueImpact: impact,
+    confidence: 'medium', confidenceScore: CONF_SCORE.medium,
+    why: [
+      `Week of ${weekLabel} is at ~${util}% of capacity (${soonest.fullDays} full day${soonest.fullDays !== 1 ? 's' : ''})`,
+      'When you’re full, new work should carry a premium — not a discount',
+      `Each new job at +${Math.round(PREMIUM_PCT * 100)}% ≈ +$${premiumPerJob}; waitlist the rest`,
+      winRate != null ? `Your quotes accept at ${Math.round(winRate * 100)}% — ${winRate >= 0.6 ? 'strong pricing power, push the premium' : winRate < 0.4 ? 'price gently' : 'room to nudge up'}` : '',
+      priceLossRate >= 0.3 ? `Note: ${priceLosses} recent quote${priceLosses !== 1 ? 's' : ''} lost to price — premium kept small` : '',
+    ].filter(Boolean),
+    calc: [
+      `Week of ${weekLabel}: ${Math.round(soonest.labor / 60)}h booked vs ${Math.round(soonest.cap / 60)}h capacity = ${util}%`,
+      `Premium = avg visit $${avgVisit} × ${Math.round(PREMIUM_PCT * 100)}% = +$${premiumPerJob}/new job`,
+      model.totalSamples >= 3 ? `Capacity uses your real pace (${model.totalSamples} timed jobs)` : 'Capacity uses scheduled durations — time more jobs to sharpen this',
+    ],
+    action: { kind: 'navigate', label: 'See booked weeks', href: '/dashboard/schedule' },
+  })
+  return out
+}
+
+// ── 📍 GROWTH: referral engine — ask your best advocates ─────────────────────────
+// Ranks customers by likelihood to refer (lifetime value + tenure + active
+// recurring + proven prior referrals) and surfaces a one-tap "ask {name}" card.
+// The cheapest, highest-close acquisition channel — and the data already exists.
+function referralAsks(ctx: SuggestionContext): Suggestion[] {
+  const out: Suggestion[] = []
+  if (ctx.customers.length < 3) return out
+  const ltv = getLifetimeValues(ctx)
+  const series = getSeries(ctx)
+  const recurringCust = new Set<string>()
+  for (const s of series) if (s.futureOpen.length > 0 && s.customerId) recurringCust.add(s.customerId)
+
+  const completedCount: Record<string, number> = {}
+  const lastCompleted: Record<string, string> = {}
+  for (const j of ctx.jobs) {
+    if (j.status !== 'completed' || !j.customer_id) continue
+    completedCount[j.customer_id] = (completedCount[j.customer_id] || 0) + 1
+    if (!lastCompleted[j.customer_id] || j.scheduled_date > lastCompleted[j.customer_id]) lastCompleted[j.customer_id] = j.scheduled_date
+  }
+  // Proven advocates — who already referred someone in.
+  const referralsGiven: Record<string, number> = {}
+  for (const c of ctx.customers) {
+    const ref = c.referred_by_customer_id
+    if (ref) referralsGiven[ref] = (referralsGiven[ref] || 0) + 1
+  }
+  const propByCust: Record<string, Property> = {}
+  for (const p of ctx.properties) if (p.customer_id && !propByCust[p.customer_id]) propByCust[p.customer_id] = p
+
+  const nowMs = new Date(ctx.today + 'T00:00:00').getTime()
+  const scored = ctx.customers.map(c => {
+    const value = ltv[c.id] || 0
+    const visits = completedCount[c.id] || 0
+    const isRecurring = recurringCust.has(c.id)
+    const given = referralsGiven[c.id] || 0
+    const last = lastCompleted[c.id]
+    const active = isRecurring || (last ? dayDelta(last, ctx.today) <= 75 : false)
+    const tenureDays = c.created_at ? Math.max(0, Math.floor((nowMs - new Date(c.created_at).getTime()) / 86_400_000)) : 0
+    const score = value
+      + (tenureDays >= 365 ? 300 : tenureDays >= 180 ? 120 : 0)
+      + (isRecurring ? 400 : 0)
+      + visits * 20
+      + given * 600
+    return { c, value, visits, isRecurring, given, active, tenureDays, score }
+  })
+    .filter(x => x.active && x.visits >= 2 && (x.value >= 300 || x.isRecurring))
+    .sort((a, b) => b.score - a.score)
+
+  for (const x of scored.slice(0, 3)) {
+    const c = x.c
+    const hood = propByCust[c.id]?.neighborhood?.trim() || null
+    const s = series.find(se => se.customerId === c.id && se.futureOpen.length > 0)
+    const referredAnnual = s ? Math.round(s.perVisit * seriesVisitsPerYear(s))
+      : x.visits > 0 ? Math.round((x.value / x.visits) * SEASON_VISITS_BIWEEKLY) : 0
+    if (referredAnnual < 200) continue
+    const impact = Math.round(referredAnnual * 0.5) // warm referrals close ~50%
+    const tenureLabel = x.tenureDays >= 730 ? `${Math.floor(x.tenureDays / 365)} yrs with you`
+      : x.tenureDays >= 365 ? '1+ yr with you'
+        : x.tenureDays >= 60 ? `${Math.round(x.tenureDays / 30)} months with you` : 'a happy customer'
+    const confidence: Confidence = x.given > 0 || x.value >= VIP_THRESHOLD ? 'high' : 'medium'
+    out.push({
+      id: `referral-${c.id}`,
+      category: 'growth',
+      title: `Ask ${c.name} for a referral`,
+      subtitle: `${x.given > 0 ? `Already referred ${x.given} — ` : ''}$${x.value.toLocaleString()} lifetime${hood ? ` · ${hood}` : ''}`,
+      impact, oneTime: false, revenueImpact: impact,
+      confidence, confidenceScore: CONF_SCORE[confidence],
+      why: [
+        `${x.isRecurring ? 'Active recurring customer' : 'Recently served'} · ${tenureLabel} · ${x.visits} visits`,
+        x.given > 0 ? `Proven advocate — already referred ${x.given} customer${x.given !== 1 ? 's' : ''}` : 'Happy, loyal customers refer the best leads',
+        hood ? `A referral in ${hood} adds density where you already work` : 'Referrals close warm and cost nothing to win',
+      ],
+      calc: [
+        `A similar customer ≈ $${referredAnnual}/yr; warm referrals close ~50% → +$${impact}/yr`,
+        `Ranked by lifetime value $${x.value}${x.isRecurring ? ', recurring' : ''}${x.tenureDays >= 365 ? ', long-tenured' : ''}${x.given > 0 ? ', proven referrer' : ''}`,
+      ],
+      action: { kind: 'navigate', label: `Open ${c.name}`, href: `/dashboard/customers/${c.id}` },
+    })
+  }
+  return out
+}
+
+// ── 📍 GROWTH: cross-season cross-sell (lawn ↔ snow) + spring/fall cleanups ───────
+// A customer active in one season with NO plan in the other is leaving a whole
+// second season on the table — and the truck already knows the address. Gated to
+// ~6 weeks before the season flips so the offer lands when it's actionable.
+function mkCross(cid: string, name: string, target: 'snow' | 'lawn', impact: number, estAnnual: number, avgVisit: number): Suggestion {
+  const svc = target === 'snow' ? 'snow removal' : 'lawn service'
+  const from = target === 'snow' ? 'lawn' : 'snow'
+  const when = target === 'snow' ? 'before winter' : 'for spring'
+  return {
+    id: `crosssell-${target}-${cid}`,
+    category: 'growth',
+    title: `Offer ${svc} to ${name} ${when}`,
+    subtitle: `Already on your route — a second season at ~$${avgVisit}/visit`,
+    impact, oneTime: false, revenueImpact: impact,
+    confidence: 'medium', confidenceScore: CONF_SCORE.medium,
+    why: [
+      `Active ${from} customer with no ${target} plan`,
+      'The truck already serves this address — second-season revenue at near-zero acquisition cost',
+      `Est. ~$${estAnnual}/yr; ~40% take-up → +$${impact}/yr`,
+    ],
+    calc: [
+      `Estimate = $${avgVisit}/visit × ~${SEASON_VISITS_BIWEEKLY} visits = $${estAnnual}/season`,
+      '× 40% conservative cross-sell take-up',
+    ],
+    action: { kind: 'navigate', label: 'Quote it', href: `/dashboard/quotes/new?customer=${cid}` },
+  }
+}
+function crossSeasonOffers(ctx: SuggestionContext): Suggestion[] {
+  const ltv = getLifetimeValues(ctx)
+  const cats: Record<string, Set<string>> = {}
+  const visits: Record<string, number> = {}
+  const futureByCust: Record<string, Set<string>> = {}
+  for (const j of ctx.jobs) {
+    if (!j.customer_id || j.status === 'cancelled') continue
+    ;(cats[j.customer_id] ||= new Set()).add(serviceCategory(j.service_type))
+    if (j.status === 'completed') visits[j.customer_id] = (visits[j.customer_id] || 0) + 1
+    if (j.scheduled_date >= ctx.today && j.status !== 'completed') (futureByCust[j.customer_id] ||= new Set()).add((j.service_type || '').toLowerCase())
+  }
+  const series = getSeries(ctx)
+  const activeRecCust = new Set<string>()
+  const perVisitByCust: Record<string, number> = {}
+  const nameByCust: Record<string, string> = {}
+  for (const s of series) {
+    if (!s.customerId) continue
+    if (s.futureOpen.length > 0) activeRecCust.add(s.customerId)
+    if (s.perVisit > 0 && !perVisitByCust[s.customerId]) perVisitByCust[s.customerId] = s.perVisit
+    nameByCust[s.customerId] = s.customerName
+  }
+  for (const c of ctx.customers) if (!nameByCust[c.id]) nameByCust[c.id] = c.name
+
+  const snowApproaching = daysUntilISO(nextSeasonStartISO(ctx.seasons.snow, ctx.today), ctx.today) <= 45
+  const lawnApproaching = daysUntilISO(nextSeasonStartISO(ctx.seasons.lawn, ctx.today), ctx.today) <= 45
+  const springWindow = daysUntilISO(nextSeasonStartISO(ctx.seasons.lawn, ctx.today), ctx.today) <= 30
+  const fallEnd = daysUntilISO(nextSeasonEndISO(ctx.seasons.lawn, ctx.today), ctx.today)
+  const fallWindow = fallEnd >= 0 && fallEnd <= 30
+
+  const candidates: Suggestion[] = []
+  for (const cid of Object.keys(cats)) {
+    const set = cats[cid]
+    const active = activeRecCust.has(cid) || (visits[cid] || 0) >= 1
+    if (!active) continue
+    const name = nameByCust[cid] || 'this customer'
+    const avgVisit = perVisitByCust[cid] || ((visits[cid] || 0) > 0 ? Math.round((ltv[cid] || 0) / visits[cid]) : 0)
+    if (avgVisit <= 0) continue
+    const hasFutureType = (kw: string) => Array.from(futureByCust[cid] || []).some(t => t.includes(kw))
+
+    if (snowApproaching && set.has('lawn') && !set.has('snow')) {
+      const estAnnual = Math.round(avgVisit * SEASON_VISITS_BIWEEKLY)
+      const impact = Math.round(estAnnual * 0.4)
+      if (impact >= 120) candidates.push(mkCross(cid, name, 'snow', impact, estAnnual, avgVisit))
+    }
+    if (lawnApproaching && set.has('snow') && !set.has('lawn')) {
+      const estAnnual = Math.round(avgVisit * SEASON_VISITS_BIWEEKLY)
+      const impact = Math.round(estAnnual * 0.4)
+      if (impact >= 120) candidates.push(mkCross(cid, name, 'lawn', impact, estAnnual, avgVisit))
+    }
+    if (set.has('lawn') && (springWindow || fallWindow) && !hasFutureType('clean')) {
+      const which = springWindow ? 'Spring' : 'Fall'
+      const cleanupPrice = round5(avgVisit * 2.5) // a cleanup is a bigger one-off than a mow
+      candidates.push({
+        id: `cleanup-${which.toLowerCase()}-${cid}`,
+        category: 'growth',
+        title: `Offer a ${which} cleanup to ${name}`,
+        subtitle: `${which === 'Spring' ? 'Before the season ramps up' : 'Before the snow flies'} · ~$${cleanupPrice}`,
+        impact: cleanupPrice, oneTime: true, revenueImpact: cleanupPrice,
+        confidence: 'low', confidenceScore: CONF_SCORE.low,
+        why: [
+          `Active lawn customer with no ${which.toLowerCase()} cleanup booked`,
+          `${which} cleanups are an easy high-ticket add for customers already on your route`,
+          `Est. ~$${cleanupPrice} one-off (≈ 2–3× a mow)`,
+        ],
+        action: { kind: 'navigate', label: 'Quote it', href: `/dashboard/quotes/new?customer=${cid}` },
+      })
+    }
+  }
+  return candidates.sort((a, b) => b.impact - a.impact).slice(0, 4)
+}
+
+// ── ❤️ RETENTION: seasonal renewal — re-book next season before the gap ──────────
+// A seasonal recurring series ending at season-end with nothing booked for next
+// season is a route you re-quote from scratch every spring. One tap re-creates the
+// plan (reusing createRecurringPlan / the recurrence engine). Fires only in the
+// ~8-week pre-season window so it lands when re-booking is the right move.
+function seasonalRenewals(ctx: SuggestionContext): Suggestion[] {
+  const out: Suggestion[] = []
+  for (const s of getSeries(ctx)) {
+    const season = seasonForService(s.rep.service_type, ctx.seasons)
+    if (!season) continue                                   // only seasonal services renew
+    if (!s.jobs.some(j => j.status === 'completed')) continue // established series only
+    const count: 1 | 2 | null = s.cadence === 'weekly' ? 1 : s.cadence === 'biweekly' ? 2 : null
+    if (!count) continue                                    // one-click rebook = weekly/biweekly
+    if (s.perVisit <= 0 || !s.customerId) continue
+    const start = nextSeasonStartISO(season, ctx.today)
+    const daysUntil = daysUntilISO(start, ctx.today)
+    if (daysUntil < 0 || daysUntil > 60) continue           // only within the renewal window
+    if (s.jobs.some(j => j.scheduled_date >= start && j.status !== 'cancelled')) continue // already re-booked
+    const startDate = firstWorkdayOnOrAfter(ctx, start)
+    const endDate = seasonEndDateFor(startDate, season)
+    const vpy = seriesVisitsPerYear(s)
+    const annual = Math.round(s.perVisit * vpy)
+    if (annual < 200) continue
+    const svc = serviceCategory(s.rep.service_type) === 'lawn' ? 'mowing' : (s.rep.service_type || 'service')
+    const startLabel = format(parseISO(startDate + 'T00:00:00'), 'MMM d')
+    const plan: RecurringPlanPayload = {
+      customerId: s.customerId, propertyId: s.rep.property_id, serviceType: s.rep.service_type, title: s.rep.title,
+      perVisitPrice: Math.round(s.perVisit), intervalUnit: 'week', intervalCount: count,
+      startDate, endDate, crewSize: s.rep.crew_size || 1, durationMinutes: s.rep.duration_minutes,
+    }
+    out.push({
+      id: `renew-${s.recurrenceId}`,
+      category: 'retention',
+      title: `Re-book ${s.customerName} for next season`,
+      subtitle: `${s.cadence} ${svc} from ${startLabel} · ${vpy} visits`,
+      impact: annual, oneTime: false, revenueImpact: annual,
+      confidence: 'high', confidenceScore: CONF_SCORE.high,
+      why: [
+        `${s.customerName}'s ${svc} plan has nothing booked for next season`,
+        'Lock in the full season now in one tap — before they drift to a competitor',
+        `${vpy} visits × $${Math.round(s.perVisit)} = +$${annual}/yr`,
+      ],
+      calc: [
+        `Re-creates the ${s.cadence} plan ${startLabel} → ${format(parseISO(endDate + 'T00:00:00'), 'MMM d')} (${vpy} visits)`,
+        `At the current $${Math.round(s.perVisit)}/visit`,
+      ],
+      action: { kind: 'create-recurring', label: `Re-book ${vpy} visits`, plan },
+    })
+  }
+  return out.sort((a, b) => b.impact - a.impact).slice(0, 5)
+}
+
+// ── 🚗 ROUTE: duration accuracy — learned actuals vs scheduled time ──────────────
+// Job Duration Learning made visible: when timed jobs show a service runs much
+// longer than the duration scheduled for it, the day plan/ETAs/capacity are all
+// optimistic. Surfaces the single biggest under-budget so the owner can fix it.
+function durationAccuracy(ctx: SuggestionContext): Suggestion[] {
+  const model = getDurationModel(ctx)
+  if (model.totalSamples < 5) return []                     // need enough data to advise
+  const out: Suggestion[] = []
+  let worst: { name: string; planned: number; learned: number; cat: string; vpy: number } | null = null
+  for (const s of getSeries(ctx)) {
+    if (!s.futureOpen.length) continue
+    const cat = serviceCategory(s.rep.service_type)
+    const learned = model.byCategory[cat]
+    if (learned == null) continue
+    const planned = Number(s.rep.duration_minutes) || 0
+    if (planned <= 0) continue
+    const diff = learned - planned
+    if (diff < 10 || diff / planned < 0.25) continue        // only materially under-budgeted
+    if (!worst || diff > worst.learned - worst.planned) worst = { name: s.customerName, planned, learned, cat, vpy: seriesVisitsPerYear(s) }
+  }
+  if (!worst) return out
+  const svc = worst.cat === 'lawn' ? 'mowing' : worst.cat === 'snow' ? 'snow' : (worst.name + '’s service')
+  // The mis-costed crew time per season (under-budgeted minutes priced at crew cost).
+  const impact = Math.max(0, Math.round(((worst.learned - worst.planned) / 60) * ctx.crewCost * worst.vpy))
+  out.push({
+    id: 'duration-accuracy',
+    category: 'route',
+    title: `Your ${svc} visits actually take ~${worst.learned} min, not ${worst.planned}`,
+    subtitle: 'Scheduled durations are under-budgeting your day',
+    impact, oneTime: false,
+    confidence: 'medium', confidenceScore: CONF_SCORE.medium,
+    why: [
+      `Timed jobs show ${svc} averages ~${worst.learned} min on site vs the ${worst.planned} min scheduled`,
+      'Under-budgeted durations overload your days and push back every ETA',
+      `Learned from ${model.totalSamples} of your check-in/out timed jobs`,
+    ],
+    calc: [
+      `${worst.learned - worst.planned} min/visit under-budget × ${worst.vpy} visits ÷ 60 × $${ctx.crewCost}/hr crew ≈ $${impact}/yr of unaccounted time`,
+    ],
+    action: { kind: 'navigate', label: 'Review on schedule', href: '/dashboard/schedule' },
+  })
+  return out
+}
+
+// ── 💰 PROFIT: win/loss patterns → pricing intelligence ─────────────────────────
+// The win side is already in quotes.status; the loss reasons come from the Grow
+// Win/Loss panel. Surfaces the one pattern worth acting on: a neighbourhood where
+// you keep losing on PRICE (your rate may be too high there) — plus a nudge to tag
+// untagged losses so the intelligence keeps sharpening.
+function winLossPatterns(ctx: SuggestionContext): Suggestion[] {
+  const out: Suggestion[] = []
+  if (ctx.quotes.length < 4) return out
+  const pById = propsById(ctx)
+  const hoodOf = (q: WLQuote) => {
+    const p = q.property_id ? pById[q.property_id] : undefined
+    return p ? neighborhoodKey(p.postal_code, p.city, p.neighborhood) : 'Unknown'
+  }
+  const wlQuotes: WLQuote[] = ctx.quotes.map(q => ({ id: q.id, status: q.status, total: q.total, property_id: q.property_id ?? null }))
+  const stats = analyzeWinLoss(wlQuotes, ctx.quoteOutcomes as QuoteOutcomeRow[], hoodOf)
+  if (stats.decided < 4) return out
+
+  const priceHood = stats.byHood.find(h => h.hood !== 'Unknown' && h.priceLosses >= 2 && h.decided >= 3)
+  if (priceHood) {
+    const winPct = Math.round(priceHood.winRate * 100)
+    const overallPct = Math.round(stats.winRate * 100)
+    const recoverable = Math.round(priceHood.lostValue * 0.3) // a sharper rate could recover ~30%
+    const confidence: Confidence = priceHood.decided >= 6 ? 'high' : 'medium'
+    out.push({
+      id: `winloss-price-${priceHood.hood}`,
+      category: 'profit',
+      title: `You keep losing on price in ${priceHood.hood}`,
+      subtitle: `${priceHood.priceLosses} quotes lost to price · ${winPct}% win rate here`,
+      impact: recoverable, oneTime: true, revenueImpact: priceHood.lostValue,
+      confidence, confidenceScore: CONF_SCORE[confidence],
+      why: [
+        `${priceHood.priceLosses} of ${priceHood.lost} lost ${priceHood.hood} quote${priceHood.lost !== 1 ? 's' : ''} were “too expensive”`,
+        `Win rate in ${priceHood.hood} is ${winPct}% vs ${overallPct}% overall`,
+        `$${Math.round(priceHood.lostValue)} of quoted work walked — a sharper rate may win more of it`,
+      ],
+      calc: [`Recoverable ≈ $${Math.round(priceHood.lostValue)} lost × ~30% if priced to win = $${recoverable}`],
+      action: { kind: 'navigate', label: 'Review the area', href: '/dashboard/saturation' },
+    })
+  }
+
+  // Capture nudge — only when there's a backlog of untagged losses and no pattern
+  // card fired (keeps the feed tight; the panel itself shows the full list).
+  if (!out.length && stats.untaggedLost >= 3) {
+    out.push({
+      id: 'winloss-capture',
+      category: 'profit',
+      title: `Tag ${stats.untaggedLost} lost quotes to learn why you’re losing`,
+      subtitle: `${Math.round(stats.winRate * 100)}% win rate · reasons not recorded yet`,
+      impact: 0, oneTime: true,
+      confidence: 'low', confidenceScore: CONF_SCORE.low,
+      why: [
+        `${stats.lost} quotes declined; ${stats.untaggedLost} have no recorded reason`,
+        'A few taps turns lost quotes into a clear pricing/positioning signal',
+      ],
+      action: { kind: 'navigate', label: 'Tag lost quotes', href: '/dashboard/grow' },
+    })
+  }
+  return out
+}
+
+// ── ⚠️ PROBLEMS: time-window risk — routes that miss promised arrival windows ────
+// Customers/properties carry a preferred time window (pref_time_start/end). Walk
+// each upcoming day's route (greedy from base) with the ETA engine and flag stops
+// the schedule lands OUTSIDE their window — the #1 avoidable redo-trip / unhappy-
+// customer cause. Navigates to the schedule; never edits it.
+function nnOrderFromBase(base: Coord, jobs: Job[]): { job: Job; legKm: number }[] {
+  const located = jobs.filter(j => j.properties?.lat != null && j.properties?.lng != null)
+  const out: { job: Job; legKm: number }[] = []
+  const used = new Set<number>()
+  let cur = base
+  for (let n = 0; n < located.length; n++) {
+    let best = -1, bestD = Infinity
+    for (let i = 0; i < located.length; i++) {
+      if (used.has(i)) continue
+      const d = haversineKm(cur, { lat: located[i].properties!.lat as number, lng: located[i].properties!.lng as number })
+      if (d < bestD) { bestD = d; best = i }
+    }
+    if (best < 0) break
+    used.add(best)
+    const j = located[best]
+    out.push({ job: j, legKm: Math.round(bestD * 10) / 10 })
+    cur = { lat: j.properties!.lat as number, lng: j.properties!.lng as number }
+  }
+  return out
+}
+function windowLabel(p: { timeStart: string | null; timeEnd: string | null }): string {
+  if (p.timeStart && p.timeEnd) return `${p.timeStart}–${p.timeEnd}`
+  if (p.timeStart) return `after ${p.timeStart}`
+  if (p.timeEnd) return `before ${p.timeEnd}`
+  return 'preferred time'
+}
+function timeWindowWarnings(ctx: SuggestionContext): Suggestion[] {
+  const out: Suggestion[] = []
+  if (!ctx.baseCoord) return out
+  const model = getDurationModel(ctx)
+  const idx = getJobIndex(ctx)
+  const byDate: Record<string, Job[]> = {}
+  for (const j of idx.futureScheduled) {
+    if (dayDelta(ctx.today, j.scheduled_date) > 10) continue
+    ;(byDate[j.scheduled_date] ||= []).push(j)
+  }
+  const violations: { name: string; date: string; arrival: string; window: string; lateBy: number }[] = []
+  for (const [date, dayJobs] of Object.entries(byDate)) {
+    const windowed = dayJobs.filter(j => {
+      const prefs = resolvePrefs(j.customers ?? null, j.properties ?? null)
+      return !!(prefs.timeStart || prefs.timeEnd)
+    })
+    if (!windowed.length) continue
+    const ordered = nnOrderFromBase(ctx.baseCoord, dayJobs)
+    const durByJob: Record<string, number> = {}
+    for (const j of dayJobs) durByJob[j.id] = learnedDurationFor(j, model)
+    const etas = computeDayEtas(ctx.workStart, ordered.map(o => ({ jobId: o.job.id, legKm: o.legKm })), durByJob)
+    const arrivalByJob: Record<string, { min: number; label: string }> = {}
+    for (const s of etas.stops) arrivalByJob[s.jobId] = { min: s.arrivalMin, label: s.arrival }
+    for (const j of windowed) {
+      const a = arrivalByJob[j.id]
+      if (!a) continue
+      const prefs = resolvePrefs(j.customers ?? null, j.properties ?? null)
+      const end = prefs.timeEnd ? timeToMinutes(prefs.timeEnd) : null
+      if (end != null && a.min > end + 15) { // 15-min grace
+        violations.push({ name: j.customers?.name || j.title, date, arrival: a.label, window: windowLabel(prefs), lateBy: a.min - end })
+      }
+    }
+  }
+  if (!violations.length) return out
+  violations.sort((a, b) => b.lateBy - a.lateBy)
+  const worst = violations[0]
+  const count = violations.length
+  const impact = Math.round(count * ctx.crewCost * 0.5) // a missed window risks a ~½h redo trip
+  out.push({
+    id: 'time-window',
+    category: 'problem',
+    title: count === 1 ? `${worst.name} may miss their ${worst.window} window` : `${count} stops risk missing promised time windows`,
+    subtitle: `${format(parseISO(worst.date + 'T00:00:00'), 'EEE MMM d')}: arriving ~${worst.arrival}`,
+    impact, oneTime: true,
+    confidence: 'medium', confidenceScore: CONF_SCORE.medium,
+    why: [
+      `${worst.name} prefers ${worst.window}, but the route arrives ~${worst.arrival}`,
+      count > 1 ? `${count} promised windows at risk over the next 10 days` : 'Arriving outside the window risks a redo trip or an unhappy customer',
+      'Re-order that day or move the stop earlier',
+    ],
+    calc: [`Estimated from your ${ctx.workStart} start + route order + learned durations`],
+    action: { kind: 'navigate', label: 'Fix the route', href: '/dashboard/schedule' },
+  })
+  return out
+}
 
 // ── the advisor ─────────────────────────────────────────────────────────────────
 export function buildSuggestions(ctx: SuggestionContext): Suggestion[] {
@@ -1113,11 +1743,18 @@ export function buildSuggestions(ctx: SuggestionContext): Suggestion[] {
     () => belowMedianPricing(ctx),
     () => recurringConversions(ctx),
     () => addonUpsells(ctx),
+    () => capacityPricing(ctx),
+    () => winLossPatterns(ctx),
     () => routeImprovements(ctx),
     () => routeGapFinder(ctx),
+    () => durationAccuracy(ctx),
+    () => timeWindowWarnings(ctx),
     () => problems(ctx),
     () => growth(ctx),
     () => neighborhoodDomination(ctx),
+    () => referralAsks(ctx),
+    () => crossSeasonOffers(ctx),
+    () => seasonalRenewals(ctx),
     () => retention(ctx),
   ]
   let all: Suggestion[] = []
@@ -1137,6 +1774,10 @@ export function buildSuggestions(ctx: SuggestionContext): Suggestion[] {
     }
     return true
   })
+
+  // De-dupe neighbour-lead surfaces: the richer neighborhoodDomination card (which
+  // already routes to the leads) supersedes the generic "follow up N leads" card.
+  if (all.some(s => s.id.startsWith('dominate-'))) all = all.filter(s => s.id !== 'growth-leads')
 
   // Drop anything the owner dismissed or snoozed (resolved to "still active" in load).
   if (ctx.dismissedKeys.size) all = all.filter(s => !ctx.dismissedKeys.has(s.id))

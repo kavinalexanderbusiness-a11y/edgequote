@@ -26,7 +26,15 @@ export default function QuotesPage() {
     setLoading(false)
   }
 
-  useEffect(() => { fetchQuotes() }, [])
+  // Fetch on mount and again when the tab regains focus, so a quote that was
+  // just scheduled / completed elsewhere (Schedule, portal, another tab) shows
+  // its current status without a manual hard reload.
+  useEffect(() => {
+    fetchQuotes()
+    const onFocus = () => fetchQuotes()
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [])
 
   async function handleDelete(id: string) {
     await supabase.from('quotes').delete().eq('id', id)

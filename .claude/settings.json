@@ -18,7 +18,11 @@
       "PowerShell($env:NO_COLOR=1; \\(Get-Command node -ErrorAction SilentlyContinue\\).Source)",
       "mcp__supabase__get_advisors",
       "Bash(python -c ' *)",
-      "Bash(grep -oE '\\\\\\\\\"name\\\\\\\\\":\\\\\\\\\"[a-z_]+\\\\\\\\\"' mcp-supabase-get_advisors-1782188266321.txt)"
+      "Bash(grep -oE '\\\\\\\\\"name\\\\\\\\\":\\\\\\\\\"[a-z_]+\\\\\\\\\"' mcp-supabase-get_advisors-1782188266321.txt)",
+      "Bash(git status *)",
+      "Bash(echo \"EXIT CODE: $?\")",
+      "Read(//tmp/**)",
+      "PowerShell(npx tsc --noEmit 2>&1 | Select-Object -First 25; Write-Output \"---EXIT:$LASTEXITCODE---\")"
     ],
     "additionalDirectories": [
       "c:\\Users\\Kavin\\.claude\\projects\\c--Users-Kavin-Downloads-edgequote-edgequote\\memory"
