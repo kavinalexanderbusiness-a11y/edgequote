@@ -87,6 +87,8 @@ export default function InvoicesPage() {
       window.open(d.url, '_blank')
       setToast('Payment link opened & copied — take a card or send the link.')
       setTimeout(() => setToast(null), 6000)
+    } catch {
+      setToast('Could not reach the server. Please try again.'); setTimeout(() => setToast(null), 5000)
     } finally { setPayingId(null) }
   }
 

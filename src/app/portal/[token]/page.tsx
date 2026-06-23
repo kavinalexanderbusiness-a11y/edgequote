@@ -104,7 +104,10 @@ export default function PortalPage() {
       })
       const d = await res.json().catch(() => ({}))
       if (res.ok && d.url) { window.location.href = d.url; return }
-      alert(d.error || 'Could not start payment. Please try again.')
+      // Public portal: show a FIXED message — never render a server-provided string.
+      alert('Could not start payment. Please try again.')
+    } catch {
+      alert('Could not start payment. Please try again.')
     } finally { setPayingId(null) }
   }
 

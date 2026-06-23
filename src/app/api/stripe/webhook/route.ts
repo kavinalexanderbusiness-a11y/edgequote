@@ -15,7 +15,10 @@ export async function POST(req: NextRequest) {
   const raw = await req.text()
   const sig = req.headers.get('stripe-signature')
   const v = constructWebhookEvent(raw, sig)
-  if (!v.ok) return NextResponse.json({ error: v.error }, { status: 400 })
+  if (!v.ok) {
+    console.error('[stripe] webhook signature verification failed:', v.error)
+    return NextResponse.json({ error: 'invalid signature' }, { status: 400 })
+  }
   const event = v.event as { type: string; data: { object: Record<string, unknown> } }
 
   if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {

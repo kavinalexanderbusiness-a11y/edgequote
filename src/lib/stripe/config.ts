@@ -7,11 +7,16 @@
 import crypto from 'crypto'
 
 export function stripeEnabled(): boolean {
-  return !!process.env.STRIPE_SECRET_KEY
+  return !!process.env.STRIPE_SECRET_KEY?.trim()
 }
 export function webhookConfigured(): boolean {
   return !!process.env.STRIPE_WEBHOOK_SECRET
 }
+
+// The ONE message any payment failure shows a user. Stripe details (response
+// bodies, exceptions, headers, the key) are logged server-side and NEVER
+// returned to a caller that forwards to the browser.
+const GENERIC_PAYMENT_ERROR = 'Could not start payment. Please try again.'
 
 export interface CheckoutInvoice {
   id: string
@@ -53,23 +58,30 @@ export async function createInvoiceCheckoutSession(
   form.set('metadata[invoice_number]', invoice.invoice_number)
   form.set('payment_intent_data[metadata][invoice_id]', invoice.id)
 
+  // Read + TRIM the secret here. A stray newline/space in the env var makes fetch
+  // throw a TypeError whose message embeds the header value (the key) — which is
+  // exactly how the key once leaked to the browser. We trim it AND never let any
+  // Stripe detail (response body, header, exception) reach the caller.
+  const secret = process.env.STRIPE_SECRET_KEY?.trim()
+  if (!secret) { console.error('[stripe] STRIPE_SECRET_KEY missing/blank'); return { ok: false, error: GENERIC_PAYMENT_ERROR } }
   try {
     const res = await fetch('https://api.stripe.com/v1/checkout/sessions', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY!}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/x-www-form-urlencoded' },
       body: form,
     })
     if (!res.ok) {
-      // Surface Stripe's exact error (e.g. {"error":{"message":"Invalid API Key"}}).
+      // Log Stripe's body server-side ONLY; the caller gets a generic message.
       const detail = await res.text().catch(() => '')
-      let msg = `Stripe ${res.status}`
-      try { const j = JSON.parse(detail); if (j?.error?.message) msg = `Stripe ${res.status}: ${j.error.message}` } catch { if (detail) msg += `: ${detail.slice(0, 300)}` }
-      return { ok: false, error: msg }
+      console.error(`[stripe] checkout session HTTP ${res.status}:`, detail.slice(0, 500))
+      return { ok: false, error: GENERIC_PAYMENT_ERROR }
     }
     const data = await res.json()
     return { ok: true, url: data.url }
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : 'Could not reach Stripe.' }
+    // e.message can embed the Authorization header (the key) — log, never return.
+    console.error('[stripe] checkout session request failed:', e)
+    return { ok: false, error: GENERIC_PAYMENT_ERROR }
   }
 }
 
