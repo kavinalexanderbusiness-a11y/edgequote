@@ -814,3 +814,133 @@ end; $$;
 drop trigger if exists trg_resync_quote_on_job_recurring on public.jobs;
 create trigger trg_resync_quote_on_job_recurring after update of recurrence_id on public.jobs
   for each row execute function public.resync_quote_on_job_recurring();
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-23 — Payment fee recovery + GST + payment method.
+-- Strategy: recover Stripe cost via a GLOBAL PRICE INCREASE baked into NEW quotes
+-- (NOT a card surcharge — Calgary/Alberta-compliant, no surcharge rules, no
+-- separate fee line shown to the customer). GST is a pass-through, computed on top
+-- at display/charge time, shown only when gst_percent > 0. Idempotent.
+-- ════════════════════════════════════════════════════════════
+alter table public.business_settings
+  add column if not exists payment_fee_strategy       text    not null default 'global_price_increase',
+  add column if not exists fee_recovery_percent       numeric not null default 3,
+  add column if not exists etransfer_discount_percent numeric not null default 0,
+  add column if not exists gst_percent                numeric not null default 0;
+alter table public.business_settings drop constraint if exists business_settings_fee_strategy_chk;
+alter table public.business_settings add constraint business_settings_fee_strategy_chk
+  check (payment_fee_strategy in ('absorb','global_price_increase','etransfer_discount'));
+
+alter table public.invoices add column if not exists payment_method text;
+alter table public.invoices drop constraint if exists invoices_payment_method_chk;
+alter table public.invoices add constraint invoices_payment_method_chk
+  check (payment_method is null or payment_method in ('stripe','etransfer','cash','cheque'));
+
+-- Portal pay needs the owner's GST rate to charge the GST-inclusive total.
+create or replace function public.portal_invoice_for_payment(p_token text, p_invoice_id uuid)
+returns json language plpgsql security definer set search_path = public as $$
+declare v_customer uuid; result json;
+begin
+  select customer_id into v_customer from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return null; end if;
+  select to_json(i) into result from (
+    select inv.id, inv.invoice_number, inv.service_type, inv.amount, inv.status, inv.customer_id, inv.user_id,
+           coalesce(bs.gst_percent, 0) as gst_percent
+    from public.invoices inv
+    left join public.business_settings bs on bs.user_id = inv.user_id
+    where inv.id = p_invoice_id and inv.customer_id = v_customer and inv.status in ('unpaid','sent')
+  ) i;
+  return result;
+end; $$;
+grant execute on function public.portal_invoice_for_payment(text, uuid) to anon, authenticated;
+
+-- Portal display needs gst_percent in the business object to show Subtotal/GST/Total.
+create or replace function public.get_portal_data(p_token text)
+returns json language plpgsql security definer set search_path = public as $$
+declare v_customer uuid; v_user uuid; result json;
+begin
+  select customer_id, user_id into v_customer, v_user
+    from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return null; end if;
+  select json_build_object(
+    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code from public.customers where id = v_customer) c),
+    'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, website, logo_url, coalesce(gst_percent,0) as gst_percent from public.business_settings where user_id = v_user) b),
+    'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
+    'quotes', coalesce((select json_agg(q order by q.created_at desc) from (select id, quote_number, service_type, address, total, initial_price, weekly_price, biweekly_price, monthly_price, notes, status, created_at from public.quotes where customer_id = v_customer and status <> 'draft') q), '[]'::json),
+    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, status, issued_date, due_date, line_items, job_id, created_at from public.invoices where customer_id = v_customer) i), '[]'::json),
+    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, notes from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
+    'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, end_date from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
+    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json)
+  ) into result;
+  return result;
+end; $$;
+grant execute on function public.get_portal_data(text) to anon, authenticated;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-23 — Communication consent: bulk tools + audit trail.
+-- consent_changes logs WHO changed a customer's SMS/email consent, WHEN, and the
+-- old→new value, from any source (single edit, bulk action, portal self-serve,
+-- import). Customers never auto-opt-in. Idempotent.
+-- ════════════════════════════════════════════════════════════
+create table if not exists public.consent_changes (
+  id          uuid primary key default uuid_generate_v4(),
+  created_at  timestamptz not null default now(),
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  customer_id uuid references public.customers(id) on delete set null,  -- audit survives a customer delete
+  channel     text not null,        -- 'sms' | 'email'
+  old_value   boolean,
+  new_value   boolean,
+  source      text not null,        -- 'single' | 'bulk' | 'portal' | 'import'
+  changed_by  text                  -- owner email, or 'customer (portal)'
+);
+alter table public.consent_changes enable row level security;
+drop policy if exists "consent_changes: select own" on public.consent_changes;
+create policy "consent_changes: select own" on public.consent_changes for select using (auth.uid() = user_id);
+drop policy if exists "consent_changes: insert own" on public.consent_changes;
+create policy "consent_changes: insert own" on public.consent_changes for insert with check (auth.uid() = user_id);
+create index if not exists consent_changes_cust_idx on public.consent_changes(user_id, customer_id, created_at desc);
+
+-- Portal self-serve consent: token-scoped update + audit (SECURITY DEFINER, so the
+-- anon portal can write its own customer's consent without broad table grants).
+create or replace function public.portal_set_consent(p_token text, p_sms_opt_in boolean, p_email_opt_in boolean)
+returns boolean language plpgsql security definer set search_path = public as $$
+declare v_customer uuid; v_user uuid; v_old_sms boolean; v_old_email boolean;
+begin
+  select customer_id, user_id into v_customer, v_user
+    from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return false; end if;
+  select sms_opt_in, email_opt_in into v_old_sms, v_old_email from public.customers where id = v_customer;
+  update public.customers set sms_opt_in = p_sms_opt_in, email_opt_in = p_email_opt_in where id = v_customer;
+  if v_old_sms is distinct from p_sms_opt_in then
+    insert into public.consent_changes (user_id, customer_id, channel, old_value, new_value, source, changed_by)
+      values (v_user, v_customer, 'sms', v_old_sms, p_sms_opt_in, 'portal', 'customer (portal)');
+  end if;
+  if v_old_email is distinct from p_email_opt_in then
+    insert into public.consent_changes (user_id, customer_id, channel, old_value, new_value, source, changed_by)
+      values (v_user, v_customer, 'email', v_old_email, p_email_opt_in, 'portal', 'customer (portal)');
+  end if;
+  return true;
+end; $$;
+grant execute on function public.portal_set_consent(text, boolean, boolean) to anon, authenticated;
+
+-- get_portal_data: expose sms_opt_in/email_opt_in so the portal can show + edit consent.
+create or replace function public.get_portal_data(p_token text)
+returns json language plpgsql security definer set search_path = public as $$
+declare v_customer uuid; v_user uuid; result json;
+begin
+  select customer_id, user_id into v_customer, v_user
+    from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return null; end if;
+  select json_build_object(
+    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code, sms_opt_in, email_opt_in from public.customers where id = v_customer) c),
+    'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, website, logo_url, coalesce(gst_percent,0) as gst_percent from public.business_settings where user_id = v_user) b),
+    'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
+    'quotes', coalesce((select json_agg(q order by q.created_at desc) from (select id, quote_number, service_type, address, total, initial_price, weekly_price, biweekly_price, monthly_price, notes, status, created_at from public.quotes where customer_id = v_customer and status <> 'draft') q), '[]'::json),
+    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, status, issued_date, due_date, line_items, job_id, created_at from public.invoices where customer_id = v_customer) i), '[]'::json),
+    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, notes from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
+    'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, end_date from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
+    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json)
+  ) into result;
+  return result;
+end; $$;
+grant execute on function public.get_portal_data(text) to anon, authenticated;

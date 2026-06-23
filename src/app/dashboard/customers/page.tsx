@@ -6,9 +6,10 @@ import { Customer, CustomerFormValues } from '@/types'
 import { CustomerList } from '@/components/customers/CustomerList'
 import { CustomerForm } from '@/components/customers/CustomerForm'
 import { PageHeader } from '@/components/layout/PageHeader'
+import Link from 'next/link'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
-import { Plus, X } from 'lucide-react'
+import { Plus, X, Upload } from 'lucide-react'
 
 export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[]>([])
@@ -104,9 +105,14 @@ export default function CustomersPage() {
         title="Customers"
         description={`${customers.length} customer${customers.length !== 1 ? 's' : ''} in your database`}
         action={
-          <Button onClick={() => { setShowForm(true); setEditing(null) }}>
-            <Plus className="w-4 h-4" /> Add Customer
-          </Button>
+          <div className="flex items-center gap-2">
+            <Link href="/dashboard/customers/import">
+              <Button variant="secondary"><Upload className="w-4 h-4" /> Import</Button>
+            </Link>
+            <Button onClick={() => { setShowForm(true); setEditing(null) }}>
+              <Plus className="w-4 h-4" /> Add Customer
+            </Button>
+          </div>
         }
       />
 
@@ -153,6 +159,7 @@ export default function CustomersPage() {
           customers={customers}
           onEdit={c => { setEditing(c); setShowForm(false) }}
           onDelete={handleDelete}
+          onRefresh={fetchCustomers}
         />
       )}
     </div>

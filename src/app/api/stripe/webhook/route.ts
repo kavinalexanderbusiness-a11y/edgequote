@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
         }, { onConflict: 'stripe_session_id', ignoreDuplicates: true })
         // Mark the invoice paid — scoped to the owner from metadata, and only
         // while it's still owing (never un-pay or touch someone else's invoice).
-        await sb.from('invoices').update({ status: 'paid', paid_at: new Date().toISOString() })
+        await sb.from('invoices').update({ status: 'paid', paid_at: new Date().toISOString(), payment_method: 'stripe' })
           .eq('id', invoiceId).eq('user_id', userId).neq('status', 'paid')
       }
     }

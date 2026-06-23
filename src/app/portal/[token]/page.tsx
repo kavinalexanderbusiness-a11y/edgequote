@@ -5,11 +5,12 @@ import { useParams } from 'next/navigation'
 import { format } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { recurrenceLabel } from '@/lib/recurrence'
+import { invoiceTotals } from '@/lib/invoiceTotals'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
 import {
   Home, History, Image as ImageIcon, FileText, Receipt, MessageSquarePlus, Check, Loader2,
-  Phone, Globe, Mail, Leaf, CheckCircle2, Navigation, Play, CalendarClock, Repeat, MapPin, Ruler, Sparkles, CreditCard,
+  Phone, Globe, Mail, Leaf, CheckCircle2, Navigation, Play, CalendarClock, Repeat, MapPin, Ruler, Sparkles, CreditCard, MessageSquare,
 } from 'lucide-react'
 
 // ── Premium Customer Portal ─────────────────────────────────────────────────────
@@ -23,8 +24,8 @@ interface PortalJob { id: string; recurrence_id: string | null; service_type: st
 interface PortalRec { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null; end_date: string | null }
 interface PortalPhoto { id: string; job_id: string | null; storage_path: string; kind: string; caption: string | null; taken_at: string }
 interface PortalData {
-  customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null; city: string | null }
-  business: { company_name: string | null; owner_name: string | null; phone: string | null; email_primary: string | null; website: string | null; logo_url: string | null } | null
+  customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null; city: string | null; sms_opt_in?: boolean | null; email_opt_in?: boolean | null }
+  business: { company_name: string | null; owner_name: string | null; phone: string | null; email_primary: string | null; website: string | null; logo_url: string | null; gst_percent?: number | null } | null
   property: { address: string | null; city: string | null; province: string | null; lawn_sqft: number | null; fence_length: number | null; neighborhood: string | null } | null
   quotes: PortalQuote[]; invoices: PortalInvoice[]; jobs: PortalJob[]; recurrences: PortalRec[]; photos: PortalPhoto[]
 }
@@ -61,11 +62,20 @@ export default function PortalPage() {
   const [paymentsEnabled, setPaymentsEnabled] = useState(false)
   const [payingId, setPayingId] = useState<string | null>(null)
   const [justPaid, setJustPaid] = useState(false)
+  const [consent, setConsentState] = useState<{ sms: boolean; email: boolean } | null>(null)
 
   async function load() {
     const { data: d } = await supabase.rpc('get_portal_data', { p_token: token })
-    setData((d as PortalData | null) ?? null)
+    const pd = (d as PortalData | null) ?? null
+    setData(pd)
+    if (pd) setConsentState({ sms: !!pd.customer.sms_opt_in, email: !!pd.customer.email_opt_in })
     setLoading(false)
+  }
+
+  // Self-serve consent — updates the customer record immediately (token-scoped RPC).
+  async function saveConsent(next: { sms: boolean; email: boolean }) {
+    setConsentState(next)
+    await supabase.rpc('portal_set_consent', { p_token: token, p_sms_opt_in: next.sms, p_email_opt_in: next.email })
   }
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -190,10 +200,11 @@ export default function PortalPage() {
             </div>
           )}
           {tab === 'home' && <HomeTab data={data} derived={derived} biz={biz} />}
+          {tab === 'home' && consent && <ConsentCard consent={consent} onSave={saveConsent} />}
           {tab === 'service' && <ServiceTab completed={derived.completed} photosByJob={photosByJob} invoiceByJob={invoiceByJob} photoUrl={photoUrl} />}
           {tab === 'photos' && <GalleryTab photosByJob={photosByJob} jobs={data.jobs} photoUrl={photoUrl} />}
           {tab === 'quotes' && <QuotesTab quotes={data.quotes} accept={accept} accepting={accepting} />}
-          {tab === 'invoices' && <InvoicesTab invoices={data.invoices} paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} />}
+          {tab === 'invoices' && <InvoicesTab invoices={data.invoices} paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} gstPercent={Number(data.business?.gst_percent) || 0} />}
           {tab === 'request' && (
             <RequestTab presets={REQUEST_PRESETS} reqMsg={reqMsg} setReqMsg={setReqMsg} request={request} reqBusy={reqBusy} reqSent={reqSent} biz={biz} />
           )}
@@ -424,29 +435,37 @@ function QuotesTab({ quotes, accept, accepting }: { quotes: PortalQuote[]; accep
 }
 
 // ── Invoices ──
-function InvoicesTab({ invoices, paymentsEnabled, pay, payingId }: {
-  invoices: PortalInvoice[]; paymentsEnabled: boolean; pay: (id: string) => void; payingId: string | null
+function InvoicesTab({ invoices, paymentsEnabled, pay, payingId, gstPercent }: {
+  invoices: PortalInvoice[]; paymentsEnabled: boolean; pay: (id: string) => void; payingId: string | null; gstPercent: number
 }) {
   if (invoices.length === 0) return <Empty text="No invoices yet." />
   return (
     <div className="space-y-3">
       {invoices.map(inv => {
         const owing = inv.status === 'unpaid' || inv.status === 'sent'
+        const t = invoiceTotals(inv.amount, { gst_percent: gstPercent })
         return (
         <div key={inv.id} className="rounded-card border border-border bg-bg-secondary p-4">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0"><p className="text-sm font-semibold text-ink">{inv.service_type || 'Services'}</p><p className="text-xs text-ink-muted">{inv.invoice_number} · {inv.issued_date ? formatDate(inv.issued_date) : formatDate(inv.created_at)}{inv.due_date ? ` · due ${formatDate(inv.due_date)}` : ''}</p></div>
-            <div className="text-right"><p className="text-base font-bold text-ink">{formatCurrency(Number(inv.amount))}</p><InvoiceStatusPill status={inv.status} /></div>
+            <div className="text-right"><p className="text-base font-bold text-ink">{formatCurrency(t.total)}</p><InvoiceStatusPill status={inv.status} /></div>
           </div>
           {inv.line_items && inv.line_items.length > 1 && (
             <div className="mt-2 space-y-0.5">
               {inv.line_items.map((li, i) => <p key={i} className="text-xs flex justify-between gap-3"><span className="text-ink-faint">{li.description}</span><span className="text-ink-muted">{formatCurrency(Number(li.amount))}</span></p>)}
             </div>
           )}
+          {t.hasGst && (
+            <div className="mt-2 space-y-0.5 text-xs border-t border-border pt-2">
+              <p className="flex justify-between gap-3"><span className="text-ink-faint">Subtotal</span><span className="text-ink-muted">{formatCurrency(t.subtotal)}</span></p>
+              <p className="flex justify-between gap-3"><span className="text-ink-faint">GST ({t.gstPercent}%)</span><span className="text-ink-muted">{formatCurrency(t.gstAmount)}</span></p>
+              <p className="flex justify-between gap-3 font-semibold"><span className="text-ink">Total</span><span className="text-ink">{formatCurrency(t.total)}</span></p>
+            </div>
+          )}
           {paymentsEnabled && owing && (
             <div className="mt-3">
               <Button size="sm" onClick={() => pay(inv.id)} loading={payingId === inv.id}>
-                <CreditCard className="w-4 h-4" /> Pay {formatCurrency(Number(inv.amount))}
+                <CreditCard className="w-4 h-4" /> Pay {formatCurrency(t.total)}
               </Button>
             </div>
           )}
@@ -495,6 +514,31 @@ function RequestTab({ presets, reqMsg, setReqMsg, request, reqBusy, reqSent, biz
           </>
         )}
       </div>
+    </div>
+  )
+}
+
+// ── Message preferences (self-serve consent) ──
+function ConsentCard({ consent, onSave }: { consent: { sms: boolean; email: boolean }; onSave: (c: { sms: boolean; email: boolean }) => void }) {
+  return (
+    <div className="rounded-card border border-border bg-bg-secondary p-4 mt-3">
+      <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><MessageSquare className="w-4 h-4 text-accent" /> Message preferences</p>
+      <p className="text-xs text-ink-muted mt-0.5 mb-3">Choose how we can reach you — you can change this anytime. Message &amp; data rates may apply to texts.</p>
+      <div className="space-y-2">
+        <PrefRow label="Text messages (SMS)" icon={MessageSquare} on={consent.sms} onChange={v => onSave({ ...consent, sms: v })} />
+        <PrefRow label="Email" icon={Mail} on={consent.email} onChange={v => onSave({ ...consent, email: v })} />
+      </div>
+    </div>
+  )
+}
+function PrefRow({ label, icon: Icon, on, onChange }: { label: string; icon: typeof Mail; on: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-bg-tertiary px-3 py-2.5">
+      <span className="text-sm text-ink flex items-center gap-2"><Icon className="w-4 h-4 text-ink-muted" /> {label}</span>
+      <button onClick={() => onChange(!on)} aria-pressed={on}
+        className={cn('relative w-11 h-6 rounded-full transition-colors shrink-0', on ? 'bg-emerald-500' : 'bg-border-strong')}>
+        <span className={cn('absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform', on && 'translate-x-5')} />
+      </button>
     </div>
   )
 }

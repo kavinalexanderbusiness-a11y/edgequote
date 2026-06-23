@@ -9,6 +9,7 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
 import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes } from '@/lib/pricing'
 import { ensureCustomerAndProperty } from '@/lib/customers'
+import { applyFeeRecovery } from '@/lib/invoiceTotals'
 
 interface MeasurementPayload {
   customerId: string | null
@@ -116,10 +117,14 @@ export default function NewQuotePage() {
       address: values.address,
       service_type: values.service_type,
       service_template_id: values.service_template_id || null,
-      initial_price: Number(values.initial_price) > 0 ? Number(values.initial_price) : null,
-      weekly_price: Number(values.weekly_price) > 0 ? Number(values.weekly_price) : null,
-      biweekly_price: Number(values.biweekly_price) > 0 ? Number(values.biweekly_price) : null,
-      monthly_price: Number(values.monthly_price) > 0 ? Number(values.monthly_price) : null,
+      // Bake the fee-recovery markup (global price increase) into the customer-
+      // facing prices ONCE, here at generation. Jobs + invoices + Stripe inherit
+      // these, so there's no double-application. suggested_price stays at the raw
+      // engine value, so the quote page still shows "suggested → quoted".
+      initial_price: applyFeeRecovery(Number(values.initial_price) > 0 ? Number(values.initial_price) : null, settings),
+      weekly_price: applyFeeRecovery(Number(values.weekly_price) > 0 ? Number(values.weekly_price) : null, settings),
+      biweekly_price: applyFeeRecovery(Number(values.biweekly_price) > 0 ? Number(values.biweekly_price) : null, settings),
+      monthly_price: applyFeeRecovery(Number(values.monthly_price) > 0 ? Number(values.monthly_price) : null, settings),
       overgrowth_multiplier: mult,
       custom_travel_required: values.custom_travel_required,
       show_travel_separately: values.show_travel_separately,
@@ -128,7 +133,7 @@ export default function NewQuotePage() {
       hours: Number(values.hours),
       crew_size: Number(values.crew_size),
       rate: finalRate,
-      travel_fee: Number(values.travel_fee),
+      travel_fee: applyFeeRecovery(Number(values.travel_fee), settings) ?? 0,
       measured_sqft: measurement?.sqft ?? (Number(values.measured_sqft) || null),
       suggested_price: measurement?.suggestedPrice ?? (Number(values.suggested_price) || null),
       front_lawn_sqft: measurement?.sections?.front ?? null,

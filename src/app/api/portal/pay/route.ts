@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { createInvoiceCheckoutSession, stripeEnabled } from '@/lib/stripe/config'
+import { invoiceTotals } from '@/lib/invoiceTotals'
 
 export const dynamic = 'force-dynamic'
 
@@ -20,13 +21,16 @@ export async function POST(req: NextRequest) {
   if (!invJson) return NextResponse.json({ error: 'This invoice is not available to pay.' }, { status: 404 })
   const invoice = invJson as {
     id: string; invoice_number: string; service_type: string | null; amount: number | string
-    status: string; user_id: string; customer_id: string | null
+    status: string; user_id: string; customer_id: string | null; gst_percent?: number | null
   }
+  // Charge the GST-inclusive total (the RPC returns the owner's gst_percent).
+  const total = invoiceTotals(invoice.amount, { gst_percent: invoice.gst_percent }).total
 
   const base = (process.env.NEXT_PUBLIC_APP_URL || '').replace(/\/$/, '')
   const result = await createInvoiceCheckoutSession(invoice, {
     successUrl: `${base}/portal/${token}?paid=1`,
     cancelUrl: `${base}/portal/${token}`,
+    chargeCents: Math.round(total * 100),
   })
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 502 })
   return NextResponse.json({ url: result.url })

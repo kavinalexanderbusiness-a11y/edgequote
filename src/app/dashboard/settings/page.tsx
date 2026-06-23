@@ -17,7 +17,7 @@ import { useForm, Controller } from 'react-hook-form'
 import { cn } from '@/lib/utils'
 import { ThemePref, getThemePref, applyThemePref } from '@/lib/theme'
 import { ServiceSeasons, ServiceSeason, DEFAULT_SEASONS, settingsToSeasons, seasonLabel } from '@/lib/seasons'
-import { Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange } from 'lucide-react'
+import { Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard } from 'lucide-react'
 
 // Mon→Sun display, mapped to date-fns getDay indices (Sun=0…Sat=6).
 const WEEKDAYS = [
@@ -75,6 +75,10 @@ export default function SettingsPage() {
         pricing_premium_mult: settings.pricing_premium_mult ?? 1.2,
         pricing_travel_rate: settings.pricing_travel_rate ?? 1.5,
         terms_text: settings.terms_text || '',
+        payment_fee_strategy: settings.payment_fee_strategy ?? 'global_price_increase',
+        fee_recovery_percent: settings.fee_recovery_percent ?? 3,
+        etransfer_discount_percent: settings.etransfer_discount_percent ?? 0,
+        gst_percent: settings.gst_percent ?? 0,
       })
       setLogoUrl(settings.logo_url)
       setWorkDays(settings.preferred_work_days?.length ? settings.preferred_work_days : DEFAULT_WORK_DAYS)
@@ -124,6 +128,10 @@ export default function SettingsPage() {
         pricing_recommended_mult: Number(values.pricing_recommended_mult),
         pricing_premium_mult: Number(values.pricing_premium_mult),
         pricing_travel_rate: Number(values.pricing_travel_rate),
+        payment_fee_strategy: values.payment_fee_strategy || 'global_price_increase',
+        fee_recovery_percent: Number(values.fee_recovery_percent) >= 0 ? Number(values.fee_recovery_percent) : 3,
+        etransfer_discount_percent: Number(values.etransfer_discount_percent) >= 0 ? Number(values.etransfer_discount_percent) : 0,
+        gst_percent: Number(values.gst_percent) >= 0 ? Number(values.gst_percent) : 0,
         preferred_work_days: workDays,
         work_start_time: /^\d{1,2}:\d{2}$/.test(workStart) ? workStart : '08:00',
         daily_capacity_hours: Number(capacityHours) > 0 ? Number(capacityHours) : 8,
@@ -284,6 +292,38 @@ export default function SettingsPage() {
               {...register('target_rev_per_hour')}
             />
             <Textarea label="PDF Terms & Conditions" rows={5} {...register('terms_text')} />
+          </CardBody>
+        </Card>
+
+        <Card className="mt-6">
+          <CardHeader>
+            <div>
+              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><CreditCard className="w-4 h-4 text-accent" /> Payment &amp; Fees</h2>
+              <p className="text-xs text-ink-faint mt-0.5">How card-processing cost is recovered. The default bakes a small increase into NEW quotes — never a card surcharge (compliant in Alberta; no separate fee line is shown to customers).</p>
+            </div>
+          </CardHeader>
+          <CardBody className="space-y-4">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Fee recovery strategy</label>
+              <select {...register('payment_fee_strategy')}
+                className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all">
+                <option value="global_price_increase">Global price increase (recommended)</option>
+                <option value="absorb">Absorb the fee (no change)</option>
+                <option value="etransfer_discount">E-transfer discount (coming soon)</option>
+              </select>
+              <p className="text-xs text-ink-faint">“Global price increase” adds the % below to every NEW quote so card fees are covered. Existing quotes are never changed.</p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Input label="Fee recovery %" type="number" step="0.5" min="0" max="10"
+                hint="Baked into new quote prices. ~3% covers Stripe's ~2.9% + 30¢."
+                {...register('fee_recovery_percent')} />
+              <Input label="GST % (if registered)" type="number" step="0.5" min="0" max="15"
+                hint="Alberta GST is 5%. Leave 0 if you're not GST-registered — no GST line will be shown."
+                {...register('gst_percent')} />
+            </div>
+            <Input label="E-transfer discount % (future — leave 0)" type="number" step="0.5" min="0" max="10"
+              hint="Reserved for a future cash/e-transfer discount. Not active yet."
+              {...register('etransfer_discount_percent')} />
           </CardBody>
         </Card>
 

@@ -6,8 +6,10 @@ import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { formatDate, cn } from '@/lib/utils'
 import { MessageSquare, Mail, Check, Loader2 } from 'lucide-react'
 import { MSG_LABELS, MsgType } from '@/lib/comms/templates'
+import { applyConsent, SMS_CONSENT_WARNING } from '@/lib/consent'
 
 interface LogRow { id: string; created_at: string; channel: string; template: string; status: string; detail: string | null }
+interface ConsentRow { id: string; created_at: string; channel: string; old_value: boolean | null; new_value: boolean | null; source: string; changed_by: string | null }
 
 // Per-customer Communication Center: consent toggles + the full SMS/email history
 // (what was sent, delivery status, when). Reads notification_log.
@@ -16,20 +18,35 @@ export function CustomerComms({ customerId, smsOptIn, emailOptIn }: { customerId
   const [sms, setSms] = useState(smsOptIn)
   const [email, setEmail] = useState(emailOptIn)
   const [log, setLog] = useState<LogRow[]>([])
+  const [consentLog, setConsentLog] = useState<ConsentRow[]>([])
   const [loading, setLoading] = useState(true)
 
   async function loadLog() {
-    const { data } = await supabase.from('notification_log')
-      .select('id, created_at, channel, template, status, detail')
-      .eq('customer_id', customerId).order('created_at', { ascending: false }).limit(40)
-    setLog((data as LogRow[]) || [])
+    const [msgRes, conRes] = await Promise.all([
+      supabase.from('notification_log').select('id, created_at, channel, template, status, detail')
+        .eq('customer_id', customerId).order('created_at', { ascending: false }).limit(40),
+      supabase.from('consent_changes').select('id, created_at, channel, old_value, new_value, source, changed_by')
+        .eq('customer_id', customerId).order('created_at', { ascending: false }).limit(20),
+    ])
+    setLog((msgRes.data as LogRow[]) || [])
+    setConsentLog((conRes.data as ConsentRow[]) || [])
     setLoading(false)
   }
   useEffect(() => { loadLog() }, [customerId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function toggle(channel: 'sms' | 'email', value: boolean) {
+    // Enabling SMS requires explicit confirmation (carrier/Twilio/CASL).
+    if (channel === 'sms' && value && !confirm(`${SMS_CONSENT_WARNING}\n\nEnable SMS for this customer?`)) return
+    const prevSms = sms, prevEmail = email
     if (channel === 'sms') setSms(value); else setEmail(value)
-    await supabase.from('customers').update(channel === 'sms' ? { sms_opt_in: value } : { email_opt_in: value }).eq('id', customerId)
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+    // Update + audit (who/when/old→new) via the shared consent layer.
+    await applyConsent(supabase, {
+      targets: [{ id: customerId, sms_opt_in: prevSms, email_opt_in: prevEmail }],
+      channel, value, userId: user.id, changedBy: user.email || user.id, source: 'single',
+    })
+    loadLog() // refresh consent history with the new audit row
   }
 
   return (
@@ -65,6 +82,23 @@ export function CustomerComms({ customerId, smsOptIn, emailOptIn }: { customerId
             </div>
           )}
         </div>
+
+        {/* Consent history — who changed SMS/email opt-in, when, old → new */}
+        {consentLog.length > 0 && (
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-1.5">Consent history</p>
+            <div className="space-y-1">
+              {consentLog.map(r => (
+                <div key={r.id} className="flex items-center gap-2 text-xs py-1 border-b border-border/50 last:border-0">
+                  <span className="text-ink font-medium uppercase">{r.channel}</span>
+                  <span className={r.new_value ? 'text-emerald-400' : 'text-ink-muted'}>{r.old_value ? 'On' : 'Off'} → {r.new_value ? 'On' : 'Off'}</span>
+                  <span className="text-ink-faint truncate">· {r.source}{r.changed_by ? ` · ${r.changed_by}` : ''}</span>
+                  <span className="text-ink-faint ml-auto shrink-0">{formatDate(r.created_at)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </CardBody>
     </Card>
   )

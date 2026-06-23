@@ -8,6 +8,7 @@ import { Card, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { SendComms } from '@/components/comms/SendComms'
 import { PaymentHistory } from '@/components/payments/PaymentHistory'
+import { invoiceTotals } from '@/lib/invoiceTotals'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { FileText, User, Check, FileDown, Trash2, CreditCard } from 'lucide-react'
 
@@ -122,9 +123,10 @@ export default function InvoicesPage() {
 
   // One tap straight to paid — the most common action on billing day shouldn't
   // require cycling through "sent".
-  async function markPaid(inv: Invoice) {
-    setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: 'paid' as InvoiceStatus } : i))
-    const { error } = await supabase.from('invoices').update({ status: 'paid' }).eq('id', inv.id)
+  async function markPaid(inv: Invoice, method?: 'etransfer' | 'cash' | 'cheque') {
+    const pm = method ?? inv.payment_method ?? null
+    setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: 'paid' as InvoiceStatus, payment_method: pm } : i))
+    const { error } = await supabase.from('invoices').update({ status: 'paid', paid_at: new Date().toISOString(), payment_method: pm }).eq('id', inv.id)
     if (error) { setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: inv.status } : i)); alert('Could not update status: ' + error.message) }
   }
 
@@ -295,7 +297,10 @@ export default function InvoicesPage() {
                   </div>
                   <div className="flex items-center gap-3 shrink-0">
                     <div className="text-right">
-                      <span className="text-lg font-bold text-ink">{formatCurrency(Number(inv.amount))}</span>
+                      <span className="text-lg font-bold text-ink">{formatCurrency(invoiceTotals(inv.amount, settings).total)}</span>
+                      {settings && Number(settings.gst_percent) > 0 && (
+                        <p className="text-[10px] text-ink-faint">incl. {formatCurrency(invoiceTotals(inv.amount, settings).gstAmount)} GST</p>
+                      )}
                       {(() => {
                         const n = (inv.line_items || []).filter(li => li.kind === 'addon').length
                         return n > 0 ? <p className="text-[10px] font-semibold text-accent">+{n} service{n !== 1 ? 's' : ''}</p> : null
@@ -318,9 +323,20 @@ export default function InvoicesPage() {
                       </Button>
                     )}
                     {(inv.status === 'unpaid' || inv.status === 'sent') && (
-                      <Button onClick={() => markPaid(inv)} variant="secondary" size="sm" title="Mark paid">
-                        <Check className="w-3.5 h-3.5" /> Paid
-                      </Button>
+                      <select
+                        defaultValue=""
+                        onChange={e => { const m = e.target.value as 'etransfer' | 'cash' | 'cheque' | ''; if (m) markPaid(inv, m) }}
+                        title="Mark paid by method"
+                        className="text-xs rounded-lg border border-border-strong bg-surface text-ink-muted px-2 py-1.5 outline-none focus:border-accent"
+                      >
+                        <option value="">Mark paid…</option>
+                        <option value="etransfer">E-transfer</option>
+                        <option value="cash">Cash</option>
+                        <option value="cheque">Cheque</option>
+                      </select>
+                    )}
+                    {inv.status === 'paid' && inv.payment_method && (
+                      <span className="text-[10px] text-ink-faint capitalize">{inv.payment_method === 'etransfer' ? 'E-transfer' : inv.payment_method}</span>
                     )}
                     <Button onClick={() => deleteInvoice(inv)} variant="ghost" size="sm" loading={deletingId === inv.id}
                       className="hover:text-red-400" title="Delete invoice">

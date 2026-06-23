@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createInvoiceCheckoutSession, stripeEnabled } from '@/lib/stripe/config'
+import { invoiceTotals } from '@/lib/invoiceTotals'
 
 export const dynamic = 'force-dynamic'
 
@@ -28,11 +29,16 @@ export async function POST(req: NextRequest) {
   }
   if (invoice.status === 'paid') return NextResponse.json({ error: 'This invoice is already paid.' }, { status: 409 })
 
+  // Charge the GST-inclusive total (fee recovery is already baked into amount).
+  const { data: bs } = await supabase.from('business_settings').select('gst_percent').eq('user_id', user.id).maybeSingle()
+  const total = invoiceTotals(invoice.amount, bs as { gst_percent?: number | null } | null).total
+
   const base = (process.env.NEXT_PUBLIC_APP_URL || '').replace(/\/$/, '')
   const result = await createInvoiceCheckoutSession(invoice, {
     successUrl: `${base}/dashboard/invoices?paid=1`,
     cancelUrl: `${base}/dashboard/invoices`,
     customerEmail: invoice.customers?.email ?? null,
+    chargeCents: Math.round(total * 100),
   })
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 502 })
   return NextResponse.json({ url: result.url })

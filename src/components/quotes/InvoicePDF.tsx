@@ -4,6 +4,7 @@ import {
   Document, Page, Text, View, Image, StyleSheet, pdf,
 } from '@react-pdf/renderer'
 import type { Invoice, BusinessSettings } from '@/types'
+import { invoiceTotals } from '@/lib/invoiceTotals'
 
 const COLORS = {
   green: '#00C896',
@@ -153,10 +154,31 @@ export function InvoiceDocument({ invoice, settings }: InvoicePDFProps) {
           ))}
         </View>
 
-        <View style={styles.grandRow}>
-          <Text style={styles.grandLabel}>Amount Due</Text>
-          <Text style={styles.grandValue}>{money(Number(invoice.amount))}</Text>
-        </View>
+        {(() => {
+          const t = invoiceTotals(invoice.amount, settings)
+          if (!t.hasGst) return (
+            <View style={styles.grandRow}>
+              <Text style={styles.grandLabel}>Amount Due</Text>
+              <Text style={styles.grandValue}>{money(t.total)}</Text>
+            </View>
+          )
+          return (
+            <View>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 12, marginLeft: 'auto', width: '50%' }}>
+                <Text style={styles.bodyText}>Subtotal</Text>
+                <Text style={styles.bodyText}>{money(t.subtotal)}</Text>
+              </View>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginLeft: 'auto', width: '50%', marginTop: 2 }}>
+                <Text style={styles.bodyText}>GST ({t.gstPercent}%)</Text>
+                <Text style={styles.bodyText}>{money(t.gstAmount)}</Text>
+              </View>
+              <View style={styles.grandRow}>
+                <Text style={styles.grandLabel}>Total Due</Text>
+                <Text style={styles.grandValue}>{money(t.total)}</Text>
+              </View>
+            </View>
+          )
+        })()}
 
         {invoice.notes ? (
           <View style={styles.notesBox}>

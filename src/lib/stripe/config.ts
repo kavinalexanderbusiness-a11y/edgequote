@@ -34,10 +34,12 @@ export interface CheckoutResult { ok: boolean; url?: string; error?: string }
 // what lets us mark exactly the right invoice paid for the right owner.
 export async function createInvoiceCheckoutSession(
   invoice: CheckoutInvoice,
-  opts: { successUrl: string; cancelUrl: string; customerEmail?: string | null },
+  opts: { successUrl: string; cancelUrl: string; customerEmail?: string | null; chargeCents?: number },
 ): Promise<CheckoutResult> {
   if (!stripeEnabled()) return { ok: false, error: 'Payments are not set up yet.' }
-  const cents = Math.round(Number(invoice.amount) * 100)
+  // chargeCents (the GST-inclusive total) wins when the caller computes it;
+  // otherwise charge the invoice amount as-is.
+  const cents = opts.chargeCents != null ? Math.round(opts.chargeCents) : Math.round(Number(invoice.amount) * 100)
   if (!Number.isFinite(cents) || cents <= 0) return { ok: false, error: 'This invoice has no payable amount.' }
 
   const form = new URLSearchParams()

@@ -336,6 +336,9 @@ export interface Invoice {
   // Snapshot breakdown for the customer (base service + add-ons + travel). Null
   // on legacy invoices → render the single (service_type, amount) row.
   line_items: InvoiceLineItem[] | null
+  // How it was paid (set on mark-paid / by the Stripe webhook). null = unpaid.
+  payment_method?: 'stripe' | 'etransfer' | 'cash' | 'cheque' | null
+  paid_at?: string | null
   customers?: Pick<Customer, 'id' | 'name' | 'email' | 'phone'>
 }
 
@@ -520,8 +523,18 @@ export interface BusinessSettings {
   // "Season End" recurrence default and seasonal reactivation suppression.
   // null = use Calgary defaults (lib/seasons DEFAULT_SEASONS).
   service_seasons: { lawn?: unknown; snow?: unknown } | null
+  // ── Payment fee recovery ── how the ~3% Stripe cost is recovered:
+  //   'global_price_increase' (default) → new quote prices are bumped by
+  //   fee_recovery_percent; 'absorb' → no change; 'etransfer_discount' →
+  //   future-proof, off by default. Never a card surcharge (AB-compliant).
+  payment_fee_strategy: PaymentFeeStrategy | null
+  fee_recovery_percent: number | null        // markup % baked into new quotes
+  etransfer_discount_percent: number | null  // future: % off for non-card pay (off by default)
+  gst_percent: number | null                 // GST shown/charged only when > 0 (Alberta = 5 when registered)
   user_id: string
 }
+
+export type PaymentFeeStrategy = 'absorb' | 'global_price_increase' | 'etransfer_discount'
 
 export interface TravelFeeTier {
   id: string
@@ -574,6 +587,10 @@ export interface BusinessSettingsFormValues {
   pricing_premium_mult: number
   pricing_travel_rate: number
   terms_text: string
+  payment_fee_strategy: PaymentFeeStrategy
+  fee_recovery_percent: number
+  etransfer_discount_percent: number
+  gst_percent: number
 }
 
 export const SERVICE_CATEGORIES = [
