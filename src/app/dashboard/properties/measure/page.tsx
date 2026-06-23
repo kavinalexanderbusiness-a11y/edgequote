@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Property } from '@/types'
 import { MeasureTool } from '@/components/properties/MeasureTool'
+import { PropertyMeasurementHistory } from '@/components/properties/PropertyMeasurementHistory'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { ArrowLeft } from 'lucide-react'
 
@@ -44,6 +45,7 @@ export default function MeasurePage() {
         <PageHeader title="Measure Property" description={property.address} />
       </div>
       <MeasureTool property={property} />
+      <PropertyMeasurementHistory propertyId={property.id} />
     </div>
   )
 }

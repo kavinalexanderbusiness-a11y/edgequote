@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { LayoutDashboard, Users, FileText, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Navigation, Receipt, Menu, X, Sprout, MessageSquare } from 'lucide-react'
+import { LayoutDashboard, Users, FileText, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Navigation, Receipt, Menu, X, Sprout, MessageSquare, Ruler } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 
@@ -15,6 +15,7 @@ const navMain = [
   { label: 'Routes',     href: '/dashboard/routes',     icon: Navigation },
   { label: 'Customers',  href: '/dashboard/customers',  icon: Users },
   { label: 'Properties', href: '/dashboard/properties', icon: Home },
+  { label: 'Measurements', href: '/dashboard/measurements', icon: Ruler },
   { label: 'Quotes',     href: '/dashboard/quotes',     icon: FileText },
   { label: 'Invoices',   href: '/dashboard/invoices',   icon: Receipt },
   { label: 'Messages',   href: '/dashboard/messages',   icon: MessageSquare },
@@ -45,11 +46,9 @@ export function Sidebar() {
       const next = { url: s?.logo_url ?? null, scale: s?.logo_scale && s.logo_scale >= 50 ? s.logo_scale : 100 }
       setBrand(next)
       try { window.localStorage.setItem('eq-logo', JSON.stringify(next)) } catch { /* ignore */ }
-      // Unread customer messages → the Messages nav badge.
-      const { count } = await supabase.from('service_requests')
-        .select('id', { count: 'exact', head: true })
-        .eq('user_id', user.id).eq('status', 'new')
-      if (active) setUnread(count || 0)
+      // Unread customer messages (sum of conversation unread) → the Messages badge.
+      const { data: cvs } = await supabase.from('conversations').select('unread').eq('user_id', user.id).gt('unread', 0)
+      if (active) setUnread((cvs as { unread: number }[] | null)?.reduce((s, c) => s + (c.unread || 0), 0) || 0)
     }
     load()
     return () => { active = false }

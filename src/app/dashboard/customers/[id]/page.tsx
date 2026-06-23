@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/Button'
 import { formatCurrency, formatDate, getInitials } from '@/lib/utils'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { CustomerComms } from '@/components/customers/CustomerComms'
+import { ConversationThread } from '@/components/messages/ConversationThread'
 import {
   ArrowLeft, Phone, MessageSquare, FilePlus, CalendarPlus, Mail, MapPin, Repeat,
   FileText, Send, RotateCw, CheckCircle2, Wrench, Receipt, DollarSign, Sparkles, Users,
@@ -375,6 +376,17 @@ export default function CustomerDetailPage() {
               <MessageSquare className="w-4 h-4" /> Text
             </a>
           </div>
+        </CardBody>
+      </Card>
+
+      {/* Conversation — two-way SMS + portal thread */}
+      <Card>
+        <CardHeader>
+          <h2 className="text-sm font-semibold text-ink">Conversation</h2>
+          <p className="text-xs text-ink-faint mt-0.5">Two-way SMS &amp; portal messages with this customer.</p>
+        </CardHeader>
+        <CardBody>
+          <div className="h-[440px]"><ConversationThread customerId={customer.id} /></div>
         </CardBody>
       </Card>
 

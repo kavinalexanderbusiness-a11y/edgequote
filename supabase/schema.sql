@@ -1081,3 +1081,198 @@ begin
   return json_build_object('quote_number', v_qnum, 'customer_id', v_customer, 'quote_id', v_quote);
 end; $$;
 grant execute on function public.submit_booking(text, text, text, text, text, text, text, text, double precision, double precision, numeric, text, numeric, numeric, numeric, numeric, text, text, text, text, jsonb, text[]) to anon, authenticated;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-23 — Auto-measure: measurement store + learning + analytics.
+-- Records the AUTO estimate vs the FINAL accepted area for every measurement so
+-- the estimate self-calibrates per neighborhood and we can report accuracy. The
+-- provider that produced the estimate is stored (source) so a paid provider can
+-- be swapped in later while keeping all history/analytics. Idempotent.
+-- ════════════════════════════════════════════════════════════
+create table if not exists public.measurements (
+  id            uuid primary key default uuid_generate_v4(),
+  created_at    timestamptz not null default now(),
+  user_id       uuid not null references auth.users(id) on delete cascade,
+  property_id   uuid references public.properties(id) on delete set null,
+  quote_id      uuid references public.quotes(id) on delete set null,
+  customer_id   uuid references public.customers(id) on delete set null,
+  lat           double precision,
+  lng           double precision,
+  neighborhood  text,
+  context       text,            -- 'quote' | 'property' | 'booking' | 'snow'
+  source        text,            -- provider: 'calgary-buildings' | 'manual' | 'satquote' …
+  confidence    text,            -- 'high' | 'medium' | 'low'
+  building_sqft numeric,         -- footprint the estimate was anchored on
+  auto_sqft     numeric,         -- the provider's auto estimate (null = pure manual)
+  accepted_sqft numeric,         -- the final accepted/measured area
+  adjusted      boolean,         -- accepted materially != auto
+  diff_pct      numeric          -- (accepted − auto) / auto × 100
+);
+alter table public.measurements enable row level security;
+drop policy if exists "measurements: select own" on public.measurements;
+create policy "measurements: select own" on public.measurements for select using (auth.uid() = user_id);
+drop policy if exists "measurements: insert own" on public.measurements;
+create policy "measurements: insert own" on public.measurements for insert with check (auth.uid() = user_id);
+create index if not exists measurements_user_idx on public.measurements(user_id, created_at desc);
+create index if not exists measurements_hood_idx on public.measurements(user_id, neighborhood);
+
+-- Anon booking funnel records its measurement via this token-scoped writer
+-- (the owner's authenticated surfaces insert directly under RLS).
+create or replace function public.record_booking_measurement(
+  p_token text, p_quote_id uuid, p_lat double precision, p_lng double precision, p_neighborhood text,
+  p_auto numeric, p_accepted numeric, p_building numeric, p_confidence text
+) returns boolean language plpgsql security definer set search_path = public as $$
+declare v_user uuid;
+begin
+  select user_id into v_user from public.business_settings where booking_token = p_token and booking_enabled = true;
+  if v_user is null then return false; end if;
+  insert into public.measurements (user_id, quote_id, lat, lng, neighborhood, context, source, confidence,
+      building_sqft, auto_sqft, accepted_sqft, adjusted, diff_pct)
+    values (v_user, p_quote_id, p_lat, p_lng, nullif(p_neighborhood, ''), 'booking', 'calgary-buildings', nullif(p_confidence, ''),
+      nullif(p_building, 0), nullif(p_auto, 0), nullif(p_accepted, 0),
+      (p_auto is not null and p_auto > 0 and abs(coalesce(p_accepted, 0) - p_auto) > greatest(1, p_auto * 0.02)),
+      case when coalesce(p_auto, 0) > 0 then round(((p_accepted - p_auto) / p_auto * 100)::numeric, 1) else null end);
+  return true;
+end; $$;
+grant execute on function public.record_booking_measurement(text, uuid, double precision, double precision, text, numeric, numeric, numeric, text) to anon, authenticated;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-23 — Two-way SMS conversations (unified inbox).
+-- ONE conversation per customer, ONE messages timeline across SMS / portal /
+-- internal notes; templated sends stay in notification_log and merge into the
+-- thread at read-time. The inbound Twilio webhook (service role) writes here.
+-- Idempotent.
+-- ════════════════════════════════════════════════════════════
+create table if not exists public.conversations (
+  id              uuid primary key default uuid_generate_v4(),
+  created_at      timestamptz not null default now(),
+  user_id         uuid not null references auth.users(id) on delete cascade,
+  customer_id     uuid not null references public.customers(id) on delete cascade,
+  last_message_at timestamptz not null default now(),
+  last_preview    text,
+  last_direction  text,                       -- 'inbound' | 'outbound' | 'internal'
+  unread          int not null default 0,     -- owner's unread inbound count
+  unique (user_id, customer_id)
+);
+alter table public.conversations enable row level security;
+drop policy if exists "conversations: select own" on public.conversations;
+create policy "conversations: select own" on public.conversations for select using (auth.uid() = user_id);
+drop policy if exists "conversations: insert own" on public.conversations;
+create policy "conversations: insert own" on public.conversations for insert with check (auth.uid() = user_id);
+drop policy if exists "conversations: update own" on public.conversations;
+create policy "conversations: update own" on public.conversations for update using (auth.uid() = user_id);
+create index if not exists conversations_user_idx on public.conversations(user_id, last_message_at desc);
+
+create table if not exists public.messages (
+  id              uuid primary key default uuid_generate_v4(),
+  created_at      timestamptz not null default now(),
+  user_id         uuid not null references auth.users(id) on delete cascade,
+  conversation_id uuid not null references public.conversations(id) on delete cascade,
+  customer_id     uuid references public.customers(id) on delete set null,
+  direction       text not null,              -- 'inbound' | 'outbound' | 'internal'
+  channel         text not null default 'sms',-- 'sms' | 'email' | 'portal' | 'internal'
+  body            text not null,
+  twilio_sid      text,
+  status          text,
+  meta            jsonb
+);
+alter table public.messages enable row level security;
+drop policy if exists "messages: select own" on public.messages;
+create policy "messages: select own" on public.messages for select using (auth.uid() = user_id);
+drop policy if exists "messages: insert own" on public.messages;
+create policy "messages: insert own" on public.messages for insert with check (auth.uid() = user_id);
+create index if not exists messages_convo_idx on public.messages(conversation_id, created_at);
+
+-- Keep the conversation summary + owner unread in sync on every message.
+create or replace function public.bump_conversation() returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  update public.conversations set
+    last_message_at = new.created_at,
+    last_preview = left(new.body, 140),
+    last_direction = new.direction,
+    unread = case when new.direction = 'inbound' then unread + 1 else unread end
+  where id = new.conversation_id;
+  return new;
+end; $$;
+drop trigger if exists trg_bump_conversation on public.messages;
+create trigger trg_bump_conversation after insert on public.messages
+  for each row execute function public.bump_conversation();
+
+-- Match a customer by phone (last 10 digits) for the inbound webhook.
+create or replace function public.find_customer_by_phone(p_phone text)
+returns json language plpgsql security definer set search_path = public as $$
+declare d text; result json;
+begin
+  d := right(regexp_replace(coalesce(p_phone, ''), '\D', '', 'g'), 10);
+  if length(d) < 10 then return null; end if;
+  select to_json(c) into result from (
+    select id, user_id, sms_opt_in, name from public.customers
+    where phone is not null and right(regexp_replace(phone, '\D', '', 'g'), 10) = d
+    order by created_at desc limit 1
+  ) c;
+  return result;
+end; $$;
+grant execute on function public.find_customer_by_phone(text) to authenticated, service_role;
+
+-- Portal service requests flow into the SAME thread (channel 'portal').
+create or replace function public.sr_to_conversation() returns trigger language plpgsql security definer set search_path = public as $$
+declare v_convo uuid;
+begin
+  if new.customer_id is null then return new; end if;
+  select id into v_convo from public.conversations where user_id = new.user_id and customer_id = new.customer_id;
+  if v_convo is null then
+    insert into public.conversations (user_id, customer_id, last_message_at) values (new.user_id, new.customer_id, new.created_at) returning id into v_convo;
+  end if;
+  insert into public.messages (user_id, conversation_id, customer_id, direction, channel, body, status, meta, created_at)
+    values (new.user_id, v_convo, new.customer_id, 'inbound', 'portal', new.message, 'received', jsonb_build_object('service_request_id', new.id), new.created_at);
+  return new;
+end; $$;
+drop trigger if exists trg_sr_to_conversation on public.service_requests;
+create trigger trg_sr_to_conversation after insert on public.service_requests
+  for each row execute function public.sr_to_conversation();
+
+-- One-time backfill of existing portal requests into conversations/messages.
+do $$ begin
+  if not exists (select 1 from public.conversations) then
+    insert into public.conversations (user_id, customer_id, last_message_at, last_preview, last_direction, unread)
+      select user_id, customer_id, max(created_at), 'Portal request', 'inbound', 0
+      from public.service_requests where customer_id is not null
+      group by user_id, customer_id on conflict (user_id, customer_id) do nothing;
+    insert into public.messages (user_id, conversation_id, customer_id, direction, channel, body, status, meta, created_at)
+      select sr.user_id, c.id, sr.customer_id, 'inbound', 'portal', sr.message, 'received', jsonb_build_object('service_request_id', sr.id), sr.created_at
+      from public.service_requests sr join public.conversations c on c.user_id = sr.user_id and c.customer_id = sr.customer_id
+      where sr.customer_id is not null;
+  end if;
+end $$;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-23 — Revenue Intelligence feedback loop (GROWTH).
+-- Closes the loop on predictive recommendations: records what the owner
+-- DID with each opportunity (acted / dismissed / won / lost) and the
+-- realised result, so the ranking can learn which plays produce revenue.
+-- One row per opportunity (kind + customer); upsert on the stable key.
+-- Idempotent.
+-- ════════════════════════════════════════════════════════════
+create table if not exists public.revenue_recommendations (
+  id              uuid primary key default uuid_generate_v4(),
+  created_at      timestamptz not null default now(),
+  user_id         uuid not null references auth.users(id) on delete cascade,
+  opportunity_key text not null,        -- `${kind}:${customer_id}` — stable
+  kind            text not null,        -- renewal | upsell | cross_sell | membership | referral
+  customer_id     uuid references public.customers(id) on delete cascade,
+  expected_value  numeric,
+  status          text not null default 'acted',  -- acted | dismissed | won | lost
+  result_value    numeric,              -- realised revenue when status = won
+  acted_at        timestamptz,
+  unique (user_id, opportunity_key)
+);
+
+alter table public.revenue_recommendations enable row level security;
+create policy "revenue_recommendations: select own" on public.revenue_recommendations for select using (auth.uid() = user_id);
+create policy "revenue_recommendations: insert own" on public.revenue_recommendations for insert with check (auth.uid() = user_id);
+create policy "revenue_recommendations: update own" on public.revenue_recommendations for update using (auth.uid() = user_id);
+create policy "revenue_recommendations: delete own" on public.revenue_recommendations for delete using (auth.uid() = user_id);
+
+create index if not exists revenue_recommendations_user_idx on public.revenue_recommendations(user_id);
+
+grant select, insert, update, delete on public.revenue_recommendations to authenticated;

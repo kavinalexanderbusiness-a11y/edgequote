@@ -5,140 +5,105 @@ import Link from 'next/link'
 import { formatDistanceToNow } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { PageHeader } from '@/components/layout/PageHeader'
+import { ConversationThread } from '@/components/messages/ConversationThread'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
-import { MessageSquare, Loader2, Check, RotateCcw, FileText, User, Inbox } from 'lucide-react'
+import { Loader2, Inbox, User, ArrowLeft, MessageSquare, FileText } from 'lucide-react'
 
-// ── Messages / Inbox ─────────────────────────────────────────────────────────
-// Where customer messages & service requests from the portal land so the owner
-// can actually READ and act on them. Reads the existing `service_requests` table
-// (the portal's "Request" tab writes here via portal_request_service); does not
-// touch the portal. One tap to mark handled, open the customer, or convert to a
-// quote.
-
-interface ReqRow {
-  id: string
-  created_at: string
-  customer_id: string | null
-  message: string
-  status: string
-  customers: { id: string; name: string; phone: string | null; email: string | null } | null
+interface Convo {
+  id: string; customer_id: string; last_message_at: string; last_preview: string | null
+  last_direction: string | null; unread: number
+  customers: { id: string; name: string; phone: string | null } | null
 }
 
-type Filter = 'all' | 'new' | 'handled'
+const timeAgo = (iso: string) => { try { return formatDistanceToNow(new Date(iso), { addSuffix: true }) } catch { return '' } }
 
 export default function MessagesPage() {
   const supabase = useMemo(() => createClient(), [])
-  const [rows, setRows] = useState<ReqRow[]>([])
+  const [convos, setConvos] = useState<Convo[]>([])
   const [loading, setLoading] = useState(true)
-  const [filter, setFilter] = useState<Filter>('new')
-  const [busyId, setBusyId] = useState<string | null>(null)
+  const [sel, setSel] = useState<Convo | null>(null)
 
   async function load() {
-    setLoading(true)
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { setLoading(false); return }
-    const { data } = await supabase
-      .from('service_requests')
-      .select('id, created_at, customer_id, message, status, customers(id, name, phone, email)')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false })
-    setRows((data as unknown as ReqRow[]) || [])
+    const { data } = await supabase.from('conversations')
+      .select('id, customer_id, last_message_at, last_preview, last_direction, unread, customers(id, name, phone)')
+      .eq('user_id', user.id).order('last_message_at', { ascending: false })
+    setConvos((data as unknown as Convo[]) || [])
     setLoading(false)
   }
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function setStatus(r: ReqRow, status: string) {
-    setBusyId(r.id)
-    setRows(prev => prev.map(x => x.id === r.id ? { ...x, status } : x)) // optimistic
-    await supabase.from('service_requests').update({ status }).eq('id', r.id)
-    setBusyId(null)
-  }
-
-  const counts = useMemo(() => ({
-    all: rows.length,
-    new: rows.filter(r => r.status === 'new').length,
-    handled: rows.filter(r => r.status !== 'new').length,
-  }), [rows])
-
-  const visible = filter === 'all' ? rows : filter === 'new' ? rows.filter(r => r.status === 'new') : rows.filter(r => r.status !== 'new')
-
-  const FILTERS: { key: Filter; label: string }[] = [
-    { key: 'new', label: `New${counts.new ? ` (${counts.new})` : ''}` },
-    { key: 'all', label: `All (${counts.all})` },
-    { key: 'handled', label: 'Handled' },
-  ]
-
   return (
-    <div className="max-w-3xl space-y-5">
-      <PageHeader title="Messages" description="Service requests and messages your customers send from their portal." />
+    <div className="max-w-5xl space-y-4">
+      <PageHeader title="Messages" description="Two-way SMS + portal conversations with your customers." />
 
-      <div className="flex flex-wrap gap-1.5">
-        {FILTERS.map(f => (
-          <button key={f.key} onClick={() => setFilter(f.key)}
-            className={cn('text-xs font-medium rounded-full px-3 py-1.5 border transition-colors',
-              filter === f.key ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
-            {f.label}
-          </button>
-        ))}
-      </div>
-
-      {loading ? (
-        <div className="py-16 text-center text-sm text-ink-muted flex items-center justify-center gap-2">
-          <Loader2 className="w-4 h-4 animate-spin" /> Loading messages…
-        </div>
-      ) : visible.length === 0 ? (
-        <div className="py-16 text-center">
-          <Inbox className="w-10 h-10 text-ink-faint mx-auto mb-3" />
-          <p className="text-sm font-medium text-ink">{filter === 'new' ? 'No new messages' : 'No messages yet'}</p>
-          <p className="text-xs text-ink-muted mt-1">When a customer sends a request from their portal, it shows up here.</p>
-        </div>
-      ) : (
-        <div className="space-y-2.5">
-          {visible.map(r => {
-            const isNew = r.status === 'new'
-            const name = r.customers?.name || 'Unknown customer'
-            return (
-              <div key={r.id} className={cn('rounded-card border p-4', isNew ? 'border-accent/30 bg-accent/[0.04]' : 'border-border bg-bg-secondary')}>
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-sm font-bold text-ink flex items-center gap-2">
-                      {isNew && <span className="w-2 h-2 rounded-full bg-accent shrink-0" />}
-                      {name}
-                    </p>
-                    <p className="text-[11px] text-ink-faint mt-0.5">
-                      {(() => { try { return formatDistanceToNow(new Date(r.created_at), { addSuffix: true }) } catch { return '' } })()}
-                      {r.customers?.phone ? ` · ${r.customers.phone}` : ''}
-                    </p>
+      <div className="grid lg:grid-cols-[320px_1fr] gap-4" style={{ minHeight: '62vh' }}>
+        {/* Conversation list */}
+        <div className={cn('rounded-card border border-border bg-bg-secondary overflow-hidden', sel && 'hidden lg:block')}>
+          {loading ? (
+            <div className="py-16 flex items-center justify-center text-ink-muted"><Loader2 className="w-4 h-4 animate-spin" /></div>
+          ) : convos.length === 0 ? (
+            <div className="py-16 text-center px-4">
+              <Inbox className="w-9 h-9 text-ink-faint mx-auto mb-2" />
+              <p className="text-sm font-medium text-ink">No conversations yet</p>
+              <p className="text-xs text-ink-muted mt-1">Inbound texts and portal requests will appear here.</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-border max-h-[72vh] overflow-y-auto">
+              {convos.map(c => (
+                <button key={c.id} onClick={() => setSel(c)}
+                  className={cn('w-full text-left px-4 py-3 hover:bg-surface/40 transition-colors flex items-start gap-3', sel?.id === c.id && 'bg-accent/5')}>
+                  <div className="w-9 h-9 rounded-full bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0 text-xs font-bold text-accent">
+                    {(c.customers?.name || '?').slice(0, 2).toUpperCase()}
                   </div>
-                  <span className={cn('shrink-0 text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border',
-                    isNew ? 'text-accent border-accent/30 bg-accent/10' : 'text-ink-muted border-border')}>
-                    {isNew ? 'New' : 'Handled'}
-                  </span>
-                </div>
-
-                <p className="text-sm text-ink mt-2.5 whitespace-pre-wrap">{r.message}</p>
-
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  {isNew
-                    ? <Button size="sm" onClick={() => setStatus(r, 'handled')} loading={busyId === r.id}><Check className="w-3.5 h-3.5" /> Mark handled</Button>
-                    : <Button size="sm" variant="secondary" onClick={() => setStatus(r, 'new')} loading={busyId === r.id}><RotateCcw className="w-3.5 h-3.5" /> Reopen</Button>}
-                  {r.customer_id && (
-                    <Link href={`/dashboard/quotes/new?customer=${r.customer_id}`}>
-                      <Button size="sm" variant="secondary"><FileText className="w-3.5 h-3.5" /> Convert to quote</Button>
-                    </Link>
-                  )}
-                  {r.customer_id && (
-                    <Link href={`/dashboard/customers/${r.customer_id}`}>
-                      <Button size="sm" variant="ghost"><User className="w-3.5 h-3.5" /> View customer</Button>
-                    </Link>
-                  )}
-                </div>
-              </div>
-            )
-          })}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-semibold text-ink truncate flex-1">{c.customers?.name || 'Unknown'}</p>
+                      {c.unread > 0 && <span className="shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-accent text-black text-[10px] font-bold flex items-center justify-center">{c.unread > 9 ? '9+' : c.unread}</span>}
+                    </div>
+                    <p className={cn('text-xs truncate mt-0.5', c.unread > 0 ? 'text-ink font-medium' : 'text-ink-muted')}>
+                      {c.last_direction && c.last_direction !== 'inbound' ? 'You: ' : ''}{c.last_preview || '…'}
+                    </p>
+                    <p className="text-[10px] text-ink-faint mt-0.5">{timeAgo(c.last_message_at)}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-      )}
+
+        {/* Thread */}
+        <div className={cn('rounded-card border border-border bg-bg-secondary p-4 flex-col', sel ? 'flex' : 'hidden lg:flex')}>
+          {sel ? (
+            <>
+              <div className="flex items-center justify-between gap-2 border-b border-border pb-2 mb-1">
+                <div className="flex items-center gap-2 min-w-0">
+                  <button className="lg:hidden text-ink-muted hover:text-ink" onClick={() => setSel(null)} aria-label="Back"><ArrowLeft className="w-4 h-4" /></button>
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-ink truncate">{sel.customers?.name || 'Unknown'}</p>
+                    {sel.customers?.phone && <p className="text-[11px] text-ink-faint">{sel.customers.phone}</p>}
+                  </div>
+                </div>
+                {sel.customer_id && (
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <Link href={`/dashboard/quotes/new?customer=${sel.customer_id}`}><Button size="sm" variant="secondary"><FileText className="w-3.5 h-3.5" /> Quote</Button></Link>
+                    <Link href={`/dashboard/customers/${sel.customer_id}`}><Button size="sm" variant="ghost"><User className="w-3.5 h-3.5" /> Profile</Button></Link>
+                  </div>
+                )}
+              </div>
+              <div className="flex-1 min-h-0">
+                <ConversationThread customerId={sel.customer_id} onRead={load} />
+              </div>
+            </>
+          ) : (
+            <div className="flex-1 flex flex-col items-center justify-center text-sm text-ink-muted py-16">
+              <MessageSquare className="w-8 h-8 text-ink-faint mb-2" /> Select a conversation
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }

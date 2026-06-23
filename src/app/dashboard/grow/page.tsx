@@ -7,7 +7,7 @@ import { SuggestionsCenter } from '@/components/grow/SuggestionsCenter'
 import { CustomerHealthPanel } from '@/components/grow/CustomerHealthPanel'
 import { WinLossPanel } from '@/components/grow/WinLossPanel'
 import {
-  BarChart3, Gauge, HeartPulse, Map as MapIcon, Target, ShieldCheck, CalendarCheck, ArrowRight,
+  BarChart3, Gauge, HeartPulse, Map as MapIcon, Target, ShieldCheck, CalendarCheck, ArrowRight, TrendingUp,
 } from 'lucide-react'
 
 // ── Grow hub ──────────────────────────────────────────────────────────────────
@@ -52,6 +52,36 @@ export default function GrowPage() {
   return (
     <div className="max-w-5xl space-y-6">
       <PageHeader title="Grow" description="Everything that grows Edge Property Services, in one place." />
+
+      {/* Intelligence — the owner's command center: report (BI) + act (Revenue Intel). */}
+      <div className="grid sm:grid-cols-2 gap-3">
+        <Link href="/dashboard/intelligence">
+          <Card className="p-4 h-full border-accent/30 bg-gradient-to-br from-accent/[0.08] to-transparent hover:border-accent/50 transition-colors">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
+                <BarChart3 className="w-5 h-5 text-accent" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-bold text-ink flex items-center gap-1.5">Business Intelligence <ArrowRight className="w-3.5 h-3.5 text-accent" /></p>
+                <p className="text-xs text-ink-muted mt-0.5">Revenue, profit, customers, sales, capacity & forecasts — how the business is performing.</p>
+              </div>
+            </div>
+          </Card>
+        </Link>
+        <Link href="/dashboard/revenue-intelligence">
+          <Card className="p-4 h-full border-accent/30 bg-gradient-to-br from-accent/[0.08] to-transparent hover:border-accent/50 transition-colors">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
+                <TrendingUp className="w-5 h-5 text-accent" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-bold text-ink flex items-center gap-1.5">Revenue Intelligence <ArrowRight className="w-3.5 h-3.5 text-accent" /></p>
+                <p className="text-xs text-ink-muted mt-0.5">Every customer scored for renewal, upsell, cross-sell, referral — ranked by $ impact.</p>
+              </div>
+            </div>
+          </Card>
+        </Link>
+      </div>
 
       {/* Suggestions Center — the action feed comes first. */}
       <SuggestionsCenter />

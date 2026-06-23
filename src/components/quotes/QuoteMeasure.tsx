@@ -8,6 +8,8 @@ import { Coord } from '@/lib/geo'
 import { ProspectContext, loadProspectContext, assessProspect } from '@/lib/prospect'
 import { PricePackagePanel, CadenceSelection } from '@/components/pricing/PricePackagePanel'
 import { DecisionSummary } from '@/components/pricing/DecisionSummary'
+import { AutoMeasureBanner } from '@/components/measure/AutoMeasureBanner'
+import { recordMeasurement, neighborhoodOf, AutoMeasureResult } from '@/lib/autoMeasure'
 import { DEFAULT_CREW_COST, crewCostPerHour as resolveCrewCost } from '@/lib/economics'
 import { Button } from '@/components/ui/Button'
 import { X, Undo2, Trash2, Plus, Ruler } from 'lucide-react'
@@ -69,6 +71,8 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
   const currentOverlay = useRef<any>(null)
   const currentPath = useRef<any[]>([])
   const preview = useRef<any>(null)
+  const overrideRef = useRef(0)
+  const autoRef = useRef<AutoMeasureResult | null>(null)
 
   const [ready, setReady] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -90,7 +94,8 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
     let total = 0
     for (const p of committedPaths.current) total += areaOf(p)
     total += areaOf(currentPath.current)
-    setTotalSqft(Math.round(total))
+    // Traced shapes win; otherwise fall back to the auto/accepted override.
+    setTotalSqft(total > 0 ? Math.round(total) : Math.round(overrideRef.current || 0))
     setPoints(currentPath.current.length)
     setShapes(committedPaths.current.length)
   }
@@ -264,6 +269,14 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
 
   function applySelection(sel: CadenceSelection) {
     if (!pkg) return
+    // Record auto vs accepted so the estimate self-calibrates (best-effort).
+    ;(async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) recordMeasurement(supabase, {
+        userId: user.id, context: 'quote', lat: center?.lat ?? null, lng: center?.lng ?? null,
+        neighborhood: neighborhoodOf(null, null, hoodName), auto: autoRef.current, acceptedSqft: totalSqft,
+      }).catch(() => {})
+    })()
     onApply({
       cadence: sel.cadence,
       price: sel.price,
@@ -285,6 +298,12 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
         </div>
 
         <div className="p-4 space-y-4">
+          {center && (
+            <AutoMeasureBanner lat={center.lat} lng={center.lng}
+              neighborhood={neighborhoodOf(null, null, hoodName)}
+              onAuto={r => { autoRef.current = r }}
+              onUse={n => { overrideRef.current = n; setTotalSqft(n) }} />
+          )}
           {loadError ? (
             <div className="text-sm text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-3 space-y-1">
               <p>The map couldn&apos;t load. Error detail:</p>

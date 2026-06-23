@@ -9,6 +9,8 @@ import { priceTiers, routeDensityTravel, pricingConfidence, travelFeeForDistance
 import { PricePackagePanel, CadenceSelection } from '@/components/pricing/PricePackagePanel'
 import { ProspectContext, loadProspectContext, assessProspect } from '@/lib/prospect'
 import { DecisionSummary } from '@/components/pricing/DecisionSummary'
+import { AutoMeasureBanner } from '@/components/measure/AutoMeasureBanner'
+import { recordMeasurement, neighborhoodOf, AutoMeasureResult } from '@/lib/autoMeasure'
 import { DEFAULT_CREW_COST, crewCostPerHour as resolveCrewCost } from '@/lib/economics'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { Coord, haversineKm, nearbyJobCount, fetchLocatedUpcomingJobs } from '@/lib/geo'
@@ -51,6 +53,8 @@ export function MeasureTool({ property }: { property: Property }) {
   const activeRef = useRef<SectionKey>('front')
   const shapeId = useRef(0)
   const targetCoord = useRef<Coord | null>(null)
+  const overrideRef = useRef(0)                         // auto/accepted sqft when nothing is traced
+  const autoRef = useRef<AutoMeasureResult | null>(null) // the auto estimate, for recording
   const rafPending = useRef(false)
   // 'draw' = clicks add points (overlays inert). 'adjust' = drag/tap points to
   // edit/delete (map clicks do nothing). Ref mirrors state for the map closures.
@@ -77,6 +81,7 @@ export function MeasureTool({ property }: { property: Property }) {
   const [saving, setSaving] = useState(false)
   const [creating, setCreating] = useState(false)
   const [savedSqft, setSavedSqft] = useState<number | null>(property.lawn_sqft)
+  const [coords, setCoords] = useState<Coord | null>(null)
 
   // Pricing config from Settings (defaults until loaded) — the source of truth.
   const [cfg, setCfg] = useState<PricingConfig>(DEFAULT_PRICING)
@@ -109,7 +114,9 @@ export function MeasureTool({ property }: { property: Property }) {
     bd[activeRef.current] += cur
     setBreakdown(bd)
     setPointsInCurrent(currentPath.current.length)
-    setTotalSqft(Math.round(Object.values(bd).reduce((a, b) => a + b, 0)))
+    // Traced sections win; otherwise fall back to the auto/accepted override.
+    const sectionsTotal = Math.round(Object.values(bd).reduce((a, b) => a + b, 0))
+    setTotalSqft(sectionsTotal > 0 ? sectionsTotal : Math.round(overrideRef.current || 0))
   }
 
   // Coalesce the burst of set_at events fired while dragging a vertex into at
@@ -375,6 +382,7 @@ export function MeasureTool({ property }: { property: Property }) {
         }
         if (!center) center = { lat: 51.0447, lng: -114.0719 }
         targetCoord.current = center
+        setCoords(center)
         // Re-check after the geocode await — the component may have unmounted.
         if (cancelled || !mapEl.current) return
 
@@ -484,10 +492,11 @@ export function MeasureTool({ property }: { property: Property }) {
   // Persist the total + append a versioned snapshot to history (never overwrite).
   // The snapshot carries the FULL recommendation package, so quotes and jobs can
   // suggest measured prices later without re-measuring.
-  async function persistMeasurement(): Promise<{ total: number; sections: LawnSections }> {
+  async function persistMeasurement(context: 'property' | 'quote'): Promise<{ total: number; sections: LawnSections }> {
     if (currentPath.current.length >= 3) commitCurrent(activeRef.current)
     const sections = currentSections()
-    const total = Math.round(Object.values(sections).reduce((a, b) => a + b, 0))
+    const sectionsTotal = Math.round(Object.values(sections).reduce((a, b) => a + b, 0))
+    const total = sectionsTotal > 0 ? sectionsTotal : Math.round(overrideRef.current || 0)
     const baseSave = pricingPackage(total, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood })
     const estMin = estimateVisitMinutes(total, prospect?.observedMinPer1000)
     const scoreSave = prospect
@@ -510,20 +519,28 @@ export function MeasureTool({ property }: { property: Property }) {
     await supabase.from('properties').update({ lawn_sqft: total, measurement_history: nextHistory }).eq('id', property.id)
     setHistory(nextHistory)
     setSavedSqft(total)
+    // Record auto vs accepted so the estimate self-calibrates per neighborhood.
+    const { data: { user } } = await supabase.auth.getUser()
+    if (user) recordMeasurement(supabase, {
+      userId: user.id, context, propertyId: property.id,
+      lat: targetCoord.current?.lat ?? null, lng: targetCoord.current?.lng ?? null,
+      neighborhood: neighborhoodOf(property.postal_code, property.city, property.neighborhood),
+      auto: autoRef.current, acceptedSqft: total,
+    }).catch(() => {})
     return { total, sections }
   }
 
   async function save() {
     if (totalSqft <= 0) return
     setSaving(true)
-    await persistMeasurement()
+    await persistMeasurement('property')
     setSaving(false)
   }
 
   async function createQuote(sel?: CadenceSelection) {
     if (totalSqft <= 0) return
     setCreating(true)
-    const { total, sections } = await persistMeasurement()
+    const { total, sections } = await persistMeasurement('quote')
     // Price off the SAME (per-section-rounded) total we persist, so jobPrice,
     // measured_sqft and suggested_price are all derived from one area figure.
     const tiersForTotal = priceTiers(total, cfg, overgrowth)
@@ -580,6 +597,12 @@ export function MeasureTool({ property }: { property: Property }) {
 
   return (
     <div className="space-y-4">
+      {coords && (
+        <AutoMeasureBanner lat={coords.lat} lng={coords.lng}
+          neighborhood={neighborhoodOf(property.postal_code, property.city, property.neighborhood)}
+          onAuto={r => { autoRef.current = r }}
+          onUse={n => { overrideRef.current = n; setTotalSqft(n) }} />
+      )}
       {/* Section selector — color-coded, large touch targets */}
       <div className="flex gap-2 overflow-x-auto pb-1">
         {SECTIONS.map(s => (

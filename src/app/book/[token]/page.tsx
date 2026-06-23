@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { pricingConfigFromSettings, pricingPackage } from '@/lib/pricing'
 import { applyFeeRecovery } from '@/lib/invoiceTotals'
+import { autoMeasureLawn, AutoMeasureResult, neighborhoodOf } from '@/lib/autoMeasure'
 import { loadGoogleMaps } from '@/lib/googleMaps'
 import { AddressAutocomplete, ParsedAddress } from '@/components/ui/AddressAutocomplete'
 import { Button } from '@/components/ui/Button'
@@ -43,6 +44,9 @@ export default function BookPage() {
   const [parsed, setParsed] = useState<ParsedAddress | null>(null)
   const [sqft, setSqft] = useState(0)
   const [manualSqft, setManualSqft] = useState('')
+  const [autoResult, setAutoResult] = useState<AutoMeasureResult | null | undefined>(undefined)
+  const [measuring, setMeasuring] = useState(false)
+  const [showTracer, setShowTracer] = useState(false)
   const [plan, setPlan] = useState<Plan | null>(null)
   const [name, setName] = useState(''); const [email, setEmail] = useState(''); const [phone, setPhone] = useState('')
   const [notes, setNotes] = useState('')
@@ -123,8 +127,18 @@ export default function BookPage() {
     if (poly.current) (poly.current as { setMap: (m: unknown) => void }).setMap(null)
     poly.current = new g.maps.Polygon({ paths: pts.current, strokeColor: '#00C896', strokeWeight: 2, fillColor: '#00C896', fillOpacity: 0.3, map: gmap.current, clickable: false })
   }
+  // Auto-measure: estimate the lawn the moment we have the address (default flow).
   useEffect(() => {
-    if (step !== 'measure' || !parsed?.lat || !parsed?.lng || !mapEl.current) return
+    if (step !== 'measure' || !parsed?.lat || !parsed?.lng || autoResult !== undefined) return
+    setMeasuring(true)
+    autoMeasureLawn(parsed.lat, parsed.lng)
+      .then(r => { setAutoResult(r); if (r) { setSqft(r.sqft); setShowTracer(false) } else setShowTracer(true); setMeasuring(false) })
+      .catch(() => { setAutoResult(null); setShowTracer(true); setMeasuring(false) })
+  }, [step, parsed, autoResult])
+
+  // Manual tracer — only mounts when redrawing (or when auto-measure found nothing).
+  useEffect(() => {
+    if (step !== 'measure' || !showTracer || !parsed?.lat || !parsed?.lng || !mapEl.current) return
     let cancelled = false
     ;(async () => {
       try {
@@ -142,7 +156,7 @@ export default function BookPage() {
       } catch { if (!cancelled) setMapErr('Map could not load — enter your approximate lawn size instead.') }
     })()
     return () => { cancelled = true }
-  }, [step, parsed])
+  }, [step, parsed, showTracer])
 
   function undo() { pts.current.pop(); redraw(); recompute() }
   function clearTrace() { pts.current = []; redraw(); recompute() }
@@ -170,9 +184,15 @@ export default function BookPage() {
       p_photos: photoUrls.length ? photoUrls : null,
     })
     setSubmitting(false)
-    const res = data as { quote_number?: string } | null
+    const res = data as { quote_number?: string; quote_id?: string } | null
     if (rpcErr || !res?.quote_number) { setError('Something went wrong — please try again or call us.'); return }
     setQuoteNumber(res.quote_number)
+    // Record auto vs accepted area so the estimate self-calibrates (best-effort).
+    supabase.rpc('record_booking_measurement', {
+      p_token: token, p_quote_id: res.quote_id ?? null, p_lat: parsed.lat, p_lng: parsed.lng,
+      p_neighborhood: neighborhoodOf(parsed.postal, parsed.city, null),
+      p_auto: autoResult?.sqft ?? null, p_accepted: sqft, p_building: autoResult?.buildingSqft ?? null, p_confidence: autoResult?.confidence ?? null,
+    }).then(() => {}, () => {})
     // Best-effort owner alert (no-op if email isn't configured).
     fetch('/api/booking/notify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, name: name.trim(), address: parsed.formatted, cadence: plan.label, quoteNumber: res.quote_number }) }).catch(() => {})
     setStep('done')
@@ -215,19 +235,43 @@ export default function BookPage() {
         {step === 'address' && (
           <Section title="Where's your lawn?" sub="Enter your address to get an instant price.">
             <AddressAutocomplete label="Property address" value={addressText} onChange={setAddressText}
-              onSelect={p => { setParsed(p); setAddressText(p.formatted) }} placeholder="Start typing your address…" />
+              onSelect={p => { setParsed(p); setAddressText(p.formatted); setAutoResult(undefined); setShowTracer(false); setSqft(0) }} placeholder="Start typing your address…" />
             <Button className="w-full mt-4" disabled={!parsed?.lat} onClick={() => setStep('measure')}>
               Next <ArrowRight className="w-4 h-4" />
             </Button>
           </Section>
         )}
 
-        {/* STEP: measure */}
+        {/* STEP: measure — auto by default, with adjust + redraw */}
         {step === 'measure' && (
-          <Section title="Outline your lawn" sub="Tap the corners of your lawn on the map to trace it. We'll calculate the size instantly.">
-            {mapErr ? (
+          <Section title="Your lawn" sub="We measure it automatically — accept it, tweak the number, or redraw it exactly.">
+            {measuring ? (
+              <div className="py-12 text-center text-sm text-ink-muted flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Measuring your lawn…</div>
+            ) : !showTracer && autoResult ? (
+              <div className="space-y-3">
+                <div className="rounded-xl border border-accent/30 bg-accent/5 px-4 py-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm text-ink-muted flex items-center gap-2"><Ruler className="w-4 h-4 text-accent" /> Estimated lawn size</span>
+                    <ConfidenceBadge confidence={autoResult.confidence} />
+                  </div>
+                  <div className="flex items-end gap-2 mt-2">
+                    <input type="number" value={sqft || ''} onChange={e => setSqft(Number(e.target.value) || 0)}
+                      className="w-32 bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-xl font-bold text-ink outline-none focus:border-accent" />
+                    <span className="text-sm text-ink-muted pb-2">sq ft</span>
+                  </div>
+                  <p className="text-[11px] text-ink-faint mt-1">Auto-estimated — edit the number to adjust, or redraw it exactly below.</p>
+                </div>
+                <Button variant="secondary" className="w-full" onClick={() => setShowTracer(true)}><Ruler className="w-4 h-4" /> Redraw on the map</Button>
+              </div>
+            ) : mapErr && mapErr !== 'manual' ? (
               <div className="space-y-3">
                 <p className="text-sm text-amber-400">{mapErr}</p>
+                <label className="text-xs text-ink-muted">Approximate lawn size (sq ft)</label>
+                <input type="number" value={manualSqft} onChange={e => { setManualSqft(e.target.value); setSqft(Number(e.target.value) || 0) }}
+                  placeholder="e.g. 3000" className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent" />
+              </div>
+            ) : mapErr === 'manual' ? (
+              <div className="space-y-3">
                 <label className="text-xs text-ink-muted">Approximate lawn size (sq ft)</label>
                 <input type="number" value={manualSqft} onChange={e => { setManualSqft(e.target.value); setSqft(Number(e.target.value) || 0) }}
                   placeholder="e.g. 3000" className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent" />
@@ -244,7 +288,7 @@ export default function BookPage() {
                     <Button variant="ghost" size="sm" onClick={clearTrace} title="Clear"><Trash2 className="w-4 h-4" /></Button>
                   </div>
                 </div>
-                <button onClick={() => setMapErr('manual')} className="text-xs text-ink-faint hover:text-ink mt-2 underline">Can’t trace it? Enter size manually</button>
+                <button onClick={() => setMapErr('manual')} className="text-xs text-ink-faint hover:text-ink mt-2 underline">Enter size manually instead</button>
               </>
             )}
             <div className="flex gap-2 mt-4">
@@ -355,6 +399,15 @@ function Section({ title, sub, children }: { title: string; sub?: string; childr
       {children}
     </div>
   )
+}
+function ConfidenceBadge({ confidence }: { confidence?: string }) {
+  const map: Record<string, string> = {
+    high: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
+    medium: 'text-amber-400 border-amber-500/30 bg-amber-500/10',
+    low: 'text-ink-muted border-border bg-bg-tertiary',
+  }
+  const c = confidence || 'low'
+  return <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', map[c] || map.low)}>{c} confidence</span>
 }
 function Field({ label, value, onChange, placeholder, type }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string }) {
   return (
