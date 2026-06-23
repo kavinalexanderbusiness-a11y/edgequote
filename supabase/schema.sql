@@ -1281,3 +1281,108 @@ create policy "revenue_recommendations: delete own" on public.revenue_recommenda
 create index if not exists revenue_recommendations_user_idx on public.revenue_recommendations(user_id);
 
 grant select, insert, update, delete on public.revenue_recommendations to authenticated;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-23 — Portal PDF downloads (COMMS/PORTAL).
+-- The portal renders the SAME quote/invoice PDFs as the dashboard. Expose the
+-- extra fields those documents print (quote crew/hours/travel/subtotal/issued;
+-- invoice notes/address; business terms/base_address/email_secondary/logo_scale)
+-- so the customer-facing PDF is identical. Still token-scoped: only this token's
+-- customer's records are ever returned.
+create or replace function public.get_portal_data(p_token text)
+returns json language plpgsql security definer set search_path = public as $$
+declare v_customer uuid; v_user uuid; result json;
+begin
+  select customer_id, user_id into v_customer, v_user
+    from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return null; end if;
+  select json_build_object(
+    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code, sms_opt_in, email_opt_in from public.customers where id = v_customer) c),
+    'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, email_secondary, website, logo_url, logo_scale, base_address, terms_text, coalesce(gst_percent,0) as gst_percent from public.business_settings where user_id = v_user) b),
+    'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
+    'quotes', coalesce((select json_agg(q order by q.created_at desc) from (select id, quote_number, service_type, address, total, initial_price, subtotal, weekly_price, biweekly_price, monthly_price, notes, status, created_at, issued_date, crew_size, hours, travel_fee from public.quotes where customer_id = v_customer and status <> 'draft') q), '[]'::json),
+    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, status, issued_date, due_date, notes, address, line_items, job_id, created_at from public.invoices where customer_id = v_customer) i), '[]'::json),
+    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, notes from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
+    'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, end_date from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
+    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json)
+  ) into result;
+  return result;
+end; $$;
+grant execute on function public.get_portal_data(text) to anon, authenticated;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-23 — Smart Labor Calculator V2 (labor learning).
+-- Learns true on-site durations from completed jobs to auto-estimate labor with
+-- a confidence range — property-level history first, then service/sqft/season/
+-- crew. BACKWARDS COMPATIBLE: feeds the labor/duration layer ONLY; pricing logic
+-- is untouched. Captured via a DB trigger so no scheduling code changes. Idempotent.
+-- ════════════════════════════════════════════════════════════
+
+-- (a) Per-owner default for the "Use Smart Estimate" toggle.
+alter table public.business_settings
+  add column if not exists smart_labor_enabled boolean not null default true;
+
+-- (b) Training store — one observation per completed, timed job.
+create table if not exists public.labor_observations (
+  id                uuid primary key default uuid_generate_v4(),
+  created_at        timestamptz not null default now(),
+  user_id           uuid not null references auth.users(id) on delete cascade,
+  job_id            uuid references public.jobs(id) on delete set null,
+  property_id       uuid references public.properties(id) on delete set null,
+  service_date      date,
+  sqft              numeric,
+  service_type      text,
+  crew_size         integer not null default 1,
+  frequency         text,
+  is_initial_visit  boolean not null default false,
+  overgrowth        numeric,
+  estimated_minutes integer,
+  actual_minutes    integer not null,
+  unique (user_id, job_id)
+);
+alter table public.labor_observations enable row level security;
+create policy "labor_observations: select own" on public.labor_observations for select using (auth.uid() = user_id);
+create policy "labor_observations: insert own" on public.labor_observations for insert with check (auth.uid() = user_id);
+create policy "labor_observations: update own" on public.labor_observations for update using (auth.uid() = user_id);
+create policy "labor_observations: delete own" on public.labor_observations for delete using (auth.uid() = user_id);
+create index if not exists labor_observations_user_idx on public.labor_observations(user_id);
+create index if not exists labor_observations_prop_idx on public.labor_observations(user_id, property_id);
+grant select, insert, update, delete on public.labor_observations to authenticated;
+
+-- (c) Auto-capture on check-out (actual_minutes set) — DB-side, no app changes.
+create or replace function public.capture_labor_observation()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_sqft numeric; v_overgrowth numeric; v_freq text;
+begin
+  if new.actual_minutes is not null and new.actual_minutes > 0
+     and (old.actual_minutes is distinct from new.actual_minutes) then
+    select p.lawn_sqft into v_sqft from public.properties p where p.id = new.property_id;
+    select q.overgrowth_multiplier into v_overgrowth from public.quotes q where q.id = new.quote_id;
+    select r.freq into v_freq from public.job_recurrences r where r.id = new.recurrence_id;
+    insert into public.labor_observations
+      (user_id, job_id, property_id, service_date, sqft, service_type, crew_size, frequency, is_initial_visit, overgrowth, estimated_minutes, actual_minutes)
+    values
+      (new.user_id, new.id, new.property_id, new.scheduled_date, v_sqft, new.service_type, coalesce(new.crew_size,1), v_freq, coalesce(new.is_initial_visit,false), v_overgrowth, new.duration_minutes, new.actual_minutes)
+    on conflict (user_id, job_id) do update set
+      actual_minutes = excluded.actual_minutes, estimated_minutes = excluded.estimated_minutes,
+      sqft = excluded.sqft, crew_size = excluded.crew_size, overgrowth = excluded.overgrowth,
+      frequency = excluded.frequency, is_initial_visit = excluded.is_initial_visit,
+      service_date = excluded.service_date, created_at = now();
+  end if;
+  return new;
+end; $$;
+drop trigger if exists trg_capture_labor on public.jobs;
+create trigger trg_capture_labor after update of actual_minutes on public.jobs
+  for each row execute function public.capture_labor_observation();
+
+-- (d) Backfill from existing completed timed jobs (idempotent via unique key).
+insert into public.labor_observations
+  (user_id, job_id, property_id, service_date, sqft, service_type, crew_size, frequency, is_initial_visit, overgrowth, estimated_minutes, actual_minutes)
+select j.user_id, j.id, j.property_id, j.scheduled_date, p.lawn_sqft, j.service_type, coalesce(j.crew_size,1),
+       r.freq, coalesce(j.is_initial_visit,false), q.overgrowth_multiplier, j.duration_minutes, j.actual_minutes
+from public.jobs j
+left join public.properties p on p.id = j.property_id
+left join public.quotes q on q.id = j.quote_id
+left join public.job_recurrences r on r.id = j.recurrence_id
+where j.actual_minutes is not null and j.actual_minutes > 0
+on conflict (user_id, job_id) do nothing;

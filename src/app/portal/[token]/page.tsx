@@ -8,9 +8,11 @@ import { recurrenceLabel } from '@/lib/recurrence'
 import { invoiceTotals } from '@/lib/invoiceTotals'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
+import { renderPortalQuoteBlob, renderPortalInvoiceBlob, downloadBlob, viewBlob, printBlob } from '@/lib/portalPdf'
 import {
   Home, History, Image as ImageIcon, FileText, Receipt, MessageSquarePlus, Check, Loader2,
   Phone, Globe, Mail, Leaf, CheckCircle2, Navigation, Play, CalendarClock, Repeat, MapPin, Ruler, Sparkles, CreditCard, MessageSquare,
+  Eye, Download, Printer, FolderOpen, Search, ArrowUpDown,
 } from 'lucide-react'
 
 // ── Premium Customer Portal ─────────────────────────────────────────────────────
@@ -18,19 +20,19 @@ import {
 // service-app experience: a Home overview, live job status, a per-visit timeline
 // with photos & invoices, a before/after gallery, and quick service requests.
 
-interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; total: number; initial_price: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string }
-interface PortalInvoice { id: string; invoice_number: string; service_type: string | null; amount: number; status: string; issued_date: string | null; due_date: string | null; line_items: { description: string; amount: number; kind: string }[] | null; job_id: string | null; created_at: string }
+interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null }
+interface PortalInvoice { id: string; invoice_number: string; service_type: string | null; amount: number; status: string; issued_date: string | null; due_date: string | null; notes: string | null; address: string | null; line_items: { description: string; amount: number; kind: string }[] | null; job_id: string | null; created_at: string }
 interface PortalJob { id: string; recurrence_id: string | null; service_type: string | null; title: string; scheduled_date: string; status: string; on_my_way_at: string | null; started_at: string | null; completed_at: string | null; notes: string | null }
 interface PortalRec { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null; end_date: string | null }
 interface PortalPhoto { id: string; job_id: string | null; storage_path: string; kind: string; caption: string | null; taken_at: string }
 interface PortalData {
   customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null; city: string | null; sms_opt_in?: boolean | null; email_opt_in?: boolean | null }
-  business: { company_name: string | null; owner_name: string | null; phone: string | null; email_primary: string | null; website: string | null; logo_url: string | null; gst_percent?: number | null } | null
+  business: { company_name: string | null; owner_name: string | null; phone: string | null; email_primary: string | null; email_secondary: string | null; website: string | null; logo_url: string | null; logo_scale: number | null; base_address: string | null; terms_text: string | null; gst_percent?: number | null } | null
   property: { address: string | null; city: string | null; province: string | null; lawn_sqft: number | null; fence_length: number | null; neighborhood: string | null } | null
   quotes: PortalQuote[]; invoices: PortalInvoice[]; jobs: PortalJob[]; recurrences: PortalRec[]; photos: PortalPhoto[]
 }
 
-type Tab = 'home' | 'service' | 'photos' | 'quotes' | 'invoices' | 'request'
+type Tab = 'home' | 'service' | 'photos' | 'documents' | 'quotes' | 'invoices' | 'request'
 type LiveStatus = 'scheduled' | 'on_my_way' | 'in_progress' | 'completed'
 
 interface Derived {
@@ -162,6 +164,7 @@ export default function PortalPage() {
     { key: 'home', label: 'Home', icon: Home },
     { key: 'service', label: 'Service', icon: History, n: derived.completed.length },
     { key: 'photos', label: 'Photos', icon: ImageIcon, n: data.photos.length },
+    { key: 'documents', label: 'Documents', icon: FolderOpen, n: data.quotes.length + data.invoices.length },
     { key: 'quotes', label: 'Quotes', icon: FileText, n: data.quotes.length },
     { key: 'invoices', label: 'Invoices', icon: Receipt, n: data.invoices.length },
     { key: 'request', label: 'Request', icon: MessageSquarePlus },
@@ -203,8 +206,9 @@ export default function PortalPage() {
           {tab === 'home' && consent && <ConsentCard consent={consent} onSave={saveConsent} />}
           {tab === 'service' && <ServiceTab completed={derived.completed} photosByJob={photosByJob} invoiceByJob={invoiceByJob} photoUrl={photoUrl} />}
           {tab === 'photos' && <GalleryTab photosByJob={photosByJob} jobs={data.jobs} photoUrl={photoUrl} />}
-          {tab === 'quotes' && <QuotesTab quotes={data.quotes} accept={accept} accepting={accepting} />}
-          {tab === 'invoices' && <InvoicesTab invoices={data.invoices} paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} gstPercent={Number(data.business?.gst_percent) || 0} />}
+          {tab === 'documents' && <DocumentsTab quotes={data.quotes} invoices={data.invoices} customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} business={biz} />}
+          {tab === 'quotes' && <QuotesTab quotes={data.quotes} accept={accept} accepting={accepting} customerName={data.customer.name} business={biz} />}
+          {tab === 'invoices' && <InvoicesTab invoices={data.invoices} paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} gstPercent={Number(data.business?.gst_percent) || 0} customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} business={biz} />}
           {tab === 'request' && (
             <RequestTab presets={REQUEST_PRESETS} reqMsg={reqMsg} setReqMsg={setReqMsg} request={request} reqBusy={reqBusy} reqSent={reqSent} biz={biz} />
           )}
@@ -409,7 +413,7 @@ function Thumb({ p, photoUrl, wide }: { p: PortalPhoto; photoUrl: (s: string) =>
 }
 
 // ── Quotes ──
-function QuotesTab({ quotes, accept, accepting }: { quotes: PortalQuote[]; accept: (id: string) => void; accepting: string | null }) {
+function QuotesTab({ quotes, accept, accepting, customerName, business }: { quotes: PortalQuote[]; accept: (id: string) => void; accepting: string | null; customerName: string; business: PortalData['business'] }) {
   if (quotes.length === 0) return <Empty text="No quotes yet." />
   return (
     <div className="space-y-3">
@@ -426,6 +430,7 @@ function QuotesTab({ quotes, accept, accepting }: { quotes: PortalQuote[]; accep
             {!q.weekly_price && !q.biweekly_price && !q.monthly_price ? <PriceChip label="Total" v={q.total} /> : null}
           </div>
           {q.notes && <p className="text-xs text-ink-muted mt-2 whitespace-pre-wrap">{q.notes}</p>}
+          <DocActions filename={`${q.quote_number}.pdf`} getBlob={() => renderPortalQuoteBlob(q, customerName, business)} />
           {q.status === 'sent' && <div className="mt-3"><Button size="sm" onClick={() => accept(q.id)} loading={accepting === q.id}><Check className="w-4 h-4" /> Accept this quote</Button></div>}
           {q.status === 'accepted' && <p className="mt-3 inline-flex items-center gap-1.5 text-sm font-semibold text-emerald-400"><CheckCircle2 className="w-4 h-4" /> Accepted — thank you!</p>}
         </div>
@@ -435,8 +440,9 @@ function QuotesTab({ quotes, accept, accepting }: { quotes: PortalQuote[]; accep
 }
 
 // ── Invoices ──
-function InvoicesTab({ invoices, paymentsEnabled, pay, payingId, gstPercent }: {
+function InvoicesTab({ invoices, paymentsEnabled, pay, payingId, gstPercent, customerName, fallbackAddress, business }: {
   invoices: PortalInvoice[]; paymentsEnabled: boolean; pay: (id: string) => void; payingId: string | null; gstPercent: number
+  customerName: string; fallbackAddress: string | null; business: PortalData['business']
 }) {
   if (invoices.length === 0) return <Empty text="No invoices yet." />
   return (
@@ -462,6 +468,7 @@ function InvoicesTab({ invoices, paymentsEnabled, pay, payingId, gstPercent }: {
               <p className="flex justify-between gap-3 font-semibold"><span className="text-ink">Total</span><span className="text-ink">{formatCurrency(t.total)}</span></p>
             </div>
           )}
+          <DocActions filename={`${inv.invoice_number}.pdf`} getBlob={() => renderPortalInvoiceBlob(inv, customerName, fallbackAddress, business)} />
           {paymentsEnabled && owing && (
             <div className="mt-3">
               <Button size="sm" onClick={() => pay(inv.id)} loading={payingId === inv.id}>
@@ -472,6 +479,119 @@ function InvoicesTab({ invoices, paymentsEnabled, pay, payingId, gstPercent }: {
         </div>
         )
       })}
+    </div>
+  )
+}
+
+// ── Documents (central home for all customer records) ──────────────────────
+type DocKind = 'quote' | 'invoice'
+interface DocItem { id: string; kind: DocKind; number: string; title: string; date: string; status: string; amount: number; filename: string; getBlob: () => Promise<Blob> }
+const KIND_META: Record<DocKind, { label: string; icon: typeof FileText; tone: string }> = {
+  quote: { label: 'Quote', icon: FileText, tone: 'text-accent border-accent/25 bg-accent/10' },
+  invoice: { label: 'Invoice', icon: Receipt, tone: 'text-sky-400 border-sky-500/25 bg-sky-500/10' },
+}
+const FUTURE_DOCS = ['Receipts', 'Service reports', 'Photos']
+
+function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, business }: {
+  quotes: PortalQuote[]; invoices: PortalInvoice[]; customerName: string; fallbackAddress: string | null; business: PortalData['business']
+}) {
+  const [cat, setCat] = useState<'all' | DocKind>('all')
+  const [query, setQuery] = useState('')
+  const [sort, setSort] = useState<'newest' | 'oldest'>('newest')
+
+  const docs = useMemo<DocItem[]>(() => {
+    const q: DocItem[] = quotes.map(qq => ({
+      id: 'q' + qq.id, kind: 'quote', number: qq.quote_number, title: qq.service_type || 'Quote',
+      date: qq.issued_date || qq.created_at, status: qq.status, amount: Number(qq.total) || 0,
+      filename: `${qq.quote_number}.pdf`, getBlob: () => renderPortalQuoteBlob(qq, customerName, business),
+    }))
+    const inv: DocItem[] = invoices.map(ii => ({
+      id: 'i' + ii.id, kind: 'invoice', number: ii.invoice_number, title: ii.service_type || 'Invoice',
+      date: ii.issued_date || ii.created_at, status: ii.status, amount: Number(ii.amount) || 0,
+      filename: `${ii.invoice_number}.pdf`, getBlob: () => renderPortalInvoiceBlob(ii, customerName, fallbackAddress, business),
+    }))
+    return [...q, ...inv]
+  }, [quotes, invoices, customerName, fallbackAddress, business])
+
+  const counts = { all: docs.length, quote: docs.filter(d => d.kind === 'quote').length, invoice: docs.filter(d => d.kind === 'invoice').length }
+
+  const filtered = useMemo(() => {
+    const ql = query.trim().toLowerCase()
+    let list = cat === 'all' ? docs : docs.filter(d => d.kind === cat)
+    if (ql) list = list.filter(d =>
+      d.number.toLowerCase().includes(ql) || d.title.toLowerCase().includes(ql) ||
+      d.status.toLowerCase().includes(ql) || KIND_META[d.kind].label.toLowerCase().includes(ql))
+    return [...list].sort((a, b) => sort === 'newest' ? b.date.localeCompare(a.date) : a.date.localeCompare(b.date))
+  }, [docs, cat, query, sort])
+
+  const CATS: { key: 'all' | DocKind; label: string; n: number }[] = [
+    { key: 'all', label: 'All', n: counts.all },
+    { key: 'quote', label: 'Quotes', n: counts.quote },
+    { key: 'invoice', label: 'Invoices', n: counts.invoice },
+  ]
+
+  return (
+    <div className="space-y-3">
+      {/* Count + category filters */}
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-sm font-semibold text-ink">{docs.length} document{docs.length === 1 ? '' : 's'}</p>
+        <p className="text-xs text-ink-faint">Showing {filtered.length}</p>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {CATS.map(c => (
+          <button key={c.key} onClick={() => setCat(c.key)} type="button"
+            className={cn('text-xs font-medium rounded-full px-3 py-1.5 border transition-colors',
+              cat === c.key ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
+            {c.label}{c.n > 0 && <span className="opacity-70"> {c.n}</span>}
+          </button>
+        ))}
+        {FUTURE_DOCS.map(f => (
+          <span key={f} className="text-xs font-medium rounded-full px-3 py-1.5 border border-dashed border-border text-ink-faint inline-flex items-center gap-1">
+            {f} <span className="text-[9px] uppercase tracking-wide opacity-80">Soon</span>
+          </span>
+        ))}
+      </div>
+
+      {/* Search + sort */}
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1">
+          <Search className="w-4 h-4 text-ink-faint absolute left-3 top-1/2 -translate-y-1/2" />
+          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search documents…"
+            className="w-full h-10 pl-9 pr-3 rounded-xl bg-bg-tertiary border border-border text-sm text-ink outline-none focus:border-accent" />
+        </div>
+        <button type="button" onClick={() => setSort(s => s === 'newest' ? 'oldest' : 'newest')}
+          className="h-10 px-3 rounded-xl border border-border bg-bg-tertiary text-sm font-medium text-ink flex items-center gap-1.5 shrink-0 hover:border-border-strong">
+          <ArrowUpDown className="w-4 h-4 text-ink-muted" /> {sort === 'newest' ? 'Newest' : 'Oldest'}
+        </button>
+      </div>
+
+      {/* List */}
+      {filtered.length === 0 ? (
+        <Empty text={docs.length === 0 ? 'No documents yet. Your quotes and invoices will appear here.' : 'No documents match your search.'} />
+      ) : (
+        <div className="space-y-3">{filtered.map(d => <DocRow key={d.id} d={d} />)}</div>
+      )}
+    </div>
+  )
+}
+function DocRow({ d }: { d: DocItem }) {
+  const m = KIND_META[d.kind]
+  return (
+    <div className="rounded-card border border-border bg-bg-secondary p-4">
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-start gap-3 min-w-0">
+          <div className={cn('w-9 h-9 rounded-lg border flex items-center justify-center shrink-0', m.tone)}><m.icon className="w-4 h-4" /></div>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-ink truncate">{d.title}</p>
+            <p className="text-xs text-ink-muted">{m.label} · {d.number} · {formatDate(d.date)}</p>
+          </div>
+        </div>
+        <div className="text-right shrink-0">
+          <p className="text-sm font-bold text-ink">{formatCurrency(d.amount)}</p>
+          {d.kind === 'quote' ? <QuoteStatusPill status={d.status} /> : <InvoiceStatusPill status={d.status} />}
+        </div>
+      </div>
+      <DocActions filename={d.filename} getBlob={d.getBlob} />
     </div>
   )
 }
@@ -540,6 +660,39 @@ function PrefRow({ label, icon: Icon, on, onChange }: { label: string; icon: typ
         <span className={cn('absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform', on && 'translate-x-5')} />
       </button>
     </div>
+  )
+}
+
+// ── Document actions (View / Download / Print) — same PDF the dashboard makes ──
+function DocActions({ getBlob, filename }: { getBlob: () => Promise<Blob>; filename: string }) {
+  const [busy, setBusy] = useState<'view' | 'download' | 'print' | null>(null)
+  async function run(kind: 'view' | 'download' | 'print') {
+    if (busy) return
+    setBusy(kind)
+    try {
+      const blob = await getBlob()
+      if (kind === 'download') downloadBlob(blob, filename)
+      else if (kind === 'print') printBlob(blob)
+      else viewBlob(blob)
+    } catch {
+      alert('Could not generate the PDF. Please try again.')
+    } finally { setBusy(null) }
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-border">
+      <DocBtn icon={Eye} label="View" loading={busy === 'view'} disabled={busy !== null} onClick={() => run('view')} />
+      <DocBtn icon={Download} label="Download PDF" loading={busy === 'download'} disabled={busy !== null} onClick={() => run('download')} primary />
+      <DocBtn icon={Printer} label="Print" loading={busy === 'print'} disabled={busy !== null} onClick={() => run('print')} />
+    </div>
+  )
+}
+function DocBtn({ icon: Icon, label, loading, disabled, onClick, primary }: { icon: typeof Eye; label: string; loading?: boolean; disabled?: boolean; onClick: () => void; primary?: boolean }) {
+  return (
+    <button onClick={onClick} disabled={disabled} type="button"
+      className={cn('flex-1 min-w-[92px] h-10 rounded-xl border text-sm font-semibold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-60',
+        primary ? 'border-accent/40 bg-accent/10 text-accent hover:bg-accent/15' : 'border-border bg-bg-tertiary text-ink hover:border-border-strong')}>
+      {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Icon className="w-4 h-4" />} {label}
+    </button>
   )
 }
 

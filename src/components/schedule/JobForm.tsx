@@ -16,6 +16,7 @@ import {
   seasonEndDateFor, estimateSeasonVisits, seasonLabel,
 } from '@/lib/seasons'
 import { WeeklyScheduler } from '@/components/schedule/WeeklyScheduler'
+import { SmartLaborField } from '@/components/labor/SmartLaborField'
 import { resolvePrefs, type PrefSource } from '@/lib/preferences'
 import { Repeat, Sparkles, Snowflake, Sun, AlertTriangle, CalendarRange } from 'lucide-react'
 
@@ -437,6 +438,18 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
         <Input label="Crew Size" type="number" min="1"
           {...register('crew_size', { min: { value: 1, message: 'Min 1' } })} />
       </div>
+
+      {/* Smart Labor Calculator V2 — learns duration from history; fills the field
+          above (never overwrites a typed value, never affects price). */}
+      <SmartLaborField
+        sqft={Number(selProp?.lawn_sqft) || 0}
+        serviceType={serviceType}
+        crewSize={Number(watch('crew_size')) || 1}
+        propertyId={selectedPropertyId || null}
+        price={Number(watch('price')) || (measuredPrice ?? 0)}
+        value={Number(watch('duration_minutes')) || null}
+        onApply={(min) => setValue('duration_minutes', min, { shouldValidate: true })}
+      />
 
       <div className="grid grid-cols-2 gap-4">
         <Input label="Start Time" type="time" {...register('start_time')} />

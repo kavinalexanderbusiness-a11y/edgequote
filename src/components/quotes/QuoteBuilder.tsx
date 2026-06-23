@@ -21,6 +21,7 @@ import { findCustomerMatch } from '@/lib/customers'
 import { createClient } from '@/lib/supabase/client'
 import type { MeasurementSnapshot, SavedRecommendation } from '@/types'
 import { BestDaySuggestions } from '@/components/schedule/BestDaySuggestions'
+import { SmartLaborField } from '@/components/labor/SmartLaborField'
 import { Clock, DollarSign, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, SlidersHorizontal, CheckCircle2, Users } from 'lucide-react'
 
 interface QuoteBuilderProps {
@@ -397,6 +398,17 @@ export function QuoteBuilder({
                 error={errors.crew_size?.message}
                 {...register('crew_size', { required: 'Required', min: { value: 1, message: 'Min 1' } })} />
             </div>
+            {/* Smart Labor Estimate — reference only on quotes; never changes the price. */}
+            <SmartLaborField
+              readOnly
+              sqft={measuredSqft}
+              serviceType={watch('service_type')}
+              crewSize={Number(crewSize) || 1}
+              overgrowth={overgrowth}
+              price={initialPrice || weeklyPrice || biweeklyPrice || monthlyPrice || 0}
+              value={null}
+              onApply={() => {}}
+            />
             <Input label="Adjustment Multiplier" type="number" step="0.05" min="0"
               hint="Multiplies the rate. e.g. 0.75 (easy), 1.0 (standard), 1.25 (overgrown)."
               {...register('overgrowth_multiplier', { min: 0 })} />
