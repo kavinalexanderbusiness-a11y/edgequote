@@ -1386,3 +1386,23 @@ left join public.quotes q on q.id = j.quote_id
 left join public.job_recurrences r on r.id = j.recurrence_id
 where j.actual_minutes is not null and j.actual_minutes > 0
 on conflict (user_id, job_id) do nothing;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-23 — Realtime for the unified inbox (COMMS).
+-- Streams new inbound SMS + conversation bumps to the Messages page with no
+-- refresh. RLS still applies — Realtime only delivers rows the subscribed owner
+-- can SELECT (auth.uid() = user_id). Idempotent.
+-- ════════════════════════════════════════════════════════════
+alter table public.conversations replica identity full;
+alter table public.messages replica identity full;
+do $$
+begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'conversations') then
+      execute 'alter publication supabase_realtime add table public.conversations';
+    end if;
+    if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'messages') then
+      execute 'alter publication supabase_realtime add table public.messages';
+    end if;
+  end if;
+end $$;

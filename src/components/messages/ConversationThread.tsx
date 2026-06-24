@@ -56,6 +56,17 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
   useEffect(() => { load() }, [customerId]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { endRef.current?.scrollIntoView({ block: 'end' }) }, [items.length])
 
+  // Realtime: a new message for this customer (inbound SMS, or the owner's own
+  // reply from another device) refreshes the thread live. Reloading also
+  // re-marks the conversation read while it's open. RLS scopes the stream to us.
+  useEffect(() => {
+    const channel = supabase
+      .channel(`thread:${customerId}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `customer_id=eq.${customerId}` }, () => load())
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [customerId]) // eslint-disable-line react-hooks/exhaustive-deps
+
   async function send() {
     const t = text.trim()
     if (!t) return

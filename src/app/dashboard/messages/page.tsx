@@ -35,6 +35,23 @@ export default function MessagesPage() {
   }
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Realtime: a new inbound SMS bumps its conversation (preview / unread / order)
+  // or creates a brand-new one — refresh the list live. RLS scopes the stream
+  // to this owner's conversations.
+  useEffect(() => {
+    let channel: ReturnType<typeof supabase.channel> | null = null
+    let active = true
+    ;(async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user || !active) return
+      channel = supabase
+        .channel(`conv-list:${user.id}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `user_id=eq.${user.id}` }, () => load())
+        .subscribe()
+    })()
+    return () => { active = false; if (channel) supabase.removeChannel(channel) }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <div className="max-w-5xl space-y-4">
       <PageHeader title="Messages" description="Two-way SMS + portal conversations with your customers." />
