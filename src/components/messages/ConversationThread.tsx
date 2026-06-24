@@ -9,7 +9,7 @@ import { Send, StickyNote, Loader2, Mail, MessageSquare } from 'lucide-react'
 import { format } from 'date-fns'
 
 interface Msg { id: string; created_at: string; direction: string; channel: string; body: string; status: string | null }
-interface Log { id: string; created_at: string; channel: string; template: string; status: string }
+interface Log { id: string; created_at: string; channel: string; template: string; status: string; message_id: string | null }
 type Item = { id: string; at: string; kind: 'in' | 'out' | 'note' | 'event'; channel: string; body: string; status?: string | null }
 
 // One customer's unified timeline: inbound SMS + portal requests, outbound
@@ -30,13 +30,15 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
     if (!user) { setLoading(false); return }
     const [mRes, lRes] = await Promise.all([
       supabase.from('messages').select('id, created_at, direction, channel, body, status').eq('customer_id', customerId).eq('user_id', user.id).order('created_at'),
-      supabase.from('notification_log').select('id, created_at, channel, template, status').eq('customer_id', customerId).eq('user_id', user.id).neq('template', 'reply').order('created_at'),
+      supabase.from('notification_log').select('id, created_at, channel, template, status, message_id').eq('customer_id', customerId).eq('user_id', user.id).neq('template', 'reply').order('created_at'),
     ])
     const msgs: Item[] = (mRes.data as Msg[] || []).map(m => ({
       id: 'm' + m.id, at: m.created_at, channel: m.channel, body: m.body, status: m.status,
       kind: m.direction === 'inbound' ? 'in' : m.direction === 'internal' ? 'note' : 'out',
     }))
-    const logs: Item[] = (lRes.data as Log[] || []).map(l => {
+    // A log row linked to a thread message is already shown as the full bubble —
+    // skip its event pill so a sent message isn't displayed twice.
+    const logs: Item[] = (lRes.data as Log[] || []).filter(l => !l.message_id).map(l => {
       // notification_log statuses: 'sent' | 'skipped' (no opt-in/contact) |
       // 'disabled' (messaging not set up) | 'error'. Don't claim "Sent" unless it was.
       const verb = l.status === 'sent' ? 'Sent'

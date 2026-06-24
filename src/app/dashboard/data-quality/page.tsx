@@ -12,13 +12,13 @@ import { format } from 'date-fns'
 import {
   ProfitJob, ProfitQuote, ProfitContext, RecInfo, jobValue,
 } from '@/lib/profitability'
-import { ensureCustomerAndProperty, findCustomerMatch } from '@/lib/customers'
+import { ensureCustomerAndProperty, findCustomerMatch, normalizePhone, normalizeEmail } from '@/lib/customers'
 import { geocodeAddressDetailed, reverseNeighborhood } from '@/lib/geo'
 import {
   CoverageRow, coveragePct, overallScore, scoreGrade, scoreLabel, DQ_GRADE_COLORS,
 } from '@/lib/dataQuality'
 import {
-  ShieldCheck, UserPlus, Home, AlertTriangle, CheckCircle2, ArrowRight, DollarSign, Link2, Users, FileText, MapPin,
+  ShieldCheck, UserPlus, Home, AlertTriangle, CheckCircle2, ArrowRight, DollarSign, Link2, Users, FileText, MapPin, Phone, Ruler, Copy,
 } from 'lucide-react'
 
 interface QRow {
@@ -26,7 +26,7 @@ interface QRow {
   address: string; property_id: string | null; status: string
 }
 type DQJob = ProfitJob & { title: string; property_id: string | null }
-interface PRow { id: string; customer_id: string | null; address: string; lat: number | null; lng: number | null; neighborhood: string | null }
+interface PRow { id: string; customer_id: string | null; address: string; lat: number | null; lng: number | null; neighborhood: string | null; lawn_sqft: number | null }
 
 const EMPTY_CTX: ProfitContext = { quotesById: {}, recById: {}, base: null, today: format(new Date(), 'yyyy-MM-dd') }
 
@@ -47,7 +47,7 @@ export default function DataQualityPage() {
       supabase.from('quotes').select('id, quote_number, customer_id, customer_name, address, property_id, status, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
       supabase.from('jobs').select('id, title, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, property_id, properties(lat, lng, city, postal_code, neighborhood)').eq('user_id', user!.id),
       supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user!.id),
-      supabase.from('properties').select('id, customer_id, address, lat, lng, neighborhood').eq('user_id', user!.id),
+      supabase.from('properties').select('id, customer_id, address, lat, lng, neighborhood, lawn_sqft').eq('user_id', user!.id),
     ])
 
     setCustomers((cRes.data as Customer[]) || [])
@@ -96,14 +96,40 @@ export default function DataQualityPage() {
     // to the postal prefix for these until resolved.
     const propsUnnamed = properties.filter(p => p.lat != null && p.lng != null && !(p.neighborhood || '').trim())
 
+    // Customer reachability (phone or email) — needed for every comms feature.
+    const custReachable = customers.filter(c => normalizePhone(c.phone).length >= 7 || !!normalizeEmail(c.email)).length
+    const customersNoContact = customers.filter(c => normalizePhone(c.phone).length < 7 && !normalizeEmail(c.email))
+    const customersNoPhone = customers.filter(c => normalizePhone(c.phone).length < 7).length
+    const customersNoEmail = customers.filter(c => !normalizeEmail(c.email)).length
+
+    // Property size (lawn_sqft) — the key pricing input. Only audit properties with an address.
+    const sizable = properties.filter(p => (p.address || '').trim().length >= 5)
+    const propsNoSize = sizable.filter(p => !p.lawn_sqft || Number(p.lawn_sqft) <= 0)
+    const sized = sizable.length - propsNoSize.length
+
+    // Potential duplicate customers — a confident phone/email/address match between
+    // two different records. Reuses findCustomerMatch (the one matching engine).
+    const dupes: { a: Customer; b: Customer; reason: string }[] = []
+    const pairSeen = new Set<string>()
+    for (const c of customers) {
+      const others = customers.filter(o => o.id !== c.id)
+      const match = findCustomerMatch(others, { name: c.name, phone: c.phone, email: c.email, address: c.address })
+      if (match && match.confident) {
+        const key = [c.id, match.customer.id].sort().join('|')
+        if (!pairSeen.has(key)) { pairSeen.add(key); dupes.push({ a: c, b: match.customer, reason: match.reason }) }
+      }
+    }
+
     const totalLinkables = quotes.length + jobs.length
     const custCovered = (quotes.length - quotesNoCustomer.length) + (jobs.length - jobsNoCustomer.length)
     const propCovered = (quotes.length - quotes.filter(q => !q.property_id).length) + (jobs.length - jobs.filter(j => !j.property_id).length)
 
     const rows: CoverageRow[] = [
       { key: 'customer', label: 'Customer coverage', covered: custCovered, total: totalLinkables, pct: coveragePct(custCovered, totalLinkables), hint: 'Quotes & jobs linked to a real customer' },
+      { key: 'contact', label: 'Customer contact', covered: custReachable, total: customers.length, pct: coveragePct(custReachable, customers.length), hint: 'Customers reachable by phone or email' },
       { key: 'property', label: 'Property coverage', covered: propCovered, total: totalLinkables, pct: coveragePct(propCovered, totalLinkables), hint: 'Quotes & jobs linked to a property' },
       { key: 'located', label: 'Properties located', covered: located, total: locatable.length, pct: coveragePct(located, locatable.length), hint: 'Properties with map coordinates (drives routes & maps)' },
+      { key: 'size', label: 'Property size', covered: sized, total: sizable.length, pct: coveragePct(sized, sizable.length), hint: 'Properties with a lawn size for pricing' },
       { key: 'quote', label: 'Job → quote linkage', covered: jobs.length - jobsNoQuote, total: jobs.length, pct: coveragePct(jobs.length - jobsNoQuote, jobs.length), hint: 'Jobs tied to a quote for pricing' },
       { key: 'revenue', label: 'Revenue coverage', covered: jobsWithValue, total: activeJobs.length, pct: coveragePct(jobsWithValue, activeJobs.length), hint: 'Active jobs that produce a $ value' },
     ]
@@ -111,10 +137,11 @@ export default function DataQualityPage() {
       rows, score: overallScore(rows),
       quotesNoCustomer, quotesNoProperty, jobsNoCustomer,
       jobsNoQuote, jobsNoPrice, propsNoCustomer, propsUngeocoded, propsUnnamed,
+      customersNoContact, customersNoPhone, customersNoEmail, propsNoSize, dupes,
       activeJobs: activeJobs.length, jobsWithValue,
       propertiesTotal: properties.length,
     }
-  }, [quotes, jobs, properties, ctx])
+  }, [quotes, jobs, properties, customers, ctx])
 
   const grade = scoreGrade(m.score)
 
@@ -353,6 +380,57 @@ export default function DataQualityPage() {
             </div>
           ))}
           {m.propsUnnamed.length > 40 && <p className="text-xs text-ink-faint">+{m.propsUnnamed.length - 40} more — all included in “Name all”.</p>}
+        </Section>
+      )}
+
+      {/* Customers with no phone or email — unreachable by any channel */}
+      {m.customersNoContact.length > 0 && (
+        <Section icon={Phone} title={`${m.customersNoContact.length} customer${m.customersNoContact.length !== 1 ? 's' : ''} with no contact info`}
+          subtitle={`No phone or email — they can't receive quotes, reminders or invoices. (${m.customersNoPhone} missing a phone · ${m.customersNoEmail} missing an email in total.)`}>
+          {m.customersNoContact.slice(0, 40).map(c => (
+            <Link key={c.id} href={`/dashboard/customers/${c.id}`} className="flex items-center justify-between gap-2 rounded-xl border border-border p-3 hover:border-border-strong transition-colors">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-ink truncate">{c.name}</p>
+                <p className="text-xs text-ink-muted truncate">{c.address || 'No address'}</p>
+              </div>
+              <span className="text-[11px] text-accent shrink-0 flex items-center gap-1">Add contact <ArrowRight className="w-3 h-3" /></span>
+            </Link>
+          ))}
+          {m.customersNoContact.length > 40 && <p className="text-xs text-ink-faint">+{m.customersNoContact.length - 40} more.</p>}
+        </Section>
+      )}
+
+      {/* Properties with no lawn size — pricing falls back to manual entry */}
+      {m.propsNoSize.length > 0 && (
+        <Section icon={Ruler} title={`${m.propsNoSize.length} propert${m.propsNoSize.length !== 1 ? 'ies' : 'y'} with no lawn size`}
+          subtitle="No lawn measurement on file — pricing recommendations need this. Measure to enable accurate quotes.">
+          {m.propsNoSize.slice(0, 40).map(p => (
+            <div key={p.id} className="flex items-center justify-between gap-2 rounded-xl border border-border p-3">
+              <p className="text-sm text-ink truncate min-w-0">{p.address}</p>
+              <Link href={`/dashboard/properties/measure?id=${p.id}`}>
+                <Button size="sm" variant="secondary"><Ruler className="w-3.5 h-3.5" /> Measure</Button>
+              </Link>
+            </div>
+          ))}
+          {m.propsNoSize.length > 40 && <p className="text-xs text-ink-faint">+{m.propsNoSize.length - 40} more.</p>}
+        </Section>
+      )}
+
+      {/* Potential duplicate customers — share a phone, email or address */}
+      {m.dupes.length > 0 && (
+        <Section icon={Copy} title={`${m.dupes.length} potential duplicate${m.dupes.length !== 1 ? 's' : ''}`}
+          subtitle="These customer pairs share a phone, email or address. Open each to confirm and merge if they're the same person.">
+          {m.dupes.slice(0, 40).map((d, i) => (
+            <div key={i} className="rounded-xl border border-border p-3">
+              <span className="text-[10px] uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded-full px-2 py-0.5">Same {d.reason}</span>
+              <div className="flex items-center justify-between gap-2 mt-2">
+                <Link href={`/dashboard/customers/${d.a.id}`} className="text-sm font-medium text-ink hover:text-accent truncate min-w-0 flex-1">{d.a.name}</Link>
+                <Copy className="w-3.5 h-3.5 text-ink-faint shrink-0" />
+                <Link href={`/dashboard/customers/${d.b.id}`} className="text-sm font-medium text-ink hover:text-accent truncate min-w-0 flex-1 text-right">{d.b.name}</Link>
+              </div>
+            </div>
+          ))}
+          {m.dupes.length > 40 && <p className="text-xs text-ink-faint">+{m.dupes.length - 40} more.</p>}
         </Section>
       )}
 

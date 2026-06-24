@@ -63,7 +63,7 @@ export default function RevenueIntelligencePage() {
   const wonCount = fbList.filter(f => f.status === 'won').length
   const wonValue = fbList.filter(f => f.status === 'won').reduce((s, f) => s + Number(f.result_value || 0), 0)
 
-  const KINDS: (OppKind | 'all')[] = ['all', 'renewal', 'upsell', 'cross_sell', 'membership', 'referral']
+  const KINDS: (OppKind | 'all')[] = ['all', 'renewal', 'upsell', 'cross_sell', 'membership', 'referral', 'reactivation']
   const kindCount = (k: OppKind | 'all') => k === 'all' ? live.length : live.filter(o => o.kind === k).length
 
   return (

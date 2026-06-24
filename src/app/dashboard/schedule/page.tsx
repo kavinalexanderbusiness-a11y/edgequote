@@ -22,6 +22,7 @@ import { format, addMonths, addWeeks, addDays, subMonths, subWeeks, subDays, par
 import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repeat, Lightbulb, Info } from 'lucide-react'
 import { OptimizeSchedule } from '@/components/schedule/OptimizeSchedule'
 import { RainDelayCenter } from '@/components/schedule/RainDelayCenter'
+import { WeatherStrip } from '@/components/weather/WeatherStrip'
 import { CloudRain } from 'lucide-react'
 import { analyzeSchedule, optimizeSchedule, MOVE_REASON_LABEL } from '@/lib/optimizer'
 import type { PlannedMove, OptimizeScope, OptimizeMode, OptJob, ScheduleSuggestion, CadenceVisit, CadenceRecs } from '@/lib/optimizer'
@@ -1224,8 +1225,8 @@ export default function SchedulePage() {
         description={`${jobs.length} job${jobs.length !== 1 ? 's' : ''} on the calendar`}
         action={
           <div className="flex items-center gap-2">
-            <Button variant="secondary" onClick={() => setShowRainCenter(true)} title="Rained out? Bump a whole day to the next work days">
-              <CloudRain className="w-4 h-4" /> Rain
+            <Button variant="secondary" onClick={() => setShowRainCenter(true)} title="Weather Operations — move jobs (rain, equipment, absence, holiday, emergency) and notify customers">
+              <CloudRain className="w-4 h-4" /> Weather Ops
             </Button>
             <Button variant="secondary" onClick={() => launchOptimizer()} title="Optimize your schedule — pick scope and goal">
               <Rocket className="w-4 h-4" /> Optimize
@@ -1236,6 +1237,9 @@ export default function SchedulePage() {
           </div>
         }
       />
+
+      {/* Weather + rain-risk strip — taps through to Weather Ops; hides on a clear week */}
+      <WeatherStrip />
 
       {quoteCtx && (
         <div className="text-sm text-accent bg-accent/10 border border-accent/20 rounded-xl px-4 py-2.5">

@@ -12,7 +12,7 @@ import { renderPortalQuoteBlob, renderPortalInvoiceBlob, downloadBlob, viewBlob,
 import {
   Home, History, Image as ImageIcon, FileText, Receipt, MessageSquarePlus, Check, Loader2,
   Phone, Globe, Mail, Leaf, CheckCircle2, Navigation, Play, CalendarClock, Repeat, MapPin, Ruler, Sparkles, CreditCard, MessageSquare,
-  Eye, Download, Printer, FolderOpen, Search, ArrowUpDown,
+  Eye, Download, Printer, FolderOpen, Search, ArrowUpDown, Activity, Wallet,
 } from 'lucide-react'
 
 // ── Premium Customer Portal ─────────────────────────────────────────────────────
@@ -25,14 +25,15 @@ interface PortalInvoice { id: string; invoice_number: string; service_type: stri
 interface PortalJob { id: string; recurrence_id: string | null; service_type: string | null; title: string; scheduled_date: string; status: string; on_my_way_at: string | null; started_at: string | null; completed_at: string | null; notes: string | null }
 interface PortalRec { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null; end_date: string | null }
 interface PortalPhoto { id: string; job_id: string | null; storage_path: string; kind: string; caption: string | null; taken_at: string }
+interface PortalPayment { id: string; amount: number; status: string; paid_at: string | null; provider: string; invoice_id: string | null; created_at: string }
 interface PortalData {
   customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null; city: string | null; sms_opt_in?: boolean | null; email_opt_in?: boolean | null }
   business: { company_name: string | null; owner_name: string | null; phone: string | null; email_primary: string | null; email_secondary: string | null; website: string | null; logo_url: string | null; logo_scale: number | null; base_address: string | null; terms_text: string | null; gst_percent?: number | null } | null
-  property: { address: string | null; city: string | null; province: string | null; lawn_sqft: number | null; fence_length: number | null; neighborhood: string | null } | null
-  quotes: PortalQuote[]; invoices: PortalInvoice[]; jobs: PortalJob[]; recurrences: PortalRec[]; photos: PortalPhoto[]
+  property: { address: string | null; city: string | null; province: string | null; lawn_sqft: number | null; fence_length: number | null; neighborhood: string | null; notes: string | null } | null
+  quotes: PortalQuote[]; invoices: PortalInvoice[]; jobs: PortalJob[]; recurrences: PortalRec[]; photos: PortalPhoto[]; payments: PortalPayment[]
 }
 
-type Tab = 'home' | 'service' | 'photos' | 'documents' | 'quotes' | 'invoices' | 'request'
+type Tab = 'home' | 'timeline' | 'service' | 'photos' | 'property' | 'documents' | 'quotes' | 'invoices' | 'payments' | 'request'
 type LiveStatus = 'scheduled' | 'on_my_way' | 'in_progress' | 'completed'
 
 interface Derived {
@@ -162,11 +163,14 @@ export default function PortalPage() {
 
   const TABS: { key: Tab; label: string; icon: typeof Home; n?: number }[] = [
     { key: 'home', label: 'Home', icon: Home },
+    { key: 'timeline', label: 'Timeline', icon: Activity },
     { key: 'service', label: 'Service', icon: History, n: derived.completed.length },
     { key: 'photos', label: 'Photos', icon: ImageIcon, n: data.photos.length },
+    { key: 'property', label: 'Property', icon: MapPin },
     { key: 'documents', label: 'Documents', icon: FolderOpen, n: data.quotes.length + data.invoices.length },
     { key: 'quotes', label: 'Quotes', icon: FileText, n: data.quotes.length },
     { key: 'invoices', label: 'Invoices', icon: Receipt, n: data.invoices.length },
+    { key: 'payments', label: 'Payments', icon: Wallet, n: data.payments.length },
     { key: 'request', label: 'Request', icon: MessageSquarePlus },
   ]
 
@@ -204,8 +208,11 @@ export default function PortalPage() {
           )}
           {tab === 'home' && <HomeTab data={data} derived={derived} biz={biz} />}
           {tab === 'home' && consent && <ConsentCard consent={consent} onSave={saveConsent} />}
+          {tab === 'timeline' && <TimelineTab data={data} photosByJob={photosByJob} />}
           {tab === 'service' && <ServiceTab completed={derived.completed} photosByJob={photosByJob} invoiceByJob={invoiceByJob} photoUrl={photoUrl} />}
           {tab === 'photos' && <GalleryTab photosByJob={photosByJob} jobs={data.jobs} photoUrl={photoUrl} />}
+          {tab === 'property' && <PropertyTab property={data.property} />}
+          {tab === 'payments' && <PaymentsTab payments={data.payments} invoices={data.invoices} outstanding={derived.outstanding} />}
           {tab === 'documents' && <DocumentsTab quotes={data.quotes} invoices={data.invoices} customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} business={biz} />}
           {tab === 'quotes' && <QuotesTab quotes={data.quotes} accept={accept} accepting={accepting} customerName={data.customer.name} business={biz} />}
           {tab === 'invoices' && <InvoicesTab invoices={data.invoices} paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} gstPercent={Number(data.business?.gst_percent) || 0} customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} business={biz} />}
@@ -592,6 +599,119 @@ function DocRow({ d }: { d: DocItem }) {
         </div>
       </div>
       <DocActions filename={d.filename} getBlob={d.getBlob} />
+    </div>
+  )
+}
+
+// ── Timeline (one unified activity feed: quotes, visits, invoices, payments, photos) ──
+interface TLEvent { id: string; at: string; icon: typeof Home; tone: string; title: string; sub: string | null }
+function TimelineTab({ data, photosByJob }: { data: PortalData; photosByJob: Map<string, PortalPhoto[]> }) {
+  const events = useMemo<TLEvent[]>(() => {
+    const ev: TLEvent[] = []
+    for (const q of data.quotes) ev.push({
+      id: 'q' + q.id, at: q.issued_date || q.created_at, icon: FileText,
+      tone: q.status === 'accepted' ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : 'text-amber-400 border-amber-500/30 bg-amber-500/10',
+      title: `Quote ${q.quote_number} ${q.status === 'accepted' ? 'accepted' : q.status === 'declined' ? 'declined' : 'sent'}`, sub: q.service_type || null,
+    })
+    for (const j of data.jobs) {
+      if (j.completed_at || j.status === 'completed') ev.push({ id: 'jc' + j.id, at: j.completed_at || j.scheduled_date, icon: CheckCircle2, tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10', title: `${j.service_type || j.title} completed`, sub: null })
+      else ev.push({ id: 'js' + j.id, at: j.scheduled_date, icon: CalendarClock, tone: 'text-sky-400 border-sky-500/30 bg-sky-500/10', title: `${j.service_type || j.title} scheduled`, sub: null })
+    }
+    for (const i of data.invoices) ev.push({ id: 'i' + i.id, at: i.issued_date || i.created_at, icon: Receipt, tone: 'text-ink-muted border-border bg-bg-tertiary', title: `Invoice ${i.invoice_number}`, sub: formatCurrency(Number(i.amount)) })
+    for (const p of data.payments) ev.push({ id: 'p' + p.id, at: p.paid_at || p.created_at, icon: CreditCard, tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10', title: 'Payment received', sub: formatCurrency(Number(p.amount)) })
+    for (const [jid, ps] of photosByJob) { if (jid !== 'none' && ps.length) ev.push({ id: 'ph' + jid, at: ps[0]?.taken_at || '', icon: ImageIcon, tone: 'text-violet-400 border-violet-500/30 bg-violet-500/10', title: `${ps.length} photo${ps.length === 1 ? '' : 's'} added`, sub: null }) }
+    return ev.filter(e => e.at).sort((a, b) => b.at.localeCompare(a.at))
+  }, [data, photosByJob])
+
+  if (events.length === 0) return <Empty text="No activity yet — your quotes, visits, and payments will appear here." />
+  return (
+    <div className="relative pl-7">
+      <div className="absolute left-[11px] top-1.5 bottom-1.5 w-px bg-border" />
+      <div className="space-y-2.5">
+        {events.map(e => (
+          <div key={e.id} className="relative">
+            <div className={cn('absolute -left-7 top-1 w-[22px] h-[22px] rounded-full border flex items-center justify-center', e.tone)}><e.icon className="w-3 h-3" /></div>
+            <div className="rounded-card border border-border bg-bg-secondary px-3.5 py-2.5">
+              <p className="text-sm font-medium text-ink">{e.title}</p>
+              <p className="text-[11px] text-ink-faint mt-0.5">{e.sub ? <span className="text-ink-muted">{e.sub} · </span> : null}{formatDate(e.at)}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Property details ──
+function PropertyTab({ property }: { property: PortalData['property'] }) {
+  if (!property || (!property.address && !property.lawn_sqft && !property.fence_length && !property.neighborhood)) {
+    return <Empty text="No property details on file yet." />
+  }
+  return (
+    <div className="space-y-3">
+      <div className="rounded-card border border-border bg-bg-secondary p-4">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-2">Your property</p>
+        {property.address && (
+          <p className="text-sm text-ink flex items-start gap-1.5"><MapPin className="w-4 h-4 text-ink-faint shrink-0 mt-0.5" /> <span>{property.address}{property.city ? `, ${property.city}` : ''}{property.province ? `, ${property.province}` : ''}</span></p>
+        )}
+        <div className="grid grid-cols-2 gap-3 mt-3">
+          {property.lawn_sqft ? <StatCard label="Lawn size" value={`${Number(property.lawn_sqft).toLocaleString()} ft²`} icon={Ruler} /> : null}
+          {property.fence_length ? <StatCard label="Fence length" value={`${Number(property.fence_length).toLocaleString()} ft`} icon={Ruler} /> : null}
+          {property.neighborhood ? <StatCard label="Neighborhood" value={property.neighborhood} icon={MapPin} /> : null}
+        </div>
+      </div>
+      {property.notes && (
+        <div className="rounded-card border border-border bg-bg-secondary p-4">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-1.5">Notes from your provider</p>
+          <p className="text-sm text-ink-muted whitespace-pre-wrap">{property.notes}</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Payment history ──
+function paymentMethodLabel(provider: string): string {
+  switch (provider) {
+    case 'stripe': return 'Card'
+    case 'etransfer': return 'E-transfer'
+    case 'cash': return 'Cash'
+    case 'cheque': return 'Cheque'
+    default: return provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : 'Payment'
+  }
+}
+function PaymentsTab({ payments, invoices, outstanding }: { payments: PortalPayment[]; invoices: PortalInvoice[]; outstanding: number }) {
+  const invById = new Map(invoices.map(i => [i.id, i]))
+  const totalPaid = payments.reduce((s, p) => s + Number(p.amount || 0), 0)
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-3">
+        <div className="rounded-card border border-emerald-500/20 bg-emerald-500/[0.06] p-3.5">
+          <p className="text-[10px] uppercase tracking-wide text-emerald-400 font-semibold flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Total paid</p>
+          <p className="text-lg font-bold text-ink mt-1">{formatCurrency(totalPaid)}</p>
+        </div>
+        <div className="rounded-card border border-border bg-bg-secondary p-3.5">
+          <p className="text-[10px] uppercase tracking-wide text-ink-faint font-semibold flex items-center gap-1"><Receipt className="w-3 h-3" /> Outstanding</p>
+          <p className={cn('text-lg font-bold mt-1', outstanding > 0 ? 'text-amber-400' : 'text-emerald-400')}>{formatCurrency(outstanding)}</p>
+        </div>
+      </div>
+      {payments.length === 0 ? (
+        <Empty text="No payments yet. Your paid invoices will appear here." />
+      ) : payments.map(p => {
+        const inv = p.invoice_id ? invById.get(p.invoice_id) : null
+        return (
+          <div key={p.id} className="rounded-card border border-border bg-bg-secondary p-4 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-9 h-9 rounded-lg border border-emerald-500/25 bg-emerald-500/10 flex items-center justify-center shrink-0"><CheckCircle2 className="w-4 h-4 text-emerald-400" /></div>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-ink">{formatCurrency(Number(p.amount))}</p>
+                <p className="text-xs text-ink-muted truncate">{p.paid_at ? formatDate(p.paid_at) : formatDate(p.created_at)}{inv ? ` · ${inv.invoice_number}` : ''} · {paymentMethodLabel(p.provider)}</p>
+              </div>
+            </div>
+            <span className="text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border text-emerald-400 border-emerald-500/30 bg-emerald-500/10 shrink-0">Paid</span>
+          </div>
+        )
+      })}
     </div>
   )
 }

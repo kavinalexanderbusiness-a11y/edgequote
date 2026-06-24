@@ -7,12 +7,22 @@
 
 export interface SendResult { sent: boolean; reason: 'sent' | 'disabled' | 'error'; id?: string; error?: string }
 
-// Which channels are live (i.e. credentials configured).
-export function commsEnabled(): { sms: boolean; email: boolean } {
+// Which channels are live (i.e. credentials configured). `push` is the forward-
+// looking third channel — wired through the whole pipeline (UI chips, the send
+// route, logging) but always reports disabled until a push provider is added, so
+// the rest of the app can offer it today without anything actually firing.
+export function commsEnabled(): { sms: boolean; email: boolean; push: boolean } {
   return {
     sms: !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM),
     email: !!(process.env.RESEND_API_KEY && process.env.RESEND_FROM),
+    push: false, // no push provider configured yet — future expansion point
   }
+}
+
+// Future push channel. Returns disabled until a provider (e.g. web-push / FCM /
+// APNs) is wired in here — the single place push delivery will live.
+export async function sendPush(_to: string, _title: string, _body: string): Promise<SendResult> {
+  return { sent: false, reason: 'disabled' }
 }
 
 export async function sendSms(to: string, body: string): Promise<SendResult> {

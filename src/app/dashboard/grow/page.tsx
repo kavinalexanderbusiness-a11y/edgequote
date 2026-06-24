@@ -7,7 +7,7 @@ import { SuggestionsCenter } from '@/components/grow/SuggestionsCenter'
 import { CustomerHealthPanel } from '@/components/grow/CustomerHealthPanel'
 import { WinLossPanel } from '@/components/grow/WinLossPanel'
 import {
-  BarChart3, Gauge, HeartPulse, Map as MapIcon, Target, ShieldCheck, CalendarCheck, ArrowRight, TrendingUp,
+  BarChart3, Gauge, HeartPulse, Map as MapIcon, Target, ShieldCheck, CalendarCheck, ArrowRight, TrendingUp, CloudRain,
 } from 'lucide-react'
 
 // ── Grow hub ──────────────────────────────────────────────────────────────────
@@ -43,6 +43,7 @@ const GROUPS: { title: string; tools: Tool[] }[] = [
     title: 'Stay on top of it',
     tools: [
       { label: 'Weekly Review', href: '/dashboard/review', icon: CalendarCheck, blurb: 'Last week’s results and this week’s moves at a glance.' },
+      { label: 'Weather', href: '/dashboard/weather', icon: CloudRain, blurb: 'Rain risk to your booked work — jobs, hours & revenue at stake.' },
       { label: 'Labor Intelligence', href: '/dashboard/labor-intelligence', icon: Gauge, blurb: 'How accurate your time estimates are — and where they’re learning.' },
       { label: 'Data Quality', href: '/dashboard/data-quality', icon: ShieldCheck, blurb: 'Missing customers, prices and locations to clean up.' },
     ],

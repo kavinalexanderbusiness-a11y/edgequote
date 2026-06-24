@@ -1406,3 +1406,113 @@ begin
     end if;
   end if;
 end $$;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-23 — In-app notifications (business alerts).
+-- Quote-accepted & invoice-paid alerts with an unread badge. Captured DB-side via
+-- triggers so it fires no matter which path changes the status (portal, dashboard,
+-- Stripe webhook) and needs NO app-code changes. Backward compatible. Idempotent.
+-- ════════════════════════════════════════════════════════════
+create table if not exists public.notifications (
+  id          uuid primary key default uuid_generate_v4(),
+  created_at  timestamptz not null default now(),
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  type        text not null,            -- quote_accepted | invoice_paid
+  title       text not null,
+  body        text,
+  customer_id uuid references public.customers(id) on delete set null,
+  entity_type text,                     -- quote | invoice
+  entity_id   uuid,
+  amount      numeric,
+  href        text,
+  read        boolean not null default false,
+  read_at     timestamptz
+);
+alter table public.notifications enable row level security;
+do $$ begin
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='notifications' and policyname='notifications: select own') then
+    create policy "notifications: select own" on public.notifications for select using (auth.uid() = user_id);
+    create policy "notifications: insert own" on public.notifications for insert with check (auth.uid() = user_id);
+    create policy "notifications: update own" on public.notifications for update using (auth.uid() = user_id);
+    create policy "notifications: delete own" on public.notifications for delete using (auth.uid() = user_id);
+  end if;
+end $$;
+create index if not exists notifications_user_unread_idx on public.notifications(user_id, read, created_at desc);
+grant select, insert, update, delete on public.notifications to authenticated;
+
+-- Quote accepted → notify.
+create or replace function public.notify_quote_accepted()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.status = 'accepted' and old.status is distinct from 'accepted' then
+    insert into public.notifications (user_id, type, title, body, customer_id, entity_type, entity_id, amount, href)
+    values (new.user_id, 'quote_accepted',
+      coalesce(nullif(new.customer_name,''), 'A customer') || ' accepted a quote',
+      'Quote ' || coalesce(new.quote_number, '') || ' · $' || trim(to_char(coalesce(new.total,0), 'FM999990D00')),
+      new.customer_id, 'quote', new.id, new.total, '/dashboard/quotes/' || new.id);
+  end if;
+  return new;
+end; $$;
+drop trigger if exists trg_notify_quote_accepted on public.quotes;
+create trigger trg_notify_quote_accepted after update of status on public.quotes
+  for each row execute function public.notify_quote_accepted();
+
+-- Invoice paid → notify.
+create or replace function public.notify_invoice_paid()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.status = 'paid' and old.status is distinct from 'paid' then
+    insert into public.notifications (user_id, type, title, body, customer_id, entity_type, entity_id, amount, href)
+    values (new.user_id, 'invoice_paid',
+      coalesce(nullif(new.customer_name,''), 'A customer') || ' paid an invoice',
+      'Invoice ' || coalesce(new.invoice_number, '') || ' · $' || trim(to_char(coalesce(new.amount,0), 'FM999990D00')) || ' received',
+      new.customer_id, 'invoice', new.id, new.amount, '/dashboard/invoices');
+  end if;
+  return new;
+end; $$;
+drop trigger if exists trg_notify_invoice_paid on public.invoices;
+create trigger trg_notify_invoice_paid after update of status on public.invoices
+  for each row execute function public.notify_invoice_paid();
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-23 — Portal Payments + Timeline + Property (COMMS/PORTAL).
+-- Adds the customer's successful payments and the property notes to the portal
+-- payload so the portal can show a Payments tab, a unified Timeline tab, and a
+-- Property details tab — all from the SAME token-scoped read. Backward
+-- compatible (only adds fields). Idempotent.
+-- ════════════════════════════════════════════════════════════
+create or replace function public.get_portal_data(p_token text)
+returns json language plpgsql security definer set search_path = public as $$
+declare v_customer uuid; v_user uuid; result json;
+begin
+  select customer_id, user_id into v_customer, v_user
+    from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return null; end if;
+  select json_build_object(
+    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code, sms_opt_in, email_opt_in from public.customers where id = v_customer) c),
+    'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, email_secondary, website, logo_url, logo_scale, base_address, terms_text, coalesce(gst_percent,0) as gst_percent from public.business_settings where user_id = v_user) b),
+    'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood, notes from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
+    'quotes', coalesce((select json_agg(q order by q.created_at desc) from (select id, quote_number, service_type, address, total, initial_price, subtotal, weekly_price, biweekly_price, monthly_price, notes, status, created_at, issued_date, crew_size, hours, travel_fee from public.quotes where customer_id = v_customer and status <> 'draft') q), '[]'::json),
+    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, status, issued_date, due_date, notes, address, line_items, job_id, created_at from public.invoices where customer_id = v_customer) i), '[]'::json),
+    'payments', coalesce((select json_agg(pm order by pm.paid_at desc nulls last) from (select id, amount, status, paid_at, provider, invoice_id, created_at from public.payments where customer_id = v_customer and status = 'paid') pm), '[]'::json),
+    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, notes from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
+    'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, end_date from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
+    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json)
+  ) into result;
+  return result;
+end; $$;
+grant execute on function public.get_portal_data(text) to anon, authenticated;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-24 — Scheduler communication actions + Weather Ops.
+-- Editable one-tap messages (Send ETA / On the way / Running late / Arrived /
+-- Rescheduled / Weather delay …) and Weather Ops notifications now record what
+-- was actually sent into the customer's message thread (public.messages). Each
+-- per-channel notification_log row links to that thread message via message_id so
+-- the conversation shows the full message ONCE (the bubble), not a duplicate
+-- audit pill. Nullable + on-delete-set-null so older log rows and not-sent
+-- attempts stay unlinked. Idempotent.
+-- ════════════════════════════════════════════════════════════
+alter table public.notification_log
+  add column if not exists message_id uuid references public.messages(id) on delete set null;
+create index if not exists notification_log_message_idx on public.notification_log(message_id);

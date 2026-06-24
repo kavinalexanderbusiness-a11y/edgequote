@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react'
 import { LayoutDashboard, Users, FileText, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Navigation, Receipt, Menu, X, Sprout, MessageSquare, Ruler } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
+import { NotificationBell } from '@/components/notifications/NotificationBell'
 
 // Everyday work up top; the 7 analytics pages now live behind one "Grow" hub
 // (/dashboard/grow) so the sidebar stays short — fewer navigation decisions.
@@ -46,12 +47,32 @@ export function Sidebar() {
       const next = { url: s?.logo_url ?? null, scale: s?.logo_scale && s.logo_scale >= 50 ? s.logo_scale : 100 }
       setBrand(next)
       try { window.localStorage.setItem('eq-logo', JSON.stringify(next)) } catch { /* ignore */ }
-      // Unread customer messages (sum of conversation unread) → the Messages badge.
-      const { data: cvs } = await supabase.from('conversations').select('unread').eq('user_id', user.id).gt('unread', 0)
-      if (active) setUnread((cvs as { unread: number }[] | null)?.reduce((s, c) => s + (c.unread || 0), 0) || 0)
     }
     load()
     return () => { active = false }
+  }, [])
+
+  // Unread Messages badge — live. The sum of conversations.unread, kept in sync
+  // through the SAME Realtime stream as the inbox, so the count updates app-wide
+  // (on any page) without a refresh or navigation. RLS scopes the stream to us.
+  useEffect(() => {
+    const supabase = createClient()
+    let channel: ReturnType<typeof supabase.channel> | null = null
+    let active = true
+    async function refresh(userId: string) {
+      const { data } = await supabase.from('conversations').select('unread').eq('user_id', userId).gt('unread', 0)
+      if (active) setUnread((data as { unread: number }[] | null)?.reduce((s, c) => s + (c.unread || 0), 0) || 0)
+    }
+    ;(async () => {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user || !active) return
+      await refresh(user.id)
+      channel = supabase
+        .channel(`sidebar-unread:${user.id}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `user_id=eq.${user.id}` }, () => refresh(user.id))
+        .subscribe()
+    })()
+    return () => { active = false; if (channel) supabase.removeChannel(channel) }
   }, [])
 
   async function handleSignOut() {
@@ -134,9 +155,12 @@ export function Sidebar() {
       {/* Mobile top bar */}
       <div className="lg:hidden sticky top-0 z-40 flex items-center justify-between h-14 px-4 bg-bg-secondary border-b border-border">
         {logo}
-        <button onClick={() => setOpen(true)} className="text-ink p-2 -mr-2" aria-label="Open menu">
-          <Menu className="w-5 h-5" />
-        </button>
+        <div className="flex items-center gap-1.5">
+          <NotificationBell />
+          <button onClick={() => setOpen(true)} className="text-ink p-2 -mr-2" aria-label="Open menu">
+            <Menu className="w-5 h-5" />
+          </button>
+        </div>
       </div>
 
       {/* Mobile drawer */}
@@ -157,8 +181,9 @@ export function Sidebar() {
 
       {/* Desktop sidebar */}
       <aside className="hidden lg:flex w-60 shrink-0 h-screen sticky top-0 flex-col bg-bg-secondary border-r border-border">
-        <div className="h-16 flex items-center px-5 border-b border-border">
+        <div className="h-16 flex items-center justify-between gap-2 px-5 border-b border-border">
           {logo}
+          <NotificationBell />
         </div>
         {navBody()}
       </aside>

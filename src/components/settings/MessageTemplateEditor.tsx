@@ -8,7 +8,10 @@ import { Input } from '@/components/ui/Input'
 import { MSG_LABELS, MsgType, DEFAULT_TEMPLATES, MSG_VARIABLES } from '@/lib/comms/templates'
 import { MessageSquare, Check, RotateCcw, Loader2 } from 'lucide-react'
 
-const TYPES: MsgType[] = ['on_my_way', 'running_late', 'arrived', 'job_complete', 'thanks', 'review_request', 'reminder', 'quote', 'invoice']
+const TYPES: MsgType[] = [
+  'confirm', 'reminder', 'eta', 'on_my_way', 'running_late', 'arrived', 'early_arrival',
+  'rescheduled', 'rain_delay', 'job_complete', 'thanks', 'review_request', 'quote', 'invoice',
+]
 
 export function MessageTemplateEditor() {
   const supabase = useMemo(() => createClient(), [])

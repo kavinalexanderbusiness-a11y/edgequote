@@ -15,7 +15,7 @@ import { formatDate, formatCurrency, localTodayISO } from '@/lib/utils'
 import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes, latestSavedRecommendation, recommendationIsStale } from '@/lib/pricing'
 import { LocatedJob, fetchLocatedUpcomingJobs, nearbyJobCount } from '@/lib/geo'
 import { JobPhotos } from '@/components/photos/JobPhotos'
-import { MapPin, Home, User, Ruler, History, RefreshCw, Trophy, DollarSign, CheckCircle2, Receipt, Timer, CalendarClock, AlertTriangle, Repeat, Camera } from 'lucide-react'
+import { MapPin, Home, User, Ruler, History, RefreshCw, Trophy, DollarSign, CheckCircle2, Receipt, Timer, CalendarClock, AlertTriangle, Repeat, Camera, FileText } from 'lucide-react'
 
 // Per-property performance, aggregated from completed jobs + invoices. Reuses
 // existing data — no new tables, no new pricing math.
@@ -28,6 +28,10 @@ interface PropPerf {
 }
 type PerfJob = { property_id: string | null; status: string; scheduled_date: string; actual_minutes: number | null }
 type PerfInvoice = { property_id: string | null; amount: number | null; status: string }
+type InvoiceRow = { id: string; property_id: string | null; invoice_number: string; amount: number | null; status: string; issued_date: string | null; created_at: string }
+type QuoteRow = { id: string; property_id: string | null; quote_number: string; total: number | null; status: string; created_at: string }
+type LastQuote = { id: string; quote_number: string; total: number; status: string; date: string }
+type LastInvoice = { id: string; invoice_number: string; status: string; date: string }
 
 function buildPerformance(jobs: PerfJob[], invoices: PerfInvoice[]): Record<string, PropPerf> {
   const out: Record<string, PropPerf> = {}
@@ -73,6 +77,8 @@ export default function PropertiesPage() {
   const [settings, setSettings] = useState<BusinessSettings | null>(null)
   const [locatedJobs, setLocatedJobs] = useState<LocatedJob[]>([])
   const [perfByProp, setPerfByProp] = useState<Record<string, PropPerf>>({})
+  const [lastQuoteByProp, setLastQuoteByProp] = useState<Record<string, LastQuote>>({})
+  const [lastInvoiceByProp, setLastInvoiceByProp] = useState<Record<string, LastInvoice>>({})
   const [plansByProp, setPlansByProp] = useState<Record<string, ServicePlan[]>>({})
   const [recalcId, setRecalcId] = useState<string | null>(null)
 
@@ -81,7 +87,7 @@ export default function PropertiesPage() {
   useEffect(() => {
     async function fetchProperties() {
       const { data: { user } } = await supabase.auth.getUser()
-      const [pRes, sRes, located, jRes, iRes, planJRes, rRes] = await Promise.all([
+      const [pRes, sRes, located, jRes, iRes, planJRes, rRes, qRes] = await Promise.all([
         supabase
           .from('properties')
           .select('*, customers(id, name, email, phone)')
@@ -90,16 +96,35 @@ export default function PropertiesPage() {
         supabase.from('business_settings').select('*').eq('user_id', user!.id).maybeSingle(),
         fetchLocatedUpcomingJobs(supabase, user!.id),
         supabase.from('jobs').select('property_id, status, scheduled_date, actual_minutes').eq('user_id', user!.id),
-        supabase.from('invoices').select('property_id, amount, status').eq('user_id', user!.id),
+        supabase.from('invoices').select('id, property_id, invoice_number, amount, status, issued_date, created_at').eq('user_id', user!.id),
         // Recurring visits (full fields buildServicePlans needs) + their series.
         supabase.from('jobs').select('id, property_id, recurrence_id, service_type, scheduled_date, status').not('recurrence_id', 'is', null).eq('user_id', user!.id),
         supabase.from('job_recurrences').select('*').eq('user_id', user!.id),
+        // Last quote per property (most recent non-draft).
+        supabase.from('quotes').select('id, property_id, quote_number, total, status, created_at').eq('user_id', user!.id).neq('status', 'draft'),
       ])
       const settingsRow = sRes.data as BusinessSettings | null
       setProperties((pRes.data as Property[]) || [])
       setSettings(settingsRow)
       setLocatedJobs(located)
       setPerfByProp(buildPerformance((jRes.data as PerfJob[]) || [], (iRes.data as PerfInvoice[]) || []))
+
+      // Last quote + last invoice per property (reuses the fetches above — no new tables).
+      const lastQ: Record<string, LastQuote> = {}
+      for (const q of (qRes.data as QuoteRow[]) || []) {
+        if (!q.property_id) continue
+        const cur = lastQ[q.property_id]
+        if (!cur || q.created_at > cur.date) lastQ[q.property_id] = { id: q.id, quote_number: q.quote_number, total: Number(q.total) || 0, status: q.status, date: q.created_at }
+      }
+      setLastQuoteByProp(lastQ)
+      const lastI: Record<string, LastInvoice> = {}
+      for (const inv of (iRes.data as InvoiceRow[]) || []) {
+        if (!inv.property_id) continue
+        const d = inv.issued_date || inv.created_at
+        const cur = lastI[inv.property_id]
+        if (!cur || d > cur.date) lastI[inv.property_id] = { id: inv.id, invoice_number: inv.invoice_number, status: inv.status, date: d }
+      }
+      setLastInvoiceByProp(lastI)
 
       // Group service plans by property (one recurring series may touch a property).
       const seasons = settingsToSeasons(settingsRow?.service_seasons)
@@ -159,6 +184,8 @@ export default function PropertiesPage() {
             const stale = saved ? recommendationIsStale(saved.date, Date.now()) : false
             const perf = perfByProp[property.id]
             const hasPerf = perf && (perf.completedVisits > 0 || perf.lifetimeRevenue > 0)
+            const lastQuote = lastQuoteByProp[property.id]
+            const lastInvoice = lastInvoiceByProp[property.id]
             const plans = plansByProp[property.id] || []
             return (
             <Card key={property.id}>
@@ -258,6 +285,26 @@ export default function PropertiesPage() {
                       <PerfStat icon={Timer} label="Avg service time" value={perf.avgActualMin != null ? `${perf.avgActualMin} min` : '—'} />
                       <PerfStat icon={CalendarClock} label="Last service" value={perf.lastServiceDate ? formatDate(perf.lastServiceDate) : '—'} />
                     </div>
+                  </div>
+                )}
+
+                {/* Last quote + last invoice — most recent paperwork at a glance */}
+                {(lastQuote || lastInvoice) && (
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    {lastQuote ? (
+                      <Link href={`/dashboard/quotes/${lastQuote.id}`} className="rounded-xl border border-border bg-bg-tertiary px-3 py-2 hover:border-border-strong transition-colors">
+                        <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1"><FileText className="w-3 h-3" /> Last quote</p>
+                        <p className="text-sm font-semibold text-ink truncate">{lastQuote.quote_number} · {formatCurrency(lastQuote.total)}</p>
+                        <p className="text-[10px] text-ink-faint">{formatDate(lastQuote.date)} · {lastQuote.status}</p>
+                      </Link>
+                    ) : <div />}
+                    {lastInvoice ? (
+                      <Link href="/dashboard/invoices" className="rounded-xl border border-border bg-bg-tertiary px-3 py-2 hover:border-border-strong transition-colors">
+                        <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1"><Receipt className="w-3 h-3" /> Last invoice</p>
+                        <p className="text-sm font-semibold text-ink truncate">{lastInvoice.invoice_number}</p>
+                        <p className="text-[10px] text-ink-faint">{formatDate(lastInvoice.date)} · {lastInvoice.status}</p>
+                      </Link>
+                    ) : <div />}
                   </div>
                 )}
 

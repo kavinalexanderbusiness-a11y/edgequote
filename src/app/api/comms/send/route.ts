@@ -4,10 +4,11 @@ import { renderMessage, MsgType, MSG_LABELS } from '@/lib/comms/templates'
 import { sendSms, sendEmail, commsEnabled } from '@/lib/comms/send'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 
-// Manual send — fired by an owner action (Day Ops one-tap buttons, quote/invoice
-// send). Uses the owner's session + custom templates, respects per-customer
-// opt-in, logs every attempt, and returns gracefully with disabled results while
-// credentials are absent (nothing sends).
+// Manual send — fired by an owner action (Day Ops one-tap buttons, the editable
+// scheduler composer, Weather Ops notifications, quote/invoice send). Uses the
+// owner's session + custom templates, respects per-customer opt-in, logs every
+// attempt, records anything actually sent into the customer's message thread, and
+// returns gracefully with disabled results while credentials are absent.
 export async function POST(req: NextRequest) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -18,7 +19,11 @@ export async function POST(req: NextRequest) {
   const template = String(body.template || '') as MsgType
   const channels: string[] = Array.isArray(body.channels) ? body.channels : ['sms', 'email']
   const jobId: string | null = body.jobId ?? null
-  const vars: { eta?: string | number; dateLabel?: string; amount?: string } = body.vars || {}
+  // The owner can edit the message before sending (scheduler composer). When a
+  // non-empty override is provided it IS the message body; the template is still
+  // used for the subject, logging, dedupe and the on-my-way stamp.
+  const bodyOverride = typeof body.bodyOverride === 'string' ? body.bodyOverride.trim() : ''
+  const vars: { eta?: string | number; dateLabel?: string; amount?: string; timeWindow?: string; oldDateLabel?: string; address?: string } = body.vars || {}
   if (!customerId || !(template in MSG_LABELS)) return NextResponse.json({ error: 'bad request' }, { status: 400 })
 
   const { data: cust } = await supabase.from('customers')
@@ -43,7 +48,7 @@ export async function POST(req: NextRequest) {
   }
 
   const token = await ensurePortalToken(supabase, user.id, customerId)
-  const msg = renderMessage(template, biz?.message_templates, {
+  const rendered = renderMessage(template, biz?.message_templates, {
     firstName: c.name,
     businessName: biz?.company_name || 'Edge Property Services',
     eta: vars.eta,
@@ -51,24 +56,90 @@ export async function POST(req: NextRequest) {
     portalLink: token ? portalUrl(token) : undefined,
     dateLabel: vars.dateLabel,
     amount: vars.amount,
+    timeWindow: vars.timeWindow,
+    oldDateLabel: vars.oldDateLabel,
+    address: vars.address,
   })
+  // The text we actually send: the owner's edit when present, else the rendered
+  // template. Email keeps the template subject; its body mirrors the SMS text.
+  const outText = bodyOverride || rendered.sms
+  const outHtml = bodyOverride
+    ? `<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;font-size:15px;line-height:1.55;color:#1A2333">${escapeHtml(bodyOverride).replace(/\n/g, '<br>')}</div>`
+    : rendered.html
+
+  // Caller can preview the fully-rendered text without sending (no I/O side effects).
+  if (body.previewOnly) return NextResponse.json({ enabled: commsEnabled(), preview: outText })
 
   const enabled = commsEnabled()
   const results: Record<string, unknown> = {}
-  async function log(channel: string, status: string, detail?: string) {
-    await supabase.from('notification_log').insert({ user_id: user!.id, customer_id: customerId, job_id: jobId, channel, template, status, detail: detail ?? null })
-  }
+  // Collect every channel attempt; log + thread once at the end so a sent message
+  // can be linked to its log rows.
+  const attempts: { channel: string; status: string; detail?: string; sent: boolean }[] = []
 
   if (channels.includes('sms')) {
-    if (!c.sms_opt_in) { results.sms = { sent: false, reason: 'no-optin' }; await log('sms', 'skipped', 'no opt-in') }
-    else if (!c.phone) { results.sms = { sent: false, reason: 'no-phone' }; await log('sms', 'skipped', 'no phone') }
-    else { const r = await sendSms(c.phone, msg.sms); results.sms = r; await log('sms', r.reason, r.error) }
+    if (!c.sms_opt_in) { results.sms = { sent: false, reason: 'no-optin' }; attempts.push({ channel: 'sms', status: 'skipped', detail: 'no opt-in', sent: false }) }
+    else if (!c.phone) { results.sms = { sent: false, reason: 'no-phone' }; attempts.push({ channel: 'sms', status: 'skipped', detail: 'no phone', sent: false }) }
+    else { const r = await sendSms(c.phone, outText); results.sms = r; attempts.push({ channel: 'sms', status: r.reason, detail: r.error, sent: r.sent }) }
   }
   if (channels.includes('email')) {
-    if (!c.email_opt_in) { results.email = { sent: false, reason: 'no-optin' }; await log('email', 'skipped', 'no opt-in') }
-    else if (!c.email) { results.email = { sent: false, reason: 'no-email' }; await log('email', 'skipped', 'no email') }
-    else { const r = await sendEmail(c.email, msg.subject, msg.html, msg.text); results.email = r; await log('email', r.reason, r.error) }
+    if (!c.email_opt_in) { results.email = { sent: false, reason: 'no-optin' }; attempts.push({ channel: 'email', status: 'skipped', detail: 'no opt-in', sent: false }) }
+    else if (!c.email) { results.email = { sent: false, reason: 'no-email' }; attempts.push({ channel: 'email', status: 'skipped', detail: 'no email', sent: false }) }
+    else { const r = await sendEmail(c.email, rendered.subject, outHtml, outText); results.email = r; attempts.push({ channel: 'email', status: r.reason, detail: r.error, sent: r.sent }) }
+  }
+  if (channels.includes('push')) {
+    // Future channel — wired through, always disabled for now (no provider).
+    results.push = { sent: false, reason: 'disabled' }; attempts.push({ channel: 'push', status: 'disabled', detail: 'push not configured', sent: false })
   }
 
-  return NextResponse.json({ enabled, results, preview: msg.sms })
+  // Record anything actually delivered into the customer's message thread, so it
+  // appears in the message center AND the customer timeline as full text (not just
+  // an audit pill). One outbound bubble per send; the per-channel log rows link to
+  // it so the thread shows the message, not a duplicate event.
+  let messageId: string | null = null
+  const sentChannels = attempts.filter(a => a.sent).map(a => a.channel)
+  if (sentChannels.length) {
+    const convoId = await getOrCreateConversation(supabase, user.id, customerId)
+    if (convoId) {
+      const { data: m } = await supabase.from('messages')
+        .insert({ user_id: user.id, conversation_id: convoId, customer_id: customerId, direction: 'outbound', channel: sentChannels[0], body: outText, status: 'sent', meta: { template } })
+        .select('id').single()
+      messageId = (m as { id: string } | null)?.id ?? null
+    }
+  }
+
+  for (const a of attempts) {
+    await logSend(supabase, { userId: user.id, customerId, jobId, channel: a.channel, template, status: a.status, detail: a.detail, messageId: a.sent ? messageId : null })
+  }
+
+  return NextResponse.json({ enabled, results, preview: outText, threaded: !!messageId })
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+// Get-or-create the one conversation per customer (mirrors /api/messages/send).
+async function getOrCreateConversation(supabase: Awaited<ReturnType<typeof createClient>>, userId: string, customerId: string): Promise<string | null> {
+  const { data: existing } = await supabase.from('conversations').select('id').eq('user_id', userId).eq('customer_id', customerId).maybeSingle()
+  if (existing) return (existing as { id: string }).id
+  const { data: created } = await supabase.from('conversations').insert({ user_id: userId, customer_id: customerId, last_message_at: new Date().toISOString() }).select('id').single()
+  return (created as { id: string } | null)?.id ?? null
+}
+
+// Insert a notification_log row. Links to the thread message when one exists; falls
+// back to an unlinked insert if the message_id column hasn't been migrated yet, so
+// the audit trail is never silently dropped.
+async function logSend(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  l: { userId: string; customerId: string; jobId: string | null; channel: string; template: string; status: string; detail?: string; messageId: string | null },
+): Promise<void> {
+  const base = { user_id: l.userId, customer_id: l.customerId, job_id: l.jobId, channel: l.channel, template: l.template, status: l.status, detail: l.detail ?? null }
+  if (l.messageId) {
+    const { error } = await supabase.from('notification_log').insert({ ...base, message_id: l.messageId })
+    if (!error) return
+    // Pre-migration fallback: the message_id column may not exist yet.
+    await supabase.from('notification_log').insert(base)
+    return
+  }
+  await supabase.from('notification_log').insert(base)
 }

@@ -18,7 +18,7 @@ import { jobValue, neighborhoodKey, ProfitJob, ProfitContext, ProfitQuote, RecIn
 // no new pricing/valuation math. A feedback table closes the loop (recommendation
 // → action → result) so the ranking learns what actually converts.
 
-export type OppKind = 'renewal' | 'upsell' | 'cross_sell' | 'membership' | 'referral'
+export type OppKind = 'renewal' | 'upsell' | 'cross_sell' | 'membership' | 'referral' | 'reactivation'
 export type Confidence = 'high' | 'medium' | 'low'
 export const OPP_META: Record<OppKind, { label: string; emoji: string }> = {
   renewal: { label: 'Renewal', emoji: '🔄' },
@@ -26,6 +26,7 @@ export const OPP_META: Record<OppKind, { label: string; emoji: string }> = {
   cross_sell: { label: 'Cross-sell', emoji: '🔁' },
   membership: { label: 'Membership', emoji: '⭐' },
   referral: { label: 'Referral', emoji: '🤝' },
+  reactivation: { label: 'Win-back', emoji: '🎯' },
 }
 const CONF_WEIGHT: Record<Confidence, number> = { high: 1, medium: 0.7, low: 0.45 }
 
@@ -323,8 +324,11 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
       }
     }
 
-    // 4) MEMBERSHIP — repeat one-off customers who'd convert to a recurring plan/auto-pay.
-    if (!a.hasActiveRecurring && a.completedCount >= 2) {
+    // 4) MEMBERSHIP — repeat one-off customers who'd convert to a recurring plan.
+    // Gated to ACTIVE repeaters (served ≤30d or booked) so it never overlaps the
+    // win-back card below (which owns the lapsed ones).
+    const recentlyServed = a.futureBooked || (a.lastCompleted ? dDays(a.lastCompleted) <= 30 : false)
+    if (!a.hasActiveRecurring && a.completedCount >= 2 && recentlyServed) {
       const perVisit = round(a.ltv / a.completedCount)
       if (perVisit > 0) {
         const expected = round(perVisit * SEASON_VISITS_BIWEEKLY)
@@ -372,6 +376,37 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
         }
       }
     }
+
+    // 6) WIN-BACK — customers not serviced in 30+ days with nothing booked (lost-
+    // customer recovery). In-season only; recency drives the recovery likelihood.
+    if (a.completedCount >= 1 && !a.futureBooked && a.lastCompleted && a.inSeason) {
+      const daysSince = dDays(a.lastCompleted)
+      if (daysSince >= 30) {
+        const annual = a.hasActiveRecurring && a.annualRecurring > 0 ? a.annualRecurring
+          : round((a.ltv / a.completedCount) * SEASON_VISITS_BIWEEKLY)
+        if (annual >= 150) {
+          const lost = daysSince >= 60
+          const recovery = lost ? 0.3 : 0.5
+          const expected = round(annual * recovery)
+          let s = lost ? 38 : 56
+          if (daysSince <= 45) s += 8
+          if (a.ltv >= 1000) s += 8
+          if (a.unpaidCount === 0) s += 4
+          const score = clamp(s)
+          push({
+            key: `reactivation:${a.id}`, kind: 'reactivation', customerId: a.id, customerName: a.name,
+            score, confidence: a.completedCount >= 3 ? 'medium' : 'low', expectedValue: expected, oneTime: false,
+            why: [
+              `Last serviced ${daysSince} days ago — ${lost ? 'a lost customer' : 'recently lapsed'}`,
+              `${a.completedCount} completed visit${a.completedCount !== 1 ? 's' : ''} · $${round(a.ltv)} lifetime`,
+              `~${Math.round(recovery * 100)}% win back when re-contacted → +$${expected}/yr`,
+            ],
+            action: lost ? 'Win back this lost customer' : 'Reach out — they’re overdue',
+            actionHref: `/dashboard/customers/${a.id}`,
+          })
+        }
+      }
+    }
   }
 
   // De-dup to ONE opportunity per (kind, customer) keeping the highest score, then rank.
@@ -393,7 +428,7 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
   }).sort((a, b) => b.churnRiskImpact - a.churnRiskImpact || b.revenueRemaining - a.revenueRemaining)
 
   // ── summary + labor context ──
-  const byKind = { renewal: { count: 0, value: 0 }, upsell: { count: 0, value: 0 }, cross_sell: { count: 0, value: 0 }, membership: { count: 0, value: 0 }, referral: { count: 0, value: 0 } } as RevenueIntelReport['summary']['byKind']
+  const byKind = { renewal: { count: 0, value: 0 }, upsell: { count: 0, value: 0 }, cross_sell: { count: 0, value: 0 }, membership: { count: 0, value: 0 }, referral: { count: 0, value: 0 }, reactivation: { count: 0, value: 0 } } as RevenueIntelReport['summary']['byKind']
   let totalOpportunity = 0, totalOneTime = 0
   for (const o of ranked) {
     byKind[o.kind].count++; byKind[o.kind].value += o.expectedValue

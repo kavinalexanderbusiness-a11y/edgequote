@@ -35,7 +35,7 @@ function localToday(): string {
 
 interface TimelineEvent {
   at: string
-  kind: 'quote_created' | 'quote_sent' | 'followup' | 'quote_accepted' | 'job_scheduled' | 'job_completed' | 'invoice_created' | 'invoice_paid'
+  kind: 'quote_created' | 'quote_sent' | 'followup' | 'quote_accepted' | 'job_scheduled' | 'job_completed' | 'invoice_created' | 'invoice_paid' | 'message_in' | 'message_out' | 'payment' | 'portal_request'
   title: string
   sub?: string
   href?: string
@@ -50,6 +50,10 @@ const EVENT_META: Record<TimelineEvent['kind'], { icon: typeof FileText; color: 
   job_completed:   { icon: Wrench,       color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' },
   invoice_created: { icon: Receipt,      color: 'text-ink-muted bg-surface border-border' },
   invoice_paid:    { icon: DollarSign,   color: 'text-accent bg-accent/10 border-accent/20' },
+  message_in:      { icon: MessageSquare,color: 'text-blue-400 bg-blue-500/10 border-blue-500/20' },
+  message_out:     { icon: Send,         color: 'text-ink-muted bg-surface border-border' },
+  payment:         { icon: DollarSign,   color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' },
+  portal_request:  { icon: StickyNote,   color: 'text-amber-400 bg-amber-500/10 border-amber-500/20' },
 }
 
 export default function CustomerDetailPage() {
@@ -66,6 +70,7 @@ export default function CustomerDetailPage() {
   const [jobs, setJobs] = useState<Job[]>([])
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [recurrences, setRecurrences] = useState<JobRecurrence[]>([])
+  const [extraTimeline, setExtraTimeline] = useState<TimelineEvent[]>([])
   const [seasons, setSeasons] = useState<ServiceSeasons>(DEFAULT_SEASONS)
   const [pausing, setPausing] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -132,6 +137,29 @@ export default function CustomerDetailPage() {
       }
       const { data: recs } = await supabase.from('job_recurrences').select('*').eq('customer_id', id)
       if (recs) setRecurrences(recs as JobRecurrence[])
+
+      // Unified timeline — messages (SMS/email/portal), payments, and portal
+      // service requests. Read-only aggregation; degrades gracefully if a table
+      // isn't present yet.
+      const [mRes, payRes, srRes] = await Promise.all([
+        supabase.from('messages').select('direction, channel, body, created_at').eq('customer_id', id).order('created_at', { ascending: false }).limit(50),
+        supabase.from('payments').select('amount, status, created_at').eq('customer_id', id),
+        supabase.from('service_requests').select('message, created_at').eq('customer_id', id),
+      ])
+      const extra: TimelineEvent[] = []
+      for (const m of (mRes.data as { direction: string; channel: string; body: string | null; created_at: string }[]) || []) {
+        if (m.direction === 'internal') continue // internal notes live in the notes card
+        const inbound = m.direction === 'inbound'
+        const chan = m.channel === 'email' ? 'email' : m.channel === 'portal' ? 'portal message' : 'SMS'
+        extra.push({ at: m.created_at, kind: inbound ? 'message_in' : 'message_out', title: `${inbound ? 'Received' : 'Sent'} ${chan}`, sub: (m.body || '').slice(0, 90), href: '/dashboard/messages' })
+      }
+      for (const p of (payRes.data as { amount: number; status: string; created_at: string }[]) || []) {
+        if (p.status === 'paid') extra.push({ at: p.created_at, kind: 'payment', title: 'Payment received', sub: formatCurrency(Number(p.amount)) })
+      }
+      for (const sr of (srRes.data as { message: string; created_at: string }[]) || []) {
+        extra.push({ at: sr.created_at, kind: 'portal_request', title: 'Portal service request', sub: (sr.message || '').slice(0, 90), href: '/dashboard/messages' })
+      }
+      setExtraTimeline(extra)
 
       const { data: settings } = await supabase.from('business_settings').select('service_seasons').eq('user_id', user!.id).maybeSingle()
       setSeasons(settingsToSeasons((settings as { service_seasons: unknown } | null)?.service_seasons))
@@ -276,6 +304,7 @@ export default function CustomerDetailPage() {
     events.push({ at: inv.created_at, kind: 'invoice_created', title: `Invoice ${inv.invoice_number} created`, sub: formatCurrency(Number(inv.amount)) })
     if (inv.status === 'paid') events.push({ at: inv.updated_at, kind: 'invoice_paid', title: `Invoice ${inv.invoice_number} paid`, sub: formatCurrency(Number(inv.amount)) })
   }
+  events.push(...extraTimeline) // messages, payments, portal requests
   events.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
 
   const phone = customer.phone

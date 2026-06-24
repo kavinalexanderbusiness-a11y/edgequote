@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Job, JobStatus, JobRecurrence, JobLineItem, RecurrenceScope, PRICE_REASONS, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
 import { Coord } from '@/lib/geo'
-import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, nearestNeighborRoute, roundTripMapsUrl, routeStats, directionsUrl, computeDayEtas, roughFinishEstimate, dayLoad, minutesToTime12, DEFAULT_JOB_MIN } from '@/lib/route'
+import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, nearestNeighborRoute, roundTripMapsUrl, routeStats, directionsUrl, computeDayEtas, roughFinishEstimate, dayLoad, minutesToTime12, timeToMinutes, DEFAULT_JOB_MIN } from '@/lib/route'
 import { buildRoadDistance } from '@/lib/distance'
 import { jobVisitValue, effectiveFreq, quoteVisitAmount } from '@/lib/invoicing'
 import { addonsTotal } from '@/lib/jobPricing'
@@ -231,7 +231,15 @@ export function DayOpsPanel({
   for (const j of active) durByJob[j.id] = j.duration_minutes || DEFAULT_JOB_MIN
   const etas = route && route.ordered.length > 0 ? computeDayEtas(workStartTime, route.ordered, durByJob) : null
   const etaByJob: Record<string, string> = {}
-  if (etas) for (const s of etas.stops) etaByJob[s.jobId] = s.arrival
+  const arrivalMinByJob: Record<string, number> = {}
+  if (etas) for (const s of etas.stops) { etaByJob[s.jobId] = s.arrival; arrivalMinByJob[s.jobId] = s.arrivalMin }
+  // A 2-hour arrival window per visit for the "Send ETA" message: anchored on the
+  // committed start time when set, else the route-computed arrival.
+  const windowByJob: Record<string, string> = {}
+  for (const j of active) {
+    const startMin = j.start_time ? timeToMinutes(j.start_time) : (arrivalMinByJob[j.id] ?? null)
+    if (startMin != null) windowByJob[j.id] = `${minutesToTime12(startMin)}–${minutesToTime12(startMin + 120)}`
+  }
   const laborTotalMin = active.reduce((s, j) => s + (j.duration_minutes || DEFAULT_JOB_MIN), 0)
   const load = dayLoad(laborTotalMin + (stats ? stats.driveMinutes : active.length * 10), capacityHours)
 
@@ -562,7 +570,8 @@ export function DayOpsPanel({
                       {messageId === job.id && (
                         <div className="mt-2 rounded-lg border border-border bg-bg-secondary p-2.5" onClick={e => e.stopPropagation()}>
                           <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-2 flex items-center gap-1"><MessageSquare className="w-3 h-3" /> Message customer</p>
-                          <JobMessages jobId={job.id} customerId={job.customer_id} customerName={job.customers?.name || job.title} />
+                          <JobMessages jobId={job.id} customerId={job.customer_id} customerName={job.customers?.name || job.title}
+                            visitDate={job.scheduled_date} timeWindow={windowByJob[job.id]} address={job.properties?.address ?? undefined} />
                         </div>
                       )}
 
