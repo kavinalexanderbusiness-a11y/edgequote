@@ -7,6 +7,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { renderMessage } from '@/lib/comms/templates'
 import { sendSms, sendEmail, commsEnabled } from '@/lib/comms/send'
+import { getOrCreateConversation } from '@/lib/comms/conversation'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 
 function formatAmount(n: number): string {
@@ -71,17 +72,6 @@ export async function sendPaymentReceipt(
   } catch (e) {
     console.error('[receipt] send failed:', e)
   }
-}
-
-async function getOrCreateConversation(sb: SupabaseClient, userId: string, customerId: string): Promise<string | null> {
-  const { data: existing } = await sb.from('conversations').select('id').eq('user_id', userId).eq('customer_id', customerId).maybeSingle()
-  if (existing) return (existing as { id: string }).id
-  const { data: created } = await sb.from('conversations')
-    .upsert({ user_id: userId, customer_id: customerId, last_message_at: new Date().toISOString() }, { onConflict: 'user_id,customer_id', ignoreDuplicates: true })
-    .select('id').maybeSingle()
-  if (created) return (created as { id: string }).id
-  const { data: ex } = await sb.from('conversations').select('id').eq('user_id', userId).eq('customer_id', customerId).maybeSingle()
-  return (ex as { id: string } | null)?.id ?? null
 }
 
 async function logReceipt(sb: SupabaseClient, userId: string, customerId: string, channel: string, status: string, messageId: string | null): Promise<void> {

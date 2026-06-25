@@ -37,5 +37,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Could not submit your request. Please try again.' }, { status: 502, headers: CORS })
   }
   if (!data) return NextResponse.json({ error: 'This form is not currently accepting submissions.' }, { status: 404, headers: CORS })
-  return NextResponse.json({ ok: true, ...(data as object) }, { headers: CORS })
+  // The RPC returns { error: 'rate_limited' } when the per-business hourly cap is hit.
+  const result = data as { error?: string; lead_id?: string; customer_id?: string }
+  if (result.error === 'rate_limited') {
+    console.warn(`[website-lead] rate limited (token …${token.slice(-6)})`)
+    return NextResponse.json({ error: 'Too many requests — please try again shortly.' }, { status: 429, headers: CORS })
+  }
+  return NextResponse.json({ ok: true, ...(result as object) }, { headers: CORS })
 }

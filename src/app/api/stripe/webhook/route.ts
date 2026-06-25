@@ -38,6 +38,26 @@ export async function POST(req: NextRequest) {
   const sb = createClient(url, svc)
   const now = () => new Date().toISOString()
   const origin = req.nextUrl?.origin || process.env.NEXT_PUBLIC_APP_URL || ''
+  const cad = (n: number) => new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(n)
+  // Find the recorded payment (+ its invoice number) for a Stripe PaymentIntent —
+  // used by the refund + dispute branches to locate the affected invoice/owner.
+  async function paymentForIntent(piId: string) {
+    const { data } = await sb.from('payments')
+      .select('id, invoice_id, user_id, customer_id, invoices(invoice_number)')
+      .eq('stripe_payment_intent', piId).limit(1).maybeSingle()
+    const p = data as { id: string; invoice_id: string | null; user_id: string; customer_id: string | null; invoices?: { invoice_number: string } | { invoice_number: string }[] | null } | null
+    if (!p) return null
+    const inv = Array.isArray(p.invoices) ? p.invoices[0] : p.invoices
+    return { ...p, invoiceNumber: inv?.invoice_number ?? null }
+  }
+  async function notifyOnce(userId: string, type: string, entityId: string, title: string, body: string, customerId: string | null) {
+    const { data: dup } = await sb.from('notifications').select('id').eq('user_id', userId).eq('type', type).eq('entity_id', entityId).limit(1)
+    if (dup && dup.length) return
+    await sb.from('notifications').insert({
+      user_id: userId, type, title, body, customer_id: customerId, entity_type: 'invoice', entity_id: entityId,
+      href: customerId ? `/dashboard/customers/${customerId}` : '/dashboard/invoices',
+    })
+  }
 
   // ── One-time Pay Now (mode=payment) — UNCHANGED ──────────────────────────────
   if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
@@ -185,6 +205,49 @@ export async function POST(req: NextRequest) {
             href: customerId ? `/dashboard/customers/${customerId}` : '/dashboard/invoices',
           })
         }
+      }
+    }
+  }
+
+  // ── Refund ────────────────────────────────────────────────────────────────
+  // A FULL refund reverts the invoice to unpaid + marks the payment refunded (so
+  // revenue stops counting it); a partial refund only notifies. Idempotent: the
+  // invoice flip is guarded by .eq('status','paid') and the notification is deduped.
+  if (event.type === 'charge.refunded') {
+    const ch = event.data.object as { id: string; payment_intent?: string | null; amount?: number; amount_refunded?: number; refunded?: boolean }
+    const piId = typeof ch.payment_intent === 'string' ? ch.payment_intent : null
+    if (piId) {
+      const p = await paymentForIntent(piId)
+      if (p) {
+        const captured = (ch.amount ?? 0) / 100
+        const refunded = (ch.amount_refunded ?? 0) / 100
+        const full = ch.refunded === true || (captured > 0 && refunded >= captured)
+        const entityId = p.invoice_id ?? p.id
+        if (full && p.invoice_id) {
+          const invRes = await sb.from('invoices').update({ status: 'unpaid', payment_method: null, paid_at: null })
+            .eq('id', p.invoice_id).eq('user_id', p.user_id).eq('status', 'paid')
+          if (invRes.error) {
+            console.error('[stripe] refund invoice revert failed:', invRes.error.message)
+            return NextResponse.json({ error: 'db write failed' }, { status: 500 })
+          }
+          await sb.from('payments').update({ status: 'refunded' }).eq('id', p.id)
+        }
+        await notifyOnce(p.user_id, 'payment_refunded', entityId, full ? 'Payment refunded' : 'Partial refund',
+          `${p.invoiceNumber ? p.invoiceNumber + ': ' : ''}${cad(refunded)} refunded${full ? ' — the invoice is unpaid again.' : '.'}`, p.customer_id)
+      }
+    }
+  }
+
+  // ── Dispute (chargeback) ────────────────────────────────────────────────────
+  // Needs the owner's action in Stripe — we notify but never auto-change state.
+  if (event.type === 'charge.dispute.created') {
+    const d = event.data.object as { id: string; payment_intent?: string | null; amount?: number; reason?: string }
+    const piId = typeof d.payment_intent === 'string' ? d.payment_intent : null
+    if (piId) {
+      const p = await paymentForIntent(piId)
+      if (p) {
+        await notifyOnce(p.user_id, 'payment_disputed', p.invoice_id ?? p.id, 'Payment disputed',
+          `${p.invoiceNumber ? p.invoiceNumber + ': ' : ''}A ${cad((d.amount ?? 0) / 100)} payment was disputed${d.reason ? ` (${d.reason})` : ''}. Respond in your Stripe dashboard.`, p.customer_id)
       }
     }
   }

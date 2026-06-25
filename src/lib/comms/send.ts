@@ -25,13 +25,31 @@ export async function sendPush(_to: string, _title: string, _body: string): Prom
   return { sent: false, reason: 'disabled' }
 }
 
+// Abort an external request that hangs, so a stalled provider can never block the
+// caller (the Stripe webhook, the daily cron, or a manual send). 10s is well above
+// Twilio/Resend's normal sub-second latency. On timeout the fetch throws AbortError,
+// which the callers' catch blocks turn into a clean "timed out" error.
+const COMMS_TIMEOUT_MS = 10_000
+async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+  const ctrl = new AbortController()
+  const t = setTimeout(() => ctrl.abort(), COMMS_TIMEOUT_MS)
+  try { return await fetch(url, { ...init, signal: ctrl.signal }) }
+  finally { clearTimeout(t) }
+}
+// A failed send's error string — names a provider timeout distinctly so logs/usage
+// stats can tell a hung connection apart from a provider rejection.
+function sendError(provider: string, e: unknown): SendResult {
+  const aborted = e instanceof Error && e.name === 'AbortError'
+  return { sent: false, reason: 'error', error: aborted ? `${provider} request timed out after ${COMMS_TIMEOUT_MS / 1000}s` : (e instanceof Error ? e.message : `${provider.toLowerCase()} failed`) }
+}
+
 export async function sendSms(to: string, body: string): Promise<SendResult> {
   if (!commsEnabled().sms) return { sent: false, reason: 'disabled' }
   if (!to) return { sent: false, reason: 'error', error: 'no recipient' }
   try {
     const sid = process.env.TWILIO_ACCOUNT_SID!
     const auth = Buffer.from(`${sid}:${process.env.TWILIO_AUTH_TOKEN!}`).toString('base64')
-    const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
+    const res = await fetchWithTimeout(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
       method: 'POST',
       headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ To: to, From: process.env.TWILIO_FROM!, Body: body }),
@@ -46,7 +64,7 @@ export async function sendSms(to: string, body: string): Promise<SendResult> {
     const data = await res.json()
     return { sent: true, reason: 'sent', id: data.sid }
   } catch (e) {
-    return { sent: false, reason: 'error', error: e instanceof Error ? e.message : 'sms failed' }
+    return sendError('Twilio', e)
   }
 }
 
@@ -54,7 +72,7 @@ export async function sendEmail(to: string, subject: string, html: string, text:
   if (!commsEnabled().email) return { sent: false, reason: 'disabled' }
   if (!to) return { sent: false, reason: 'error', error: 'no recipient' }
   try {
-    const res = await fetch('https://api.resend.com/emails', {
+    const res = await fetchWithTimeout('https://api.resend.com/emails', {
       method: 'POST',
       headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY!}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ from: process.env.RESEND_FROM!, to, subject, html, text }),
@@ -68,6 +86,6 @@ export async function sendEmail(to: string, subject: string, html: string, text:
     const data = await res.json()
     return { sent: true, reason: 'sent', id: data.id }
   } catch (e) {
-    return { sent: false, reason: 'error', error: e instanceof Error ? e.message : 'email failed' }
+    return sendError('Resend', e)
   }
 }
