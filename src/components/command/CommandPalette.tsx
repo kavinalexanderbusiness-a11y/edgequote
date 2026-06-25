@@ -187,7 +187,7 @@ export function CommandPalette() {
       onMouseDown={close}>
       <div className="absolute inset-0 bg-black/50 backdrop-blur-[2px]" />
       <div role="dialog" aria-label="Command palette" onMouseDown={e => e.stopPropagation()}
-        className="relative w-full max-w-xl rounded-2xl border border-border bg-bg-secondary shadow-2xl overflow-hidden flex flex-col max-h-[70vh]">
+        className="relative w-full max-w-xl rounded-xl2 border border-border-strong bg-surface-raised shadow-2xl overflow-hidden flex flex-col max-h-[70vh] animate-pop">
         <div className="flex items-center gap-2.5 px-4 border-b border-border shrink-0">
           <Search className="w-4 h-4 text-ink-faint shrink-0" />
           <input
@@ -221,7 +221,7 @@ export function CommandPalette() {
                     onMouseMove={() => setSel(myIdx)}
                     onClick={item.run}
                     className={cn('w-full flex items-center gap-3 px-2.5 py-2 rounded-lg text-left transition-colors',
-                      active ? 'bg-accent/10' : 'hover:bg-surface/50')}>
+                      active ? 'bg-accent/10' : 'hover:bg-surface')}>
                     <span className={cn('w-7 h-7 rounded-lg flex items-center justify-center shrink-0 border',
                       active ? 'border-accent/30 bg-accent/10 text-accent' : 'border-border text-ink-muted')}>
                       <Icon className="w-3.5 h-3.5" />

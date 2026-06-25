@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { Button } from '@/components/ui/Button'
 import { Download, Share, X, Plus } from 'lucide-react'
 import { isIos, isStandalone } from '@/lib/push'
 
@@ -94,13 +95,8 @@ export function InstallPrompt() {
           )}
           {!iosHint && (
             <div className="mt-2.5 flex items-center gap-2">
-              <button onClick={install}
-                className="px-3.5 py-1.5 rounded-lg bg-accent text-black text-xs font-semibold hover:bg-accent/90 transition-colors">
-                Install
-              </button>
-              <button onClick={dismiss} className="px-3 py-1.5 rounded-lg text-xs font-medium text-ink-muted hover:text-ink transition-colors">
-                Not now
-              </button>
+              <Button size="sm" onClick={install}>Install</Button>
+              <Button size="sm" variant="ghost" onClick={dismiss}>Not now</Button>
             </div>
           )}
         </div>

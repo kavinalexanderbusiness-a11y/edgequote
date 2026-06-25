@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { loadCustomerHealth, HealthRow, HealthTier } from '@/lib/customerHealth'
 import { formatCurrency, cn } from '@/lib/utils'
+import { FilterPill } from '@/components/ui/FilterPill'
 import { HeartPulse, Loader2, RefreshCw, Star, ArrowRight } from 'lucide-react'
 
 const TIER: Record<HealthTier, { label: string; tone: string; dot: string }> = {
@@ -77,11 +78,9 @@ export function CustomerHealthPanel() {
 
       <div className="px-4 py-2.5 border-b border-border flex flex-wrap gap-1.5">
         {SORTS.map(s => (
-          <button key={s.key} onClick={() => { setSort(s.key); setShowAll(false) }}
-            className={cn('text-xs font-medium rounded-full px-2.5 py-1 border transition-colors',
-              sort === s.key ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
+          <FilterPill key={s.key} active={sort === s.key} onClick={() => { setSort(s.key); setShowAll(false) }}>
             {s.label}
-          </button>
+          </FilterPill>
         ))}
       </div>
 

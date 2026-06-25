@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
+import { menuSurface, menuItemClass } from '@/components/ui/Menu'
 import { loadGoogleMaps } from '@/lib/googleMaps'
 import { MapPin } from 'lucide-react'
 
@@ -147,13 +148,13 @@ export function AddressAutocomplete({
           )}
         />
         {open && suggestions.length > 0 && (
-          <div className="absolute z-50 mt-1 w-full bg-bg-secondary border border-border-strong rounded-xl shadow-xl overflow-hidden">
+          <div className={cn('absolute z-50 mt-1 w-full', menuSurface)}>
             {suggestions.map((s, i) => (
               <button
                 key={i}
                 type="button"
                 onClick={() => choose(s)}
-                className="w-full text-left px-3.5 py-2.5 text-sm text-ink hover:bg-surface flex items-center gap-2 transition-colors"
+                className={menuItemClass}
               >
                 <MapPin className="w-3.5 h-3.5 text-ink-faint shrink-0" />
                 <span className="truncate">{s.text}</span>

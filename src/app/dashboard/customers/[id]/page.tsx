@@ -431,17 +431,17 @@ export default function CustomerDetailPage() {
 
           {/* Quick actions — one tap, large targets */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            <Link href={`/dashboard/quotes/new?customer=${customer.id}`} className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium bg-accent text-black hover:opacity-90 transition-opacity">
-              <FilePlus className="w-4 h-4" /> New Quote
+            <Link href={`/dashboard/quotes/new?customer=${customer.id}`} className="contents">
+              <Button className="w-full h-11"><FilePlus className="w-4 h-4" /> New Quote</Button>
             </Link>
-            <Link href={`/dashboard/schedule?customer=${customer.id}`} className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border border-border bg-surface text-ink hover:border-border-strong transition-colors">
-              <CalendarPlus className="w-4 h-4" /> Schedule
+            <Link href={`/dashboard/schedule?customer=${customer.id}`} className="contents">
+              <Button variant="secondary" className="w-full h-11"><CalendarPlus className="w-4 h-4" /> Schedule</Button>
             </Link>
-            <a href={phone ? `tel:${phone}` : undefined} aria-disabled={!phone} className={`h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border transition-colors ${phone ? 'bg-surface border-border text-ink hover:border-border-strong' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}>
-              <Phone className="w-4 h-4" /> Call
+            <a href={phone ? `tel:${phone}` : undefined} aria-disabled={!phone} className="contents">
+              <Button variant="secondary" disabled={!phone} className="w-full h-11"><Phone className="w-4 h-4" /> Call</Button>
             </a>
-            <a href={phone ? `sms:${phone}` : undefined} aria-disabled={!phone} className={`h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border transition-colors ${phone ? 'bg-surface border-border text-ink hover:border-border-strong' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}>
-              <MessageSquare className="w-4 h-4" /> Text
+            <a href={phone ? `sms:${phone}` : undefined} aria-disabled={!phone} className="contents">
+              <Button variant="secondary" disabled={!phone} className="w-full h-11"><MessageSquare className="w-4 h-4" /> Text</Button>
             </a>
           </div>
         </CardBody>

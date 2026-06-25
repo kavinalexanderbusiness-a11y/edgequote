@@ -175,12 +175,10 @@ export default function CustomersPage() {
             <h2 className="text-sm font-semibold text-ink">
               {editing ? 'Edit Customer' : 'New Customer'}
             </h2>
-            <button
-              onClick={() => { setShowForm(false); setEditing(null) }}
-              className="text-ink-faint hover:text-ink transition-colors"
-            >
+            <Button variant="ghost" size="sm" aria-label="Close"
+              onClick={() => { setShowForm(false); setEditing(null) }}>
               <X className="w-4 h-4" />
-            </button>
+            </Button>
           </CardHeader>
           <CardBody>
             <CustomerForm
@@ -218,7 +216,7 @@ export default function CustomersPage() {
 
       {/* Archived customers — fully preserved, restorable any time */}
       {!loading && archived.length > 0 && (
-        <div className="rounded-card border border-border bg-bg-secondary p-4">
+        <Card className="p-4">
           <button onClick={() => setShowArchived(s => !s)} className="text-sm font-medium text-ink-muted hover:text-ink flex items-center gap-1.5">
             <Archive className="w-4 h-4" /> {showArchived ? 'Hide' : 'Show'} archived ({archived.length})
           </button>
@@ -235,7 +233,7 @@ export default function CustomersPage() {
               ))}
             </div>
           )}
-        </div>
+        </Card>
       )}
     </div>
   )

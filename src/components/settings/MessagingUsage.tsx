@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { analyzeSms, smsCost, formatSmsCost, resolveSmsPricing, type SmsPricing } from '@/lib/sms/segments'
 import { loadSmsPricing, invalidateSmsPricing } from '@/lib/sms/useSmsPricing'
+import { Button } from '@/components/ui/Button'
 import { MessageSquareText, Loader2, Check } from 'lucide-react'
 
 interface Row { body: string | null; created_at: string }
@@ -106,11 +107,9 @@ export function MessagingUsage() {
           </Field>
         </div>
         <div className="flex items-center gap-3">
-          <button onClick={save} disabled={saving}
-            className="px-3.5 py-2 rounded-lg bg-accent text-black text-xs font-semibold hover:bg-accent/90 disabled:opacity-50 flex items-center gap-1.5">
-            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : saved ? <Check className="w-3.5 h-3.5" /> : null}
-            {saved ? 'Saved' : 'Save pricing'}
-          </button>
+          <Button size="sm" onClick={save} loading={saving}>
+            {saved ? <><Check className="w-3.5 h-3.5" /> Saved</> : 'Save pricing'}
+          </Button>
           {err && <span className="text-[11px] text-amber-400">{err}</span>}
         </div>
 

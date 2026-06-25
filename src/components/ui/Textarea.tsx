@@ -7,21 +7,22 @@ interface TextareaProps extends TextareaHTMLAttributes<HTMLTextAreaElement> {
 }
 
 const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
-  ({ className, label, error, id, ...props }, ref) => {
+  ({ className, label, error, id, required, ...props }, ref) => {
     const inputId = id || label?.toLowerCase().replace(/\s+/g, '-')
     return (
       <div className="flex flex-col gap-1.5">
         {label && (
           <label htmlFor={inputId} className="text-xs font-semibold text-ink-muted uppercase tracking-wide">
-            {label}
+            {label}{required && <span className="text-red-400 ml-0.5">*</span>}
           </label>
         )}
         <textarea
           ref={ref}
           id={inputId}
+          required={required}
           rows={3}
           className={cn(
-         'w-full bg-bg-tertiary border rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none transition-all resize-none',
+         'w-full bg-bg-tertiary border rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none transition-all resize-none disabled:opacity-60 disabled:cursor-not-allowed',
             error
               ? 'border-red-500/50 focus:border-red-500 focus:ring-2 focus:ring-red-500/20'
               : 'border-border-strong focus:border-accent focus:ring-2 focus:ring-accent/20',

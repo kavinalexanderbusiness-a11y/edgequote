@@ -43,6 +43,7 @@ export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel
       <Input
         label="Full Name"
         placeholder="Jane Smith"
+        required
         error={errors.name?.message}
         {...register('name', { required: 'Name is required' })}
       />

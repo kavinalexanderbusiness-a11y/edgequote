@@ -113,3 +113,6 @@ body { min-height: 100dvh; overscroll-behavior-y: none; }
 /* Horizontal scrollers (tab strips, pill rows) that shouldn't show a scrollbar. */
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 .no-scrollbar::-webkit-scrollbar { display: none; }
+
+/* Shared entrance for every dropdown / popover / context menu. */
+.animate-pop { animation: popIn 0.12s ease-out; transform-origin: var(--pop-origin, top); }

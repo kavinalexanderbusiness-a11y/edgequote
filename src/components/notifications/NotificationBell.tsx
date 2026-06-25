@@ -7,6 +7,7 @@ import Link from 'next/link'
 import { formatDistanceToNow } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
+import { menuSurface } from '@/components/ui/Menu'
 import { Bell, Check, FileText, DollarSign, MessageSquare, Globe, Star } from 'lucide-react'
 
 export interface AppNotification {
@@ -140,7 +141,7 @@ export function NotificationBell() {
       role="dialog"
       aria-label="Notifications"
       style={{ position: 'fixed', top: pos.top, left: pos.left, width: pos.width, maxHeight: pos.maxHeight }}
-      className="z-[100] flex flex-col rounded-card border border-border bg-bg-secondary shadow-2xl overflow-hidden">
+      className={cn('z-[100] flex flex-col', menuSurface)}>
       <div className="px-4 py-2.5 border-b border-border flex items-center justify-between shrink-0">
         <p className="text-sm font-bold text-ink">Notifications</p>
         {unread > 0 && (
@@ -155,7 +156,7 @@ export function NotificationBell() {
           const Icon = ICON[n.type] || Bell
           return (
             <button key={n.id} onClick={() => openItem(n)}
-              className={cn('w-full text-left px-4 py-3 flex items-start gap-3 hover:bg-surface/40 transition-colors', !n.read && 'bg-accent/[0.04]')}>
+              className={cn('w-full text-left px-4 py-3 flex items-start gap-3 hover:bg-surface transition-colors', !n.read && 'bg-accent/[0.04]')}>
               <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border', !n.read ? 'border-accent/30 bg-accent/10 text-accent' : 'border-border text-ink-muted')}>
                 <Icon className="w-4 h-4" />
               </div>
@@ -180,7 +181,7 @@ export function NotificationBell() {
     <div className="relative shrink-0">
       <button ref={btnRef} onClick={toggle} aria-label="Notifications" aria-expanded={open}
         className="relative h-9 w-9 rounded-lg border border-border text-ink-muted hover:text-ink hover:bg-surface flex items-center justify-center">
-        <Bell className="w-4.5 h-4.5" />
+        <Bell className="w-4 h-4" />
         {unread > 0 && (
           <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-accent text-black text-[9px] font-bold flex items-center justify-center">
             {unread > 9 ? '9+' : unread}

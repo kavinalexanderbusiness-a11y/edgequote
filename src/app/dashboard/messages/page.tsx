@@ -10,6 +10,8 @@ import { ConversationThread } from '@/components/messages/ConversationThread'
 import { ConversationInfo } from '@/components/messages/ConversationInfo'
 import { Button } from '@/components/ui/Button'
 import { Skeleton } from '@/components/ui/Skeleton'
+import { FilterPill } from '@/components/ui/FilterPill'
+import { InlineEmpty } from '@/components/ui/EmptyState'
 import { cn } from '@/lib/utils'
 import {
   Loader2, Inbox, User, ArrowLeft, MessageSquare, FileText, Search, X,
@@ -343,17 +345,15 @@ export default function MessagesPage() {
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <div className="flex flex-wrap gap-1.5">
             {FILTERS.map(f => (
-              <button key={f.key} onClick={() => { setFilter(f.key); setSel(null) }}
-                className={cn('flex items-center gap-1.5 text-xs font-medium rounded-full px-3 py-1.5 border transition-colors',
-                  filter === f.key ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
+              <FilterPill key={f.key} active={filter === f.key} onClick={() => { setFilter(f.key); setSel(null) }}>
                 <f.icon className="w-3.5 h-3.5" /> {f.label}
                 {counts[f.key] > 0 && <span className={cn('text-[10px] font-bold', filter === f.key ? 'text-black/70' : 'text-ink-faint')}>{counts[f.key]}</span>}
-              </button>
+              </FilterPill>
             ))}
           </div>
-          <button onClick={() => selectMode ? exitSelect() : setSelectMode(true)} className="text-xs font-medium text-ink-muted hover:text-ink shrink-0">
+          <Button variant="ghost" size="sm" onClick={() => selectMode ? exitSelect() : setSelectMode(true)}>
             {selectMode ? 'Cancel' : 'Select'}
-          </button>
+          </Button>
         </div>
       )}
 
@@ -393,11 +393,10 @@ export default function MessagesPage() {
               ))}
             </div>
           ) : list.length === 0 ? (
-            <div className="py-16 text-center px-4">
-              <Inbox className="w-9 h-9 text-ink-faint mx-auto mb-2" />
-              <p className="text-sm font-medium text-ink">{searchResults ? 'No matches' : filter === 'archived' ? 'No archived chats' : 'Nothing here'}</p>
-              <p className="text-xs text-ink-muted mt-1">{searchResults ? 'Try a name, address, service, or quote/invoice #.' : 'Inbound texts and portal requests appear here.'}</p>
-            </div>
+            <InlineEmpty icon={Inbox} className="py-16">
+              <span className="block text-sm font-medium text-ink">{searchResults ? 'No matches' : filter === 'archived' ? 'No archived chats' : 'Nothing here'}</span>
+              <span className="block text-xs text-ink-muted mt-1">{searchResults ? 'Try a name, address, service, or quote/invoice #.' : 'Inbound texts and portal requests appear here.'}</span>
+            </InlineEmpty>
           ) : (
             <div ref={scrollRef} onScroll={onScroll} className="overflow-y-auto" style={{ maxHeight: '72vh' }}>
               <div style={{ height: list.length * ROW_H, position: 'relative' }}>
@@ -408,7 +407,7 @@ export default function MessagesPage() {
                   ))}
                 </div>
               </div>
-              {loadingMore && <div className="py-3 flex justify-center"><Loader2 className="w-3.5 h-3.5 animate-spin text-ink-faint" /></div>}
+              {loadingMore && <div className="px-4 py-2"><Skeleton className="h-12 w-full rounded-lg" /></div>}
             </div>
           )}
         </div>
@@ -443,8 +442,8 @@ export default function MessagesPage() {
               </div>
             </>
           ) : (
-            <div className="flex-1 flex flex-col items-center justify-center text-sm text-ink-muted py-16">
-              <MessageSquare className="w-8 h-8 text-ink-faint mb-2" /> Select a conversation
+            <div className="flex-1 flex items-center justify-center">
+              <InlineEmpty icon={MessageSquare}>Select a conversation</InlineEmpty>
             </div>
           )}
         </div>

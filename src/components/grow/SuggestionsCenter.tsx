@@ -9,6 +9,7 @@ import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { formatCurrency, cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
+import { FilterPill } from '@/components/ui/FilterPill'
 import { Sparkles, Check, ArrowRight, Clock, Navigation, TrendingUp, RefreshCw, HelpCircle, Calculator, X, BellOff, Undo2 } from 'lucide-react'
 import { addDays, format } from 'date-fns'
 
@@ -142,11 +143,9 @@ export function SuggestionsCenter() {
             const n = counts[f.key] || 0
             if (f.key !== 'all' && n === 0) return null
             return (
-              <button key={f.key} onClick={() => { setFilter(f.key); setShowAll(false) }}
-                className={cn('text-xs font-medium rounded-full px-2.5 py-1 border transition-colors',
-                  filter === f.key ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
+              <FilterPill key={f.key} active={filter === f.key} onClick={() => { setFilter(f.key); setShowAll(false) }}>
                 {f.label} {n > 0 && <span className="opacity-70">{n}</span>}
-              </button>
+              </FilterPill>
             )
           })}
         </div>

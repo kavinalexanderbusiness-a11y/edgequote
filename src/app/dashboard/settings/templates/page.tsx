@@ -99,10 +99,10 @@ export default function ServiceTemplatesPage() {
           </CardHeader>
           <CardBody>
             <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-              <Input label="Service Name" {...register('name', { required: true })} />
+              <Input label="Service Name" required {...register('name', { required: true })} />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <Select label="Category" options={categoryOptions} {...register('category')} />
-                <Input label="Default Rate ($/man-hour)" type="number" step="5" min="50" {...register('default_rate', { required: true })} />
+                <Input label="Default Rate ($/man-hour)" type="number" step="5" min="50" required {...register('default_rate', { required: true })} />
               </div>
               <Textarea label="Default Description" {...register('default_description')} />
               <Textarea label="Internal Notes" {...register('notes')} />
