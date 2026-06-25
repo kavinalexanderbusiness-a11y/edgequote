@@ -93,7 +93,8 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('Delete this customer? Their quote history will be preserved.')) return
+    // The page runs a record-aware safety check + an accurate confirmation
+    // (archives the customer when any history exists, rather than destroying it).
     setDeleting(id)
     await onDelete(id)
     setDeleting(null)

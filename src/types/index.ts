@@ -16,6 +16,9 @@ export interface Customer {
   tags: string[]
   acquisition_source: string | null
   referred_by_customer_id: string | null
+  // Soft-archive: set when the customer is archived (hidden but fully preserved);
+  // null = active. Deleting a customer with any history archives instead of cascading.
+  archived_at?: string | null
   // Scheduling preferences (customer-wide default; a property may override per
   // field — see lib/preferences). Honoured by manual scheduling, the optimizer
   // and the weekly Best-Day picker. getDay weekday indices (0=Sun…6=Sat).

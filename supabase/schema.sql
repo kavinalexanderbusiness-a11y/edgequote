@@ -1837,3 +1837,15 @@ alter table public.day_statuses
   add column if not exists starts_at  time,
   add column if not exists ends_at    time,
   add column if not exists created_by text;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-24f — Customer soft-archive (data-loss safety).
+-- Hard-deleting a customer CASCADES conversations→messages (wiping years of SMS/
+-- portal history) and orphans quotes/invoices/jobs/payments. To make EdgeQuote
+-- resilient to mistakes, the customer "delete" action now ARCHIVES (soft) whenever
+-- ANY related history exists — preserving everything — and only hard-deletes a
+-- customer with no quotes/invoices/jobs/payments/conversations. archived_at null =
+-- active. Idempotent.
+-- ════════════════════════════════════════════════════════════
+alter table public.customers add column if not exists archived_at timestamptz;
+create index if not exists customers_active_idx on public.customers(user_id) where archived_at is null;

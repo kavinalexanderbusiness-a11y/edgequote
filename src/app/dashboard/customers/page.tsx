@@ -10,10 +10,12 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import Link from 'next/link'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
-import { Plus, X, Upload } from 'lucide-react'
+import { Plus, X, Upload, Archive, RotateCcw } from 'lucide-react'
 
 export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[]>([])
+  const [archived, setArchived] = useState<Customer[]>([])
+  const [showArchived, setShowArchived] = useState(false)
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Customer | null>(null)
@@ -23,13 +25,15 @@ export default function CustomersPage() {
 
   async function fetchCustomers() {
     const { data: { user } } = await supabase.auth.getUser()
-    if (user) setUid(user.id)
-    const { data } = await supabase
-      .from('customers')
-      .select('*')
-      .eq('user_id', user!.id)
-      .order('name')
-    setCustomers(data || [])
+    if (!user) { setLoading(false); return }
+    setUid(user.id)
+    // Active (non-archived) customers only — archived ones are preserved but hidden.
+    const [activeRes, archRes] = await Promise.all([
+      supabase.from('customers').select('*').eq('user_id', user.id).is('archived_at', null).order('name'),
+      supabase.from('customers').select('*').eq('user_id', user.id).not('archived_at', 'is', null).order('name'),
+    ])
+    setCustomers(activeRes.data || [])
+    setArchived(archRes.data || [])
     setLoading(false)
   }
 
@@ -108,11 +112,43 @@ export default function CustomersPage() {
     setEditing(null)
   }
 
+  // Safe delete: a customer with ANY history is ARCHIVED (everything preserved), not
+  // hard-deleted — so one click can never wipe years of quotes/invoices/jobs/
+  // payments/messages. Only a customer with no related records is truly deleted.
   async function handleDelete(id: string) {
-    const prev = customers
-    setCustomers(p => p.filter(c => c.id !== id))   // optimistic
-    const { error } = await supabase.from('customers').delete().eq('id', id)
-    if (error) { setCustomers(prev); alert('Could not delete the customer: ' + error.message) }
+    const [qc, ic, jc, pc, cc] = await Promise.all([
+      supabase.from('quotes').select('id', { count: 'exact', head: true }).eq('customer_id', id),
+      supabase.from('invoices').select('id', { count: 'exact', head: true }).eq('customer_id', id),
+      supabase.from('jobs').select('id', { count: 'exact', head: true }).eq('customer_id', id),
+      supabase.from('payments').select('id', { count: 'exact', head: true }).eq('customer_id', id),
+      supabase.from('conversations').select('id', { count: 'exact', head: true }).eq('customer_id', id),
+    ])
+    const n = { quotes: qc.count || 0, invoices: ic.count || 0, jobs: jc.count || 0, payments: pc.count || 0, convos: cc.count || 0 }
+    const total = n.quotes + n.invoices + n.jobs + n.payments + n.convos
+
+    if (total > 0) {
+      const parts = [
+        n.quotes && `${n.quotes} quote${n.quotes !== 1 ? 's' : ''}`,
+        n.invoices && `${n.invoices} invoice${n.invoices !== 1 ? 's' : ''}`,
+        n.jobs && `${n.jobs} job${n.jobs !== 1 ? 's' : ''}`,
+        n.payments && `${n.payments} payment${n.payments !== 1 ? 's' : ''}`,
+        n.convos && `${n.convos} conversation${n.convos !== 1 ? 's' : ''}`,
+      ].filter(Boolean).join(', ')
+      if (!confirm(`This customer has ${parts}.\n\nTo protect that history, they'll be ARCHIVED (hidden from your list but fully preserved) — not deleted. You can restore them anytime from "Show archived".\n\nArchive this customer?`)) return
+      const { error } = await supabase.from('customers').update({ archived_at: new Date().toISOString() }).eq('id', id)
+      if (error) { alert('Could not archive the customer: ' + error.message); return }
+    } else {
+      if (!confirm('Delete this customer permanently? They have no quotes, invoices, jobs, payments, or messages, so nothing else is affected. This cannot be undone.')) return
+      const { error } = await supabase.from('customers').delete().eq('id', id)
+      if (error) { alert('Could not delete the customer: ' + error.message); return }
+    }
+    await fetchCustomers()
+  }
+
+  async function handleRestore(id: string) {
+    const { error } = await supabase.from('customers').update({ archived_at: null }).eq('id', id)
+    if (error) { alert('Could not restore the customer: ' + error.message); return }
+    await fetchCustomers()
   }
 
   return (
@@ -177,6 +213,28 @@ export default function CustomersPage() {
           onDelete={handleDelete}
           onRefresh={fetchCustomers}
         />
+      )}
+
+      {/* Archived customers — fully preserved, restorable any time */}
+      {!loading && archived.length > 0 && (
+        <div className="rounded-card border border-border bg-bg-secondary p-4">
+          <button onClick={() => setShowArchived(s => !s)} className="text-sm font-medium text-ink-muted hover:text-ink flex items-center gap-1.5">
+            <Archive className="w-4 h-4" /> {showArchived ? 'Hide' : 'Show'} archived ({archived.length})
+          </button>
+          {showArchived && (
+            <div className="mt-3 divide-y divide-border">
+              {archived.map(c => (
+                <div key={c.id} className="flex items-center justify-between gap-3 py-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-ink truncate">{c.name}</p>
+                    <p className="text-[11px] text-ink-faint">Archived{c.archived_at ? ` ${new Date(c.archived_at).toLocaleDateString()}` : ''} · all history preserved</p>
+                  </div>
+                  <Button size="sm" variant="secondary" onClick={() => handleRestore(c.id)}><RotateCcw className="w-3.5 h-3.5" /> Restore</Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       )}
     </div>
   )
