@@ -3,6 +3,7 @@ import { localTodayISO } from '@/lib/utils'
 import { effectiveFreq, jobVisitValue } from '@/lib/invoicing'
 import { estimateLabor, learnLaborModel, LaborModel, LaborObservation } from '@/lib/labor'
 import { fetchForecast, DayForecast, weatherScore, WeatherScore } from '@/lib/weather'
+import { buildDayStatusMap, DAY_STATUS_SELECT, DayStatusRow } from '@/lib/dayStatus'
 
 // ── Weather Impact analytics ─────────────────────────────────────────────────────
 // Turns the forecast + your booked work into a risk picture: which jobs, labor
@@ -80,6 +81,7 @@ export function computeWeatherImpact(
   today: string,
   locationLabel = 'your business location',
   usingDefaultLocation = false,
+  blockedDates: Set<string> = new Set(),  // days marked unavailable (Day Status) — never recommend these
 ): WeatherImpactReport {
   const pref = preferredDays.length ? new Set(preferredDays) : null
   const fByDate: Record<string, DayForecast> = {}
@@ -104,6 +106,7 @@ export function computeWeatherImpact(
     for (const f of forecast) {
       if (f.date <= afterDate) continue
       if (pref && !pref.has(dow(f.date))) continue
+      if (blockedDates.has(f.date)) continue   // day marked unavailable — never recommend it
       if (f.rainy) continue
       if (firstDry == null) firstDry = f.date
       if ((hoursByDate[f.date] || 0) + (committedExtra[f.date] || 0) + neededHours <= capacityHours) return f.date
@@ -177,14 +180,17 @@ export async function loadWeatherImpact(supabase: SupabaseClient): Promise<Weath
   const today = localTodayISO()
   const horizon = (() => { const d = new Date(today + 'T00:00:00'); d.setDate(d.getDate() + 8); return d.toISOString().slice(0, 10) })()
 
-  const [sRes, jRes, qRes, pRes, rRes, oRes] = await Promise.all([
+  const [sRes, jRes, qRes, pRes, rRes, oRes, dRes] = await Promise.all([
     supabase.from('business_settings').select('base_lat, base_lng, base_address, daily_capacity_hours, preferred_work_days').eq('user_id', uid).maybeSingle(),
     supabase.from('jobs').select('id, scheduled_date, status, service_type, crew_size, property_id, quote_id, recurrence_id, price, is_initial_visit, customer_id, properties(lawn_sqft)').eq('user_id', uid).gte('scheduled_date', today).lte('scheduled_date', horizon),
     supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', uid),
     supabase.from('properties').select('id, lawn_sqft').eq('user_id', uid),
     supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', uid),
     supabase.from('labor_observations').select('job_id, property_id, service_date, sqft, service_type, crew_size, frequency, is_initial_visit, overgrowth, estimated_minutes, actual_minutes').eq('user_id', uid),
+    supabase.from('day_statuses').select(DAY_STATUS_SELECT).eq('user_id', uid),
   ])
+  // Days the owner marked unavailable (Day Status) — Weather Ops never recommends them.
+  const blockedDates = buildDayStatusMap((dRes.data as DayStatusRow[]) || []).blockedDates
 
   const settings = sRes.data as { base_lat?: number | null; base_lng?: number | null; base_address?: string | null; daily_capacity_hours?: number | null; preferred_work_days?: number[] | null } | null
   // Always have a location: the configured base if set, else default to Calgary.
@@ -223,5 +229,5 @@ export async function loadWeatherImpact(supabase: SupabaseClient): Promise<Weath
 
   const capacityHours = Number(settings?.daily_capacity_hours) > 0 ? Number(settings!.daily_capacity_hours) : 8
   const preferredDays = settings?.preferred_work_days?.length ? settings!.preferred_work_days! : [5, 6, 0]
-  return computeWeatherImpact(jobs, forecast, model, capacityHours, preferredDays, today, locationLabel, usingDefaultLocation)
+  return computeWeatherImpact(jobs, forecast, model, capacityHours, preferredDays, today, locationLabel, usingDefaultLocation, blockedDates)
 }
