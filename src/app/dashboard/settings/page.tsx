@@ -16,11 +16,13 @@ import { MessagingUsage } from '@/components/settings/MessagingUsage'
 import { AutomationToggles } from '@/components/settings/AutomationToggles'
 import { PushNotificationSettings } from '@/components/settings/PushNotificationSettings'
 import { BookingLink } from '@/components/settings/BookingLink'
+import { Tabs, type TabItem } from '@/components/ui/Tabs'
+import { PageSkeleton } from '@/components/ui/Skeleton'
 import { useForm, Controller } from 'react-hook-form'
 import { cn } from '@/lib/utils'
 import { ThemePref, getThemePref, applyThemePref } from '@/lib/theme'
 import { ServiceSeasons, ServiceSeason, DEFAULT_SEASONS, settingsToSeasons, seasonLabel } from '@/lib/seasons'
-import { Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard } from 'lucide-react'
+import { Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard, Building2, DollarSign, MessageSquare, Bell, Link as LinkIcon } from 'lucide-react'
 
 // Mon→Sun display, mapped to date-fns getDay indices (Sun=0…Sat=6).
 const WEEKDAYS = [
@@ -28,6 +30,20 @@ const WEEKDAYS = [
   { i: 5, l: 'Friday' }, { i: 6, l: 'Saturday' }, { i: 0, l: 'Sunday' },
 ]
 const DEFAULT_WORK_DAYS = [5, 6, 0] // Fri/Sat/Sun
+
+// One long Settings page → tabbed. The form (Business/Pricing/Scheduling) stays
+// mounted across tab switches via `hidden`, so values are never lost and the
+// single Save footer submits every field regardless of the active tab.
+const SETTINGS_TABS: TabItem[] = [
+  { key: 'business', label: 'Business', icon: Building2 },
+  { key: 'pricing', label: 'Pricing & Fees', icon: DollarSign },
+  { key: 'scheduling', label: 'Scheduling', icon: CalendarRange },
+  { key: 'messaging', label: 'Messaging', icon: MessageSquare },
+  { key: 'notifications', label: 'Notifications', icon: Bell },
+  { key: 'booking', label: 'Booking', icon: LinkIcon },
+]
+type SettingsTab = (typeof SETTINGS_TABS)[number]['key']
+const FORM_TABS: SettingsTab[] = ['business', 'pricing', 'scheduling']
 
 export default function SettingsPage() {
   const { settings, tiers, loading, refresh } = useBusinessData()
@@ -44,6 +60,7 @@ export default function SettingsPage() {
   const [themePref, setThemePref] = useState<ThemePref>('dark')
   const [logoScale, setLogoScale] = useState(100)
   const [seasons, setSeasons] = useState<ServiceSeasons>(DEFAULT_SEASONS)
+  const [tab, setTab] = useState<SettingsTab>('business')
 
   useEffect(() => { setThemePref(getThemePref()) }, [])
   function pickTheme(p: ThemePref) { setThemePref(p); applyThemePref(p) }
@@ -177,304 +194,334 @@ export default function SettingsPage() {
     setLocalTiers(prev => prev.filter((_, i) => i !== idx))
   }
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading settings...</div>
+  if (loading) return <PageSkeleton rows={5} className="max-w-3xl" />
 
   return (
     <div className="max-w-3xl space-y-6">
       <PageHeader title="Business Settings" description="Company info, branding, pricing, and travel fees" />
 
-      <Card>
-        <CardHeader><h2 className="text-sm font-semibold text-ink">Branding</h2></CardHeader>
-        <CardBody className="space-y-5">
-          <div className="flex items-center gap-5 flex-wrap">
-            <div className="w-32 h-32 rounded-xl border border-border-strong bg-black flex items-center justify-center overflow-hidden shrink-0">
-              {logoUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={logoUrl} alt="Logo" className="object-contain transition-all"
-                  style={{ width: `${Math.min(logoScale, 200)}%`, height: `${Math.min(logoScale, 200)}%`, maxWidth: 'none' }} />
-              ) : (
-                <span className="text-xs text-ink-faint text-center px-2">No logo uploaded</span>
-              )}
-            </div>
-            <div>
-              <label className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-surface border border-border-strong text-sm text-ink cursor-pointer hover:bg-surface-raised transition-colors">
-                <Upload className="w-4 h-4" />
-                {uploading ? 'Uploading...' : 'Upload Logo'}
-                <input type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} disabled={uploading} />
-              </label>
-              <p className="text-xs text-ink-faint mt-2 max-w-xs">
-                Upload your official Edge Property Services logo. Used in the sidebar, on the login screen and on PDF quotes &amp; invoices.
-              </p>
-            </div>
-          </div>
+      <div className="sticky top-0 z-10 -mx-1 px-1 py-2 bg-bg/90 backdrop-blur">
+        <Tabs tabs={SETTINGS_TABS} active={tab} onChange={(k) => setTab(k as SettingsTab)} />
+      </div>
 
-          {logoUrl && (
-            <div className="space-y-2.5">
-              <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Logo size <span className="text-ink-faint normal-case font-normal">— live preview above</span></p>
-              <div className="flex items-center gap-2 flex-wrap">
-                {([['Small', 75], ['Medium', 100], ['Large', 150]] as const).map(([label, v]) => (
-                  <button key={label} type="button" onClick={() => persistLogoScale(v)}
-                    className={cn('px-3.5 py-2 rounded-lg text-xs font-medium border transition-colors',
-                      logoScale === v ? 'bg-accent text-black border-accent' : 'bg-surface border-border-strong text-ink-muted hover:text-ink')}>
+      {/* Business / Pricing / Scheduling all share one form so a single Save
+          persists every field, whichever tab is active. */}
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+        {/* ── BUSINESS ── */}
+        <div className={cn('space-y-6', tab !== 'business' && 'hidden')}>
+          <Card>
+            <CardHeader><h2 className="text-sm font-semibold text-ink">Branding</h2></CardHeader>
+            <CardBody className="space-y-5">
+              <div className="flex items-center gap-5 flex-wrap">
+                <div className="w-32 h-32 rounded-xl border border-border-strong bg-bg-tertiary flex items-center justify-center overflow-hidden shrink-0">
+                  {logoUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={logoUrl} alt="Logo" className="object-contain transition-all"
+                      style={{ width: `${Math.min(logoScale, 200)}%`, height: `${Math.min(logoScale, 200)}%`, maxWidth: 'none' }} />
+                  ) : (
+                    <span className="text-xs text-ink-faint text-center px-2">No logo uploaded</span>
+                  )}
+                </div>
+                <div>
+                  <label className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-surface border border-border-strong text-sm font-medium text-ink cursor-pointer hover:bg-surface-raised transition-colors">
+                    <Upload className="w-4 h-4" />
+                    {uploading ? 'Uploading...' : 'Upload Logo'}
+                    <input type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} disabled={uploading} />
+                  </label>
+                  <p className="text-xs text-ink-faint mt-2 max-w-xs">
+                    Upload your official Edge Property Services logo. Used in the sidebar, on the login screen and on PDF quotes &amp; invoices.
+                  </p>
+                </div>
+              </div>
+
+              {logoUrl && (
+                <div className="space-y-2.5">
+                  <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Logo size <span className="text-ink-faint normal-case font-normal">— live preview above</span></p>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {([['Small', 75], ['Medium', 100], ['Large', 150]] as const).map(([label, v]) => (
+                      <button key={label} type="button" onClick={() => persistLogoScale(v)}
+                        className={cn('px-3.5 py-2 rounded-lg text-xs font-medium border transition-colors',
+                          logoScale === v ? 'bg-accent text-black border-accent' : 'bg-surface border-border-strong text-ink-muted hover:text-ink')}>
+                        {label}
+                      </button>
+                    ))}
+                    <div className="flex items-center gap-2 flex-1 min-w-[180px]">
+                      <input type="range" min={50} max={200} step={5} value={logoScale}
+                        onChange={e => setLogoScale(Number(e.target.value))}
+                        onPointerUp={e => persistLogoScale(Number((e.target as HTMLInputElement).value))}
+                        className="flex-1 accent-accent" />
+                      <span className="text-xs font-semibold text-ink w-11 text-right">{logoScale}%</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </CardBody>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <div>
+                <h2 className="text-sm font-semibold text-ink">Appearance</h2>
+                <p className="text-xs text-ink-faint mt-0.5">Applies across the whole app and is remembered on this device.</p>
+              </div>
+            </CardHeader>
+            <CardBody>
+              <div className="grid grid-cols-3 gap-2 max-w-md">
+                {([
+                  { p: 'light' as ThemePref, label: 'Light', Icon: Sun },
+                  { p: 'dark' as ThemePref, label: 'Dark', Icon: Moon },
+                  { p: 'system' as ThemePref, label: 'System', Icon: Monitor },
+                ]).map(({ p, label, Icon }) => (
+                  <button key={p} type="button" onClick={() => pickTheme(p)}
+                    className={cn('h-16 rounded-xl border text-sm font-medium flex flex-col items-center justify-center gap-1.5 transition-colors',
+                      themePref === p ? 'border-accent bg-accent/10 text-ink' : 'border-border-strong bg-surface text-ink-muted hover:text-ink')}>
+                    <Icon className={cn('w-4 h-4', themePref === p && 'text-accent')} />
                     {label}
                   </button>
                 ))}
-                <div className="flex items-center gap-2 flex-1 min-w-[180px]">
-                  <input type="range" min={50} max={200} step={5} value={logoScale}
-                    onChange={e => setLogoScale(Number(e.target.value))}
-                    onPointerUp={e => persistLogoScale(Number((e.target as HTMLInputElement).value))}
-                    className="flex-1 accent-[rgb(var(--c-accent))]" />
-                  <span className="text-xs font-semibold text-ink w-11 text-right">{logoScale}%</span>
+              </div>
+            </CardBody>
+          </Card>
+
+          <Card>
+            <CardHeader><h2 className="text-sm font-semibold text-ink">Company Information</h2></CardHeader>
+            <CardBody className="space-y-4">
+              <Input label="Company Name" {...register('company_name')} />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Input label="Owner Name" {...register('owner_name')} />
+                <Input label="Phone" {...register('phone')} />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Input label="Primary Email" type="email" {...register('email_primary')} />
+                <Input label="Business Email" type="email" {...register('email_secondary')} />
+              </div>
+              <Input label="Website" {...register('website')} />
+              <Controller name="base_address" control={control}
+                render={({ field }) => (
+                  <AddressAutocomplete
+                    label="Base Location (address)"
+                    value={field.value || ''}
+                    onChange={field.onChange}
+                    onSelect={(p) => field.onChange(p.formatted)}
+                    hint="Your starting point for travel fees and route planning."
+                  />
+                )} />
+              <Input label="Default Labour Rate ($/man-hour)" type="number" step="5" min="50" {...register('default_rate')} />
+              <Input
+                label="Crew Cost Per Hour ($/hr)"
+                type="number" step="5" min="0"
+                hint="What one crew-hour actually costs you (wages + overhead). Used everywhere profit is shown — the measure verdict, profitability, and suggestions. Most solo/2-person lawn crews land around $40/hr."
+                {...register('crew_cost_per_hour')}
+              />
+              <Input
+                label="Target Revenue Per Hour ($/hr)"
+                type="number" step="5" min="0"
+                hint="Your minimum acceptable revenue per crew-hour (on-site + drive). The Suggestions Center flags customers, routes and areas below this — and recommends raising the price or tightening the route before ever suggesting a drop. A common floor is $60–$80/hr."
+                {...register('target_rev_per_hour')}
+              />
+              <Textarea label="PDF Terms & Conditions" rows={5} {...register('terms_text')} />
+            </CardBody>
+          </Card>
+        </div>
+
+        {/* ── PRICING & FEES ── */}
+        <div className={cn('space-y-6', tab !== 'pricing' && 'hidden')}>
+          <Card>
+            <CardHeader>
+              <div>
+                <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><CreditCard className="w-4 h-4 text-ink-muted" /> Payment &amp; Fees</h2>
+                <p className="text-xs text-ink-faint mt-0.5">How card-processing cost is recovered. The default bakes a small increase into NEW quotes — never a card surcharge (compliant in Alberta; no separate fee line is shown to customers).</p>
+              </div>
+            </CardHeader>
+            <CardBody className="space-y-4">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Fee recovery strategy</label>
+                <select {...register('payment_fee_strategy')}
+                  className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all">
+                  <option value="global_price_increase">Global price increase (recommended)</option>
+                  <option value="absorb">Absorb the fee (no change)</option>
+                  <option value="etransfer_discount">E-transfer discount (coming soon)</option>
+                </select>
+                <p className="text-xs text-ink-faint">“Global price increase” adds the % below to every NEW quote so card fees are covered. Existing quotes are never changed.</p>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Input label="Fee recovery %" type="number" step="0.5" min="0" max="10"
+                  hint="Baked into new quote prices. ~3% covers Stripe's ~2.9% + 30¢."
+                  {...register('fee_recovery_percent')} />
+                <Input label="GST % (if registered)" type="number" step="0.5" min="0" max="15"
+                  hint="Alberta GST is 5%. Leave 0 if you're not GST-registered — no GST line will be shown."
+                  {...register('gst_percent')} />
+              </div>
+              <Input label="E-transfer discount % (future — leave 0)" type="number" step="0.5" min="0" max="10"
+                hint="Reserved for a future cash/e-transfer discount. Not active yet."
+                {...register('etransfer_discount_percent')} />
+            </CardBody>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <div>
+                <h2 className="text-sm font-semibold text-ink">Lawn Pricing</h2>
+                <p className="text-xs text-ink-faint mt-0.5">Drives suggested measurement prices. Recommended = base price × multiplier.</p>
+              </div>
+            </CardHeader>
+            <CardBody className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Input label="Base / minimum charge ($)" type="number" step="1" min="0"
+                  hint="The show-up minimum for any lawn."
+                  {...register('pricing_base_charge')} />
+                <Input label="Mowing rate ($ / 1,000 sq ft)" type="number" step="1" min="0"
+                  hint="Added on top of the base, per 1,000 sq ft."
+                  {...register('pricing_mow_rate')} />
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Input label="Recommended multiplier" type="number" step="0.05" min="0"
+                  hint="1.0 = the realistic everyday quote (not inflated)."
+                  {...register('pricing_recommended_mult')} />
+                <Input label="Premium multiplier" type="number" step="0.05" min="0"
+                  hint="The upsell tier, e.g. 1.2."
+                  {...register('pricing_premium_mult')} />
+              </div>
+              <Input label="Travel rate ($ / km)" type="number" step="0.25" min="0"
+                hint="Driving distance from base × this rate (route-density discounts apply automatically)."
+                {...register('pricing_travel_rate')} />
+              <p className="text-xs text-ink-faint">
+                Defaults are tuned for Calgary mow+trim+edge: ~$40 small, ~$50–60 medium, ~$70–80 large lawns.
+              </p>
+            </CardBody>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex items-center justify-between">
+              <div>
+                <h2 className="text-sm font-semibold text-ink">Travel Fee Tiers</h2>
+                <p className="text-xs text-ink-faint mt-0.5">Fully configurable. Leave fee blank for &quot;custom quote&quot;.</p>
+              </div>
+              <Button type="button" variant="secondary" size="sm" onClick={addTier}><Plus className="w-3.5 h-3.5" /> Add Tier</Button>
+            </CardHeader>
+            <CardBody className="space-y-3">
+              <div className="grid grid-cols-[1fr_1fr_1fr_auto_auto] gap-3 text-xs font-semibold text-ink-faint uppercase tracking-wide px-1">
+                <span>Min km</span><span>Max km</span><span>Fee ($)</span><span /><span />
+              </div>
+              {localTiers.map((t, i) => (
+                <div key={t.id || i} className="grid grid-cols-[1fr_1fr_1fr_auto_auto] gap-3 items-center">
+                  <input type="number" value={t.min_km ?? ''} onChange={e => updateTier(i, 'min_km', e.target.value)}
+                    className="bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent" />
+                  <input type="number" value={t.max_km ?? ''} placeholder="inf" onChange={e => updateTier(i, 'max_km', e.target.value)}
+                    className="bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent" />
+                  <input type="number" value={t.fee ?? ''} placeholder="custom" onChange={e => updateTier(i, 'fee', e.target.value)}
+                    className="bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent" />
+                  <Button type="button" variant="ghost" size="sm" onClick={() => saveTier(i)} title="Save"><Check className="w-4 h-4" /></Button>
+                  <Button type="button" variant="ghost" size="sm" onClick={() => deleteTier(i)} className="hover:text-red-400" title="Delete"><Trash2 className="w-4 h-4" /></Button>
+                </div>
+              ))}
+            </CardBody>
+          </Card>
+        </div>
+
+        {/* ── SCHEDULING ── */}
+        <div className={cn('space-y-6', tab !== 'scheduling' && 'hidden')}>
+          <Card>
+            <CardHeader>
+              <div>
+                <h2 className="text-sm font-semibold text-ink">Work Schedule</h2>
+                <p className="text-xs text-ink-faint mt-0.5">Drives the weekly scheduler, per-stop arrival times and the day-load signal.</p>
+              </div>
+            </CardHeader>
+            <CardBody className="space-y-5">
+              <div>
+                <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-2">Preferred work days</p>
+                <div className="flex flex-wrap gap-2">
+                  {WEEKDAYS.map(w => {
+                    const on = workDays.includes(w.i)
+                    return (
+                      <button key={w.i} type="button" onClick={() => toggleDay(w.i)}
+                        className={cn(
+                          'px-3.5 py-2 rounded-xl text-sm font-medium border transition-colors flex items-center gap-1.5',
+                          on ? 'bg-accent text-black border-accent' : 'bg-surface border-border-strong text-ink-muted hover:text-ink'
+                        )}>
+                        <span className={cn('w-3.5 h-3.5 rounded border flex items-center justify-center', on ? 'border-black/40 bg-black/10' : 'border-border-strong')}>
+                          {on && <Check className="w-3 h-3" />}
+                        </span>
+                        {w.l}
+                      </button>
+                    )
+                  })}
                 </div>
               </div>
-            </div>
-          )}
-        </CardBody>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <div>
-            <h2 className="text-sm font-semibold text-ink">Appearance</h2>
-            <p className="text-xs text-ink-faint mt-0.5">Applies across the whole app and is remembered on this device.</p>
-          </div>
-        </CardHeader>
-        <CardBody>
-          <div className="grid grid-cols-3 gap-2 max-w-md">
-            {([
-              { p: 'light' as ThemePref, label: 'Light', Icon: Sun },
-              { p: 'dark' as ThemePref, label: 'Dark', Icon: Moon },
-              { p: 'system' as ThemePref, label: 'System', Icon: Monitor },
-            ]).map(({ p, label, Icon }) => (
-              <button key={p} type="button" onClick={() => pickTheme(p)}
-                className={cn('h-16 rounded-xl border text-sm font-medium flex flex-col items-center justify-center gap-1.5 transition-colors',
-                  themePref === p ? 'border-accent bg-accent/10 text-ink' : 'border-border-strong bg-surface text-ink-muted hover:text-ink')}>
-                <Icon className={cn('w-4 h-4', themePref === p && 'text-accent')} />
-                {label}
-              </button>
-            ))}
-          </div>
-        </CardBody>
-      </Card>
-
-      <form onSubmit={handleSubmit(onSubmit)}>
-        <Card>
-          <CardHeader><h2 className="text-sm font-semibold text-ink">Company Information</h2></CardHeader>
-          <CardBody className="space-y-4">
-            <Input label="Company Name" {...register('company_name')} />
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Input label="Owner Name" {...register('owner_name')} />
-              <Input label="Phone" {...register('phone')} />
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Input label="Primary Email" type="email" {...register('email_primary')} />
-              <Input label="Business Email" type="email" {...register('email_secondary')} />
-            </div>
-            <Input label="Website" {...register('website')} />
-            <Controller name="base_address" control={control}
-              render={({ field }) => (
-                <AddressAutocomplete
-                  label="Base Location (address)"
-                  value={field.value || ''}
-                  onChange={field.onChange}
-                  onSelect={(p) => field.onChange(p.formatted)}
-                  hint="Your starting point for travel fees and route planning."
-                />
-              )} />
-            <Input label="Default Labour Rate ($/man-hour)" type="number" step="5" min="50" {...register('default_rate')} />
-            <Input
-              label="Crew Cost Per Hour ($/hr)"
-              type="number" step="5" min="0"
-              hint="What one crew-hour actually costs you (wages + overhead). Used everywhere profit is shown — the measure verdict, profitability, and suggestions. Most solo/2-person lawn crews land around $40/hr."
-              {...register('crew_cost_per_hour')}
-            />
-            <Input
-              label="Target Revenue Per Hour ($/hr)"
-              type="number" step="5" min="0"
-              hint="Your minimum acceptable revenue per crew-hour (on-site + drive). The Suggestions Center flags customers, routes and areas below this — and recommends raising the price or tightening the route before ever suggesting a drop. A common floor is $60–$80/hr."
-              {...register('target_rev_per_hour')}
-            />
-            <Textarea label="PDF Terms & Conditions" rows={5} {...register('terms_text')} />
-          </CardBody>
-        </Card>
-
-        <Card className="mt-6">
-          <CardHeader>
-            <div>
-              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><CreditCard className="w-4 h-4 text-accent" /> Payment &amp; Fees</h2>
-              <p className="text-xs text-ink-faint mt-0.5">How card-processing cost is recovered. The default bakes a small increase into NEW quotes — never a card surcharge (compliant in Alberta; no separate fee line is shown to customers).</p>
-            </div>
-          </CardHeader>
-          <CardBody className="space-y-4">
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Fee recovery strategy</label>
-              <select {...register('payment_fee_strategy')}
-                className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all">
-                <option value="global_price_increase">Global price increase (recommended)</option>
-                <option value="absorb">Absorb the fee (no change)</option>
-                <option value="etransfer_discount">E-transfer discount (coming soon)</option>
-              </select>
-              <p className="text-xs text-ink-faint">“Global price increase” adds the % below to every NEW quote so card fees are covered. Existing quotes are never changed.</p>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Input label="Fee recovery %" type="number" step="0.5" min="0" max="10"
-                hint="Baked into new quote prices. ~3% covers Stripe's ~2.9% + 30¢."
-                {...register('fee_recovery_percent')} />
-              <Input label="GST % (if registered)" type="number" step="0.5" min="0" max="15"
-                hint="Alberta GST is 5%. Leave 0 if you're not GST-registered — no GST line will be shown."
-                {...register('gst_percent')} />
-            </div>
-            <Input label="E-transfer discount % (future — leave 0)" type="number" step="0.5" min="0" max="10"
-              hint="Reserved for a future cash/e-transfer discount. Not active yet."
-              {...register('etransfer_discount_percent')} />
-          </CardBody>
-        </Card>
-
-        <Card className="mt-6">
-          <CardHeader>
-            <div>
-              <h2 className="text-sm font-semibold text-ink">Work Schedule</h2>
-              <p className="text-xs text-ink-faint mt-0.5">Drives the weekly scheduler, per-stop arrival times and the day-load signal.</p>
-            </div>
-          </CardHeader>
-          <CardBody className="space-y-5">
-            <div>
-              <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-2">Preferred work days</p>
-              <div className="flex flex-wrap gap-2">
-                {WEEKDAYS.map(w => {
-                  const on = workDays.includes(w.i)
-                  return (
-                    <button key={w.i} type="button" onClick={() => toggleDay(w.i)}
-                      className={cn(
-                        'px-3.5 py-2 rounded-xl text-sm font-medium border transition-colors flex items-center gap-1.5',
-                        on ? 'bg-accent text-black border-accent' : 'bg-surface border-border-strong text-ink-muted hover:text-ink'
-                      )}>
-                      <span className={cn('w-3.5 h-3.5 rounded border flex items-center justify-center', on ? 'border-black/40 bg-black/10' : 'border-border-strong')}>
-                        {on && <Check className="w-3 h-3" />}
-                      </span>
-                      {w.l}
-                    </button>
-                  )
-                })}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Work day start time</label>
+                  <input type="time" value={workStart} onChange={e => setWorkStart(e.target.value)}
+                    className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" />
+                  <p className="text-xs text-ink-faint">Arrival times for each stop and the estimated finish are computed from this.</p>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Daily capacity (hours)</label>
+                  <input type="number" min="1" max="16" step="0.5" value={capacityHours} onChange={e => setCapacityHours(e.target.value)}
+                    className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" />
+                  <p className="text-xs text-ink-faint">Days past this show as overloaded; days with an hour+ spare show room for more jobs.</p>
+                </div>
               </div>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Work day start time</label>
-                <input type="time" value={workStart} onChange={e => setWorkStart(e.target.value)}
-                  className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" />
-                <p className="text-xs text-ink-faint">Arrival times for each stop and the estimated finish are computed from this.</p>
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Daily capacity (hours)</label>
-                <input type="number" min="1" max="16" step="0.5" value={capacityHours} onChange={e => setCapacityHours(e.target.value)}
-                  className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" />
-                <p className="text-xs text-ink-faint">Days past this show as overloaded; days with an hour+ spare show room for more jobs.</p>
-              </div>
-            </div>
-            <p className="text-xs text-ink-faint">Save (below) to apply.</p>
-          </CardBody>
-        </Card>
+            </CardBody>
+          </Card>
 
-        <Card className="mt-6">
-          <CardHeader>
-            <div>
-              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><CalendarRange className="w-4 h-4 text-accent" /> Service Seasons</h2>
-              <p className="text-xs text-ink-faint mt-0.5">Recurring lawn &amp; snow services default to ending at season end. Off-season customers won&apos;t show as lapsed in Reactivation.</p>
-            </div>
-          </CardHeader>
-          <CardBody className="space-y-5">
-            <SeasonEditor
-              icon={<Sun className="w-4 h-4 text-amber-400" />}
-              title="Lawn Season"
-              hint="Weekly/Bi-Weekly Mowing, Monthly Lawn Care, Fertilization"
-              season={seasons.lawn}
-              onChange={s => setSeasons(prev => ({ ...prev, lawn: s }))}
-            />
-            <SeasonEditor
-              icon={<Snowflake className="w-4 h-4 text-sky-400" />}
-              title="Snow Season"
-              hint="Snow Removal, Snow Blowing, Snow Clearing (can wrap the new year)"
-              season={seasons.snow}
-              onChange={s => setSeasons(prev => ({ ...prev, snow: s }))}
-            />
-            <button type="button" onClick={() => setSeasons(DEFAULT_SEASONS)}
-              className="text-xs text-accent hover:underline">Reset to Calgary defaults (Apr 15 → Oct 31 · Nov 1 → Mar 31)</button>
-          </CardBody>
-        </Card>
+          <Card>
+            <CardHeader>
+              <div>
+                <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><CalendarRange className="w-4 h-4 text-ink-muted" /> Service Seasons</h2>
+                <p className="text-xs text-ink-faint mt-0.5">Recurring lawn &amp; snow services default to ending at season end. Off-season customers won&apos;t show as lapsed in Reactivation.</p>
+              </div>
+            </CardHeader>
+            <CardBody className="space-y-5">
+              <SeasonEditor
+                icon={<Sun className="w-4 h-4 text-amber-400" />}
+                title="Lawn Season"
+                hint="Weekly/Bi-Weekly Mowing, Monthly Lawn Care, Fertilization"
+                season={seasons.lawn}
+                onChange={s => setSeasons(prev => ({ ...prev, lawn: s }))}
+              />
+              <SeasonEditor
+                icon={<Snowflake className="w-4 h-4 text-sky-400" />}
+                title="Snow Season"
+                hint="Snow Removal, Snow Blowing, Snow Clearing (can wrap the new year)"
+                season={seasons.snow}
+                onChange={s => setSeasons(prev => ({ ...prev, snow: s }))}
+              />
+              <button type="button" onClick={() => setSeasons(DEFAULT_SEASONS)}
+                className="text-xs text-accent hover:underline">Reset to Calgary defaults (Apr 15 → Oct 31 · Nov 1 → Mar 31)</button>
+            </CardBody>
+          </Card>
+        </div>
 
-        <Card className="mt-6">
-          <CardHeader>
-            <div>
-              <h2 className="text-sm font-semibold text-ink">Lawn Pricing</h2>
-              <p className="text-xs text-ink-faint mt-0.5">Drives suggested measurement prices. Recommended = base price × multiplier.</p>
-            </div>
-          </CardHeader>
-          <CardBody className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Input label="Base / minimum charge ($)" type="number" step="1" min="0"
-                hint="The show-up minimum for any lawn."
-                {...register('pricing_base_charge')} />
-              <Input label="Mowing rate ($ / 1,000 sq ft)" type="number" step="1" min="0"
-                hint="Added on top of the base, per 1,000 sq ft."
-                {...register('pricing_mow_rate')} />
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Input label="Recommended multiplier" type="number" step="0.05" min="0"
-                hint="1.0 = the realistic everyday quote (not inflated)."
-                {...register('pricing_recommended_mult')} />
-              <Input label="Premium multiplier" type="number" step="0.05" min="0"
-                hint="The upsell tier, e.g. 1.2."
-                {...register('pricing_premium_mult')} />
-            </div>
-            <Input label="Travel rate ($ / km)" type="number" step="0.25" min="0"
-              hint="Driving distance from base × this rate (route-density discounts apply automatically)."
-              {...register('pricing_travel_rate')} />
-            <p className="text-xs text-ink-faint">
-              Defaults are tuned for Calgary mow+trim+edge: ~$40 small, ~$50–60 medium, ~$70–80 large lawns.
-            </p>
-          </CardBody>
-          <div className="px-6 py-4 border-t border-border flex justify-end">
+        {/* One Save bar for every form tab — all fields are mounted, so it saves
+            Business, Pricing and Scheduling together regardless of active tab. */}
+        {FORM_TABS.includes(tab) && (
+          <div className="sticky bottom-0 -mx-1 px-1 py-3 bg-bg/90 backdrop-blur flex justify-end">
             <Button type="submit" loading={isSubmitting}>
               {saved ? <><Check className="w-4 h-4" /> Saved</> : 'Save Settings'}
             </Button>
           </div>
-        </Card>
+        )}
       </form>
 
-      <Card>
-        <CardHeader className="flex items-center justify-between">
-          <div>
-            <h2 className="text-sm font-semibold text-ink">Travel Fee Tiers</h2>
-            <p className="text-xs text-ink-faint mt-0.5">Fully configurable. Leave fee blank for &quot;custom quote&quot;.</p>
-          </div>
-          <Button variant="secondary" size="sm" onClick={addTier}><Plus className="w-3.5 h-3.5" /> Add Tier</Button>
-        </CardHeader>
-        <CardBody className="space-y-3">
-          <div className="grid grid-cols-[1fr_1fr_1fr_auto_auto] gap-3 text-xs font-semibold text-ink-faint uppercase tracking-wide px-1">
-            <span>Min km</span><span>Max km</span><span>Fee ($)</span><span /><span />
-          </div>
-          {localTiers.map((t, i) => (
-            <div key={t.id || i} className="grid grid-cols-[1fr_1fr_1fr_auto_auto] gap-3 items-center">
-              <input type="number" value={t.min_km ?? ''} onChange={e => updateTier(i, 'min_km', e.target.value)}
-                className="bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent" />
-              <input type="number" value={t.max_km ?? ''} placeholder="inf" onChange={e => updateTier(i, 'max_km', e.target.value)}
-                className="bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent" />
-              <input type="number" value={t.fee ?? ''} placeholder="custom" onChange={e => updateTier(i, 'fee', e.target.value)}
-                className="bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent" />
-              <Button variant="ghost" size="sm" onClick={() => saveTier(i)} title="Save"><Check className="w-4 h-4" /></Button>
-              <Button variant="ghost" size="sm" onClick={() => deleteTier(i)} className="hover:text-red-400" title="Delete"><Trash2 className="w-4 h-4" /></Button>
-            </div>
-          ))}
-        </CardBody>
-      </Card>
+      {/* ── MESSAGING ── */}
+      <div className={cn('space-y-6', tab !== 'messaging' && 'hidden')}>
+        <MessagingUsage />
+        <MessageTemplateEditor />
+        <CommunicationsTest />
+      </div>
 
-      <BookingLink />
-      <PushNotificationSettings />
-      <AutomationToggles />
-      <MessagingUsage />
-      <MessageTemplateEditor />
-      <CommunicationsTest />
+      {/* ── NOTIFICATIONS ── */}
+      <div className={cn('space-y-6', tab !== 'notifications' && 'hidden')}>
+        <PushNotificationSettings />
+        <AutomationToggles />
+      </div>
+
+      {/* ── BOOKING ── */}
+      <div className={cn('space-y-6', tab !== 'booking' && 'hidden')}>
+        <BookingLink />
+      </div>
     </div>
   )
 }
@@ -498,7 +545,7 @@ function SeasonEditor({ icon, title, hint, season, onChange }: {
     </select>
   )
   return (
-    <div className="rounded-xl border border-border p-3">
+    <div className="rounded-card border border-border p-3">
       <div className="flex items-center gap-2 mb-1">
         {icon}
         <span className="text-sm font-semibold text-ink">{title}</span>
