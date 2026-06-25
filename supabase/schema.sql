@@ -1849,3 +1849,79 @@ alter table public.day_statuses
 -- ════════════════════════════════════════════════════════════
 alter table public.customers add column if not exists archived_at timestamptz;
 create index if not exists customers_active_idx on public.customers(user_id) where archived_at is null;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-24g — Messages inbox: archive / pin / mute + search.
+-- The inbox behaves like Apple Messages while staying a CRM. Archiving is a FLAG
+-- on the conversation (archived_at) — nothing is deleted, all history/attachments/
+-- notifications/customer links survive, and the conversation still shows on the
+-- customer profile/timeline/search. A new inbound OR outbound message auto-returns
+-- an archived conversation to the inbox; muted conversations stop notifying (but
+-- still record history + auto-unarchive). Idempotent.
+-- ════════════════════════════════════════════════════════════
+alter table public.conversations
+  add column if not exists archived_at timestamptz,
+  add column if not exists pinned_at   timestamptz,
+  add column if not exists muted       boolean not null default false;
+create index if not exists conversations_inbox_idx on public.conversations(user_id, archived_at, last_message_at desc);
+
+-- A new real message (inbound/outbound — NOT an internal note) auto-returns an
+-- archived conversation to the inbox, on top of the existing summary sync.
+create or replace function public.bump_conversation() returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  update public.conversations set
+    last_message_at = new.created_at,
+    last_preview = left(new.body, 140),
+    last_direction = new.direction,
+    unread = case when new.direction = 'inbound' then unread + 1 else unread end,
+    archived_at = case when new.direction in ('inbound', 'outbound') then null else archived_at end
+  where id = new.conversation_id;
+  return new;
+end; $$;
+
+-- Inbound notification, now skipped for MUTED conversations (history + auto-unarchive
+-- still happen via bump_conversation).
+create or replace function public.notify_inbound_message()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_name text; v_muted boolean;
+begin
+  if new.direction <> 'inbound' then return new; end if;
+  select muted into v_muted from public.conversations where id = new.conversation_id;
+  if coalesce(v_muted, false) then return new; end if;
+  select name into v_name from public.customers where id = new.customer_id;
+  insert into public.notifications (user_id, type, title, body, customer_id, entity_type, entity_id, href)
+  values (
+    new.user_id,
+    case when new.channel = 'portal' then 'portal_request' else 'new_message' end,
+    coalesce(nullif(v_name, ''), 'A customer')
+      || case when new.channel = 'portal' then ' sent a request from the portal' else ' replied by text' end,
+    left(new.body, 140),
+    new.customer_id, 'message', new.id, '/dashboard/messages'
+  );
+  return new;
+end; $$;
+
+-- Conversation search across customer (name/phone/address), message body, quote #
+-- and invoice #. Returns matches INCLUDING archived conversations. Token-scoped via
+-- auth.uid(). Opening a result reopens the conversation with its full history.
+create or replace function public.search_conversations(p_query text)
+returns json language plpgsql security definer set search_path = public as $$
+declare v_user uuid := auth.uid(); q text := '%' || trim(coalesce(p_query, '')) || '%'; result json;
+begin
+  if v_user is null or length(trim(coalesce(p_query, ''))) < 2 then return '[]'::json; end if;
+  select coalesce(json_agg(row_to_json(t) order by t.pinned_at desc nulls last, t.last_message_at desc), '[]'::json) into result
+  from (
+    select c.id, c.customer_id, c.last_message_at, c.last_preview, c.last_direction, c.unread,
+           c.archived_at, c.pinned_at, c.muted, cu.name as customer_name, cu.phone as customer_phone
+    from public.conversations c
+    join public.customers cu on cu.id = c.customer_id
+    where c.user_id = v_user and (
+      cu.name ilike q or coalesce(cu.phone, '') ilike q or coalesce(cu.address, '') ilike q
+      or exists (select 1 from public.messages m where m.conversation_id = c.id and m.body ilike q)
+      or exists (select 1 from public.quotes qq where qq.customer_id = c.customer_id and qq.quote_number ilike q)
+      or exists (select 1 from public.invoices iv where iv.customer_id = c.customer_id and iv.invoice_number ilike q)
+    )
+  ) t;
+  return result;
+end; $$;
+grant execute on function public.search_conversations(text) to authenticated;
