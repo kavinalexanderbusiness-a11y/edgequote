@@ -1989,3 +1989,12 @@ alter table public.business_settings add column if not exists default_crew_size 
 -- with no SID) stay unconstrained. Idempotent + backward compatible.
 create unique index if not exists messages_twilio_sid_key
   on public.messages (twilio_sid) where twilio_sid is not null;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-25b — Configurable SMS pricing (Messaging).
+-- The composer cost previews + the Settings usage card read per-segment pricing
+-- from here instead of a hardcoded constant, so estimates stay accurate when
+-- carrier/provider rates change. jsonb: { currency, gsm7, unicode, provider }.
+-- Null = use the app defaults. Idempotent + backward compatible.
+-- ════════════════════════════════════════════════════════════
+alter table public.business_settings add column if not exists sms_pricing jsonb;

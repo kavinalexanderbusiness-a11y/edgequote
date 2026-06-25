@@ -13,8 +13,8 @@ import { Toggle } from '@/components/ui/Toggle'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Collapsible } from '@/components/ui/Collapsible'
 import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
-import { formatCurrency, formatDate, suggestTravelFee } from '@/lib/utils'
-import { laborSuggestion, pricingConfigFromSettings, latestSavedRecommendation, recommendationIsStale } from '@/lib/pricing'
+import { formatCurrency, formatDate, suggestTravelFee, cn } from '@/lib/utils'
+import { laborSuggestion, pricingConfigFromSettings, latestSavedRecommendation, recommendationIsStale, pricingPackage } from '@/lib/pricing'
 import { evaluatePrice, PriceGuardrail } from '@/lib/priceGuardrails'
 import { PriceGuardrailNote } from '@/components/pricing/PriceGuardrailNote'
 import { findCustomerMatch } from '@/lib/customers'
@@ -78,6 +78,9 @@ export function QuoteBuilder({
   // Saved recommendation from the customer's latest property measurement — the
   // source of truth for suggested prices (no re-measuring needed).
   const [savedRec, setSavedRec] = useState<{ rec: SavedRecommendation; sqft: number; date: string } | null>(null)
+  // Which suggested price the owner tapped — drives the compact "Suggested Pricing"
+  // highlight. Cleared the moment a price is edited (manual override).
+  const [pickedCadence, setPickedCadence] = useState<'one_time' | 'weekly' | 'biweekly' | null>(null)
 
   const hours = watch('hours') || 0
   const crewSize = watch('crew_size') || 1
@@ -124,6 +127,33 @@ export function QuoteBuilder({
   )
   const suggestedInitial = laborSuggestion(Number(hours), Number(crewSize), Number(rate), overgrowth || 1)
   const effectiveTotal = initialPrice + Number(travelFee || 0)
+
+  // Live suggested prices straight from the measured lawn — the compact one-tap
+  // pricing. Same engine as everywhere else; we just surface the top three.
+  const suggested = useMemo(() => {
+    if (measuredSqft <= 0) return null
+    const cfg = pricingConfigFromSettings(settings)
+    const pkg = pricingPackage(measuredSqft, cfg, { overgrowth: overgrowth || 1, nearbyCount: 0 })
+    return {
+      one_time: pkg.oneTime,
+      weekly: pkg.options.find(o => o.cadence === 'weekly')?.price ?? 0,
+      biweekly: pkg.options.find(o => o.cadence === 'biweekly')?.price ?? 0,
+      recommended: pkg.recommended.cadence,
+    }
+  }, [measuredSqft, overgrowth, settings])
+
+  // Tap a suggestion → fill the first-visit price + the chosen cadence (and clear the
+  // others), marking it as "suggested" (not a manual override).
+  function applySuggested(c: 'one_time' | 'weekly' | 'biweekly') {
+    if (!suggested) return
+    setValue('initial_price', suggested.one_time)
+    setValue('weekly_price', c === 'weekly' ? suggested.weekly : 0)
+    setValue('biweekly_price', c === 'biweekly' ? suggested.biweekly : 0)
+    setValue('monthly_price', 0)
+    setValue('suggested_price', suggested.one_time)
+    setInitialManual(false)
+    setPickedCadence(c)
+  }
 
   // One-line summaries so collapsed sections still reveal their state.
   const recSummary = [
@@ -352,6 +382,36 @@ export function QuoteBuilder({
                 )}
               </div>
 
+              {/* Compact Suggested Pricing — one tap fills the quote price + frequency. */}
+              {suggested && (
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-1.5">Suggested Pricing</p>
+                  <div className="grid grid-cols-3 gap-2">
+                    {([
+                      { c: 'weekly', label: 'Weekly', price: suggested.weekly, per: '/visit' },
+                      { c: 'biweekly', label: 'Bi-Weekly', price: suggested.biweekly, per: '/visit' },
+                      { c: 'one_time', label: 'One-Time', price: suggested.one_time, per: '' },
+                    ] as const).map(opt => {
+                      const active = pickedCadence === opt.c && !initialManual
+                      return (
+                        <button key={opt.c} type="button" onClick={() => applySuggested(opt.c)}
+                          className={cn('rounded-xl border p-2.5 text-left transition-colors',
+                            active ? 'border-accent bg-accent/10 ring-1 ring-accent' : 'border-border bg-surface hover:border-border-strong')}>
+                          <span className="flex items-center justify-between gap-1">
+                            <span className="text-[11px] font-medium text-ink-muted">{opt.label}</span>
+                            {suggested.recommended === opt.c && <span className="text-[9px] font-bold uppercase tracking-wide text-accent">Rec</span>}
+                          </span>
+                          <span className="block text-base font-bold text-ink mt-0.5 leading-tight">
+                            {formatCurrency(opt.price)}<span className="text-[10px] font-normal text-ink-faint">{opt.per}</span>
+                          </span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <p className="text-[10px] text-ink-faint mt-1.5">Tap a price to use it. Editing a price below overrides it until you tap a suggestion again.</p>
+                </div>
+              )}
+
               {/* Service */}
               <Controller name="service_template_id" control={control}
                 render={({ field }) => (<Select label="Service" options={templateOptions} {...field} />)} />
@@ -403,7 +463,8 @@ export function QuoteBuilder({
             </CardBody>
           </Card>
 
-          {/* ── ADVANCED — collapsed by default; open only when needed ── */}
+          {/* ── Show Pricing Breakdown — the full engine, collapsed until needed ── */}
+          <Collapsible title="Show Pricing Breakdown" icon={DollarSign} summary="Labour · recurring · travel — full transparency">
           <Collapsible title="Labour calculator" icon={Calculator} summary={laborSummary}>
             <p className="text-xs text-ink-faint">Adjusts the suggested price above. Most mowing quotes can skip this and just type a price.</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -452,7 +513,7 @@ export function QuoteBuilder({
             </div>
             {calcMsg && <p className="text-xs text-accent">{calcMsg}</p>}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
-              <Input label="Distance (km)" type="number" step="1" min="0" {...register('distance_km', { min: 0 })} />
+              <Input label="Distance (km)" type="number" step="0.1" min="0" {...register('distance_km', { min: 0 })} />
               <Input label="Travel Fee ($)" type="number" step="5" min="0" {...register('travel_fee', { min: 0 })} />
             </div>
             {travelSuggestion && (
@@ -484,6 +545,7 @@ export function QuoteBuilder({
                     label={field.value ? 'Show travel as separate line on PDF' : 'Travel rolled into total on PDF'} />
                 )} />
             </div>
+          </Collapsible>
           </Collapsible>
 
           <Collapsible title="Notes" icon={FileText} summary={notes ? String(notes).slice(0, 40) : 'None'}>
