@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createClient } from '@/lib/supabase/server'
 
 // Pull the best human area name from Google address components.
 // Priority: community/neighborhood → sublocality (district) → null.
@@ -14,6 +15,11 @@ function extractNeighborhood(results: Array<{ address_components?: Array<{ long_
 }
 
 export async function POST(req: NextRequest) {
+  // Authenticated owners only — this proxies the server-side Google Maps billing key,
+  // so an open endpoint would let anyone run up the owner's Maps bill / quota.
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
   try {
     const body = await req.json()
     const address = (body.address || '').trim()

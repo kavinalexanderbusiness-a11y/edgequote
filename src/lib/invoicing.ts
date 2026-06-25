@@ -227,7 +227,16 @@ export async function createDraftInvoiceForCompletedJob(supabase: Supa, job: Job
     notes: `Auto-generated from completed ${freq || 'recurring'} visit on ${job.scheduled_date}.`,
   }).select('id').single()
 
-  if (error || !created) return { created: false, reason: 'error' }
+  if (error || !created) {
+    // The partial unique index on invoices(job_id) is the ATOMIC backstop against a
+    // double-complete of the same visit (e.g. a mobile double-tap of "Done" racing
+    // two inserts): the loser hits a 23505 unique violation, which we treat as a
+    // benign "already invoiced" — NOT an error. Crucially, triggerAutoPay is only
+    // reached on a SUCCESSFUL insert below, so a duplicate visit can never produce a
+    // second invoice and therefore can never produce a second AutoPay charge.
+    if ((error as { code?: string } | null)?.code === '23505') return { created: false, reason: 'exists' }
+    return { created: false, reason: 'error' }
+  }
 
   // AutoPay: this is the single point a recurring invoice is "finalized", so attempt
   // the off-session charge here. The /api/payments/autopay route gates EVERYTHING

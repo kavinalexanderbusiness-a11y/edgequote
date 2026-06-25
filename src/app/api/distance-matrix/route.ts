@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createClient } from '@/lib/supabase/server'
 
 interface LatLng { lat: number; lng: number }
 
@@ -7,6 +8,10 @@ interface LatLng { lat: number; lng: number }
 // measured. Returns a rows[origin][destination] grid of { km, seconds } (or null
 // for unreachable / failed elements). Mirrors /api/route's key + error handling.
 export async function POST(req: NextRequest) {
+  // Authenticated owners only — proxies the server-side Google Maps billing key.
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 })
   try {
     const body = await req.json()
     const origins: LatLng[] = Array.isArray(body.origins) ? body.origins : []

@@ -79,6 +79,7 @@ export default function CustomerDetailPage() {
   const [seasons, setSeasons] = useState<ServiceSeasons>(DEFAULT_SEASONS)
   const [pausing, setPausing] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [portalBusy, setPortalBusy] = useState(false)
   const [portalCopied, setPortalCopied] = useState(false)
 
@@ -133,6 +134,10 @@ export default function CustomerDetailPage() {
         supabase.from('jobs').select('*').eq('customer_id', id).order('scheduled_date', { ascending: true }),
         supabase.from('invoices').select('*').eq('customer_id', id).order('created_at', { ascending: false }),
       ])
+      // A transient/network error must NOT render as "Customer not found." Only a
+      // genuine no-rows result (.single() → PGRST116) means the customer is truly gone.
+      if (cRes.error && cRes.error.code !== 'PGRST116') { setLoadError('Could not load this customer — check your connection.'); setLoading(false); return }
+      setLoadError(null)
       const cust = cRes.data as Customer | null
       setCustomer(cust)
       setNotesValue(cust?.notes || '')
@@ -262,7 +267,16 @@ export default function CustomerDetailPage() {
   }
 
   if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading customer...</div>
-  if (!customer) return <div className="text-center py-16 text-sm text-red-400">Customer not found.</div>
+  // Cached customer (if any) keeps showing on a revalidation blip; only when there's
+  // genuinely nothing to show do we branch error-vs-not-found.
+  if (!customer) return loadError ? (
+    <div className="text-center py-16 text-sm">
+      <p className="text-red-400">{loadError}</p>
+      <button onClick={reload} className="mt-2 underline font-medium text-accent">Retry</button>
+    </div>
+  ) : (
+    <div className="text-center py-16 text-sm text-red-400">Customer not found.</div>
+  )
 
   const today = localToday()
   // Per-visit valuation so plans can show the initial vs recurring price.

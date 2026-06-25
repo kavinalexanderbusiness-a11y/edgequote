@@ -138,6 +138,286 @@ create index quotes_status_idx     on public.quotes(status);
 create index quotes_created_idx    on public.quotes(created_at desc);
 
 -- ════════════════════════════════════════════════════════════
+-- BASE TABLES (reconstructed from production, 2026-06-25) — REPRODUCIBILITY FIX
+-- ════════════════════════════════════════════════════════════
+-- These seven tables predate this migration log and were created out-of-band, so a
+-- fresh database built from schema.sql alone was missing them (and their RLS
+-- policies / indexes), breaking disaster recovery + new environments. Captured here
+-- as an idempotent snapshot of the LIVE schema. Placed right after customers/quotes
+-- (their only same-file dependencies) and before the dated migrations that ALTER
+-- them. On the live DB every statement no-ops (tables/policies/indexes already
+-- exist); on a fresh DB this builds the foundation the rest of the file expects.
+-- Idempotent + additive — does NOT alter runtime behavior.
+
+-- ── service_templates ──
+create table if not exists public.service_templates (
+  id                  uuid primary key default uuid_generate_v4(),
+  created_at          timestamptz not null default now(),
+  updated_at          timestamptz not null default now(),
+  name                text not null,
+  category            text not null default 'General',
+  default_rate        numeric(8,2) not null default 50.00,
+  default_description text,
+  notes               text,
+  is_active           boolean not null default true,
+  sort_order          int not null default 0,
+  user_id             uuid not null references auth.users(id) on delete cascade
+);
+alter table public.service_templates enable row level security;
+drop trigger if exists service_templates_updated_at on public.service_templates;
+create trigger service_templates_updated_at before update on public.service_templates for each row execute procedure public.handle_updated_at();
+do $$ begin
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='service_templates' and policyname='templates: select own') then
+    create policy "templates: select own" on public.service_templates for select using (auth.uid() = user_id);
+    create policy "templates: insert own" on public.service_templates for insert with check (auth.uid() = user_id);
+    create policy "templates: update own" on public.service_templates for update using (auth.uid() = user_id);
+    create policy "templates: delete own" on public.service_templates for delete using (auth.uid() = user_id);
+  end if;
+end $$;
+create index if not exists service_templates_user_idx   on public.service_templates(user_id);
+create index if not exists service_templates_active_idx on public.service_templates(is_active);
+
+-- ── travel_fee_tiers ──
+create table if not exists public.travel_fee_tiers (
+  id          uuid primary key default uuid_generate_v4(),
+  created_at  timestamptz not null default now(),
+  min_km      numeric(6,2) not null,
+  max_km      numeric(6,2),
+  fee         numeric(8,2),
+  is_custom   boolean not null default false,
+  sort_order  int not null default 0,
+  user_id     uuid not null references auth.users(id) on delete cascade
+);
+alter table public.travel_fee_tiers enable row level security;
+do $$ begin
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='travel_fee_tiers' and policyname='tiers: select own') then
+    create policy "tiers: select own" on public.travel_fee_tiers for select using (auth.uid() = user_id);
+    create policy "tiers: insert own" on public.travel_fee_tiers for insert with check (auth.uid() = user_id);
+    create policy "tiers: update own" on public.travel_fee_tiers for update using (auth.uid() = user_id);
+    create policy "tiers: delete own" on public.travel_fee_tiers for delete using (auth.uid() = user_id);
+  end if;
+end $$;
+create index if not exists travel_fee_tiers_user_idx on public.travel_fee_tiers(user_id);
+
+-- ── business_settings (full current snapshot — later ALTER migrations no-op) ──
+create table if not exists public.business_settings (
+  id                         uuid primary key default uuid_generate_v4(),
+  created_at                 timestamptz not null default now(),
+  updated_at                 timestamptz not null default now(),
+  company_name               text not null default 'Edge Property Services',
+  owner_name                 text,
+  phone                      text,
+  email_primary              text,
+  email_secondary            text,
+  website                    text,
+  logo_url                   text,
+  base_address               text,
+  base_lat                   numeric(10,7),
+  base_lng                   numeric(10,7),
+  default_rate               numeric(8,2) not null default 50.00,
+  terms_text                 text,
+  user_id                    uuid not null unique references auth.users(id) on delete cascade,
+  pricing_base_charge        numeric default 28,
+  pricing_mow_rate           numeric default 15,
+  pricing_recommended_mult   numeric default 1.0,
+  pricing_premium_mult       numeric default 1.2,
+  pricing_travel_rate        numeric default 1.5,
+  preferred_work_days        int[] default '{5,6,0}'::int[],
+  work_start_time            text default '08:00',
+  daily_capacity_hours       numeric default 8,
+  logo_scale                 numeric default 100,
+  dashboard_cards            jsonb,
+  service_seasons            jsonb,
+  target_rev_per_hour        numeric default 60,
+  crew_cost_per_hour         numeric default 40,
+  message_templates          jsonb,
+  review_url                 text,
+  automations                jsonb,
+  payment_fee_strategy       text not null default 'global_price_increase' check (payment_fee_strategy in ('absorb','global_price_increase','etransfer_discount')),
+  fee_recovery_percent       numeric not null default 3,
+  etransfer_discount_percent numeric not null default 0,
+  gst_percent                numeric not null default 0,
+  smart_labor_enabled        boolean not null default true,
+  notif_prefs                jsonb not null default '{}'::jsonb,
+  sms_pricing                jsonb,
+  default_crew_size          int not null default 1,
+  autopay_charge_mode        text not null default 'auto' check (autopay_charge_mode in ('auto','manual_review')),
+  autopay_variance_pct       int not null default 40,
+  booking_enabled            boolean not null default false,
+  booking_token              text
+);
+alter table public.business_settings enable row level security;
+drop trigger if exists business_settings_updated_at on public.business_settings;
+create trigger business_settings_updated_at before update on public.business_settings for each row execute procedure public.handle_updated_at();
+do $$ begin
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='business_settings' and policyname='settings: select own') then
+    create policy "settings: select own" on public.business_settings for select using (auth.uid() = user_id);
+    create policy "settings: insert own" on public.business_settings for insert with check (auth.uid() = user_id);
+    create policy "settings: update own" on public.business_settings for update using (auth.uid() = user_id);
+    create policy "settings: delete own" on public.business_settings for delete using (auth.uid() = user_id);
+  end if;
+end $$;
+create unique index if not exists business_settings_booking_token_idx on public.business_settings(booking_token) where booking_token is not null;
+
+-- ── job_recurrences (jobs.recurrence_id → here, so it precedes jobs) ──
+create table if not exists public.job_recurrences (
+  id             uuid primary key default uuid_generate_v4(),
+  created_at     timestamptz not null default now(),
+  user_id        uuid not null references auth.users(id) on delete cascade,
+  freq           text check (freq in ('weekly','biweekly','monthly')),
+  start_date     date not null,
+  end_date       date,
+  customer_id    uuid references public.customers(id) on delete set null,
+  interval_unit  text check (interval_unit in ('day','week','month')),
+  interval_count int,
+  end_count      int
+);
+alter table public.job_recurrences enable row level security;
+do $$ begin
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='job_recurrences' and policyname='job_recurrences: all own') then
+    create policy "job_recurrences: all own" on public.job_recurrences for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+  end if;
+end $$;
+create index if not exists job_recurrences_user_id_idx     on public.job_recurrences(user_id);
+create index if not exists job_recurrences_customer_id_idx on public.job_recurrences(customer_id);
+
+-- ── properties (full current snapshot) ──
+create table if not exists public.properties (
+  id                          uuid primary key default uuid_generate_v4(),
+  created_at                  timestamptz not null default now(),
+  updated_at                  timestamptz not null default now(),
+  customer_id                 uuid not null references public.customers(id) on delete cascade,
+  user_id                     uuid not null references auth.users(id) on delete cascade,
+  address                     text not null,
+  city                        text,
+  province                    text default 'AB',
+  postal_code                 text,
+  lat                         double precision,
+  lng                         double precision,
+  lot_size                    numeric(10,2),
+  lawn_sqft                   numeric(10,2),
+  fence_length                numeric(10,2),
+  mulch_area                  numeric(10,2),
+  rock_area                   numeric(10,2),
+  driveway_area               numeric(10,2),
+  notes                       text,
+  measurement_history         jsonb default '[]'::jsonb,
+  is_primary                  boolean not null default true,
+  neighborhood                text,
+  preferred_days              int[],
+  avoid_days                  int[],
+  pref_time_start             text,
+  pref_time_end               text,
+  lawn_polygon                jsonb,
+  google_place_id             text,
+  maps_url                    text,
+  property_travel_distance_km numeric,
+  property_travel_fee         numeric
+);
+alter table public.properties enable row level security;
+drop trigger if exists properties_updated_at on public.properties;
+create trigger properties_updated_at before update on public.properties for each row execute procedure public.handle_updated_at();
+do $$ begin
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='properties' and policyname='properties: select own') then
+    create policy "properties: select own" on public.properties for select using (auth.uid() = user_id);
+    create policy "properties: insert own" on public.properties for insert with check (auth.uid() = user_id);
+    create policy "properties: update own" on public.properties for update using (auth.uid() = user_id);
+    create policy "properties: delete own" on public.properties for delete using (auth.uid() = user_id);
+  end if;
+end $$;
+create index if not exists properties_user_id_idx     on public.properties(user_id);
+create index if not exists properties_customer_id_idx on public.properties(customer_id);
+
+-- ── jobs (full current snapshot; FK to job_recurrences above) ──
+create table if not exists public.jobs (
+  id                     uuid primary key default uuid_generate_v4(),
+  created_at             timestamptz not null default now(),
+  updated_at             timestamptz not null default now(),
+  user_id                uuid not null references auth.users(id) on delete cascade,
+  customer_id            uuid references public.customers(id) on delete set null,
+  property_id            uuid references public.properties(id) on delete set null,
+  quote_id               uuid references public.quotes(id) on delete set null,
+  title                  text not null,
+  service_type           text,
+  scheduled_date         date not null,
+  start_time             time,
+  end_time               time,
+  duration_minutes       int,
+  crew_size              int not null default 1,
+  status                 text not null default 'scheduled' check (status in ('scheduled','in_progress','completed','cancelled')),
+  notes                  text,
+  recurrence_id          uuid references public.job_recurrences(id) on delete set null,
+  suggested_date         date,
+  suggested_nearby_count int,
+  actual_minutes         int,
+  price                  numeric,
+  started_at             timestamptz,
+  completed_at           timestamptz,
+  is_initial_visit       boolean not null default false,
+  on_my_way_at           timestamptz
+);
+alter table public.jobs enable row level security;
+drop trigger if exists jobs_updated_at on public.jobs;
+create trigger jobs_updated_at before update on public.jobs for each row execute procedure public.handle_updated_at();
+do $$ begin
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='jobs' and policyname='jobs: select own') then
+    create policy "jobs: select own" on public.jobs for select using (auth.uid() = user_id);
+    create policy "jobs: insert own" on public.jobs for insert with check (auth.uid() = user_id);
+    create policy "jobs: update own" on public.jobs for update using (auth.uid() = user_id);
+    create policy "jobs: delete own" on public.jobs for delete using (auth.uid() = user_id);
+  end if;
+end $$;
+create index if not exists jobs_user_id_idx        on public.jobs(user_id);
+create index if not exists jobs_customer_id_idx    on public.jobs(customer_id);
+create index if not exists jobs_property_id_idx    on public.jobs(property_id);
+create index if not exists jobs_quote_id_idx       on public.jobs(quote_id);
+create index if not exists jobs_recurrence_idx     on public.jobs(recurrence_id);
+create index if not exists jobs_scheduled_date_idx on public.jobs(scheduled_date);
+
+-- ── invoices (full current snapshot; FK to jobs above) ──
+create table if not exists public.invoices (
+  id             uuid primary key default uuid_generate_v4(),
+  created_at     timestamptz not null default now(),
+  updated_at     timestamptz not null default now(),
+  user_id        uuid not null references auth.users(id) on delete cascade,
+  quote_id       uuid references public.quotes(id) on delete set null,
+  customer_id    uuid references public.customers(id) on delete set null,
+  property_id    uuid references public.properties(id) on delete set null,
+  invoice_number text not null,
+  customer_name  text not null,
+  address        text,
+  service_type   text,
+  amount         numeric(10,2) not null default 0,
+  status         text not null default 'unpaid' check (status in ('draft','unpaid','sent','paid')),
+  issued_date    date default now(),
+  due_date       date,
+  notes          text,
+  job_id         uuid references public.jobs(id) on delete set null,
+  line_items     jsonb,
+  paid_at        timestamptz,
+  payment_method text check (payment_method is null or payment_method in ('stripe','etransfer','cash','cheque'))
+);
+alter table public.invoices enable row level security;
+drop trigger if exists invoices_updated_at on public.invoices;
+create trigger invoices_updated_at before update on public.invoices for each row execute procedure public.handle_updated_at();
+do $$ begin
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='invoices' and policyname='invoices: select own') then
+    create policy "invoices: select own" on public.invoices for select using (auth.uid() = user_id);
+    create policy "invoices: insert own" on public.invoices for insert with check (auth.uid() = user_id);
+    create policy "invoices: update own" on public.invoices for update using (auth.uid() = user_id);
+    create policy "invoices: delete own" on public.invoices for delete using (auth.uid() = user_id);
+  end if;
+end $$;
+create index if not exists invoices_user_id_idx     on public.invoices(user_id);
+create index if not exists invoices_customer_id_idx on public.invoices(customer_id);
+create index if not exists invoices_property_id_idx on public.invoices(property_id);
+create index if not exists invoices_quote_id_idx    on public.invoices(quote_id);
+create index if not exists invoices_job_id_idx      on public.invoices(job_id);
+-- Finding #1 fix: at most one invoice per job (atomic guard against a double-complete
+-- minting a second invoice → a second AutoPay charge). No live duplicates exist.
+create unique index if not exists invoices_job_id_key on public.invoices(job_id) where job_id is not null;
+
+-- ════════════════════════════════════════════════════════════
 -- MIGRATION 2026-06-09 — Measurement sections, travel + pricing
 -- intelligence capture. Idempotent; safe to re-run.
 -- ════════════════════════════════════════════════════════════

@@ -23,11 +23,18 @@ export default function NotificationsPage() {
   const router = useRouter()
   const [items, setItems] = useState<AppNotification[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [uid, setUid] = useState<string | null>(null)
 
   async function load(userId: string) {
-    const { data } = await supabase.from('notifications')
+    setUid(userId)
+    // A failed fetch must NOT render as "No notifications yet" — the owner could miss
+    // a payment_failed / autopay_review alert. Distinguish error from genuinely empty.
+    const { data, error } = await supabase.from('notifications')
       .select('id, created_at, type, title, body, href, read')
       .eq('user_id', userId).order('created_at', { ascending: false }).limit(100)
+    if (error) { setLoadError('Could not load notifications: ' + error.message); setLoading(false); return }
+    setLoadError(null)
     setItems((data as AppNotification[]) || [])
     setLoading(false)
   }
@@ -62,9 +69,15 @@ export default function NotificationsPage() {
       <PageHeader title="Notifications" description="Quote accepted and invoice paid alerts."
         action={unread > 0 ? <Button variant="secondary" size="sm" onClick={() => markRead(items.filter(n => !n.read).map(n => n.id))}><Check className="w-3.5 h-3.5" /> Mark all read</Button> : undefined} />
 
+      {loadError && (
+        <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5">
+          {loadError} <button onClick={() => { setLoading(true); if (uid) load(uid) }} className="underline font-medium ml-1">Retry</button>
+        </div>
+      )}
+
       {loading ? (
         <div className="py-16 text-center text-sm text-ink-muted flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading…</div>
-      ) : items.length === 0 ? (
+      ) : loadError ? null : items.length === 0 ? (
         <div className="py-16 text-center">
           <Bell className="w-10 h-10 text-ink-faint mx-auto mb-3" />
           <p className="text-sm font-medium text-ink">No notifications yet</p>
