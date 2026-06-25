@@ -244,20 +244,22 @@ end; $$;
 grant execute on function public.search_conversations(text) to authenticated;
 
 -- ── 2d. Security hardening ───────────────────────────────────────────────────
--- Stop anon/authenticated from invoking these SECURITY DEFINER *trigger* functions
--- directly over REST. The triggers themselves keep firing (they run as the table
--- owner), so this is behaviour-preserving — it only closes a direct-call surface.
-revoke execute on function public.notify_quote_accepted()        from anon, authenticated;
-revoke execute on function public.notify_invoice_paid()          from anon, authenticated;
-revoke execute on function public.notify_inbound_message()       from anon, authenticated;
-revoke execute on function public.notify_review_received()       from anon, authenticated;
-revoke execute on function public.capture_labor_observation()    from anon, authenticated;
-revoke execute on function public.push_dispatch()                from anon, authenticated;
-revoke execute on function public.bump_conversation()            from anon, authenticated;
-revoke execute on function public.sr_to_conversation()           from anon, authenticated;
-revoke execute on function public.sync_quote_on_invoice_paid()   from anon, authenticated;
-revoke execute on function public.sync_quote_on_job_complete()   from anon, authenticated;
-revoke execute on function public.resync_quote_on_job_recurring() from anon, authenticated;
+-- Stop anon from invoking these SECURITY DEFINER *trigger* functions directly over
+-- REST. Postgres grants EXECUTE to PUBLIC by default, so it MUST be revoked from
+-- PUBLIC (revoking from anon/authenticated alone is a no-op — they inherit via
+-- PUBLIC). The triggers keep firing (they run as the owner / service_role retains
+-- EXECUTE), so this is behaviour-preserving. Idempotent.
+revoke execute on function public.notify_quote_accepted()         from public, anon, authenticated;
+revoke execute on function public.notify_invoice_paid()           from public, anon, authenticated;
+revoke execute on function public.notify_inbound_message()        from public, anon, authenticated;
+revoke execute on function public.notify_review_received()        from public, anon, authenticated;
+revoke execute on function public.capture_labor_observation()     from public, anon, authenticated;
+revoke execute on function public.push_dispatch()                 from public, anon, authenticated;
+revoke execute on function public.bump_conversation()             from public, anon, authenticated;
+revoke execute on function public.sr_to_conversation()            from public, anon, authenticated;
+revoke execute on function public.sync_quote_on_invoice_paid()    from public, anon, authenticated;
+revoke execute on function public.sync_quote_on_job_complete()    from public, anon, authenticated;
+revoke execute on function public.resync_quote_on_job_recurring() from public, anon, authenticated;
 
 
 -- ╔══════════════════════════════════════════════════════════════════════════╗
