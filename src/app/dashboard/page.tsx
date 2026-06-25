@@ -3,9 +3,6 @@ import { DashboardSections } from '@/components/dashboard/DashboardSections'
 import { createClient } from '@/lib/supabase/server'
 import { StatsGrid } from '@/components/dashboard/StatsGrid'
 import { RecentQuotes } from '@/components/dashboard/RecentQuotes'
-import { UnscheduledAccepted } from '@/components/dashboard/UnscheduledAccepted'
-import { MissedJobs } from '@/components/dashboard/MissedJobs'
-import { FollowUpQuotes } from '@/components/dashboard/FollowUpQuotes'
 import { AcquisitionInsights } from '@/components/dashboard/AcquisitionInsights'
 import { DashboardTopSuggestions } from '@/components/dashboard/DashboardTopSuggestions'
 import { TodaysPriorities } from '@/components/dashboard/TodaysPriorities'
@@ -95,9 +92,6 @@ export default async function DashboardPage() {
         sections={{
           suggestions: <DashboardTopSuggestions />,
           stats: <StatsGrid stats={stats} />,
-          missed: <MissedJobs />,
-          followups: <FollowUpQuotes />,
-          unscheduled: <UnscheduledAccepted />,
           weekend: <WeekendOutlook />,
           recent: <RecentQuotes quotes={recent} />,
           acquisition: <AcquisitionInsights />,

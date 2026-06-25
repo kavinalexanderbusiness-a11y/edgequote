@@ -734,13 +734,11 @@ export default function QuoteDetailPage() {
                     <span className="text-ink-muted">Suggested price</span>
                     <span className="text-ink font-medium">{formatCurrency(suggestedPrice)}</span>
                   </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-ink-muted">Actual quote price</span>
-                    <span className="text-ink font-medium">{formatCurrency(actualPrice)}</span>
-                  </div>
+                  {/* "Actual quote price" row removed — it just repeated the First Invoice
+                      Total shown prominently above; the difference below conveys the rest. */}
                   {priceDiff != null && (
                     <div className="flex justify-between text-sm pt-1.5 border-t border-border">
-                      <span className="text-ink-muted">Difference</span>
+                      <span className="text-ink-muted">Your price vs suggested</span>
                       <span className={`font-semibold ${priceDiff >= 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
                         {priceDiff >= 0 ? '+' : '−'}{formatCurrency(Math.abs(priceDiff))}
                         <span className="text-ink-faint font-normal"> {priceDiff >= 0 ? 'above' : 'below'} suggested</span>

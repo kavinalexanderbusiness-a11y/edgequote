@@ -6,16 +6,16 @@ import { cn } from '@/lib/utils'
 import { Settings2, Check, ChevronUp, ChevronDown, EyeOff, Eye } from 'lucide-react'
 
 export const SECTION_LABELS: Record<string, string> = {
-  suggestions: 'Do this next',
+  suggestions: 'Suggestions',
   stats: 'Business stats',
-  missed: 'Missed jobs',
-  followups: 'Quote follow-ups',
-  unscheduled: 'Accepted — not scheduled',
   weekend: 'Next work days',
   recent: 'Recent quotes',
   acquisition: 'Acquisition insights',
 }
-export const DEFAULT_ORDER = ['suggestions', 'stats', 'missed', 'followups', 'unscheduled', 'weekend', 'recent', 'acquisition']
+// "missed", "followups" and "unscheduled" were removed — Today's Priorities (top of
+// the page) now surfaces those exact signals in one ranked queue, so the standalone
+// cards were pure duplication. Their actions live on the pages each priority links to.
+export const DEFAULT_ORDER = ['suggestions', 'stats', 'weekend', 'recent', 'acquisition']
 
 export interface DashboardPrefs { order: string[]; hidden: string[] }
 
