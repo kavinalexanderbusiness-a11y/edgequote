@@ -64,6 +64,9 @@ export interface OptOptions {
   // treated as unavailable: the optimizer never MOVES a job onto one and never
   // offers one as an alternative. (The owner can still manually drag onto it.)
   dayStatusMap?: DayStatusMap
+  // Per-day available LABOR-HOURS (Day Settings crew/hours overrides). When set,
+  // capacity checks use this PER DAY instead of the flat capacityHours.
+  capacityForDate?: (dateISO: string) => number
 }
 
 // Resolve a scope into its date windows. movable = origin dates that may move;
@@ -236,7 +239,7 @@ export interface RainDelayPlan {
 }
 
 export function planRainDelay(jobs: OptJob[], dayISO: string, opts: Omit<OptOptions, 'mode' | 'scope' | 'anchorDate'>): RainDelayPlan {
-  const capMin = (opts.capacityHours > 0 ? opts.capacityHours : 8) * 60
+  const capMinFor = (date: string) => (opts.capacityForDate ? opts.capacityForDate(date) : (opts.capacityHours > 0 ? opts.capacityHours : 8)) * 60
   const prefSet = opts.preferredDays.length ? new Set(opts.preferredDays) : null
 
   const dayJobs = jobs.filter(j => j.scheduled_date === dayISO && j.status !== 'cancelled' && j.status !== 'completed')
@@ -286,7 +289,7 @@ export function planRainDelay(jobs: OptJob[], dayISO: string, opts: Omit<OptOpti
       if (ceiling && t >= ceiling) break // any later day is past the next visit too
       const current = loadOf([...existing.get(t)!, ...assignedTo.get(t)!])
       const jobMin = (j.duration_minutes || DEFAULT_JOB_MIN) + 10
-      if (current.total + jobMin > capMin && targetDates.some(t2 => t2 > t && (!ceiling || t2 < ceiling))) continue
+      if (current.total + jobMin > capMinFor(t) && targetDates.some(t2 => t2 > t && (!ceiling || t2 < ceiling))) continue
       assignedTo.get(t)!.push(j)
       moves.push({ jobId: j.id, title: j.title, customerName: j.customerName, from: dayISO, to: t, value: j.value, recurring: !!j.recurrence_id, hasSetTime: !!j.start_time })
       placed = true
@@ -305,7 +308,7 @@ export function planRainDelay(jobs: OptJob[], dayISO: string, opts: Omit<OptOpti
       return {
         date: t, beforeMin: before.total, afterMin: after.total,
         beforeKm: Math.round(before.km * 10) / 10, afterKm: Math.round(after.km * 10) / 10,
-        added: assignedTo.get(t)!.length, overCapacity: after.total > capMin,
+        added: assignedTo.get(t)!.length, overCapacity: after.total > capMinFor(t),
       }
     })
 
@@ -494,6 +497,9 @@ interface DayEval { driveMin: number; laborMin: number; km: number; totalMin: nu
 
 export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): OptimizationResult {
   const capMin = (opts.capacityHours > 0 ? opts.capacityHours : 8) * 60
+  // Per-day capacity (Day Settings crew/hours overrides) → falls back to the flat
+  // capacity when no override exists, so normal days are unchanged.
+  const capMinFor = (date: string) => (opts.capacityForDate ? opts.capacityForDate(date) : (opts.capacityHours > 0 ? opts.capacityHours : 8)) * 60
   const prefSet = opts.preferredDays.length ? new Set(opts.preferredDays) : null
   // A day the owner blocked (rain/vacation/…) is never a legal MOVE destination.
   const isBlockedDay = (date: string) => isDayBlocked(opts.dayStatusMap, date)
@@ -823,7 +829,7 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
       if (ids.size === 0 || !inMetrics(date)) continue
       const e = evalDay(date)
       km += e.km; drive += e.driveMin; labor += e.laborMin; days++; stops += ids.size
-      if (e.totalMin > capMin) over++
+      if (e.totalMin > capMinFor(date)) over++
       for (const id of ids) revenue += byId.get(id)!.value
     }
     const totalHours = Math.round(((drive + labor) / 60) * 10) / 10
@@ -1064,7 +1070,7 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
       const fromDate = assign.get(j.id)!
       const delta = moveCost(j, to) - baseCost
       const destSorted = daySorted.get(to) ?? []
-      const destOver = evalSet(withInserted(destSorted, j.id)).totalMin - capMin
+      const destOver = evalSet(withInserted(destSorted, j.id)).totalMin - capMinFor(to)
       if (delta < -MIN_GAIN) return { ok: true, reason: 'no-gain', detail: 'a beneficial move exists' }
       if (destOver > 0) return { ok: false, reason: 'capacity', detail: `${longDow(to)} is already full (${fmtDur(destOver)} over capacity)` }
       if (j.recurrence_id) {
@@ -1137,10 +1143,10 @@ function fmtDur(min: number): string {
 // result.after exactly.
 export function metricsWithMoves(
   jobs: OptJob[],
-  opts: Pick<OptOptions, 'scope' | 'anchorDate' | 'today' | 'base' | 'capacityHours' | 'roadDist'>,
+  opts: Pick<OptOptions, 'scope' | 'anchorDate' | 'today' | 'base' | 'capacityHours' | 'roadDist' | 'capacityForDate'>,
   moves: Pick<PlannedMove, 'jobId' | 'to'>[],
 ): ScheduleMetrics {
-  const capMin = (opts.capacityHours > 0 ? opts.capacityHours : 8) * 60
+  const capMinFor = (date: string) => (opts.capacityForDate ? opts.capacityForDate(date) : (opts.capacityHours > 0 ? opts.capacityHours : 8)) * 60
   const win = scopeWindows(opts.scope, opts.anchorDate, opts.today)
   const inMetrics = (date: string) => date >= win.metricsStart && (win.metricsEnd == null || date <= win.metricsEnd)
   const override = new Map(moves.map(m => [m.jobId, m.to]))
@@ -1154,13 +1160,13 @@ export function metricsWithMoves(
     else byDate.set(date, [j])
   }
   let km = 0, drive = 0, labor = 0, days = 0, stops = 0, over = 0, revenue = 0
-  for (const list of byDate.values()) {
+  for (const [date, list] of byDate) {
     const laborMin = list.reduce((s, j) => s + (j.duration_minutes || DEFAULT_JOB_MIN), 0)
     const located = list.filter(j => j.lat != null && j.lng != null).map(j => ({ lat: j.lat as number, lng: j.lng as number }))
     const dayKm = opts.base ? routeKmEstimate(opts.base, located, opts.roadDist) : clusterKmEstimate(located, opts.roadDist)
     const driveMin = Math.round(dayKm / AVG_SPEED_KM_PER_MIN)
     km += dayKm; drive += driveMin; labor += laborMin; days++; stops += list.length
-    if (driveMin + laborMin > capMin) over++
+    if (driveMin + laborMin > capMinFor(date)) over++
     revenue += list.reduce((s, j) => s + j.value, 0)
   }
   const totalHours = Math.round(((drive + labor) / 60) * 10) / 10
@@ -1224,7 +1230,7 @@ function explainStuckDay(dayJobs: OptJob[]): string {
 }
 
 export function analyzeSchedule(jobs: OptJob[], base: Omit<OptOptions, 'mode' | 'scope' | 'anchorDate'>): ScheduleSuggestion[] {
-  const capMin = (base.capacityHours > 0 ? base.capacityHours : 8) * 60
+  const capMinFor = (date: string) => (base.capacityForDate ? base.capacityForDate(date) : (base.capacityHours > 0 ? base.capacityHours : 8)) * 60
   const out: ScheduleSuggestion[] = []
   const future = jobs.filter(j => j.scheduled_date > base.today && j.status !== 'cancelled')
   if (future.length === 0) return out
@@ -1244,7 +1250,7 @@ export function analyzeSchedule(jobs: OptJob[], base: Omit<OptOptions, 'mode' | 
   // job OFF that day; otherwise show a non-actionable explanation of why it's
   // stuck (so we never show a dead "Optimize" CTA the optimizer can't honour).
   const overloaded = Object.entries(byDate)
-    .map(([date, list]) => ({ date, over: loadOf(list).total - capMin, count: list.length }))
+    .map(([date, list]) => ({ date, over: loadOf(list).total - capMinFor(date), count: list.length }))
     .filter(d => d.over > 20)
     .sort((a, b) => a.date.localeCompare(b.date))
     .slice(0, 3)
@@ -1338,7 +1344,7 @@ export function analyzeSchedule(jobs: OptJob[], base: Omit<OptOptions, 'mode' | 
     if (out.some(s => (s.kind === 'overload' || s.kind === 'stuck') && s.anchorDate === d.date)) continue
     const widx = getDay(parseISO(d.date + 'T00:00:00'))
     if (prefSet && !prefSet.has(widx)) continue               // an off day isn't "underutilized"
-    if (d.count > 2 || d.load >= capMin * 0.4) continue       // must be genuinely light
+    if (d.count > 2 || d.load >= capMinFor(d.date) * 0.4) continue       // must be genuinely light
     if (++underutilSims > 3) break                            // bounded simulation budget
     const res = optimizeSchedule(jobs, { ...base, mode: 'density', scope: 'week', anchorDate: d.date })
     if (res.moves.length === 0 || res.after.activeDays >= res.before.activeDays) continue // no trip actually saved

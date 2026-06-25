@@ -24,8 +24,9 @@ export interface DayStatusRow {
   blocks: boolean              // AUTHORITATIVE — does this day block scheduling?
   label: string | null         // free text (custom reason / display override)
   notes: string | null         // longer free-text notes
-  starts_at: string | null     // HH:mm[:ss] — partial-day support (null = whole day)
+  starts_at: string | null     // HH:mm[:ss] — day-specific working hours (null = default)
   ends_at: string | null
+  crew_size: number | null     // day-specific crew override (null = business default)
   created_by: string | null
   created_at?: string | null
 }
@@ -52,7 +53,7 @@ export const DAY_STATUS_META: Record<DayStatus, DayStatusMeta> = {
 }
 
 export const DAY_STATUSES = Object.keys(DAY_STATUS_META) as DayStatus[]
-export const DAY_STATUS_SELECT = 'id, date, status, blocks, label, notes, starts_at, ends_at, created_by, created_at'
+export const DAY_STATUS_SELECT = 'id, date, status, blocks, label, notes, starts_at, ends_at, crew_size, created_by, created_at'
 
 function titleCase(s: string): string {
   return s.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
@@ -105,6 +106,42 @@ export function countBlockedInRange(map: DayStatusMap | null | undefined, startI
   return n
 }
 
+// ── Per-day capacity (Day Settings: crew + working-hours overrides) ──────────────
+// The business defaults: `crew` (default crew size) and `hours` (work-hours per
+// crew per day = daily_capacity_hours ÷ default_crew_size). Available LABOR-HOURS
+// for a day = crew × hours, so with no override a day equals the existing global
+// capacity exactly (nothing changes). An override sets crew and/or start/end time
+// for THAT day only. A blocked day has 0 capacity.
+export interface CapacityDefaults { crew: number; hours: number }
+
+function hoursBetween(start: string, end: string): number {
+  const [sh, sm = '0'] = start.split(':'); const [eh, em = '0'] = end.split(':')
+  const mins = (Number(eh) * 60 + Number(em)) - (Number(sh) * 60 + Number(sm))
+  return Math.max(0, mins / 60)
+}
+
+// Crew working that day (override → default).
+export function dayCrew(row: DayStatusRow | null | undefined, def: CapacityDefaults): number {
+  return row?.crew_size && row.crew_size > 0 ? row.crew_size : def.crew
+}
+// Work-hours (wall-clock) that day (override start/end → default).
+export function dayWorkHours(row: DayStatusRow | null | undefined, def: CapacityDefaults): number {
+  return row?.starts_at && row?.ends_at ? hoursBetween(row.starts_at, row.ends_at) : def.hours
+}
+// Available LABOR-HOURS for a date: 0 when blocked, else crew × work-hours.
+export function dayLaborHours(row: DayStatusRow | null | undefined, def: CapacityDefaults): number {
+  if (row?.blocks) return 0
+  return dayCrew(row, def) * dayWorkHours(row, def)
+}
+// A per-date labor-hours function for the optimizer / capacity math / Weather Ops.
+export function buildCapacityForDate(map: DayStatusMap | null | undefined, def: CapacityDefaults): (dateISO: string) => number {
+  return (dateISO: string) => dayLaborHours(map?.byDate[dateISO] ?? null, def)
+}
+// True when a day carries a crew/hours override (vs. just a status / nothing).
+export function hasCapacityOverride(row: DayStatusRow | null | undefined): boolean {
+  return !!(row && (row.crew_size != null || (row.starts_at && row.ends_at)))
+}
+
 // ── supabase helpers (shared by the scheduler UI + the Weather Ops loader) ──────
 export async function loadDayStatuses(supabase: SupabaseClient, userId: string): Promise<DayStatusRow[]> {
   const { data } = await supabase.from('day_statuses').select(DAY_STATUS_SELECT).eq('user_id', userId)
@@ -116,8 +153,9 @@ export interface SetDayStatusInput {
   blocks?: boolean             // defaults to the status's defaultBlocks (known) or true
   label?: string | null
   notes?: string | null
-  startsAt?: string | null     // HH:mm — partial day (optional)
+  startsAt?: string | null     // HH:mm — day-specific working hours (optional)
   endsAt?: string | null
+  crewSize?: number | null     // day-specific crew override (optional)
   createdBy?: string | null
 }
 
@@ -128,7 +166,28 @@ export async function setDayStatus(supabase: SupabaseClient, userId: string, dat
     user_id: userId, date, status: input.status, blocks,
     label: input.label ?? null, notes: input.notes ?? null,
     starts_at: input.startsAt ?? null, ends_at: input.endsAt ?? null,
+    crew_size: input.crewSize ?? null,
     created_by: input.createdBy ?? null, updated_at: new Date().toISOString(),
+  }, { onConflict: 'user_id,date' })
+}
+
+// Save ONLY a day's capacity override (crew + working hours) without changing its
+// block status — for the Day Settings panel. Upserts so it merges with any status
+// already on the day. An override with no block uses status 'custom', blocks=false.
+export async function setDayCapacity(
+  supabase: SupabaseClient, userId: string, date: string,
+  cur: DayStatusRow | null,
+  patch: { crewSize?: number | null; startsAt?: string | null; endsAt?: string | null },
+) {
+  const status = cur?.status ?? 'custom'
+  const blocks = cur?.blocks ?? false
+  return supabase.from('day_statuses').upsert({
+    user_id: userId, date, status, blocks,
+    label: cur?.label ?? null, notes: cur?.notes ?? null,
+    starts_at: patch.startsAt !== undefined ? patch.startsAt : (cur?.starts_at ?? null),
+    ends_at: patch.endsAt !== undefined ? patch.endsAt : (cur?.ends_at ?? null),
+    crew_size: patch.crewSize !== undefined ? patch.crewSize : (cur?.crew_size ?? null),
+    created_by: cur?.created_by ?? null, updated_at: new Date().toISOString(),
   }, { onConflict: 'user_id,date' })
 }
 

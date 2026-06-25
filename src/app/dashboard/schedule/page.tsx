@@ -34,8 +34,9 @@ import { analyzeScheduleHealth } from '@/lib/scheduleHealth'
 import type { HealthIssue, HealthJob } from '@/lib/scheduleHealth'
 import { ScheduleHealthCard } from '@/components/schedule/ScheduleHealthCard'
 import { DayStatusMenu } from '@/components/schedule/DayStatusMenu'
-import { buildDayStatusMap, loadDayStatuses, setDayStatus, clearDayStatus, DAY_STATUS_META, DAY_STATUS_SELECT, type DayStatusMap, type DayStatusRow, type DayStatus } from '@/lib/dayStatus'
+import { buildDayStatusMap, buildCapacityForDate, loadDayStatuses, setDayStatus, setDayCapacity, clearDayStatus, DAY_STATUS_META, DAY_STATUS_SELECT, type DayStatusMap, type DayStatusRow, type DayStatus } from '@/lib/dayStatus'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
+import { DaySettingsBar } from '@/components/schedule/DaySettingsBar'
 import { WeatherRainCard, type RainMoveSummary } from '@/components/schedule/WeatherRainCard'
 import { loadWeatherImpact, type WeatherImpactReport, type DayImpact } from '@/lib/weatherImpact'
 
@@ -104,6 +105,7 @@ export default function SchedulePage() {
   const [preferredWorkDays, setPreferredWorkDays] = useState<number[]>([5, 6, 0])
   const [workStartTime, setWorkStartTime] = useState('08:00')
   const [capacityHours, setCapacityHours] = useState(8)
+  const [defaultCrew, setDefaultCrew] = useState(1)
   const [automations, setAutomations] = useState<Automations>({ reminder: true, job_complete: true, review: true })
   const [showOptimize, setShowOptimize] = useState(false)
   const [showRainCenter, setShowRainCenter] = useState(false)
@@ -185,8 +187,10 @@ export default function SchedulePage() {
   const optBaseOpts = useMemo(() => {
     const recs: Record<string, { freq: string | null; interval_unit: string | null; interval_count: number | null }> = {}
     for (const [id, r] of Object.entries(recurrences)) recs[id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count }
-    return { today: localToday(), base: baseCoord, preferredDays: preferredWorkDays, capacityHours, recurrences: recs, roadDist, dayStatusMap }
-  }, [recurrences, baseCoord, preferredWorkDays, capacityHours, roadDist, dayStatusMap])
+    const crew = defaultCrew > 0 ? defaultCrew : 1
+    const capacityForDate = buildCapacityForDate(dayStatusMap, { crew, hours: (capacityHours > 0 ? capacityHours : 8) / crew })
+    return { today: localToday(), base: baseCoord, preferredDays: preferredWorkDays, capacityHours, recurrences: recs, roadDist, dayStatusMap, capacityForDate }
+  }, [recurrences, baseCoord, preferredWorkDays, capacityHours, roadDist, dayStatusMap, defaultCrew])
 
   // Proactive auto-suggestions (overloaded days, isolated jobs, recurring-cluster
   // opportunities) — same engines, shown without opening the optimizer.
@@ -479,7 +483,7 @@ export default function SchedulePage() {
       const byDate = { ...(prev?.byDate || {}) }
       const blockedDates = new Set(prev?.blockedDates || [])
       for (const dt of dates) {
-        byDate[dt] = { id: byDate[dt]?.id || `tmp-${dt}`, date: dt, status, blocks, label: null, notes: null, starts_at: null, ends_at: null, created_by: null }
+        byDate[dt] = { id: byDate[dt]?.id || `tmp-${dt}`, date: dt, status, blocks, label: null, notes: null, starts_at: null, ends_at: null, crew_size: null, created_by: null }
         if (blocks) blockedDates.add(dt); else blockedDates.delete(dt)
       }
       return { byDate, blockedDates }
@@ -559,6 +563,32 @@ export default function SchedulePage() {
     setRainSummary(summarizeRain(date, false, plan))
     setDismissedRain(prev => new Set(prev).add(date))
     setRainBusy(null)
+  }
+
+  // ── Day Settings: per-day crew / working-hours override (Day View) ──
+  async function saveDayCapacity(date: string, patch: { crewSize?: number | null; startsAt?: string | null; endsAt?: string | null }) {
+    if (!uid) return
+    const cur = dayStatusMap?.byDate[date] ?? null
+    setDayStatusMap(prev => {
+      const byDate = { ...(prev?.byDate || {}) }
+      const blockedDates = new Set(prev?.blockedDates || [])
+      const base: DayStatusRow = byDate[date] ?? { id: `tmp-${date}`, date, status: 'custom', blocks: false, label: null, notes: null, starts_at: null, ends_at: null, crew_size: null, created_by: null }
+      byDate[date] = {
+        ...base,
+        starts_at: patch.startsAt !== undefined ? patch.startsAt : base.starts_at,
+        ends_at: patch.endsAt !== undefined ? patch.endsAt : base.ends_at,
+        crew_size: patch.crewSize !== undefined ? patch.crewSize : base.crew_size,
+      }
+      return { byDate, blockedDates }
+    })
+    const { error } = await setDayCapacity(supabase, uid, date, cur, patch)
+    if (error) setBanner('Could not save day settings — please try again.')
+    reloadDayStatuses()
+  }
+  function resetDayCapacity(date: string) { saveDayCapacity(date, { crewSize: null, startsAt: null, endsAt: null }) }
+  async function toggleDisableDay(date: string) {
+    if (dayStatusMap?.byDate[date]?.blocks) await clearDayStatusFor([date])
+    else await applyDayStatus([date], 'custom')
   }
 
   useEffect(() => {
@@ -1581,6 +1611,22 @@ export default function SchedulePage() {
       {loading ? (
         <div className="text-center py-16 text-sm text-ink-muted">Loading schedule...</div>
       ) : view === 'day' ? (
+        <>
+        <DaySettingsBar
+          date={format(cursor, 'yyyy-MM-dd')}
+          jobs={jobs.filter(j => j.scheduled_date === format(cursor, 'yyyy-MM-dd'))}
+          row={dayStatusMap?.byDate[format(cursor, 'yyyy-MM-dd')] ?? null}
+          defaultCrew={defaultCrew}
+          capacityHours={capacityHours}
+          workStartTime={workStartTime}
+          busy={rainBusy === format(cursor, 'yyyy-MM-dd')}
+          onSetCapacity={(patch) => saveDayCapacity(format(cursor, 'yyyy-MM-dd'), patch)}
+          onResetCapacity={() => resetDayCapacity(format(cursor, 'yyyy-MM-dd'))}
+          onToggleDisable={() => toggleDisableDay(format(cursor, 'yyyy-MM-dd'))}
+          onAutoOptimize={() => launchOptimizer({ scope: 'week', mode: 'recommended', anchorDate: format(cursor, 'yyyy-MM-dd') })}
+          onWeatherOps={() => setShowRainCenter(true)}
+          onAddJob={() => openNewJob(cursor)}
+        />
         <DayOpsPanel
           date={format(cursor, 'yyyy-MM-dd')}
           dateLabel={format(cursor, 'EEEE, MMMM d, yyyy')}
@@ -1605,6 +1651,7 @@ export default function SchedulePage() {
           onAddJob={() => openNewJob(cursor)}
           onQuickSave={quickSaveJob}
         />
+        </>
       ) : (
         <Calendar
           view={view}
@@ -1677,6 +1724,7 @@ export default function SchedulePage() {
           invoicedIds={invoicedJobIds}
           roadDist={roadDist}
           dayStatusMap={dayStatusMap}
+          capacityForDate={optBaseOpts.capacityForDate}
           duplicateNote={healthDuplicates.stops > 0 ? healthDuplicates : undefined}
           onApply={applyOptimization}
           onClose={() => { setShowOptimize(false); setOptimizeLaunch(null) }}
@@ -1692,6 +1740,7 @@ export default function SchedulePage() {
           preferredWorkDays={preferredWorkDays}
           capacityHours={capacityHours}
           dayStatusMap={dayStatusMap}
+          capacityForDate={optBaseOpts.capacityForDate}
           onApply={applyOptimization}
           onClose={() => setShowRainCenter(false)}
         />

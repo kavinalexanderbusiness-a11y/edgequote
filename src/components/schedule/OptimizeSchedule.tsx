@@ -48,6 +48,8 @@ interface Props {
   roadDist?: (a: Coord, b: Coord) => number
   // Owner-blocked days (Rain / Vacation / …) — the optimizer never moves a job onto one.
   dayStatusMap?: DayStatusMap
+  // Per-day capacity (Day Settings crew/hours overrides).
+  capacityForDate?: (dateISO: string) => number
   // Duplicate stops the optimizer CAN'T fix by moving (they need deleting in
   // Schedule Health) — reported so the owner resolves them first.
   duplicateNote?: { stops: number; minutes: number }
@@ -57,7 +59,7 @@ interface Props {
 
 // 🚀 The whole-schedule optimizer UI: pick a mode, see Current vs Optimized,
 // review every proposed move, then Apply (undo-able) or Cancel.
-export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, preferredWorkDays, capacityHours, anchorDate, initialScope, initialMode, autoRun, invoicedIds: invoicedIdsProp, roadDist, dayStatusMap, duplicateNote, onApply, onClose }: Props) {
+export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, preferredWorkDays, capacityHours, anchorDate, initialScope, initialMode, autoRun, invoicedIds: invoicedIdsProp, roadDist, dayStatusMap, capacityForDate, duplicateNote, onApply, onClose }: Props) {
   const supabase = createClient()
   const [mode, setMode] = useState<OptimizeMode>(initialMode ?? 'recommended')
   const [scope, setScope] = useState<OptimizeScope>(initialScope ?? 'future')
@@ -128,6 +130,7 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
         recurrences: recs,
         roadDist,
         dayStatusMap,
+        capacityForDate,
       }))
       setRunning(false)
     }, 30)
@@ -164,9 +167,9 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
     if (!result) return null
     if (deselected.size === 0 || !lastOptJobs) return result.after
     return metricsWithMoves(lastOptJobs, {
-      scope: result.scope, anchorDate, today: localTodayISO(), base: baseCoord, capacityHours, roadDist,
+      scope: result.scope, anchorDate, today: localTodayISO(), base: baseCoord, capacityHours, roadDist, capacityForDate,
     }, selectedMoves)
-  }, [result, lastOptJobs, deselected, selectedMoves, anchorDate, baseCoord, capacityHours, roadDist])
+  }, [result, lastOptJobs, deselected, selectedMoves, anchorDate, baseCoord, capacityHours, roadDist, capacityForDate])
   const selKmSaved = result && effAfter ? Math.round((result.before.totalKm - effAfter.totalKm) * 10) / 10 : 0
   const selMinSaved = result && effAfter ? result.before.driveMinutes - effAfter.driveMinutes : 0
   const selDaysAffected = new Set(selectedMoves.flatMap(m => [m.from, m.to])).size
