@@ -94,14 +94,10 @@ export async function POST(req: NextRequest) {
           if (stripeCustomerId) {
             await sb.from('customers').update({ stripe_customer_id: stripeCustomerId }).eq('id', customerId).eq('user_id', userId)
           }
-          // Keep exactly ONE card per customer: detach + delete any previous cards,
-          // then upsert the new one (idempotent on the unique payment-method id).
-          const { data: prior } = await sb.from('payment_methods')
-            .select('stripe_payment_method_id').eq('customer_id', customerId).neq('stripe_payment_method_id', card.paymentMethodId)
-          for (const p of (prior as { stripe_payment_method_id: string }[] | null) || []) {
-            await detachPaymentMethod(p.stripe_payment_method_id)
-          }
-          await sb.from('payment_methods').delete().eq('customer_id', customerId).neq('stripe_payment_method_id', card.paymentMethodId)
+          // Keep exactly ONE card per customer. Save the NEW card FIRST, then detach +
+          // delete any previous cards — so a failure mid-way can never leave the
+          // customer with NO card while AutoPay is still on (the worst case is a
+          // harmless stale row, and the charge path always picks is_default + newest).
           const upRes = await sb.from('payment_methods').upsert({
             user_id: userId, customer_id: customerId, stripe_customer_id: stripeCustomerId,
             stripe_payment_method_id: card.paymentMethodId, brand: card.brand ?? null, last4: card.last4 ?? null,
@@ -111,6 +107,12 @@ export async function POST(req: NextRequest) {
             console.error('[stripe] payment_method upsert failed:', upRes.error.message)
             return NextResponse.json({ error: 'db write failed' }, { status: 500 })
           }
+          const { data: prior } = await sb.from('payment_methods')
+            .select('stripe_payment_method_id').eq('customer_id', customerId).neq('stripe_payment_method_id', card.paymentMethodId)
+          for (const p of (prior as { stripe_payment_method_id: string }[] | null) || []) {
+            await detachPaymentMethod(p.stripe_payment_method_id)
+          }
+          await sb.from('payment_methods').delete().eq('customer_id', customerId).neq('stripe_payment_method_id', card.paymentMethodId)
         }
       }
     }
@@ -147,7 +149,13 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ error: 'db write failed' }, { status: 500 })
         }
         if ((invRes.data?.length ?? 0) > 0) {
-          await sendPaymentReceipt(sb, { userId, customerId, amount: (pi.amount ?? 0) / 100, origin })
+          // The payment is already recorded + the invoice flipped, so the receipt is
+          // pure best-effort. Time-box it: a slow/hung SMS/email provider must never
+          // stall the webhook 200 (which would make Stripe needlessly retry).
+          await Promise.race([
+            sendPaymentReceipt(sb, { userId, customerId, amount: (pi.amount ?? 0) / 100, origin }),
+            new Promise<void>(resolve => setTimeout(resolve, 6000)),
+          ])
         }
       }
     }
