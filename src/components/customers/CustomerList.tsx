@@ -12,6 +12,7 @@ import { applyConsent, SMS_CONSENT_WARNING, ConsentChannel } from '@/lib/consent
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { FilterPill } from '@/components/ui/FilterPill'
+import { StatTile } from '@/components/ui/StatTile'
 import { InlineEmpty } from '@/components/ui/EmptyState'
 import { Edit2, Trash2, Phone, Mail, FileText, Search, Link2, ExternalLink, Check, MessageSquare, ShieldAlert, Users } from 'lucide-react'
 
@@ -131,11 +132,11 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
     <div className="space-y-4">
       {/* Missing Consent Report */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-        <ReportStat label="Customers" value={total} />
-        <ReportStat label="SMS opted in" value={smsIn} tone="text-emerald-400" />
-        <ReportStat label="SMS opted out" value={total - smsIn} />
-        <ReportStat label="Email opted in" value={emailIn} tone="text-emerald-400" />
-        <ReportStat label="Email opted out" value={total - emailIn} />
+        <StatTile label="Customers" value={total} />
+        <StatTile label="SMS opted in" value={smsIn} tone="success" />
+        <StatTile label="SMS opted out" value={total - smsIn} />
+        <StatTile label="Email opted in" value={emailIn} tone="success" />
+        <StatTile label="Email opted out" value={total - emailIn} />
       </div>
 
       {/* Search */}
@@ -273,11 +274,3 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
   )
 }
 
-function ReportStat({ label, value, tone }: { label: string; value: number; tone?: string }) {
-  return (
-    <div className="rounded-xl border border-border bg-surface px-3 py-2">
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className={cn('text-lg font-bold', tone || 'text-ink')}>{value}</p>
-    </div>
-  )
-}
