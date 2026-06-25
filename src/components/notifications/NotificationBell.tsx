@@ -6,7 +6,7 @@ import Link from 'next/link'
 import { formatDistanceToNow } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
-import { Bell, Check, FileText, DollarSign } from 'lucide-react'
+import { Bell, Check, FileText, DollarSign, MessageSquare, Globe, Star } from 'lucide-react'
 
 export interface AppNotification {
   id: string
@@ -18,7 +18,10 @@ export interface AppNotification {
   read: boolean
 }
 
-const ICON: Record<string, typeof FileText> = { quote_accepted: FileText, invoice_paid: DollarSign }
+const ICON: Record<string, typeof FileText> = {
+  quote_accepted: FileText, invoice_paid: DollarSign,
+  new_message: MessageSquare, portal_request: Globe, review_received: Star,
+}
 const timeAgo = (iso: string) => { try { return formatDistanceToNow(new Date(iso), { addSuffix: true }) } catch { return '' } }
 
 // In-app notification bell — quote-accepted / invoice-paid alerts with a live unread
@@ -31,12 +34,12 @@ export function NotificationBell() {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
-  async function load() {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
+  // getSession reads the cached session locally (no auth-server round-trip) — RLS
+  // still scopes every query, so it's safe and noticeably faster than getUser.
+  async function load(userId: string) {
     const { data } = await supabase.from('notifications')
       .select('id, created_at, type, title, body, href, read')
-      .eq('user_id', user.id).order('created_at', { ascending: false }).limit(20)
+      .eq('user_id', userId).order('created_at', { ascending: false }).limit(20)
     setItems((data as AppNotification[]) || [])
   }
 
@@ -44,11 +47,12 @@ export function NotificationBell() {
     let active = true
     let channel: ReturnType<typeof supabase.channel> | null = null
     ;(async () => {
-      await load()
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user || !active) return
-      channel = supabase.channel(`notif:${user.id}`)
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` }, () => load())
+      const { data: { session } } = await supabase.auth.getSession()
+      const uid = session?.user?.id
+      if (!uid || !active) return
+      await load(uid)
+      channel = supabase.channel(`notif:${uid}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${uid}` }, () => load(uid))
         .subscribe()
     })()
     return () => { active = false; if (channel) supabase.removeChannel(channel) }

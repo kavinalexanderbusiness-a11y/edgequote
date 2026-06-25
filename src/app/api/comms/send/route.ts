@@ -48,12 +48,15 @@ export async function POST(req: NextRequest) {
   }
 
   const token = await ensurePortalToken(supabase, user.id, customerId)
+  // Build portal links off the REQUEST origin so they're always absolute and work
+  // in SMS/email (NEXT_PUBLIC_APP_URL may be unset in some deploys).
+  const origin = req.nextUrl?.origin || process.env.NEXT_PUBLIC_APP_URL || ''
   const rendered = renderMessage(template, biz?.message_templates, {
     firstName: c.name,
     businessName: biz?.company_name || 'Edge Property Services',
     eta: vars.eta,
     reviewLink: biz?.review_url || undefined,
-    portalLink: token ? portalUrl(token) : undefined,
+    portalLink: token ? portalUrl(token, origin) : undefined,
     dateLabel: vars.dateLabel,
     amount: vars.amount,
     timeWindow: vars.timeWindow,

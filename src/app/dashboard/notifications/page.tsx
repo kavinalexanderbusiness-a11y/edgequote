@@ -8,9 +8,12 @@ import { AppNotification } from '@/components/notifications/NotificationBell'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
-import { Bell, Check, FileText, DollarSign, Loader2 } from 'lucide-react'
+import { Bell, Check, FileText, DollarSign, Loader2, MessageSquare, Globe, Star } from 'lucide-react'
 
-const ICON: Record<string, typeof FileText> = { quote_accepted: FileText, invoice_paid: DollarSign }
+const ICON: Record<string, typeof FileText> = {
+  quote_accepted: FileText, invoice_paid: DollarSign,
+  new_message: MessageSquare, portal_request: Globe, review_received: Star,
+}
 const timeAgo = (iso: string) => { try { return formatDistanceToNow(new Date(iso), { addSuffix: true }) } catch { return '' } }
 
 export default function NotificationsPage() {
@@ -19,16 +22,29 @@ export default function NotificationsPage() {
   const [items, setItems] = useState<AppNotification[]>([])
   const [loading, setLoading] = useState(true)
 
-  async function load() {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) { setLoading(false); return }
+  async function load(userId: string) {
     const { data } = await supabase.from('notifications')
       .select('id, created_at, type, title, body, href, read')
-      .eq('user_id', user.id).order('created_at', { ascending: false }).limit(100)
+      .eq('user_id', userId).order('created_at', { ascending: false }).limit(100)
     setItems((data as AppNotification[]) || [])
     setLoading(false)
   }
-  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // Initial load + live updates (the bell and this page stay in sync without a refresh).
+  useEffect(() => {
+    let active = true
+    let channel: ReturnType<typeof supabase.channel> | null = null
+    ;(async () => {
+      const { data: { session } } = await supabase.auth.getSession()
+      const uid = session?.user?.id
+      if (!uid) { setLoading(false); return }
+      if (!active) return
+      await load(uid)
+      channel = supabase.channel(`notif-page:${uid}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${uid}` }, () => load(uid))
+        .subscribe()
+    })()
+    return () => { active = false; if (channel) supabase.removeChannel(channel) }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function markRead(ids: string[]) {
     if (!ids.length) return

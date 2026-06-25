@@ -25,11 +25,12 @@ export default function MessagesPage() {
   const [sel, setSel] = useState<Convo | null>(null)
 
   async function load() {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) { setLoading(false); return }
+    const { data: { session } } = await supabase.auth.getSession()
+    const uid = session?.user?.id
+    if (!uid) { setLoading(false); return }
     const { data } = await supabase.from('conversations')
       .select('id, customer_id, last_message_at, last_preview, last_direction, unread, customers(id, name, phone)')
-      .eq('user_id', user.id).order('last_message_at', { ascending: false })
+      .eq('user_id', uid).order('last_message_at', { ascending: false })
     setConvos((data as unknown as Convo[]) || [])
     setLoading(false)
   }
@@ -42,11 +43,12 @@ export default function MessagesPage() {
     let channel: ReturnType<typeof supabase.channel> | null = null
     let active = true
     ;(async () => {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user || !active) return
+      const { data: { session } } = await supabase.auth.getSession()
+      const uid = session?.user?.id
+      if (!uid || !active) return
       channel = supabase
-        .channel(`conv-list:${user.id}`)
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `user_id=eq.${user.id}` }, () => load())
+        .channel(`conv-list:${uid}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `user_id=eq.${uid}` }, () => load())
         .subscribe()
     })()
     return () => { active = false; if (channel) supabase.removeChannel(channel) }

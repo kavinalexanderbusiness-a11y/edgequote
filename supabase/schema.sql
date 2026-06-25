@@ -1516,3 +1516,103 @@ grant execute on function public.get_portal_data(text) to anon, authenticated;
 alter table public.notification_log
   add column if not exists message_id uuid references public.messages(id) on delete set null;
 create index if not exists notification_log_message_idx on public.notification_log(message_id);
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-24b — Live notifications coverage + review tracking.
+-- (1) Put public.notifications on the realtime publication so the bell updates
+--     live (it was missing — only conversations/messages were published).
+-- (2) Notify the owner on inbound messages (SMS) and portal activity (portal
+--     requests flow in as inbound 'portal' messages), and when a customer leaves
+--     a review. quote_accepted / invoice_paid already have triggers.
+-- (3) customers.reviewed_at + a token-scoped portal RPC so a customer can mark
+--     "I left a review" — fires the notification and suppresses future asks.
+-- Idempotent.
+-- ════════════════════════════════════════════════════════════
+alter table public.notifications replica identity full;
+do $$ begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'notifications') then
+      execute 'alter publication supabase_realtime add table public.notifications';
+    end if;
+  end if;
+end $$;
+
+-- Inbound message (customer SMS or portal request) → in-app notification.
+create or replace function public.notify_inbound_message()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_name text;
+begin
+  if new.direction <> 'inbound' then return new; end if;
+  select name into v_name from public.customers where id = new.customer_id;
+  insert into public.notifications (user_id, type, title, body, customer_id, entity_type, entity_id, href)
+  values (
+    new.user_id,
+    case when new.channel = 'portal' then 'portal_request' else 'new_message' end,
+    coalesce(nullif(v_name, ''), 'A customer')
+      || case when new.channel = 'portal' then ' sent a request from the portal' else ' replied by text' end,
+    left(new.body, 140),
+    new.customer_id, 'message', new.id, '/dashboard/messages'
+  );
+  return new;
+end; $$;
+drop trigger if exists trg_notify_inbound_message on public.messages;
+create trigger trg_notify_inbound_message after insert on public.messages
+  for each row execute function public.notify_inbound_message();
+
+-- Review tracking: marked when a customer confirms they left a Google review.
+alter table public.customers add column if not exists reviewed_at timestamptz;
+
+create or replace function public.notify_review_received()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.reviewed_at is not null and old.reviewed_at is distinct from new.reviewed_at then
+    insert into public.notifications (user_id, type, title, body, customer_id, entity_type, entity_id, href)
+    values (new.user_id, 'review_received',
+      coalesce(nullif(new.name, ''), 'A customer') || ' left a review',
+      'Thanks to your follow-up — tap to view their profile',
+      new.id, 'customer', new.id, '/dashboard/customers/' || new.id);
+  end if;
+  return new;
+end; $$;
+drop trigger if exists trg_notify_review_received on public.customers;
+create trigger trg_notify_review_received after update of reviewed_at on public.customers
+  for each row execute function public.notify_review_received();
+
+-- Portal: customer self-reports they left a review (token-scoped). Sets
+-- reviewed_at (idempotent) → the trigger above notifies + future review requests
+-- are suppressed.
+create or replace function public.portal_mark_reviewed(p_token text)
+returns boolean language plpgsql security definer set search_path = public as $$
+declare v_customer uuid;
+begin
+  select customer_id into v_customer from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return false; end if;
+  update public.customers set reviewed_at = coalesce(reviewed_at, now()) where id = v_customer;
+  return true;
+end; $$;
+grant execute on function public.portal_mark_reviewed(text) to anon, authenticated;
+
+-- get_portal_data refreshed: adds business.review_url (so the portal can show a
+-- "leave a review" link) and customer.reviewed_at (so it hides the ask once done).
+-- This redefinition is the active one (last create-or-replace wins).
+create or replace function public.get_portal_data(p_token text)
+returns json language plpgsql security definer set search_path = public as $$
+declare v_customer uuid; v_user uuid; result json;
+begin
+  select customer_id, user_id into v_customer, v_user
+    from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return null; end if;
+  select json_build_object(
+    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code, sms_opt_in, email_opt_in, reviewed_at from public.customers where id = v_customer) c),
+    'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, email_secondary, website, logo_url, logo_scale, base_address, terms_text, review_url, coalesce(gst_percent,0) as gst_percent from public.business_settings where user_id = v_user) b),
+    'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood, notes from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
+    'quotes', coalesce((select json_agg(q order by q.created_at desc) from (select id, quote_number, service_type, address, total, initial_price, subtotal, weekly_price, biweekly_price, monthly_price, notes, status, created_at, issued_date, crew_size, hours, travel_fee from public.quotes where customer_id = v_customer and status <> 'draft') q), '[]'::json),
+    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, status, issued_date, due_date, notes, address, line_items, job_id, created_at from public.invoices where customer_id = v_customer) i), '[]'::json),
+    'payments', coalesce((select json_agg(pm order by pm.paid_at desc nulls last) from (select id, amount, status, paid_at, provider, invoice_id, created_at from public.payments where customer_id = v_customer and status = 'paid') pm), '[]'::json),
+    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, notes from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
+    'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, end_date from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
+    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json)
+  ) into result;
+  return result;
+end; $$;
+grant execute on function public.get_portal_data(text) to anon, authenticated;

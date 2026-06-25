@@ -26,11 +26,12 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
   const endRef = useRef<HTMLDivElement>(null)
 
   async function load() {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) { setLoading(false); return }
+    const { data: { session } } = await supabase.auth.getSession()
+    const uid = session?.user?.id
+    if (!uid) { setLoading(false); return }
     const [mRes, lRes] = await Promise.all([
-      supabase.from('messages').select('id, created_at, direction, channel, body, status').eq('customer_id', customerId).eq('user_id', user.id).order('created_at'),
-      supabase.from('notification_log').select('id, created_at, channel, template, status, message_id').eq('customer_id', customerId).eq('user_id', user.id).neq('template', 'reply').order('created_at'),
+      supabase.from('messages').select('id, created_at, direction, channel, body, status').eq('customer_id', customerId).eq('user_id', uid).order('created_at'),
+      supabase.from('notification_log').select('id, created_at, channel, template, status, message_id').eq('customer_id', customerId).eq('user_id', uid).neq('template', 'reply').order('created_at'),
     ])
     const msgs: Item[] = (mRes.data as Msg[] || []).map(m => ({
       id: 'm' + m.id, at: m.created_at, channel: m.channel, body: m.body, status: m.status,
@@ -52,7 +53,7 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
     })
     setItems([...msgs, ...logs].sort((a, b) => a.at.localeCompare(b.at)))
     setLoading(false)
-    await supabase.from('conversations').update({ unread: 0 }).eq('user_id', user.id).eq('customer_id', customerId)
+    await supabase.from('conversations').update({ unread: 0 }).eq('user_id', uid).eq('customer_id', customerId)
     onRead?.()
   }
   useEffect(() => { load() }, [customerId]) // eslint-disable-line react-hooks/exhaustive-deps

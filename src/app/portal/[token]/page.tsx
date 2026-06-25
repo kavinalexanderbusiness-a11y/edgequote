@@ -12,7 +12,7 @@ import { renderPortalQuoteBlob, renderPortalInvoiceBlob, downloadBlob, viewBlob,
 import {
   Home, History, Image as ImageIcon, FileText, Receipt, MessageSquarePlus, Check, Loader2,
   Phone, Globe, Mail, Leaf, CheckCircle2, Navigation, Play, CalendarClock, Repeat, MapPin, Ruler, Sparkles, CreditCard, MessageSquare,
-  Eye, Download, Printer, FolderOpen, Search, ArrowUpDown, Activity, Wallet,
+  Eye, Download, Printer, FolderOpen, Search, ArrowUpDown, Activity, Wallet, Star,
 } from 'lucide-react'
 
 // ── Premium Customer Portal ─────────────────────────────────────────────────────
@@ -27,8 +27,8 @@ interface PortalRec { id: string; freq: string | null; interval_unit: string | n
 interface PortalPhoto { id: string; job_id: string | null; storage_path: string; kind: string; caption: string | null; taken_at: string }
 interface PortalPayment { id: string; amount: number; status: string; paid_at: string | null; provider: string; invoice_id: string | null; created_at: string }
 interface PortalData {
-  customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null; city: string | null; sms_opt_in?: boolean | null; email_opt_in?: boolean | null }
-  business: { company_name: string | null; owner_name: string | null; phone: string | null; email_primary: string | null; email_secondary: string | null; website: string | null; logo_url: string | null; logo_scale: number | null; base_address: string | null; terms_text: string | null; gst_percent?: number | null } | null
+  customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null; city: string | null; sms_opt_in?: boolean | null; email_opt_in?: boolean | null; reviewed_at?: string | null }
+  business: { company_name: string | null; owner_name: string | null; phone: string | null; email_primary: string | null; email_secondary: string | null; website: string | null; logo_url: string | null; logo_scale: number | null; base_address: string | null; terms_text: string | null; review_url?: string | null; gst_percent?: number | null } | null
   property: { address: string | null; city: string | null; province: string | null; lawn_sqft: number | null; fence_length: number | null; neighborhood: string | null; notes: string | null } | null
   quotes: PortalQuote[]; invoices: PortalInvoice[]; jobs: PortalJob[]; recurrences: PortalRec[]; photos: PortalPhoto[]; payments: PortalPayment[]
 }
@@ -66,6 +66,7 @@ export default function PortalPage() {
   const [payingId, setPayingId] = useState<string | null>(null)
   const [justPaid, setJustPaid] = useState(false)
   const [consent, setConsentState] = useState<{ sms: boolean; email: boolean } | null>(null)
+  const [markedReviewed, setMarkedReviewed] = useState(false)
 
   async function load() {
     const { data: d } = await supabase.rpc('get_portal_data', { p_token: token })
@@ -79,6 +80,13 @@ export default function PortalPage() {
   async function saveConsent(next: { sms: boolean; email: boolean }) {
     setConsentState(next)
     await supabase.rpc('portal_set_consent', { p_token: token, p_sms_opt_in: next.sms, p_email_opt_in: next.email })
+  }
+
+  // Customer confirms they left a review → records it (notifies the owner, stops
+  // future review-request messages). Optimistic; token-scoped RPC.
+  async function markReviewed() {
+    setMarkedReviewed(true)
+    await supabase.rpc('portal_mark_reviewed', { p_token: token })
   }
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -207,6 +215,9 @@ export default function PortalPage() {
             </div>
           )}
           {tab === 'home' && <HomeTab data={data} derived={derived} biz={biz} />}
+          {tab === 'home' && biz?.review_url && derived.lastCompleted && !data.customer.reviewed_at && (
+            <ReviewCard reviewUrl={biz.review_url} businessName={biz.company_name} reviewed={markedReviewed} onReviewed={markReviewed} />
+          )}
           {tab === 'home' && consent && <ConsentCard consent={consent} onSave={saveConsent} />}
           {tab === 'timeline' && <TimelineTab data={data} photosByJob={photosByJob} />}
           {tab === 'service' && <ServiceTab completed={derived.completed} photosByJob={photosByJob} invoiceByJob={invoiceByJob} photoUrl={photoUrl} />}
@@ -753,6 +764,35 @@ function RequestTab({ presets, reqMsg, setReqMsg, request, reqBusy, reqSent, biz
             <div className="mt-2"><Button size="sm" onClick={() => request(reqMsg, 'custom')} loading={reqBusy === 'custom'} disabled={!reqMsg.trim()}>Send request</Button></div>
           </>
         )}
+      </div>
+    </div>
+  )
+}
+
+// ── Review ask (only after a completed visit, hidden once they've reviewed) ──
+function ReviewCard({ reviewUrl, businessName, reviewed, onReviewed }: { reviewUrl: string; businessName: string | null; reviewed: boolean; onReviewed: () => void }) {
+  const href = reviewUrl.startsWith('http') ? reviewUrl : `https://${reviewUrl}`
+  if (reviewed) {
+    return (
+      <div className="rounded-card border border-emerald-500/30 bg-emerald-500/[0.06] p-4 mt-3">
+        <p className="text-sm font-semibold text-emerald-400 flex items-center gap-1.5"><Star className="w-4 h-4" /> Thank you for your review!</p>
+        <p className="text-xs text-ink-muted mt-0.5">We really appreciate you taking the time.</p>
+      </div>
+    )
+  }
+  return (
+    <div className="rounded-card border border-amber-400/30 bg-amber-400/[0.06] p-4 mt-3">
+      <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><Star className="w-4 h-4 text-amber-400" /> Enjoying the service?</p>
+      <p className="text-xs text-ink-muted mt-0.5 mb-3">A quick Google review helps {businessName || 'us'} a lot — thank you!</p>
+      <div className="flex flex-wrap gap-2">
+        <a href={href} target="_blank" rel="noopener noreferrer"
+          className="flex-1 min-w-[140px] h-10 rounded-xl bg-accent text-black text-sm font-semibold flex items-center justify-center gap-1.5">
+          <Star className="w-4 h-4" /> Leave a review
+        </a>
+        <button onClick={onReviewed}
+          className="flex-1 min-w-[140px] h-10 rounded-xl border border-border bg-bg-tertiary text-sm font-medium text-ink flex items-center justify-center gap-1.5">
+          <Check className="w-4 h-4" /> I’ve left my review
+        </button>
       </div>
     </div>
   )

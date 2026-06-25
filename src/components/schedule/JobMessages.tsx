@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { MsgType, renderMessage } from '@/lib/comms/templates'
 import { localTodayISO, cn } from '@/lib/utils'
 import {
-  Navigation, Clock, MapPin, CheckCircle2, CalendarCheck, CalendarClock, CloudRain, Sparkles,
+  Navigation, Clock, MapPin, CheckCircle2, CalendarCheck, CalendarClock, CloudRain, Sparkles, Star,
   MessageSquare, Mail, Smartphone, Send, Loader2, Check, AlertTriangle, X,
 } from 'lucide-react'
 
@@ -34,6 +34,7 @@ const ACTIONS: { type: MsgType; label: string; icon: typeof Navigation; tone?: s
   { type: 'early_arrival', label: 'Finished early', icon: Sparkles },
   { type: 'confirm', label: 'Confirm visit', icon: CalendarCheck },
   { type: 'job_complete', label: 'Completed', icon: CheckCircle2, tone: 'text-emerald-300 border-emerald-400/30 bg-emerald-400/10 hover:bg-emerald-400/20' },
+  { type: 'review_request', label: 'Review request', icon: Star, tone: 'text-violet-300 border-violet-400/30 bg-violet-400/10 hover:bg-violet-400/20' },
   { type: 'rescheduled', label: 'Rescheduled', icon: CalendarClock, reschedule: 'date' },
   { type: 'rain_delay', label: 'Weather delay', icon: CloudRain, reschedule: 'weather', tone: 'text-blue-300 border-blue-400/30 bg-blue-400/10 hover:bg-blue-400/20' },
 ]
@@ -45,6 +46,7 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
   const [custom, setCustom] = useState<Partial<Record<MsgType, string>> | null>(null)
   const [company, setCompany] = useState('Edge Property Services')
   const [reviewUrl, setReviewUrl] = useState('')
+  const [reviewed, setReviewed] = useState(false)  // customer already left a review → hide review request
 
   const [active, setActive] = useState<MsgType | null>(null)
   const [eta, setEta] = useState('15')
@@ -59,15 +61,20 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
   // what gets sent (same engine, same overrides) and renders instantly.
   useEffect(() => {
     (async () => {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-      const { data } = await supabase.from('business_settings').select('company_name, review_url, message_templates').eq('user_id', user.id).maybeSingle()
-      const d = data as { company_name: string | null; review_url: string | null; message_templates: Partial<Record<MsgType, string>> | null } | null
+      const { data: { session } } = await supabase.auth.getSession()
+      const uid = session?.user?.id
+      if (!uid) return
+      const [bizRes, custRes] = await Promise.all([
+        supabase.from('business_settings').select('company_name, review_url, message_templates').eq('user_id', uid).maybeSingle(),
+        customerId ? supabase.from('customers').select('reviewed_at').eq('id', customerId).maybeSingle() : Promise.resolve({ data: null }),
+      ])
+      const d = bizRes.data as { company_name: string | null; review_url: string | null; message_templates: Partial<Record<MsgType, string>> | null } | null
       if (d?.company_name) setCompany(d.company_name)
       setReviewUrl(d?.review_url || '')
       setCustom(d?.message_templates || {})
+      setReviewed(!!(custRes.data as { reviewed_at: string | null } | null)?.reviewed_at)
     })()
-  }, [supabase])
+  }, [supabase, customerId])
 
   const fmtDate = (iso: string) => { try { return format(parseISO(iso + 'T00:00:00'), 'EEE, MMM d') } catch { return iso } }
 
@@ -129,9 +136,9 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
 
   return (
     <div className="space-y-2.5">
-      {/* Action buttons */}
+      {/* Action buttons — hide Review request once the customer has reviewed */}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
-        {ACTIONS.map(a => (
+        {ACTIONS.filter(a => a.type !== 'review_request' || !reviewed).map(a => (
           <button key={a.type} onClick={() => open(a.type)} disabled={busy}
             className={cn('h-9 rounded-lg border text-xs font-medium flex items-center justify-center gap-1.5 active:scale-95 transition-transform disabled:opacity-50',
               active === a.type ? 'border-accent bg-accent/15 text-accent ring-1 ring-accent/40'
@@ -179,6 +186,9 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
           <textarea value={text} onChange={e => setText(e.target.value)} rows={4}
             className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent resize-none" />
           <p className="text-[10px] text-ink-faint">{text.length} characters · edit freely before sending</p>
+          {active === 'review_request' && !reviewUrl && (
+            <p className="text-[10px] text-amber-400">Add your Google review link in Settings → Message templates so it&apos;s inserted automatically.</p>
+          )}
 
           {/* Channels + send */}
           <div className="flex items-center gap-1.5 flex-wrap">
