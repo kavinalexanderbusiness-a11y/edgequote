@@ -70,7 +70,7 @@ export default function ReactivationPage() {
     async function load() {
       const { data: { user } } = await supabase.auth.getUser()
       const [cRes, jRes, qRes, rRes, sRes] = await Promise.all([
-        supabase.from('customers').select('*').eq('user_id', user!.id),
+        supabase.from('customers').select('*').eq('user_id', user!.id).is('archived_at', null), // don't suggest re-engaging deliberately-archived customers
         supabase.from('jobs').select('customer_id, scheduled_date, status, service_type, quote_id, recurrence_id, price').eq('user_id', user!.id),
         supabase.from('quotes').select('id, customer_id, status, total, service_type, created_at, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
         supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user!.id),

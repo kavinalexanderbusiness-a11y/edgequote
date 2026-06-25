@@ -60,7 +60,7 @@ export default function NewQuotePage() {
     async function load() {
       const { data: { user } } = await supabase.auth.getUser()
       const [customersRes, templatesRes, tiersRes, settingsRes] = await Promise.all([
-        supabase.from('customers').select('*').eq('user_id', user!.id).order('name'),
+        supabase.from('customers').select('*').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — archived hidden from the picker
         supabase.from('service_templates').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('travel_fee_tiers').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('business_settings').select('*').eq('user_id', user!.id).maybeSingle(),

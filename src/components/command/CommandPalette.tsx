@@ -94,7 +94,7 @@ export function CommandPalette() {
       if (!safe) { setLoading(false); return }
       const like = `%${safe}%`
       const [cust, quo, inv, job, msg] = await Promise.all([
-        supabase.from('customers').select('id, name, phone, city, email').eq('user_id', uid)
+        supabase.from('customers').select('id, name, phone, city, email').eq('user_id', uid).is('archived_at', null) // active only — reach archived via Customers → Show archived
           .or(`name.ilike.${like},email.ilike.${like},phone.ilike.${like},address.ilike.${like},city.ilike.${like},notes.ilike.${like}`).limit(6),
         supabase.from('quotes').select('id, quote_number, customer_name, service_type, total, status').eq('user_id', uid)
           .or(`quote_number.ilike.${like},customer_name.ilike.${like},service_type.ilike.${like},address.ilike.${like}`).order('created_at', { ascending: false }).limit(6),

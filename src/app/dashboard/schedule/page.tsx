@@ -390,7 +390,7 @@ export default function SchedulePage() {
         .select('*, customers(id, name, phone, preferred_days, avoid_days, pref_time_start, pref_time_end), properties(id, address, lat, lng, neighborhood, preferred_days, avoid_days, pref_time_start, pref_time_end)')
         .eq('user_id', user!.id)
         .order('scheduled_date'),
-      supabase.from('customers').select('*').eq('user_id', user!.id).order('name'),
+      supabase.from('customers').select('*').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — can't schedule an archived customer without restoring
       supabase.from('job_recurrences').select('*').eq('user_id', user!.id),
       supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
       supabase.from('business_settings').select('base_lat, base_lng, base_address, preferred_work_days, work_start_time, daily_capacity_hours, automations').eq('user_id', user!.id).maybeSingle(),
