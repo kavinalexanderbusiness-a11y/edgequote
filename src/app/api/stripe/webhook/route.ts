@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
         const sb = createClient(url, svc)
         // One payment row per session (unique stripe_session_id) — duplicate
         // deliveries are ignored rather than double-counted.
-        await sb.from('payments').upsert({
+        const payRes = await sb.from('payments').upsert({
           user_id: userId,
           customer_id: s.metadata?.customer_id ?? null,
           invoice_id: invoiceId,
@@ -45,10 +45,22 @@ export async function POST(req: NextRequest) {
           status: 'paid',
           paid_at: new Date().toISOString(),
         }, { onConflict: 'stripe_session_id', ignoreDuplicates: true })
+        // A DB write must NOT be reported as handled — return 500 so Stripe RETRIES
+        // (both writes are idempotent: the upsert dedupes on stripe_session_id and
+        // the invoice flip is guarded by .neq('paid'), so a retry can't double-count
+        // or un-pay). Silently 200-ing on a failed write would LOSE the payment.
+        if (payRes.error) {
+          console.error('[stripe] payment upsert failed:', payRes.error.message)
+          return NextResponse.json({ error: 'db write failed' }, { status: 500 })
+        }
         // Mark the invoice paid — scoped to the owner from metadata, and only
         // while it's still owing (never un-pay or touch someone else's invoice).
-        await sb.from('invoices').update({ status: 'paid', paid_at: new Date().toISOString(), payment_method: 'stripe' })
+        const invRes = await sb.from('invoices').update({ status: 'paid', paid_at: new Date().toISOString(), payment_method: 'stripe' })
           .eq('id', invoiceId).eq('user_id', userId).neq('status', 'paid')
+        if (invRes.error) {
+          console.error('[stripe] invoice update failed:', invRes.error.message)
+          return NextResponse.json({ error: 'db write failed' }, { status: 500 })
+        }
       }
     }
   }

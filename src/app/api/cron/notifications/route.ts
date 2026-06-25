@@ -43,7 +43,9 @@ export async function GET(req: NextRequest) {
     return (bizCache[userId] = { name: d?.company_name || 'Edge Property Services', templates: d?.message_templates ?? null, reviewUrl: d?.review_url ?? null, automations: resolveAutomations(d?.automations) })
   }
   async function alreadySent(userId: string, jobId: string, template: string): Promise<boolean> {
-    const { data } = await supabase.from('notification_log').select('id').eq('user_id', userId).eq('job_id', jobId).eq('template', template).limit(1)
+    // Only a SUCCESSFUL prior send blocks a resend — otherwise a failed attempt
+    // (Resend/Twilio down) would log a row and never be retried on the next run.
+    const { data } = await supabase.from('notification_log').select('id').eq('user_id', userId).eq('job_id', jobId).eq('template', template).eq('status', 'sent').limit(1)
     return !!(data && data.length)
   }
   const sel = 'id, user_id, customer_id, scheduled_date, customers(name, phone, email, sms_opt_in, email_opt_in, reviewed_at)'
