@@ -209,7 +209,7 @@ export async function createDraftInvoiceForCompletedJob(supabase: Supa, job: Job
   const today = localTodayISO()
   const dueISO = format(addDays(parseISO(today), 14), 'yyyy-MM-dd')
 
-  const { error } = await supabase.from('invoices').insert({
+  const { data: created, error } = await supabase.from('invoices').insert({
     user_id: user.id,
     quote_id: job.quote_id,
     customer_id: job.customer_id,
@@ -225,8 +225,29 @@ export async function createDraftInvoiceForCompletedJob(supabase: Supa, job: Job
     issued_date: today,
     due_date: dueISO,
     notes: `Auto-generated from completed ${freq || 'recurring'} visit on ${job.scheduled_date}.`,
-  })
+  }).select('id').single()
 
-  if (error) return { created: false, reason: 'error' }
+  if (error || !created) return { created: false, reason: 'error' }
+
+  // AutoPay: this is the single point a recurring invoice is "finalized", so attempt
+  // the off-session charge here. The /api/payments/autopay route gates EVERYTHING
+  // (AutoPay enabled, charge-mode, saved card, anomaly safety check, idempotency)
+  // and no-ops when not eligible — so this is a safe fire-and-forget. Invoice
+  // creation never depends on, or is blocked by, the charge.
+  triggerAutoPay((created as { id: string }).id)
+
   return { created: true, invoiceNumber }
+}
+
+// Fire-and-forget AutoPay trigger (browser only — uses the owner's session cookie).
+// Swallows every error: a failed/uncharged invoice simply stays a draft to collect
+// manually, exactly as before AutoPay existed.
+function triggerAutoPay(invoiceId: string): void {
+  if (typeof window === 'undefined') return
+  try {
+    void fetch('/api/payments/autopay', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ invoiceId }),
+    }).catch(() => {})
+  } catch { /* never let an AutoPay attempt break invoice creation */ }
 }

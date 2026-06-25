@@ -87,6 +87,156 @@ export async function createInvoiceCheckoutSession(
   }
 }
 
+// ── Card-on-file AutoPay (SetupIntents + off-session PaymentIntents) ──────────
+// All raw REST, same secret-trim + server-only-logging discipline as above. These
+// power "save a card" (hosted Checkout in mode=setup) and the recurring off-session
+// charge. They REUSE the existing webhook to record the result, so a saved-card
+// charge marks an invoice paid exactly like a manual one.
+
+// Read + trim the secret once per call; a stray newline makes fetch embed the key
+// in its error, which is exactly how the key once leaked. Returns null if absent.
+function stripeSecret(): string | null {
+  const s = process.env.STRIPE_SECRET_KEY?.trim()
+  return s || null
+}
+
+// POST x-www-form-urlencoded to Stripe. Optional Idempotency-Key collapses retries
+// into a single operation. On any non-2xx, logs Stripe's body server-side ONLY and
+// returns { ok:false } with Stripe's error code (safe — a code, never the key/body).
+async function stripePost(
+  path: string, form: URLSearchParams, idempotencyKey?: string,
+): Promise<{ ok: boolean; data?: Record<string, unknown>; status: number; code?: string; declineCode?: string }> {
+  const secret = stripeSecret()
+  if (!secret) { console.error('[stripe] STRIPE_SECRET_KEY missing/blank'); return { ok: false, status: 0 } }
+  const headers: Record<string, string> = { Authorization: `Bearer ${secret}`, 'Content-Type': 'application/x-www-form-urlencoded' }
+  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey
+  try {
+    const res = await fetch(`https://api.stripe.com/v1/${path}`, { method: 'POST', headers, body: form })
+    const text = await res.text().catch(() => '')
+    let data: Record<string, unknown> = {}
+    try { data = text ? JSON.parse(text) : {} } catch { /* non-JSON */ }
+    if (!res.ok) {
+      const err = (data.error as { code?: string; decline_code?: string; message?: string } | undefined) || undefined
+      console.error(`[stripe] POST ${path} HTTP ${res.status}:`, text.slice(0, 500))
+      return { ok: false, status: res.status, data, code: err?.code, declineCode: err?.decline_code }
+    }
+    return { ok: true, status: res.status, data }
+  } catch (e) {
+    console.error(`[stripe] POST ${path} request failed:`, e)
+    return { ok: false, status: 0 }
+  }
+}
+
+async function stripeGet(path: string): Promise<{ ok: boolean; data?: Record<string, unknown> }> {
+  const secret = stripeSecret()
+  if (!secret) return { ok: false }
+  try {
+    const res = await fetch(`https://api.stripe.com/v1/${path}`, { headers: { Authorization: `Bearer ${secret}` } })
+    if (!res.ok) { console.error(`[stripe] GET ${path} HTTP ${res.status}`); return { ok: false } }
+    return { ok: true, data: await res.json() }
+  } catch (e) { console.error(`[stripe] GET ${path} failed:`, e); return { ok: false } }
+}
+
+// Create a Stripe Customer for one of OUR customers. Idempotency-Key 'cust:<id>'
+// guarantees we never create two Stripe customers for the same person on retries.
+export async function createStripeCustomer(
+  opts: { internalCustomerId: string; name?: string | null; email?: string | null },
+): Promise<{ ok: boolean; id?: string; error?: string }> {
+  if (!stripeEnabled()) return { ok: false, error: 'Payments are not set up yet.' }
+  const form = new URLSearchParams()
+  if (opts.name) form.set('name', opts.name)
+  if (opts.email) form.set('email', opts.email)
+  form.set('metadata[customer_id]', opts.internalCustomerId)
+  const r = await stripePost('customers', form, `cust:${opts.internalCustomerId}`)
+  if (!r.ok || !r.data?.id) return { ok: false, error: GENERIC_PAYMENT_ERROR }
+  return { ok: true, id: String(r.data.id) }
+}
+
+// Hosted Checkout in mode=setup — saves a card to the Stripe customer with NO
+// charge and NO publishable key (Stripe-hosted, same redirect UX as Pay Now). The
+// webhook captures the saved card (brand/last4/exp) on checkout.session.completed.
+export async function createSetupCheckoutSession(
+  opts: { stripeCustomerId: string; successUrl: string; cancelUrl: string; metadata: Record<string, string> },
+): Promise<CheckoutResult> {
+  if (!stripeEnabled()) return { ok: false, error: 'Payments are not set up yet.' }
+  const form = new URLSearchParams()
+  form.set('mode', 'setup')
+  form.set('customer', opts.stripeCustomerId)
+  form.set('payment_method_types[0]', 'card')
+  form.set('success_url', opts.successUrl)
+  form.set('cancel_url', opts.cancelUrl)
+  for (const [k, v] of Object.entries(opts.metadata)) form.set(`metadata[${k}]`, v)
+  const r = await stripePost('checkout/sessions', form)
+  if (!r.ok || !r.data?.url) return { ok: false, error: GENERIC_PAYMENT_ERROR }
+  return { ok: true, url: String(r.data.url) }
+}
+
+export interface OffSessionResult {
+  ok: boolean
+  status?: string          // Stripe PaymentIntent.status (e.g. 'succeeded', 'requires_action')
+  paymentIntentId?: string
+  error?: string           // generic, safe to surface
+  declineCode?: string     // server-side detail (logged/returned to owner UI only)
+}
+
+// Charge a SAVED card off-session for a recurring invoice. confirm=true + off_session
+// attempts the charge immediately; Idempotency-Key 'autopay:<invoiceId>' means a
+// given invoice can produce AT MOST ONE real charge no matter how many retries fire.
+// metadata.source='autopay' is what the webhook uses to tell these apart from the
+// one-time Checkout PaymentIntents (so the one-time flow is never double-recorded).
+export async function chargeSavedCardOffSession(
+  opts: {
+    stripeCustomerId: string; paymentMethodId: string; amountCents: number
+    invoiceId: string; userId: string; customerId: string; currency?: string
+  },
+): Promise<OffSessionResult> {
+  if (!stripeEnabled()) return { ok: false, error: 'Payments are not set up yet.' }
+  if (!Number.isFinite(opts.amountCents) || opts.amountCents <= 0) return { ok: false, error: 'This invoice has no payable amount.' }
+  const form = new URLSearchParams()
+  form.set('amount', String(Math.round(opts.amountCents)))
+  form.set('currency', opts.currency || 'cad')
+  form.set('customer', opts.stripeCustomerId)
+  form.set('payment_method', opts.paymentMethodId)
+  form.set('off_session', 'true')
+  form.set('confirm', 'true')
+  form.set('metadata[source]', 'autopay')
+  form.set('metadata[invoice_id]', opts.invoiceId)
+  form.set('metadata[user_id]', opts.userId)
+  form.set('metadata[customer_id]', opts.customerId)
+  const r = await stripePost('payment_intents', form, `autopay:${opts.invoiceId}`)
+  if (!r.ok) {
+    // A decline returns the failed PaymentIntent inside error.payment_intent.
+    const pi = (r.data?.error as { payment_intent?: { id?: string; status?: string } } | undefined)?.payment_intent
+    return { ok: false, status: pi?.status, paymentIntentId: pi?.id, error: GENERIC_PAYMENT_ERROR, declineCode: r.declineCode || r.code }
+  }
+  const d = r.data || {}
+  return { ok: true, status: String(d.status || ''), paymentIntentId: d.id ? String(d.id) : undefined }
+}
+
+// Resolve a completed setup Checkout/SetupIntent to its saved card details, so the
+// webhook can persist brand/last4/exp. Expands payment_method in one round-trip.
+export async function fetchSetupIntentCard(
+  setupIntentId: string,
+): Promise<{ ok: boolean; paymentMethodId?: string; stripeCustomerId?: string; brand?: string; last4?: string; expMonth?: number; expYear?: number }> {
+  const r = await stripeGet(`setup_intents/${setupIntentId}?expand[]=payment_method`)
+  if (!r.ok || !r.data) return { ok: false }
+  const si = r.data as { customer?: string; payment_method?: { id?: string; card?: { brand?: string; last4?: string; exp_month?: number; exp_year?: number } } | string }
+  const pm = typeof si.payment_method === 'object' ? si.payment_method : undefined
+  return {
+    ok: true,
+    paymentMethodId: pm?.id || (typeof si.payment_method === 'string' ? si.payment_method : undefined),
+    stripeCustomerId: typeof si.customer === 'string' ? si.customer : undefined,
+    brand: pm?.card?.brand, last4: pm?.card?.last4, expMonth: pm?.card?.exp_month, expYear: pm?.card?.exp_year,
+  }
+}
+
+// Detach a saved card from Stripe (used on Remove / on replacing the old card).
+// Best-effort — failure is logged, not surfaced; the DB row is the source of truth.
+export async function detachPaymentMethod(paymentMethodId: string): Promise<void> {
+  if (!stripeEnabled() || !paymentMethodId) return
+  await stripePost(`payment_methods/${paymentMethodId}/detach`, new URLSearchParams())
+}
+
 // Verify a Stripe webhook signature WITHOUT the SDK: HMAC-SHA256 over
 // `${timestamp}.${rawBody}`, timing-safe compared against any v1 signature, with
 // a 5-minute replay window. Returns the parsed event ONLY when authentic — the

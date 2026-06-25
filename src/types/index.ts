@@ -29,7 +29,33 @@ export interface Customer {
   // Communication consent — gates all SMS/email sends (default off).
   sms_opt_in: boolean
   email_opt_in: boolean
+  // ── Recurring card-on-file AutoPay ──
+  // Stripe customer id (lazily created on first card save). We store only this id +
+  // the display metadata on PaymentMethod; Stripe holds the card itself.
+  stripe_customer_id?: string | null
+  // Master per-customer AutoPay switch (default off). When on AND a card is saved,
+  // recurring invoices are auto-charged off-session.
+  autopay_enabled?: boolean
+  // Per-customer charge-mode OVERRIDE: null = inherit the business default;
+  // 'auto' = charge on completion; 'manual_review' = always hold for the owner.
+  autopay_charge_mode?: 'auto' | 'manual_review' | null
   user_id: string
+}
+
+// A saved card — DISPLAY metadata only. Stripe stores the actual card; we keep just
+// the Stripe ids + brand/last4/expiry so the profile + portal can show "Visa ••42".
+export interface PaymentMethod {
+  id: string
+  created_at: string
+  user_id: string
+  customer_id: string
+  stripe_customer_id: string | null
+  stripe_payment_method_id: string
+  brand: string | null
+  last4: string | null
+  exp_month: number | null
+  exp_year: number | null
+  is_default: boolean
 }
 
 export interface Property {
@@ -55,6 +81,13 @@ export interface Property {
   driveway_area: number | null
   notes: string | null
   measurement_history: MeasurementSnapshot[]
+  // Permanently-saved lawn boundary + map identity (from a website measurement or
+  // an in-app trace). Polygon is an array of {lat,lng} rings (jsonb).
+  lawn_polygon?: unknown
+  google_place_id?: string | null
+  maps_url?: string | null
+  property_travel_distance_km?: number | null
+  property_travel_fee?: number | null
   is_primary: boolean
   // Optional per-property override of the customer's scheduling preferences.
   // A set field wins over the customer default for that field only.
@@ -534,6 +567,13 @@ export interface BusinessSettings {
   fee_recovery_percent: number | null        // markup % baked into new quotes
   etransfer_discount_percent: number | null  // future: % off for non-card pay (off by default)
   gst_percent: number | null                 // GST shown/charged only when > 0 (Alberta = 5 when registered)
+  // ── Recurring AutoPay ── business-wide default charge mode (a customer may
+  // override). 'auto' = charge a saved card the moment a recurring visit completes;
+  // 'manual_review' = always draft the invoice and wait for the owner to charge.
+  autopay_charge_mode?: 'auto' | 'manual_review' | null
+  // Safety check: a recurring invoice whose amount deviates from the customer's
+  // usual recurring amount by more than this % is HELD for review, never auto-charged.
+  autopay_variance_pct?: number | null
   user_id: string
 }
 
@@ -594,6 +634,8 @@ export interface BusinessSettingsFormValues {
   fee_recovery_percent: number
   etransfer_discount_percent: number
   gst_percent: number
+  autopay_charge_mode: 'auto' | 'manual_review'
+  autopay_variance_pct: number
 }
 
 export const SERVICE_CATEGORIES = [

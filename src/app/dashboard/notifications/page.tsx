@@ -8,11 +8,12 @@ import { AppNotification } from '@/components/notifications/NotificationBell'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
-import { Bell, Check, FileText, DollarSign, Loader2, MessageSquare, Globe, Star } from 'lucide-react'
+import { Bell, Check, FileText, DollarSign, Loader2, MessageSquare, Globe, Star, CreditCard, AlertTriangle } from 'lucide-react'
 
 const ICON: Record<string, typeof FileText> = {
   quote_accepted: FileText, invoice_paid: DollarSign,
   new_message: MessageSquare, portal_request: Globe, review_received: Star,
+  payment_failed: CreditCard, autopay_review: AlertTriangle, website_lead: Globe,
 }
 const timeAgo = (iso: string) => { try { return formatDistanceToNow(new Date(iso), { addSuffix: true }) } catch { return '' } }
 

@@ -12,7 +12,7 @@ import { SendComms } from '@/components/comms/SendComms'
 import { PaymentHistory } from '@/components/payments/PaymentHistory'
 import { invoiceTotals } from '@/lib/invoiceTotals'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
-import { FileText, User, Check, FileDown, Trash2, CreditCard } from 'lucide-react'
+import { FileText, User, Check, FileDown, Trash2, CreditCard, Zap, AlertTriangle } from 'lucide-react'
 
 const STATUS_CYCLE: InvoiceStatus[] = ['unpaid', 'sent', 'paid']
 const FILTERS: { value: '' | InvoiceStatus; label: string }[] = [
@@ -34,6 +34,8 @@ export default function InvoicesPage() {
   const [filter, setFilter] = useState<'' | InvoiceStatus>('')
   const [paymentsEnabled, setPaymentsEnabled] = useState(false)
   const [payingId, setPayingId] = useState<string | null>(null)
+  const [chargingId, setChargingId] = useState<string | null>(null)
+  const [cardCustomers, setCardCustomers] = useState<Set<string>>(new Set())
   const [toast, setToast] = useState<string | null>(null)
   const [uid, setUid] = useState<string | null>(null)
 
@@ -42,24 +44,52 @@ export default function InvoicesPage() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) { setLoadError('Session expired — sign in again.'); return }
       setUid(user.id)
-      const [iRes, sRes] = await Promise.all([
+      const [iRes, sRes, pmRes] = await Promise.all([
         supabase
           .from('invoices')
           .select('*, customers(id, name, email, phone)')
           .eq('user_id', user.id)
           .order('created_at', { ascending: false }),
         supabase.from('business_settings').select('*').eq('user_id', user.id).maybeSingle(),
+        // Which customers have a saved card → enables the "Charge saved card" action.
+        supabase.from('payment_methods').select('customer_id').eq('user_id', user.id),
       ])
       // A failed fetch must NOT render as "No invoices yet" on billing day.
       if (iRes.error) { setLoadError('Could not load invoices: ' + iRes.error.message); return }
       setLoadError(null)
       setInvoices((iRes.data as Invoice[]) || [])
       setSettings(sRes.data as BusinessSettings | null)
+      setCardCustomers(new Set(((pmRes.data as { customer_id: string }[] | null) || []).map(r => r.customer_id)))
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : 'Could not load invoices.')
     } finally {
       setLoading(false)
     }
+  }
+
+  // Owner-initiated charge of a saved card for a recurring invoice (bypasses the
+  // AutoPay-enabled + anomaly checks — this is a deliberate manual action). The
+  // webhook records the payment + flips the invoice, so realtime updates the row.
+  async function chargeSavedCard(inv: Invoice) {
+    if (chargingId) return
+    setChargingId(inv.id)
+    try {
+      const res = await fetch('/api/payments/autopay', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invoiceId: inv.id, manual: true }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (d.result === 'charged') setToast(`Charging the saved card for ${inv.invoice_number} — the invoice will update shortly.`)
+      else if (d.result === 'declined') setToast(`The card was declined for ${inv.invoice_number}. Try a payment link or ask the customer to update their card.`)
+      else if (d.result === 'skipped' && d.reason === 'no-card') setToast('That customer has no saved card on file.')
+      else if (d.result === 'skipped' && d.reason === 'already-charged') setToast('This invoice has already been charged.')
+      else if (d.result === 'skipped' && d.reason === 'webhook-unconfigured') setToast('Configure the Stripe webhook before charging saved cards.')
+      else if (!res.ok) setToast(d.error || 'Could not charge the saved card.')
+      else setToast('Could not charge the saved card for this invoice.')
+      setTimeout(() => setToast(null), 6000)
+    } catch {
+      setToast('Could not reach the server. Please try again.'); setTimeout(() => setToast(null), 5000)
+    } finally { setChargingId(null) }
   }
 
   useEffect(() => { fetchInvoices() }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -325,9 +355,21 @@ export default function InvoicesPage() {
                       {inv.status === 'paid' && <Check className="w-3 h-3" />}
                       {INVOICE_STATUS_LABELS[inv.status]}
                     </button>
+                    {/* AutoPay held this invoice for review (amount differs from usual). */}
+                    {inv.status === 'draft' && (inv.notes || '').includes('AutoPay held') && (
+                      <span title={inv.notes || undefined} className="text-[10px] px-2 py-1 rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-400 font-semibold flex items-center gap-1">
+                        <AlertTriangle className="w-3 h-3" /> Review
+                      </span>
+                    )}
                     {paymentsEnabled && (inv.status === 'unpaid' || inv.status === 'sent') && (
                       <Button onClick={() => payNow(inv)} size="sm" loading={payingId === inv.id} title="Create a Stripe payment link">
                         <CreditCard className="w-3.5 h-3.5" /> Pay
+                      </Button>
+                    )}
+                    {/* Charge the saved card directly — recurring invoices, customer with a card on file. */}
+                    {paymentsEnabled && inv.customer_id && cardCustomers.has(inv.customer_id) && inv.job_id && inv.status !== 'paid' && (
+                      <Button onClick={() => chargeSavedCard(inv)} size="sm" variant="secondary" loading={chargingId === inv.id} title="Charge the customer's saved card on file">
+                        <Zap className="w-3.5 h-3.5" /> Charge card
                       </Button>
                     )}
                     {(inv.status === 'unpaid' || inv.status === 'sent') && (

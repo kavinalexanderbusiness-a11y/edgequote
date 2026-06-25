@@ -12,7 +12,7 @@ import { renderPortalQuoteBlob, renderPortalInvoiceBlob, downloadBlob, viewBlob,
 import {
   Home, History, Image as ImageIcon, FileText, Receipt, MessageSquarePlus, Check, Loader2,
   Phone, Globe, Mail, Leaf, CheckCircle2, Navigation, Play, CalendarClock, Repeat, MapPin, Ruler, Sparkles, CreditCard, MessageSquare,
-  Eye, Download, Printer, FolderOpen, Search, ArrowUpDown, Activity, Wallet, Star,
+  Eye, Download, Printer, FolderOpen, Search, ArrowUpDown, Activity, Wallet, Star, Zap, ShieldCheck, Trash2,
 } from 'lucide-react'
 
 // ── Premium Customer Portal ─────────────────────────────────────────────────────
@@ -26,11 +26,13 @@ interface PortalJob { id: string; recurrence_id: string | null; service_type: st
 interface PortalRec { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null; end_date: string | null }
 interface PortalPhoto { id: string; job_id: string | null; storage_path: string; kind: string; caption: string | null; taken_at: string }
 interface PortalPayment { id: string; amount: number; status: string; paid_at: string | null; provider: string; invoice_id: string | null; created_at: string }
+interface PortalCard { brand: string | null; last4: string | null; exp_month: number | null; exp_year: number | null }
 interface PortalData {
-  customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null; city: string | null; sms_opt_in?: boolean | null; email_opt_in?: boolean | null; reviewed_at?: string | null }
+  customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null; city: string | null; sms_opt_in?: boolean | null; email_opt_in?: boolean | null; reviewed_at?: string | null; autopay_enabled?: boolean | null }
   business: { company_name: string | null; owner_name: string | null; phone: string | null; email_primary: string | null; email_secondary: string | null; website: string | null; logo_url: string | null; logo_scale: number | null; base_address: string | null; terms_text: string | null; review_url?: string | null; gst_percent?: number | null } | null
   property: { address: string | null; city: string | null; province: string | null; lawn_sqft: number | null; fence_length: number | null; neighborhood: string | null; notes: string | null } | null
   quotes: PortalQuote[]; invoices: PortalInvoice[]; jobs: PortalJob[]; recurrences: PortalRec[]; photos: PortalPhoto[]; payments: PortalPayment[]
+  payment_method?: PortalCard | null
 }
 
 type Tab = 'home' | 'timeline' | 'service' | 'photos' | 'property' | 'documents' | 'quotes' | 'invoices' | 'payments' | 'request'
@@ -85,6 +87,7 @@ export default function PortalPage() {
       recurrences: Array.isArray(raw.recurrences) ? raw.recurrences : [],
       photos: Array.isArray(raw.photos) ? raw.photos : [],
       payments: Array.isArray(raw.payments) ? raw.payments : [],
+      payment_method: raw.payment_method ?? null,
     } : null
     setData(pd)
     if (pd) setConsentState({ sms: !!pd.customer?.sms_opt_in, email: !!pd.customer?.email_opt_in })
@@ -110,10 +113,20 @@ export default function PortalPage() {
   // invoice paid a beat later, so refetch shortly after.
   useEffect(() => {
     fetch('/api/payments/status').then(r => r.json()).then(d => setPaymentsEnabled(!!d.enabled)).catch(() => {})
-    if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('paid') === '1') {
-      setJustPaid(true)
-      window.history.replaceState({}, '', `/portal/${token}`)
-      setTimeout(() => load(), 1500)
+    if (typeof window !== 'undefined') {
+      const sp = new URLSearchParams(window.location.search)
+      if (sp.get('paid') === '1') {
+        setJustPaid(true)
+        window.history.replaceState({}, '', `/portal/${token}`)
+        setTimeout(() => load(), 1500)
+      }
+      // Back from the hosted card-setup page — the webhook saves the card a beat
+      // later, so reload shortly to show it.
+      if (sp.get('cardsaved') === '1') {
+        setTab('payments')
+        window.history.replaceState({}, '', `/portal/${token}`)
+        setTimeout(() => load(), 1500)
+      }
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -242,7 +255,8 @@ export default function PortalPage() {
           {tab === 'service' && <ServiceTab completed={derived.completed} photosByJob={photosByJob} invoiceByJob={invoiceByJob} photoUrl={photoUrl} />}
           {tab === 'photos' && <GalleryTab photosByJob={photosByJob} jobs={data.jobs} photoUrl={photoUrl} />}
           {tab === 'property' && <PropertyTab property={data.property} />}
-          {tab === 'payments' && <PaymentsTab payments={data.payments} invoices={data.invoices} outstanding={derived.outstanding} />}
+          {tab === 'payments' && <PaymentsTab payments={data.payments} invoices={data.invoices} outstanding={derived.outstanding}
+            token={token} paymentsEnabled={paymentsEnabled} card={data.payment_method ?? null} autopayEnabled={!!data.customer.autopay_enabled} onChanged={load} />}
           {tab === 'documents' && <DocumentsTab quotes={data.quotes} invoices={data.invoices} customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} business={biz} />}
           {tab === 'quotes' && <QuotesTab quotes={data.quotes} accept={accept} accepting={accepting} customerName={data.customer.name} business={biz} />}
           {tab === 'invoices' && <InvoicesTab invoices={data.invoices} paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} gstPercent={Number(data.business?.gst_percent) || 0} customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} business={biz} />}
@@ -715,11 +729,15 @@ function paymentMethodLabel(provider: string): string {
     default: return provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : 'Payment'
   }
 }
-function PaymentsTab({ payments, invoices, outstanding }: { payments: PortalPayment[]; invoices: PortalInvoice[]; outstanding: number }) {
+function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, card, autopayEnabled, onChanged }: {
+  payments: PortalPayment[]; invoices: PortalInvoice[]; outstanding: number
+  token: string; paymentsEnabled: boolean; card: PortalCard | null; autopayEnabled: boolean; onChanged: () => void
+}) {
   const invById = new Map(invoices.map(i => [i.id, i]))
   const totalPaid = payments.reduce((s, p) => s + Number(p.amount || 0), 0)
   return (
     <div className="space-y-3">
+      {paymentsEnabled && <AutoPayCard token={token} card={card} autopayEnabled={autopayEnabled} onChanged={onChanged} />}
       <div className="grid grid-cols-2 gap-3">
         <div className="rounded-card border border-emerald-500/20 bg-emerald-500/[0.06] p-3.5">
           <p className="text-[10px] uppercase tracking-wide text-emerald-400 font-semibold flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Total paid</p>
@@ -747,6 +765,78 @@ function PaymentsTab({ payments, invoices, outstanding }: { payments: PortalPaym
           </div>
         )
       })}
+    </div>
+  )
+}
+
+// ── Card on file + AutoPay (customer self-serve) ──
+function AutoPayCard({ token, card, autopayEnabled, onChanged }: {
+  token: string; card: PortalCard | null; autopayEnabled: boolean; onChanged: () => void
+}) {
+  const [autopay, setAutopay] = useState(autopayEnabled)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  useEffect(() => { setAutopay(autopayEnabled) }, [autopayEnabled])
+
+  async function addCard() {
+    setBusy('card'); setErr(null)
+    try {
+      const res = await fetch('/api/portal/setup-card', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) })
+      const d = await res.json().catch(() => ({}))
+      if (res.ok && d.url) { window.location.href = d.url; return }   // hosted Stripe setup
+      setErr('Could not start card setup. Please try again.')
+    } catch { setErr('Could not start card setup. Please try again.') }
+    setBusy(null)
+  }
+  async function removeCard() {
+    if (!confirm('Remove your saved card? AutoPay will be turned off.')) return
+    setBusy('remove'); setErr(null)
+    try {
+      const res = await fetch('/api/portal/remove-card', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) })
+      if (res.ok) { setAutopay(false); onChanged() } else setErr('Could not remove the card.')
+    } finally { setBusy(null) }
+  }
+  async function toggle() {
+    if (!card && !autopay) { setErr('Add a card first to use AutoPay.'); return }
+    const next = !autopay
+    setAutopay(next); setErr(null)   // optimistic
+    const res = await fetch('/api/portal/autopay', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, enabled: next }) })
+    const d = await res.json().catch(() => ({}))
+    if (!d.ok) { setAutopay(!next); setErr('Could not update AutoPay.'); return }
+    onChanged()
+  }
+  const exp = card?.exp_month && card?.exp_year ? `${String(card.exp_month).padStart(2, '0')}/${String(card.exp_year).slice(-2)}` : null
+  const brand = card?.brand ? card.brand.charAt(0).toUpperCase() + card.brand.slice(1) : 'Card'
+
+  return (
+    <div className="rounded-card border border-border bg-bg-secondary p-4">
+      <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><CreditCard className="w-4 h-4 text-accent" /> Payment method &amp; AutoPay</p>
+      <p className="text-xs text-ink-muted mt-0.5 mb-3">Save a card to pay recurring invoices automatically. Your card is stored securely by Stripe — never by us.</p>
+      {card ? (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-bg-tertiary px-3 py-2.5">
+          <span className="text-sm text-ink flex items-center gap-2 min-w-0">
+            <CreditCard className="w-4 h-4 text-ink-muted shrink-0" />
+            <span className="truncate">{brand} •••• {card.last4 || '????'}{exp ? ` · ${exp}` : ''}</span>
+          </span>
+          <div className="flex items-center gap-3 shrink-0">
+            <button onClick={addCard} disabled={busy !== null} className="text-xs font-medium text-accent hover:underline disabled:opacity-50">Replace</button>
+            <button onClick={removeCard} disabled={busy !== null} className="text-xs font-medium text-ink-muted hover:text-red-400 disabled:opacity-50 flex items-center gap-1"><Trash2 className="w-3.5 h-3.5" /> Remove</button>
+          </div>
+        </div>
+      ) : (
+        <button onClick={addCard} disabled={busy !== null} className="w-full h-10 rounded-xl bg-accent text-black text-sm font-semibold flex items-center justify-center gap-1.5 disabled:opacity-60">
+          {busy === 'card' ? <Loader2 className="w-4 h-4 animate-spin" /> : <CreditCard className="w-4 h-4" />} Add a card
+        </button>
+      )}
+      <div className="flex items-center justify-between gap-3 mt-3 rounded-lg border border-border bg-bg-tertiary px-3 py-2.5">
+        <span className="text-sm text-ink flex items-center gap-2"><Zap className="w-4 h-4 text-accent" /> AutoPay recurring invoices</span>
+        <button onClick={toggle} disabled={!card && !autopay} aria-pressed={autopay}
+          className={cn('relative w-11 h-6 rounded-full transition-colors shrink-0', autopay ? 'bg-accent' : 'bg-border-strong', (!card && !autopay) && 'opacity-40 cursor-not-allowed')}>
+          <span className={cn('absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform', autopay && 'translate-x-5')} />
+        </button>
+      </div>
+      {card && <p className="text-[11px] text-ink-faint mt-2 flex items-center gap-1"><ShieldCheck className="w-3 h-3 text-emerald-400" /> Secured by Stripe. You can remove your card or turn off AutoPay anytime.</p>}
+      {err && <p className="text-xs text-red-400 mt-2">{err}</p>}
     </div>
   )
 }

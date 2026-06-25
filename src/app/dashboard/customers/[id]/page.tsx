@@ -21,6 +21,7 @@ import { formatCurrency, formatDate, getInitials } from '@/lib/utils'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { CustomerComms } from '@/components/customers/CustomerComms'
 import { ConversationThread } from '@/components/messages/ConversationThread'
+import { PaymentMethodCard } from '@/components/payments/PaymentMethodCard'
 import {
   ArrowLeft, Phone, MessageSquare, FilePlus, CalendarPlus, Mail, MapPin, Repeat,
   FileText, Send, RotateCw, CheckCircle2, Wrench, Receipt, DollarSign, Sparkles, Users,
@@ -524,6 +525,9 @@ export default function CustomerDetailPage() {
           )}
         </CardBody>
       </Card>
+
+      {/* Payment method + AutoPay (card-on-file for recurring customers) */}
+      <PaymentMethodCard customer={customer} onCustomerChange={patch => setCustomer({ ...customer, ...patch })} />
 
       {/* Open items — what needs action */}
       <Card className={openItems.length > 0 ? 'border-amber-500/30' : ''}>

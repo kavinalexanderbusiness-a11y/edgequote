@@ -12,6 +12,8 @@ export type MsgType =
   | 'eta' | 'rain_delay' | 'rescheduled' | 'early_arrival' | 'confirm'
   // Follow-up / reminder templates.
   | 'estimate_reminder' | 'payment_reminder' | 'estimate_followup'
+  // Payment receipt — auto-sent after a successful (AutoPay) payment.
+  | 'receipt'
 
 export const MSG_LABELS: Record<MsgType, string> = {
   on_my_way: 'On my way',
@@ -31,6 +33,7 @@ export const MSG_LABELS: Record<MsgType, string> = {
   estimate_reminder: 'Estimate reminder',
   payment_reminder: 'Payment reminder',
   estimate_followup: 'Estimate follow-up',
+  receipt: 'Payment receipt',
 }
 
 // The variables a template may reference, with a short hint for the editor.
@@ -204,6 +207,18 @@ Whenever you're ready, you can view and accept your quote here:
 {{quote_link}}
 
 Thank you for considering {{business_name}}.`,
+
+  receipt: `Hi {{first_name}},
+
+Thank you — we've received your payment{{amount}}.
+
+This confirms your invoice has been **paid in full**. You can view your payment history and receipts anytime here:
+
+{{portal_link}}
+
+We appreciate your business!
+
+— {{business_name}}`,
 }
 
 const SUBJECTS: Record<MsgType, string> = {
@@ -213,6 +228,7 @@ const SUBJECTS: Record<MsgType, string> = {
   eta: 'Your upcoming service', rain_delay: 'Weather reschedule', rescheduled: 'Your service has been rescheduled',
   early_arrival: 'We can come earlier today', confirm: 'Confirming your service',
   estimate_reminder: 'Your upcoming estimate', payment_reminder: 'Invoice reminder', estimate_followup: 'Following up on your quote',
+  receipt: 'Payment received — thank you',
 }
 
 export interface MsgVars {

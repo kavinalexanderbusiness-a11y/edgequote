@@ -10,6 +10,7 @@ import { applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix }
 import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes } from '@/lib/pricing'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { applyFeeRecovery } from '@/lib/invoiceTotals'
+import { LeadPrefillPayload, LEAD_PREFILL_KEY } from '@/lib/leads'
 
 interface MeasurementPayload {
   customerId: string | null
@@ -42,6 +43,7 @@ export default function NewQuotePage() {
   const [tiers, setTiers] = useState<TravelFeeTier[]>([])
   const [settings, setSettings] = useState<BusinessSettings | null>(null)
   const [measurement, setMeasurement] = useState<MeasurementPayload | null>(null)
+  const [lead, setLead] = useState<LeadPrefillPayload | null>(null)
   const [loading, setLoading] = useState(true)
 
   const supabase = createClient()
@@ -53,6 +55,13 @@ export default function NewQuotePage() {
     if (raw) {
       try { setMeasurement(JSON.parse(raw) as MeasurementPayload) } catch { /* ignore */ }
       window.sessionStorage.removeItem('eq_measurement')
+    }
+    // Consume a website-lead handoff (one-time) — opens the builder pre-filled from
+    // a website quote request (Build Quote in Messages).
+    const leadRaw = window.sessionStorage.getItem(LEAD_PREFILL_KEY)
+    if (leadRaw) {
+      try { setLead(JSON.parse(leadRaw) as LeadPrefillPayload) } catch { /* ignore */ }
+      window.sessionStorage.removeItem(LEAD_PREFILL_KEY)
     }
   }, [])
 
@@ -168,11 +177,29 @@ export default function NewQuotePage() {
           if (measurement?.cadence && measurement.cadence !== 'one_time') rec.cadence = measurement.cadence
           const hist = Array.isArray((prop as { measurement_history: unknown } | null)?.measurement_history)
             ? (prop as { measurement_history: unknown[] }).measurement_history : []
-          await supabase.from('properties').update({
+          const patch: Record<string, unknown> = {
             lawn_sqft: measuredSqft,
-            measurement_history: [...hist, { date: new Date().toISOString(), total_sqft: measuredSqft, sections: measurement?.sections ?? undefined, recommendation: rec }],
-          }).eq('id', propertyId)
+            measurement_history: [...hist, { date: new Date().toISOString(), total_sqft: measuredSqft, sections: measurement?.sections ?? lead?.sections ?? undefined, recommendation: rec }],
+          }
+          // From a website lead → permanently persist the boundary/place/travel the
+          // website measured (gated by the SAME replace-confirm above).
+          if (lead) {
+            if (lead.lawnPolygon) patch.lawn_polygon = lead.lawnPolygon
+            if (lead.placeId) patch.google_place_id = lead.placeId
+            if (lead.mapsUrl) patch.maps_url = lead.mapsUrl
+            if (lead.lat != null) patch.lat = lead.lat
+            if (lead.lng != null) patch.lng = lead.lng
+            if (lead.travelDistanceKm != null) patch.property_travel_distance_km = lead.travelDistanceKm
+            if (lead.travelFee != null) patch.property_travel_fee = lead.travelFee
+          }
+          await supabase.from('properties').update(patch).eq('id', propertyId)
         }
+      }
+      // Website lead: link it to the new quote + clear the open-lead badge so the
+      // conversation continues as a normal thread (SMS/portal/follow-ups).
+      if (lead) {
+        await supabase.from('website_leads').update({ status: 'quoted', quote_id: data.id }).eq('id', lead.leadId)
+        if (customerId) await supabase.from('conversations').update({ lead_status: null }).eq('user_id', user!.id).eq('customer_id', customerId)
       }
       // Tell the next screen the lead became a customer (created or matched).
       if (typeof window !== 'undefined' && (createdCustomer || matchedBy)) {
@@ -194,8 +221,26 @@ export default function NewQuotePage() {
         templates={templates}
         tiers={tiers}
         settings={settings}
-        defaultCustomerId={measurement?.customerId || defaultCustomerId}
-        defaultValues={measurement ? {
+        defaultCustomerId={lead?.customerId || measurement?.customerId || defaultCustomerId}
+        defaultValues={lead ? {
+          // Pre-filled from a website quote request — review, adjust price, create.
+          customer_id: lead.customerId || '',
+          customer_name: lead.customerName || '',
+          customer_phone: lead.customerPhone || '',
+          customer_email: lead.customerEmail || '',
+          address: lead.address || '',
+          measured_sqft: lead.sqft || 0,
+          service_type: lead.serviceType || 'Lawn Mowing',
+          // RAW website prices — handleSubmit applies fee-recovery once at insert.
+          initial_price: lead.initialPrice || 0,
+          weekly_price: lead.weekly || 0,
+          biweekly_price: lead.biweekly || 0,
+          monthly_price: lead.monthly || 0,
+          travel_fee: lead.travelFee || 0,
+          distance_km: lead.travelDistanceKm || 0,
+          overgrowth_multiplier: lead.overgrowth || 1,
+          notes: lead.notes || '',
+        } : measurement ? {
           customer_id: measurement.customerId || '',
           address: measurement.address || '',
           // Lawn size measured on the website flows straight into the editable field.

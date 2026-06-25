@@ -8,13 +8,14 @@ import { createClient } from '@/lib/supabase/client'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { ConversationThread } from '@/components/messages/ConversationThread'
 import { ConversationInfo } from '@/components/messages/ConversationInfo'
+import { LeadCard } from '@/components/messages/LeadCard'
 import { Button } from '@/components/ui/Button'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { cn } from '@/lib/utils'
 import {
   Loader2, Inbox, User, ArrowLeft, MessageSquare, FileText, Search, X,
   Archive, ArchiveRestore, Pin, PinOff, BellOff, Bell, MailOpen, Trash2, MoreVertical, Reply,
-  MapPin, Wrench, Receipt,
+  MapPin, Wrench, Receipt, Globe, Sparkles,
 } from 'lucide-react'
 
 // Apple-Messages-style inbox that stays a CRM. Archive is a FLAG — nothing is
@@ -25,20 +26,24 @@ interface Convo {
   id: string; customer_id: string; last_message_at: string; last_preview: string | null
   last_direction: string | null; unread: number
   archived_at: string | null; pinned_at: string | null; muted: boolean
+  lead_status: string | null; last_channel: string | null
   customers?: { id: string; name: string; phone: string | null } | null
   customer_name?: string; customer_phone?: string | null   // search-result shape
   message_snippet?: string | null; match_type?: string     // search-result extras
 }
 
-type Filter = 'inbox' | 'unread' | 'needs_reply' | 'pinned' | 'archived'
+// Type axis (one hub): All / SMS / Portal / Website Leads / Archived. Per-row
+// affordances (unread badge, Needs-reply pill, pin/mute) and the action menu carry
+// the status dimension.
+type Filter = 'all' | 'sms' | 'portal' | 'website_lead' | 'archived'
 const FILTERS: { key: Filter; label: string; icon: typeof Inbox }[] = [
-  { key: 'inbox', label: 'Inbox', icon: Inbox },
-  { key: 'unread', label: 'Unread', icon: MessageSquare },
-  { key: 'needs_reply', label: 'Needs reply', icon: Reply },
-  { key: 'pinned', label: 'Pinned', icon: Pin },
+  { key: 'all', label: 'All', icon: Inbox },
+  { key: 'sms', label: 'SMS', icon: MessageSquare },
+  { key: 'portal', label: 'Portal', icon: Globe },
+  { key: 'website_lead', label: 'Website Leads', icon: Sparkles },
   { key: 'archived', label: 'Archived', icon: Archive },
 ]
-const SELECT_COLS = 'id, customer_id, last_message_at, last_preview, last_direction, unread, archived_at, pinned_at, muted, customers(id, name, phone)'
+const SELECT_COLS = 'id, customer_id, last_message_at, last_preview, last_direction, unread, archived_at, pinned_at, muted, lead_status, last_channel, customers(id, name, phone)'
 const PAGE = 40
 const ROW_H = 76
 
@@ -48,11 +53,14 @@ const phoneOf = (c: Convo) => c.customers?.phone ?? c.customer_phone ?? null
 
 // Does a conversation still belong in this filter after a change? (optimistic removal)
 function inFilter(c: Convo, f: Filter): boolean {
-  if (f === 'inbox') return !c.archived_at
-  if (f === 'unread') return !c.archived_at && c.unread > 0
-  if (f === 'needs_reply') return !c.archived_at && c.last_direction === 'inbound'
-  if (f === 'pinned') return !!c.pinned_at
-  return !!c.archived_at
+  if (f === 'archived') return !!c.archived_at
+  if (c.archived_at) return false
+  if (f === 'all') return true
+  if (f === 'website_lead') return c.lead_status === 'new'
+  if (c.lead_status === 'new') return false   // open leads live only under their own chip
+  if (f === 'sms') return c.last_channel === 'sms' || c.last_channel == null
+  if (f === 'portal') return c.last_channel === 'portal'
+  return false
 }
 
 // Keep the client list in the SAME order the server returns (pinned first by pin
@@ -80,8 +88,8 @@ export default function MessagesPage() {
   const [hasMore, setHasMore] = useState(true)
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
-  const [counts, setCounts] = useState<Record<Filter, number>>({ inbox: 0, unread: 0, needs_reply: 0, pinned: 0, archived: 0 })
-  const [filter, setFilter] = useState<Filter>('inbox')
+  const [counts, setCounts] = useState<Record<Filter, number>>({ all: 0, sms: 0, portal: 0, website_lead: 0, archived: 0 })
+  const [filter, setFilter] = useState<Filter>('all')
   const [sel, setSel] = useState<Convo | null>(null)
   const [query, setQuery] = useState('')
   const [searchResults, setSearchResults] = useState<Convo[] | null>(null)
@@ -104,16 +112,16 @@ export default function MessagesPage() {
   async function loadCounts(u: string) {
     async function countFor(f: Filter): Promise<number> {
       let qb = supabase.from('conversations').select('id', { count: 'exact', head: true }).eq('user_id', u)
-      if (f === 'inbox') qb = qb.is('archived_at', null)
-      else if (f === 'unread') qb = qb.is('archived_at', null).gt('unread', 0)
-      else if (f === 'needs_reply') qb = qb.is('archived_at', null).eq('last_direction', 'inbound')
-      else if (f === 'pinned') qb = qb.not('pinned_at', 'is', null)
+      if (f === 'all') qb = qb.is('archived_at', null)
+      else if (f === 'sms') qb = qb.is('archived_at', null).is('lead_status', null).or('last_channel.eq.sms,last_channel.is.null')
+      else if (f === 'portal') qb = qb.is('archived_at', null).is('lead_status', null).eq('last_channel', 'portal')
+      else if (f === 'website_lead') qb = qb.is('archived_at', null).eq('lead_status', 'new')
       else qb = qb.not('archived_at', 'is', null)
       const { count } = await qb
       return count || 0
     }
-    const [a, b, c, d, e] = await Promise.all([countFor('inbox'), countFor('unread'), countFor('needs_reply'), countFor('pinned'), countFor('archived')])
-    setCounts({ inbox: a, unread: b, needs_reply: c, pinned: d, archived: e })
+    const [a, b, c, d, e] = await Promise.all([countFor('all'), countFor('sms'), countFor('portal'), countFor('website_lead'), countFor('archived')])
+    setCounts({ all: a, sms: b, portal: c, website_lead: d, archived: e })
   }
 
   async function loadPage(u: string, f: Filter, reset: boolean) {
@@ -125,10 +133,10 @@ export default function MessagesPage() {
     if (reset) setLoading(true); else setLoadingMore(true)
     const from = reset ? 0 : rows.length
     let qb = supabase.from('conversations').select(SELECT_COLS).eq('user_id', u)
-    if (f === 'inbox') qb = qb.is('archived_at', null)
-    else if (f === 'unread') qb = qb.is('archived_at', null).gt('unread', 0)
-    else if (f === 'needs_reply') qb = qb.is('archived_at', null).eq('last_direction', 'inbound')
-    else if (f === 'pinned') qb = qb.not('pinned_at', 'is', null)
+    if (f === 'all') qb = qb.is('archived_at', null)
+    else if (f === 'sms') qb = qb.is('archived_at', null).is('lead_status', null).or('last_channel.eq.sms,last_channel.is.null')
+    else if (f === 'portal') qb = qb.is('archived_at', null).is('lead_status', null).eq('last_channel', 'portal')
+    else if (f === 'website_lead') qb = qb.is('archived_at', null).eq('lead_status', 'new')
     else qb = qb.not('archived_at', 'is', null)
     const { data } = await qb
       .order('pinned_at', { ascending: false, nullsFirst: false }).order('last_message_at', { ascending: false })
@@ -174,8 +182,8 @@ export default function MessagesPage() {
           const f = filterRef.current
           loadCounts(u)
           if (payload.eventType === 'UPDATE') {
-            const r = payload.new as Pick<Convo, 'id' | 'unread' | 'last_preview' | 'last_direction' | 'last_message_at' | 'archived_at' | 'pinned_at' | 'muted'>
-            const fields = { unread: r.unread, last_preview: r.last_preview, last_direction: r.last_direction, last_message_at: r.last_message_at, archived_at: r.archived_at, pinned_at: r.pinned_at, muted: r.muted }
+            const r = payload.new as Pick<Convo, 'id' | 'unread' | 'last_preview' | 'last_direction' | 'last_message_at' | 'archived_at' | 'pinned_at' | 'muted' | 'lead_status' | 'last_channel'>
+            const fields = { unread: r.unread, last_preview: r.last_preview, last_direction: r.last_direction, last_message_at: r.last_message_at, archived_at: r.archived_at, pinned_at: r.pinned_at, muted: r.muted, lead_status: r.lead_status, last_channel: r.last_channel }
             setRows(cs => cs.some(x => x.id === r.id)
               ? sortConvos(cs.map(x => x.id === r.id ? { ...x, ...fields } : x).filter(x => x.id !== r.id || inFilter({ ...x, ...fields }, f)))
               : cs)
@@ -423,6 +431,7 @@ export default function MessagesPage() {
                   <div className="min-w-0">
                     <p className="text-sm font-bold text-ink truncate flex items-center gap-1.5">
                       {sel.pinned_at && <Pin className="w-3 h-3 text-accent shrink-0" />}{nameOf(sel)}
+                      {sel.lead_status === 'new' && <span className="text-[10px] font-bold uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5 flex items-center gap-0.5"><Globe className="w-2.5 h-2.5" /> Website Lead</span>}
                       {sel.archived_at && <span className="text-[10px] font-semibold uppercase text-ink-faint border border-border rounded px-1 py-0.5">Archived</span>}
                       {sel.muted && <BellOff className="w-3 h-3 text-ink-faint shrink-0" />}
                     </p>
@@ -437,6 +446,8 @@ export default function MessagesPage() {
                   <Link href={`/dashboard/customers/${sel.customer_id}`}><Button size="sm" variant="ghost" title="Customer profile"><User className="w-3.5 h-3.5" /><span className="hidden sm:inline">Profile</span></Button></Link>
                 </div>
               </div>
+              {/* Website-lead context + Build Quote, shown only while the lead is open. */}
+              {sel.lead_status === 'new' && <LeadCard customerId={sel.customer_id} />}
               <ConversationInfo customerId={sel.customer_id} />
               <div className="flex-1 min-h-0">
                 <ConversationThread customerId={sel.customer_id} onRead={() => uid && loadCounts(uid)} />
@@ -556,6 +567,7 @@ function ConversationRow({ c, selected, actions, query, selectMode, checked, onT
           <div className="flex items-center gap-1.5">
             {c.pinned_at && <Pin className="w-3 h-3 text-accent shrink-0" />}
             <p className={cn('text-sm truncate flex-1', c.unread > 0 ? 'font-bold text-ink' : 'font-semibold text-ink')}><Highlight text={nameOf(c)} q={query} /></p>
+            {c.lead_status === 'new' && <span className="shrink-0 text-[9px] font-bold uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded px-1 leading-4">Lead</span>}
             {c.muted && <BellOff className="w-3 h-3 text-ink-faint shrink-0" />}
             {c.archived_at && <Archive className="w-3 h-3 text-ink-faint shrink-0" />}
             {c.unread > 0 && <span className="shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-accent text-black text-[10px] font-bold flex items-center justify-center">{c.unread > 9 ? '9+' : c.unread}</span>}
