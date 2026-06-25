@@ -5,6 +5,8 @@ import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
+import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
+import { custCacheKey, type CustomerPrefetch } from '@/lib/prefetch'
 import { Customer, Property, Quote, Job, Invoice, JobRecurrence } from '@/types'
 import { needsFollowUp, daysSince } from '@/lib/followup'
 import { recurrenceLabel, recurringCustomerLabel, buildServicePlans, ServicePlan } from '@/lib/recurrence'
@@ -105,6 +107,21 @@ export default function CustomerDetailPage() {
   const [propPrefsDraft, setPropPrefsDraft] = useState<PrefsDraft>(EMPTY_DRAFT)
   const [savingPropPrefs, setSavingPropPrefs] = useState(false)
 
+  // Instant paint from a warm cache (hover prefetch on the list, or a prior
+  // visit). The load effect below revalidates right after, so it's never stale-stuck.
+  useEffect(() => {
+    const cached = readCache<CustomerPrefetch>(custCacheKey(id), CACHE_TTL.short)
+    if (cached?.customer) {
+      setCustomer(cached.customer)
+      setNotesValue(cached.customer.notes || '')
+      setProperties(cached.properties)
+      setQuotes(cached.quotes)
+      setJobs(cached.jobs)
+      setInvoices(cached.invoices)
+      setLoading(false)
+    }
+  }, [id])
+
   useEffect(() => {
     async function load() {
       const { data: { user } } = await supabase.auth.getUser()
@@ -122,6 +139,11 @@ export default function CustomerDetailPage() {
       setQuotes((qRes.data as Quote[]) || [])
       setJobs((jRes.data as Job[]) || [])
       setInvoices((iRes.data as Invoice[]) || [])
+      // Warm the cache so the next open (or a back-nav) paints instantly.
+      if (cust) writeCache<CustomerPrefetch>(custCacheKey(id), {
+        customer: cust, properties: (pRes.data as Property[]) || [], quotes: (qRes.data as Quote[]) || [],
+        jobs: (jRes.data as Job[]) || [], invoices: (iRes.data as Invoice[]) || [],
+      })
 
       if (cust?.referred_by_customer_id) {
         const { data } = await supabase.from('customers').select('id, name').eq('id', cust.referred_by_customer_id).maybeSingle()

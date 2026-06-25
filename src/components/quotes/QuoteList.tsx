@@ -1,7 +1,9 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { hoverIntent } from '@/lib/prefetch'
 import { Quote, QuoteStatus } from '@/types'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { needsFollowUp } from '@/lib/followup'
@@ -27,6 +29,7 @@ const STATUS_FILTERS: { value: '' | QuoteStatus; label: string }[] = [
 ]
 
 export function QuoteList({ quotes, onDelete }: QuoteListProps) {
+  const router = useRouter()
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'' | QuoteStatus>('')
   const [followUpOnly, setFollowUpOnly] = useState(false)
@@ -116,7 +119,8 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
               </thead>
               <tbody className="divide-y divide-border">
                 {filtered.map(q => (
-                  <tr key={q.id} className="hover:bg-surface-raised transition-colors group">
+                  <tr key={q.id} {...hoverIntent(() => router.prefetch(`/dashboard/quotes/${q.id}`))}
+                    className="hover:bg-surface-raised transition-colors group">
                     <td className="px-5 py-3.5 font-mono text-xs text-ink-muted">
                       <span className="flex items-center gap-1.5">
                         {needsFollowUp(q) && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" title="Needs follow-up" />}

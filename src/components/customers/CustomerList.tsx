@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { Customer } from '@/types'
 import { formatDate, getInitials, cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
+import { prefetchCustomer, hoverIntent } from '@/lib/prefetch'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { applyConsent, SMS_CONSENT_WARNING, ConsentChannel } from '@/lib/consent'
 import { Button } from '@/components/ui/Button'
@@ -186,7 +187,8 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
       ) : (
         <div className="grid gap-3">
           {filtered.map(c => (
-            <Card key={c.id} className={cn('flex items-center gap-3 px-5 py-4 transition-colors', selected.has(c.id) ? 'border-accent/50' : 'hover:border-border-strong')}>
+            <Card key={c.id} {...hoverIntent(() => prefetchCustomer(c.id))}
+              className={cn('flex items-center gap-3 px-5 py-4 transition-colors', selected.has(c.id) ? 'border-accent/50' : 'hover:border-border-strong')}>
               <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggleSelect(c.id)}
                 className="w-4 h-4 rounded border-border-strong accent-accent shrink-0" title="Select" />
               {/* Avatar */}
