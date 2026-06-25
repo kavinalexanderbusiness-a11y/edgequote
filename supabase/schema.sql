@@ -1616,3 +1616,83 @@ begin
   return result;
 end; $$;
 grant execute on function public.get_portal_data(text) to anon, authenticated;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-24c — Web Push notifications (PWA).
+-- Push is a DELIVERY CHANNEL for the EXISTING public.notifications system, not a
+-- second notification system. Whenever a notification row is inserted (by any of
+-- the existing triggers: quote_accepted / invoice_paid / inbound_message /
+-- review_received — or future ones), an AFTER INSERT trigger fans it out to the
+-- owner's registered browsers via pg_net → /api/push/send, which signs the payload
+-- and calls Web Push (VAPID). Respects per-type preferences (business_settings
+-- .notif_prefs) inside the endpoint. Fully backward compatible + idempotent.
+-- ════════════════════════════════════════════════════════════
+
+-- (1) Per-device push subscriptions (one row per browser/endpoint).
+create table if not exists public.push_subscriptions (
+  id          uuid primary key default uuid_generate_v4(),
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  endpoint    text not null,
+  p256dh      text not null,
+  auth        text not null,
+  user_agent  text,
+  created_at  timestamptz not null default now(),
+  last_seen_at timestamptz not null default now(),
+  unique (user_id, endpoint)
+);
+alter table public.push_subscriptions enable row level security;
+do $$ begin
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='push_subscriptions' and policyname='push_subs: select own') then
+    create policy "push_subs: select own" on public.push_subscriptions for select using (auth.uid() = user_id);
+    create policy "push_subs: insert own" on public.push_subscriptions for insert with check (auth.uid() = user_id);
+    create policy "push_subs: update own" on public.push_subscriptions for update using (auth.uid() = user_id);
+    create policy "push_subs: delete own" on public.push_subscriptions for delete using (auth.uid() = user_id);
+  end if;
+end $$;
+create index if not exists push_subscriptions_user_idx on public.push_subscriptions(user_id);
+grant select, insert, update, delete on public.push_subscriptions to authenticated;
+
+-- (2) Per-type notification preferences (jsonb on the existing settings row).
+-- Keys: sms, quote_accepted, invoice_paid, portal_request, review_received,
+-- weather, daily_reminder, schedule_change. Absent key = ON (opt-out model).
+alter table public.business_settings add column if not exists notif_prefs jsonb not null default '{}'::jsonb;
+
+-- (3) Server-only config the dispatch trigger reads: where to POST + a shared
+-- secret the endpoint verifies. ONE row (id = 1). No client access — only the
+-- security-definer trigger (runs as owner, bypasses RLS) and the service role
+-- read it. After deploy run, once:
+--   update public.push_config
+--     set endpoint_url = 'https://YOUR-APP.vercel.app/api/push/send',
+--         secret       = 'a-long-random-string';   -- same as Vercel PUSH_SEND_SECRET
+create table if not exists public.push_config (
+  id           int primary key default 1,
+  endpoint_url text,
+  secret       text,
+  constraint push_config_singleton check (id = 1)
+);
+insert into public.push_config (id) values (1) on conflict (id) do nothing;
+alter table public.push_config enable row level security;  -- deny-by-default: no policies = no client access
+revoke all on public.push_config from anon, authenticated;
+
+-- (4) pg_net lets Postgres make the outbound HTTP call from the trigger.
+create extension if not exists pg_net;
+
+-- (5) Fan a freshly-inserted notification out to the owner's push endpoint.
+-- Non-blocking (pg_net queues the request); a missing/empty config is a safe
+-- no-op so the app works before push is configured.
+create or replace function public.push_dispatch()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_url text; v_secret text;
+begin
+  select endpoint_url, secret into v_url, v_secret from public.push_config where id = 1;
+  if v_url is null or v_url = '' then return new; end if;
+  perform net.http_post(
+    url     := v_url,
+    body    := jsonb_build_object('id', new.id::text),
+    headers := jsonb_build_object('Content-Type', 'application/json', 'x-push-secret', coalesce(v_secret, ''))
+  );
+  return new;
+end; $$;
+drop trigger if exists trg_push_dispatch on public.notifications;
+create trigger trg_push_dispatch after insert on public.notifications
+  for each row execute function public.push_dispatch();

@@ -9,8 +9,10 @@ import {
 } from '@/lib/revenueIntelligence'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
+import { Skeleton, SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
+import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { formatCurrency, cn } from '@/lib/utils'
-import { Loader2, TrendingUp, Check, X, Trophy, ArrowRight, Sparkles, AlertTriangle, RefreshCw } from 'lucide-react'
+import { TrendingUp, Check, X, Trophy, ArrowRight, Sparkles, AlertTriangle, RefreshCw } from 'lucide-react'
 
 const CONF_PILL: Record<Confidence, string> = {
   high: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
@@ -21,7 +23,7 @@ const CONF_LABEL: Record<Confidence, string> = { high: 'High', medium: 'Medium',
 
 export default function RevenueIntelligencePage() {
   const supabase = useMemo(() => createClient(), [])
-  const [report, setReport] = useState<RevenueIntelReport | null>(null)
+  const [report, setReport] = useState<RevenueIntelReport | null>(() => readCache<RevenueIntelReport>('revintel', CACHE_TTL.medium))
   const [feedback, setFeedback] = useState<Record<string, FeedbackRow>>({})
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<OppKind | 'all'>('all')
@@ -29,10 +31,9 @@ export default function RevenueIntelligencePage() {
   const [showForecast, setShowForecast] = useState(false)
 
   async function load() {
-    setLoading(true)
     try {
       const res = await loadRevenueIntel(supabase)
-      if (res) { setReport(res.report); setFeedback(res.feedback) }
+      if (res) { setReport(res.report); setFeedback(res.feedback); writeCache('revintel', res.report) }
     } finally { setLoading(false) }
   }
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -44,11 +45,13 @@ export default function RevenueIntelligencePage() {
     setBusy(null)
   }
 
-  if (loading) {
+  if (loading && !report) {
     return (
-      <div className="max-w-5xl">
+      <div className="max-w-5xl space-y-6">
         <PageHeader title="Revenue Intelligence" description="The highest-value moves to grow the business — ranked." />
-        <div className="py-20 text-center text-sm text-ink-muted flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Scoring every customer…</div>
+        <SkeletonTiles count={4} />
+        <Skeleton className="h-20 w-full rounded-card" />
+        <SkeletonRows count={5} />
       </div>
     )
   }

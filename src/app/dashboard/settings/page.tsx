@@ -13,6 +13,7 @@ import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { CommunicationsTest } from '@/components/settings/CommunicationsTest'
 import { MessageTemplateEditor } from '@/components/settings/MessageTemplateEditor'
 import { AutomationToggles } from '@/components/settings/AutomationToggles'
+import { PushNotificationSettings } from '@/components/settings/PushNotificationSettings'
 import { BookingLink } from '@/components/settings/BookingLink'
 import { useForm, Controller } from 'react-hook-form'
 import { cn } from '@/lib/utils'
@@ -468,6 +469,7 @@ export default function SettingsPage() {
       </Card>
 
       <BookingLink />
+      <PushNotificationSettings />
       <AutomationToggles />
       <MessageTemplateEditor />
       <CommunicationsTest />

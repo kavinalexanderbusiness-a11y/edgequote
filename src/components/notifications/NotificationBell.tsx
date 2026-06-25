@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { formatDistanceToNow } from 'date-fns'
@@ -24,18 +25,26 @@ const ICON: Record<string, typeof FileText> = {
 }
 const timeAgo = (iso: string) => { try { return formatDistanceToNow(new Date(iso), { addSuffix: true }) } catch { return '' } }
 
-// In-app notification bell — quote-accepted / invoice-paid alerts with a live unread
-// badge. Self-contained (own fetch + Realtime), so it drops into the sidebar header
-// with one line and never depends on other nav state.
+// Fixed-position coordinates for the dropdown panel, measured from the bell.
+interface PanelPos { top: number; left: number; width: number; maxHeight: number }
+
+// In-app notification bell — quote-accepted / invoice-paid / message / portal /
+// review alerts with a live unread badge. Self-contained (own fetch + Realtime).
+// The dropdown is rendered in a portal with fixed, viewport-clamped coordinates so
+// it's ALWAYS fully visible (GitHub/Slack style) regardless of where the bell sits
+// or how narrow the screen is — never clipped by the sidebar or the viewport edge.
 export function NotificationBell() {
   const supabase = useMemo(() => createClient(), [])
   const router = useRouter()
   const [items, setItems] = useState<AppNotification[]>([])
   const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState<PanelPos | null>(null)
+  const [mounted, setMounted] = useState(false)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
 
-  // getSession reads the cached session locally (no auth-server round-trip) — RLS
-  // still scopes every query, so it's safe and noticeably faster than getUser.
+  useEffect(() => { setMounted(true) }, [])
+
   async function load(userId: string) {
     const { data } = await supabase.from('notifications')
       .select('id, created_at, type, title, body, href, read')
@@ -58,15 +67,62 @@ export function NotificationBell() {
     return () => { active = false; if (channel) supabase.removeChannel(channel) }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Close on outside click.
+  const unread = items.filter(n => !n.read).length
+
+  // App-icon badge (installed PWA) mirrors the unread count; cleared at zero.
+  useEffect(() => {
+    const nav = navigator as Navigator & { setAppBadge?: (n?: number) => Promise<void>; clearAppBadge?: () => Promise<void> }
+    if (typeof navigator === 'undefined' || !nav.setAppBadge) return
+    if (unread > 0) nav.setAppBadge(unread).catch(() => {})
+    else nav.clearAppBadge?.().catch(() => {})
+  }, [unread])
+
+  // Measure the bell and clamp the panel fully inside the viewport. Right-aligned
+  // to the bell on wide screens; shifts inward (and shrinks) as space runs out.
+  const place = useCallback(() => {
+    const b = btnRef.current?.getBoundingClientRect()
+    if (!b) return
+    const margin = 8
+    const vw = window.innerWidth
+    const vh = window.innerHeight
+    const width = Math.min(360, vw - margin * 2)
+    let left = b.right - width                       // align panel's right edge to the bell
+    left = Math.min(left, vw - width - margin)        // keep inside the right edge
+    left = Math.max(margin, left)                     // keep inside the left edge
+    const top = Math.min(b.bottom + 8, vh - 160)      // never push the panel off the bottom
+    const maxHeight = Math.max(200, vh - top - margin)
+    setPos({ top, left, width, maxHeight })
+  }, [])
+
+  function toggle() {
+    if (open) { setOpen(false); return }
+    place()
+    setOpen(true)
+  }
+
+  // Keep it pinned while open: reposition on resize/scroll, close on Escape or an
+  // outside click (accounting for the portaled panel living outside this subtree).
+  useLayoutEffect(() => { if (open) place() }, [open, place])
   useEffect(() => {
     if (!open) return
-    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false) }
-    document.addEventListener('mousedown', h)
-    return () => document.removeEventListener('mousedown', h)
-  }, [open])
-
-  const unread = items.filter(n => !n.read).length
+    const reposition = () => place()
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (btnRef.current?.contains(t) || panelRef.current?.contains(t)) return
+      setOpen(false)
+    }
+    window.addEventListener('resize', reposition)
+    window.addEventListener('scroll', reposition, true)
+    window.addEventListener('keydown', onKey)
+    document.addEventListener('mousedown', onDown)
+    return () => {
+      window.removeEventListener('resize', reposition)
+      window.removeEventListener('scroll', reposition, true)
+      window.removeEventListener('keydown', onKey)
+      document.removeEventListener('mousedown', onDown)
+    }
+  }, [open, place])
 
   async function markRead(ids: string[]) {
     if (!ids.length) return
@@ -78,9 +134,51 @@ export function NotificationBell() {
     if (n.href) router.push(n.href)
   }
 
+  const panel = open && pos && (
+    <div
+      ref={panelRef}
+      role="dialog"
+      aria-label="Notifications"
+      style={{ position: 'fixed', top: pos.top, left: pos.left, width: pos.width, maxHeight: pos.maxHeight }}
+      className="z-[100] flex flex-col rounded-card border border-border bg-bg-secondary shadow-2xl overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-border flex items-center justify-between shrink-0">
+        <p className="text-sm font-bold text-ink">Notifications</p>
+        {unread > 0 && (
+          <button onClick={() => markRead(items.filter(n => !n.read).map(n => n.id))}
+            className="text-[11px] font-medium text-accent hover:underline flex items-center gap-1"><Check className="w-3 h-3" /> Mark all read</button>
+        )}
+      </div>
+      <div className="flex-1 overflow-y-auto divide-y divide-border overscroll-contain">
+        {items.length === 0 ? (
+          <p className="py-10 text-center text-xs text-ink-muted">No notifications yet.</p>
+        ) : items.map(n => {
+          const Icon = ICON[n.type] || Bell
+          return (
+            <button key={n.id} onClick={() => openItem(n)}
+              className={cn('w-full text-left px-4 py-3 flex items-start gap-3 hover:bg-surface/40 transition-colors', !n.read && 'bg-accent/[0.04]')}>
+              <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border', !n.read ? 'border-accent/30 bg-accent/10 text-accent' : 'border-border text-ink-muted')}>
+                <Icon className="w-4 h-4" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className={cn('text-sm truncate', !n.read ? 'font-semibold text-ink' : 'text-ink-muted')}>{n.title}</p>
+                {n.body && <p className="text-[11px] text-ink-muted truncate">{n.body}</p>}
+                <p className="text-[10px] text-ink-faint mt-0.5">{timeAgo(n.created_at)}</p>
+              </div>
+              {!n.read && <span className="w-2 h-2 rounded-full bg-accent shrink-0 mt-1.5" />}
+            </button>
+          )
+        })}
+      </div>
+      <Link href="/dashboard/notifications" onClick={() => setOpen(false)}
+        className="block px-4 py-2.5 text-center text-xs font-medium text-accent hover:underline border-t border-border shrink-0">
+        See all notifications
+      </Link>
+    </div>
+  )
+
   return (
-    <div ref={ref} className="relative shrink-0">
-      <button onClick={() => setOpen(o => !o)} aria-label="Notifications"
+    <div className="relative shrink-0">
+      <button ref={btnRef} onClick={toggle} aria-label="Notifications" aria-expanded={open}
         className="relative h-9 w-9 rounded-lg border border-border text-ink-muted hover:text-ink hover:bg-surface flex items-center justify-center">
         <Bell className="w-4.5 h-4.5" />
         {unread > 0 && (
@@ -89,43 +187,7 @@ export function NotificationBell() {
           </span>
         )}
       </button>
-
-      {open && (
-        <div className="absolute right-0 mt-2 w-80 max-w-[88vw] rounded-card border border-border bg-bg-secondary shadow-xl z-50 overflow-hidden">
-          <div className="px-4 py-2.5 border-b border-border flex items-center justify-between">
-            <p className="text-sm font-bold text-ink">Notifications</p>
-            {unread > 0 && (
-              <button onClick={() => markRead(items.filter(n => !n.read).map(n => n.id))}
-                className="text-[11px] font-medium text-accent hover:underline flex items-center gap-1"><Check className="w-3 h-3" /> Mark all read</button>
-            )}
-          </div>
-          <div className="max-h-[60vh] overflow-y-auto divide-y divide-border">
-            {items.length === 0 ? (
-              <p className="py-10 text-center text-xs text-ink-muted">No notifications yet.</p>
-            ) : items.map(n => {
-              const Icon = ICON[n.type] || Bell
-              return (
-                <button key={n.id} onClick={() => openItem(n)}
-                  className={cn('w-full text-left px-4 py-3 flex items-start gap-3 hover:bg-surface/40 transition-colors', !n.read && 'bg-accent/[0.04]')}>
-                  <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border', !n.read ? 'border-accent/30 bg-accent/10 text-accent' : 'border-border text-ink-muted')}>
-                    <Icon className="w-4 h-4" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className={cn('text-sm truncate', !n.read ? 'font-semibold text-ink' : 'text-ink-muted')}>{n.title}</p>
-                    {n.body && <p className="text-[11px] text-ink-muted truncate">{n.body}</p>}
-                    <p className="text-[10px] text-ink-faint mt-0.5">{timeAgo(n.created_at)}</p>
-                  </div>
-                  {!n.read && <span className="w-2 h-2 rounded-full bg-accent shrink-0 mt-1.5" />}
-                </button>
-              )
-            })}
-          </div>
-          <Link href="/dashboard/notifications" onClick={() => setOpen(false)}
-            className="block px-4 py-2.5 text-center text-xs font-medium text-accent hover:underline border-t border-border">
-            See all notifications
-          </Link>
-        </div>
-      )}
+      {mounted && panel ? createPortal(panel, document.body) : null}
     </div>
   )
 }

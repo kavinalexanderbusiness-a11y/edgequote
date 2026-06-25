@@ -1,6 +1,7 @@
-import type { Metadata } from 'next'
+import type { Metadata, Viewport } from 'next'
 import { DM_Sans, Syne } from 'next/font/google'
 import { ThemeWatcher } from '@/components/layout/ThemeWatcher'
+import { ServiceWorkerRegister } from '@/components/pwa/ServiceWorkerRegister'
 import './globals.css'
 
 // Applies the saved theme BEFORE first paint (no flash). Defaults to dark.
@@ -19,7 +20,19 @@ const syne = Syne({
 
 export const metadata: Metadata = {
   title: 'EdgeQuote AI — Edge Property Services',
-  description: 'Internal quoting tool for Edge Property Services',
+  description: 'Quoting, scheduling and field operations for Edge Property Services',
+  applicationName: 'EdgeQuote',
+  manifest: '/manifest.webmanifest',
+  appleWebApp: { capable: true, title: 'EdgeQuote', statusBarStyle: 'default' },
+  icons: { icon: '/icon.svg', shortcut: '/icon.svg', apple: '/icon.svg' },
+  formatDetection: { telephone: false },
+}
+
+export const viewport: Viewport = {
+  themeColor: '#0b1120',
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',   // draw under the safe-area insets so we control them in CSS
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -30,6 +43,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body className="font-body bg-bg text-ink antialiased">
         <ThemeWatcher />
+        <ServiceWorkerRegister />
         {children}
       </body>
     </html>

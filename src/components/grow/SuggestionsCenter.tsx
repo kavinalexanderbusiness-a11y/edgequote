@@ -5,9 +5,11 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { Suggestion, SuggestionAction, SuggestionCategory, CATEGORY_META, Confidence, applyPriceRaise, createRecurringPlan, dismissSuggestion, undismissSuggestion } from '@/lib/suggestions'
 import { loadSuggestions } from '@/lib/suggestionsLoad'
+import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
+import { SkeletonRows } from '@/components/ui/Skeleton'
 import { formatCurrency, cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
-import { Sparkles, Check, ArrowRight, Clock, Navigation, TrendingUp, Loader2, RefreshCw, HelpCircle, Calculator, X, BellOff, Undo2 } from 'lucide-react'
+import { Sparkles, Check, ArrowRight, Clock, Navigation, TrendingUp, RefreshCw, HelpCircle, Calculator, X, BellOff, Undo2 } from 'lucide-react'
 import { addDays, format } from 'date-fns'
 
 const CONF_PILL: Record<Confidence, string> = {
@@ -28,7 +30,7 @@ const FILTERS: { key: SuggestionCategory | 'all'; label: string }[] = [
 
 export function SuggestionsCenter() {
   const supabase = useMemo(() => createClient(), [])
-  const [items, setItems] = useState<Suggestion[]>([])
+  const [items, setItems] = useState<Suggestion[]>(() => readCache<Suggestion[]>('suggestions', CACHE_TTL.short) || [])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<SuggestionCategory | 'all'>('all')
   const [showAll, setShowAll] = useState(false)
@@ -39,9 +41,8 @@ export function SuggestionsCenter() {
   const [undo, setUndo] = useState<{ key: string; label: string } | null>(null)
 
   async function load() {
-    setLoading(true)
     setUndo(null)
-    try { setItems(await loadSuggestions(supabase)) } finally { setLoading(false) }
+    try { const next = await loadSuggestions(supabase); setItems(next); writeCache('suggestions', next) } finally { setLoading(false) }
   }
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -153,10 +154,8 @@ export function SuggestionsCenter() {
 
       {/* Feed */}
       <div className="p-4 space-y-3">
-        {loading ? (
-          <div className="py-10 text-center text-sm text-ink-muted flex items-center justify-center gap-2">
-            <Loader2 className="w-4 h-4 animate-spin" /> Analyzing pricing, routes, profit and customers…
-          </div>
+        {loading && items.length === 0 ? (
+          <SkeletonRows count={3} />
         ) : filtered.length === 0 ? (
           <div className="py-10 text-center text-sm text-ink-muted">Nothing in this category right now.</div>
         ) : (

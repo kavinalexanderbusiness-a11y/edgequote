@@ -4,23 +4,29 @@ import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { loadLaborInsights, LaborInsights, ServiceAccuracy, ServiceProfit } from '@/lib/labor'
 import { PageHeader } from '@/components/layout/PageHeader'
+import { Skeleton, SkeletonTiles } from '@/components/ui/Skeleton'
+import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { formatCurrency, cn } from '@/lib/utils'
-import { Loader2, Gauge, Target, DollarSign, Home, AlertTriangle, Users } from 'lucide-react'
+import { Gauge, Target, DollarSign, Home, AlertTriangle, Users } from 'lucide-react'
 
 export default function LaborIntelligencePage() {
   const supabase = useMemo(() => createClient(), [])
-  const [ins, setIns] = useState<LaborInsights | null>(null)
+  const [ins, setIns] = useState<LaborInsights | null>(() => readCache<LaborInsights>('labor', CACHE_TTL.medium))
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    (async () => { setLoading(true); try { const r = await loadLaborInsights(supabase); if (r) setIns(r.insights) } finally { setLoading(false) } })()
+    (async () => {
+      try { const r = await loadLaborInsights(supabase); if (r) { setIns(r.insights); writeCache('labor', r.insights) } }
+      finally { setLoading(false) }
+    })()
   }, [supabase])
 
-  if (loading) {
+  if (loading && !ins) {
     return (
-      <div className="max-w-5xl">
+      <div className="max-w-5xl space-y-6">
         <PageHeader title="Labor Intelligence" description="How accurate your time estimates are — and where they're learning fastest." />
-        <div className="py-20 text-center text-sm text-ink-muted flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Reading your timed jobs…</div>
+        <SkeletonTiles count={3} />
+        <div className="grid md:grid-cols-2 gap-3">{[0, 1].map(i => <Skeleton key={i} className="h-40 rounded-card" />)}</div>
       </div>
     )
   }

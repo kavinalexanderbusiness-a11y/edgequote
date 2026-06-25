@@ -4,25 +4,31 @@ import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { loadBusinessIntelligence, BIReport, NamedValue } from '@/lib/businessIntelligence'
 import { PageHeader } from '@/components/layout/PageHeader'
+import { Skeleton, SkeletonTiles } from '@/components/ui/Skeleton'
+import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { formatCurrency, cn } from '@/lib/utils'
-import { Loader2, TrendingUp, TrendingDown, DollarSign, Gauge, Users, Target, Activity, LineChart } from 'lucide-react'
+import { TrendingUp, TrendingDown, DollarSign, Gauge, Users, Target, Activity, LineChart } from 'lucide-react'
 
 export default function IntelligencePage() {
   const supabase = useMemo(() => createClient(), [])
-  const [bi, setBi] = useState<BIReport | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [bi, setBi] = useState<BIReport | null>(() => readCache<BIReport>('bi', CACHE_TTL.medium))
+  const [loading, setLoading] = useState(!bi) // cached → render instantly, refresh in background
 
   useEffect(() => {
-    (async () => { setLoading(true); try { setBi(await loadBusinessIntelligence(supabase)) } finally { setLoading(false) } })()
+    (async () => {
+      try { const r = await loadBusinessIntelligence(supabase); if (r) { setBi(r); writeCache('bi', r) } }
+      finally { setLoading(false) }
+    })()
   }, [supabase])
 
-  if (loading) {
+  if (loading && !bi) {
     return (
-      <div className="max-w-6xl">
+      <div className="max-w-6xl space-y-6">
         <PageHeader title="Business Intelligence" description="How your business is performing — and where to focus next." />
-        <div className="py-20 text-center text-sm text-ink-muted flex items-center justify-center gap-2">
-          <Loader2 className="w-4 h-4 animate-spin" /> Crunching your numbers…
-        </div>
+        <SkeletonTiles count={4} />
+        <Skeleton className="h-32 w-full rounded-card" />
+        <div className="grid md:grid-cols-3 gap-3">{[0, 1, 2].map(i => <Skeleton key={i} className="h-40 rounded-card" />)}</div>
+        <SkeletonTiles count={4} />
       </div>
     )
   }
