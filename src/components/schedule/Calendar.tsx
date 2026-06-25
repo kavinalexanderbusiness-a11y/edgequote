@@ -6,6 +6,7 @@ import {
   format, isSameMonth, isSameDay, addDays,
 } from 'date-fns'
 import { Job, JOB_STATUS_COLORS, JOB_STATUS_LABELS } from '@/types'
+import { ScheduleItem, ITEM_META } from '@/lib/scheduleItems'
 import { cn } from '@/lib/utils'
 import { Repeat, Check, CheckCircle2, Plus } from 'lucide-react'
 
@@ -24,13 +25,22 @@ interface CalendarProps {
   // Number of add-on services per job → a compact "+N" badge on the chip so the
   // owner sees at a glance why a visit is worth more than usual.
   addonCountByJobId?: Record<string, number>
+  // Non-job schedule items (estimate / callback / appointment / task / reminder),
+  // merged into the SAME calendar. Optional so the calendar still works standalone.
+  scheduleItems?: ScheduleItem[]
+  onSelectItem?: (item: ScheduleItem) => void
+  onMoveItem?: (item: ScheduleItem, newDateISO: string) => void
 }
 
-function JobChip({ job, onSelect, onDragStart, recurLabel, value, addonCount }: { job: Job; onSelect: (j: Job) => void; onDragStart?: (e: React.PointerEvent, job: Job) => void; recurLabel?: string; value?: number; addonCount?: number }) {
+// What a pointer-drag is carrying — generalised so a Job and a ScheduleItem share
+// the SAME drag engine (one implementation, no second drag system).
+interface DragPayload { title: string; fromDate: string; commit: (toDate: string) => void }
+
+function JobChip({ job, onSelect, onDragStart, recurLabel, value, addonCount }: { job: Job; onSelect: (j: Job) => void; onDragStart?: (e: React.PointerEvent) => void; recurLabel?: string; value?: number; addonCount?: number }) {
   return (
     <button
       onClick={(e) => { e.stopPropagation(); onSelect(job) }}
-      onPointerDown={onDragStart ? (e) => onDragStart(e, job) : undefined}
+      onPointerDown={onDragStart}
       style={onDragStart ? { touchAction: 'none' } : undefined}
       className={cn(
         'w-full text-left px-1.5 py-0.5 rounded text-[11px] font-medium border truncate transition-opacity hover:opacity-80',
@@ -51,9 +61,35 @@ function JobChip({ job, onSelect, onDragStart, recurLabel, value, addonCount }: 
   )
 }
 
-export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkDone, onMoveJob, recurrenceLabels, valueByJobId, addonCountByJobId }: CalendarProps) {
+function itemTimeLabel(item: ScheduleItem): string {
+  if (item.start_time) return item.start_time.slice(0, 5) + ' '
+  if (item.due_at) { try { return format(new Date(item.due_at), 'HH:mm') + ' ' } catch { return '' } }
+  return ''
+}
+
+function ItemChip({ item, onSelect, onDragStart }: { item: ScheduleItem; onSelect: (i: ScheduleItem) => void; onDragStart?: (e: React.PointerEvent) => void }) {
+  const meta = ITEM_META[item.type]
+  const done = item.status === 'completed'
+  return (
+    <button
+      onClick={(e) => { e.stopPropagation(); onSelect(item) }}
+      onPointerDown={onDragStart}
+      style={onDragStart ? { touchAction: 'none' } : undefined}
+      className={cn('w-full text-left px-1.5 py-0.5 rounded text-[11px] font-medium border truncate transition-opacity hover:opacity-80', meta.chip)}
+      title={`${meta.label}: ${item.title}`}
+    >
+      <span className="flex items-center gap-0.5">
+        {done ? <Check className="w-2.5 h-2.5 shrink-0" /> : <meta.icon className="w-2.5 h-2.5 shrink-0 opacity-80" />}
+        <span className={cn('truncate', done && 'line-through opacity-80')}>{itemTimeLabel(item)}{item.title}</span>
+      </span>
+    </button>
+  )
+}
+
+export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkDone, onMoveJob, recurrenceLabels, valueByJobId, addonCountByJobId, scheduleItems, onSelectItem, onMoveItem }: CalendarProps) {
   const recurLabelFor = (job: Job) => job.recurrence_id ? recurrenceLabels?.[job.recurrence_id] : undefined
   const weekdayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+  const dragEnabled = !!(onMoveJob || onMoveItem)
 
   const monthDays = useMemo(() => {
     const start = startOfWeek(startOfMonth(cursor))
@@ -75,26 +111,35 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
   }, [jobs])
   const dayJobsFor = (day: Date) => jobsByDate[format(day, 'yyyy-MM-dd')] || []
 
-  // ── P1: true pointer drag-and-drop across days ───────────────────────────────
-  // The ghost + drop-target highlight are driven imperatively (refs + classList)
-  // so a drag doesn't re-render the whole grid on every pointer move.
+  const itemsByDate = useMemo(() => {
+    const m: Record<string, ScheduleItem[]> = {}
+    for (const it of (scheduleItems || [])) (m[it.scheduled_date] ||= []).push(it)
+    for (const k in m) m[k].sort((a, b) => (a.start_time || a.due_at || '').localeCompare(b.start_time || b.due_at || ''))
+    return m
+  }, [scheduleItems])
+  const dayItemsFor = (day: Date) => itemsByDate[format(day, 'yyyy-MM-dd')] || []
+
+  // ── P1: true pointer drag-and-drop across days (jobs AND items share it) ───────
   const ghostRef = useRef<HTMLDivElement>(null)
-  const dragRef = useRef<{ job: Job; startX: number; startY: number; active: boolean; over: HTMLElement | null } | null>(null)
+  const dragRef = useRef<{ payload: DragPayload; startX: number; startY: number; active: boolean; over: HTMLElement | null } | null>(null)
   const justDragged = useRef(false)
   const [dragging, setDragging] = useState(false)
 
-  function startDrag(e: React.PointerEvent, job: Job) {
-    if (!onMoveJob) return
-    dragRef.current = { job, startX: e.clientX, startY: e.clientY, active: false, over: null }
+  function startDrag(e: React.PointerEvent, payload: DragPayload) {
+    if (!dragEnabled) return
+    dragRef.current = { payload, startX: e.clientX, startY: e.clientY, active: false, over: null }
   }
+  // Per-entry drag starters — build the real commit closure for this job/item.
+  const jobDragStart = onMoveJob ? (e: React.PointerEvent, job: Job) => startDrag(e, { title: job.title, fromDate: job.scheduled_date, commit: (to) => onMoveJob(job, to) }) : undefined
+  const itemDragStart = onMoveItem ? (e: React.PointerEvent, item: ScheduleItem) => startDrag(e, { title: item.title, fromDate: item.scheduled_date, commit: (to) => onMoveItem(item, to) }) : undefined
 
   useEffect(() => {
-    if (!onMoveJob) return
+    if (!dragEnabled) return
     function setOver(el: HTMLElement | null) {
       const d = dragRef.current; if (!d) return
       if (d.over === el) return
       d.over?.classList.remove('ring-2', 'ring-accent', 'ring-inset', 'bg-accent/5')
-      if (el && el.dataset.date !== d.job.scheduled_date) el.classList.add('ring-2', 'ring-accent', 'ring-inset', 'bg-accent/5')
+      if (el && el.dataset.date !== d.payload.fromDate) el.classList.add('ring-2', 'ring-accent', 'ring-inset', 'bg-accent/5')
       d.over = el
     }
     function move(e: PointerEvent) {
@@ -106,7 +151,7 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
         document.body.style.userSelect = 'none'
       }
       if (ghostRef.current) {
-        ghostRef.current.textContent = d.job.title
+        ghostRef.current.textContent = d.payload.title
         ghostRef.current.style.transform = `translate(${e.clientX + 10}px, ${e.clientY + 10}px)`
       }
       const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null
@@ -119,7 +164,7 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
       if (d?.active) {
         const targetDate = d.over?.dataset.date
         d.over?.classList.remove('ring-2', 'ring-accent', 'ring-inset', 'bg-accent/5')
-        if (targetDate && targetDate !== d.job.scheduled_date) onMoveJob!(d.job, targetDate)
+        if (targetDate && targetDate !== d.payload.fromDate) d.payload.commit(targetDate)
         justDragged.current = true
         setTimeout(() => { justDragged.current = false }, 0)
       }
@@ -128,12 +173,18 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
     return () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
-  }, [onMoveJob])
+  }, [dragEnabled])
 
-  // Suppress the click that follows a drag (so dropping doesn't open the job).
+  // Rebuild a chip's commit closure at drag-start (payload above carries a no-op;
+  // we set the real commit here so the closures capture the latest handlers).
+  const onJobDragStart = onMoveJob ? (e: React.PointerEvent, _p: DragPayload, job: Job) => startDrag(e, { title: job.title, fromDate: job.scheduled_date, commit: (to) => onMoveJob(job, to) }) : undefined
+  const onItemDragStart = onMoveItem ? (e: React.PointerEvent, _p: DragPayload, item: ScheduleItem) => startDrag(e, { title: item.title, fromDate: item.scheduled_date, commit: (to) => onMoveItem(item, to) }) : undefined
+
+  // Suppress the click that follows a drag (so dropping doesn't open the entry).
   const selectJob = (job: Job) => { if (justDragged.current) return; onSelectJob(job) }
+  const selectItem = (item: ScheduleItem) => { if (justDragged.current) return; onSelectItem?.(item) }
 
-  const ghost = onMoveJob ? (
+  const ghost = dragEnabled ? (
     <div
       ref={ghostRef}
       className={cn(
@@ -156,8 +207,12 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
         <div className="grid grid-cols-7">
           {monthDays.map((day, i) => {
             const dayJobs = dayJobsFor(day)
+            const dayItems = dayItemsFor(day)
             const inMonth = isSameMonth(day, cursor)
             const today = isSameDay(day, new Date())
+            const shownJobs = dayJobs.slice(0, 3)
+            const shownItems = dayItems.slice(0, 2)
+            const overflow = (dayJobs.length - shownJobs.length) + (dayItems.length - shownItems.length)
             return (
               <button
                 key={i}
@@ -178,11 +233,14 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
                   </span>
                 </div>
                 <div className="space-y-0.5">
-                  {dayJobs.slice(0, 4).map(job => (
-                    <JobChip key={job.id} job={job} onSelect={selectJob} onDragStart={onMoveJob ? startDrag : undefined} recurLabel={recurLabelFor(job)} value={valueByJobId?.[job.id]} addonCount={addonCountByJobId?.[job.id]} />
+                  {shownJobs.map(job => (
+                    <JobChip key={job.id} job={job} onSelect={selectJob} onDragStart={onJobDragStart ? (e, p) => onJobDragStart(e, p, job) : undefined} recurLabel={recurLabelFor(job)} value={valueByJobId?.[job.id]} addonCount={addonCountByJobId?.[job.id]} />
                   ))}
-                  {dayJobs.length > 4 && (
-                    <span className="block text-[10px] font-medium text-ink-faint px-1 pt-0.5">+{dayJobs.length - 4} more</span>
+                  {shownItems.map(item => (
+                    <ItemChip key={item.id} item={item} onSelect={selectItem} onDragStart={onItemDragStart ? (e, p) => onItemDragStart(e, p, item) : undefined} />
+                  ))}
+                  {overflow > 0 && (
+                    <span className="block text-[10px] font-medium text-ink-faint px-1 pt-0.5">+{overflow} more</span>
                   )}
                 </div>
               </button>
@@ -200,6 +258,7 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
         <div className="grid grid-cols-7">
           {weekDays.map((day, i) => {
             const dayJobs = dayJobsFor(day)
+            const dayItems = dayItemsFor(day)
             const today = isSameDay(day, new Date())
             return (
               <button
@@ -222,7 +281,10 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
                 </div>
                 <div className="space-y-1">
                   {dayJobs.map(job => (
-                    <JobChip key={job.id} job={job} onSelect={selectJob} onDragStart={onMoveJob ? startDrag : undefined} recurLabel={recurLabelFor(job)} value={valueByJobId?.[job.id]} addonCount={addonCountByJobId?.[job.id]} />
+                    <JobChip key={job.id} job={job} onSelect={selectJob} onDragStart={onJobDragStart ? (e, p) => onJobDragStart(e, p, job) : undefined} recurLabel={recurLabelFor(job)} value={valueByJobId?.[job.id]} addonCount={addonCountByJobId?.[job.id]} />
+                  ))}
+                  {dayItems.map(item => (
+                    <ItemChip key={item.id} item={item} onSelect={selectItem} onDragStart={onItemDragStart ? (e, p) => onItemDragStart(e, p, item) : undefined} />
                   ))}
                 </div>
               </button>
@@ -234,7 +296,7 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
     )
   }
 
-  // Day view
+  // Day view (used as a fallback; the schedule page uses DayOpsPanel for 'day').
   const dayJobs = dayJobsFor(cursor)
   const totalMin = dayJobs.reduce((s, j) => s + (j.duration_minutes || 0), 0)
   const estHours = Math.round((totalMin / 60) * 10) / 10

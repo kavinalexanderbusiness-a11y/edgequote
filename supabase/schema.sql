@@ -1704,3 +1704,82 @@ end; $$;
 drop trigger if exists trg_push_dispatch on public.notifications;
 create trigger trg_push_dispatch after insert on public.notifications
   for each row execute function public.push_dispatch();
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-24c — Unified schedule items (extends the calendar).
+-- A SEPARATE, lightweight table for non-job schedule entries (estimate /
+-- callback / appointment / task / reminder) so the ONE calendar + Day Ops can
+-- show everything you need to do that day. Kept off the jobs table ON PURPOSE:
+-- labor, revenue, weather, routing and analytics keep reading public.jobs only,
+-- so non-jobs can never affect those numbers. Realtime-published so the calendar
+-- updates live; reminded_at de-dupes the reminder cron. Idempotent.
+-- ════════════════════════════════════════════════════════════
+create table if not exists public.schedule_items (
+  id                 uuid primary key default uuid_generate_v4(),
+  created_at         timestamptz not null default now(),
+  user_id            uuid not null references auth.users(id) on delete cascade,
+  type               text not null,                 -- estimate | callback | appointment | task | reminder
+  title              text not null,
+  customer_id        uuid references public.customers(id) on delete set null,
+  property_id        uuid references public.properties(id) on delete set null,
+  scheduled_date     date not null,
+  start_time         time,
+  duration_minutes   int,
+  notes              text,
+  phone              text,                           -- callbacks
+  due_at             timestamptz,                    -- tasks / reminders
+  status             text not null default 'scheduled', -- scheduled | completed | cancelled
+  converted_quote_id uuid references public.quotes(id) on delete set null, -- estimate → quote
+  completed_at       timestamptz,
+  reminded_at        timestamptz                     -- reminder cron de-dupe
+);
+alter table public.schedule_items enable row level security;
+drop policy if exists "schedule_items: select own" on public.schedule_items;
+create policy "schedule_items: select own" on public.schedule_items for select using (auth.uid() = user_id);
+drop policy if exists "schedule_items: insert own" on public.schedule_items;
+create policy "schedule_items: insert own" on public.schedule_items for insert with check (auth.uid() = user_id);
+drop policy if exists "schedule_items: update own" on public.schedule_items;
+create policy "schedule_items: update own" on public.schedule_items for update using (auth.uid() = user_id);
+drop policy if exists "schedule_items: delete own" on public.schedule_items;
+create policy "schedule_items: delete own" on public.schedule_items for delete using (auth.uid() = user_id);
+create index if not exists schedule_items_user_date_idx on public.schedule_items(user_id, scheduled_date);
+create index if not exists schedule_items_due_idx on public.schedule_items(user_id, status, due_at);
+grant select, insert, update, delete on public.schedule_items to authenticated;
+
+-- Realtime so the unified calendar updates live (same publication as jobs' inbox).
+alter table public.schedule_items replica identity full;
+do $$ begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'schedule_items') then
+      execute 'alter publication supabase_realtime add table public.schedule_items';
+    end if;
+  end if;
+end $$;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-24d — Realtime for core platform tables (GROWTH/polish).
+-- The lists & detail pages (quotes, invoices, customers, customer timeline) now
+-- subscribe to Supabase Realtime so they update live with no manual refresh and
+-- no polling. Realtime only streams tables on the supabase_realtime publication,
+-- so add the core ones here. `replica identity full` makes UPDATE/DELETE events
+-- carry the row (needed so the user_id / customer_id filters match on those too).
+-- Read-only streaming; RLS still scopes every row. Idempotent. No data change.
+-- ════════════════════════════════════════════════════════════
+do $$
+declare t text;
+begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    foreach t in array array['quotes','invoices','customers','jobs','payments','service_requests']
+    loop
+      if to_regclass('public.' || t) is not null then
+        execute format('alter table public.%I replica identity full', t);
+        if not exists (
+          select 1 from pg_publication_tables
+          where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t
+        ) then
+          execute format('alter publication supabase_realtime add table public.%I', t);
+        end if;
+      end if;
+    end loop;
+  end if;
+end $$;
