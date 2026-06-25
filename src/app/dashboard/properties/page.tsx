@@ -217,18 +217,21 @@ export default function PropertiesPage() {
                           {property.customers.name}
                         </p>
                       )}
-                      {(property.lawn_sqft || property.fence_length) && (
-                        <p className="text-xs text-ink-faint">
-                          {property.lawn_sqft ? `Lawn ${property.lawn_sqft} ft²` : ''}
-                          {property.lawn_sqft && property.fence_length ? ' · ' : ''}
-                          {property.fence_length ? `Fence ${property.fence_length} ft` : ''}
+                      {property.lawn_sqft ? (
+                        <p className="text-xs text-ink-muted flex items-center gap-1.5">
+                          <Ruler className="w-3 h-3 text-ink-faint shrink-0" />
+                          <span className="font-semibold text-ink">{Number(property.lawn_sqft).toLocaleString()} ft²</span> lawn
+                          {property.fence_length ? <span className="text-ink-faint">· {property.fence_length} ft fence</span> : null}
                         </p>
-                      )}
+                      ) : property.fence_length ? (
+                        <p className="text-xs text-ink-faint flex items-center gap-1.5"><Ruler className="w-3 h-3 shrink-0" /> {property.fence_length} ft fence</p>
+                      ) : null}
                       {last && (
                         <p className="text-xs text-ink-faint flex items-center gap-1">
-                          <History className="w-3 h-3" />
-                          Last measured {formatDate(last.date)} · {(last.total_sqft ?? last.lawn_sqft ?? 0).toLocaleString()} ft²
-                          {hist.length > 1 && <span className="text-ink-faint">· {hist.length} measurements</span>}
+                          <History className="w-3 h-3 shrink-0" />
+                          Measured {formatDate(last.date)}
+                          {hist.length > 1 && <span>· {hist.length}× measured</span>}
+                          {stale && <span className="text-amber-400">· may be outdated</span>}
                         </p>
                       )}
                     </div>
@@ -236,7 +239,7 @@ export default function PropertiesPage() {
                   <div className="flex flex-col items-end gap-2 shrink-0">
                     <Link href={`/dashboard/properties/measure?id=${property.id}`}>
                       <Button variant="secondary" size="sm">
-                        <Ruler className="w-3.5 h-3.5" /> Measure
+                        <Ruler className="w-3.5 h-3.5" /> {last ? 'Re-measure' : 'Measure'}
                       </Button>
                     </Link>
                     {property.lat && property.lng ? (

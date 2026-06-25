@@ -147,11 +147,12 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
                     <td className="px-3 sm:px-5 py-3.5">
                       <div className="flex items-center gap-1 justify-end">
                         <Button
-                          variant="ghost"
+                          variant="danger"
                           size="sm"
                           onClick={() => handleDelete(q.id)}
                           loading={deleting === q.id}
-                          className="hover:text-red-400 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
+                          title="Delete quote"
+                          className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </Button>

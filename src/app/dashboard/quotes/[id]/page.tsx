@@ -36,9 +36,9 @@ export default function QuoteDetailPage() {
   const [scheduleMsg, setScheduleMsg] = useState<string | null>(null)
   const [converting, setConverting] = useState(false)
   const [convertMsg, setConvertMsg] = useState<string | null>(null)
-  const [showSchedulePrompt, setShowSchedulePrompt] = useState(false)
   const [duplicating, setDuplicating] = useState(false)
   const [savedCustomerMsg, setSavedCustomerMsg] = useState<string | null>(null)
+  const [dupMsg, setDupMsg] = useState<string | null>(null)
 
 
   const supabase = createClient()
@@ -59,6 +59,15 @@ export default function QuoteDetailPage() {
             : null
       )
     } catch { /* ignore */ }
+  }, [])
+
+  // One-time toast handed over from a Duplicate action on the source quote.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const from = window.sessionStorage.getItem('eq_quote_dup_from')
+    if (!from) return
+    window.sessionStorage.removeItem('eq_quote_dup_from')
+    setDupMsg(`Duplicated from ${from}. Edit and save to finish the new quote.`)
   }, [])
 
   useEffect(() => {
@@ -347,6 +356,7 @@ export default function QuoteDetailPage() {
       }).select().single()
 
       if (!error && data) {
+        try { window.sessionStorage.setItem('eq_quote_dup_from', quote.quote_number) } catch { /* ignore */ }
         router.push(`/dashboard/quotes/${data.id}`)
       } else if (error) {
         alert('Could not duplicate quote: ' + error.message)
@@ -377,8 +387,7 @@ export default function QuoteDetailPage() {
     try {
       const patch = markWonPatch(quote.follow_up_count)
       await supabase.from('quotes').update(patch).eq('id', quote.id)
-      setQuote({ ...quote, ...patch })
-      setShowSchedulePrompt(true)
+      setQuote({ ...quote, ...patch })   // status → accepted; the persistent banner shows automatically
     } finally { setActionBusy(false) }
   }
 
@@ -391,10 +400,9 @@ export default function QuoteDetailPage() {
     } finally { setActionBusy(false) }
   }
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading...</div>
+  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading quote…</div>
   if (!quote) return <div className="text-center py-16 text-sm text-red-400">Quote not found.</div>
 
-  const canSchedule = quote.status === 'accepted' || quote.status === 'scheduled'
   const customerPhone = customers.find(c => c.id === quote.customer_id)?.phone || null
   const canInvoice = quote.status === 'accepted' || quote.status === 'scheduled' || quote.status === 'completed'
 
@@ -481,10 +489,11 @@ export default function QuoteDetailPage() {
             status={quote.status}
             onChanged={(s) => {
               setQuote(prev => prev ? { ...prev, status: s } : prev)
-              if (s === 'accepted') setShowSchedulePrompt(true)
             }}
           />
-          {canSchedule && (
+          {/* Accepted quotes schedule via the persistent banner below; the toolbar
+              action is for already-scheduled quotes (book another visit). */}
+          {quote.status === 'scheduled' && (
             <Button onClick={() => handleScheduleJob()} variant="secondary" size="sm" loading={scheduling}>
               <CalendarPlus className="w-3.5 h-3.5" /> Schedule Job
             </Button>
@@ -525,14 +534,25 @@ export default function QuoteDetailPage() {
         </div>
       )}
 
-      {showSchedulePrompt && (
+      {dupMsg && (
+        <div className="flex items-center justify-between gap-3 text-sm bg-accent/10 border border-accent/20 rounded-xl px-4 py-3">
+          <span className="flex items-center gap-2 text-ink"><Copy className="w-4 h-4 shrink-0 text-accent" /> {dupMsg}</span>
+          <button onClick={() => setDupMsg(null)} className="text-ink-faint hover:text-ink shrink-0">✕</button>
+        </div>
+      )}
+
+      {/* Persistent reminder — stays until the job is actually scheduled (status
+          leaves "accepted"), so the next step is never lost by dismissing a prompt. */}
+      {quote.status === 'accepted' && (
         <div className="flex items-center justify-between flex-wrap gap-3 text-sm bg-accent/10 border border-accent/20 rounded-xl px-4 py-3">
-          <span className="text-ink font-medium">Quote accepted — schedule this job now?</span>
+          <span className="text-ink font-medium flex items-center gap-2">
+            <CalendarPlus className="w-4 h-4 shrink-0 text-accent" /> Accepted — this job isn’t scheduled yet.
+          </span>
           <div className="flex items-center gap-2">
-            <Button size="sm" onClick={() => router.push(`/dashboard/schedule?quote=${quote.id}`)}>
-              Open scheduler
+            <Button size="sm" onClick={() => handleScheduleJob()} loading={scheduling}>
+              <CalendarPlus className="w-3.5 h-3.5" /> Schedule Job
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => setShowSchedulePrompt(false)}>Not now</Button>
+            <Button size="sm" variant="ghost" onClick={() => router.push(`/dashboard/schedule?quote=${quote.id}`)}>Open scheduler</Button>
           </div>
         </div>
       )}

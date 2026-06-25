@@ -237,7 +237,7 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
                 <Button variant="ghost" size="sm" onClick={() => onEdit(c)} title="Edit">
                   <Edit2 className="w-4 h-4" />
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => handleDelete(c.id)} loading={deleting === c.id} className="hover:text-red-400" title="Delete">
+                <Button variant="danger" size="sm" onClick={() => handleDelete(c.id)} loading={deleting === c.id} title="Delete">
                   <Trash2 className="w-4 h-4" />
                 </Button>
               </div>
