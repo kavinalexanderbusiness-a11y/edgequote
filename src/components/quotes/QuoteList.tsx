@@ -10,7 +10,9 @@ import { needsFollowUp } from '@/lib/followup'
 import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
-import { Search, Trash2, ArrowRight, Bell } from 'lucide-react'
+import { FilterPill } from '@/components/ui/FilterPill'
+import { InlineEmpty } from '@/components/ui/EmptyState'
+import { Search, Trash2, ArrowRight, Bell, FileText } from 'lucide-react'
 
 interface QuoteListProps {
   quotes: Quote[]
@@ -82,37 +84,24 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
         </div>
         <div className="flex items-center gap-1.5 flex-wrap">
           {followUpCount > 0 && (
-            <button
-              onClick={() => setFollowUpOnly(v => !v)}
-              className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                followUpOnly
-                  ? 'bg-amber-400 text-black'
-                  : 'bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20'
-              }`}
-            >
+            <FilterPill active={followUpOnly} onClick={() => setFollowUpOnly(v => !v)}>
               <Bell className="w-3 h-3" /> Follow up ({followUpCount})
-            </button>
+            </FilterPill>
           )}
           {STATUS_FILTERS.map(f => (
-            <button
-              key={f.value}
-              onClick={() => setStatusFilter(f.value)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                statusFilter === f.value
-                  ? 'bg-accent text-black'
-                  : 'bg-surface border border-border-strong text-ink-muted hover:text-ink'
-              }`}
-            >
+            <FilterPill key={f.value} active={statusFilter === f.value} onClick={() => setStatusFilter(f.value)}>
               {f.label}
-            </button>
+            </FilterPill>
           ))}
         </div>
       </div>
 
       {/* Table */}
       {filtered.length === 0 ? (
-        <Card className="py-14 text-center text-sm text-ink-muted">
-          No quotes found.
+        <Card>
+          <InlineEmpty icon={FileText}>
+            {quotes.length === 0 ? 'No quotes yet. Create your first one.' : 'No quotes match these filters.'}
+          </InlineEmpty>
         </Card>
       ) : (
         <Card className="overflow-hidden">

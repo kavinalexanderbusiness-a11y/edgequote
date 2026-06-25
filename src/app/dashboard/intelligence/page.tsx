@@ -5,9 +5,11 @@ import { createClient } from '@/lib/supabase/client'
 import { loadBusinessIntelligence, BIReport, NamedValue } from '@/lib/businessIntelligence'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Skeleton, SkeletonTiles } from '@/components/ui/Skeleton'
+import { StatTile } from '@/components/ui/StatTile'
+import { InlineEmpty } from '@/components/ui/EmptyState'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { formatCurrency, cn } from '@/lib/utils'
-import { TrendingUp, TrendingDown, DollarSign, Gauge, Users, Target, Activity, LineChart } from 'lucide-react'
+import { DollarSign, Gauge, Users, Target, Activity, LineChart } from 'lucide-react'
 
 export default function IntelligencePage() {
   const supabase = useMemo(() => createClient(), [])
@@ -41,10 +43,10 @@ export default function IntelligencePage() {
       {/* ── FINANCIAL ── */}
       <Section title="Financial" icon={DollarSign}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <Stat label="Revenue this month" value={formatCurrency(bi.financial.revenueThisMonth)} delta={bi.financial.monthOverMonthPct} deltaLabel="vs last month" />
-          <Stat label="Revenue last month" value={formatCurrency(bi.financial.revenueLastMonth)} />
-          <Stat label="Revenue YTD" value={formatCurrency(bi.financial.revenueYTD)} />
-          <Stat label="Projected this month" value={formatCurrency(bi.forecasting.projectedThisMonth)} accent />
+          <StatTile label="Revenue this month" value={formatCurrency(bi.financial.revenueThisMonth)} delta={bi.financial.monthOverMonthPct} deltaLabel="vs last month" />
+          <StatTile label="Revenue last month" value={formatCurrency(bi.financial.revenueLastMonth)} />
+          <StatTile label="Revenue YTD" value={formatCurrency(bi.financial.revenueYTD)} />
+          <StatTile label="Projected this month" value={formatCurrency(bi.forecasting.projectedThisMonth)} accent />
         </div>
         <TrendBars trend={bi.financial.trend} />
         <div className="grid md:grid-cols-3 gap-3">
@@ -57,10 +59,10 @@ export default function IntelligencePage() {
       {/* ── PROFITABILITY ── */}
       <Section title="Profitability" icon={Gauge}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <Stat label="Revenue / labor hour" value={`$${bi.profitability.revenuePerLaborHour}`} />
-          <Stat label="Gross profit YTD" value={formatCurrency(bi.profitability.grossProfitYTD)} sub={`${bi.profitability.grossMarginPct}% margin`} />
-          <Stat label="Crew efficiency" value={bi.profitability.crewEfficiencyPct != null ? `${bi.profitability.crewEfficiencyPct}%` : '—'} sub={bi.profitability.crewEfficiencyPct != null ? (bi.profitability.crewEfficiencyPct <= 100 ? 'at/under estimate' : 'over estimate') : 'time more jobs'} />
-          <Stat label="Route $/km" value={`$${bi.profitability.routeRevPerKm}`} sub={bi.profitability.avgGrade ? `avg grade ${bi.profitability.avgGrade}` : undefined} />
+          <StatTile label="Revenue / labor hour" value={`$${bi.profitability.revenuePerLaborHour}`} />
+          <StatTile label="Gross profit YTD" value={formatCurrency(bi.profitability.grossProfitYTD)} sub={`${bi.profitability.grossMarginPct}% margin`} />
+          <StatTile label="Crew efficiency" value={bi.profitability.crewEfficiencyPct != null ? `${bi.profitability.crewEfficiencyPct}%` : '—'} sub={bi.profitability.crewEfficiencyPct != null ? (bi.profitability.crewEfficiencyPct <= 100 ? 'at/under estimate' : 'over estimate') : 'time more jobs'} />
+          <StatTile label="Route $/km" value={`$${bi.profitability.routeRevPerKm}`} sub={bi.profitability.avgGrade ? `avg grade ${bi.profitability.avgGrade}` : undefined} />
         </div>
         <div className="grid md:grid-cols-3 gap-3">
           <RankList title="Most profitable customers" items={bi.profitability.topCustomers} fmt={formatCurrency} />
@@ -72,10 +74,10 @@ export default function IntelligencePage() {
       {/* ── CUSTOMERS ── */}
       <Section title="Customers" icon={Users}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <Stat label="Active customers" value={String(bi.customers.active)} sub={`${bi.customers.total} total`} />
-          <Stat label="Retention rate" value={bi.customers.retentionRatePct != null ? `${bi.customers.retentionRatePct}%` : '—'} sub={bi.customers.churnRatePct != null ? `${bi.customers.churnRatePct}% churn` : 'recurring only'} />
-          <Stat label="Avg lifetime value" value={formatCurrency(bi.customers.avgLifetimeValue)} sub={`forecast ${formatCurrency(bi.customers.forecastLtv)}`} />
-          <Stat label="New this month" value={`+${bi.customers.newThisMonth}`} sub={`avg ${formatCurrency(bi.customers.avgAnnualValue)}/yr`} accent />
+          <StatTile label="Active customers" value={String(bi.customers.active)} sub={`${bi.customers.total} total`} />
+          <StatTile label="Retention rate" value={bi.customers.retentionRatePct != null ? `${bi.customers.retentionRatePct}%` : '—'} sub={bi.customers.churnRatePct != null ? `${bi.customers.churnRatePct}% churn` : 'recurring only'} />
+          <StatTile label="Avg lifetime value" value={formatCurrency(bi.customers.avgLifetimeValue)} sub={`forecast ${formatCurrency(bi.customers.forecastLtv)}`} />
+          <StatTile label="New this month" value={`+${bi.customers.newThisMonth}`} sub={`avg ${formatCurrency(bi.customers.avgAnnualValue)}/yr`} accent />
         </div>
         <TrendBars trend={bi.customers.growth.map(g => ({ month: g.name, revenue: g.value }))} label="New customers / month" integer />
       </Section>
@@ -83,10 +85,10 @@ export default function IntelligencePage() {
       {/* ── SALES ── */}
       <Section title="Sales" icon={Target}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <Stat label="Quote win rate" value={bi.sales.quoteAcceptancePct != null ? `${bi.sales.quoteAcceptancePct}%` : '—'} sub={`${bi.sales.won} won · ${bi.sales.lost} lost`} />
-          <Stat label="Avg quote value" value={formatCurrency(bi.sales.avgQuoteValue)} />
-          <Stat label="Lost pipeline" value={formatCurrency(bi.sales.lostValue)} sub="quoted but declined" />
-          <Stat label="Top loss reason" value={bi.sales.topLossReasons[0]?.name ? cap(bi.sales.topLossReasons[0].name) : '—'} sub={bi.sales.topLossReasons[0] ? `${bi.sales.topLossReasons[0].value}×` : undefined} />
+          <StatTile label="Quote win rate" value={bi.sales.quoteAcceptancePct != null ? `${bi.sales.quoteAcceptancePct}%` : '—'} sub={`${bi.sales.won} won · ${bi.sales.lost} lost`} />
+          <StatTile label="Avg quote value" value={formatCurrency(bi.sales.avgQuoteValue)} />
+          <StatTile label="Lost pipeline" value={formatCurrency(bi.sales.lostValue)} sub="quoted but declined" />
+          <StatTile label="Top loss reason" value={bi.sales.topLossReasons[0]?.name ? cap(bi.sales.topLossReasons[0].name) : '—'} sub={bi.sales.topLossReasons[0] ? `${bi.sales.topLossReasons[0].value}×` : undefined} />
         </div>
         <div className="grid md:grid-cols-2 gap-3">
           <RankList title="Win rate by service" items={bi.sales.byServiceType} fmt={v => `${v}%`} subFmt={v => `${v} quotes`} />
@@ -97,20 +99,20 @@ export default function IntelligencePage() {
       {/* ── OPERATIONS ── */}
       <Section title="Operations" icon={Activity}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <Stat label="Capacity used (4 wk)" value={bi.operations.capacityUtilizationPct != null ? `${bi.operations.capacityUtilizationPct}%` : '—'} sub="of workday capacity" />
-          <Stat label="Booked next 2 wk" value={bi.operations.bookedUtilizationPct != null ? `${bi.operations.bookedUtilizationPct}%` : '—'} sub="of capacity" />
-          <Stat label="Labor estimate accuracy" value={bi.operations.laborAccuracyPct != null ? `${bi.operations.laborAccuracyPct}%` : '—'} sub={`${bi.operations.timedJobs} timed jobs`} />
-          <Stat label="Avg route density" value={`${bi.operations.avgRouteDensity}/100`} sub="how clustered you are" />
+          <StatTile label="Capacity used (4 wk)" value={bi.operations.capacityUtilizationPct != null ? `${bi.operations.capacityUtilizationPct}%` : '—'} sub="of workday capacity" />
+          <StatTile label="Booked next 2 wk" value={bi.operations.bookedUtilizationPct != null ? `${bi.operations.bookedUtilizationPct}%` : '—'} sub="of capacity" />
+          <StatTile label="Labor estimate accuracy" value={bi.operations.laborAccuracyPct != null ? `${bi.operations.laborAccuracyPct}%` : '—'} sub={`${bi.operations.timedJobs} timed jobs`} />
+          <StatTile label="Avg route density" value={`${bi.operations.avgRouteDensity}/100`} sub="how clustered you are" />
         </div>
       </Section>
 
       {/* ── FORECASTING ── */}
       <Section title="Forecasting" icon={LineChart}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <Stat label="Projected this month" value={formatCurrency(bi.forecasting.projectedThisMonth)} accent />
-          <Stat label="Recurring run-rate" value={formatCurrency(bi.forecasting.projectedRecurringAnnual)} sub="/yr locked in" />
-          <Stat label="Rest of season" value={formatCurrency(bi.forecasting.projectedSeasonRemaining)} sub="recurring booked" />
-          <Stat label="Growth trend" value={bi.forecasting.growthForecastPct != null ? `${bi.forecasting.growthForecastPct > 0 ? '+' : ''}${bi.forecasting.growthForecastPct}%` : '—'} delta={bi.forecasting.growthForecastPct} deltaLabel="3-mo revenue" />
+          <StatTile label="Projected this month" value={formatCurrency(bi.forecasting.projectedThisMonth)} accent />
+          <StatTile label="Recurring run-rate" value={formatCurrency(bi.forecasting.projectedRecurringAnnual)} sub="/yr locked in" />
+          <StatTile label="Rest of season" value={formatCurrency(bi.forecasting.projectedSeasonRemaining)} sub="recurring booked" />
+          <StatTile label="Growth trend" value={bi.forecasting.growthForecastPct != null ? `${bi.forecasting.growthForecastPct > 0 ? '+' : ''}${bi.forecasting.growthForecastPct}%` : '—'} delta={bi.forecasting.growthForecastPct} deltaLabel="3-mo revenue" />
         </div>
       </Section>
     </div>
@@ -128,28 +130,12 @@ function Section({ title, icon: Icon, children }: { title: string; icon: typeof 
   )
 }
 
-function Stat({ label, value, sub, delta, deltaLabel, accent }: { label: string; value: string; sub?: string; delta?: number | null; deltaLabel?: string; accent?: boolean }) {
-  return (
-    <div className={cn('rounded-card border p-3.5', accent ? 'border-accent/30 bg-accent/[0.05]' : 'border-border bg-bg-secondary')}>
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className={cn('text-xl font-black mt-1', accent ? 'text-accent' : 'text-ink')}>{value}</p>
-      {delta != null && (
-        <p className={cn('text-[11px] font-semibold mt-0.5 flex items-center gap-1', delta >= 0 ? 'text-emerald-400' : 'text-red-400')}>
-          {delta >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-          {delta > 0 ? '+' : ''}{delta}% {deltaLabel && <span className="text-ink-faint font-normal">{deltaLabel}</span>}
-        </p>
-      )}
-      {sub && delta == null && <p className="text-[11px] text-ink-muted mt-0.5">{sub}</p>}
-    </div>
-  )
-}
-
 function RankList({ title, items, fmt, subFmt }: { title: string; items: NamedValue[]; fmt: (v: number) => string; subFmt?: (v: number) => string }) {
   return (
-    <div className="rounded-card border border-border bg-bg-secondary p-3.5">
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-2">{title}</p>
+    <div className="rounded-card border border-border bg-surface p-3.5">
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint mb-2">{title}</p>
       {items.length === 0 ? (
-        <p className="text-xs text-ink-faint py-3 text-center">Not enough data yet</p>
+        <InlineEmpty>Not enough data yet</InlineEmpty>
       ) : (
         <ul className="space-y-1.5">
           {items.map((it, i) => (
@@ -174,8 +160,8 @@ function TrendBars({ trend, label = 'Revenue / month', integer = false }: { tren
   if (!trend.length) return null
   const max = Math.max(1, ...trend.map(t => t.revenue))
   return (
-    <div className="rounded-card border border-border bg-bg-secondary p-3.5">
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-2">{label}</p>
+    <div className="rounded-card border border-border bg-surface p-3.5">
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint mb-2">{label}</p>
       <div className="flex items-end gap-1.5 h-24">
         {trend.map((t, i) => (
           <div key={i} className="flex-1 flex flex-col items-center justify-end gap-1 min-w-0">

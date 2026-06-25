@@ -9,6 +9,9 @@ import {
 } from '@/lib/revenueIntelligence'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
+import { StatTile } from '@/components/ui/StatTile'
+import { FilterPill } from '@/components/ui/FilterPill'
+import { InlineEmpty } from '@/components/ui/EmptyState'
 import { Skeleton, SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { formatCurrency, cn } from '@/lib/utils'
@@ -77,10 +80,10 @@ export default function RevenueIntelligencePage() {
 
       {/* Summary */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <Tile label="Recurring opportunity" value={formatCurrency(summary.totalOpportunity)} sub="/yr if all won" accent />
-        <Tile label="One-time opportunity" value={formatCurrency(summary.totalOneTime)} />
-        <Tile label="Open opportunities" value={String(live.length)} sub={`${actedCount} acted · ${wonCount} won`} />
-        <Tile label="Revenue from acted" value={formatCurrency(wonValue)} sub="tracked wins" />
+        <StatTile label="Recurring opportunity" value={formatCurrency(summary.totalOpportunity)} sub="/yr if all won" accent />
+        <StatTile label="One-time opportunity" value={formatCurrency(summary.totalOneTime)} />
+        <StatTile label="Open opportunities" value={String(live.length)} sub={`${actedCount} acted · ${wonCount} won`} />
+        <StatTile label="Revenue from acted" value={formatCurrency(wonValue)} sub="tracked wins" />
       </div>
 
       {/* Top action */}
@@ -98,27 +101,25 @@ export default function RevenueIntelligencePage() {
           const n = kindCount(k)
           if (k !== 'all' && n === 0) return null
           return (
-            <button key={k} onClick={() => setFilter(k)}
-              className={cn('text-xs font-medium rounded-full px-3 py-1.5 border transition-colors',
-                filter === k ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
+            <FilterPill key={k} active={filter === k} onClick={() => setFilter(k)}>
               {k === 'all' ? 'All' : `${OPP_META[k as OppKind].emoji} ${OPP_META[k as OppKind].label}`} {n > 0 && <span className="opacity-70">{n}</span>}
-            </button>
+            </FilterPill>
           )
         })}
-        <button onClick={load} title="Refresh" className="ml-auto h-7 w-7 rounded-lg border border-border text-ink-muted hover:text-ink flex items-center justify-center"><RefreshCw className="w-3.5 h-3.5" /></button>
+        <Button variant="ghost" size="sm" onClick={load} aria-label="Refresh" className="ml-auto"><RefreshCw className="w-3.5 h-3.5" /></Button>
       </div>
 
       {/* Ranked opportunities — the Action Center */}
       <div className="space-y-2.5">
         {inFilter.length === 0 ? (
-          <div className="py-12 text-center text-sm text-ink-muted">No opportunities in this view yet. As you complete jobs and quotes, predictions sharpen.</div>
+          <InlineEmpty icon={Sparkles}>No opportunities in this view yet. As you complete jobs and quotes, predictions sharpen.</InlineEmpty>
         ) : inFilter.map(o => (
           <OppCard key={o.key} o={o} status={feedback[o.key]?.status} busy={busy === o.key} onAct={act} />
         ))}
       </div>
 
       {/* LTV Forecast */}
-      <div className="rounded-card border border-border bg-bg-secondary overflow-hidden">
+      <div className="rounded-card border border-border bg-surface overflow-hidden">
         <button onClick={() => setShowForecast(s => !s)} className="w-full px-5 py-3.5 flex items-center justify-between text-left">
           <span className="text-sm font-bold text-ink flex items-center gap-2"><Sparkles className="w-4 h-4 text-accent" /> Lifetime Value Forecast</span>
           <span className="text-xs text-ink-muted">{showForecast ? 'Hide' : `Show top ${Math.min(12, ltvForecast.length)}`}</span>
@@ -149,22 +150,12 @@ export default function RevenueIntelligencePage() {
   )
 }
 
-function Tile({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: boolean }) {
-  return (
-    <div className={cn('rounded-card border p-3.5', accent ? 'border-accent/30 bg-accent/[0.05]' : 'border-border bg-bg-secondary')}>
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className={cn('text-xl font-black mt-1', accent ? 'text-accent' : 'text-ink')}>{value}</p>
-      {sub && <p className="text-[11px] text-ink-muted mt-0.5">{sub}</p>}
-    </div>
-  )
-}
-
 function OppCard({ o, status, busy, onAct }: { o: Opportunity; status?: string; busy: boolean; onAct: (o: Opportunity, s: 'acted' | 'dismissed' | 'won') => void }) {
   const [showWhy, setShowWhy] = useState(false)
   const meta = OPP_META[o.kind]
   const done = status === 'acted' || status === 'won'
   return (
-    <div className={cn('rounded-card border p-3.5', status === 'won' ? 'border-emerald-500/30 bg-emerald-500/[0.04]' : done ? 'border-border bg-bg-tertiary' : 'border-border bg-bg-secondary')}>
+    <div className={cn('rounded-card border p-3.5', status === 'won' ? 'border-emerald-500/30 bg-emerald-500/[0.04]' : done ? 'border-border bg-bg-tertiary' : 'border-border bg-surface')}>
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="flex items-center gap-2 flex-wrap">

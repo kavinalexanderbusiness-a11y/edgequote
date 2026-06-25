@@ -5,6 +5,10 @@ import { createClient } from '@/lib/supabase/client'
 import { loadLaborInsights, LaborInsights, ServiceAccuracy, ServiceProfit } from '@/lib/labor'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Skeleton, SkeletonTiles } from '@/components/ui/Skeleton'
+import { Card } from '@/components/ui/Card'
+import { StatTile } from '@/components/ui/StatTile'
+import { SectionHeading } from '@/components/ui/SectionHeading'
+import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { formatCurrency, cn } from '@/lib/utils'
 import { Gauge, Target, DollarSign, Home, AlertTriangle, Users } from 'lucide-react'
@@ -34,13 +38,13 @@ export default function LaborIntelligencePage() {
 
   if (ins.trainingJobs < 1) {
     return (
-      <div className="max-w-5xl">
+      <div className="max-w-5xl space-y-6">
         <PageHeader title="Labor Intelligence" description="How accurate your time estimates are — and where they're learning fastest." />
-        <div className="rounded-card border border-border bg-bg-secondary p-8 text-center">
-          <Gauge className="w-10 h-10 text-ink-faint mx-auto mb-3" />
-          <p className="text-sm font-medium text-ink">No timed jobs yet</p>
-          <p className="text-xs text-ink-muted mt-1">Start and complete jobs in Day Ops (check-in / check-out) and the model learns automatically. The Smart Estimate falls back to lawn size until then.</p>
-        </div>
+        <EmptyState
+          icon={Gauge}
+          title="No timed jobs yet"
+          description="Start and complete jobs in Day Ops (check-in / check-out) and the model learns automatically. The Smart Estimate falls back to lawn size until then."
+        />
       </div>
     )
   }
@@ -50,9 +54,9 @@ export default function LaborIntelligencePage() {
       <PageHeader title="Labor Intelligence" description="How accurate your time estimates are — and where they're learning fastest." />
 
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-        <Tile label="Estimate accuracy" value={ins.overallAccuracyPct != null ? `${ins.overallAccuracyPct}%` : '—'} accent />
-        <Tile label="Average error" value={ins.avgErrorPct != null ? `${ins.avgErrorPct}%` : '—'} />
-        <Tile label="Training jobs" value={String(ins.trainingJobs)} sub="completed & timed" />
+        <StatTile label="Estimate accuracy" value={ins.overallAccuracyPct != null ? `${ins.overallAccuracyPct}%` : '—'} accent />
+        <StatTile label="Average error" value={ins.avgErrorPct != null ? `${ins.avgErrorPct}%` : '—'} />
+        <StatTile label="Training jobs" value={String(ins.trainingJobs)} sub="completed & timed" />
       </div>
 
       <div className="grid md:grid-cols-2 gap-3">
@@ -67,14 +71,15 @@ export default function LaborIntelligencePage() {
 
       {/* Crew efficiency trends (learned) */}
       <Section title="Crew efficiency (learned)" icon={Users}>
-        {ins.crewTrends.length === 0 ? <Empty /> : (
+        {ins.crewTrends.length === 0 ? <InlineEmpty>Not enough data yet</InlineEmpty> : (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             {ins.crewTrends.map(t => (
-              <div key={t.crewSize} className="rounded-lg border border-border bg-bg-tertiary px-3 py-2">
-                <p className="text-[10px] uppercase tracking-wide text-ink-faint">{t.crewSize}-person crew</p>
-                <p className="text-base font-bold text-ink">{t.effectiveWorkers}× <span className="text-[11px] font-normal text-ink-muted">effective</span></p>
-                <p className="text-[10px] text-ink-faint">{t.manMinPer1000} man-min / 1,000 ft²</p>
-              </div>
+              <StatTile
+                key={t.crewSize}
+                label={`${t.crewSize}-person crew`}
+                value={<>{t.effectiveWorkers}× <span className="text-[11px] font-normal text-ink-muted">effective</span></>}
+                sub={`${t.manMinPer1000} man-min / 1,000 ft²`}
+              />
             ))}
           </div>
         )}
@@ -110,24 +115,15 @@ export default function LaborIntelligencePage() {
   )
 }
 
-function Tile({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: boolean }) {
-  return (
-    <div className={cn('rounded-card border p-3.5', accent ? 'border-accent/30 bg-accent/[0.05]' : 'border-border bg-bg-secondary')}>
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className={cn('text-xl font-black mt-1', accent ? 'text-accent' : 'text-ink')}>{value}</p>
-      {sub && <p className="text-[11px] text-ink-muted mt-0.5">{sub}</p>}
-    </div>
-  )
-}
 function Section({ title, icon: Icon, children }: { title: string; icon: typeof Gauge; children: React.ReactNode }) {
   return (
-    <div className="rounded-card border border-border bg-bg-secondary p-4">
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-2 flex items-center gap-1.5"><Icon className="w-3.5 h-3.5" /> {title}</p>
+    <Card className="p-4">
+      <SectionHeading icon={Icon} title={title} className="mb-2" />
       {children}
-    </div>
+    </Card>
   )
 }
-function Empty() { return <p className="text-xs text-ink-faint py-3 text-center">Not enough data yet</p> }
+function Empty() { return <InlineEmpty>Not enough data yet</InlineEmpty> }
 
 function AccuracyList({ title, icon, items, good }: { title: string; icon: typeof Gauge; items: ServiceAccuracy[]; good?: boolean }) {
   return (

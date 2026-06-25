@@ -1,4 +1,5 @@
 import { LucideIcon } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { Button } from './Button'
 
 interface EmptyStateProps {
@@ -6,11 +7,12 @@ interface EmptyStateProps {
   title: string
   description: string
   action?: { label: string; onClick: () => void }
+  className?: string
 }
 
-export function EmptyState({ icon: Icon, title, description, action }: EmptyStateProps) {
+export function EmptyState({ icon: Icon, title, description, action, className }: EmptyStateProps) {
   return (
-    <div className="flex flex-col items-center justify-center py-20 text-center">
+    <div className={cn('flex flex-col items-center justify-center py-20 text-center', className)}>
       <div className="w-14 h-14 rounded-2xl bg-surface-raised border border-border-strong flex items-center justify-center mb-4">
         <Icon className="w-6 h-6 text-ink-faint" />
       </div>
@@ -19,6 +21,18 @@ export function EmptyState({ icon: Icon, title, description, action }: EmptyStat
       {action && (
         <Button onClick={action.onClick}>{action.label}</Button>
       )}
+    </div>
+  )
+}
+
+// Compact in-card / in-panel empty. Use when a full EmptyState (py-20) would be
+// too tall — e.g. an empty list inside a Card. One look for all "nothing here yet"
+// lines so they stop drifting on size, colour and padding.
+export function InlineEmpty({ icon: Icon, children, className }: { icon?: LucideIcon; children: React.ReactNode; className?: string }) {
+  return (
+    <div className={cn('flex flex-col items-center justify-center gap-2 py-8 px-4 text-center text-sm text-ink-muted', className)}>
+      {Icon && <Icon className="w-5 h-5 text-ink-faint" />}
+      <span>{children}</span>
     </div>
   )
 }

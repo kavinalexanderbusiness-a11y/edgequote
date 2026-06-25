@@ -5,6 +5,10 @@ import { createClient } from '@/lib/supabase/client'
 import { measurementStats, MeasureStats } from '@/lib/autoMeasure'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
+import { StatTile } from '@/components/ui/StatTile'
+import { SectionHeading } from '@/components/ui/SectionHeading'
+import { SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
+import { EmptyState } from '@/components/ui/EmptyState'
 import { cn } from '@/lib/utils'
 import { Ruler, TrendingUp, Target, MapPin, Gauge } from 'lucide-react'
 
@@ -32,19 +36,24 @@ export default function MeasurementsPage() {
       <PageHeader title="Measurement Accuracy" description="How well auto-measure performs — and how it's learning your neighborhoods." />
 
       {loading ? (
-        <div className="text-center py-16 text-sm text-ink-muted">Loading…</div>
+        <>
+          <SkeletonTiles count={4} />
+          <SkeletonRows count={4} />
+        </>
       ) : !stats || stats.autoTotal === 0 ? (
-        <Card><CardBody className="text-center py-14 text-sm text-ink-muted">
-          No auto-measurements yet. As you measure quotes and properties, the accuracy and per-neighborhood learning will show up here.
-        </CardBody></Card>
+        <EmptyState
+          icon={Ruler}
+          title="No auto-measurements yet"
+          description="As you measure quotes and properties, the accuracy and per-neighborhood learning will show up here."
+        />
       ) : (
         <>
           {/* Headline stats */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <Stat icon={Target} label="Accepted as-is" value={`${stats.acceptanceRate}%`} sub={`${stats.acceptedAsIs}/${stats.autoTotal} estimates`} />
-            <Stat icon={TrendingUp} label="Avg adjustment" value={`±${stats.avgAdjustmentPct}%`} sub="when changed" />
-            <Stat icon={Ruler} label="Auto-measurements" value={String(stats.autoTotal)} sub="recorded" />
-            <Stat icon={Gauge} label="Calibrated areas" value={`${calibrated}/${hoods}`} sub="≥5 measurements" />
+            <StatTile icon={Target} label="Accepted as-is" value={`${stats.acceptanceRate}%`} sub={`${stats.acceptedAsIs}/${stats.autoTotal} estimates`} />
+            <StatTile icon={TrendingUp} label="Avg adjustment" value={`±${stats.avgAdjustmentPct}%`} sub="when changed" />
+            <StatTile icon={Ruler} label="Auto-measurements" value={String(stats.autoTotal)} sub="recorded" />
+            <StatTile icon={Gauge} label="Calibrated areas" value={`${calibrated}/${hoods}`} sub="≥5 measurements" />
           </div>
 
           {/* Calibration progress */}
@@ -59,7 +68,7 @@ export default function MeasurementsPage() {
 
           {/* By confidence */}
           <Card><CardBody>
-            <p className="text-sm font-semibold text-ink flex items-center gap-2 mb-2"><Gauge className="w-4 h-4 text-accent" /> Accuracy by confidence level</p>
+            <SectionHeading icon={Gauge} title="Accuracy by confidence level" className="mb-2" />
             <div className="divide-y divide-border">
               {stats.byConfidence.sort((a, b) => a.confidence.localeCompare(b.confidence)).map(c => (
                 <div key={c.confidence} className="flex items-center justify-between gap-3 py-2 text-sm">
@@ -80,16 +89,6 @@ export default function MeasurementsPage() {
         </>
       )}
     </div>
-  )
-}
-
-function Stat({ icon: Icon, label, value, sub }: { icon: typeof Ruler; label: string; value: string; sub: string }) {
-  return (
-    <Card><CardBody>
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1"><Icon className="w-3 h-3" /> {label}</p>
-      <p className="text-2xl font-bold text-ink mt-0.5">{value}</p>
-      <p className="text-[11px] text-ink-faint">{sub}</p>
-    </CardBody></Card>
   )
 }
 
