@@ -94,15 +94,21 @@ export function computeWeatherImpact(
     hoursByDate[j.date] = (hoursByDate[j.date] || 0) + est.minutes / 60
   }
 
-  // Best dry day to move a rainy day's work to: the soonest forecast day that's a
-  // preferred work day, not rainy, and after the affected date.
-  const findDryDay = (afterDate: string): string | null => {
+  // Best dry day to MOVE a rainy day's work to: the soonest preferred work day that
+  // isn't rainy AND still has room for these hours — accounting for what EARLIER
+  // rain days this week were already assigned, so multiple rain days spread across
+  // multiple dry days instead of all piling onto the first dry day.
+  const committedExtra: Record<string, number> = {}
+  const findDryDay = (afterDate: string, neededHours: number): string | null => {
+    let firstDry: string | null = null
     for (const f of forecast) {
       if (f.date <= afterDate) continue
       if (pref && !pref.has(dow(f.date))) continue
-      if (!f.rainy) return f.date
+      if (f.rainy) continue
+      if (firstDry == null) firstDry = f.date
+      if ((hoursByDate[f.date] || 0) + (committedExtra[f.date] || 0) + neededHours <= capacityHours) return f.date
     }
-    return null
+    return firstDry  // nothing with spare capacity — soonest dry day (flagged overbooked)
   }
 
   const atRiskDays: DayImpact[] = []
@@ -114,10 +120,11 @@ export function computeWeatherImpact(
     const laborHours = round1(hoursByDate[f.date] || 0)
     const revenue = Math.round(dayJobs.reduce((s, j) => s + j.value, 0))
     const customers = new Set(dayJobs.map(j => j.customerId).filter(Boolean)).size
-    const rec = findDryDay(f.date)
-    const recExisting = rec ? (hoursByDate[rec] || 0) : 0
+    const rec = findDryDay(f.date, laborHours)
+    const recExisting = rec ? (hoursByDate[rec] || 0) + (committedExtra[rec] || 0) : 0
     const recProjected = rec ? round1(recExisting + laborHours) : null
     const recOverbooks = recProjected != null && recProjected > capacityHours
+    if (rec) committedExtra[rec] = (committedExtra[rec] || 0) + laborHours  // reserve room for this day
     const score = weatherScore(f)
     const recDayLabel = rec ? new Date(rec + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : null
     const recommendation: DayRecommendation = score.level === 'red'
@@ -133,8 +140,8 @@ export function computeWeatherImpact(
       overbooked: laborHours > capacityHours,
       recommendedDay: rec, recommendedProjectedHours: recProjected, recommendedOverbooks: recOverbooks,
       recommendedNote: !rec ? 'No dry work day in the next week — consider a specific date'
-        : recOverbooks ? `Moving to ${rec} would overbook it (${recProjected}h vs ${capacityHours}h) — split across days`
-          : `Best move: ${rec} (${recProjected}h of ${capacityHours}h after)`,
+        : recOverbooks ? `${recDayLabel} would be over capacity (${recProjected}h vs ${capacityHours}h) — split across days`
+          : `Best move: ${recDayLabel} (${recProjected}h of ${capacityHours}h after)`,
     })
   }
 
@@ -149,7 +156,7 @@ export function computeWeatherImpact(
   const firstDelay = atRiskDays.find(d => d.recommendation.action === 'delay')
   const firstMonitor = atRiskDays.find(d => d.recommendation.action === 'monitor')
   const headline = firstDelay
-    ? `Delay recommended ${fmtDay(firstDelay.date)} — ${firstDelay.jobs} job${firstDelay.jobs !== 1 ? 's' : ''}, ${firstDelay.laborHours}h, ${Math.round(firstDelay.revenue)} at risk`
+    ? `Delay recommended ${fmtDay(firstDelay.date)} — ${firstDelay.jobs} job${firstDelay.jobs !== 1 ? 's' : ''}, ${firstDelay.laborHours}h, $${Math.round(firstDelay.revenue)} at risk`
     : firstMonitor
     ? `Monitor ${fmtDay(firstMonitor.date)} — ${firstMonitor.jobs} job${firstMonitor.jobs !== 1 ? 's' : ''} could be affected`
     : 'Keep schedule — no rain risk to booked work this week'
