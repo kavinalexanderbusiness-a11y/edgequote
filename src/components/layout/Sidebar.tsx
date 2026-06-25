@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { LayoutDashboard, Users, FileText, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Navigation, Receipt, Menu, X, Sprout, MessageSquare, Ruler, Search } from 'lucide-react'
+import { LayoutDashboard, Users, FileText, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Receipt, Menu, X, Sprout, MessageSquare, Ruler, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { NotificationBell } from '@/components/notifications/NotificationBell'
@@ -13,7 +13,6 @@ import { NotificationBell } from '@/components/notifications/NotificationBell'
 const navMain = [
   { label: 'Dashboard',  href: '/dashboard',            icon: LayoutDashboard },
   { label: 'Schedule',   href: '/dashboard/schedule',   icon: CalendarDays },
-  { label: 'Routes',     href: '/dashboard/routes',     icon: Navigation },
   { label: 'Customers',  href: '/dashboard/customers',  icon: Users },
   { label: 'Properties', href: '/dashboard/properties', icon: Home },
   { label: 'Measurements', href: '/dashboard/measurements', icon: Ruler },

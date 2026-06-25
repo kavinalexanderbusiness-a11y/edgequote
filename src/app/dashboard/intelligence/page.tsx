@@ -3,21 +3,31 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { loadBusinessIntelligence, BIReport, NamedValue } from '@/lib/businessIntelligence'
+import { loadLaborInsights, LaborInsights, ServiceAccuracy, ServiceProfit } from '@/lib/labor'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Skeleton, SkeletonTiles } from '@/components/ui/Skeleton'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { formatCurrency, cn } from '@/lib/utils'
-import { TrendingUp, TrendingDown, DollarSign, Gauge, Users, Target, Activity, LineChart } from 'lucide-react'
+import { TrendingUp, TrendingDown, DollarSign, Gauge, Users, Target, Activity, LineChart, Home, AlertTriangle } from 'lucide-react'
 
 export default function IntelligencePage() {
   const supabase = useMemo(() => createClient(), [])
   const [bi, setBi] = useState<BIReport | null>(() => readCache<BIReport>('bi', CACHE_TTL.medium))
   const [loading, setLoading] = useState(!bi) // cached → render instantly, refresh in background
+  // Labour accuracy & crew efficiency — loaded alongside, but never blocks the BI report.
+  const [labor, setLabor] = useState<LaborInsights | null>(() => readCache<LaborInsights>('labor', CACHE_TTL.medium))
 
   useEffect(() => {
     (async () => {
       try { const r = await loadBusinessIntelligence(supabase); if (r) { setBi(r); writeCache('bi', r) } }
       finally { setLoading(false) }
+    })()
+  }, [supabase])
+
+  useEffect(() => {
+    (async () => {
+      try { const r = await loadLaborInsights(supabase); if (r) { setLabor(r.insights); writeCache('labor', r.insights) } }
+      catch { /* labour insights are supplementary — never break the BI report */ }
     })()
   }, [supabase])
 
@@ -104,6 +114,77 @@ export default function IntelligencePage() {
         </div>
       </Section>
 
+      {/* ── LABOUR ACCURACY & CREW EFFICIENCY ── (merged from the former Labor Intelligence page) */}
+      <Section title="Labour accuracy & crew efficiency" icon={Gauge}>
+        {labor && labor.trainingJobs >= 1 ? (
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+              <Stat label="Estimate accuracy" value={labor.overallAccuracyPct != null ? `${labor.overallAccuracyPct}%` : '—'} accent />
+              <Stat label="Average error" value={labor.avgErrorPct != null ? `${labor.avgErrorPct}%` : '—'} />
+              <Stat label="Training jobs" value={String(labor.trainingJobs)} sub="completed & timed" />
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-3">
+              <LaborAccuracyList title="Most accurate services" icon={Target} items={labor.mostAccurate} good />
+              <LaborAccuracyList title="Least accurate services" icon={Target} items={labor.leastAccurate} />
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-3">
+              <LaborProfitList title="Most profitable services" icon={DollarSign} items={labor.mostProfitable} />
+              <LaborProfitList title="Least profitable services" icon={DollarSign} items={labor.leastProfitable} />
+            </div>
+
+            {/* Crew efficiency trends (learned) */}
+            <LaborCard title="Crew efficiency (learned)" icon={Users}>
+              {labor.crewTrends.length === 0 ? <LaborEmpty /> : (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {labor.crewTrends.map(t => (
+                    <div key={t.crewSize} className="rounded-lg border border-border bg-bg-tertiary px-3 py-2">
+                      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{t.crewSize}-person crew</p>
+                      <p className="text-base font-bold text-ink">{t.effectiveWorkers}× <span className="text-[11px] font-normal text-ink-muted">effective</span></p>
+                      <p className="text-[10px] text-ink-faint">{t.manMinPer1000} man-min / 1,000 ft²</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </LaborCard>
+
+            <div className="grid md:grid-cols-2 gap-3">
+              <LaborCard title="Most accurate properties" icon={Home}>
+                {labor.bestProperties.length === 0 ? <LaborEmpty /> : (
+                  <ul className="space-y-1.5">
+                    {labor.bestProperties.map(p => (
+                      <li key={p.propertyId} className="flex items-center justify-between gap-2 text-sm">
+                        <span className="text-ink truncate">{p.name}</span>
+                        <span className="shrink-0 font-semibold text-emerald-400">{p.accuracyPct}% <span className="text-[11px] text-ink-faint font-normal">· {p.n}</span></span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </LaborCard>
+              <LaborCard title="Worst prediction misses" icon={AlertTriangle}>
+                {labor.worstMisses.length === 0 ? <LaborEmpty /> : (
+                  <ul className="space-y-1.5">
+                    {labor.worstMisses.map((m, i) => (
+                      <li key={i} className="flex items-center justify-between gap-2 text-sm">
+                        <span className="text-ink truncate">{m.propertyName} <span className="text-ink-faint text-[11px]">· {m.combo}</span></span>
+                        <span className="shrink-0 text-ink-muted text-xs">est {m.estimated} → <span className="font-semibold text-red-400">{m.actual}</span> ({m.errorPct}%)</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </LaborCard>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-card border border-border bg-bg-secondary p-6 text-center">
+            <Gauge className="w-8 h-8 text-ink-faint mx-auto mb-2" />
+            <p className="text-sm font-medium text-ink">No timed jobs yet</p>
+            <p className="text-xs text-ink-muted mt-1">Start and complete jobs in Day Ops (check-in / check-out) and the model learns automatically. The Smart Estimate falls back to lawn size until then.</p>
+          </div>
+        )}
+      </Section>
+
       {/* ── FORECASTING ── */}
       <Section title="Forecasting" icon={LineChart}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -186,5 +267,49 @@ function TrendBars({ trend, label = 'Revenue / month', integer = false }: { tren
         ))}
       </div>
     </div>
+  )
+}
+
+// ── Labour accuracy & crew efficiency helpers (merged from the former Labor Intelligence page) ──
+function LaborCard({ title, icon: Icon, children }: { title: string; icon: typeof Gauge; children: React.ReactNode }) {
+  return (
+    <div className="rounded-card border border-border bg-bg-secondary p-4">
+      <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-2 flex items-center gap-1.5"><Icon className="w-3.5 h-3.5" /> {title}</p>
+      {children}
+    </div>
+  )
+}
+function LaborEmpty() { return <p className="text-xs text-ink-faint py-3 text-center">Not enough data yet</p> }
+
+function LaborAccuracyList({ title, icon, items, good }: { title: string; icon: typeof Gauge; items: ServiceAccuracy[]; good?: boolean }) {
+  return (
+    <LaborCard title={title} icon={icon}>
+      {items.length === 0 ? <LaborEmpty /> : (
+        <ul className="space-y-1.5">
+          {items.map(s => (
+            <li key={s.combo} className="flex items-center justify-between gap-2 text-sm">
+              <span className="text-ink truncate">{s.label} <span className="text-[11px] text-ink-faint">· {s.n}</span></span>
+              <span className={cn('shrink-0 font-semibold', good ? 'text-emerald-400' : s.accuracyPct < 70 ? 'text-amber-400' : 'text-ink')}>{s.accuracyPct}%</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </LaborCard>
+  )
+}
+function LaborProfitList({ title, icon, items }: { title: string; icon: typeof Gauge; items: ServiceProfit[] }) {
+  return (
+    <LaborCard title={title} icon={icon}>
+      {items.length === 0 ? <LaborEmpty /> : (
+        <ul className="space-y-1.5">
+          {items.map(s => (
+            <li key={s.combo} className="flex items-center justify-between gap-2 text-sm">
+              <span className="text-ink truncate">{s.label} <span className="text-[11px] text-ink-faint">· {s.n}</span></span>
+              <span className="shrink-0 font-semibold text-ink">${s.revPerHour}/hr <span className="text-[11px] text-ink-faint font-normal">{formatCurrency(s.profit)}</span></span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </LaborCard>
   )
 }

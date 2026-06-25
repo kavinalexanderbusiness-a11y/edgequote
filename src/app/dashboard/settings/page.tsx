@@ -16,11 +16,22 @@ import { MessagingUsage } from '@/components/settings/MessagingUsage'
 import { AutomationToggles } from '@/components/settings/AutomationToggles'
 import { PushNotificationSettings } from '@/components/settings/PushNotificationSettings'
 import { BookingLink } from '@/components/settings/BookingLink'
+import { Tabs, type TabItem } from '@/components/ui/Tabs'
 import { useForm, Controller } from 'react-hook-form'
 import { cn } from '@/lib/utils'
 import { ThemePref, getThemePref, applyThemePref } from '@/lib/theme'
 import { ServiceSeasons, ServiceSeason, DEFAULT_SEASONS, settingsToSeasons, seasonLabel } from '@/lib/seasons'
-import { Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard } from 'lucide-react'
+import { Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard, Building2, DollarSign, MessageSquare, Bell, Link as LinkIcon, Zap } from 'lucide-react'
+
+const SETTINGS_TABS: TabItem[] = [
+  { key: 'business', label: 'Business', icon: Building2 },
+  { key: 'pricing', label: 'Pricing & Fees', icon: DollarSign },
+  { key: 'scheduling', label: 'Scheduling', icon: CalendarRange },
+  { key: 'messaging', label: 'Messaging', icon: MessageSquare },
+  { key: 'notifications', label: 'Notifications', icon: Bell },
+  { key: 'booking', label: 'Booking', icon: LinkIcon },
+]
+type SettingsTab = (typeof SETTINGS_TABS)[number]['key']
 
 // Mon→Sun display, mapped to date-fns getDay indices (Sun=0…Sat=6).
 const WEEKDAYS = [
@@ -44,6 +55,7 @@ export default function SettingsPage() {
   const [themePref, setThemePref] = useState<ThemePref>('dark')
   const [logoScale, setLogoScale] = useState(100)
   const [seasons, setSeasons] = useState<ServiceSeasons>(DEFAULT_SEASONS)
+  const [tab, setTab] = useState<SettingsTab>('business')
 
   useEffect(() => { setThemePref(getThemePref()) }, [])
   function pickTheme(p: ThemePref) { setThemePref(p); applyThemePref(p) }
@@ -82,6 +94,8 @@ export default function SettingsPage() {
         fee_recovery_percent: settings.fee_recovery_percent ?? 3,
         etransfer_discount_percent: settings.etransfer_discount_percent ?? 0,
         gst_percent: settings.gst_percent ?? 0,
+        autopay_charge_mode: settings.autopay_charge_mode ?? 'auto',
+        autopay_variance_pct: settings.autopay_variance_pct ?? 40,
       })
       setLogoUrl(settings.logo_url)
       setWorkDays(settings.preferred_work_days?.length ? settings.preferred_work_days : DEFAULT_WORK_DAYS)
@@ -135,6 +149,8 @@ export default function SettingsPage() {
         fee_recovery_percent: Number(values.fee_recovery_percent) >= 0 ? Number(values.fee_recovery_percent) : 3,
         etransfer_discount_percent: Number(values.etransfer_discount_percent) >= 0 ? Number(values.etransfer_discount_percent) : 0,
         gst_percent: Number(values.gst_percent) >= 0 ? Number(values.gst_percent) : 0,
+        autopay_charge_mode: values.autopay_charge_mode === 'manual_review' ? 'manual_review' : 'auto',
+        autopay_variance_pct: Number(values.autopay_variance_pct) >= 0 ? Number(values.autopay_variance_pct) : 40,
         preferred_work_days: workDays,
         work_start_time: /^\d{1,2}:\d{2}$/.test(workStart) ? workStart : '08:00',
         daily_capacity_hours: Number(capacityHours) > 0 ? Number(capacityHours) : 8,
@@ -179,10 +195,22 @@ export default function SettingsPage() {
 
   if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading settings...</div>
 
+  // Tabs that contain react-hook-form fields. The <form> stays mounted across
+  // these so values are never lost on tab switch; the Save footer shows on any
+  // of them and submits every field regardless of which is active.
+  const formTabs: SettingsTab[] = ['business', 'pricing', 'scheduling']
+  const showSave = formTabs.includes(tab)
+
   return (
     <div className="max-w-3xl space-y-6">
       <PageHeader title="Business Settings" description="Company info, branding, pricing, and travel fees" />
 
+      <div className="sticky top-0 z-10 -mx-1 px-1 py-2 bg-bg/90 backdrop-blur">
+        <Tabs tabs={SETTINGS_TABS} active={tab} onChange={(k) => setTab(k as SettingsTab)} />
+      </div>
+
+      {/* BUSINESS */}
+      <div className={cn('space-y-6', tab !== 'business' && 'hidden')}>
       <Card>
         <CardHeader><h2 className="text-sm font-semibold text-ink">Branding</h2></CardHeader>
         <CardBody className="space-y-5">
@@ -256,9 +284,14 @@ export default function SettingsPage() {
           </div>
         </CardBody>
       </Card>
+      </div>
+      {/* END BUSINESS non-form cards */}
 
-      <form onSubmit={handleSubmit(onSubmit)}>
-        <Card>
+      {/* The form stays mounted across the Business / Pricing / Scheduling tabs
+          so react-hook-form never loses values when switching tabs. Each card
+          group is shown/hidden by tab; the Save footer submits every field. */}
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+        <Card className={cn(tab !== 'business' && 'hidden')}>
           <CardHeader><h2 className="text-sm font-semibold text-ink">Company Information</h2></CardHeader>
           <CardBody className="space-y-4">
             <Input label="Company Name" {...register('company_name')} />
@@ -298,7 +331,7 @@ export default function SettingsPage() {
           </CardBody>
         </Card>
 
-        <Card className="mt-6">
+        <Card className={cn(tab !== 'pricing' && 'hidden')}>
           <CardHeader>
             <div>
               <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><CreditCard className="w-4 h-4 text-accent" /> Payment &amp; Fees</h2>
@@ -327,10 +360,30 @@ export default function SettingsPage() {
             <Input label="E-transfer discount % (future — leave 0)" type="number" step="0.5" min="0" max="10"
               hint="Reserved for a future cash/e-transfer discount. Not active yet."
               {...register('etransfer_discount_percent')} />
+
+            {/* ── Recurring AutoPay ── */}
+            <div className="pt-4 mt-2 border-t border-border">
+              <h3 className="text-sm font-semibold text-ink flex items-center gap-2"><Zap className="w-4 h-4 text-accent" /> Recurring AutoPay</h3>
+              <p className="text-xs text-ink-faint mt-0.5 mb-3">For customers with a saved card and AutoPay enabled. A customer can override the timing on their profile.</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">When to charge</label>
+                  <select {...register('autopay_charge_mode')}
+                    className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all">
+                    <option value="auto">Charge automatically on completion</option>
+                    <option value="manual_review">Hold for my review, then charge</option>
+                  </select>
+                  <p className="text-xs text-ink-faint">“Automatically” charges the saved card the moment a recurring visit is completed.</p>
+                </div>
+                <Input label="Review threshold %" type="number" step="5" min="0" max="200"
+                  hint="Hold (don't auto-charge) any recurring invoice that differs from the customer's usual amount by more than this %."
+                  {...register('autopay_variance_pct')} />
+              </div>
+            </div>
           </CardBody>
         </Card>
 
-        <Card className="mt-6">
+        <Card className={cn(tab !== 'scheduling' && 'hidden')}>
           <CardHeader>
             <div>
               <h2 className="text-sm font-semibold text-ink">Work Schedule</h2>
@@ -376,7 +429,7 @@ export default function SettingsPage() {
           </CardBody>
         </Card>
 
-        <Card className="mt-6">
+        <Card className={cn(tab !== 'scheduling' && 'hidden')}>
           <CardHeader>
             <div>
               <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><CalendarRange className="w-4 h-4 text-accent" /> Service Seasons</h2>
@@ -403,7 +456,7 @@ export default function SettingsPage() {
           </CardBody>
         </Card>
 
-        <Card className="mt-6">
+        <Card className={cn(tab !== 'pricing' && 'hidden')}>
           <CardHeader>
             <div>
               <h2 className="text-sm font-semibold text-ink">Lawn Pricing</h2>
@@ -434,15 +487,25 @@ export default function SettingsPage() {
               Defaults are tuned for Calgary mow+trim+edge: ~$40 small, ~$50–60 medium, ~$70–80 large lawns.
             </p>
           </CardBody>
-          <div className="px-6 py-4 border-t border-border flex justify-end">
-            <Button type="submit" loading={isSubmitting}>
-              {saved ? <><Check className="w-4 h-4" /> Saved</> : 'Save Settings'}
-            </Button>
-          </div>
         </Card>
+
+        {/* Persistent Save footer — visible on any form-bearing tab, submits
+            every field (Company Info, Payment & Fees, Work Schedule, Service
+            Seasons, Lawn Pricing) regardless of which tab is active. */}
+        {showSave && (
+          <div className="sticky bottom-0 z-10 -mx-1 px-1">
+            <div className="rounded-card border border-border bg-surface/95 backdrop-blur px-6 py-4 flex items-center justify-end gap-3">
+              <span className="text-xs text-ink-faint mr-auto">Saves all business, pricing &amp; scheduling settings.</span>
+              <Button type="submit" loading={isSubmitting}>
+                {saved ? <><Check className="w-4 h-4" /> Saved</> : 'Save Settings'}
+              </Button>
+            </div>
+          </div>
+        )}
       </form>
 
-      <Card>
+      {/* PRICING — standalone (not part of the react-hook-form) */}
+      <Card className={cn(tab !== 'pricing' && 'hidden')}>
         <CardHeader className="flex items-center justify-between">
           <div>
             <h2 className="text-sm font-semibold text-ink">Travel Fee Tiers</h2>
@@ -469,12 +532,23 @@ export default function SettingsPage() {
         </CardBody>
       </Card>
 
-      <BookingLink />
-      <PushNotificationSettings />
-      <AutomationToggles />
-      <MessagingUsage />
-      <MessageTemplateEditor />
-      <CommunicationsTest />
+      {/* MESSAGING */}
+      <div className={cn('space-y-6', tab !== 'messaging' && 'hidden')}>
+        <AutomationToggles />
+        <MessagingUsage />
+        <MessageTemplateEditor />
+        <CommunicationsTest />
+      </div>
+
+      {/* NOTIFICATIONS */}
+      <div className={cn('space-y-6', tab !== 'notifications' && 'hidden')}>
+        <PushNotificationSettings />
+      </div>
+
+      {/* BOOKING */}
+      <div className={cn('space-y-6', tab !== 'booking' && 'hidden')}>
+        <BookingLink />
+      </div>
     </div>
   )
 }

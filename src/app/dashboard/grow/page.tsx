@@ -43,8 +43,7 @@ const GROUPS: { title: string; tools: Tool[] }[] = [
     title: 'Stay on top of it',
     tools: [
       { label: 'Weekly Review', href: '/dashboard/review', icon: CalendarCheck, blurb: 'Last week’s results and this week’s moves at a glance.' },
-      { label: 'Weather', href: '/dashboard/weather', icon: CloudRain, blurb: 'Rain risk to your booked work — jobs, hours & revenue at stake.' },
-      { label: 'Labor Intelligence', href: '/dashboard/labor-intelligence', icon: Gauge, blurb: 'How accurate your time estimates are — and where they’re learning.' },
+      { label: 'Move Jobs', href: '/dashboard/weather', icon: CloudRain, blurb: 'Spot rain-threatened work and reschedule it — jobs, hours & revenue at stake.' },
       { label: 'Data Quality', href: '/dashboard/data-quality', icon: ShieldCheck, blurb: 'Missing customers, prices and locations to clean up.' },
     ],
   },
