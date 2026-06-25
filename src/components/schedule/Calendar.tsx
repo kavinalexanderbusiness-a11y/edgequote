@@ -36,7 +36,12 @@ interface CalendarProps {
 // the SAME drag engine (one implementation, no second drag system).
 interface DragPayload { title: string; fromDate: string; commit: (toDate: string) => void }
 
-function JobChip({ job, onSelect, onDragStart, recurLabel, value, addonCount }: { job: Job; onSelect: (j: Job) => void; onDragStart?: (e: React.PointerEvent) => void; recurLabel?: string; value?: number; addonCount?: number }) {
+// The ONE signature every chip's drag-start handler uses. A chip only forwards the
+// pointer event; the parent decides what (job or item) is being dragged. Job and
+// ScheduleItem chips are therefore interchangeable from the drag engine's view.
+type ChipDragStart = (e: React.PointerEvent) => void
+
+function JobChip({ job, onSelect, onDragStart, recurLabel, value, addonCount }: { job: Job; onSelect: (j: Job) => void; onDragStart?: ChipDragStart; recurLabel?: string; value?: number; addonCount?: number }) {
   return (
     <button
       onClick={(e) => { e.stopPropagation(); onSelect(job) }}
@@ -67,7 +72,7 @@ function itemTimeLabel(item: ScheduleItem): string {
   return ''
 }
 
-function ItemChip({ item, onSelect, onDragStart }: { item: ScheduleItem; onSelect: (i: ScheduleItem) => void; onDragStart?: (e: React.PointerEvent) => void }) {
+function ItemChip({ item, onSelect, onDragStart }: { item: ScheduleItem; onSelect: (i: ScheduleItem) => void; onDragStart?: ChipDragStart }) {
   const meta = ITEM_META[item.type]
   const done = item.status === 'completed'
   return (
@@ -129,7 +134,8 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
     if (!dragEnabled) return
     dragRef.current = { payload, startX: e.clientX, startY: e.clientY, active: false, over: null }
   }
-  // Per-entry drag starters — build the real commit closure for this job/item.
+  // Per-entry drag starters — build the real commit closure for this job/item, then
+  // hand the chip a plain ChipDragStart (single-arg) closure at the render site.
   const jobDragStart = onMoveJob ? (e: React.PointerEvent, job: Job) => startDrag(e, { title: job.title, fromDate: job.scheduled_date, commit: (to) => onMoveJob(job, to) }) : undefined
   const itemDragStart = onMoveItem ? (e: React.PointerEvent, item: ScheduleItem) => startDrag(e, { title: item.title, fromDate: item.scheduled_date, commit: (to) => onMoveItem(item, to) }) : undefined
 
@@ -174,11 +180,6 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
     window.addEventListener('pointerup', up)
     return () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up) }
   }, [dragEnabled])
-
-  // Rebuild a chip's commit closure at drag-start (payload above carries a no-op;
-  // we set the real commit here so the closures capture the latest handlers).
-  const onJobDragStart = onMoveJob ? (e: React.PointerEvent, _p: DragPayload, job: Job) => startDrag(e, { title: job.title, fromDate: job.scheduled_date, commit: (to) => onMoveJob(job, to) }) : undefined
-  const onItemDragStart = onMoveItem ? (e: React.PointerEvent, _p: DragPayload, item: ScheduleItem) => startDrag(e, { title: item.title, fromDate: item.scheduled_date, commit: (to) => onMoveItem(item, to) }) : undefined
 
   // Suppress the click that follows a drag (so dropping doesn't open the entry).
   const selectJob = (job: Job) => { if (justDragged.current) return; onSelectJob(job) }
@@ -234,10 +235,10 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
                 </div>
                 <div className="space-y-0.5">
                   {shownJobs.map(job => (
-                    <JobChip key={job.id} job={job} onSelect={selectJob} onDragStart={onJobDragStart ? (e, p) => onJobDragStart(e, p, job) : undefined} recurLabel={recurLabelFor(job)} value={valueByJobId?.[job.id]} addonCount={addonCountByJobId?.[job.id]} />
+                    <JobChip key={job.id} job={job} onSelect={selectJob} onDragStart={jobDragStart ? (e) => jobDragStart(e, job) : undefined} recurLabel={recurLabelFor(job)} value={valueByJobId?.[job.id]} addonCount={addonCountByJobId?.[job.id]} />
                   ))}
                   {shownItems.map(item => (
-                    <ItemChip key={item.id} item={item} onSelect={selectItem} onDragStart={onItemDragStart ? (e, p) => onItemDragStart(e, p, item) : undefined} />
+                    <ItemChip key={item.id} item={item} onSelect={selectItem} onDragStart={itemDragStart ? (e) => itemDragStart(e, item) : undefined} />
                   ))}
                   {overflow > 0 && (
                     <span className="block text-[10px] font-medium text-ink-faint px-1 pt-0.5">+{overflow} more</span>
@@ -281,10 +282,10 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
                 </div>
                 <div className="space-y-1">
                   {dayJobs.map(job => (
-                    <JobChip key={job.id} job={job} onSelect={selectJob} onDragStart={onJobDragStart ? (e, p) => onJobDragStart(e, p, job) : undefined} recurLabel={recurLabelFor(job)} value={valueByJobId?.[job.id]} addonCount={addonCountByJobId?.[job.id]} />
+                    <JobChip key={job.id} job={job} onSelect={selectJob} onDragStart={jobDragStart ? (e) => jobDragStart(e, job) : undefined} recurLabel={recurLabelFor(job)} value={valueByJobId?.[job.id]} addonCount={addonCountByJobId?.[job.id]} />
                   ))}
                   {dayItems.map(item => (
-                    <ItemChip key={item.id} item={item} onSelect={selectItem} onDragStart={onItemDragStart ? (e, p) => onItemDragStart(e, p, item) : undefined} />
+                    <ItemChip key={item.id} item={item} onSelect={selectItem} onDragStart={itemDragStart ? (e) => itemDragStart(e, item) : undefined} />
                   ))}
                 </div>
               </button>
