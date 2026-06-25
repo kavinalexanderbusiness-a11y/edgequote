@@ -9,6 +9,10 @@ import { generateQuoteNumber, formatCurrency, maxNumericSuffix, localTodayISO } 
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { StatTile } from '@/components/ui/StatTile'
+import { SectionHeading } from '@/components/ui/SectionHeading'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { PageSkeleton } from '@/components/ui/Skeleton'
 import { Gauge, DollarSign, AlertTriangle, Repeat, Link2, FileText, Check, TrendingUp, Sparkles } from 'lucide-react'
 
 interface JobRow {
@@ -255,7 +259,7 @@ export default function PricingRecoveryPage() {
     await load(); setWorking(null)
   }
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Scanning for unpriced work…</div>
+  if (loading) return <PageSkeleton tiles={4} rows={3} className="max-w-4xl" />
 
   const m = model
   const scoreTone = m.score >= 90 ? 'text-emerald-400' : m.score >= 60 ? 'text-amber-400' : 'text-red-400'
@@ -273,24 +277,23 @@ export default function PricingRecoveryPage() {
             <p className="text-[10px] uppercase tracking-wide text-ink-faint">Data quality</p>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 flex-1">
-            <Stat label="Jobs priced" value={`${m.priced}/${m.total}`} tone="text-emerald-400" />
-            <Stat label="Unpriced" value={String(m.unpriced)} tone={m.unpriced ? 'text-red-400' : undefined} />
-            <Stat label="Quotes linked" value={`${m.quotesLinkedPct}%`} />
-            <Stat label="Recurring covered" value={`${m.recurringCoveragePct}%`} tone={m.recurringCoveragePct < 100 ? 'text-amber-400' : 'text-emerald-400'} />
+            <StatTile label="Jobs priced" value={`${m.priced}/${m.total}`} tone="success" />
+            <StatTile label="Unpriced" value={String(m.unpriced)} tone={m.unpriced ? 'danger' : undefined} />
+            <StatTile label="Quotes linked" value={`${m.quotesLinkedPct}%`} />
+            <StatTile label="Recurring covered" value={`${m.recurringCoveragePct}%`} tone={m.recurringCoveragePct < 100 ? 'warn' : 'success'} />
           </div>
         </CardBody>
       </Card>
 
       {/* Missing revenue */}
       <div className="grid grid-cols-2 gap-3">
-        <Metric icon={DollarSign} tone="text-accent" label="Revenue missing from reports" value={formatCurrency(m.missingRevenue)} sub="booked value of all unpriced visits (estimated)" />
-        <Metric icon={TrendingUp} tone="text-emerald-400" label="Items to fix" value={`${m.unpricedSeries.length + m.mispricedSeries.length + m.underpricedSeries.length + m.oneTimeGroups.length}`} sub={m.upside > 0 ? `incl. +${formatCurrency(m.upside)} from raising underpriced series` : 'apply the suggestions below to recover it'} />
+        <StatTile icon={DollarSign} tone="accent" label="Revenue missing from reports" value={formatCurrency(m.missingRevenue)} sub="booked value of all unpriced visits (estimated)" />
+        <StatTile icon={TrendingUp} tone="success" label="Items to fix" value={`${m.unpricedSeries.length + m.mispricedSeries.length + m.underpricedSeries.length + m.oneTimeGroups.length}`} sub={m.upside > 0 ? `incl. +${formatCurrency(m.upside)} from raising underpriced series` : 'apply the suggestions below to recover it'} />
       </div>
 
       {m.score === 100 && m.mispricedSeries.length === 0 && m.underpricedSeries.length === 0 ? (
-        <Card><CardBody className="text-center py-12 text-sm text-ink-muted">
-          <Check className="w-6 h-6 mx-auto mb-2 text-emerald-400" /> Every job is priced. Reports and growth dashboards are running on real revenue.
-        </CardBody></Card>
+        <EmptyState icon={Check} title="Every job is priced"
+          description="Reports and growth dashboards are running on real revenue." />
       ) : null}
 
       {/* Unpriced recurring series — highest leverage */}
@@ -379,11 +382,7 @@ function cadenceLabel(freq: string | null) {
 function Section({ title, sub, icon: Icon, children }: { title: string; sub: string; icon: typeof Repeat; children: React.ReactNode }) {
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-2">
-        <Icon className="w-4 h-4 text-accent" />
-        <h2 className="text-sm font-bold text-ink">{title}</h2>
-        <span className="text-xs text-ink-faint">{sub}</span>
-      </div>
+      <SectionHeading icon={Icon} title={title} sub={sub} className="mb-0" />
       <div className="space-y-2">{children}</div>
     </div>
   )
@@ -424,23 +423,3 @@ function RecoveryRow({ title, sub, source, price, onPrice, missing, primary, sec
   )
 }
 
-function Metric({ icon: Icon, label, value, sub, tone }: { icon: typeof DollarSign; label: string; value: string; sub: string; tone: string }) {
-  return (
-    <Card className="p-4">
-      <div className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-muted uppercase tracking-wide">
-        <Icon className={`w-3.5 h-3.5 ${tone}`} /> {label}
-      </div>
-      <p className={`text-2xl font-bold tracking-tight mt-1 ${tone}`}>{value}</p>
-      <p className="text-xs text-ink-faint mt-0.5">{sub}</p>
-    </Card>
-  )
-}
-
-function Stat({ label, value, tone }: { label: string; value: string; tone?: string }) {
-  return (
-    <div className="rounded-lg border border-border bg-bg-tertiary px-2.5 py-1.5">
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className={`text-base font-bold mt-0.5 ${tone || 'text-ink'}`}>{value}</p>
-    </div>
-  )
-}

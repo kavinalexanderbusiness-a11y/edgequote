@@ -10,9 +10,16 @@ import {
 import { ProfitMap, ProfitPoint } from '@/components/profitability/ProfitMap'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { PageHeader } from '@/components/layout/PageHeader'
-import { Card, CardBody } from '@/components/ui/Card'
+import { Card, CardBody, CardHeader } from '@/components/ui/Card'
+import { Button } from '@/components/ui/Button'
+import { StatTile } from '@/components/ui/StatTile'
+import { FilterPill } from '@/components/ui/FilterPill'
+import { Banner } from '@/components/ui/Banner'
+import { SectionHeading } from '@/components/ui/SectionHeading'
+import { InlineEmpty } from '@/components/ui/EmptyState'
+import { PageSkeleton } from '@/components/ui/Skeleton'
 import { parseISO, startOfWeek, format } from 'date-fns'
-import { TrendingUp, TrendingDown, Navigation, Clock, DollarSign, MapPin, Lightbulb, Trophy, AlertTriangle } from 'lucide-react'
+import { TrendingUp, TrendingDown, Navigation, Clock, DollarSign, MapPin, Lightbulb, Trophy, AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react'
 
 type Period = 'day' | 'week' | 'month'
 
@@ -143,74 +150,73 @@ export default function ProfitabilityPage() {
       .map(j => ({ lat: j.lat as number, lng: j.lng as number, grade: gradeByDate[j.scheduled_date] ?? 'C', title: formatDate(j.scheduled_date) }))
   }, [jobs, routes])
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Crunching route profitability…</div>
+  if (loading) return <PageSkeleton tiles={6} rows={4} />
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="max-w-5xl space-y-6">
       <PageHeader title="Route Profitability" description="Which routes, days and neighborhoods make the most per hour" />
 
       {loadError && (
-        <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5">
-          {loadError} <button onClick={() => window.location.reload()} className="underline font-medium ml-1">Retry</button>
-        </div>
+        <Banner tone="danger" icon={AlertTriangle} action={<Button variant="ghost" size="sm" onClick={() => window.location.reload()}>Retry</Button>}>
+          {loadError}
+        </Banner>
       )}
 
-      <div className="text-xs text-ink-muted bg-bg-secondary border border-border rounded-xl px-4 py-2.5">
+      <Banner tone="neutral">
         <span className="font-medium text-ink">Revenue = booked route value</span> (cadence-priced), not collected cash. $/hr is projected from planned time until you log <span className="text-ink">actual minutes</span>; completion counts only past-due days.
-      </div>
+      </Banner>
 
       {!ctx.base && (
-        <div className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2.5">
+        <Banner tone="warn">
           Set your base address in Settings — without it, $/km and the letter grade can’t include drive cost (grades are capped at C).
-        </div>
+        </Banner>
       )}
 
       {/* Opportunity detection */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <OppCard icon={Trophy} tone="text-emerald-400" label="Top booked day"
+        <StatTile icon={Trophy} tone="success" label="Top booked day"
           value={opp.topRevenue ? formatCurrency(opp.topRevenue.revenue) : '—'}
           sub={opp.topRevenue ? `${formatDate(opp.topRevenue.date)} · grade ${opp.topRevenue.grade}` : ''} />
-        <OppCard icon={TrendingUp} tone="text-accent" label="Best revenue/hour"
+        <StatTile icon={TrendingUp} tone="accent" label="Best revenue/hour"
           value={opp.bestPerHour ? `$${opp.bestPerHour.revPerHour}/h` : '—'}
           sub={opp.bestPerHour ? formatDate(opp.bestPerHour.date) : ''} />
-        <OppCard icon={MapPin} tone="text-emerald-400" label="Best neighborhood"
+        <StatTile icon={MapPin} tone="success" label="Best neighborhood"
           value={opp.bestHood ? opp.bestHood.key : '—'}
           sub={opp.bestHood ? `${formatCurrency(opp.bestHood.revenue)} · ${opp.bestHood.customers} cust` : ''} />
-        <OppCard icon={TrendingDown} tone="text-amber-400" label="Lowest booked day"
+        <StatTile icon={TrendingDown} tone="warn" label="Lowest booked day"
           value={opp.lowRevenue ? formatCurrency(opp.lowRevenue.revenue) : '—'}
           sub={opp.lowRevenue ? `${formatDate(opp.lowRevenue.date)} · grade ${opp.lowRevenue.grade}` : ''} />
-        <OppCard icon={AlertTriangle} tone="text-red-400" label="Worst revenue/hour"
+        <StatTile icon={AlertTriangle} tone="danger" label="Worst revenue/hour"
           value={opp.worstPerHour ? `$${opp.worstPerHour.revPerHour}/h` : '—'}
           sub={opp.worstPerHour ? formatDate(opp.worstPerHour.date) : ''} />
-        <OppCard icon={MapPin} tone="text-red-400" label="Worst neighborhood"
+        <StatTile icon={MapPin} tone="danger" label="Worst neighborhood"
           value={opp.worstHood ? opp.worstHood.key : '—'}
           sub={opp.worstHood ? `${formatCurrency(opp.worstHood.revenue)} · ${opp.worstHood.customers} cust` : ''} />
       </div>
 
       {/* Period toggle */}
-      <div className="flex items-center gap-1 bg-bg-secondary border border-border rounded-xl p-1 w-fit">
+      <div className="flex items-center gap-1.5 w-fit">
         {(['day', 'week', 'month'] as Period[]).map(p => (
-          <button key={p} onClick={() => setPeriod(p)}
-            className={cn('px-4 py-1.5 rounded-lg text-sm font-medium capitalize transition-all', period === p ? 'bg-accent text-black' : 'text-ink-muted hover:text-ink')}>
+          <FilterPill key={p} active={period === p} onClick={() => setPeriod(p)} className="capitalize">
             {p}
-          </button>
+          </FilterPill>
         ))}
       </div>
 
       {/* Routes */}
       {routes.length === 0 ? (
-        <Card><CardBody className="text-center py-12 text-sm text-ink-muted">No jobs to analyze yet.</CardBody></Card>
+        <Card><InlineEmpty icon={Navigation}>No jobs to analyze yet.</InlineEmpty></Card>
       ) : period === 'day' ? (
         <div className="space-y-3">
           {upcomingRoutes.length > 0 && (
             <button onClick={() => setShowUpcoming(v => !v)}
-              className="w-full text-left rounded-xl border border-border bg-bg-secondary px-4 py-2.5 text-sm text-ink-muted hover:text-ink transition-colors">
-              {showUpcoming ? '▾' : '▸'} {upcomingRoutes.length} upcoming booked day{upcomingRoutes.length !== 1 ? 's' : ''} · {formatCurrency(upcomingRoutes.reduce((s, r) => s + r.revenue, 0))} on the books
+              className="w-full flex items-center gap-1.5 text-left rounded-card border border-border bg-surface px-4 py-2.5 text-sm text-ink-muted hover:text-ink transition-colors">
+              {showUpcoming ? <ChevronDown className="w-4 h-4 shrink-0" /> : <ChevronRight className="w-4 h-4 shrink-0" />} {upcomingRoutes.length} upcoming booked day{upcomingRoutes.length !== 1 ? 's' : ''} · {formatCurrency(upcomingRoutes.reduce((s, r) => s + r.revenue, 0))} on the books
             </button>
           )}
           {showUpcoming && upcomingRoutes.slice(0, 30).map(r => <RouteCard key={r.date} r={r} />)}
           {pastRoutes.length === 0 ? (
-            <Card><CardBody className="text-center py-8 text-sm text-ink-muted">No completed days yet — past routes appear here once you work them.</CardBody></Card>
+            <Card><InlineEmpty icon={Clock}>No completed days yet — past routes appear here once you work them.</InlineEmpty></Card>
           ) : pastRoutes.slice(0, 60).map(r => <RouteCard key={r.date} r={r} />)}
         </div>
       ) : (
@@ -222,10 +228,10 @@ export default function ProfitabilityPage() {
       {/* Historical trends (monthly) */}
       {trends.length > 0 && (
         <Card>
-          <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-            <Clock className="w-4 h-4 text-accent" />
+          <CardHeader className="flex items-center gap-2">
+            <Clock className="w-4 h-4 text-ink-muted" />
             <h2 className="text-sm font-semibold text-ink">Monthly trends</h2>
-          </div>
+          </CardHeader>
           <CardBody className="overflow-x-auto p-0">
             <table className="w-full text-sm">
               <thead>
@@ -257,8 +263,8 @@ export default function ProfitabilityPage() {
 
       {/* Profitability map */}
       {mapPoints.length > 0 && (
-        <div className="space-y-2">
-          <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><MapPin className="w-4 h-4 text-accent" /> Profitability map</h2>
+        <div>
+          <SectionHeading icon={MapPin} title="Profitability map" />
           <ProfitMap points={mapPoints} />
         </div>
       )}
@@ -272,18 +278,6 @@ function GradeBadge({ grade }: { grade: Grade }) {
       style={{ backgroundColor: GRADE_COLORS[grade] + '22', color: GRADE_COLORS[grade], border: `1px solid ${GRADE_COLORS[grade]}55` }}>
       {grade}
     </div>
-  )
-}
-
-function OppCard({ icon: Icon, label, value, sub, tone }: { icon: typeof Trophy; label: string; value: string; sub: string; tone: string }) {
-  return (
-    <Card className="p-3.5">
-      <div className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-muted uppercase tracking-wide">
-        <Icon className={cn('w-3.5 h-3.5', tone)} /> {label}
-      </div>
-      <p className={cn('text-lg font-bold mt-1', tone)}>{value}</p>
-      {sub && <p className="text-xs text-ink-faint mt-0.5 truncate">{sub}</p>}
-    </Card>
   )
 }
 

@@ -10,7 +10,12 @@ import {
 } from '@/lib/profitability'
 import { SaturationMap, SatPoint, SatHood, SatLayer } from '@/components/saturation/SaturationMap'
 import { PageHeader } from '@/components/layout/PageHeader'
-import { Card, CardBody } from '@/components/ui/Card'
+import { Card, CardBody, CardHeader } from '@/components/ui/Card'
+import { Button } from '@/components/ui/Button'
+import { FilterPill } from '@/components/ui/FilterPill'
+import { Banner } from '@/components/ui/Banner'
+import { InlineEmpty } from '@/components/ui/EmptyState'
+import { Skeleton, SkeletonRows } from '@/components/ui/Skeleton'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { format } from 'date-fns'
 import { Trophy, Sprout, TrendingDown, TrendingUp, Users, Repeat, FileText, MapPin, Navigation } from 'lucide-react'
@@ -264,28 +269,32 @@ export default function SaturationPage() {
     return { points, hoods, mapHoods, best, opportunities, strongest, weakest, unknownHood, intel }
   }, [jobs, properties, quotes, customersById, ctx])
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Mapping your service area…</div>
+  if (loading) return (
+    <div className="max-w-5xl space-y-6">
+      <PageHeader title="Saturation Map" description="Where your customers, revenue and routes concentrate — and where to grow next" />
+      <Skeleton className="h-72 w-full rounded-card" />
+      <SkeletonRows count={4} />
+    </div>
+  )
 
   const m = model
 
   return (
-    <div className="max-w-5xl space-y-5">
+    <div className="max-w-5xl space-y-6">
       <PageHeader title="Saturation Map" description="Where your customers, revenue and routes concentrate — and where to grow next" />
 
       {loadError && (
-        <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5">
-          {loadError} <button onClick={() => window.location.reload()} className="underline font-medium ml-1">Retry</button>
-        </div>
+        <Banner tone="danger" action={<Button variant="ghost" size="sm" onClick={() => window.location.reload()}>Retry</Button>}>
+          {loadError}
+        </Banner>
       )}
 
       {/* Layer toggles */}
       <div className="flex flex-wrap items-center gap-1.5">
         {LAYER_DEFS.map(l => (
-          <button key={l.key} onClick={() => setLayers(prev => ({ ...prev, [l.key]: !prev[l.key] }))}
-            className={cn('px-3.5 py-2.5 rounded-lg text-xs font-medium border transition-colors',
-              layers[l.key] ? 'bg-accent text-black border-accent' : 'bg-surface border-border-strong text-ink-muted hover:text-ink')}>
+          <FilterPill key={l.key} active={layers[l.key]} onClick={() => setLayers(prev => ({ ...prev, [l.key]: !prev[l.key] }))}>
             {l.label}
-          </button>
+          </FilterPill>
         ))}
       </div>
 
@@ -298,10 +307,10 @@ export default function SaturationPage() {
       {/* Neighborhood intelligence — one winner per business question */}
       {(m.intel.revenue || m.intel.density || m.intel.recurring || m.intel.conversion || m.intel.growth) && (
         <Card>
-          <div className="px-4 py-3 border-b border-border flex items-center gap-2">
+          <CardHeader className="flex items-center gap-2">
             <Trophy className="w-4 h-4 text-accent" />
             <h2 className="text-sm font-semibold text-ink">Neighborhood intelligence</h2>
-          </div>
+          </CardHeader>
           <CardBody className="p-0">
             <div className="divide-y divide-border">
               {m.intel.revenue && <IntelRow label="Top revenue" hood={m.intel.revenue.key} stat={formatCurrency(m.intel.revenue.revenue) + ' booked'} />}
@@ -318,13 +327,13 @@ export default function SaturationPage() {
       <div className="grid lg:grid-cols-2 gap-4">
         {/* Where to get more customers */}
         <Card>
-          <div className="px-4 py-3 border-b border-border flex items-center gap-2">
+          <CardHeader className="flex items-center gap-2">
             <Sprout className="w-4 h-4 text-violet-300" />
             <h2 className="text-sm font-semibold text-ink">Where to get more customers</h2>
-          </div>
+          </CardHeader>
           <CardBody className="space-y-2.5">
             {m.opportunities.length === 0 ? (
-              <p className="text-sm text-ink-muted py-4 text-center">No clear expansion signal yet — add more priced, located jobs.</p>
+              <InlineEmpty>No clear expansion signal yet — add more priced, located jobs.</InlineEmpty>
             ) : m.opportunities.slice(0, 5).map(h => (
               <div key={h.key} className="rounded-xl border border-border p-3">
                 <div className="flex items-center justify-between gap-2">
@@ -344,13 +353,13 @@ export default function SaturationPage() {
 
         {/* Best neighborhoods */}
         <Card>
-          <div className="px-4 py-3 border-b border-border flex items-center gap-2">
+          <CardHeader className="flex items-center gap-2">
             <Trophy className="w-4 h-4 text-amber-400" />
             <h2 className="text-sm font-semibold text-ink">Best neighborhoods</h2>
-          </div>
+          </CardHeader>
           <CardBody className="space-y-2.5">
             {m.best.length === 0 ? (
-              <p className="text-sm text-ink-muted py-4 text-center">No neighborhood data yet.</p>
+              <InlineEmpty>No neighborhood data yet.</InlineEmpty>
             ) : m.best.map((h, i) => (
               <div key={h.key} className="flex items-center gap-3 rounded-xl border border-border p-3">
                 <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0" style={{ background: h.color + '33', color: h.color }}>{i + 1}</div>
@@ -376,22 +385,22 @@ export default function SaturationPage() {
       {/* Strongest / weakest routes */}
       <div className="grid lg:grid-cols-2 gap-4">
         <Card>
-          <div className="px-4 py-3 border-b border-border flex items-center gap-2">
+          <CardHeader className="flex items-center gap-2">
             <TrendingUp className="w-4 h-4 text-emerald-400" />
             <h2 className="text-sm font-semibold text-ink">Strongest routes</h2>
-          </div>
+          </CardHeader>
           <CardBody className="space-y-2">
-            {m.strongest.length === 0 ? <p className="text-sm text-ink-muted py-3 text-center">Not enough multi-stop days yet.</p>
+            {m.strongest.length === 0 ? <InlineEmpty>Not enough multi-stop days yet.</InlineEmpty>
               : m.strongest.map(r => <RouteLine key={r.date} date={r.date} grade={r.grade} revenue={r.revenue} revPerHour={r.revPerHour} stops={r.stops} />)}
           </CardBody>
         </Card>
         <Card>
-          <div className="px-4 py-3 border-b border-border flex items-center gap-2">
+          <CardHeader className="flex items-center gap-2">
             <TrendingDown className="w-4 h-4 text-red-400" />
             <h2 className="text-sm font-semibold text-ink">Weakest routes</h2>
-          </div>
+          </CardHeader>
           <CardBody className="space-y-2">
-            {m.weakest.length === 0 ? <p className="text-sm text-ink-muted py-3 text-center">Nothing weak enough to flag.</p>
+            {m.weakest.length === 0 ? <InlineEmpty>Nothing weak enough to flag.</InlineEmpty>
               : m.weakest.map(r => <RouteLine key={r.date} date={r.date} grade={r.grade} revenue={r.revenue} revPerHour={r.revPerHour} stops={r.stops} />)}
           </CardBody>
         </Card>

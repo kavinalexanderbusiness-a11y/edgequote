@@ -5,8 +5,12 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { Customer } from '@/types'
 import { PageHeader } from '@/components/layout/PageHeader'
-import { Card, CardBody } from '@/components/ui/Card'
+import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { StatTile } from '@/components/ui/StatTile'
+import { SectionHeading } from '@/components/ui/SectionHeading'
+import { Banner } from '@/components/ui/Banner'
+import { PageSkeleton } from '@/components/ui/Skeleton'
 import { cn } from '@/lib/utils'
 import { format } from 'date-fns'
 import {
@@ -243,7 +247,7 @@ export default function DataQualityPage() {
     } finally { setWorking(null) }
   }
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Checking data quality…</div>
+  if (loading) return <PageSkeleton tiles={2} rows={4} className="max-w-3xl" />
 
   const allClean = m.quotesNoCustomer.length === 0 && m.quotesNoProperty.length === 0 && m.jobsNoCustomer.length === 0 && m.jobsNoPrice === 0 && m.jobsNoQuote === 0 && m.propsUngeocoded.length === 0 && m.propsUnnamed.length === 0
 
@@ -275,12 +279,9 @@ export default function DataQualityPage() {
       </div>
 
       {allClean && (
-        <Card>
-          <CardBody className="flex items-center gap-3 text-sm text-emerald-400">
-            <CheckCircle2 className="w-5 h-5 shrink-0" />
-            Everything is linked and priced. Your data is clean — Saturation Map &amp; Neighbor Leads can trust it.
-          </CardBody>
-        </Card>
+        <Banner tone="success" icon={CheckCircle2}>
+          Everything is linked and priced. Your data is clean — Saturation Map &amp; Neighbor Leads can trust it.
+        </Banner>
       )}
 
       {/* Quotes missing a customer — manual review (identity matters) */}
@@ -456,13 +457,10 @@ export default function DataQualityPage() {
       {(m.jobsNoPrice > 0 || m.jobsNoQuote > 0) && (
         <Card>
           <CardBody className="space-y-3">
-            <div className="flex items-center gap-2">
-              <DollarSign className="w-4 h-4 text-amber-400" />
-              <h2 className="text-sm font-semibold text-ink">Pricing &amp; quote gaps</h2>
-            </div>
+            <SectionHeading icon={DollarSign} title="Pricing & quote gaps" className="mb-0" />
             <div className="grid grid-cols-2 gap-3">
-              <Stat label="Jobs missing a price" value={m.jobsNoPrice} total={jobs.length} />
-              <Stat label="Jobs missing a quote" value={m.jobsNoQuote} total={jobs.length} />
+              <StatTile label="Jobs missing a price" value={<>{m.jobsNoPrice}<span className="text-xs font-normal text-ink-faint"> / {jobs.length}</span></>} />
+              <StatTile label="Jobs missing a quote" value={<>{m.jobsNoQuote}<span className="text-xs font-normal text-ink-faint"> / {jobs.length}</span></>} />
             </div>
             <p className="text-xs text-ink-muted">
               These are fixed in the dedicated tool — link jobs to quotes, set recurring prices, and create missing quotes in one click.
@@ -514,26 +512,17 @@ function Section({ icon: Icon, title, subtitle, action, children }: {
 }) {
   return (
     <Card>
-      <div className="px-4 py-3 border-b border-border flex items-start justify-between gap-3">
+      <CardHeader className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-2 min-w-0">
-          <Icon className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+          <Icon className="w-4 h-4 text-ink-muted shrink-0 mt-0.5" />
           <div className="min-w-0">
             <h2 className="text-sm font-semibold text-ink">{title}</h2>
             <p className="text-xs text-ink-muted mt-0.5">{subtitle}</p>
           </div>
         </div>
         {action}
-      </div>
+      </CardHeader>
       <CardBody className="space-y-2">{children}</CardBody>
     </Card>
-  )
-}
-
-function Stat({ label, value, total }: { label: string; value: number; total: number }) {
-  return (
-    <div className="rounded-lg border border-border bg-bg-tertiary px-3 py-2">
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className="text-lg font-bold text-ink mt-0.5">{value}<span className="text-xs font-normal text-ink-faint"> / {total}</span></p>
-    </div>
   )
 }

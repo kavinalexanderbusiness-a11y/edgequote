@@ -12,8 +12,11 @@ import {
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { PageHeader } from '@/components/layout/PageHeader'
-import { Card, CardBody } from '@/components/ui/Card'
+import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { StatTile } from '@/components/ui/StatTile'
+import { InlineEmpty } from '@/components/ui/EmptyState'
+import { PageSkeleton } from '@/components/ui/Skeleton'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { Target, MapPin, Plus, Phone, FileText, Check, X, Trash2, Sprout, UserPlus } from 'lucide-react'
 
@@ -196,7 +199,7 @@ export default function NeighborsPage() {
 
   const customerName = (id: string | null) => customers.find(c => c.id === id)?.name ?? null
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading neighbor leads…</div>
+  if (loading) return <PageSkeleton tiles={6} rows={3} className="max-w-4xl" />
 
   return (
     <div className="max-w-4xl space-y-6">
@@ -205,24 +208,18 @@ export default function NeighborsPage() {
       {/* Funnel metrics */}
       <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
         {(Object.keys(STATUS_META) as LeadStatus[]).map(s => (
-          <div key={s} className="rounded-lg border border-border bg-bg-tertiary px-3 py-2">
-            <p className="text-[10px] uppercase tracking-wide text-ink-faint">{STATUS_META[s].label}</p>
-            <p className="text-lg font-bold text-ink">{counts[s]}</p>
-          </div>
+          <StatTile key={s} label={STATUS_META[s].label} value={counts[s]} />
         ))}
-        <div className="rounded-lg border border-border bg-bg-tertiary px-3 py-2">
-          <p className="text-[10px] uppercase tracking-wide text-ink-faint">Conversion</p>
-          <p className="text-lg font-bold text-accent">{counts.conversion}%</p>
-        </div>
+        <StatTile label="Conversion" value={`${counts.conversion}%`} tone="accent" />
       </div>
 
       {/* Where to knock — straight from the shared neighborhood engine */}
       {targets.length > 0 && (
         <Card>
-          <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-            <Sprout className="w-4 h-4 text-violet-300" />
+          <CardHeader className="flex items-center gap-2">
+            <Sprout className="w-4 h-4 text-ink-muted" />
             <h2 className="text-sm font-semibold text-ink">Where to knock next</h2>
-          </div>
+          </CardHeader>
           <CardBody className="space-y-2">
             {targets.map(t => (
               <div key={t.key} className="rounded-xl border border-border p-3">
@@ -265,9 +262,9 @@ export default function NeighborsPage() {
 
       {/* Leads */}
       {leads.length === 0 ? (
-        <Card><CardBody className="text-center py-10 text-sm text-ink-muted">
+        <Card><InlineEmpty icon={Target}>
           No leads yet. After a job, knock the two doors either side and add them here — the truck is already parked.
-        </CardBody></Card>
+        </InlineEmpty></Card>
       ) : (
         <div className="space-y-2">
           {leads.map(l => {
@@ -322,10 +319,10 @@ export default function NeighborsPage() {
                         Open customer
                       </Button>
                     )}
-                    <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(l.address)}`} target="_blank" rel="noopener noreferrer"
-                      className="h-8 px-2.5 rounded-lg border border-border text-xs font-medium flex items-center gap-1 text-ink-muted hover:text-ink">
+                    <Button size="sm" variant="secondary"
+                      onClick={() => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(l.address)}`, '_blank', 'noopener,noreferrer')}>
                       <MapPin className="w-3.5 h-3.5" /> Map
-                    </a>
+                    </Button>
                     <Button size="sm" variant="ghost" className="ml-auto hover:text-red-400" onClick={() => deleteLead(l)} title="Delete lead">
                       <Trash2 className="w-3.5 h-3.5" />
                     </Button>

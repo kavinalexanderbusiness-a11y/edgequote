@@ -9,6 +9,10 @@ import { seasonForService, isWithinSeason, settingsToSeasons, ServiceSeasons } f
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
+import { StatTile } from '@/components/ui/StatTile'
+import { SectionHeading } from '@/components/ui/SectionHeading'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { PageSkeleton } from '@/components/ui/Skeleton'
 import { Phone, MessageSquare, FileText, CalendarPlus, HeartPulse, DollarSign, Percent, TrendingUp, AlertTriangle, Repeat, Star } from 'lucide-react'
 
 interface JobLite { customer_id: string | null; scheduled_date: string; status: string; service_type: string | null; quote_id: string | null; recurrence_id: string | null; price: number | null }
@@ -222,62 +226,48 @@ export default function ReactivationPage() {
     load()
   }, [])
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Finding lapsed customers…</div>
+  if (loading) return <PageSkeleton tiles={4} rows={4} className="max-w-4xl" />
 
   return (
     <div className="max-w-4xl space-y-6">
       <PageHeader title="Customer Reactivation" description="Win back customers you already paid to acquire" />
 
       {/* Headline metrics */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <Metric icon={AlertTriangle} label="At risk" value={String(metrics.atRisk)} tone="text-amber-400" />
-        <Metric icon={DollarSign} label="Potential recovery" value={formatCurrency(metrics.potential)} tone="text-accent" />
-        <Metric icon={Percent} label="Reactivation rate" value={`${metrics.reactivationRate}%`} />
-        <Metric icon={TrendingUp} label="Recovered (1y)" value={formatCurrency(metrics.revenueRecovered)} tone="text-emerald-400" />
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <StatTile icon={AlertTriangle} label="At risk" value={String(metrics.atRisk)} tone="warn" />
+        <StatTile icon={DollarSign} label="Potential recovery" value={formatCurrency(metrics.potential)} tone="accent" />
+        <StatTile icon={Percent} label="Reactivation rate" value={`${metrics.reactivationRate}%`} />
+        <StatTile icon={TrendingUp} label="Recovered (1y)" value={formatCurrency(metrics.revenueRecovered)} tone="success" />
       </div>
 
       {/* Recurring series ran out — the urgent re-book queue (any days-since) */}
       {ranOut.length > 0 && (
         <div className="space-y-3">
-          <div className="flex items-center gap-2 flex-wrap">
-            <Repeat className="w-4 h-4 text-red-400" />
-            <h2 className="text-sm font-bold text-red-400">Recurring series ran out</h2>
-            <span className="text-xs text-ink-faint">No next visit booked · {ranOut.length} customer{ranOut.length !== 1 ? 's' : ''} · {formatCurrency(ranOut.reduce((s, r) => s + r.perVisit, 0))}/visit at stake</span>
-          </div>
+          <SectionHeading icon={Repeat}
+            title={<span className="text-red-400">Recurring series ran out</span>}
+            sub={`No next visit booked · ${ranOut.length} customer${ranOut.length !== 1 ? 's' : ''} · ${formatCurrency(ranOut.reduce((s, r) => s + r.perVisit, 0))}/visit at stake`}
+            className="mb-0" />
           {ranOut.map(r => <RanOutCard key={r.customer.id} r={r} />)}
         </div>
       )}
 
       {risk.length === 0 && ranOut.length === 0 ? (
-        <Card><CardBody className="text-center py-12 text-sm text-ink-muted">
-          <HeartPulse className="w-6 h-6 mx-auto mb-2 text-emerald-400" />
-          No lapsed customers — everyone with service history is booked or recently served. Nice.
-        </CardBody></Card>
+        <EmptyState icon={HeartPulse} title="No lapsed customers"
+          description="Everyone with service history is booked or recently served. Nice." />
       ) : BUCKETS.map(b => {
         const list = risk.filter(r => r.bucket === b.key)
         if (list.length === 0) return null
         return (
           <div key={b.key} className="space-y-3">
-            <div className="flex items-center gap-2">
-              <h2 className={`text-sm font-bold ${b.tone}`}>{b.label}</h2>
-              <span className="text-xs text-ink-faint">{b.sub} · {list.length} customer{list.length !== 1 ? 's' : ''} · {formatCurrency(list.reduce((s, r) => s + r.potentialRecovery, 0))} potential</span>
-            </div>
+            <SectionHeading
+              title={<span className={b.tone}>{b.label}</span>}
+              sub={`${b.sub} · ${list.length} customer${list.length !== 1 ? 's' : ''} · ${formatCurrency(list.reduce((s, r) => s + r.potentialRecovery, 0))} potential`}
+              className="mb-0" />
             {list.map(r => <RiskCard key={r.customer.id} r={r} />)}
           </div>
         )
       })}
     </div>
-  )
-}
-
-function Metric({ icon: Icon, label, value, tone }: { icon: typeof DollarSign; label: string; value: string; tone?: string }) {
-  return (
-    <Card className="p-4">
-      <div className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-muted uppercase tracking-wide">
-        <Icon className="w-3.5 h-3.5" /> {label}
-      </div>
-      <p className={`text-2xl font-bold tracking-tight mt-1 ${tone || 'text-ink'}`}>{value}</p>
-    </Card>
   )
 }
 
