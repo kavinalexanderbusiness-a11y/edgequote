@@ -55,6 +55,24 @@ function inFilter(c: Convo, f: Filter): boolean {
   return !!c.archived_at
 }
 
+// Keep the client list in the SAME order the server returns (pinned first by pin
+// time, then most-recent activity) so optimistic pin/unpin/bump never desyncs the
+// row order from what a refetch would produce.
+function sortConvos(arr: Convo[]): Convo[] {
+  return [...arr].sort((a, b) => {
+    const ap = a.pinned_at ? 1 : 0, bp = b.pinned_at ? 1 : 0
+    if (ap !== bp) return bp - ap
+    if (a.pinned_at && b.pinned_at && a.pinned_at !== b.pinned_at) return a.pinned_at < b.pinned_at ? 1 : -1
+    return (a.last_message_at || '') < (b.last_message_at || '') ? 1 : -1
+  })
+}
+// Append a page without ever introducing a duplicate id (guards a double-fired
+// infinite-scroll or an append that overlaps a realtime refetch).
+function mergeUnique(prev: Convo[], next: Convo[]): Convo[] {
+  const seen = new Set(prev.map(c => c.id))
+  return [...prev, ...next.filter(c => !seen.has(c.id))]
+}
+
 export default function MessagesPage() {
   const supabase = useMemo(() => createClient(), [])
   const [uid, setUid] = useState<string | null>(null)
@@ -73,6 +91,15 @@ export default function MessagesPage() {
   const searchRef = useRef<HTMLInputElement>(null)
   const [scrollTop, setScrollTop] = useState(0)
   const [viewport, setViewport] = useState(640)
+  // Concurrency / ordering guards: loadingRef blocks overlapping page appends;
+  // loadSeq invalidates a page load that a newer one (filter switch / refetch) has
+  // superseded; searchSeq drops out-of-order search responses. filterRef/uidRef let
+  // the realtime subscription read the latest values without re-subscribing.
+  const loadingRef = useRef(false)
+  const loadSeq = useRef(0)
+  const searchSeq = useRef(0)
+  const filterRef = useRef(filter); filterRef.current = filter
+  const uidRef = useRef<string | null>(null)
 
   async function loadCounts(u: string) {
     async function countFor(f: Filter): Promise<number> {
@@ -90,6 +117,11 @@ export default function MessagesPage() {
   }
 
   async function loadPage(u: string, f: Filter, reset: boolean) {
+    // Never run two appends at once (a double-fired infinite-scroll); a reset always
+    // proceeds and supersedes anything in flight via loadSeq.
+    if (!reset && loadingRef.current) return
+    loadingRef.current = true
+    const mySeq = ++loadSeq.current
     if (reset) setLoading(true); else setLoadingMore(true)
     const from = reset ? 0 : rows.length
     let qb = supabase.from('conversations').select(SELECT_COLS).eq('user_id', u)
@@ -101,8 +133,10 @@ export default function MessagesPage() {
     const { data } = await qb
       .order('pinned_at', { ascending: false, nullsFirst: false }).order('last_message_at', { ascending: false })
       .range(from, from + PAGE - 1)
+    loadingRef.current = false
+    if (mySeq !== loadSeq.current) return // a newer load (filter switch / refetch) won — discard this one, it owns the flags
     const got = (data as unknown as Convo[]) || []
-    setRows(prev => reset ? got : [...prev, ...got])
+    setRows(prev => reset ? got : mergeUnique(prev, got))
     setHasMore(got.length === PAGE)
     setLoading(false); setLoadingMore(false)
   }
@@ -114,7 +148,7 @@ export default function MessagesPage() {
       const { data: { session } } = await supabase.auth.getSession()
       const u = session?.user?.id
       if (!u || !active) { setLoading(false); return }
-      setUid(u)
+      setUid(u); uidRef.current = u
       if (scrollRef.current) scrollRef.current.scrollTop = 0
       setScrollTop(0)
       await Promise.all([loadPage(u, filter, true), loadCounts(u)])
@@ -122,8 +156,11 @@ export default function MessagesPage() {
     return () => { active = false }
   }, [filter]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Realtime: refresh counts always; refetch the top page only when near the top so
-  // an inbound message bumps the inbox without disrupting a deep scroll.
+  // Realtime: subscribe ONCE (reads the live filter via filterRef so a filter switch
+  // never tears down the channel). Always refresh counts. Patch the changed row in
+  // place from the payload so deep-scrolled rows stay fresh (unread/preview/order)
+  // without a refetch; only refetch the top page when near the top, which also picks
+  // up brand-new conversations.
   useEffect(() => {
     let active = true
     let channel: ReturnType<typeof supabase.channel> | null = null
@@ -131,28 +168,50 @@ export default function MessagesPage() {
       const { data: { session } } = await supabase.auth.getSession()
       const u = session?.user?.id
       if (!u || !active) return
+      uidRef.current = u
       channel = supabase.channel(`conv-list:${u}`)
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `user_id=eq.${u}` }, () => {
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `user_id=eq.${u}` }, (payload) => {
+          const f = filterRef.current
           loadCounts(u)
-          if ((scrollRef.current?.scrollTop ?? 0) < 200) loadPage(u, filter, true)
+          if (payload.eventType === 'UPDATE') {
+            const r = payload.new as Pick<Convo, 'id' | 'unread' | 'last_preview' | 'last_direction' | 'last_message_at' | 'archived_at' | 'pinned_at' | 'muted'>
+            const fields = { unread: r.unread, last_preview: r.last_preview, last_direction: r.last_direction, last_message_at: r.last_message_at, archived_at: r.archived_at, pinned_at: r.pinned_at, muted: r.muted }
+            setRows(cs => cs.some(x => x.id === r.id)
+              ? sortConvos(cs.map(x => x.id === r.id ? { ...x, ...fields } : x).filter(x => x.id !== r.id || inFilter({ ...x, ...fields }, f)))
+              : cs)
+            setSel(s => s && s.id === r.id ? { ...s, ...fields } : s)
+          } else if (payload.eventType === 'DELETE') {
+            const oldId = (payload.old as { id?: string })?.id
+            if (oldId) { setRows(cs => cs.filter(x => x.id !== oldId)); setSel(s => s && s.id === oldId ? null : s) }
+          }
+          if ((scrollRef.current?.scrollTop ?? 0) < 200) loadPage(u, filterRef.current, true)
         })
         .subscribe()
     })()
     return () => { active = false; if (channel) supabase.removeChannel(channel) }
-  }, [filter]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Debounced Spotlight search.
+  // Debounced Spotlight search. A seq guard drops out-of-order responses so a slow
+  // earlier query can never overwrite the results of a newer one.
   useEffect(() => {
     const q = query.trim()
-    if (q.length < 2) { setSearchResults(null); setSearching(false); return }
+    if (q.length < 2) { setSearchResults(null); setSearching(false); searchSeq.current++; return }
     setSearching(true)
+    const seq = ++searchSeq.current
     const t = setTimeout(async () => {
       const { data } = await supabase.rpc('search_conversations', { p_query: q })
+      if (seq !== searchSeq.current) return
       setSearchResults((data as Convo[]) || [])
       setSearching(false)
     }, 250)
     return () => clearTimeout(t)
   }, [query, supabase])
+
+  // If optimistic removals (archiving/deleting a whole page) emptied the list but the
+  // server still has more, pull the next page so it never looks empty by mistake.
+  useEffect(() => {
+    if (!loading && !loadingMore && !searchResults && hasMore && rows.length === 0 && uid) loadPage(uid, filter, true)
+  }, [rows.length, hasMore, loading, loadingMore, searchResults, uid, filter]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const list = searchResults ?? rows
 
@@ -161,11 +220,17 @@ export default function MessagesPage() {
     setSearchResults(rs => rs ? rs.map(c => c.id === id ? { ...c, ...p } : c) : rs)
     setSel(s => s && s.id === id ? { ...s, ...p } : s)
   }
-  // Optimistic update; drop the row from the current list if it left the filter.
+  // Optimistic update. Always keep `rows` (the filter's list) correct — drop the row
+  // if it left the filter, else patch + re-sort — even while a search overlays the
+  // list, so clearing search reveals an accurate inbox. Patch the search overlay and
+  // the open thread separately.
   function mutate(c: Convo, p: Partial<Convo>) {
     const next = { ...c, ...p }
-    if (!searchResults && !inFilter(next, filter)) setRows(cs => cs.filter(x => x.id !== c.id))
-    else patch(c.id, p)
+    setRows(cs => cs.some(x => x.id === c.id)
+      ? sortConvos(inFilter(next, filter) ? cs.map(x => x.id === c.id ? next : x) : cs.filter(x => x.id !== c.id))
+      : cs)
+    setSearchResults(rs => rs ? rs.map(x => x.id === c.id ? next : x) : rs)
+    setSel(s => s && s.id === c.id ? next : s)
     if (uid) loadCounts(uid)
   }
   function removeLocal(id: string) {
@@ -209,7 +274,7 @@ export default function MessagesPage() {
       const now = new Date().toISOString()
       const p: Partial<Convo> = op === 'archive' ? { archived_at: now } : op === 'unarchive' ? { archived_at: null }
         : op === 'read' ? { unread: 0 } : op === 'unread' ? { unread: 1 } : op === 'mute' ? { muted: true } : op === 'unmute' ? { muted: false } : { pinned_at: now }
-      setRows(cs => cs.map(c => selectedIds.has(c.id) ? { ...c, ...p } : c).filter(c => searchResults || inFilter(c, filter)))
+      setRows(cs => sortConvos(cs.map(c => selectedIds.has(c.id) ? { ...c, ...p } : c).filter(c => inFilter(c, filter))))
       setSearchResults(rs => rs ? rs.map(c => selectedIds.has(c.id) ? { ...c, ...p } : c) : rs)
       await supabase.from('conversations').update(p).in('id', ids)
     }
@@ -227,6 +292,15 @@ export default function MessagesPage() {
   const start = Math.max(0, Math.floor(scrollTop / ROW_H) - BUF)
   const end = Math.min(list.length, Math.ceil((scrollTop + viewport) / ROW_H) + BUF)
   const visible = list.slice(start, end)
+
+  // Measure the real list height so virtualization fills a tall screen on first paint
+  // (before any scroll sets the viewport) and re-measures on resize / layout change.
+  useEffect(() => {
+    function measure() { const el = scrollRef.current; if (el && el.clientHeight) setViewport(el.clientHeight) }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [loading, sel])
 
   // Keyboard: "/" focuses search, Esc clears search / closes the thread / exits
   // select mode, and ↑/↓ move through the list (opening as you go) — Spotlight feel.

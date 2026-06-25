@@ -77,7 +77,10 @@ export async function POST(req: NextRequest) {
       user_id: c.user_id, conversation_id: convoId, customer_id: c.id,
       direction: 'inbound', channel: 'sms', body: rawBody || '(empty)', twilio_sid: sid, status: 'received',
     })
-    if (msgErr) console.error('[sms/inbound] message insert failed:', msgErr.message)
+    // 23505 = the messages_twilio_sid_key unique index rejected a re-delivered SID:
+    // a Twilio retry of a message we already stored. Silently idempotent (no dup, no
+    // double unread); only log genuine failures.
+    if (msgErr && msgErr.code !== '23505') console.error('[sms/inbound] message insert failed:', msgErr.message)
     return twiml()
   } catch (e) {
     console.error('[sms/inbound] error:', e instanceof Error ? e.message : String(e))

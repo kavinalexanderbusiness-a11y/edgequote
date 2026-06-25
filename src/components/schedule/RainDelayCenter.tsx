@@ -13,6 +13,7 @@ import {
   DestinationStrategy, STRATEGY_META, STRATEGIES, resolveDestination,
 } from '@/lib/disruption'
 import { renderMessage, MsgType } from '@/lib/comms/templates'
+import { SmsCost } from '@/components/comms/SmsCost'
 import { localTodayISO, formatCurrency, cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
@@ -454,6 +455,7 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
                       {/* Review preview */}
                       <div className="rounded-lg border border-border bg-bg-secondary px-2.5 py-2">
                         <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-1">Message preview (each customer gets their own name + dates)</p>
+                        <SmsCost text={previewText} recipients={recipientIds.size} className="mb-2" />
                         <p className="text-xs text-ink whitespace-pre-wrap">{previewText}</p>
                       </div>
                       {/* Recipient selection */}

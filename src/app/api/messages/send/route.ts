@@ -18,13 +18,21 @@ export async function POST(req: NextRequest) {
   const internal = !!body.internal
   if (!customerId || !text) return NextResponse.json({ error: 'bad request' }, { status: 400 })
 
-  // Get-or-create the conversation.
+  // Get-or-create the conversation. Fast path is a SELECT; on a brand-new thread we
+  // insert-or-do-nothing on the unique (user_id, customer_id) and re-select if a
+  // concurrent request won the race — so this reply can never be dropped on the floor.
   let convoId: string | null = null
   const { data: existing } = await supabase.from('conversations').select('id').eq('user_id', user.id).eq('customer_id', customerId).maybeSingle()
   if (existing) convoId = (existing as { id: string }).id
   else {
-    const { data: created } = await supabase.from('conversations').insert({ user_id: user.id, customer_id: customerId, last_message_at: new Date().toISOString() }).select('id').single()
+    const { data: created } = await supabase.from('conversations')
+      .upsert({ user_id: user.id, customer_id: customerId, last_message_at: new Date().toISOString() }, { onConflict: 'user_id,customer_id', ignoreDuplicates: true })
+      .select('id').maybeSingle()
     convoId = (created as { id: string } | null)?.id ?? null
+    if (!convoId) {
+      const { data: ex } = await supabase.from('conversations').select('id').eq('user_id', user.id).eq('customer_id', customerId).maybeSingle()
+      convoId = (ex as { id: string } | null)?.id ?? null
+    }
   }
   if (!convoId) return NextResponse.json({ error: 'could not open conversation' }, { status: 500 })
 

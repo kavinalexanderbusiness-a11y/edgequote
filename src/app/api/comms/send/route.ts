@@ -122,11 +122,17 @@ function escapeHtml(s: string): string {
 }
 
 // Get-or-create the one conversation per customer (mirrors /api/messages/send).
+// Race-safe: insert-or-do-nothing on the unique (user_id, customer_id), re-selecting
+// if a concurrent send won the insert, so a templated message is never left unthreaded.
 async function getOrCreateConversation(supabase: Awaited<ReturnType<typeof createClient>>, userId: string, customerId: string): Promise<string | null> {
   const { data: existing } = await supabase.from('conversations').select('id').eq('user_id', userId).eq('customer_id', customerId).maybeSingle()
   if (existing) return (existing as { id: string }).id
-  const { data: created } = await supabase.from('conversations').insert({ user_id: userId, customer_id: customerId, last_message_at: new Date().toISOString() }).select('id').single()
-  return (created as { id: string } | null)?.id ?? null
+  const { data: created } = await supabase.from('conversations')
+    .upsert({ user_id: userId, customer_id: customerId, last_message_at: new Date().toISOString() }, { onConflict: 'user_id,customer_id', ignoreDuplicates: true })
+    .select('id').maybeSingle()
+  if (created) return (created as { id: string }).id
+  const { data: ex } = await supabase.from('conversations').select('id').eq('user_id', userId).eq('customer_id', customerId).maybeSingle()
+  return (ex as { id: string } | null)?.id ?? null
 }
 
 // Insert a notification_log row. Links to the thread message when one exists; falls

@@ -1966,3 +1966,26 @@ begin
   return result;
 end; $$;
 grant execute on function public.search_conversations(text) to authenticated;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-25 — Day Settings: per-day crew override + global default.
+-- day_statuses.crew_size: a day-specific crew override (null = business default).
+-- Combined with the existing starts_at/ends_at (per-day working hours), a day's
+-- available LABOR-HOURS = crew × work-hours, which the optimizer / Weather Ops /
+-- capacity all read. business_settings.default_crew_size reserves a global default
+-- (currently 1). Idempotent + backward compatible.
+-- ════════════════════════════════════════════════════════════
+alter table public.day_statuses     add column if not exists crew_size int;
+alter table public.business_settings add column if not exists default_crew_size int not null default 1;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-24j — Idempotent inbound SMS (no duplicate messages)
+-- ════════════════════════════════════════════════════════════
+-- Twilio re-POSTs the inbound webhook when our handler is slow to return 200.
+-- Without a guard the same provider MessageSid could append the SAME text twice
+-- (a duplicate bubble AND the unread counter bumped twice). A partial unique index
+-- on the SID makes re-delivery a harmless no-op — the retry's insert hits 23505,
+-- which the webhook now swallows. NULL sids (portal / internal notes / owner replies
+-- with no SID) stay unconstrained. Idempotent + backward compatible.
+create unique index if not exists messages_twilio_sid_key
+  on public.messages (twilio_sid) where twilio_sid is not null;

@@ -6,6 +6,7 @@ import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { MSG_LABELS, MsgType, DEFAULT_TEMPLATES, MSG_VARIABLES } from '@/lib/comms/templates'
+import { SmsCost } from '@/components/comms/SmsCost'
 import { MessageSquare, Check, RotateCcw, Loader2 } from 'lucide-react'
 
 const TYPES: MsgType[] = [
@@ -86,6 +87,7 @@ export function MessageTemplateEditor() {
                     <textarea rows={6} value={val} placeholder={DEFAULT_TEMPLATES[t]}
                       onChange={e => setTemplates(prev => ({ ...prev, [t]: e.target.value }))}
                       className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent placeholder:text-ink-faint resize-y leading-relaxed" />
+                    <SmsCost text={val || DEFAULT_TEMPLATES[t]} className="mt-1.5" />
                   </div>
                 )
               })}

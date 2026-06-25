@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import { MSG_LABELS, MsgType } from '@/lib/comms/templates'
+import { SmsCost } from '@/components/comms/SmsCost'
 import { Send, StickyNote, Clock, Mail, MessageSquare } from 'lucide-react'
 import { format } from 'date-fns'
 import { Skeleton } from '@/components/ui/Skeleton'
@@ -25,15 +26,24 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
   const [sending, setSending] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
+  // Guards a fast conversation switch: a slow load for an earlier customer must never
+  // overwrite the thread you've since opened (the component is reused across both).
+  const reqSeq = useRef(0)
 
   async function load() {
+    const mySeq = ++reqSeq.current
+    const cid = customerId
     const { data: { session } } = await supabase.auth.getSession()
     const uid = session?.user?.id
-    if (!uid) { setLoading(false); return }
+    if (!uid) { if (mySeq === reqSeq.current) setLoading(false); return }
     const [mRes, lRes] = await Promise.all([
-      supabase.from('messages').select('id, created_at, direction, channel, body, status').eq('customer_id', customerId).eq('user_id', uid).order('created_at'),
-      supabase.from('notification_log').select('id, created_at, channel, template, status, message_id').eq('customer_id', customerId).eq('user_id', uid).neq('template', 'reply').order('created_at'),
+      supabase.from('messages').select('id, created_at, direction, channel, body, status').eq('customer_id', cid).eq('user_id', uid).order('created_at'),
+      supabase.from('notification_log').select('id, created_at, channel, template, status, message_id').eq('customer_id', cid).eq('user_id', uid).neq('template', 'reply').order('created_at'),
     ])
+    // Mark THIS conversation read (you opened it) regardless of a later switch; only
+    // the latest load is allowed to repaint the visible thread + refresh inbox counts.
+    supabase.from('conversations').update({ unread: 0 }).eq('user_id', uid).eq('customer_id', cid).then(() => { if (mySeq === reqSeq.current) onRead?.() })
+    if (mySeq !== reqSeq.current) return
     const msgs: Item[] = (mRes.data as Msg[] || []).map(m => ({
       id: 'm' + m.id, at: m.created_at, channel: m.channel, body: m.body, status: m.status,
       kind: m.direction === 'inbound' ? 'in' : m.direction === 'internal' ? 'note' : 'out',
@@ -54,10 +64,9 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
     })
     setItems([...msgs, ...logs].sort((a, b) => a.at.localeCompare(b.at)))
     setLoading(false)
-    await supabase.from('conversations').update({ unread: 0 }).eq('user_id', uid).eq('customer_id', customerId)
-    onRead?.()
   }
-  useEffect(() => { load() }, [customerId]) // eslint-disable-line react-hooks/exhaustive-deps
+  // On switch: show the skeleton and load fresh (the seq guard drops any stale load).
+  useEffect(() => { setLoading(true); setErr(null); load() }, [customerId]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { endRef.current?.scrollIntoView({ block: 'end' }) }, [items.length])
 
   // Drafts: restore an unsent message when (re)opening a conversation, and auto-save
@@ -135,6 +144,7 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
           </div>
         </div>
         <p className="text-[10px] text-ink-faint mt-1">{note ? 'Internal note — only you see this.' : 'Sends an SMS via your number. ⌘/Ctrl+Enter to send.'}</p>
+        {!note && <SmsCost text={text} className="mt-1.5" />}
       </div>
     </div>
   )

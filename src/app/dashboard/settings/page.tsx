@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/Button'
 import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { CommunicationsTest } from '@/components/settings/CommunicationsTest'
 import { MessageTemplateEditor } from '@/components/settings/MessageTemplateEditor'
+import { MessagingUsage } from '@/components/settings/MessagingUsage'
 import { AutomationToggles } from '@/components/settings/AutomationToggles'
 import { PushNotificationSettings } from '@/components/settings/PushNotificationSettings'
 import { BookingLink } from '@/components/settings/BookingLink'
@@ -471,6 +472,7 @@ export default function SettingsPage() {
       <BookingLink />
       <PushNotificationSettings />
       <AutomationToggles />
+      <MessagingUsage />
       <MessageTemplateEditor />
       <CommunicationsTest />
     </div>

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { format, parseISO } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { MsgType, renderMessage } from '@/lib/comms/templates'
+import { SmsCost } from '@/components/comms/SmsCost'
 import { localTodayISO, cn } from '@/lib/utils'
 import {
   Navigation, Clock, MapPin, CheckCircle2, CalendarCheck, CalendarClock, CloudRain, Sparkles, Star,
@@ -185,7 +186,7 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
           {/* Editable message */}
           <textarea value={text} onChange={e => setText(e.target.value)} rows={4}
             className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent resize-none" />
-          <p className="text-[10px] text-ink-faint">{text.length} characters · edit freely before sending</p>
+          {ch.sms ? <SmsCost text={text} className="mt-0.5" /> : <p className="text-[10px] text-ink-faint">{text.length} characters · edit freely before sending</p>}
           {active === 'review_request' && !reviewUrl && (
             <p className="text-[10px] text-amber-400">Add your Google review link in Settings → Message templates so it&apos;s inserted automatically.</p>
           )}
