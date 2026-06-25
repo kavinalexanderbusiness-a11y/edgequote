@@ -9,6 +9,7 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Button } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
+import { PageSkeleton } from '@/components/ui/Skeleton'
 import { SendComms } from '@/components/comms/SendComms'
 import { formatCurrency, formatDate, applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
 import { addDays, format as formatDfn, parseISO } from 'date-fns'
@@ -391,7 +392,7 @@ export default function QuoteDetailPage() {
     } finally { setActionBusy(false) }
   }
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading...</div>
+  if (loading) return <PageSkeleton rows={6} className="max-w-5xl" />
   if (!quote) return <div className="text-center py-16 text-sm text-red-400">Quote not found.</div>
 
   const canSchedule = quote.status === 'accepted' || quote.status === 'scheduled'

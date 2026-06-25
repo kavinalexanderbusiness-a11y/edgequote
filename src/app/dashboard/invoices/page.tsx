@@ -7,6 +7,10 @@ import { Invoice, InvoiceStatus, INVOICE_STATUS_LABELS, INVOICE_STATUS_COLORS, B
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { SkeletonRows } from '@/components/ui/Skeleton'
+import { StatTile } from '@/components/ui/StatTile'
+import { FilterPill } from '@/components/ui/FilterPill'
+import { Banner } from '@/components/ui/Banner'
+import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { Button } from '@/components/ui/Button'
 import { SendComms } from '@/components/comms/SendComms'
 import { PaymentHistory } from '@/components/payments/PaymentHistory'
@@ -201,25 +205,20 @@ export default function InvoicesPage() {
         description={`${invoices.length} invoice${invoices.length !== 1 ? 's' : ''}`}
       />
 
-      {toast && (
-        <div className="text-sm text-ink bg-accent/10 border border-accent/30 rounded-xl px-4 py-2.5">{toast}</div>
-      )}
+      {toast && <Banner tone="accent">{toast}</Banner>}
 
       {loadError && (
-        <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5">
-          {loadError} <button onClick={() => { setLoading(true); fetchInvoices() }} className="underline font-medium ml-1">Retry</button>
-        </div>
+        <Banner tone="danger" action={<Button variant="ghost" size="sm" onClick={() => { setLoading(true); fetchInvoices() }}>Retry</Button>}>
+          {loadError}
+        </Banner>
       )}
 
       {/* Undo toast — restore the last deleted invoice */}
       {undoAction && (
-        <div className="flex items-center justify-between gap-3 text-sm bg-ink text-bg border border-border-strong rounded-xl px-4 py-2.5 shadow-lg">
+        <Banner tone="neutral" onDismiss={() => setUndoAction(null)}
+          action={<Button variant="ghost" size="sm" onClick={runUndo}>Undo</Button>}>
           <span className="font-medium">{undoAction.label}</span>
-          <div className="flex items-center gap-3 shrink-0">
-            <button onClick={runUndo} className="font-bold underline">Undo</button>
-            <button onClick={() => setUndoAction(null)} className="opacity-60 hover:opacity-100">✕</button>
-          </div>
-        </div>
+        </Banner>
       )}
 
       {!loading && !loadError && invoices.length > 0 && (
@@ -227,37 +226,23 @@ export default function InvoicesPage() {
           {/* Drafts are the auto-invoiced recurring pipeline — they were invisible
               (Outstanding only counts unpaid/sent) and silently went unsent. */}
           <button onClick={() => setFilter(filter === 'draft' ? '' : 'draft')} className="text-left">
-            <Card className={cn(filter === 'draft' && 'border-accent/50')}>
-              <CardBody>
-                <p className="text-xs text-ink-faint uppercase tracking-wide font-semibold mb-1">Drafts to review</p>
-                <p className={cn('text-2xl font-bold', drafts.length ? 'text-sky-400' : 'text-ink-faint')}>{drafts.length ? formatCurrency(draftsTotal) : '—'}</p>
-                {drafts.length > 0 && <p className="text-[11px] text-ink-faint mt-0.5">{drafts.length} draft{drafts.length !== 1 ? 's' : ''} — tap to review</p>}
-              </CardBody>
-            </Card>
+            <StatTile label="Drafts to review"
+              value={drafts.length ? formatCurrency(draftsTotal) : '—'}
+              tone={drafts.length ? 'info' : undefined}
+              sub={drafts.length > 0 ? `${drafts.length} draft${drafts.length !== 1 ? 's' : ''} — tap to review` : undefined}
+              className={cn('h-full', filter === 'draft' && 'border-accent/50')} />
           </button>
-          <Card>
-            <CardBody>
-              <p className="text-xs text-ink-faint uppercase tracking-wide font-semibold mb-1">Outstanding</p>
-              <p className="text-2xl font-bold text-amber-400">{formatCurrency(outstanding)}</p>
-            </CardBody>
-          </Card>
-          <Card>
-            <CardBody>
-              <p className="text-xs text-ink-faint uppercase tracking-wide font-semibold mb-1">Paid</p>
-              <p className="text-2xl font-bold text-accent">{formatCurrency(paidTotal)}</p>
-            </CardBody>
-          </Card>
+          <StatTile label="Outstanding" value={formatCurrency(outstanding)} tone="warn" />
+          <StatTile label="Paid" value={formatCurrency(paidTotal)} tone="accent" />
         </div>
       )}
 
       {!loading && !loadError && invoices.length > 0 && (
         <div className="flex items-center gap-1.5 flex-wrap">
           {FILTERS.map(f => (
-            <button key={f.value} onClick={() => setFilter(f.value)}
-              className={cn('px-3.5 py-2 rounded-lg text-xs font-medium border transition-colors',
-                filter === f.value ? 'bg-accent text-black border-accent' : 'bg-surface border-border-strong text-ink-muted hover:text-ink')}>
+            <FilterPill key={f.value} active={filter === f.value} onClick={() => setFilter(f.value)}>
               {f.label}{f.value === 'draft' && drafts.length > 0 ? ` (${drafts.length})` : ''}
-            </button>
+            </FilterPill>
           ))}
         </div>
       )}
@@ -265,11 +250,10 @@ export default function InvoicesPage() {
       {loading ? (
         <SkeletonRows count={6} />
       ) : loadError ? null : invoices.length === 0 ? (
-        <div className="text-center py-16 text-sm text-ink-muted">
-          No invoices yet. Completing a recurring visit drafts one automatically — or open an accepted quote and click <span className="font-medium text-ink">Convert to Invoice</span>.
-        </div>
+        <EmptyState icon={FileText} title="No invoices yet"
+          description="Completing a recurring visit drafts one automatically — or open an accepted quote and Convert to Invoice." />
       ) : visible.length === 0 ? (
-        <div className="text-center py-12 text-sm text-ink-muted">No {filter} invoices.</div>
+        <Card><InlineEmpty icon={FileText}>No {filter} invoices.</InlineEmpty></Card>
       ) : (
         <div className="space-y-3">
           {visible.map(inv => (

@@ -17,6 +17,7 @@ import { SchedulePrefsFields, PrefsDraft, EMPTY_DRAFT, toDraft, draftToRow } fro
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { PageSkeleton } from '@/components/ui/Skeleton'
 import { formatCurrency, formatDate, getInitials } from '@/lib/utils'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { CustomerComms } from '@/components/customers/CustomerComms'
@@ -260,7 +261,7 @@ export default function CustomerDetailPage() {
     setPausing(null)
   }
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading customer...</div>
+  if (loading) return <PageSkeleton rows={6} className="max-w-5xl" />
   if (!customer) return <div className="text-center py-16 text-sm text-red-400">Customer not found.</div>
 
   const today = localToday()

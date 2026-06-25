@@ -7,6 +7,7 @@ import { Property } from '@/types'
 import { MeasureTool } from '@/components/properties/MeasureTool'
 import { PropertyMeasurementHistory } from '@/components/properties/PropertyMeasurementHistory'
 import { PageHeader } from '@/components/layout/PageHeader'
+import { PageSkeleton } from '@/components/ui/Skeleton'
 import { ArrowLeft } from 'lucide-react'
 
 export default function MeasurePage() {
@@ -33,7 +34,7 @@ export default function MeasurePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading...</div>
+  if (loading) return <PageSkeleton rows={2} className="max-w-4xl" />
   if (!property) return <div className="text-center py-16 text-sm text-red-400">Property not found.</div>
 
   return (

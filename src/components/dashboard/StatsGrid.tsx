@@ -23,7 +23,7 @@ export function StatsGrid({ stats }: StatsGridProps) {
       sub: 'Won quotes',
       icon: DollarSign,
       color: 'text-accent',
-      bg: 'bg-accent-dim',
+      bg: 'bg-accent/10',
     },
     {
       label: 'Collected',
