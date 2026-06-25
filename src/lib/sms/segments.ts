@@ -24,9 +24,33 @@ export interface SmsInfo {
   perSegment: number     // capacity of each segment for this message
 }
 
-// Rough Twilio Canada outbound price per segment, in CAD. Deliberately a single,
-// easy-to-tune constant — the estimate is for awareness, not invoicing.
-export const SMS_COST_PER_SEGMENT_CAD = 0.015
+// Pricing is CONFIGURABLE (Business Settings → Messaging) so the estimate stays
+// accurate as carrier/provider rates change — no code edit needed. Per-segment
+// prices are kept separate for GSM-7 vs Unicode (some providers differ); Unicode
+// defaults to the GSM-7 price. DEFAULT is a rough Twilio-Canada figure used until
+// the owner configures their own.
+export interface SmsPricing {
+  currency: string     // e.g. 'CAD'
+  gsm7: number         // estimated cost per GSM-7 segment
+  unicode: number      // estimated cost per Unicode (UCS-2) segment
+  provider?: string    // free-text, for the owner's reference / future providers
+}
+
+export const DEFAULT_SMS_PRICING: SmsPricing = { currency: 'CAD', gsm7: 0.015, unicode: 0.015, provider: 'Twilio' }
+
+// Normalize a stored (possibly partial / null) pricing config into a complete one.
+export function resolveSmsPricing(raw: unknown): SmsPricing {
+  const p = (raw && typeof raw === 'object') ? raw as Partial<SmsPricing> : {}
+  const gsm7 = typeof p.gsm7 === 'number' && p.gsm7 >= 0 ? p.gsm7 : DEFAULT_SMS_PRICING.gsm7
+  const unicode = typeof p.unicode === 'number' && p.unicode >= 0 ? p.unicode : gsm7
+  const currency = typeof p.currency === 'string' && p.currency.trim() ? p.currency.trim().toUpperCase() : DEFAULT_SMS_PRICING.currency
+  return { currency, gsm7, unicode, provider: typeof p.provider === 'string' ? p.provider : DEFAULT_SMS_PRICING.provider }
+}
+
+// Per-segment price for a message's encoding.
+export function segmentPrice(encoding: SmsEncoding, pricing: SmsPricing): number {
+  return encoding === 'Unicode' ? pricing.unicode : pricing.gsm7
+}
 
 export function analyzeSms(text: string | null | undefined): SmsInfo {
   const t = text || ''
@@ -49,13 +73,13 @@ export function analyzeSms(text: string | null | undefined): SmsInfo {
   return { chars, encoding: 'Unicode', segments, perSegment: segments <= 1 ? 70 : 67 }
 }
 
-// Estimated cost in CAD for `segments` per recipient × `recipients`.
-export function smsCostCad(segments: number, recipients = 1): number {
-  return segments * Math.max(0, recipients) * SMS_COST_PER_SEGMENT_CAD
+// Estimated cost for `segments` (of the given encoding) × `recipients`.
+export function smsCost(segments: number, encoding: SmsEncoding, recipients: number, pricing: SmsPricing): number {
+  return segments * Math.max(0, recipients) * segmentPrice(encoding, pricing)
 }
 
 // "~$0.03 CAD" — 3 decimals under a dollar (per-message), 2 above (bulk totals).
-export function formatSmsCost(cad: number): string {
-  if (cad <= 0) return '$0.00 CAD'
-  return '~$' + (cad < 1 ? cad.toFixed(3) : cad.toFixed(2)) + ' CAD'
+export function formatSmsCost(amount: number, currency = 'CAD'): string {
+  if (amount <= 0) return '$0.00 ' + currency
+  return '~$' + (amount < 1 ? amount.toFixed(3) : amount.toFixed(2)) + ' ' + currency
 }
