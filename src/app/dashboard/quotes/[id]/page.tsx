@@ -347,25 +347,37 @@ export default function QuoteDetailPage() {
     }
   }
 
+  // One guard for the follow-up / won / lost actions so a double-tap can't double
+  // a follow-up count or fire the status change twice.
+  const [actionBusy, setActionBusy] = useState(false)
   async function logFollowUp() {
-    if (!quote) return
-    const patch = logFollowUpPatch(quote)
-    await supabase.from('quotes').update(patch).eq('id', quote.id)
-    setQuote({ ...quote, ...patch })
+    if (!quote || actionBusy) return
+    setActionBusy(true)
+    try {
+      const patch = logFollowUpPatch(quote)
+      await supabase.from('quotes').update(patch).eq('id', quote.id)
+      setQuote({ ...quote, ...patch })
+    } finally { setActionBusy(false) }
   }
 
   async function markWon() {
-    if (!quote) return
-    const patch = markWonPatch(quote.follow_up_count)
-    await supabase.from('quotes').update(patch).eq('id', quote.id)
-    setQuote({ ...quote, ...patch })
-    setShowSchedulePrompt(true)
+    if (!quote || actionBusy) return
+    setActionBusy(true)
+    try {
+      const patch = markWonPatch(quote.follow_up_count)
+      await supabase.from('quotes').update(patch).eq('id', quote.id)
+      setQuote({ ...quote, ...patch })
+      setShowSchedulePrompt(true)
+    } finally { setActionBusy(false) }
   }
 
   async function markLost() {
-    if (!quote) return
-    await supabase.from('quotes').update({ status: 'declined' }).eq('id', quote.id)
-    setQuote({ ...quote, status: 'declined' })
+    if (!quote || actionBusy) return
+    setActionBusy(true)
+    try {
+      await supabase.from('quotes').update({ status: 'declined' }).eq('id', quote.id)
+      setQuote({ ...quote, status: 'declined' })
+    } finally { setActionBusy(false) }
   }
 
   if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading...</div>
@@ -567,19 +579,22 @@ export default function QuoteDetailPage() {
               </a>
               <button
                 onClick={logFollowUp}
-                className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border border-border bg-surface text-ink hover:border-border-strong transition-colors"
+                disabled={actionBusy}
+                className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border border-border bg-surface text-ink hover:border-border-strong transition-colors disabled:opacity-50 disabled:pointer-events-none"
               >
                 <RotateCw className="w-4 h-4" /> Followed up
               </button>
               <button
                 onClick={markWon}
-                className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border border-emerald-500/25 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+                disabled={actionBusy}
+                className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border border-emerald-500/25 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors disabled:opacity-50 disabled:pointer-events-none"
               >
                 <Check className="w-4 h-4" /> Won
               </button>
               <button
                 onClick={markLost}
-                className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border border-border bg-surface text-ink-muted hover:text-red-400 transition-colors col-span-2 sm:col-span-1"
+                disabled={actionBusy}
+                className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border border-border bg-surface text-ink-muted hover:text-red-400 transition-colors col-span-2 sm:col-span-1 disabled:opacity-50 disabled:pointer-events-none"
               >
                 <X className="w-4 h-4" /> Lost
               </button>

@@ -100,6 +100,7 @@ export default function PortalPage() {
   // Customer confirms they left a review → records it (notifies the owner, stops
   // future review-request messages). Optimistic; token-scoped RPC.
   async function markReviewed() {
+    if (markedReviewed) return                 // double-click guard (already confirmed)
     setMarkedReviewed(true)
     await supabase.rpc('portal_mark_reviewed', { p_token: token })
   }
@@ -119,6 +120,7 @@ export default function PortalPage() {
   function photoUrl(path: string) { return supabase.storage.from('job-photos').getPublicUrl(path).data.publicUrl }
 
   async function accept(qid: string) {
+    if (accepting) return                      // double-click guard
     setAccepting(qid)
     const { data: ok } = await supabase.rpc('portal_accept_quote', { p_token: token, p_quote_id: qid })
     if (ok) setData(d => d ? { ...d, quotes: d.quotes.map(q => q.id === qid ? { ...q, status: 'accepted' } : q) } : d)
@@ -132,6 +134,7 @@ export default function PortalPage() {
     if (ok) { setReqSent(key); if (key === 'custom') setReqMsg(''); setTimeout(() => setReqSent(null), 4000) }
   }
   async function pay(invoiceId: string) {
+    if (payingId) return                       // re-entry guard — never start two checkout sessions
     setPayingId(invoiceId)
     try {
       const res = await fetch('/api/portal/pay', {
@@ -139,12 +142,13 @@ export default function PortalPage() {
         body: JSON.stringify({ token, invoiceId }),
       })
       const d = await res.json().catch(() => ({}))
-      if (res.ok && d.url) { window.location.href = d.url; return }
+      if (res.ok && d.url) { window.location.href = d.url; return }   // redirecting to Stripe — stay disabled
       // Public portal: show a FIXED message — never render a server-provided string.
       alert('Could not start payment. Please try again.')
     } catch {
       alert('Could not start payment. Please try again.')
-    } finally { setPayingId(null) }
+    }
+    setPayingId(null)   // only reached on failure — a successful redirect already left the page
   }
 
   // ── derived ──

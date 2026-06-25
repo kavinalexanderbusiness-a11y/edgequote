@@ -35,8 +35,8 @@ interface Props {
   recurrences: Record<string, JobRecurrence>
   baseCoord: Coord | null
   onOpenJob: (job: Job) => void
-  onStartJob: (job: Job) => void
-  onMarkDone: (job: Job) => void
+  onStartJob: (job: Job) => void | Promise<void>
+  onMarkDone: (job: Job) => void | Promise<void>
   onMove: (job: Job, newDateISO: string) => void
   onDeleteJob: (job: Job) => void
   onSetPrice: (job: Job, price: number | null, reason?: string) => Promise<void>
@@ -70,6 +70,9 @@ export function DayOpsPanel({
   addonsByJobId, onAddLineItem, onDeleteLineItem, getPreviousAddons, onCopyPreviousAddons,
 }: Props) {
   const supabase = createClient()
+  // Guards Start/Complete against a double-tap (which would double-stamp the job
+  // and double-create its draft invoice) while the request is in flight.
+  const [acting, setActing] = useState<string | null>(null)
   const [quickId, setQuickId] = useState<string | null>(null)
   const [moveId, setMoveId] = useState<string | null>(null)
   const [qv, setQv] = useState<{ start_time: string; crew_size: number; duration_minutes: number; status: JobStatus; notes: string; price: number }>({ start_time: '', crew_size: 1, duration_minutes: 0, status: 'scheduled', notes: '', price: 0 })
@@ -527,8 +530,8 @@ export function DayOpsPanel({
 
                       {/* One-tap actions */}
                       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-                        {job.status === 'scheduled' && <ActionBtn onClick={() => onStartJob(job)} icon={Play} label="Start" tone="sky" />}
-                        {job.status === 'in_progress' && <ActionBtn onClick={() => onMarkDone(job)} icon={CheckCircle2} label="Complete" tone="emerald" />}
+                        {job.status === 'scheduled' && <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onStartJob(job) } finally { setActing(null) } }} icon={Play} label="Start" tone="sky" />}
+                        {job.status === 'in_progress' && <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onMarkDone(job) } finally { setActing(null) } }} icon={CheckCircle2} label="Complete" tone="emerald" />}
                         <ActionBtn onClick={() => (quickId === job.id ? setQuickId(null) : openQuick(job))} icon={SlidersHorizontal} label="Quick" />
                         <ActionBtn onClick={() => onOpenJob(job)} icon={Pencil} label="Open" />
                         <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setAddonsId(null); setMessageId(messageId === job.id ? null : job.id) }} icon={MessageSquare} label="Message" />
@@ -657,12 +660,13 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: str
   )
 }
 
-function ActionBtn({ onClick, icon: Icon, label, tone }: { onClick: () => void; icon: typeof Pencil; label: string; tone?: 'emerald' | 'sky' }) {
+function ActionBtn({ onClick, icon: Icon, label, tone, disabled }: { onClick: () => void; icon: typeof Pencil; label: string; tone?: 'emerald' | 'sky'; disabled?: boolean }) {
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
       className={cn(
-        'h-8 px-2.5 rounded-lg border text-xs font-medium flex items-center gap-1 active:scale-95 transition-transform',
+        'h-8 px-2.5 rounded-lg border text-xs font-medium flex items-center gap-1 active:scale-95 transition-transform disabled:opacity-50 disabled:pointer-events-none',
         tone === 'emerald'
           ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25'
           : tone === 'sky'
