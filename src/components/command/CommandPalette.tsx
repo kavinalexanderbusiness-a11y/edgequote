@@ -41,6 +41,7 @@ export function CommandPalette() {
   const [results, setResults] = useState<Section[]>([])
   const [sel, setSel] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
+  const activeRef = useRef<HTMLButtonElement>(null)
   const reqRef = useRef(0)
 
   useEffect(() => { setMounted(true) }, [])
@@ -158,6 +159,13 @@ export function CommandPalette() {
   const sections = q.trim() ? results : baseSections
   const flat = useMemo(() => sections.flatMap(s => s.items), [sections])
 
+  // Reset the highlight whenever the query changes so it never points past the
+  // (possibly shorter) new result set; keep it clamped in range otherwise.
+  useEffect(() => { setSel(0) }, [q])
+  useEffect(() => { if (sel > flat.length - 1) setSel(flat.length ? flat.length - 1 : 0) }, [flat.length, sel])
+  // Keep the keyboard-selected row visible in a long list.
+  useEffect(() => { activeRef.current?.scrollIntoView({ block: 'nearest' }) }, [sel])
+
   // Keyboard navigation over the flat item list.
   useEffect(() => {
     if (!open) return
@@ -209,6 +217,7 @@ export function CommandPalette() {
                 return (
                   <button
                     key={item.id}
+                    ref={active ? activeRef : undefined}
                     onMouseMove={() => setSel(myIdx)}
                     onClick={item.run}
                     className={cn('w-full flex items-center gap-3 px-2.5 py-2 rounded-lg text-left transition-colors',

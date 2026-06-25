@@ -109,8 +109,10 @@ export default function CustomersPage() {
   }
 
   async function handleDelete(id: string) {
-    await supabase.from('customers').delete().eq('id', id)
-    setCustomers(prev => prev.filter(c => c.id !== id))
+    const prev = customers
+    setCustomers(p => p.filter(c => c.id !== id))   // optimistic
+    const { error } = await supabase.from('customers').delete().eq('id', id)
+    if (error) { setCustomers(prev); alert('Could not delete the customer: ' + error.message) }
   }
 
   return (

@@ -209,9 +209,10 @@ export default function CustomerDetailPage() {
   async function saveNotes() {
     if (!customer) return
     setSavingNotes(true)
-    await supabase.from('customers').update({ notes: notesValue || null }).eq('id', customer.id)
-    setCustomer({ ...customer, notes: notesValue || null })
+    const { error } = await supabase.from('customers').update({ notes: notesValue || null }).eq('id', customer.id)
     setSavingNotes(false)
+    if (error) { alert('Could not save the note: ' + error.message); return }   // keep the editor open
+    setCustomer({ ...customer, notes: notesValue || null })
     setEditingNotes(false)
   }
 

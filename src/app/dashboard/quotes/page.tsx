@@ -42,8 +42,10 @@ export default function QuotesPage() {
   useRealtimeRefresh('quotes', uid ? `user_id=eq.${uid}` : null, fetchQuotes)
 
   async function handleDelete(id: string) {
-    await supabase.from('quotes').delete().eq('id', id)
-    setQuotes(prev => prev.filter(q => q.id !== id))
+    const prev = quotes
+    setQuotes(p => p.filter(q => q.id !== id))   // optimistic
+    const { error } = await supabase.from('quotes').delete().eq('id', id)
+    if (error) { setQuotes(prev); alert('Could not delete the quote: ' + error.message) }
   }
 
   return (
