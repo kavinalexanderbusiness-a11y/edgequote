@@ -376,7 +376,7 @@ export default function BookPage() {
         {step === 'done' && (
           <div className="text-center py-10 space-y-3">
             <CheckCircle2 className="w-14 h-14 text-emerald-400 mx-auto" />
-            <p className="text-xl font-bold text-ink">You’re booked! 🎉</p>
+            <p className="text-xl font-bold text-ink">You’re booked!</p>
             <p className="text-sm text-ink-muted">Thanks, {name.split(' ')[0]}. {biz.company_name || 'We'} received your request{quoteNumber ? ` (${quoteNumber})` : ''} and will reach out shortly to confirm your first visit.</p>
             <div className="flex flex-col items-center gap-1.5 pt-3">
               {biz.phone && <a href={`tel:${biz.phone}`} className="text-sm text-accent flex items-center gap-1.5"><Phone className="w-4 h-4" /> {biz.phone}</a>}

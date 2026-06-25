@@ -522,7 +522,7 @@ export default function QuoteDetailPage() {
           <span className="flex items-center gap-2 text-emerald-300">
             <Check className="w-4 h-4 shrink-0" /> {savedCustomerMsg}
           </span>
-          <button onClick={() => setSavedCustomerMsg(null)} className="text-ink-faint hover:text-ink shrink-0">✕</button>
+          <button onClick={() => setSavedCustomerMsg(null)} aria-label="Dismiss" className="text-ink-faint hover:text-ink shrink-0"><X className="w-4 h-4" /></button>
         </div>
       )}
 

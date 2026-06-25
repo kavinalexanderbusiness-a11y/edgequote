@@ -535,7 +535,7 @@ export default function CustomerDetailPage() {
         </CardHeader>
         <CardBody className="p-0">
           {openItems.length === 0 ? (
-            <p className="px-5 py-6 text-center text-sm text-ink-muted">Nothing needs action right now. 🎉</p>
+            <p className="px-5 py-6 text-center text-sm text-ink-muted">Nothing needs action right now.</p>
           ) : (
             <div className="divide-y divide-border">
               {openItems.map(item => {

@@ -11,7 +11,9 @@ import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { applyConsent, SMS_CONSENT_WARNING, ConsentChannel } from '@/lib/consent'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
-import { Edit2, Trash2, Phone, Mail, FileText, Search, Link2, ExternalLink, Check, MessageSquare, ShieldAlert } from 'lucide-react'
+import { FilterPill } from '@/components/ui/FilterPill'
+import { InlineEmpty } from '@/components/ui/EmptyState'
+import { Edit2, Trash2, Phone, Mail, FileText, Search, Link2, ExternalLink, Check, MessageSquare, ShieldAlert, Users } from 'lucide-react'
 
 type ConsentFilter = '' | 'sms_in' | 'sms_out' | 'email_in' | 'email_out' | 'both' | 'neither'
 const CONSENT_FILTERS: { value: ConsentFilter; label: string }[] = [
@@ -151,24 +153,22 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
       {/* Consent filters */}
       <div className="flex flex-wrap gap-1.5">
         {CONSENT_FILTERS.map(f => (
-          <button key={f.value} onClick={() => setConsentFilter(f.value)}
-            className={cn('px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors',
-              consentFilter === f.value ? 'bg-accent text-black border-accent' : 'bg-surface border-border-strong text-ink-muted hover:text-ink')}>
+          <FilterPill key={f.value} active={consentFilter === f.value} onClick={() => setConsentFilter(f.value)}>
             {f.label}
-          </button>
+          </FilterPill>
         ))}
       </div>
 
       {/* Bulk action bar */}
       {selected.size > 0 && (
-        <div className="sticky top-2 z-20 flex items-center gap-2 flex-wrap bg-bg-secondary border border-accent/40 rounded-xl px-4 py-2.5 shadow-lg">
+        <div className="sticky top-2 z-20 flex items-center gap-2 flex-wrap bg-surface border border-accent/40 rounded-card px-4 py-2.5 shadow-lg">
           <span className="text-sm font-semibold text-ink">{selected.size} selected</span>
           <span className="text-xs text-ink-faint">consent:</span>
           <Button size="sm" variant="secondary" loading={bulkBusy} onClick={() => requestBulk('email', true)}><Mail className="w-3.5 h-3.5" /> Email on</Button>
           <Button size="sm" variant="ghost" onClick={() => requestBulk('email', false)}>Email off</Button>
           <Button size="sm" variant="secondary" loading={bulkBusy} onClick={() => requestBulk('sms', true)}><MessageSquare className="w-3.5 h-3.5" /> SMS on</Button>
           <Button size="sm" variant="ghost" onClick={() => requestBulk('sms', false)}>SMS off</Button>
-          <button onClick={() => setSelected(new Set())} className="ml-auto text-xs font-medium text-ink-faint hover:text-ink">Clear</button>
+          <Button size="sm" variant="ghost" className="ml-auto" onClick={() => setSelected(new Set())}>Clear</Button>
         </div>
       )}
 
@@ -182,8 +182,10 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
 
       {/* List */}
       {filtered.length === 0 ? (
-        <Card className="py-14 text-center text-sm text-ink-muted">
-          {search || consentFilter ? 'No customers match your filters.' : 'No customers yet.'}
+        <Card>
+          <InlineEmpty icon={Users}>
+            {search || consentFilter ? 'No customers match your filters.' : 'No customers yet.'}
+          </InlineEmpty>
         </Card>
       ) : (
         <div className="grid gap-3">

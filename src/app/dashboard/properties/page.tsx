@@ -240,7 +240,7 @@ export default function PropertiesPage() {
                       </Button>
                     </Link>
                     {property.lat && property.lng ? (
-                      <p className="text-xs text-accent font-medium">📍 Located</p>
+                      <p className="text-xs text-accent font-medium flex items-center gap-1"><MapPin className="w-3 h-3" /> Located</p>
                     ) : (
                       <p className="text-xs text-ink-faint">No coords yet</p>
                     )}
