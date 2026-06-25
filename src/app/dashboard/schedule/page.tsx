@@ -24,7 +24,7 @@ import { OptimizeSchedule } from '@/components/schedule/OptimizeSchedule'
 import { RainDelayCenter } from '@/components/schedule/RainDelayCenter'
 import { WeatherStrip } from '@/components/weather/WeatherStrip'
 import { CloudRain } from 'lucide-react'
-import { analyzeSchedule, optimizeSchedule, MOVE_REASON_LABEL } from '@/lib/optimizer'
+import { analyzeSchedule, optimizeSchedule, planRainDelay, MOVE_REASON_LABEL } from '@/lib/optimizer'
 import type { PlannedMove, OptimizeScope, OptimizeMode, OptJob, ScheduleSuggestion, CadenceVisit, CadenceRecs } from '@/lib/optimizer'
 import { evaluateScheduleMove } from '@/lib/scheduleWarnings'
 import { resolvePrefs } from '@/lib/preferences'
@@ -36,6 +36,8 @@ import { ScheduleHealthCard } from '@/components/schedule/ScheduleHealthCard'
 import { DayStatusMenu } from '@/components/schedule/DayStatusMenu'
 import { buildDayStatusMap, loadDayStatuses, setDayStatus, clearDayStatus, DAY_STATUS_META, DAY_STATUS_SELECT, type DayStatusMap, type DayStatusRow, type DayStatus } from '@/lib/dayStatus'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
+import { WeatherRainCard, type RainMoveSummary } from '@/components/schedule/WeatherRainCard'
+import { loadWeatherImpact, type WeatherImpactReport, type DayImpact } from '@/lib/weatherImpact'
 
 function localToday(): string {
   const d = new Date()
@@ -127,6 +129,12 @@ export default function SchedulePage() {
   const [dayStatusMap, setDayStatusMap] = useState<DayStatusMap | undefined>(undefined)
   const [selectedDays, setSelectedDays] = useState<Set<string>>(new Set())
   const [dayMenu, setDayMenu] = useState<{ dates: string[]; current: DayStatusRow | null; x: number; y: number } | null>(null)
+
+  // Proactive Weather Ops (rain → block day + auto-optimize, one click).
+  const [weatherReport, setWeatherReport] = useState<WeatherImpactReport | null>(null)
+  const [dismissedRain, setDismissedRain] = useState<Set<string>>(new Set())
+  const [rainBusy, setRainBusy] = useState<string | null>(null)
+  const [rainSummary, setRainSummary] = useState<RainMoveSummary | null>(null)
 
   function launchOptimizer(opts?: { scope: OptimizeScope; mode: OptimizeMode; anchorDate: string }) {
     setOptimizeLaunch(opts ? { ...opts, autoRun: true } : null)
@@ -492,6 +500,65 @@ export default function SchedulePage() {
     setDayMenu(null); setSelectedDays(new Set())
     await Promise.all(dates.map(dt => clearDayStatus(supabase, uid, dt)))
     reloadDayStatuses()
+  }
+
+  // ── Proactive Weather Ops: detect a rainy day with work, offer a one-click fix ──
+  useEffect(() => {
+    let active = true
+    loadWeatherImpact(supabase).then(r => { if (active) setWeatherReport(r) }).catch(() => {})
+    return () => { active = false }
+  }, [supabase])
+
+  // The next rainy day Weather Ops says to delay that still has work and isn't
+  // already blocked or dismissed.
+  const rainTarget = useMemo<DayImpact | null>(() => {
+    if (!weatherReport) return null
+    const today = localToday()
+    return weatherReport.atRiskDays.find(d =>
+      d.recommendation.action === 'delay' && d.jobs > 0 && d.date >= today &&
+      !dismissedRain.has(d.date) && !dayStatusMap?.blockedDates.has(d.date)
+    ) ?? null
+  }, [weatherReport, dismissedRain, dayStatusMap])
+
+  // Move a rained-out day's work to the best open days (reuses planRainDelay, which
+  // already skips blocked days) and summarize what moved.
+  function summarizeRain(date: string, blocked: boolean, plan: ReturnType<typeof planRainDelay>): RainMoveSummary {
+    const byDay: Record<string, number> = {}
+    for (const m of plan.moves) byDay[m.to] = (byDay[m.to] || 0) + 1
+    return {
+      date, blocked,
+      byDay: Object.entries(byDay).sort((a, b) => a[0].localeCompare(b[0])).map(([to, count]) => ({ to, count })),
+      revenueProtected: Math.round(plan.moves.reduce((s, m) => s + m.value, 0)),
+      unmovable: plan.unmovable.length,
+    }
+  }
+  async function applyRainMoves(date: string): Promise<ReturnType<typeof planRainDelay>> {
+    const plan = planRainDelay(optJobsAll, date, optBaseOpts)
+    const moves = plan.moves.map(m => ({ jobId: m.jobId, from: m.from, to: m.to }))
+    if (moves.length) await applyOptimization(moves)
+    return plan
+  }
+  async function rainDisableAndOptimize(date: string) {
+    setRainBusy(date)
+    await applyDayStatus([date], 'rain')
+    const plan = await applyRainMoves(date)
+    setRainSummary(summarizeRain(date, true, plan))
+    setDismissedRain(prev => new Set(prev).add(date))
+    setRainBusy(null)
+  }
+  async function rainDisableOnly(date: string) {
+    setRainBusy(date)
+    await applyDayStatus([date], 'rain')
+    setRainSummary({ date, blocked: true, byDay: [], revenueProtected: 0, unmovable: 0 })
+    setDismissedRain(prev => new Set(prev).add(date))
+    setRainBusy(null)
+  }
+  async function rainOptimizeOnly(date: string) {
+    setRainBusy(date)
+    const plan = await applyRainMoves(date)
+    setRainSummary(summarizeRain(date, false, plan))
+    setDismissedRain(prev => new Set(prev).add(date))
+    setRainBusy(null)
   }
 
   useEffect(() => {
@@ -1493,6 +1560,22 @@ export default function SchedulePage() {
             </Card>
           </div>
         </div>
+      )}
+
+      {(rainTarget || rainSummary) && (
+        <WeatherRainCard
+          date={rainSummary?.date ?? rainTarget!.date}
+          jobsAffected={rainTarget?.jobs ?? 0}
+          rainLabel={rainTarget?.recommendation.text ?? ''}
+          revenue={rainTarget?.revenue ?? 0}
+          busy={rainBusy === (rainSummary?.date ?? rainTarget?.date)}
+          summary={rainSummary}
+          onDisableAndOptimize={() => { if (rainTarget) rainDisableAndOptimize(rainTarget.date) }}
+          onDisableOnly={() => { if (rainTarget) rainDisableOnly(rainTarget.date) }}
+          onOptimizeOnly={() => { if (rainTarget) rainOptimizeOnly(rainTarget.date) }}
+          onLater={() => { if (rainTarget) setDismissedRain(prev => new Set(prev).add(rainTarget.date)) }}
+          onDismissSummary={() => setRainSummary(null)}
+        />
       )}
 
       {loading ? (
