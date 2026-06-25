@@ -3,14 +3,17 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 // Owner-side helper: get (or mint) the magic-link token for a customer's portal.
 // EXISTING tokens are always reused, so links you've already sent keep working
 // forever. NEW tokens use a friendly, readable format — <name-slug>-<random
-// suffix>, e.g. "john-smith-7K4P3M" — short enough to share, with a random suffix
-// so they still can't be guessed. Same table / column / RPC / route as before:
-// get_portal_data(p_token) matches on the token string, so any format resolves.
+// suffix>, e.g. "john-smith-A7K4P3MX" — short enough to share, with a random
+// suffix so they can't be guessed. The slug part is public-knowable (it's the
+// customer's name), so the SUFFIX carries all the security: 8 chars from a
+// 30-char alphabet ≈ 6.6×10^11 possibilities — a brute-force is infeasible, and
+// this is the only secret protecting the (login-less) portal's data. Same table /
+// column / RPC / route as before: get_portal_data(p_token) matches the string.
 
 // Readable suffix alphabet — excludes 0/O/1/I/L to avoid ambiguity when read aloud.
 const SUFFIX_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
 
-function randomSuffix(len = 6): string {
+function randomSuffix(len = 8): string {
   const bytes = new Uint8Array(len)
   crypto.getRandomValues(bytes)
   let out = ''
@@ -43,7 +46,7 @@ export async function ensurePortalToken(supabase: SupabaseClient, userId: string
   const { data: cust } = await supabase.from('customers').select('name').eq('id', customerId).maybeSingle()
   const slug = slugifyName((cust as { name: string | null } | null)?.name)
   for (let attempt = 0; attempt < 6; attempt++) {
-    const token = `${slug}-${randomSuffix(6)}`
+    const token = `${slug}-${randomSuffix(8)}`
     const { error } = await supabase.from('customer_portal_tokens').insert({ token, user_id: userId, customer_id: customerId })
     if (!error) return token
     // 23505 = unique_violation (slug+suffix already taken) → retry a fresh suffix.
