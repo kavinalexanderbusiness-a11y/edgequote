@@ -233,7 +233,7 @@ export default function PortalPage() {
               <CheckCircle2 className="w-4 h-4" /> Payment received — thank you! Your invoice will update shortly.
             </div>
           )}
-          {tab === 'home' && <HomeTab data={data} derived={derived} biz={biz} />}
+          {tab === 'home' && <HomeTab data={data} derived={derived} biz={biz} onRequest={() => setTab('request')} />}
           {tab === 'home' && biz?.review_url && derived.lastCompleted && !data.customer.reviewed_at && (
             <ReviewCard reviewUrl={biz.review_url} businessName={biz.company_name} reviewed={markedReviewed} onReviewed={markReviewed} />
           )}
@@ -283,7 +283,7 @@ function StatusStepper({ s }: { s: LiveStatus }) {
 }
 
 // ── Home ──
-function HomeTab({ data, derived, biz }: { data: PortalData; derived: Derived; biz: PortalData['business'] }) {
+function HomeTab({ data, derived, biz, onRequest }: { data: PortalData; derived: Derived; biz: PortalData['business']; onRequest: () => void }) {
   const next = derived.nextService
   return (
     <div className="space-y-3">
@@ -301,7 +301,12 @@ function HomeTab({ data, derived, biz }: { data: PortalData; derived: Derived; b
             {liveStatusOf(next) === 'on_my_way' && <p className="text-xs text-sky-400 mt-2 flex items-center gap-1"><Navigation className="w-3.5 h-3.5" /> Your provider is on the way!</p>}
           </>
         ) : (
-          <p className="text-sm text-ink-muted">No upcoming visit scheduled. Tap <span className="font-medium text-ink">Request</span> to book one.</p>
+          <div>
+            <p className="text-sm text-ink-muted mb-3">No upcoming visit scheduled.</p>
+            <Button onClick={onRequest} className="w-full sm:w-auto">
+              <MessageSquarePlus className="w-4 h-4" /> Request Service
+            </Button>
+          </div>
         )}
       </div>
 
