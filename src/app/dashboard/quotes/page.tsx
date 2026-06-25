@@ -1,8 +1,9 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
+import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { Quote } from '@/types'
 import { QuoteList } from '@/components/quotes/QuoteList'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -12,11 +13,13 @@ import { Plus } from 'lucide-react'
 export default function QuotesPage() {
   const [quotes, setQuotes] = useState<Quote[]>([])
   const [loading, setLoading] = useState(true)
+  const [uid, setUid] = useState<string | null>(null)
 
-  const supabase = createClient()
+  const supabase = useMemo(() => createClient(), [])
 
   async function fetchQuotes() {
     const { data: { user } } = await supabase.auth.getUser()
+    if (user) setUid(user.id)
     const { data } = await supabase
       .from('quotes')
       .select('*')
@@ -26,15 +29,17 @@ export default function QuotesPage() {
     setLoading(false)
   }
 
-  // Fetch on mount and again when the tab regains focus, so a quote that was
-  // just scheduled / completed elsewhere (Schedule, portal, another tab) shows
-  // its current status without a manual hard reload.
+  // Initial load; the tab-focus refetch is a cheap belt-and-suspenders backup.
   useEffect(() => {
     fetchQuotes()
     const onFocus = () => fetchQuotes()
     window.addEventListener('focus', onFocus)
     return () => window.removeEventListener('focus', onFocus)
-  }, [])
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Live: a quote accepted/scheduled/completed/deleted anywhere (portal, Stripe,
+  // another tab) updates this list instantly — no refresh, no polling.
+  useRealtimeRefresh('quotes', uid ? `user_id=eq.${uid}` : null, fetchQuotes)
 
   async function handleDelete(id: string) {
     await supabase.from('quotes').delete().eq('id', id)

@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { LayoutDashboard, Users, FileText, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Navigation, Receipt, Menu, X, Sprout, MessageSquare, Ruler } from 'lucide-react'
+import { LayoutDashboard, Users, FileText, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Navigation, Receipt, Menu, X, Sprout, MessageSquare, Ruler, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { NotificationBell } from '@/components/notifications/NotificationBell'
@@ -81,6 +81,9 @@ export function Sidebar() {
     router.push('/login')
   }
 
+  // Open the global command palette (also reachable via Cmd/Ctrl+K anywhere).
+  const openCommand = () => window.dispatchEvent(new Event('eq:command-open'))
+
   const linkClass = (active: boolean) =>
     cn(
       'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all',
@@ -91,6 +94,13 @@ export function Sidebar() {
     return (
       <>
         <nav className="flex-1 px-3 py-4 flex flex-col gap-0.5 overflow-y-auto">
+          <button
+            onClick={() => { onNavigate?.(); openCommand() }}
+            className="flex items-center gap-3 px-3 py-2.5 mb-1 rounded-xl text-sm font-medium text-ink-muted bg-surface/60 border border-border hover:text-ink hover:bg-surface transition-all w-full">
+            <Search className="w-4 h-4" />
+            <span className="flex-1 text-left">Search</span>
+            <kbd className="hidden lg:inline text-[10px] font-semibold text-ink-faint border border-border rounded px-1.5 py-0.5">⌘K</kbd>
+          </button>
           {navMain.map(({ label, href, icon: Icon }) => {
             const active = href === '/dashboard' ? pathname === '/dashboard' : pathname.startsWith(href)
             const badge = label === 'Messages' && unread > 0 ? unread : 0
@@ -156,6 +166,9 @@ export function Sidebar() {
       <div className="lg:hidden sticky top-0 z-40 flex items-center justify-between h-14 px-4 bg-bg-secondary border-b border-border">
         {logo}
         <div className="flex items-center gap-1.5">
+          <button onClick={openCommand} className="text-ink-muted hover:text-ink p-2" aria-label="Search">
+            <Search className="w-5 h-5" />
+          </button>
           <NotificationBell />
           <button onClick={() => setOpen(true)} className="text-ink p-2 -mr-2" aria-label="Open menu">
             <Menu className="w-5 h-5" />

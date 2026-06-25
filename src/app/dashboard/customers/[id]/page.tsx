@@ -1,9 +1,10 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
+import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { Customer, Property, Quote, Job, Invoice, JobRecurrence } from '@/types'
 import { needsFollowUp, daysSince } from '@/lib/followup'
 import { recurrenceLabel, recurringCustomerLabel, buildServicePlans, ServicePlan } from '@/lib/recurrence'
@@ -59,7 +60,8 @@ const EVENT_META: Record<TimelineEvent['kind'], { icon: typeof FileText; color: 
 export default function CustomerDetailPage() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
-  const supabase = createClient()
+  const supabase = useMemo(() => createClient(), [])
+  const [tick, setTick] = useState(0)   // bump to re-run load() (used by realtime)
 
   const [customer, setCustomer] = useState<Customer | null>(null)
   const [referrer, setReferrer] = useState<{ id: string; name: string } | null>(null)
@@ -167,7 +169,20 @@ export default function CustomerDetailPage() {
       setLoading(false)
     }
     load()
-  }, [id])
+  }, [id, tick]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Live timeline: a new message, payment, quote/job/invoice change, or portal
+  // request for THIS customer re-runs load() — no refresh. Tables must be on the
+  // realtime publication (migration 2026-06-24d); unpublished ones just stay quiet.
+  const reload = () => setTick(t => t + 1)
+  const custFilter = id ? `customer_id=eq.${id}` : null
+  useRealtimeRefresh('quotes', custFilter, reload)
+  useRealtimeRefresh('jobs', custFilter, reload)
+  useRealtimeRefresh('invoices', custFilter, reload)
+  useRealtimeRefresh('messages', custFilter, reload)
+  useRealtimeRefresh('payments', custFilter, reload)
+  useRealtimeRefresh('service_requests', custFilter, reload)
+  useRealtimeRefresh('customers', id ? `id=eq.${id}` : null, reload)
 
   async function saveNotes() {
     if (!customer) return

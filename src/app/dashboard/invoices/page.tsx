@@ -1,7 +1,8 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { Invoice, InvoiceStatus, INVOICE_STATUS_LABELS, INVOICE_STATUS_COLORS, BusinessSettings } from '@/types'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
@@ -22,7 +23,7 @@ const FILTERS: { value: '' | InvoiceStatus; label: string }[] = [
 ]
 
 export default function InvoicesPage() {
-  const supabase = createClient()
+  const supabase = useMemo(() => createClient(), [])
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [settings, setSettings] = useState<BusinessSettings | null>(null)
   const [loading, setLoading] = useState(true)
@@ -33,11 +34,13 @@ export default function InvoicesPage() {
   const [paymentsEnabled, setPaymentsEnabled] = useState(false)
   const [payingId, setPayingId] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  const [uid, setUid] = useState<string | null>(null)
 
   async function fetchInvoices() {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) { setLoadError('Session expired — sign in again.'); return }
+      setUid(user.id)
       const [iRes, sRes] = await Promise.all([
         supabase
           .from('invoices')
@@ -58,7 +61,11 @@ export default function InvoicesPage() {
     }
   }
 
-  useEffect(() => { fetchInvoices() }, [])
+  useEffect(() => { fetchInvoices() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Live: when the Stripe webhook flips an invoice to paid (or status changes in
+  // another tab) the list updates instantly — the ?paid=1 delay below is a backup.
+  useRealtimeRefresh('invoices', uid ? `user_id=eq.${uid}` : null, fetchInvoices)
 
   // Payments availability + return-from-Stripe handling. ?paid=1 means the
   // customer just completed checkout; the webhook marks the invoice paid a beat

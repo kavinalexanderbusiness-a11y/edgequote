@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { InstallPrompt } from '@/components/pwa/InstallPrompt'
+import { CommandPalette } from '@/components/command/CommandPalette'
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient()
@@ -16,6 +17,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
         {children}
       </main>
       <InstallPrompt />
+      <CommandPalette />
     </div>
   )
 }

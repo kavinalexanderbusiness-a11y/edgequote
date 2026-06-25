@@ -1,7 +1,8 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { Customer, CustomerFormValues } from '@/types'
 import { CustomerList } from '@/components/customers/CustomerList'
 import { CustomerForm } from '@/components/customers/CustomerForm'
@@ -16,11 +17,13 @@ export default function CustomersPage() {
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Customer | null>(null)
+  const [uid, setUid] = useState<string | null>(null)
 
-  const supabase = createClient()
+  const supabase = useMemo(() => createClient(), [])
 
   async function fetchCustomers() {
     const { data: { user } } = await supabase.auth.getUser()
+    if (user) setUid(user.id)
     const { data } = await supabase
       .from('customers')
       .select('*')
@@ -30,7 +33,18 @@ export default function CustomersPage() {
     setLoading(false)
   }
 
-  useEffect(() => { fetchCustomers() }, [])
+  useEffect(() => { fetchCustomers() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Command-palette "New Customer" deep-links here with ?new=1 → open the form.
+  useEffect(() => {
+    if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('new') === '1') {
+      setShowForm(true); setEditing(null)
+      window.history.replaceState({}, '', '/dashboard/customers')
+    }
+  }, [])
+
+  // Live: new/edited/deleted customers (import, API, another device) appear instantly.
+  useRealtimeRefresh('customers', uid ? `user_id=eq.${uid}` : null, fetchCustomers)
 
   function normalize(values: CustomerFormValues) {
     return {
