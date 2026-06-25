@@ -13,7 +13,11 @@ import {
 import { needsFollowUp } from '@/lib/followup'
 import { localTodayISO, formatCurrency, formatDate, cn } from '@/lib/utils'
 import { PageHeader } from '@/components/layout/PageHeader'
-import { Card, CardBody } from '@/components/ui/Card'
+import { Card, CardBody, CardHeader } from '@/components/ui/Card'
+import { Button } from '@/components/ui/Button'
+import { StatTile } from '@/components/ui/StatTile'
+import { Banner } from '@/components/ui/Banner'
+import { PageSkeleton } from '@/components/ui/Skeleton'
 import {
   CalendarCheck, DollarSign, Gauge, MapPin, Bell, HeartPulse, Sprout, ArrowRight, TrendingUp, TrendingDown,
 } from 'lucide-react'
@@ -119,37 +123,28 @@ export default function WeeklyReviewPage() {
     return { weekStart, today, revenue, completedCount: completed.length, missed, dayRoutes, avgGrade, best, worst, followUps: followUps.length, followUpValue, pending: pending.length, pendingValue, growth }
   }, [jobs, quotes, ctx])
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Building your weekly review…</div>
+  if (loading) return <PageSkeleton tiles={3} rows={4} className="max-w-3xl" />
 
   return (
-    <div className="max-w-3xl space-y-5">
+    <div className="max-w-3xl space-y-6">
       <PageHeader
         title="Weekly Review"
         description={`${formatDate(m.weekStart)} – ${formatDate(m.today)} · how the week went, and next week's moves`}
       />
 
       {loadError && (
-        <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5">
-          {loadError} <button onClick={() => window.location.reload()} className="underline font-medium ml-1">Retry</button>
-        </div>
+        <Banner tone="danger" action={<Button variant="ghost" size="sm" onClick={() => window.location.reload()}>Retry</Button>}>
+          {loadError}
+        </Banner>
       )}
 
       {/* The week in numbers */}
       <div className="grid grid-cols-3 gap-3">
-        <Card className="p-4">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted flex items-center gap-1.5"><DollarSign className="w-3.5 h-3.5 text-accent" /> Revenue earned</p>
-          <p className="text-2xl font-bold text-accent mt-1">{formatCurrency(m.revenue)}</p>
-        </Card>
-        <Card className="p-4">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted flex items-center gap-1.5"><CalendarCheck className="w-3.5 h-3.5" /> Jobs completed</p>
-          <p className="text-2xl font-bold text-ink mt-1">{m.completedCount}{m.missed > 0 && <span className="text-sm font-semibold text-amber-400"> · {m.missed} open</span>}</p>
-        </Card>
-        <Card className="p-4">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted flex items-center gap-1.5"><Gauge className="w-3.5 h-3.5" /> Avg route grade</p>
-          {m.avgGrade ? (
-            <p className="text-2xl font-black mt-1" style={{ color: GRADE_COLORS[m.avgGrade] }}>{m.avgGrade}</p>
-          ) : <p className="text-2xl font-bold text-ink-faint mt-1">—</p>}
-        </Card>
+        <StatTile icon={DollarSign} tone="accent" label="Revenue earned" value={formatCurrency(m.revenue)} />
+        <StatTile icon={CalendarCheck} label="Jobs completed"
+          value={<>{m.completedCount}{m.missed > 0 && <span className="text-sm font-semibold text-amber-400"> · {m.missed} open</span>}</>} />
+        <StatTile icon={Gauge} label="Avg route grade"
+          value={m.avgGrade ? <span style={{ color: GRADE_COLORS[m.avgGrade] }}>{m.avgGrade}</span> : <span className="text-ink-faint">—</span>} />
       </div>
 
       {/* Best / worst neighborhood this week */}
@@ -191,9 +186,9 @@ export default function WeeklyReviewPage() {
 
       {/* Next week's moves */}
       <Card>
-        <div className="px-4 py-3 border-b border-border">
+        <CardHeader>
           <h2 className="text-sm font-semibold text-ink">Next week&apos;s moves</h2>
-        </div>
+        </CardHeader>
         <CardBody className="p-0">
           <div className="divide-y divide-border">
             <ReviewRow icon={Bell} tone="text-amber-400" label="Follow-ups waiting"

@@ -12,6 +12,8 @@ import { Select } from '@/components/ui/Select'
 import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
 import { Toggle } from '@/components/ui/Toggle'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { PageSkeleton } from '@/components/ui/Skeleton'
 import { useForm } from 'react-hook-form'
 import { formatCurrency } from '@/lib/utils'
 import { Plus, Edit2, Trash2, X } from 'lucide-react'
@@ -77,7 +79,7 @@ export default function ServiceTemplatesPage() {
 
   const categoryOptions = SERVICE_CATEGORIES.map(c => ({ value: c, label: c }))
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading templates...</div>
+  if (loading) return <PageSkeleton rows={5} className="max-w-3xl" />
 
   return (
     <div className="max-w-3xl space-y-6">
@@ -91,9 +93,9 @@ export default function ServiceTemplatesPage() {
         <Card>
           <CardHeader className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-ink">{editing ? 'Edit Service' : 'New Service'}</h2>
-            <button onClick={() => { setShowForm(false); setEditing(null) }} className="text-ink-faint hover:text-ink">
+            <Button variant="ghost" size="sm" onClick={() => { setShowForm(false); setEditing(null) }} aria-label="Close">
               <X className="w-4 h-4" />
-            </button>
+            </Button>
           </CardHeader>
           <CardBody>
             <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
@@ -117,7 +119,8 @@ export default function ServiceTemplatesPage() {
       )}
 
       {Object.keys(grouped).length === 0 ? (
-        <Card className="py-14 text-center text-sm text-ink-muted">No services yet. Add your first one.</Card>
+        <EmptyState icon={Plus} title="No services yet" description="Add your first one to power the quote builder."
+          action={{ label: 'Add Service', onClick: openNew }} />
       ) : (
         SERVICE_CATEGORIES.filter(c => grouped[c]?.length).map(category => (
           <div key={category}>

@@ -3,9 +3,11 @@
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { PageHeader } from '@/components/layout/PageHeader'
-import { Card, CardBody } from '@/components/ui/Card'
+import { Card, CardBody, CardHeader } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
+import { InlineEmpty } from '@/components/ui/EmptyState'
+import { Skeleton, SkeletonTiles } from '@/components/ui/Skeleton'
 import { format } from 'date-fns'
 import { Coord, geocodeAddress } from '@/lib/geo'
 import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, routeStats, computeDayEtas, DEFAULT_JOB_MIN } from '@/lib/route'
@@ -156,11 +158,14 @@ export default function RoutesPage() {
       </p>
 
       {loading ? (
-        <div className="text-center py-20 text-sm text-ink-muted">Analyzing route…</div>
+        <div className="space-y-5">
+          <Skeleton className="h-64 w-full rounded-card" />
+          <SkeletonTiles count={6} />
+        </div>
       ) : activeCount === 0 ? (
-        <Card><CardBody className="text-center py-16 text-sm text-ink-muted">
+        <Card><InlineEmpty icon={MapPin}>
           No jobs scheduled for {format(new Date(date + 'T00:00:00'), 'EEEE, MMMM d')}. Schedule jobs first, then analyze the route.
-        </CardBody></Card>
+        </InlineEmpty></Card>
       ) : (
         <div className="space-y-5">
           {/* Summary + map */}
@@ -248,11 +253,11 @@ export default function RoutesPage() {
           {/* Ordered route breakdown */}
           {route && route.ordered.length > 0 && (
             <Card>
-              <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-                <Navigation className="w-4 h-4 text-accent" />
+              <CardHeader className="flex items-center gap-2">
+                <Navigation className="w-4 h-4 text-ink-muted" />
                 <h2 className="text-sm font-semibold text-ink">Route breakdown</h2>
                 <span className="ml-auto text-xs text-ink-faint">arrival · value · leg</span>
-              </div>
+              </CardHeader>
               <CardBody className="space-y-2">
                 <div className="flex items-center gap-3 p-2.5 rounded-xl bg-surface border border-border">
                   <div className="w-7 h-7 rounded-full bg-ink-faint/20 text-ink-muted flex items-center justify-center shrink-0">
