@@ -103,3 +103,9 @@ body { min-height: 100dvh; overscroll-behavior-y: none; }
 @media (display-mode: standalone) {
   body { padding-bottom: env(safe-area-inset-bottom); }
 }
+
+/* Subtle entrance for menus / dropdowns / action bars — keeps UI feeling crisp. */
+@keyframes popIn {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}

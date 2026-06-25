@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { format, parseISO, addDays, nextFriday } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency, cn, localTodayISO } from '@/lib/utils'
+import { Skeleton } from '@/components/ui/Skeleton'
 import {
   ChevronDown, MapPin, Receipt, CalendarClock, DollarSign,
   MessageSquare, Mail, Phone, Plus, Loader2, Check,
@@ -112,7 +113,12 @@ export function ConversationInfo({ customerId }: Props) {
     setTimeout(() => setFollowDone(null), 2500)
   }
 
-  if (!info || !derived) return <div className="py-3 flex justify-center"><Loader2 className="w-3.5 h-3.5 animate-spin text-ink-faint" /></div>
+  if (!info || !derived) return (
+    <div className="border-b border-border pb-2 mb-2 space-y-2">
+      <div className="flex gap-2"><Skeleton className="h-5 w-28 rounded-full" /><Skeleton className="h-5 w-32 rounded-full" /><Skeleton className="h-5 w-24 rounded-full" /></div>
+      <div className="flex gap-2 items-center"><Skeleton className="h-6 w-20 rounded-lg" /><Skeleton className="h-4 w-24" /><Skeleton className="h-4 w-20" /></div>
+    </div>
+  )
   const c = info.customer
 
   return (
@@ -136,7 +142,7 @@ export function ConversationInfo({ customerId }: Props) {
             {followDone ? <><Check className="w-3 h-3" /> Added</> : <><Plus className="w-3 h-3" /> Follow up</>}
           </button>
           {followOpen && (
-            <div className="absolute left-0 top-8 z-20 w-44 rounded-xl border border-border bg-bg-secondary shadow-xl overflow-hidden py-1">
+            <div className="absolute left-0 top-8 z-20 w-44 rounded-xl border border-border bg-bg-secondary shadow-xl overflow-hidden py-1 origin-top-left animate-[popIn_0.12s_ease-out]">
               {FOLLOWUPS.map(f => (
                 <button key={f.key} onClick={() => addFollowUp(f)} disabled={busy === f.key}
                   className="w-full text-left px-3 py-2 text-xs text-ink hover:bg-surface/60 flex items-center gap-2 disabled:opacity-50">
