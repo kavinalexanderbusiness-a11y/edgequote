@@ -9,6 +9,9 @@ import { autoMeasureLawn, AutoMeasureResult, neighborhoodOf } from '@/lib/autoMe
 import { loadGoogleMaps } from '@/lib/googleMaps'
 import { AddressAutocomplete, ParsedAddress } from '@/components/ui/AddressAutocomplete'
 import { Button } from '@/components/ui/Button'
+import { Skeleton } from '@/components/ui/Skeleton'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { BrandHeader } from '@/components/layout/BrandHeader'
 import { formatCurrency, cn } from '@/lib/utils'
 import { Leaf, Loader2, Undo2, Trash2, Check, ArrowRight, ArrowLeft, Ruler, CheckCircle2, Phone, Mail, Camera } from 'lucide-react'
 
@@ -198,13 +201,20 @@ export default function BookPage() {
     setStep('done')
   }
 
-  if (loading) return <Center><Loader2 className="w-5 h-5 animate-spin text-ink-muted" /></Center>
+  if (loading) return (
+    <div className="min-h-screen bg-bg">
+      <div className="max-w-lg mx-auto px-4 py-6 space-y-4">
+        <Skeleton className="h-10 w-44" />
+        <Skeleton className="h-1.5 w-full rounded-full" />
+        <Skeleton className="h-48 w-full rounded-card" />
+      </div>
+    </div>
+  )
   if (!biz) return (
-    <Center>
-      <Leaf className="w-10 h-10 text-ink-faint mb-3" />
-      <p className="text-lg font-semibold text-ink">Booking isn’t available</p>
-      <p className="text-sm text-ink-muted mt-1">This link may be inactive. Please contact the business directly.</p>
-    </Center>
+    <div className="min-h-screen bg-bg flex items-center justify-center px-4">
+      <EmptyState icon={Leaf} title="Booking isn’t available"
+        description="This link may be inactive. Please contact the business directly." />
+    </div>
   )
 
   const gst = Number(biz.gst_percent) || 0
@@ -213,14 +223,7 @@ export default function BookPage() {
     <div className="min-h-screen bg-bg">
       <div className="max-w-lg mx-auto px-4 py-6 pb-24">
         {/* Brand header */}
-        <div className="flex items-center gap-3 mb-5">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          {biz.logo_url ? <img src={biz.logo_url} alt="" className="h-10 w-auto object-contain" /> : <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center"><Leaf className="w-5 h-5 text-accent" /></div>}
-          <div className="min-w-0">
-            <p className="text-base font-bold text-ink truncate">{biz.company_name || 'Get an instant quote'}</p>
-            <p className="text-xs text-ink-muted">Instant lawn-care quote · book in minutes</p>
-          </div>
-        </div>
+        <BrandHeader logoUrl={biz.logo_url} name={biz.company_name || 'Get an instant quote'} subtitle="Instant lawn-care quote · book in minutes" />
 
         {/* Progress */}
         {step !== 'done' && (
@@ -388,9 +391,6 @@ export default function BookPage() {
   )
 }
 
-function Center({ children }: { children: ReactNode }) {
-  return <div className="min-h-screen flex flex-col items-center justify-center p-8 text-center">{children}</div>
-}
 function Section({ title, sub, children }: { title: string; sub?: string; children: ReactNode }) {
   return (
     <div>

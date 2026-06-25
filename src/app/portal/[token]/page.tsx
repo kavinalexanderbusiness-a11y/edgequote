@@ -8,6 +8,9 @@ import { recurrenceLabel } from '@/lib/recurrence'
 import { invoiceTotals } from '@/lib/invoiceTotals'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
+import { Skeleton } from '@/components/ui/Skeleton'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { BrandHeader } from '@/components/layout/BrandHeader'
 import { renderPortalQuoteBlob, renderPortalInvoiceBlob, downloadBlob, viewBlob, printBlob } from '@/lib/portalPdf'
 import {
   Home, History, Image as ImageIcon, FileText, Receipt, MessageSquarePlus, Check, Loader2,
@@ -172,13 +175,20 @@ export default function PortalPage() {
     return { upcoming, completed, nextService, lastCompleted, outstanding, plans }
   }, [data])
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center text-ink-muted"><Loader2 className="w-5 h-5 animate-spin" /></div>
+  if (loading) return (
+    <div className="min-h-screen bg-bg">
+      <div className="max-w-lg mx-auto px-4 py-5 space-y-4">
+        <Skeleton className="h-10 w-44" />
+        <Skeleton className="h-9 w-full rounded-full" />
+        <Skeleton className="h-48 w-full rounded-card" />
+      </div>
+    </div>
+  )
   if (!data || !derived) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-8 text-center">
-        <Leaf className="w-10 h-10 text-ink-faint mb-3" />
-        <p className="text-lg font-semibold text-ink">This link isn’t valid</p>
-        <p className="text-sm text-ink-muted mt-1">It may have expired. Please contact your service provider for a new link.</p>
+      <div className="min-h-screen bg-bg flex items-center justify-center px-4">
+        <EmptyState icon={Leaf} title="This link isn’t valid"
+          description="It may have expired. Please contact your service provider for a new link." />
       </div>
     )
   }
@@ -205,14 +215,7 @@ export default function PortalPage() {
     <div className="min-h-screen bg-bg">
       <div className="max-w-lg mx-auto px-4 py-5 pb-28">
         {/* Brand header */}
-        <div className="flex items-center gap-3 mb-4">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          {biz?.logo_url ? <img src={biz.logo_url} alt="" className="h-10 w-auto object-contain" /> : <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center"><Leaf className="w-5 h-5 text-accent" /></div>}
-          <div className="min-w-0">
-            <p className="text-base font-bold text-ink truncate">{biz?.company_name || 'Your Service Provider'}</p>
-            <p className="text-xs text-ink-muted">Welcome back, {first}</p>
-          </div>
-        </div>
+        <BrandHeader logoUrl={biz?.logo_url} name={biz?.company_name} subtitle={`Welcome back, ${first}`} />
 
         {/* Sticky tab bar */}
         <div className="sticky top-0 z-10 -mx-4 px-4 py-2 bg-bg/90 backdrop-blur border-b border-border">

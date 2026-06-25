@@ -2,7 +2,7 @@
 
 import { ReactNode, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/Button'
 import { Settings2, Check, ChevronUp, ChevronDown, EyeOff, Eye } from 'lucide-react'
 
 export const SECTION_LABELS: Record<string, string> = {
@@ -58,11 +58,9 @@ export function DashboardSections({ sections, initialPrefs }: {
   return (
     <div className="space-y-6">
       <div className="flex justify-end -mb-3">
-        <button onClick={() => setEditing(v => !v)}
-          className={cn('flex items-center gap-1.5 text-xs font-medium px-3 py-2 rounded-lg border transition-colors',
-            editing ? 'bg-accent text-black border-accent' : 'border-border text-ink-faint hover:text-ink hover:border-border-strong')}>
+        <Button variant={editing ? 'primary' : 'ghost'} size="sm" onClick={() => setEditing(v => !v)}>
           {editing ? <><Check className="w-3.5 h-3.5" /> Done</> : <><Settings2 className="w-3.5 h-3.5" /> Customize</>}
-        </button>
+        </Button>
       </div>
 
       {visible.map((key, idx) => (
