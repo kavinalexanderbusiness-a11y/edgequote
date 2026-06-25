@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { Quote } from '@/types'
 import { QuoteList } from '@/components/quotes/QuoteList'
+import { SkeletonRows } from '@/components/ui/Skeleton'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { Plus } from 'lucide-react'
@@ -60,7 +61,7 @@ export default function QuotesPage() {
         }
       />
       {loading ? (
-        <div className="text-center py-16 text-sm text-ink-muted">Loading quotes...</div>
+        <SkeletonRows count={6} />
       ) : (
         <QuoteList quotes={quotes} onDelete={handleDelete} />
       )}

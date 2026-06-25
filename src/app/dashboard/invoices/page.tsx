@@ -6,6 +6,7 @@ import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { Invoice, InvoiceStatus, INVOICE_STATUS_LABELS, INVOICE_STATUS_COLORS, BusinessSettings } from '@/types'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
+import { SkeletonRows } from '@/components/ui/Skeleton'
 import { Button } from '@/components/ui/Button'
 import { SendComms } from '@/components/comms/SendComms'
 import { PaymentHistory } from '@/components/payments/PaymentHistory'
@@ -262,7 +263,7 @@ export default function InvoicesPage() {
       )}
 
       {loading ? (
-        <div className="text-center py-16 text-sm text-ink-muted">Loading invoices...</div>
+        <SkeletonRows count={6} />
       ) : loadError ? null : invoices.length === 0 ? (
         <div className="text-center py-16 text-sm text-ink-muted">
           No invoices yet. Completing a recurring visit drafts one automatically — or open an accepted quote and click <span className="font-medium text-ink">Convert to Invoice</span>.

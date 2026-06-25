@@ -9,6 +9,7 @@ import { buildServicePlans, ServicePlan } from '@/lib/recurrence'
 import { settingsToSeasons } from '@/lib/seasons'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
+import { SkeletonRows } from '@/components/ui/Skeleton'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { formatDate, formatCurrency, localTodayISO } from '@/lib/utils'
@@ -167,7 +168,7 @@ export default function PropertiesPage() {
       />
 
       {loading ? (
-        <div className="text-center py-16 text-sm text-ink-muted">Loading properties...</div>
+        <SkeletonRows count={6} />
       ) : properties.length === 0 ? (
         <EmptyState
           icon={Home}

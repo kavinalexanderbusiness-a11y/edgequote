@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { Customer, CustomerFormValues } from '@/types'
 import { CustomerList } from '@/components/customers/CustomerList'
+import { SkeletonRows } from '@/components/ui/Skeleton'
 import { CustomerForm } from '@/components/customers/CustomerForm'
 import { PageHeader } from '@/components/layout/PageHeader'
 import Link from 'next/link'
@@ -205,7 +206,7 @@ export default function CustomersPage() {
       )}
 
       {loading ? (
-        <div className="text-center py-16 text-sm text-ink-muted">Loading customers...</div>
+        <SkeletonRows count={6} />
       ) : (
         <CustomerList
           customers={customers}
