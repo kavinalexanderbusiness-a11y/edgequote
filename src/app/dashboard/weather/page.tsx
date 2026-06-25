@@ -74,6 +74,18 @@ export default function WeatherPage() {
     <div className="max-w-5xl space-y-6">
       <PageHeader title="Weather" description="Rain risk to your booked work — and the best dry days to move it." />
 
+      {/* Which location the forecast is for — always visible so you know it's right */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="inline-flex items-center gap-1.5 text-sm font-semibold rounded-full px-3 py-1 border border-accent/30 bg-accent/10 text-accent">
+          <MapPin className="w-3.5 h-3.5" /> Forecast for {r.locationLabel}
+        </span>
+        {r.usingDefaultLocation && (
+          <Link href="/dashboard/settings" className="text-xs text-ink-muted hover:text-ink underline decoration-dotted">
+            Using the Calgary, AB default — set your business address in Settings for your local forecast
+          </Link>
+        )}
+      </div>
+
       {/* Headline recommendation */}
       {r.headline && (
         <div className={cn('rounded-card border px-4 py-3 flex items-center gap-3',

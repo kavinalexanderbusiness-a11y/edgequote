@@ -11,6 +11,7 @@ import { MessageSquare, Check, RotateCcw, Loader2 } from 'lucide-react'
 const TYPES: MsgType[] = [
   'confirm', 'reminder', 'eta', 'on_my_way', 'running_late', 'arrived', 'early_arrival',
   'rescheduled', 'rain_delay', 'job_complete', 'thanks', 'review_request', 'quote', 'invoice',
+  'estimate_reminder', 'payment_reminder', 'estimate_followup',
 ]
 
 export function MessageTemplateEditor() {
@@ -82,9 +83,9 @@ export function MessageTemplateEditor() {
                         <button onClick={() => setTemplates(prev => ({ ...prev, [t]: '' }))} className="text-[11px] text-ink-faint hover:text-ink flex items-center gap-1"><RotateCcw className="w-3 h-3" /> Reset</button>
                       )}
                     </div>
-                    <textarea rows={2} value={val} placeholder={DEFAULT_TEMPLATES[t]}
+                    <textarea rows={6} value={val} placeholder={DEFAULT_TEMPLATES[t]}
                       onChange={e => setTemplates(prev => ({ ...prev, [t]: e.target.value }))}
-                      className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent placeholder:text-ink-faint" />
+                      className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent placeholder:text-ink-faint resize-y leading-relaxed" />
                   </div>
                 )
               })}

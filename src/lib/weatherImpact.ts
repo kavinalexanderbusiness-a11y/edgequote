@@ -58,8 +58,15 @@ export interface WeatherImpactReport {
   atRiskDays: DayImpact[]
   // Headline verdict across the week — what the owner should do, in one line.
   headline: string
+  // Which location the forecast is for (e.g. "Calgary, AB" or the base address),
+  // and whether we fell back to the Calgary default because no base is configured.
+  locationLabel: string
+  usingDefaultLocation: boolean
   totals: { jobs: number; laborHours: number; revenue: number; customers: number; days: number }
 }
+
+// Default business location when none is configured in Settings yet.
+export const DEFAULT_LOCATION = { lat: 51.0447, lng: -114.0719, label: 'Calgary, AB' }
 
 const round1 = (n: number) => Math.round(n * 10) / 10
 const dow = (iso: string) => new Date(iso + 'T00:00:00').getDay()
@@ -71,6 +78,8 @@ export function computeWeatherImpact(
   capacityHours: number,
   preferredDays: number[],
   today: string,
+  locationLabel = 'your business location',
+  usingDefaultLocation = false,
 ): WeatherImpactReport {
   const pref = preferredDays.length ? new Set(preferredDays) : null
   const fByDate: Record<string, DayForecast> = {}
@@ -149,12 +158,12 @@ export function computeWeatherImpact(
     hasBase: true, forecast,
     today: fByDate[today] || null,
     tomorrow: forecast.find(f => f.date > today) || null,
-    atRiskDays, headline, totals,
+    atRiskDays, headline, locationLabel, usingDefaultLocation, totals,
   }
 }
 
 export async function loadWeatherImpact(supabase: SupabaseClient): Promise<WeatherImpactReport> {
-  const empty: WeatherImpactReport = { hasBase: false, forecast: [], today: null, tomorrow: null, atRiskDays: [], headline: '', totals: { jobs: 0, laborHours: 0, revenue: 0, customers: 0, days: 0 } }
+  const empty: WeatherImpactReport = { hasBase: false, forecast: [], today: null, tomorrow: null, atRiskDays: [], headline: '', locationLabel: DEFAULT_LOCATION.label, usingDefaultLocation: true, totals: { jobs: 0, laborHours: 0, revenue: 0, customers: 0, days: 0 } }
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return empty
   const uid = user.id
@@ -162,7 +171,7 @@ export async function loadWeatherImpact(supabase: SupabaseClient): Promise<Weath
   const horizon = (() => { const d = new Date(today + 'T00:00:00'); d.setDate(d.getDate() + 8); return d.toISOString().slice(0, 10) })()
 
   const [sRes, jRes, qRes, pRes, rRes, oRes] = await Promise.all([
-    supabase.from('business_settings').select('base_lat, base_lng, daily_capacity_hours, preferred_work_days').eq('user_id', uid).maybeSingle(),
+    supabase.from('business_settings').select('base_lat, base_lng, base_address, daily_capacity_hours, preferred_work_days').eq('user_id', uid).maybeSingle(),
     supabase.from('jobs').select('id, scheduled_date, status, service_type, crew_size, property_id, quote_id, recurrence_id, price, is_initial_visit, customer_id, properties(lawn_sqft)').eq('user_id', uid).gte('scheduled_date', today).lte('scheduled_date', horizon),
     supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', uid),
     supabase.from('properties').select('id, lawn_sqft').eq('user_id', uid),
@@ -170,12 +179,18 @@ export async function loadWeatherImpact(supabase: SupabaseClient): Promise<Weath
     supabase.from('labor_observations').select('job_id, property_id, service_date, sqft, service_type, crew_size, frequency, is_initial_visit, overgrowth, estimated_minutes, actual_minutes').eq('user_id', uid),
   ])
 
-  const settings = sRes.data as { base_lat?: number | null; base_lng?: number | null; daily_capacity_hours?: number | null; preferred_work_days?: number[] | null } | null
-  const lat = settings?.base_lat, lng = settings?.base_lng
-  if (lat == null || lng == null) return empty
+  const settings = sRes.data as { base_lat?: number | null; base_lng?: number | null; base_address?: string | null; daily_capacity_hours?: number | null; preferred_work_days?: number[] | null } | null
+  // Always have a location: the configured base if set, else default to Calgary.
+  // Changing the base address in Settings re-geocodes base_lat/lng, so the weather
+  // system follows it automatically — no code change needed.
+  const hasConfigured = settings?.base_lat != null && settings?.base_lng != null
+  const lat = hasConfigured ? settings!.base_lat! : DEFAULT_LOCATION.lat
+  const lng = hasConfigured ? settings!.base_lng! : DEFAULT_LOCATION.lng
+  const locationLabel = hasConfigured ? (settings?.base_address?.trim() || 'Your business location') : DEFAULT_LOCATION.label
+  const usingDefaultLocation = !hasConfigured
 
   const forecast = await fetchForecast(lat, lng, 7)
-  if (!forecast.length) return { ...empty, hasBase: true }
+  if (!forecast.length) return { ...empty, hasBase: true, locationLabel, usingDefaultLocation }
 
   const model = learnLaborModel((oRes.data as LaborObservation[]) || [])
   const quotesById: Record<string, Record<string, unknown>> = {}
@@ -201,5 +216,5 @@ export async function loadWeatherImpact(supabase: SupabaseClient): Promise<Weath
 
   const capacityHours = Number(settings?.daily_capacity_hours) > 0 ? Number(settings!.daily_capacity_hours) : 8
   const preferredDays = settings?.preferred_work_days?.length ? settings!.preferred_work_days! : [5, 6, 0]
-  return computeWeatherImpact(jobs, forecast, model, capacityHours, preferredDays, today)
+  return computeWeatherImpact(jobs, forecast, model, capacityHours, preferredDays, today, locationLabel, usingDefaultLocation)
 }
