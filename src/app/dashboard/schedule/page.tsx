@@ -33,6 +33,9 @@ import { buildRoutingRoadDistance, RoadDist } from '@/lib/distance'
 import { analyzeScheduleHealth } from '@/lib/scheduleHealth'
 import type { HealthIssue, HealthJob } from '@/lib/scheduleHealth'
 import { ScheduleHealthCard } from '@/components/schedule/ScheduleHealthCard'
+import { DayStatusMenu } from '@/components/schedule/DayStatusMenu'
+import { buildDayStatusMap, loadDayStatuses, setDayStatus, clearDayStatus, DAY_STATUS_META, DAY_STATUS_SELECT, type DayStatusMap, type DayStatusRow, type DayStatus } from '@/lib/dayStatus'
+import { useRealtimeRefresh } from '@/hooks/useRealtime'
 
 function localToday(): string {
   const d = new Date()
@@ -119,6 +122,12 @@ export default function SchedulePage() {
   const [ignoredHealthKeys, setIgnoredHealthKeys] = useState<Set<string>>(new Set())
   const [healthBusyKey, setHealthBusyKey] = useState<string | null>(null)
 
+  // ── Day Status (per-day availability: Rain / Vacation / Holiday …) ──
+  const [uid, setUid] = useState<string | null>(null)
+  const [dayStatusMap, setDayStatusMap] = useState<DayStatusMap | undefined>(undefined)
+  const [selectedDays, setSelectedDays] = useState<Set<string>>(new Set())
+  const [dayMenu, setDayMenu] = useState<{ dates: string[]; current: DayStatusRow | null; x: number; y: number } | null>(null)
+
   function launchOptimizer(opts?: { scope: OptimizeScope; mode: OptimizeMode; anchorDate: string }) {
     setOptimizeLaunch(opts ? { ...opts, autoRun: true } : null)
     setShowOptimize(true)
@@ -168,8 +177,8 @@ export default function SchedulePage() {
   const optBaseOpts = useMemo(() => {
     const recs: Record<string, { freq: string | null; interval_unit: string | null; interval_count: number | null }> = {}
     for (const [id, r] of Object.entries(recurrences)) recs[id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count }
-    return { today: localToday(), base: baseCoord, preferredDays: preferredWorkDays, capacityHours, recurrences: recs, roadDist }
-  }, [recurrences, baseCoord, preferredWorkDays, capacityHours, roadDist])
+    return { today: localToday(), base: baseCoord, preferredDays: preferredWorkDays, capacityHours, recurrences: recs, roadDist, dayStatusMap }
+  }, [recurrences, baseCoord, preferredWorkDays, capacityHours, roadDist, dayStatusMap])
 
   // Proactive auto-suggestions (overloaded days, isolated jobs, recurring-cluster
   // opportunities) — same engines, shown without opening the optimizer.
@@ -384,7 +393,7 @@ export default function SchedulePage() {
 
   const fetchJobs = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
-    const [jRes, cRes, rRes, qRes, sRes, iRes, hRes] = await Promise.all([
+    const [jRes, cRes, rRes, qRes, sRes, iRes, hRes, dRes] = await Promise.all([
       supabase
         .from('jobs')
         .select('*, customers(id, name, phone, preferred_days, avoid_days, pref_time_start, pref_time_end), properties(id, address, lat, lng, neighborhood, preferred_days, avoid_days, pref_time_start, pref_time_end)')
@@ -396,7 +405,10 @@ export default function SchedulePage() {
       supabase.from('business_settings').select('base_lat, base_lng, base_address, preferred_work_days, work_start_time, daily_capacity_hours, automations').eq('user_id', user!.id).maybeSingle(),
       supabase.from('invoices').select('job_id').eq('user_id', user!.id).not('job_id', 'is', null),
       supabase.from('schedule_health_ignored').select('issue_key').eq('user_id', user!.id),
+      supabase.from('day_statuses').select(DAY_STATUS_SELECT).eq('user_id', user!.id),
     ])
+    setUid(user!.id)
+    setDayStatusMap(buildDayStatusMap((dRes.data as DayStatusRow[]) || []))
     const loadedJobs = (jRes.data as Job[]) || []
     setJobs(loadedJobs)
     setInvoicedJobIds(new Set(((iRes.data as { job_id: string }[]) || []).map(r => r.job_id)))
@@ -435,6 +447,52 @@ export default function SchedulePage() {
   }, [supabase])
 
   useEffect(() => { fetchJobs() }, [fetchJobs])
+
+  // ── Day Status: live sync + optimistic set/clear (source of truth = day_statuses) ──
+  const reloadDayStatuses = useCallback(async () => {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (user) setDayStatusMap(buildDayStatusMap(await loadDayStatuses(supabase, user.id)))
+  }, [supabase])
+  useRealtimeRefresh('day_statuses', uid ? `user_id=eq.${uid}` : null, reloadDayStatuses)
+
+  // Open the day menu — if the day is part of a multi-selection, target them all.
+  function openDayMenu(dateISO: string, pos: { x: number; y: number }) {
+    const dates = selectedDays.has(dateISO) && selectedDays.size > 1 ? Array.from(selectedDays) : [dateISO]
+    setDayMenu({ dates, current: dates.length === 1 ? (dayStatusMap?.byDate[dateISO] ?? null) : null, x: pos.x, y: pos.y })
+  }
+  function toggleDaySelect(dateISO: string) {
+    setSelectedDays(prev => { const n = new Set(prev); if (n.has(dateISO)) n.delete(dateISO); else n.add(dateISO); return n })
+  }
+  // Apply a status to one or many days — optimistic, then persist + reconcile.
+  async function applyDayStatus(dates: string[], status: DayStatus) {
+    if (!uid) return
+    const blocks = DAY_STATUS_META[status].defaultBlocks
+    setDayStatusMap(prev => {
+      const byDate = { ...(prev?.byDate || {}) }
+      const blockedDates = new Set(prev?.blockedDates || [])
+      for (const dt of dates) {
+        byDate[dt] = { id: byDate[dt]?.id || `tmp-${dt}`, date: dt, status, blocks, label: null, notes: null, starts_at: null, ends_at: null, created_by: null }
+        if (blocks) blockedDates.add(dt); else blockedDates.delete(dt)
+      }
+      return { byDate, blockedDates }
+    })
+    setDayMenu(null); setSelectedDays(new Set())
+    const res = await Promise.all(dates.map(dt => setDayStatus(supabase, uid, dt, { status })))
+    if (res.some(r => r.error)) { setBanner('Could not save the day status — please try again.'); reloadDayStatuses() }
+    else reloadDayStatuses()
+  }
+  async function clearDayStatusFor(dates: string[]) {
+    if (!uid) return
+    setDayStatusMap(prev => {
+      const byDate = { ...(prev?.byDate || {}) }
+      const blockedDates = new Set(prev?.blockedDates || [])
+      for (const dt of dates) { delete byDate[dt]; blockedDates.delete(dt) }
+      return { byDate, blockedDates }
+    })
+    setDayMenu(null); setSelectedDays(new Set())
+    await Promise.all(dates.map(dt => clearDayStatus(supabase, uid, dt)))
+    reloadDayStatuses()
+  }
 
   useEffect(() => {
     if (!quoteId) return
@@ -1476,6 +1534,10 @@ export default function SchedulePage() {
           recurrenceLabels={recurrenceLabels}
           valueByJobId={totalByJobId}
           addonCountByJobId={addonCountByJobId}
+          dayStatusMap={dayStatusMap}
+          onDayMenu={openDayMenu}
+          selectedDays={selectedDays}
+          onToggleDaySelect={toggleDaySelect}
         />
       )}
 
@@ -1531,6 +1593,7 @@ export default function SchedulePage() {
           autoRun={optimizeLaunch?.autoRun}
           invoicedIds={invoicedJobIds}
           roadDist={roadDist}
+          dayStatusMap={dayStatusMap}
           duplicateNote={healthDuplicates.stops > 0 ? healthDuplicates : undefined}
           onApply={applyOptimization}
           onClose={() => { setShowOptimize(false); setOptimizeLaunch(null) }}
@@ -1545,9 +1608,36 @@ export default function SchedulePage() {
           baseCoord={baseCoord}
           preferredWorkDays={preferredWorkDays}
           capacityHours={capacityHours}
+          dayStatusMap={dayStatusMap}
           onApply={applyOptimization}
           onClose={() => setShowRainCenter(false)}
         />
+      )}
+
+      {dayMenu && (
+        <DayStatusMenu
+          dates={dayMenu.dates}
+          current={dayMenu.current}
+          pos={{ x: dayMenu.x, y: dayMenu.y }}
+          onPick={(status) => applyDayStatus(dayMenu.dates, status)}
+          onClear={() => clearDayStatusFor(dayMenu.dates)}
+          onClose={() => setDayMenu(null)}
+        />
+      )}
+
+      {selectedDays.size > 0 && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[55] flex items-center gap-2 rounded-2xl border border-border bg-bg-secondary/95 backdrop-blur px-4 py-2.5 shadow-2xl">
+          <span className="text-sm font-semibold text-ink">{selectedDays.size} day{selectedDays.size !== 1 ? 's' : ''} selected</span>
+          <button
+            onClick={() => setDayMenu({ dates: Array.from(selectedDays), current: null, x: window.innerWidth / 2 - 124, y: Math.max(60, window.innerHeight / 2 - 200) })}
+            className="px-3 py-1.5 rounded-lg bg-accent text-black text-xs font-semibold hover:bg-accent/90 transition-colors">Set status</button>
+          <button
+            onClick={() => clearDayStatusFor(Array.from(selectedDays))}
+            className="px-3 py-1.5 rounded-lg border border-border text-xs font-medium text-ink-muted hover:text-ink transition-colors">Clear</button>
+          <button
+            onClick={() => setSelectedDays(new Set())}
+            className="px-2 py-1.5 rounded-lg text-xs font-medium text-ink-faint hover:text-ink transition-colors">Done</button>
+        </div>
       )}
     </div>
   )

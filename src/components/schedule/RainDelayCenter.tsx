@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Job, JobRecurrence } from '@/types'
 import { Coord } from '@/lib/geo'
 import { planRainDelay, OptJob } from '@/lib/optimizer'
+import type { DayStatusMap } from '@/lib/dayStatus'
 import { DEFAULT_JOB_MIN } from '@/lib/route'
 import {
   DisruptionReason, DISRUPTION_META, DISRUPTION_REASONS,
@@ -27,6 +28,7 @@ interface Props {
   baseCoord: Coord | null
   preferredWorkDays: number[]
   capacityHours: number
+  dayStatusMap?: DayStatusMap
   onApply: (moves: { jobId: string; from: string; to: string }[]) => Promise<void>
   onClose: () => void
 }
@@ -41,7 +43,7 @@ interface Recipient { customerId: string; name: string; from: string; to: string
 // capacity and revenue impact, apply in one tap (with Undo), and notify the
 // affected customers — all reusing planRainDelay, the disruption seam and the
 // existing comms pipeline. No second scheduler, rain engine or notifier.
-export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, preferredWorkDays, capacityHours, onApply, onClose }: Props) {
+export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, preferredWorkDays, capacityHours, dayStatusMap, onApply, onClose }: Props) {
   const supabase = useMemo(() => createClient(), [])
   const today = localTodayISO()
   const [invoicedIds, setInvoicedIds] = useState<Set<string> | null>(null)
@@ -137,7 +139,7 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
     const unmovable: { jobId: string; customerName: string; reason: string }[] = billed.map(j => ({ jobId: j.id, customerName: j.customers?.name || j.title, reason: 'already invoiced' }))
 
     if (strategy === 'auto_optimize') {
-      const rp = planRainDelay(optJobs, selectedDay, { today, base: baseCoord, preferredDays: preferredWorkDays, capacityHours, recurrences: recs })
+      const rp = planRainDelay(optJobs, selectedDay, { today, base: baseCoord, preferredDays: preferredWorkDays, capacityHours, recurrences: recs, dayStatusMap })
       const sel = new Set(selMovable.map(j => j.id))
       moves = rp.moves.filter(m => sel.has(m.jobId)).map(m => ({
         jobId: m.jobId, customerId: (optJobs.find(o => o.id === m.jobId)?.customerId) ?? null,

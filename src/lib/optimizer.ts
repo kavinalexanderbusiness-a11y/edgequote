@@ -11,6 +11,7 @@ import { addDays, format, getDay, parseISO } from 'date-fns'
 import { Coord } from '@/lib/geo'
 import { routeKmEstimate, clusterKmEstimate, AVG_SPEED_KM_PER_MIN, DEFAULT_JOB_MIN, DistFn } from '@/lib/route'
 import { effectiveFreq } from '@/lib/invoicing'
+import { DayStatusMap, isDayBlocked } from '@/lib/dayStatus'
 
 export type OptimizeMode = 'density' | 'balanced' | 'revenue' | 'recommended'
 
@@ -59,6 +60,10 @@ export interface OptOptions {
   // straight-line; falls back to haversine per-pair internally. Pre-fetched by
   // the caller (the engine itself stays sync/pure).
   roadDist?: DistFn
+  // Owner-blocked days (Rain / Vacation / Holiday …). Their `blockedDates` are
+  // treated as unavailable: the optimizer never MOVES a job onto one and never
+  // offers one as an alternative. (The owner can still manually drag onto it.)
+  dayStatusMap?: DayStatusMap
 }
 
 // Resolve a scope into its date windows. movable = origin dates that may move;
@@ -151,12 +156,14 @@ export type MoveBlockReason =
   | 'capacity'                        // destination day already full
   | 'stability'                       // would pull a recurring customer off their day
   | 'no-gain'                         // legal, but wouldn't ease the day enough to justify
+  | 'blocked-day'                     // owner marked the destination unavailable (rain/vacation/…)
 
 export const MOVE_REASON_LABEL: Record<MoveBlockReason, string> = {
   'locked-billed': 'already billed', 'locked-time': 'set start time',
   'customer-avoid': 'customer preference', 'cadence-collision': 'cadence',
   'cadence-floor': 'cadence', 'cadence-window': 'cadence', 'scope': 'weekly balance',
   'capacity': 'destination capacity', 'stability': 'route stability', 'no-gain': 'no net gain',
+  'blocked-day': 'day unavailable',
 }
 
 export interface JobMoveDiag {
@@ -249,7 +256,9 @@ export function planRainDelay(jobs: OptJob[], dayISO: string, opts: Omit<OptOpti
   const targetDates: string[] = []
   let d = addDays(parseISO(dayISO), 1)
   for (let i = 0; i < 21 && targetDates.length < 5; i++) {
-    if (!prefSet || prefSet.has(getDay(d))) targetDates.push(format(d, 'yyyy-MM-dd'))
+    const iso = format(d, 'yyyy-MM-dd')
+    // Skip owner-blocked days (rain/vacation/…) — never bump rained-out work onto one.
+    if ((!prefSet || prefSet.has(getDay(d))) && !isDayBlocked(opts.dayStatusMap, iso)) targetDates.push(iso)
     d = addDays(d, 1)
   }
 
@@ -486,6 +495,8 @@ interface DayEval { driveMin: number; laborMin: number; km: number; totalMin: nu
 export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): OptimizationResult {
   const capMin = (opts.capacityHours > 0 ? opts.capacityHours : 8) * 60
   const prefSet = opts.preferredDays.length ? new Set(opts.preferredDays) : null
+  // A day the owner blocked (rain/vacation/…) is never a legal MOVE destination.
+  const isBlockedDay = (date: string) => isDayBlocked(opts.dayStatusMap, date)
   const w = WEIGHTS[opts.mode]
   const win = scopeWindows(opts.scope, opts.anchorDate, opts.today)
   const inTarget = (date: string) => date >= win.targetStart && (win.targetEnd == null || date <= win.targetEnd)
@@ -749,6 +760,7 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
       if (date === assign.get(j.id)) continue
       const { dow } = infoOf(date)
       if (prefSet && !prefSet.has(dow)) continue
+      if (isBlockedDay(date)) continue                       // owner marked the day unavailable
       if (j.avoidDays && j.avoidDays.includes(dow)) continue // never move onto a customer's avoid day
       out.push(date)
     }
@@ -758,6 +770,7 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
     if (date <= opts.today || !inTarget(date) || date === assign.get(j.id)) return false
     const { dow } = infoOf(date)
     if (prefSet && !prefSet.has(dow)) return false
+    if (isBlockedDay(date)) return false                     // owner-blocked day
     if (j.avoidDays && j.avoidDays.includes(dow)) return false
     return Math.abs(diffDaysISO(original.get(j.id)!, date)) <= moveWindowDays(j, opts.recurrences)
   }
@@ -1023,6 +1036,7 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
 
     const classify = (j: OptJob, to: string): { ok: boolean; reason: MoveBlockReason; detail: string } => {
       const dow = getDay(parseISO(to + 'T00:00:00'))
+      if (isBlockedDay(to)) return { ok: false, reason: 'blocked-day', detail: `${longDow(to)} is marked unavailable` }
       if (j.avoidDays && j.avoidDays.includes(dow)) {
         return { ok: false, reason: 'customer-avoid', detail: `${j.customerName} asked to avoid ${longDow(to)}s` }
       }
@@ -1087,6 +1101,7 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
           const to = format(d, 'yyyy-MM-dd')
           if (to <= opts.today) continue
           if (prefSet && !prefSet.has(getDay(d))) continue   // only real work days are credible alternatives
+          if (isBlockedDay(format(d, 'yyyy-MM-dd'))) continue // …and not a day the owner blocked
           const v = classify(j, to)
           if (v.ok) { canMove = true; break }
           if (!closest) closest = { date: to, reason: v.reason, detail: v.detail }

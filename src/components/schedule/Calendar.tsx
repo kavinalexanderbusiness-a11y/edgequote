@@ -8,6 +8,7 @@ import {
 import { Job, JOB_STATUS_COLORS, JOB_STATUS_LABELS } from '@/types'
 import { ScheduleItem, ITEM_META } from '@/lib/scheduleItems'
 import { cn } from '@/lib/utils'
+import { DayStatusMap, dayStatusMeta, dayStatusLabel, isDayBlocked } from '@/lib/dayStatus'
 import { Repeat, Check, CheckCircle2, Plus } from 'lucide-react'
 
 export type CalendarView = 'month' | 'week' | 'day'
@@ -30,6 +31,13 @@ interface CalendarProps {
   scheduleItems?: ScheduleItem[]
   onSelectItem?: (item: ScheduleItem) => void
   onMoveItem?: (item: ScheduleItem, newDateISO: string) => void
+  // Day Status (per-day availability): shade days that have a status, show the
+  // status, open the day menu on right-click / long-press, and support multi-day
+  // selection (cmd/ctrl-click). All optional so the calendar still works standalone.
+  dayStatusMap?: DayStatusMap
+  onDayMenu?: (dateISO: string, pos: { x: number; y: number }) => void
+  selectedDays?: Set<string>
+  onToggleDaySelect?: (dateISO: string) => void
 }
 
 // What a pointer-drag is carrying — generalised so a Job and a ScheduleItem share
@@ -44,6 +52,7 @@ type ChipDragStart = (e: React.PointerEvent) => void
 function JobChip({ job, onSelect, onDragStart, recurLabel, value, addonCount }: { job: Job; onSelect: (j: Job) => void; onDragStart?: ChipDragStart; recurLabel?: string; value?: number; addonCount?: number }) {
   return (
     <button
+      data-chip
       onClick={(e) => { e.stopPropagation(); onSelect(job) }}
       onPointerDown={onDragStart}
       style={onDragStart ? { touchAction: 'none' } : undefined}
@@ -77,6 +86,7 @@ function ItemChip({ item, onSelect, onDragStart }: { item: ScheduleItem; onSelec
   const done = item.status === 'completed'
   return (
     <button
+      data-chip
       onClick={(e) => { e.stopPropagation(); onSelect(item) }}
       onPointerDown={onDragStart}
       style={onDragStart ? { touchAction: 'none' } : undefined}
@@ -91,10 +101,41 @@ function ItemChip({ item, onSelect, onDragStart }: { item: ScheduleItem; onSelec
   )
 }
 
-export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkDone, onMoveJob, recurrenceLabels, valueByJobId, addonCountByJobId, scheduleItems, onSelectItem, onMoveItem }: CalendarProps) {
+export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkDone, onMoveJob, recurrenceLabels, valueByJobId, addonCountByJobId, scheduleItems, onSelectItem, onMoveItem, dayStatusMap, onDayMenu, selectedDays, onToggleDaySelect }: CalendarProps) {
   const recurLabelFor = (job: Job) => job.recurrence_id ? recurrenceLabels?.[job.recurrence_id] : undefined
   const weekdayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
   const dragEnabled = !!(onMoveJob || onMoveItem)
+
+  // Latest dayStatusMap for the drag-drop closure (which only re-binds on dragEnabled).
+  const dayStatusRef = useRef(dayStatusMap)
+  dayStatusRef.current = dayStatusMap
+
+  // Right-click (desktop) / long-press (touch) → the day menu. Long-press is
+  // ignored when the press starts on a chip (that's a drag) or with a mouse
+  // (mouse uses right-click). A fired long-press suppresses the following click.
+  const longPressRef = useRef<{ timer: ReturnType<typeof setTimeout>; x: number; y: number } | null>(null)
+  const suppressClick = useRef(false)
+  const cancelLongPress = () => { if (longPressRef.current) { clearTimeout(longPressRef.current.timer); longPressRef.current = null } }
+  function dayHandlers(dateISO: string, day: Date) {
+    return {
+      onClick: (e: React.MouseEvent) => {
+        if (suppressClick.current) { suppressClick.current = false; return }
+        if ((e.metaKey || e.ctrlKey) && onToggleDaySelect) { onToggleDaySelect(dateISO); return }
+        onSelectDay(day)
+      },
+      onContextMenu: onDayMenu ? (e: React.MouseEvent) => { e.preventDefault(); onDayMenu(dateISO, { x: e.clientX, y: e.clientY }) } : undefined,
+      onPointerDown: onDayMenu ? (e: React.PointerEvent) => {
+        if (e.pointerType === 'mouse') return
+        if ((e.target as HTMLElement).closest('[data-chip]')) return
+        const x = e.clientX, y = e.clientY
+        const timer = setTimeout(() => { longPressRef.current = null; suppressClick.current = true; onDayMenu(dateISO, { x, y }) }, 480)
+        longPressRef.current = { timer, x, y }
+      } : undefined,
+      onPointerMove: (e: React.PointerEvent) => { const l = longPressRef.current; if (l && Math.hypot(e.clientX - l.x, e.clientY - l.y) > 8) cancelLongPress() },
+      onPointerUp: cancelLongPress,
+      onPointerLeave: cancelLongPress,
+    }
+  }
 
   const monthDays = useMemo(() => {
     const start = startOfWeek(startOfMonth(cursor))
@@ -170,7 +211,16 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
       if (d?.active) {
         const targetDate = d.over?.dataset.date
         d.over?.classList.remove('ring-2', 'ring-accent', 'ring-inset', 'bg-accent/5')
-        if (targetDate && targetDate !== d.payload.fromDate) d.payload.commit(targetDate)
+        if (targetDate && targetDate !== d.payload.fromDate) {
+          // Manual moves are still allowed onto a blocked day — but confirm first.
+          if (isDayBlocked(dayStatusRef.current, targetDate)) {
+            const meta = dayStatusMeta(dayStatusRef.current!.byDate[targetDate]?.status || 'custom')
+            const label = format(new Date(targetDate + 'T00:00:00'), 'EEE, MMM d')
+            if (window.confirm(`${label} is marked unavailable (${meta.label}). Move “${d.payload.title}” there anyway?`)) d.payload.commit(targetDate)
+          } else {
+            d.payload.commit(targetDate)
+          }
+        }
         justDragged.current = true
         setTimeout(() => { justDragged.current = false }, 0)
       }
@@ -214,24 +264,35 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
             const shownJobs = dayJobs.slice(0, 3)
             const shownItems = dayItems.slice(0, 2)
             const overflow = (dayJobs.length - shownJobs.length) + (dayItems.length - shownItems.length)
+            const dateISO = format(day, 'yyyy-MM-dd')
+            const statusRow = dayStatusMap?.byDate[dateISO]
+            const selected = !!selectedDays?.has(dateISO)
             return (
               <button
                 key={i}
-                data-date={format(day, 'yyyy-MM-dd')}
-                onClick={() => onSelectDay(day)}
+                data-date={dateISO}
+                {...dayHandlers(dateISO, day)}
                 className={cn(
-                  'min-h-[108px] border-b border-r border-border p-1.5 text-left align-top transition-colors hover:bg-surface rounded-sm',
+                  'min-h-[108px] border-b border-r border-border p-1.5 text-left align-top transition-colors hover:bg-surface rounded-sm relative',
                   !inMonth && 'bg-bg-secondary/40',
+                  statusRow && dayStatusMeta(statusRow.status).shade,
+                  selected && 'ring-2 ring-accent ring-inset z-10',
                   (i + 1) % 7 === 0 && 'border-r-0'
                 )}
               >
-                <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center justify-between mb-1 gap-1">
                   <span className={cn(
-                    'text-xs font-medium w-6 h-6 flex items-center justify-center rounded-full',
+                    'text-xs font-medium w-6 h-6 flex items-center justify-center rounded-full shrink-0',
                     today ? 'bg-accent text-black font-bold' : inMonth ? 'text-ink' : 'text-ink-faint'
                   )}>
                     {format(day, 'd')}
                   </span>
+                  {statusRow && (
+                    <span className={cn('min-w-0 text-[9px] leading-none px-1 py-0.5 rounded border font-semibold inline-flex items-center gap-0.5', dayStatusMeta(statusRow.status).badge)} title={dayStatusLabel(statusRow)}>
+                      <span className="shrink-0">{dayStatusMeta(statusRow.status).emoji}</span>
+                      <span className="truncate">{dayStatusLabel(statusRow)}</span>
+                    </span>
+                  )}
                 </div>
                 <div className="space-y-0.5">
                   {shownJobs.map(job => (
@@ -261,13 +322,18 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
             const dayJobs = dayJobsFor(day)
             const dayItems = dayItemsFor(day)
             const today = isSameDay(day, new Date())
+            const dateISO = format(day, 'yyyy-MM-dd')
+            const statusRow = dayStatusMap?.byDate[dateISO]
+            const selected = !!selectedDays?.has(dateISO)
             return (
               <button
                 key={i}
-                data-date={format(day, 'yyyy-MM-dd')}
-                onClick={() => onSelectDay(day)}
+                data-date={dateISO}
+                {...dayHandlers(dateISO, day)}
                 className={cn(
                   'min-h-[320px] border-r border-border p-2 text-left align-top transition-colors hover:bg-surface',
+                  statusRow && dayStatusMeta(statusRow.status).shade,
+                  selected && 'ring-2 ring-accent ring-inset z-10',
                   i === 6 && 'border-r-0'
                 )}
               >
@@ -279,6 +345,12 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
                   )}>
                     {format(day, 'd')}
                   </p>
+                  {statusRow && (
+                    <span className={cn('mt-1 max-w-full text-[10px] px-1.5 py-0.5 rounded border font-semibold inline-flex items-center gap-1', dayStatusMeta(statusRow.status).badge)} title={dayStatusLabel(statusRow)}>
+                      <span className="shrink-0">{dayStatusMeta(statusRow.status).emoji}</span>
+                      <span className="truncate">{dayStatusLabel(statusRow)}</span>
+                    </span>
+                  )}
                 </div>
                 <div className="space-y-1">
                   {dayJobs.map(job => (

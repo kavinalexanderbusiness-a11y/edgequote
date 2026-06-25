@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Job, JobRecurrence } from '@/types'
 import { Coord } from '@/lib/geo'
 import { optimizeSchedule, metricsWithMoves, manualCadenceCheck, OptimizationResult, OptimizeMode, OptimizeScope, OptJob, PlannedMove, CadenceVisit, CadenceRecs } from '@/lib/optimizer'
+import type { DayStatusMap } from '@/lib/dayStatus'
 import { resolvePrefs } from '@/lib/preferences'
 import { localTodayISO, formatCurrency, cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
@@ -45,6 +46,8 @@ interface Props {
   // Cached real-road distance lookup (page-built, shared with the cards) so the
   // optimizer plans on real driving distance. Omitted → straight-line.
   roadDist?: (a: Coord, b: Coord) => number
+  // Owner-blocked days (Rain / Vacation / …) — the optimizer never moves a job onto one.
+  dayStatusMap?: DayStatusMap
   // Duplicate stops the optimizer CAN'T fix by moving (they need deleting in
   // Schedule Health) — reported so the owner resolves them first.
   duplicateNote?: { stops: number; minutes: number }
@@ -54,7 +57,7 @@ interface Props {
 
 // 🚀 The whole-schedule optimizer UI: pick a mode, see Current vs Optimized,
 // review every proposed move, then Apply (undo-able) or Cancel.
-export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, preferredWorkDays, capacityHours, anchorDate, initialScope, initialMode, autoRun, invoicedIds: invoicedIdsProp, roadDist, duplicateNote, onApply, onClose }: Props) {
+export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, preferredWorkDays, capacityHours, anchorDate, initialScope, initialMode, autoRun, invoicedIds: invoicedIdsProp, roadDist, dayStatusMap, duplicateNote, onApply, onClose }: Props) {
   const supabase = createClient()
   const [mode, setMode] = useState<OptimizeMode>(initialMode ?? 'recommended')
   const [scope, setScope] = useState<OptimizeScope>(initialScope ?? 'future')
@@ -124,6 +127,7 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
         capacityHours,
         recurrences: recs,
         roadDist,
+        dayStatusMap,
       }))
       setRunning(false)
     }, 30)
