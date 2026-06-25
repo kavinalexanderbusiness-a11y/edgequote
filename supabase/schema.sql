@@ -1686,11 +1686,19 @@ declare v_url text; v_secret text;
 begin
   select endpoint_url, secret into v_url, v_secret from public.push_config where id = 1;
   if v_url is null or v_url = '' then return new; end if;
-  perform net.http_post(
-    url     := v_url,
-    body    := jsonb_build_object('id', new.id::text),
-    headers := jsonb_build_object('Content-Type', 'application/json', 'x-push-secret', coalesce(v_secret, ''))
-  );
+  -- Push is BEST-EFFORT. Wrap the dispatch so nothing about push (a missing
+  -- pg_net, a queue hiccup) can ever roll back the notification insert — or the
+  -- quote/invoice/message change that triggered it. pg_net only enqueues here;
+  -- the actual HTTP runs in a background worker, so this never blocks either.
+  begin
+    perform net.http_post(
+      url     := v_url,
+      body    := jsonb_build_object('id', new.id::text),
+      headers := jsonb_build_object('Content-Type', 'application/json', 'x-push-secret', coalesce(v_secret, ''))
+    );
+  exception when others then
+    null;  -- swallow: the in-app notification still commits and still shows
+  end;
   return new;
 end; $$;
 drop trigger if exists trg_push_dispatch on public.notifications;
