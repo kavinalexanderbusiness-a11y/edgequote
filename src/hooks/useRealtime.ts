@@ -35,6 +35,18 @@ export function useRealtimeRefresh(
       .channel(`rt:${table}:${filter}:${++_seq}`)
       .on('postgres_changes', { event, schema: 'public', table, filter }, fire)
       .subscribe()
-    return () => { if (t) clearTimeout(t); supabase.removeChannel(channel) }
+    // postgres_changes are NOT replayed after a dropped connection or a tab that
+    // was backgrounded (the socket may have been suspended), so any rows that
+    // changed during the gap would be missed. Refetch once on reconnect / when the
+    // tab becomes visible again so the view always self-heals. Debounced + batched.
+    const onWake = () => { if (document.visibilityState === 'visible') fire() }
+    window.addEventListener('online', onWake)
+    document.addEventListener('visibilitychange', onWake)
+    return () => {
+      if (t) clearTimeout(t)
+      supabase.removeChannel(channel)
+      window.removeEventListener('online', onWake)
+      document.removeEventListener('visibilitychange', onWake)
+    }
   }, [table, filter, event])
 }
