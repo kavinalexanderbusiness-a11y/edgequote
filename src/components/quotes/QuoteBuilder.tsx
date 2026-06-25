@@ -418,53 +418,53 @@ export function QuoteBuilder({
               <Input label="Service Name" placeholder="e.g. Lawn Mowing"
                 error={errors.service_type?.message}
                 {...register('service_type', { required: 'Service is required' })} />
-
-              {/* Saved measurement — the pricing source of truth for this property */}
-              {savedRec && (
-                <div className="rounded-xl border border-accent/30 bg-accent/5 p-3 space-y-2">
-                  <p className="text-[11px] font-semibold text-accent uppercase tracking-wide">
-                    Measured property · {savedRec.sqft.toLocaleString()} ft² · {formatCurrency(savedRec.rec[savedRec.rec.cadence === 'one_time' ? 'one_time' : savedRec.rec.cadence])}/{savedRec.rec.cadence === 'one_time' ? 'visit' : savedRec.rec.cadence} recommended
-                  </p>
-                  <p className="text-xs text-ink-muted">
-                    One-Time <span className="text-ink font-semibold">${savedRec.rec.one_time}</span> · Weekly <span className="text-ink font-semibold">${savedRec.rec.weekly}</span> · Bi-Weekly <span className="text-ink font-semibold">${savedRec.rec.biweekly}</span> · Monthly <span className="text-ink font-semibold">${savedRec.rec.monthly}</span>
-                  </p>
-                  <p className="text-[11px] text-ink-faint">Calculated {formatDate(savedRec.date)}</p>
-                  <button type="button"
-                    onClick={() => {
-                      setValue('initial_price', savedRec.rec.one_time)
-                      setValue('weekly_price', savedRec.rec.weekly)
-                      setValue('biweekly_price', savedRec.rec.biweekly)
-                      setValue('monthly_price', savedRec.rec.monthly)
-                      setValue('measured_sqft', savedRec.sqft)
-                      setValue('suggested_price', savedRec.rec.one_time)
-                      setInitialManual(true)
-                    }}
-                    className="text-xs font-semibold text-accent hover:underline">
-                    Use measured prices →
-                  </button>
-                  {recommendationIsStale(savedRec.date, Date.now()) && (
-                    <p className="text-[11px] text-amber-400">⚠ Pricing recommendations may be outdated. Consider recalculating.</p>
-                  )}
-                </div>
-              )}
-
-              {/* Price */}
-              <div>
-                <Input label="Price ($, first visit)" type="number" step="1" min="0"
-                  hint={initialManual ? 'Manual — overrides the labour suggestion.' : `Suggested ${formatCurrency(suggestedInitial)} from labour. Type to override.`}
-                  {...register('initial_price', { min: 0, onChange: () => setInitialManual(true) })} />
-                {initialManual && (
-                  <button type="button" onClick={() => setInitialManual(false)}
-                    className="text-xs text-accent hover:underline mt-1.5">
-                    Use suggested ({formatCurrency(suggestedInitial)})
-                  </button>
-                )}
-              </div>
             </CardBody>
           </Card>
 
-          {/* ── Show Pricing Breakdown — the full engine, collapsed until needed ── */}
-          <Collapsible title="Show Pricing Breakdown" icon={DollarSign} summary="Labour · recurring · travel — full transparency">
+          {/* ── Advanced Pricing — exact price + the full engine, collapsed until needed ── */}
+          <Collapsible title="Advanced Pricing" icon={SlidersHorizontal} summary="Exact price · labour · recurring · travel — full control">
+          {/* Saved measurement — the pricing source of truth for this property */}
+          {savedRec && (
+            <div className="rounded-xl border border-accent/30 bg-accent/5 p-3 space-y-2">
+              <p className="text-[11px] font-semibold text-accent uppercase tracking-wide">
+                Measured property · {savedRec.sqft.toLocaleString()} ft² · {formatCurrency(savedRec.rec[savedRec.rec.cadence === 'one_time' ? 'one_time' : savedRec.rec.cadence])}/{savedRec.rec.cadence === 'one_time' ? 'visit' : savedRec.rec.cadence} recommended
+              </p>
+              <p className="text-xs text-ink-muted">
+                One-Time <span className="text-ink font-semibold">${savedRec.rec.one_time}</span> · Weekly <span className="text-ink font-semibold">${savedRec.rec.weekly}</span> · Bi-Weekly <span className="text-ink font-semibold">${savedRec.rec.biweekly}</span> · Monthly <span className="text-ink font-semibold">${savedRec.rec.monthly}</span>
+              </p>
+              <p className="text-[11px] text-ink-faint">Calculated {formatDate(savedRec.date)}</p>
+              <button type="button"
+                onClick={() => {
+                  setValue('initial_price', savedRec.rec.one_time)
+                  setValue('weekly_price', savedRec.rec.weekly)
+                  setValue('biweekly_price', savedRec.rec.biweekly)
+                  setValue('monthly_price', savedRec.rec.monthly)
+                  setValue('measured_sqft', savedRec.sqft)
+                  setValue('suggested_price', savedRec.rec.one_time)
+                  setInitialManual(true)
+                }}
+                className="text-xs font-semibold text-accent hover:underline">
+                Use measured prices →
+              </button>
+              {recommendationIsStale(savedRec.date, Date.now()) && (
+                <p className="text-[11px] text-amber-400">⚠ Pricing recommendations may be outdated. Consider recalculating.</p>
+              )}
+            </div>
+          )}
+
+          {/* Price */}
+          <div>
+            <Input label="Price ($, first visit)" type="number" step="1" min="0"
+              hint={initialManual ? 'Manual — overrides the labour suggestion.' : `Suggested ${formatCurrency(suggestedInitial)} from labour. Type to override.`}
+              {...register('initial_price', { min: 0, onChange: () => setInitialManual(true) })} />
+            {initialManual && (
+              <button type="button" onClick={() => setInitialManual(false)}
+                className="text-xs text-accent hover:underline mt-1.5">
+                Use suggested ({formatCurrency(suggestedInitial)})
+              </button>
+            )}
+          </div>
+
           <Collapsible title="Labour calculator" icon={Calculator} summary={laborSummary}>
             <p className="text-xs text-ink-faint">Adjusts the suggested price above. Most mowing quotes can skip this and just type a price.</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
