@@ -37,13 +37,15 @@ export const STRATEGY_META: Record<DestinationStrategy, { label: string; hint: s
 
 export const STRATEGIES = Object.keys(STRATEGY_META) as DestinationStrategy[]
 
-// Next preferred work day strictly AFTER fromISO. Falls back to the next calendar
-// day when no preferred days are set or none land within three weeks.
-export function nextWorkday(fromISO: string, preferredDays: number[]): string {
+// Next preferred work day strictly AFTER fromISO that is NOT marked unavailable
+// (Day Status). Falls back to the next calendar day when no preferred days are set
+// or none land within three weeks.
+export function nextWorkday(fromISO: string, preferredDays: number[], blockedDates?: Set<string>): string {
   const pref = preferredDays.length ? new Set(preferredDays) : null
   let d = addDays(parseISO(fromISO), 1)
   for (let i = 0; i < 21; i++) {
-    if (!pref || pref.has(getDay(d))) return format(d, 'yyyy-MM-dd')
+    const iso = format(d, 'yyyy-MM-dd')
+    if ((!pref || pref.has(getDay(d))) && !blockedDates?.has(iso)) return iso
     d = addDays(d, 1)
   }
   return format(addDays(parseISO(fromISO), 1), 'yyyy-MM-dd')
@@ -51,14 +53,16 @@ export function nextWorkday(fromISO: string, preferredDays: number[]): string {
 
 // Resolve a single-destination strategy to one target date. `auto_optimize` returns
 // null — the caller delegates to planRainDelay for a capacity-aware spread across
-// several days rather than piling everything onto one.
+// several days rather than piling everything onto one. `blockedDates` (Day Status)
+// is skipped by next_business_day; 'tomorrow' stays literal (it's an explicit
+// manual choice — the owner can still override a disabled day).
 export function resolveDestination(
   strategy: DestinationStrategy,
   fromISO: string,
-  opts: { preferredDays: number[]; specificDate?: string | null },
+  opts: { preferredDays: number[]; specificDate?: string | null; blockedDates?: Set<string> },
 ): string | null {
   if (strategy === 'tomorrow') return format(addDays(parseISO(fromISO), 1), 'yyyy-MM-dd')
-  if (strategy === 'next_business_day') return nextWorkday(fromISO, opts.preferredDays)
+  if (strategy === 'next_business_day') return nextWorkday(fromISO, opts.preferredDays, opts.blockedDates)
   if (strategy === 'specific_date') return opts.specificDate || null
   return null // auto_optimize
 }
