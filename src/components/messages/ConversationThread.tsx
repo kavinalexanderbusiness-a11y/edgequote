@@ -59,6 +59,13 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
   useEffect(() => { load() }, [customerId]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { endRef.current?.scrollIntoView({ block: 'end' }) }, [items.length])
 
+  // Drafts: restore an unsent message when (re)opening a conversation, and auto-save
+  // as you type so closing/switching mid-message never loses it. Sending clears it.
+  useEffect(() => { try { setText(localStorage.getItem('eq-draft-' + customerId) || '') } catch { setText('') } }, [customerId])
+  useEffect(() => {
+    try { if (text.trim()) localStorage.setItem('eq-draft-' + customerId, text); else localStorage.removeItem('eq-draft-' + customerId) } catch { /* private mode */ }
+  }, [text, customerId])
+
   // Realtime: a new message for this customer (inbound SMS, or the owner's own
   // reply from another device) refreshes the thread live. Reloading also
   // re-marks the conversation read while it's open. RLS scopes the stream to us.

@@ -7,6 +7,7 @@ import { formatDistanceToNow } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { ConversationThread } from '@/components/messages/ConversationThread'
+import { ConversationInfo } from '@/components/messages/ConversationInfo'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import {
@@ -140,6 +141,31 @@ export default function MessagesPage() {
     select: (c: Convo) => { setSel(c); if (c.unread > 0) patch(c.id, { unread: 0 }) },
   }
 
+  // ── Bulk actions (multi-select) ──
+  const [selectMode, setSelectMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const toggleSelect = (id: string) => setSelectedIds(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
+  const exitSelect = () => { setSelectMode(false); setSelectedIds(new Set()) }
+  async function bulk(op: 'archive' | 'unarchive' | 'read' | 'unread' | 'mute' | 'unmute' | 'pin' | 'delete') {
+    const ids = [...selectedIds]
+    if (!ids.length) return
+    if (op === 'delete') {
+      if (!confirm(`Permanently delete ${ids.length} conversation${ids.length !== 1 ? 's' : ''}? This erases their message history and cannot be undone.`)) return
+      if (!confirm('Are you absolutely sure? This is permanent.')) return
+      setConvos(cs => cs.filter(c => !selectedIds.has(c.id)))
+      setSearchResults(rs => rs ? rs.filter(c => !selectedIds.has(c.id)) : rs)
+      await supabase.from('conversations').delete().in('id', ids)
+    } else {
+      const now = new Date().toISOString()
+      const p: Partial<Convo> = op === 'archive' ? { archived_at: now } : op === 'unarchive' ? { archived_at: null }
+        : op === 'read' ? { unread: 0 } : op === 'unread' ? { unread: 1 } : op === 'mute' ? { muted: true } : op === 'unmute' ? { muted: false } : { pinned_at: now }
+      setConvos(cs => cs.map(c => selectedIds.has(c.id) ? { ...c, ...p } : c))
+      setSearchResults(rs => rs ? rs.map(c => selectedIds.has(c.id) ? { ...c, ...p } : c) : rs)
+      await supabase.from('conversations').update(p).in('id', ids)
+    }
+    exitSelect()
+  }
+
   return (
     <div className="max-w-5xl space-y-4">
       <PageHeader title="Messages" description="Two-way SMS + portal conversations — archived chats stay in CRM history forever." />
@@ -155,15 +181,35 @@ export default function MessagesPage() {
 
       {/* Filters (hidden while searching) */}
       {!searchResults && (
-        <div className="flex flex-wrap gap-1.5">
-          {FILTERS.map(f => (
-            <button key={f.key} onClick={() => { setFilter(f.key); setSel(null) }}
-              className={cn('flex items-center gap-1.5 text-xs font-medium rounded-full px-3 py-1.5 border transition-colors',
-                filter === f.key ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
-              <f.icon className="w-3.5 h-3.5" /> {f.label}
-              {counts[f.key] > 0 && <span className={cn('text-[10px] font-bold', filter === f.key ? 'text-black/70' : 'text-ink-faint')}>{counts[f.key]}</span>}
-            </button>
-          ))}
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex flex-wrap gap-1.5">
+            {FILTERS.map(f => (
+              <button key={f.key} onClick={() => { setFilter(f.key); setSel(null) }}
+                className={cn('flex items-center gap-1.5 text-xs font-medium rounded-full px-3 py-1.5 border transition-colors',
+                  filter === f.key ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
+                <f.icon className="w-3.5 h-3.5" /> {f.label}
+                {counts[f.key] > 0 && <span className={cn('text-[10px] font-bold', filter === f.key ? 'text-black/70' : 'text-ink-faint')}>{counts[f.key]}</span>}
+              </button>
+            ))}
+          </div>
+          <button onClick={() => selectMode ? exitSelect() : setSelectMode(true)} className="text-xs font-medium text-ink-muted hover:text-ink shrink-0">
+            {selectMode ? 'Cancel' : 'Select'}
+          </button>
+        </div>
+      )}
+
+      {/* Bulk action bar */}
+      {selectMode && (
+        <div className="flex items-center gap-1.5 flex-wrap rounded-xl border border-accent/30 bg-accent/[0.06] px-3 py-2">
+          <span className="text-xs font-semibold text-ink mr-1">{selectedIds.size} selected</span>
+          <BulkBtn icon={Archive} label="Archive" onClick={() => bulk('archive')} />
+          <BulkBtn icon={ArchiveRestore} label="Unarchive" onClick={() => bulk('unarchive')} />
+          <BulkBtn icon={MailOpen} label="Read" onClick={() => bulk('read')} />
+          <BulkBtn icon={MessageSquare} label="Unread" onClick={() => bulk('unread')} />
+          <BulkBtn icon={Pin} label="Pin" onClick={() => bulk('pin')} />
+          <BulkBtn icon={BellOff} label="Mute" onClick={() => bulk('mute')} />
+          <BulkBtn icon={Bell} label="Unmute" onClick={() => bulk('unmute')} />
+          <BulkBtn icon={Trash2} label="Delete" onClick={() => bulk('delete')} danger />
         </div>
       )}
 
@@ -186,7 +232,8 @@ export default function MessagesPage() {
           ) : (
             <div className="divide-y divide-border max-h-[72vh] overflow-y-auto">
               {list.map(c => (
-                <ConversationRow key={c.id} c={c} selected={sel?.id === c.id} actions={actions} />
+                <ConversationRow key={c.id} c={c} selected={sel?.id === c.id} actions={actions}
+                  selectMode={selectMode} checked={selectedIds.has(c.id)} onToggleSelect={() => toggleSelect(c.id)} />
               ))}
             </div>
           )}
@@ -216,6 +263,7 @@ export default function MessagesPage() {
                   <Link href={`/dashboard/customers/${sel.customer_id}`}><Button size="sm" variant="ghost"><User className="w-3.5 h-3.5" /> Profile</Button></Link>
                 </div>
               </div>
+              <ConversationInfo customerId={sel.customer_id} />
               <div className="flex-1 min-h-0">
                 <ConversationThread customerId={sel.customer_id} onRead={load} />
               </div>
@@ -231,6 +279,16 @@ export default function MessagesPage() {
   )
 }
 
+function BulkBtn({ icon: Icon, label, onClick, danger }: { icon: typeof Archive; label: string; onClick: () => void; danger?: boolean }) {
+  return (
+    <button onClick={onClick} title={label}
+      className={cn('h-7 px-2 rounded-lg border text-[11px] font-medium flex items-center gap-1 hover:bg-black/10 active:scale-95 transition-transform',
+        danger ? 'border-red-500/30 text-red-400' : 'border-border text-ink-muted hover:text-ink')}>
+      <Icon className="w-3.5 h-3.5" /> {label}
+    </button>
+  )
+}
+
 interface RowActions {
   archive: (c: Convo) => void; unarchive: (c: Convo) => void
   pin: (c: Convo) => void; unpin: (c: Convo) => void
@@ -238,7 +296,7 @@ interface RowActions {
   del: (c: Convo) => void; select: (c: Convo) => void
 }
 
-function ConversationRow({ c, selected, actions }: { c: Convo; selected: boolean; actions: RowActions }) {
+function ConversationRow({ c, selected, actions, selectMode, checked, onToggleSelect }: { c: Convo; selected: boolean; actions: RowActions; selectMode: boolean; checked: boolean; onToggleSelect: () => void }) {
   const router = useRouter()
   const [menu, setMenu] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -282,12 +340,13 @@ function ConversationRow({ c, selected, actions }: { c: Convo; selected: boolean
       <div className="absolute inset-y-0 right-0 w-24 bg-sky-500/20 flex items-center justify-end pr-4 text-sky-400" style={{ opacity: dx > 0 ? 1 : 0 }}><MailOpen className="w-4 h-4" /></div>
 
       <div
-        onClick={() => actions.select(c)}
-        onContextMenu={(e) => { e.preventDefault(); setMenu(true) }}
-        onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
+        onClick={() => selectMode ? onToggleSelect() : actions.select(c)}
+        onContextMenu={selectMode ? undefined : (e) => { e.preventDefault(); setMenu(true) }}
+        onTouchStart={selectMode ? undefined : onTouchStart} onTouchMove={selectMode ? undefined : onTouchMove} onTouchEnd={selectMode ? undefined : onTouchEnd}
         style={{ transform: `translateX(${dx}px)`, transition: dx === 0 ? 'transform 0.15s' : 'none' }}
-        className={cn('relative bg-bg-secondary w-full text-left px-4 py-3 hover:bg-surface/40 transition-colors flex items-start gap-3 cursor-pointer', selected && 'bg-accent/5')}
+        className={cn('relative bg-bg-secondary w-full text-left px-4 py-3 hover:bg-surface/40 transition-colors flex items-start gap-3 cursor-pointer', selected && 'bg-accent/5', checked && 'bg-accent/10')}
       >
+        {selectMode && <input type="checkbox" readOnly checked={checked} className="accent-accent w-4 h-4 shrink-0 mt-2.5 pointer-events-none" />}
         <div className="w-9 h-9 rounded-full bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0 text-xs font-bold text-accent">
           {nameOf(c).slice(0, 2).toUpperCase()}
         </div>
@@ -309,12 +368,14 @@ function ConversationRow({ c, selected, actions }: { c: Convo; selected: boolean
         </div>
 
         {/* ⋯ menu (desktop) */}
-        <button onClick={(e) => { e.stopPropagation(); setMenu(m => !m) }} className="shrink-0 -mr-1 h-7 w-7 rounded-lg text-ink-faint hover:text-ink hover:bg-black/10 flex items-center justify-center" aria-label="Actions">
-          <MoreVertical className="w-4 h-4" />
-        </button>
+        {!selectMode && (
+          <button onClick={(e) => { e.stopPropagation(); setMenu(m => !m) }} className="shrink-0 -mr-1 h-7 w-7 rounded-lg text-ink-faint hover:text-ink hover:bg-black/10 flex items-center justify-center" aria-label="Actions">
+            <MoreVertical className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
-      {menu && (
+      {menu && !selectMode && (
         <div ref={menuRef} onClick={e => e.stopPropagation()} className="absolute right-2 top-12 z-20 w-48 rounded-xl border border-border bg-bg-secondary shadow-xl overflow-hidden py-1">
           {c.archived_at
             ? <Item icon={ArchiveRestore} label="Unarchive" onClick={() => actions.unarchive(c)} />
