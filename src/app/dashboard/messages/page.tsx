@@ -592,7 +592,7 @@ function ConversationRow({ c, selected, actions, query, selectMode, checked, onT
       </div>
 
       {menu && !selectMode && (
-        <div ref={menuRef} role="menu" onClick={e => e.stopPropagation()} className="absolute right-2 top-12 z-20 w-48 rounded-xl border border-border bg-bg-secondary shadow-xl overflow-hidden py-1 origin-top-right animate-[popIn_0.12s_ease-out]">
+        <div ref={menuRef} role="menu" onClick={e => e.stopPropagation()} className="absolute right-2 top-9 z-20 w-48 rounded-xl border border-border bg-bg-secondary shadow-xl overflow-hidden py-1 origin-top-right animate-[popIn_0.12s_ease-out]">
           {c.archived_at
             ? <Item icon={ArchiveRestore} label="Unarchive" onClick={() => actions.unarchive(c)} />
             : <Item icon={Archive} label="Archive" onClick={() => actions.archive(c)} />}

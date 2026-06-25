@@ -6,7 +6,7 @@ import Link from 'next/link'
 import { hoverIntent } from '@/lib/prefetch'
 import { Quote, QuoteStatus } from '@/types'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { needsFollowUp } from '@/lib/followup'
+import { needsFollowUp, daysSince } from '@/lib/followup'
 import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -139,7 +139,12 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
                         {q.quote_number}
                       </span>
                     </td>
-                    <td className="px-3 sm:px-5 py-3.5 font-medium text-ink">{q.customer_name}</td>
+                    <td className="px-3 sm:px-5 py-3.5 font-medium text-ink">
+                      {q.customer_name}
+                      {needsFollowUp(q) && q.sent_at && (
+                        <span className="block text-[10px] font-semibold text-amber-400 mt-0.5">Sent {daysSince(q.sent_at)}d ago · follow up</span>
+                      )}
+                    </td>
                     <td className="px-3 sm:px-5 py-3.5 text-ink-muted hidden md:table-cell">{q.service_type}</td>
                     <td className="px-3 sm:px-5 py-3.5 font-semibold text-ink">{formatCurrency(q.total)}</td>
                     <td className="px-3 sm:px-5 py-3.5"><QuoteStatusControl quoteId={q.id} status={q.status} followUpCount={q.follow_up_count} /></td>

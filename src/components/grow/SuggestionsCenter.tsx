@@ -7,6 +7,7 @@ import { Suggestion, SuggestionAction, SuggestionCategory, CATEGORY_META, Confid
 import { loadSuggestions } from '@/lib/suggestionsLoad'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { SkeletonRows } from '@/components/ui/Skeleton'
+import { InlineEmpty } from '@/components/ui/EmptyState'
 import { formatCurrency, cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
 import { Sparkles, Check, ArrowRight, Clock, Navigation, TrendingUp, RefreshCw, HelpCircle, Calculator, X, BellOff, Undo2 } from 'lucide-react'
@@ -157,7 +158,7 @@ export function SuggestionsCenter() {
         {loading && items.length === 0 ? (
           <SkeletonRows count={3} />
         ) : filtered.length === 0 ? (
-          <div className="py-10 text-center text-sm text-ink-muted">Nothing in this category right now.</div>
+          <InlineEmpty icon={Sparkles}>Nothing in this category right now.</InlineEmpty>
         ) : (
           <>
             {visible.map(s => (

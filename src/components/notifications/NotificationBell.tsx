@@ -7,6 +7,7 @@ import Link from 'next/link'
 import { formatDistanceToNow } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
+import { InlineEmpty } from '@/components/ui/EmptyState'
 import { Bell, Check, FileText, DollarSign, MessageSquare, Globe, Star, CreditCard, AlertTriangle, RotateCcw, ShieldAlert } from 'lucide-react'
 
 export interface AppNotification {
@@ -142,7 +143,7 @@ export function NotificationBell() {
       role="dialog"
       aria-label="Notifications"
       style={{ position: 'fixed', top: pos.top, left: pos.left, width: pos.width, maxHeight: pos.maxHeight }}
-      className="z-[100] flex flex-col rounded-card border border-border bg-bg-secondary shadow-2xl overflow-hidden">
+      className="z-[100] flex flex-col rounded-card border border-border bg-bg-secondary shadow-2xl overflow-hidden origin-top-right animate-[popIn_0.12s_ease-out]">
       <div className="px-4 py-2.5 border-b border-border flex items-center justify-between shrink-0">
         <p className="text-sm font-bold text-ink">Notifications</p>
         {unread > 0 && (
@@ -152,7 +153,7 @@ export function NotificationBell() {
       </div>
       <div className="flex-1 overflow-y-auto divide-y divide-border overscroll-contain">
         {items.length === 0 ? (
-          <p className="py-10 text-center text-xs text-ink-muted">No notifications yet.</p>
+          <InlineEmpty icon={Bell}>You&apos;re all caught up — no notifications.</InlineEmpty>
         ) : items.map(n => {
           const Icon = ICON[n.type] || Bell
           return (

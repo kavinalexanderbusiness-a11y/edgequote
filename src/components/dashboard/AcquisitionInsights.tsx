@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { InlineEmpty } from '@/components/ui/EmptyState'
 import { TrendingUp, Users } from 'lucide-react'
 
 interface Row {
@@ -62,7 +63,7 @@ export function AcquisitionInsights() {
         </CardHeader>
         <CardBody>
           {sources.length === 0 ? (
-            <p className="py-6 text-center text-sm text-ink-muted">Tag a customer&apos;s source to see your channel mix.</p>
+            <InlineEmpty icon={TrendingUp}>Tag a customer&apos;s source to see your channel mix.</InlineEmpty>
           ) : (
             <div className="space-y-2.5">
               {sources.map(([source, count]) => {
@@ -91,7 +92,7 @@ export function AcquisitionInsights() {
         </CardHeader>
         <CardBody>
           {referrers.length === 0 ? (
-            <p className="py-6 text-center text-sm text-ink-muted">No referrals tracked yet.</p>
+            <InlineEmpty icon={Users}>No referrals tracked yet.</InlineEmpty>
           ) : (
             <div className="space-y-2">
               {referrers.map((r, i) => (

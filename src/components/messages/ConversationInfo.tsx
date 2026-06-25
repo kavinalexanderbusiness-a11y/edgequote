@@ -142,7 +142,7 @@ export function ConversationInfo({ customerId }: Props) {
             {followDone ? <><Check className="w-3 h-3" /> Added</> : <><Plus className="w-3 h-3" /> Follow up</>}
           </button>
           {followOpen && (
-            <div className="absolute left-0 top-8 z-20 w-44 rounded-xl border border-border bg-bg-secondary shadow-xl overflow-hidden py-1 origin-top-left animate-[popIn_0.12s_ease-out]">
+            <div className="absolute left-0 top-8 z-20 w-48 rounded-xl border border-border bg-bg-secondary shadow-xl overflow-hidden py-1 origin-top-left animate-[popIn_0.12s_ease-out]">
               {FOLLOWUPS.map(f => (
                 <button key={f.key} onClick={() => addFollowUp(f)} disabled={busy === f.key}
                   className="w-full text-left px-3 py-2 text-xs text-ink hover:bg-surface/60 flex items-center gap-2 disabled:opacity-50">

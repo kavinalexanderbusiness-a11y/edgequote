@@ -147,7 +147,7 @@ export function AddressAutocomplete({
           )}
         />
         {open && suggestions.length > 0 && (
-          <div className="absolute z-50 mt-1 w-full bg-bg-secondary border border-border-strong rounded-xl shadow-xl overflow-hidden">
+          <div className="absolute z-50 mt-1 w-full bg-bg-secondary border border-border-strong rounded-xl shadow-xl overflow-hidden origin-top animate-[popIn_0.12s_ease-out]">
             {suggestions.map((s, i) => (
               <button
                 key={i}
