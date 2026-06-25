@@ -705,8 +705,8 @@ export default function CustomerDetailPage() {
                   <p className="text-[11px] text-ink-faint mt-2">
                     {p.lat != null && p.lng != null ? `${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}` : 'No coordinates yet'}
                   </p>
-                  {/* Property actions — one tap each */}
-                  <div className="grid grid-cols-4 gap-1.5 mt-3">
+                  {/* Property actions — one tap each (2-up on phones for bigger targets) */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 mt-3">
                     <a href={mapsUrl} target="_blank" rel="noopener noreferrer" title="Open in Google Maps" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
                       <ExternalLink className="w-3.5 h-3.5" /> Maps
                     </a>

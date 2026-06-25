@@ -274,7 +274,7 @@ export default function InvoicesPage() {
           {visible.map(inv => (
             <Card key={inv.id}>
               <CardBody>
-                <div className="flex items-center justify-between gap-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
                   <div className="flex items-start gap-3 min-w-0">
                     <div className="w-9 h-9 rounded-lg bg-accent/10 flex items-center justify-center shrink-0 mt-0.5">
                       <FileText className="w-4 h-4 text-accent" />
@@ -302,7 +302,7 @@ export default function InvoicesPage() {
                       )}
                     </div>
                   </div>
-                  <div className="flex items-center gap-3 shrink-0">
+                  <div className="flex items-center gap-2 flex-wrap sm:gap-3 sm:shrink-0 sm:justify-end">
                     <div className="text-right">
                       <span className="text-lg font-bold text-ink">{formatCurrency(invoiceTotals(inv.amount, settings).total)}</span>
                       {settings && Number(settings.gst_percent) > 0 && (

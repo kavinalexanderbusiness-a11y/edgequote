@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { hoverIntent } from '@/lib/prefetch'
@@ -36,6 +36,18 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
   const [deleting, setDeleting] = useState<string | null>(null)
 
   const followUpCount = quotes.filter(needsFollowUp).length
+
+  // Deep-link from the Weekly Review (and elsewhere): ?followup=1 opens straight to
+  // the follow-up queue, ?status=sent to a status — one tap, no re-filtering. Read
+  // from window (not useSearchParams) so no Suspense boundary is needed.
+  useEffect(() => {
+    try {
+      const p = new URLSearchParams(window.location.search)
+      if (p.get('followup') === '1') setFollowUpOnly(true)
+      const s = p.get('status')
+      if (s && STATUS_FILTERS.some(f => f.value === s)) setStatusFilter(s as QuoteStatus)
+    } catch { /* ignore */ }
+  }, [])
 
   const filtered = quotes.filter(q => {
     const matchSearch =
@@ -108,38 +120,38 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border">
-                  <th className="text-left px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide">Quote #</th>
-                  <th className="text-left px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide">Customer</th>
-                  <th className="text-left px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide hidden md:table-cell">Service</th>
-                  <th className="text-left px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide">Total</th>
-                  <th className="text-left px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide">Status</th>
-                  <th className="text-left px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide hidden lg:table-cell">Date</th>
-                  <th className="px-5 py-3" />
+                  <th className="text-left px-3 sm:px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide">Quote #</th>
+                  <th className="text-left px-3 sm:px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide">Customer</th>
+                  <th className="text-left px-3 sm:px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide hidden md:table-cell">Service</th>
+                  <th className="text-left px-3 sm:px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide">Total</th>
+                  <th className="text-left px-3 sm:px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide">Status</th>
+                  <th className="text-left px-3 sm:px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide hidden lg:table-cell">Date</th>
+                  <th className="px-3 sm:px-5 py-3" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {filtered.map(q => (
                   <tr key={q.id} {...hoverIntent(() => router.prefetch(`/dashboard/quotes/${q.id}`))}
                     className="hover:bg-surface-raised transition-colors group">
-                    <td className="px-5 py-3.5 font-mono text-xs text-ink-muted">
+                    <td className="px-3 sm:px-5 py-3.5 font-mono text-xs text-ink-muted">
                       <span className="flex items-center gap-1.5">
                         {needsFollowUp(q) && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" title="Needs follow-up" />}
                         {q.quote_number}
                       </span>
                     </td>
-                    <td className="px-5 py-3.5 font-medium text-ink">{q.customer_name}</td>
-                    <td className="px-5 py-3.5 text-ink-muted hidden md:table-cell">{q.service_type}</td>
-                    <td className="px-5 py-3.5 font-semibold text-ink">{formatCurrency(q.total)}</td>
-                    <td className="px-5 py-3.5"><QuoteStatusControl quoteId={q.id} status={q.status} followUpCount={q.follow_up_count} /></td>
-                    <td className="px-5 py-3.5 text-ink-faint hidden lg:table-cell">{formatDate(q.created_at)}</td>
-                    <td className="px-5 py-3.5">
+                    <td className="px-3 sm:px-5 py-3.5 font-medium text-ink">{q.customer_name}</td>
+                    <td className="px-3 sm:px-5 py-3.5 text-ink-muted hidden md:table-cell">{q.service_type}</td>
+                    <td className="px-3 sm:px-5 py-3.5 font-semibold text-ink">{formatCurrency(q.total)}</td>
+                    <td className="px-3 sm:px-5 py-3.5"><QuoteStatusControl quoteId={q.id} status={q.status} followUpCount={q.follow_up_count} /></td>
+                    <td className="px-3 sm:px-5 py-3.5 text-ink-faint hidden lg:table-cell">{formatDate(q.created_at)}</td>
+                    <td className="px-3 sm:px-5 py-3.5">
                       <div className="flex items-center gap-1 justify-end">
                         <Button
                           variant="ghost"
                           size="sm"
                           onClick={() => handleDelete(q.id)}
                           loading={deleting === q.id}
-                          className="hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                          className="hover:text-red-400 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </Button>

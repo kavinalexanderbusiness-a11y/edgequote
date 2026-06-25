@@ -198,7 +198,7 @@ export default function WeeklyReviewPage() {
           <div className="divide-y divide-border">
             <ReviewRow icon={Bell} tone="text-amber-400" label="Follow-ups waiting"
               value={m.followUps > 0 ? `${m.followUps} quote${m.followUps !== 1 ? 's' : ''} · ${formatCurrency(m.followUpValue)}` : 'All caught up'}
-              href="/dashboard/quotes" cta={m.followUps > 0 ? 'Chase them' : undefined} />
+              href="/dashboard/quotes?followup=1" cta={m.followUps > 0 ? 'Chase them' : undefined} />
             <ReviewRow icon={HeartPulse} tone="text-red-400" label="Reactivation opportunities"
               value={ranOutCount > 0 ? `${ranOutCount} recurring customer${ranOutCount !== 1 ? 's' : ''} with no next visit` : 'No recurring customers adrift'}
               href="/dashboard/reactivation" cta={ranOutCount > 0 ? 'Re-book them' : undefined} />
@@ -207,7 +207,7 @@ export default function WeeklyReviewPage() {
               href="/dashboard/neighbors" cta={m.growth ? 'Knock doors' : undefined} />
             <ReviewRow icon={DollarSign} tone="text-accent" label="Pending quote pipeline"
               value={m.pending > 0 ? `${m.pending} open · ${formatCurrency(m.pendingValue)}` : 'No open quotes'}
-              href="/dashboard/quotes" cta={m.pending > 0 ? 'Close them' : undefined} />
+              href="/dashboard/quotes?status=sent" cta={m.pending > 0 ? 'Close them' : undefined} />
           </div>
         </CardBody>
       </Card>

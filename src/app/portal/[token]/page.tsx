@@ -70,9 +70,24 @@ export default function PortalPage() {
 
   async function load() {
     const { data: d } = await supabase.rpc('get_portal_data', { p_token: token })
-    const pd = (d as PortalData | null) ?? null
+    // Defensive normalize: an OLDER get_portal_data — or a customer with no rows in a
+    // section — can return null/undefined for a collection (Postgres json_agg is null,
+    // not []). Coerce EVERY array so the portal can never white-screen on a missing
+    // field, no matter how current the database's RPC is.
+    const raw = (d ?? null) as Partial<PortalData> | null
+    const pd: PortalData | null = raw ? {
+      customer: raw.customer ?? { id: '', name: 'Customer', email: null, phone: null, address: null, city: null },
+      business: raw.business ?? null,
+      property: raw.property ?? null,
+      quotes: Array.isArray(raw.quotes) ? raw.quotes : [],
+      invoices: Array.isArray(raw.invoices) ? raw.invoices : [],
+      jobs: Array.isArray(raw.jobs) ? raw.jobs : [],
+      recurrences: Array.isArray(raw.recurrences) ? raw.recurrences : [],
+      photos: Array.isArray(raw.photos) ? raw.photos : [],
+      payments: Array.isArray(raw.payments) ? raw.payments : [],
+    } : null
     setData(pd)
-    if (pd) setConsentState({ sms: !!pd.customer.sms_opt_in, email: !!pd.customer.email_opt_in })
+    if (pd) setConsentState({ sms: !!pd.customer?.sms_opt_in, email: !!pd.customer?.email_opt_in })
     setLoading(false)
   }
 
@@ -165,7 +180,7 @@ export default function PortalPage() {
   }
 
   const biz = data.business
-  const first = data.customer.name.split(' ')[0]
+  const first = (data.customer?.name || '').trim().split(' ')[0] || 'there'
   const photosByJob = groupPhotos(data.photos)
   const invoiceByJob = new Map((data.invoices || []).filter(i => i.job_id).map(i => [i.job_id as string, i]))
 
