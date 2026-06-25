@@ -137,6 +137,17 @@ export default function QuoteDetailPage() {
     if (data) {
       setQuote(data)
       setEditing(false)
+      // Keep the lawn size on the property in sync (it's a core attribute, not just
+      // quote data). New/unchanged → silent; REPLACING a saved measurement → confirm.
+      const measuredSqft = Number(values.measured_sqft) || 0
+      if (propertyId && measuredSqft > 0) {
+        const { data: prop } = await supabase.from('properties').select('lawn_sqft').eq('id', propertyId).maybeSingle()
+        const prior = Number((prop as { lawn_sqft: number | null } | null)?.lawn_sqft) || 0
+        const changed = Math.round(prior) !== Math.round(measuredSqft)
+        if (changed && (prior === 0 || confirm(`This property has a saved lawn size of ${prior.toLocaleString()} ft².\n\nReplace it with ${measuredSqft.toLocaleString()} ft²?`))) {
+          await supabase.from('properties').update({ lawn_sqft: measuredSqft }).eq('id', propertyId)
+        }
+      }
     } else if (error) {
       alert('Could not update quote: ' + error.message)
     }
@@ -615,6 +626,12 @@ export default function QuoteDetailPage() {
               <p className="text-xs text-ink-faint uppercase tracking-wide font-semibold mb-1">Service</p>
               <p className="text-ink font-medium">{quote.service_type}</p>
             </div>
+            {quote.measured_sqft ? (
+              <div>
+                <p className="text-xs text-ink-faint uppercase tracking-wide font-semibold mb-1">Lawn Size</p>
+                <p className="text-ink font-medium">{Number(quote.measured_sqft).toLocaleString()} ft²</p>
+              </div>
+            ) : null}
             <div>
               <p className="text-xs text-ink-faint uppercase tracking-wide font-semibold mb-1">Hours</p>
               <p className="text-ink font-medium">{quote.hours} hrs</p>

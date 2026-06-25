@@ -134,7 +134,7 @@ export default function NewQuotePage() {
       crew_size: Number(values.crew_size),
       rate: finalRate,
       travel_fee: applyFeeRecovery(Number(values.travel_fee), settings) ?? 0,
-      measured_sqft: measurement?.sqft ?? (Number(values.measured_sqft) || null),
+      measured_sqft: Number(values.measured_sqft) || measurement?.sqft || null,
       suggested_price: measurement?.suggestedPrice ?? (Number(values.suggested_price) || null),
       front_lawn_sqft: measurement?.sections?.front ?? null,
       back_lawn_sqft: measurement?.sections?.back ?? null,
@@ -155,19 +155,24 @@ export default function NewQuotePage() {
       // fired for it. Persist it back to the property (newest measurement wins),
       // WITH the full recommendation package so future quotes/jobs suggest these
       // prices without re-measuring. (Prices don't depend on route context.)
-      const measuredSqft = measurement?.sqft ?? (Number(values.measured_sqft) || 0)
+      const measuredSqft = Number(values.measured_sqft) || measurement?.sqft || 0
       if (propertyId && measuredSqft > 0) {
-        const cfg = pricingConfigFromSettings(settings)
-        const pkg = pricingPackage(measuredSqft, cfg, { overgrowth: Number(values.overgrowth_multiplier) || 1, nearbyCount: 0 })
-        const rec = buildSavedRecommendation(pkg, estimateVisitMinutes(measuredSqft))
-        if (measurement?.cadence && measurement.cadence !== 'one_time') rec.cadence = measurement.cadence
-        const { data: prop } = await supabase.from('properties').select('measurement_history').eq('id', propertyId).maybeSingle()
-        const hist = Array.isArray((prop as { measurement_history: unknown } | null)?.measurement_history)
-          ? (prop as { measurement_history: unknown[] }).measurement_history : []
-        await supabase.from('properties').update({
-          lawn_sqft: measuredSqft,
-          measurement_history: [...hist, { date: new Date().toISOString(), total_sqft: measuredSqft, sections: measurement?.sections ?? undefined, recommendation: rec }],
-        }).eq('id', propertyId)
+        const { data: prop } = await supabase.from('properties').select('lawn_sqft, measurement_history').eq('id', propertyId).maybeSingle()
+        const prior = Number((prop as { lawn_sqft: number | null } | null)?.lawn_sqft) || 0
+        const changed = Math.round(prior) !== Math.round(measuredSqft)
+        // New or unchanged → sync silently. REPLACING a saved measurement → confirm first.
+        if (changed && (prior === 0 || confirm(`This property has a saved lawn size of ${prior.toLocaleString()} ft².\n\nReplace it with ${measuredSqft.toLocaleString()} ft²?`))) {
+          const cfg = pricingConfigFromSettings(settings)
+          const pkg = pricingPackage(measuredSqft, cfg, { overgrowth: Number(values.overgrowth_multiplier) || 1, nearbyCount: 0 })
+          const rec = buildSavedRecommendation(pkg, estimateVisitMinutes(measuredSqft))
+          if (measurement?.cadence && measurement.cadence !== 'one_time') rec.cadence = measurement.cadence
+          const hist = Array.isArray((prop as { measurement_history: unknown } | null)?.measurement_history)
+            ? (prop as { measurement_history: unknown[] }).measurement_history : []
+          await supabase.from('properties').update({
+            lawn_sqft: measuredSqft,
+            measurement_history: [...hist, { date: new Date().toISOString(), total_sqft: measuredSqft, sections: measurement?.sections ?? undefined, recommendation: rec }],
+          }).eq('id', propertyId)
+        }
       }
       // Tell the next screen the lead became a customer (created or matched).
       if (typeof window !== 'undefined' && (createdCustomer || matchedBy)) {
@@ -193,6 +198,8 @@ export default function NewQuotePage() {
         defaultValues={measurement ? {
           customer_id: measurement.customerId || '',
           address: measurement.address || '',
+          // Lawn size measured on the website flows straight into the editable field.
+          measured_sqft: measurement.sqft || 0,
           // Sensible default so a measured lawn is saveable in one tap (editable).
           service_type: 'Lawn Mowing',
           initial_price: measurement.jobPrice || 0,

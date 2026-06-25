@@ -41,7 +41,7 @@ export function QuoteBuilder({
   customers, templates, tiers, settings, defaultCustomerId, defaultValues, onSubmit, isEdit,
 }: QuoteBuilderProps) {
   const router = useRouter()
-  const { register, handleSubmit, watch, setValue, control, formState: { errors, isSubmitting } } =
+  const { register, handleSubmit, watch, setValue, getValues, control, formState: { errors, isSubmitting } } =
     useForm<QuoteFormValues>({
       defaultValues: {
         customer_id: defaultCustomerId || '',
@@ -157,18 +157,24 @@ export function QuoteBuilder({
       const supabase = createClient()
       const { data } = await supabase
         .from('properties')
-        .select('measurement_history')
+        .select('lawn_sqft, measurement_history')
         .eq('customer_id', customerId)
         .order('is_primary', { ascending: false })
         .limit(1)
         .maybeSingle()
       if (!active) return
-      const hist = (data as { measurement_history: MeasurementSnapshot[] } | null)?.measurement_history
-      setSavedRec(latestSavedRecommendation(hist))
+      const row = data as { lawn_sqft: number | null; measurement_history: MeasurementSnapshot[] } | null
+      setSavedRec(latestSavedRecommendation(row?.measurement_history))
+      // Default the Lawn Size from the property's saved size when it's still empty —
+      // don't clobber an edit, a website-measurement handoff, or a manual entry.
+      const lawn = Number(row?.lawn_sqft) || 0
+      if (!isEdit && lawn > 0 && (Number(getValues('measured_sqft')) || 0) === 0) {
+        setValue('measured_sqft', lawn)
+      }
     }
     load()
     return () => { active = false }
-  }, [customerId])
+  }, [customerId, isEdit, getValues, setValue])
 
   useEffect(() => {
     if (!templateId) return
@@ -324,6 +330,16 @@ export function QuoteBuilder({
                     error={errors.address?.message}
                   />
                 )} />
+
+              {/* Lawn size — a CORE property attribute (powers pricing, labour & future
+                  analytics). Auto-filled from a website/satellite measurement or the
+                  property's saved size; always editable, and synced back to the property
+                  on save. */}
+              <Input label="Lawn Size (ft²)" type="number" step="1" min="0"
+                placeholder="e.g. 5,000"
+                hint="Powers pricing & labour. Auto-filled from a measurement or the saved property size — edit to correct."
+                {...register('measured_sqft', { min: 0 })} />
+
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
                 <Button type="button" variant="secondary" size="sm"
                   onClick={() => { if (!address) { setCalcMsg('Enter an address first.'); return } setShowMeasure(true) }}>
