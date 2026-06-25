@@ -1,62 +1,80 @@
 // ── Day Status (per-day availability) ───────────────────────────────────────────
-// A flexible status for a single calendar day. "Normal" is the absence of a row;
-// any stored row is a non-Normal status. Today EVERY non-Normal status blocks
-// scheduling (the optimizer, Weather Ops and Auto Optimize must treat the day as
-// unavailable unless the owner manually overrides by dragging a job onto it). The
-// `blocks` flag lives in config — so a future non-blocking status (e.g. "Half day")
-// is one entry here, with NO schema change. This is the ONE source of truth for
-// which days are off; the calendar, optimizer and Weather Ops all read it.
+// A flexible status for a single calendar day. "Normal" is the absence of a row.
+// Whether a day blocks scheduling is stored ON THE ROW (`blocks`), not hardcoded by
+// status name — so new statuses (Training, Office work, Inventory day, …) can be
+// added later with NO schema change and NO code change to the consumers: the
+// optimizer / Weather Ops / Auto Optimize all just read `row.blocks`. The config
+// below (DAY_STATUS_META) only supplies DISPLAY (label/emoji/colours) + a sensible
+// default-blocking value for the known statuses, and falls back gracefully for any
+// status string it doesn't know. This is the ONE source of truth for days off.
 //
 // Pure data + tiny supabase helpers — intentionally NO React/lucide import so the
-// server-side Weather Ops loader can use it without pulling a UI bundle. The
-// scheduler UI maps each status to an icon on its side.
+// server-side Weather Ops loader can use it without pulling a UI bundle.
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 
+// Known statuses (config keys). `DayStatusRow.status` is a free-form string so the
+// DB can hold future statuses the config hasn't been taught yet.
 export type DayStatus = 'rain' | 'snow' | 'holiday' | 'vacation' | 'sick' | 'equipment' | 'personal' | 'custom'
 
 export interface DayStatusRow {
   id: string
-  date: string            // yyyy-MM-dd
-  status: DayStatus
-  label: string | null    // free text when status === 'custom'
+  date: string                 // yyyy-MM-dd
+  status: string               // known DayStatus or a future one
+  blocks: boolean              // AUTHORITATIVE — does this day block scheduling?
+  label: string | null         // free text (custom reason / display override)
+  notes: string | null         // longer free-text notes
+  starts_at: string | null     // HH:mm[:ss] — partial-day support (null = whole day)
+  ends_at: string | null
+  created_by: string | null
+  created_at?: string | null
 }
 
 export interface DayStatusMeta {
   label: string
   emoji: string
-  blocks: boolean         // true → optimizer / Weather Ops treat the day as unavailable
-  // Tailwind classes for the calendar day shading + the status badge. The scheduler
-  // UI may use these directly so disabled days look consistent everywhere.
-  shade: string           // day-cell background tint
-  badge: string           // status pill (border/bg/text)
+  defaultBlocks: boolean       // default value for `blocks` when this status is set
+  shade: string                // day-cell background tint
+  badge: string                // status pill classes (border/bg/text)
 }
 
-// Order is the menu order. Every entry here currently blocks; add a non-blocking
-// status later by setting blocks:false — nothing else changes.
+// Display + default-blocking config for the known statuses. Add a status here for
+// nice display (optional) — but the DB `blocks` column is what actually decides.
 export const DAY_STATUS_META: Record<DayStatus, DayStatusMeta> = {
-  rain:      { label: 'Rain (unavailable)', emoji: '🌧️', blocks: true, shade: 'bg-blue-500/10',   badge: 'border-blue-400/40 bg-blue-400/10 text-blue-300' },
-  snow:      { label: 'Snow (unavailable)', emoji: '❄️', blocks: true, shade: 'bg-sky-500/10',    badge: 'border-sky-400/40 bg-sky-400/10 text-sky-300' },
-  holiday:   { label: 'Holiday',            emoji: '🎉', blocks: true, shade: 'bg-violet-500/10', badge: 'border-violet-400/40 bg-violet-400/10 text-violet-300' },
-  vacation:  { label: 'Vacation',           emoji: '🏖️', blocks: true, shade: 'bg-amber-500/10',  badge: 'border-amber-400/40 bg-amber-400/10 text-amber-300' },
-  sick:      { label: 'Sick day',           emoji: '🤒', blocks: true, shade: 'bg-rose-500/10',   badge: 'border-rose-400/40 bg-rose-400/10 text-rose-300' },
-  equipment: { label: 'Equipment issue',    emoji: '🔧', blocks: true, shade: 'bg-orange-500/10', badge: 'border-orange-400/40 bg-orange-400/10 text-orange-300' },
-  personal:  { label: 'Personal day',       emoji: '🧍', blocks: true, shade: 'bg-teal-500/10',   badge: 'border-teal-400/40 bg-teal-400/10 text-teal-300' },
-  custom:    { label: 'Custom',             emoji: '🚫', blocks: true, shade: 'bg-slate-500/10',  badge: 'border-slate-400/40 bg-slate-400/10 text-slate-200' },
+  rain:      { label: 'Rain',            emoji: '🌧️', defaultBlocks: true, shade: 'bg-blue-500/10',   badge: 'border-blue-400/40 bg-blue-400/10 text-blue-300' },
+  snow:      { label: 'Snow',            emoji: '❄️', defaultBlocks: true, shade: 'bg-sky-500/10',    badge: 'border-sky-400/40 bg-sky-400/10 text-sky-300' },
+  holiday:   { label: 'Holiday',         emoji: '🎉', defaultBlocks: true, shade: 'bg-violet-500/10', badge: 'border-violet-400/40 bg-violet-400/10 text-violet-300' },
+  vacation:  { label: 'Vacation',        emoji: '🏖️', defaultBlocks: true, shade: 'bg-amber-500/10',  badge: 'border-amber-400/40 bg-amber-400/10 text-amber-300' },
+  sick:      { label: 'Sick day',        emoji: '🤒', defaultBlocks: true, shade: 'bg-rose-500/10',   badge: 'border-rose-400/40 bg-rose-400/10 text-rose-300' },
+  equipment: { label: 'Equipment issue', emoji: '🔧', defaultBlocks: true, shade: 'bg-orange-500/10', badge: 'border-orange-400/40 bg-orange-400/10 text-orange-300' },
+  personal:  { label: 'Personal day',    emoji: '🧍', defaultBlocks: true, shade: 'bg-teal-500/10',   badge: 'border-teal-400/40 bg-teal-400/10 text-teal-300' },
+  custom:    { label: 'Custom',          emoji: '🚫', defaultBlocks: true, shade: 'bg-slate-500/10',  badge: 'border-slate-400/40 bg-slate-400/10 text-slate-200' },
 }
 
 export const DAY_STATUSES = Object.keys(DAY_STATUS_META) as DayStatus[]
-export const DAY_STATUS_SELECT = 'id, date, status, label'
+export const DAY_STATUS_SELECT = 'id, date, status, blocks, label, notes, starts_at, ends_at, created_by, created_at'
 
-// Display label for a row — the custom free-text when present, else the status label.
-export function dayStatusLabel(row: DayStatusRow): string {
-  if (row.status === 'custom' && row.label && row.label.trim()) return row.label.trim()
-  return DAY_STATUS_META[row.status]?.label ?? 'Unavailable'
+function titleCase(s: string): string {
+  return s.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 }
 
-// Resolve rows into a fast lookup + the set of dates that block scheduling. This is
-// what the optimizer and Weather Ops consume: `blockedDates` is the authoritative
-// "do not schedule / never recommend" set.
+const FALLBACK_META: DayStatusMeta = { label: 'Unavailable', emoji: '🚫', defaultBlocks: true, shade: 'bg-slate-500/10', badge: 'border-slate-400/40 bg-slate-400/10 text-slate-200' }
+
+// Display meta for ANY status string — known ones from config, unknown ones get a
+// graceful default (so a future status renders without a code change).
+export function dayStatusMeta(status: string): DayStatusMeta {
+  return DAY_STATUS_META[status as DayStatus] ?? { ...FALLBACK_META, label: titleCase(status) }
+}
+
+// Display label for a row — the custom free-text when present, else the status label.
+export function dayStatusLabel(row: { status: string; label: string | null }): string {
+  if (row.label && row.label.trim()) return row.label.trim()
+  return dayStatusMeta(row.status).label
+}
+
+// Resolve rows into a fast lookup + the set of dates that block scheduling — driven
+// by the stored `blocks` flag, NOT the status name. This is what the optimizer and
+// Weather Ops consume.
 export interface DayStatusMap {
   byDate: Record<string, DayStatusRow>
   blockedDates: Set<string>
@@ -67,15 +85,24 @@ export function buildDayStatusMap(rows: DayStatusRow[]): DayStatusMap {
   const blockedDates = new Set<string>()
   for (const r of rows) {
     byDate[r.date] = r
-    if (DAY_STATUS_META[r.status]?.blocks) blockedDates.add(r.date)
+    if (r.blocks) blockedDates.add(r.date)
   }
   return { byDate, blockedDates }
 }
 
-// True when this date is unavailable for scheduling (the optimizer + Weather Ops
-// must avoid it as a target; the owner can still manually drag a job onto it).
+// True when this date is unavailable for scheduling (optimizer + Weather Ops must
+// avoid it as a target; the owner can still manually drag a job onto it).
 export function isDayBlocked(map: DayStatusMap | null | undefined, dateISO: string): boolean {
   return !!map?.blockedDates.has(dateISO)
+}
+
+// Count blocking days within [startISO, endISO] inclusive — for the optimizer's
+// "N unavailable days were excluded" summary.
+export function countBlockedInRange(map: DayStatusMap | null | undefined, startISO: string, endISO: string): number {
+  if (!map) return 0
+  let n = 0
+  for (const d of map.blockedDates) if (d >= startISO && d <= endISO) n++
+  return n
 }
 
 // ── supabase helpers (shared by the scheduler UI + the Weather Ops loader) ──────
@@ -84,12 +111,25 @@ export async function loadDayStatuses(supabase: SupabaseClient, userId: string):
   return (data as DayStatusRow[]) || []
 }
 
-// Set (or change) a day's status — upsert on (user, date). Pass label only for custom.
-export async function setDayStatus(supabase: SupabaseClient, userId: string, date: string, status: DayStatus, label?: string | null) {
-  return supabase.from('day_statuses').upsert(
-    { user_id: userId, date, status, label: label ?? null, updated_at: new Date().toISOString() },
-    { onConflict: 'user_id,date' },
-  )
+export interface SetDayStatusInput {
+  status: string
+  blocks?: boolean             // defaults to the status's defaultBlocks (known) or true
+  label?: string | null
+  notes?: string | null
+  startsAt?: string | null     // HH:mm — partial day (optional)
+  endsAt?: string | null
+  createdBy?: string | null
+}
+
+// Set (or change) a day's status — upsert on (user, date).
+export async function setDayStatus(supabase: SupabaseClient, userId: string, date: string, input: SetDayStatusInput) {
+  const blocks = input.blocks ?? dayStatusMeta(input.status).defaultBlocks
+  return supabase.from('day_statuses').upsert({
+    user_id: userId, date, status: input.status, blocks,
+    label: input.label ?? null, notes: input.notes ?? null,
+    starts_at: input.startsAt ?? null, ends_at: input.endsAt ?? null,
+    created_by: input.createdBy ?? null, updated_at: new Date().toISOString(),
+  }, { onConflict: 'user_id,date' })
 }
 
 // Return a day to Normal (delete its row).

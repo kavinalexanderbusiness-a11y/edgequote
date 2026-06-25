@@ -9,7 +9,7 @@ import { DayForecast, RAIN_PROB_THRESHOLD, weatherScore, WeatherLevel } from '@/
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { formatCurrency, cn } from '@/lib/utils'
-import { Loader2, CloudRain, Droplets, Wind, Clock, DollarSign, Users, AlertTriangle, ArrowRight, MapPin, Thermometer } from 'lucide-react'
+import { Loader2, CloudRain, Droplets, Wind, Clock, DollarSign, Users, AlertTriangle, ArrowRight, MapPin, Thermometer, CalendarOff } from 'lucide-react'
 
 const dayLabel = (iso: string, today: string) => iso === today ? 'Today' : format(parseISO(iso + 'T00:00:00'), 'EEE MMM d')
 
@@ -94,6 +94,21 @@ export default function WeatherPage() {
           <CloudRain className="w-4 h-4 shrink-0 text-ink-muted" />
           <p className="text-sm font-semibold text-ink">{r.headline}</p>
           {r.totals.days > 0 && <Link href="/dashboard/schedule" className="ml-auto shrink-0"><Button size="sm">Weather Ops <ArrowRight className="w-3.5 h-3.5" /></Button></Link>}
+        </div>
+      )}
+
+      {/* Days the owner manually marked unavailable — explained, not just skipped */}
+      {r.blockedDays.length > 0 && (
+        <div className="rounded-card border border-border bg-bg-secondary p-4">
+          <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-2 flex items-center gap-1.5"><CalendarOff className="w-3.5 h-3.5" /> Days you&apos;ve marked off</p>
+          <div className="space-y-1">
+            {r.blockedDays.map(b => (
+              <p key={b.date} className="text-sm text-ink-muted">
+                <span className="font-semibold text-ink">{format(parseISO(b.date + 'T00:00:00'), 'EEEE, MMM d')}</span> is unavailable ({b.label} — manually blocked)
+              </p>
+            ))}
+          </div>
+          <p className="text-[10px] text-ink-faint mt-2">Weather Ops won&apos;t recommend these days. Re-enable a day from the schedule calendar.</p>
         </div>
       )}
 

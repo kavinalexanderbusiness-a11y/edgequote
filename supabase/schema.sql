@@ -1783,3 +1783,57 @@ begin
     end loop;
   end if;
 end $$;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-24e — Day Status (per-day availability).
+-- A flexible per-day status so the calendar can mark a day Rain / Snow / Holiday /
+-- Vacation / Sick / Equipment / Personal / Custom. "Normal" = NO row (the default
+-- for every day). Today every non-Normal status BLOCKS scheduling — the optimizer,
+-- Weather Ops and Auto Optimize treat it as unavailable (capacity 0) unless the
+-- owner manually drags a job onto it. Storing the reason (not just a boolean) keeps
+-- room to add non-blocking statuses later WITHOUT a schema change. One row per
+-- (user, date). Realtime-published so the calendar updates live. Idempotent.
+-- ════════════════════════════════════════════════════════════
+create table if not exists public.day_statuses (
+  id          uuid primary key default uuid_generate_v4(),
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now(),
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  date        date not null,
+  status      text not null default 'custom',  -- rain|snow|holiday|vacation|sick|equipment|personal|custom
+  label       text,                            -- free text for a custom reason
+  unique (user_id, date)
+);
+alter table public.day_statuses enable row level security;
+drop policy if exists "day_statuses: select own" on public.day_statuses;
+create policy "day_statuses: select own" on public.day_statuses for select using (auth.uid() = user_id);
+drop policy if exists "day_statuses: insert own" on public.day_statuses;
+create policy "day_statuses: insert own" on public.day_statuses for insert with check (auth.uid() = user_id);
+drop policy if exists "day_statuses: update own" on public.day_statuses;
+create policy "day_statuses: update own" on public.day_statuses for update using (auth.uid() = user_id);
+drop policy if exists "day_statuses: delete own" on public.day_statuses;
+create policy "day_statuses: delete own" on public.day_statuses for delete using (auth.uid() = user_id);
+create index if not exists day_statuses_user_date_idx on public.day_statuses(user_id, date);
+grant select, insert, update, delete on public.day_statuses to authenticated;
+
+-- Realtime so disabling/enabling a day updates the calendar live.
+alter table public.day_statuses replica identity full;
+do $$ begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
+    if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'day_statuses') then
+      execute 'alter publication supabase_realtime add table public.day_statuses';
+    end if;
+  end if;
+end $$;
+
+-- ── MIGRATION 2026-06-24e (cont.) — Day Status optional metadata + data-driven
+-- blocking. `blocks` makes the unavailable/available decision a STORED flag (not a
+-- hardcoded status name), so future statuses (Training, Office work, Inventory day,
+-- Supply pickup …) need no schema or consumer change. starts_at/ends_at reserve
+-- partial-day support; notes/created_by are optional metadata. Idempotent.
+alter table public.day_statuses
+  add column if not exists blocks     boolean not null default true,
+  add column if not exists notes      text,
+  add column if not exists starts_at  time,
+  add column if not exists ends_at    time,
+  add column if not exists created_by text;
