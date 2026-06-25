@@ -52,7 +52,7 @@ export function WinLossPanel() {
       <div className="px-5 py-4 border-b border-border flex items-start justify-between gap-3">
         <div className="flex items-start gap-3 min-w-0">
           <div className="w-9 h-9 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
-            <Trophy className="w-4.5 h-4.5 text-accent" />
+            <Trophy className="w-4 h-4 text-accent" />
           </div>
           <div className="min-w-0">
             <p className="text-base font-bold text-ink">Win / Loss</p>

@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/Button'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { FilterPill } from '@/components/ui/FilterPill'
 import { InlineEmpty } from '@/components/ui/EmptyState'
+import { menuSurface, menuItemClass } from '@/components/ui/Menu'
 import { cn } from '@/lib/utils'
 import {
   Loader2, Inbox, User, ArrowLeft, MessageSquare, FileText, Search, X,
@@ -373,7 +374,7 @@ export default function MessagesPage() {
 
       <div className="grid lg:grid-cols-[340px_1fr] gap-4" style={{ minHeight: '62vh' }}>
         {/* List */}
-        <div className={cn('rounded-card border border-border bg-bg-secondary overflow-hidden flex flex-col', sel && 'hidden lg:flex')}>
+        <div className={cn('rounded-card border border-border bg-surface overflow-hidden flex flex-col', sel && 'hidden lg:flex')}>
           {searchResults && (
             <p className="px-4 py-2 text-[11px] text-ink-faint border-b border-border flex items-center gap-1.5 shrink-0">
               {searching ? <><Loader2 className="w-3 h-3 animate-spin" /> Searching…</> : `${searchResults.length} result${searchResults.length !== 1 ? 's' : ''} (incl. archived)`}
@@ -413,7 +414,7 @@ export default function MessagesPage() {
         </div>
 
         {/* Thread */}
-        <div className={cn('rounded-card border border-border bg-bg-secondary p-4 flex-col', sel ? 'flex' : 'hidden lg:flex')}>
+        <div className={cn('rounded-card border border-border bg-surface p-4 flex-col', sel ? 'flex' : 'hidden lg:flex')}>
           {sel ? (
             <>
               <div className="flex items-center justify-between gap-2 border-b border-border pb-2 mb-2">
@@ -526,7 +527,7 @@ function ConversationRow({ c, selected, actions, query, selectMode, checked, onT
   const needsReply = !c.archived_at && c.last_direction === 'inbound'
   const Item = ({ icon: Icon, label, onClick, danger }: { icon: typeof Pin; label: string; onClick: () => void; danger?: boolean }) => (
     <button onClick={() => { setMenu(false); onClick() }}
-      className={cn('w-full text-left px-3 py-2 text-xs flex items-center gap-2 hover:bg-surface/60', danger ? 'text-red-400' : 'text-ink')}>
+      className={cn(menuItemClass, 'px-3 py-2 text-xs gap-2', danger && 'text-red-400 hover:bg-red-500/10')}>
       <Icon className="w-3.5 h-3.5 shrink-0" /> {label}
     </button>
   )
@@ -579,7 +580,7 @@ function ConversationRow({ c, selected, actions, query, selectMode, checked, onT
       </div>
 
       {menu && !selectMode && (
-        <div ref={menuRef} role="menu" onClick={e => e.stopPropagation()} className="absolute right-2 top-12 z-20 w-48 rounded-xl border border-border bg-bg-secondary shadow-xl overflow-hidden py-1 origin-top-right animate-[popIn_0.12s_ease-out]">
+        <div ref={menuRef} role="menu" onClick={e => e.stopPropagation()} className={cn('absolute right-2 top-12 z-20 w-48 py-1', menuSurface)}>
           {c.archived_at
             ? <Item icon={ArchiveRestore} label="Unarchive" onClick={() => actions.unarchive(c)} />
             : <Item icon={Archive} label="Archive" onClick={() => actions.archive(c)} />}

@@ -321,7 +321,7 @@ function HomeTab({ data, derived, biz, onRequest }: { data: PortalData; derived:
 
       {/* Active plan */}
       {derived.plans.length > 0 && (
-        <div className="rounded-card border border-border bg-bg-secondary p-4">
+        <div className="rounded-card border border-border bg-surface p-4">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-2">Active plan{derived.plans.length !== 1 ? 's' : ''}</p>
           <div className="space-y-1.5">
             {derived.plans.map(p => (
@@ -337,7 +337,7 @@ function HomeTab({ data, derived, biz, onRequest }: { data: PortalData; derived:
 
       {/* Property summary */}
       {data.property && (data.property.address || data.property.lawn_sqft) && (
-        <div className="rounded-card border border-border bg-bg-secondary p-4">
+        <div className="rounded-card border border-border bg-surface p-4">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-2">Your property</p>
           {data.property.address && <p className="text-sm text-ink flex items-center gap-1.5"><MapPin className="w-3.5 h-3.5 text-ink-faint" /> {data.property.address}{data.property.city ? `, ${data.property.city}` : ''}</p>}
           <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1.5 text-xs text-ink-muted">
@@ -351,9 +351,9 @@ function HomeTab({ data, derived, biz, onRequest }: { data: PortalData; derived:
       {/* Contact */}
       {biz && (biz.phone || biz.email_primary) && (
         <div className="flex flex-wrap gap-2">
-          {biz.phone && <a href={`tel:${biz.phone}`} className="flex-1 min-w-[120px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-secondary py-2.5 text-ink hover:border-border-strong"><Phone className="w-4 h-4 text-accent" /> Call</a>}
-          {biz.email_primary && <a href={`mailto:${biz.email_primary}`} className="flex-1 min-w-[120px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-secondary py-2.5 text-ink hover:border-border-strong"><Mail className="w-4 h-4 text-accent" /> Email</a>}
-          {biz.website && <a href={biz.website.startsWith('http') ? biz.website : `https://${biz.website}`} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-[120px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-secondary py-2.5 text-ink hover:border-border-strong"><Globe className="w-4 h-4 text-accent" /> Website</a>}
+          {biz.phone && <a href={`tel:${biz.phone}`} className="flex-1 min-w-[120px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-surface py-2.5 text-ink hover:border-border-strong"><Phone className="w-4 h-4 text-accent" /> Call</a>}
+          {biz.email_primary && <a href={`mailto:${biz.email_primary}`} className="flex-1 min-w-[120px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-surface py-2.5 text-ink hover:border-border-strong"><Mail className="w-4 h-4 text-accent" /> Email</a>}
+          {biz.website && <a href={biz.website.startsWith('http') ? biz.website : `https://${biz.website}`} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-[120px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-surface py-2.5 text-ink hover:border-border-strong"><Globe className="w-4 h-4 text-accent" /> Website</a>}
         </div>
       )}
     </div>
@@ -361,7 +361,7 @@ function HomeTab({ data, derived, biz, onRequest }: { data: PortalData; derived:
 }
 function StatCard({ label, value, tone, icon: Icon }: { label: string; value: string; tone?: string; icon: typeof Receipt }) {
   return (
-    <div className="rounded-card border border-border bg-bg-secondary p-3.5">
+    <div className="rounded-card border border-border bg-surface p-3.5">
       <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1"><Icon className="w-3 h-3" /> {label}</p>
       <p className={cn('text-lg font-bold mt-1', tone || 'text-ink')}>{value}</p>
     </div>
@@ -377,7 +377,7 @@ function ServiceTab({ completed, photosByJob, invoiceByJob, photoUrl }: { comple
         const photos = photosByJob.get(j.id) || []
         const inv = invoiceByJob.get(j.id)
         return (
-          <div key={j.id} className="rounded-card border border-border bg-bg-secondary p-4">
+          <div key={j.id} className="rounded-card border border-border bg-surface p-4">
             <div className="flex items-center justify-between gap-2">
               <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> {j.service_type || j.title}</p>
               <span className="text-xs text-ink-muted">{formatDate(j.scheduled_date)}</span>
@@ -421,7 +421,7 @@ function GalleryTab({ photosByJob, jobs, photoUrl }: { photosByJob: Map<string, 
         const j = jobById.get(jobId)
         const hasBA = before.length > 0 && after.length > 0
         return (
-          <div key={jobId} className="rounded-card border border-border bg-bg-secondary p-4">
+          <div key={jobId} className="rounded-card border border-border bg-surface p-4">
             <p className="text-sm font-semibold text-ink">{j?.service_type || j?.title || 'Visit'}</p>
             <p className="text-xs text-ink-faint mb-2.5">{j ? formatDate(j.scheduled_date) : ''}</p>
             {hasBA ? (
@@ -463,7 +463,7 @@ function QuotesTab({ quotes, accept, accepting, customerName, business }: { quot
   return (
     <div className="space-y-3">
       {quotes.map(q => (
-        <div key={q.id} className="rounded-card border border-border bg-bg-secondary p-4">
+        <div key={q.id} className="rounded-card border border-border bg-surface p-4">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0"><p className="text-sm font-semibold text-ink">{q.service_type}</p><p className="text-xs text-ink-muted">{q.quote_number} · {formatDate(q.created_at)}</p></div>
             <QuoteStatusPill status={q.status} />
@@ -496,7 +496,7 @@ function InvoicesTab({ invoices, paymentsEnabled, pay, payingId, gstPercent, cus
         const owing = inv.status === 'unpaid' || inv.status === 'sent'
         const t = invoiceTotals(inv.amount, { gst_percent: gstPercent })
         return (
-        <div key={inv.id} className="rounded-card border border-border bg-bg-secondary p-4">
+        <div key={inv.id} className="rounded-card border border-border bg-surface p-4">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0"><p className="text-sm font-semibold text-ink">{inv.service_type || 'Services'}</p><p className="text-xs text-ink-muted">{inv.invoice_number} · {inv.issued_date ? formatDate(inv.issued_date) : formatDate(inv.created_at)}{inv.due_date ? ` · due ${formatDate(inv.due_date)}` : ''}</p></div>
             <div className="text-right"><p className="text-base font-bold text-ink">{formatCurrency(t.total)}</p><InvoiceStatusPill status={inv.status} /></div>
@@ -622,7 +622,7 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, busines
 function DocRow({ d }: { d: DocItem }) {
   const m = KIND_META[d.kind]
   return (
-    <div className="rounded-card border border-border bg-bg-secondary p-4">
+    <div className="rounded-card border border-border bg-surface p-4">
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-start gap-3 min-w-0">
           <div className={cn('w-9 h-9 rounded-lg border flex items-center justify-center shrink-0', m.tone)}><m.icon className="w-4 h-4" /></div>
@@ -669,7 +669,7 @@ function TimelineTab({ data, photosByJob }: { data: PortalData; photosByJob: Map
         {events.map(e => (
           <div key={e.id} className="relative">
             <div className={cn('absolute -left-7 top-1 w-[22px] h-[22px] rounded-full border flex items-center justify-center', e.tone)}><e.icon className="w-3 h-3" /></div>
-            <div className="rounded-card border border-border bg-bg-secondary px-3.5 py-2.5">
+            <div className="rounded-card border border-border bg-surface px-3.5 py-2.5">
               <p className="text-sm font-medium text-ink">{e.title}</p>
               <p className="text-[11px] text-ink-faint mt-0.5">{e.sub ? <span className="text-ink-muted">{e.sub} · </span> : null}{formatDate(e.at)}</p>
             </div>
@@ -687,7 +687,7 @@ function PropertyTab({ property }: { property: PortalData['property'] }) {
   }
   return (
     <div className="space-y-3">
-      <div className="rounded-card border border-border bg-bg-secondary p-4">
+      <div className="rounded-card border border-border bg-surface p-4">
         <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-2">Your property</p>
         {property.address && (
           <p className="text-sm text-ink flex items-start gap-1.5"><MapPin className="w-4 h-4 text-ink-faint shrink-0 mt-0.5" /> <span>{property.address}{property.city ? `, ${property.city}` : ''}{property.province ? `, ${property.province}` : ''}</span></p>
@@ -699,7 +699,7 @@ function PropertyTab({ property }: { property: PortalData['property'] }) {
         </div>
       </div>
       {property.notes && (
-        <div className="rounded-card border border-border bg-bg-secondary p-4">
+        <div className="rounded-card border border-border bg-surface p-4">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-1.5">Notes from your provider</p>
           <p className="text-sm text-ink-muted whitespace-pre-wrap">{property.notes}</p>
         </div>
@@ -728,7 +728,7 @@ function PaymentsTab({ payments, invoices, outstanding }: { payments: PortalPaym
           <p className="text-[10px] uppercase tracking-wide text-emerald-400 font-semibold flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Total paid</p>
           <p className="text-lg font-bold text-ink mt-1">{formatCurrency(totalPaid)}</p>
         </div>
-        <div className="rounded-card border border-border bg-bg-secondary p-3.5">
+        <div className="rounded-card border border-border bg-surface p-3.5">
           <p className="text-[10px] uppercase tracking-wide text-ink-faint font-semibold flex items-center gap-1"><Receipt className="w-3 h-3" /> Outstanding</p>
           <p className={cn('text-lg font-bold mt-1', outstanding > 0 ? 'text-amber-400' : 'text-emerald-400')}>{formatCurrency(outstanding)}</p>
         </div>
@@ -738,7 +738,7 @@ function PaymentsTab({ payments, invoices, outstanding }: { payments: PortalPaym
       ) : payments.map(p => {
         const inv = p.invoice_id ? invById.get(p.invoice_id) : null
         return (
-          <div key={p.id} className="rounded-card border border-border bg-bg-secondary p-4 flex items-center justify-between gap-3">
+          <div key={p.id} className="rounded-card border border-border bg-surface p-4 flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-9 h-9 rounded-lg border border-emerald-500/25 bg-emerald-500/10 flex items-center justify-center shrink-0"><CheckCircle2 className="w-4 h-4 text-emerald-400" /></div>
               <div className="min-w-0">
@@ -761,7 +761,7 @@ function RequestTab({ presets, reqMsg, setReqMsg, request, reqBusy, reqSent, biz
 }) {
   return (
     <div className="space-y-3">
-      <div className="rounded-card border border-border bg-bg-secondary p-4">
+      <div className="rounded-card border border-border bg-surface p-4">
         <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><Sparkles className="w-4 h-4 text-accent" /> Request a service</p>
         <p className="text-xs text-ink-muted mt-0.5 mb-3">Tap a service to request a quote — {biz?.company_name || 'we'}’ll be in touch.</p>
         <div className="grid grid-cols-2 gap-2">
@@ -780,7 +780,7 @@ function RequestTab({ presets, reqMsg, setReqMsg, request, reqBusy, reqSent, biz
         </div>
       </div>
 
-      <div className="rounded-card border border-border bg-bg-secondary p-4">
+      <div className="rounded-card border border-border bg-surface p-4">
         <p className="text-sm font-semibold text-ink mb-1">Something else?</p>
         {reqSent === 'custom' ? (
           <p className="text-sm text-emerald-400 flex items-center gap-1.5 py-2"><CheckCircle2 className="w-4 h-4" /> Request sent — we’ll be in touch soon.</p>
@@ -828,7 +828,7 @@ function ReviewCard({ reviewUrl, businessName, reviewed, onReviewed }: { reviewU
 // ── Message preferences (self-serve consent) ──
 function ConsentCard({ consent, onSave }: { consent: { sms: boolean; email: boolean }; onSave: (c: { sms: boolean; email: boolean }) => void }) {
   return (
-    <div className="rounded-card border border-border bg-bg-secondary p-4 mt-3">
+    <div className="rounded-card border border-border bg-surface p-4 mt-3">
       <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><MessageSquare className="w-4 h-4 text-accent" /> Message preferences</p>
       <p className="text-xs text-ink-muted mt-0.5 mb-3">Choose how we can reach you — you can change this anytime. Message &amp; data rates may apply to texts.</p>
       <div className="space-y-2">

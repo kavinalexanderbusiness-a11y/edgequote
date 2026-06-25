@@ -359,7 +359,7 @@ export default function BookPage() {
               </div>
             </div>
             {plan && (
-              <div className="mt-4 rounded-xl border border-border bg-bg-secondary px-4 py-3 flex items-center justify-between">
+              <div className="mt-4 rounded-xl border border-border bg-surface px-4 py-3 flex items-center justify-between">
                 <span className="text-sm text-ink-muted">{plan.label}</span>
                 <span className="text-base font-bold text-ink">{formatCurrency(plan.price)}{plan.key !== 'one_time' ? '/visit' : ''}</span>
               </div>

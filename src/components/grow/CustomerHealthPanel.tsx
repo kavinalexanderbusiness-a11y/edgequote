@@ -46,7 +46,7 @@ export function CustomerHealthPanel() {
 
   if (loading) {
     return (
-      <div className="rounded-card border border-border bg-bg-secondary p-5 flex items-center gap-2 text-sm text-ink-muted">
+      <div className="rounded-card border border-border bg-surface p-5 flex items-center gap-2 text-sm text-ink-muted">
         <Loader2 className="w-4 h-4 animate-spin" /> Scoring customer health…
       </div>
     )
@@ -58,11 +58,11 @@ export function CustomerHealthPanel() {
   const visible = showAll ? sorted : sorted.slice(0, 12)
 
   return (
-    <div className="rounded-card border border-border bg-bg-secondary overflow-hidden">
+    <div className="rounded-card border border-border bg-surface overflow-hidden">
       <div className="px-5 py-4 border-b border-border flex items-start justify-between gap-3">
         <div className="flex items-start gap-3 min-w-0">
           <div className="w-9 h-9 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
-            <HeartPulse className="w-4.5 h-4.5 text-accent" />
+            <HeartPulse className="w-4 h-4 text-accent" />
           </div>
           <div className="min-w-0">
             <p className="text-base font-bold text-ink">Customer Health</p>
