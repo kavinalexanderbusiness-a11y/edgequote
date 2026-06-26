@@ -3,8 +3,16 @@
 // and coloured, so the report, any future embed, and the context block never
 // drift. Keys come from lib/vision/types.
 
-import type { Difficulty, FeatureKey } from './types'
+import type { ConfidenceBand, Difficulty, FeatureKey } from './types'
 import type { Tone } from '@/lib/tone'
+
+// Confidence band → tone, defined ONCE so every chip agrees (these used to be
+// re-declared inline in 4 components, and the 'low' value had drifted).
+//   • CONFIDENCE_TONE — for an ANALYSIS's trust level: low = danger (shaky read).
+//   • FORECAST_TONE   — for a PREDICTION's certainty: low = neutral (just rougher,
+//     not "bad"), so a low-confidence forecast doesn't render alarmingly red.
+export const CONFIDENCE_TONE: Record<ConfidenceBand, Tone> = { high: 'success', medium: 'warn', low: 'danger' }
+export const FORECAST_TONE: Record<ConfidenceBand, Tone> = { high: 'success', medium: 'warn', low: 'neutral' }
 
 export const FEATURE_LABELS: Record<FeatureKey, string> = {
   mowing_completed: 'Mowing completed',

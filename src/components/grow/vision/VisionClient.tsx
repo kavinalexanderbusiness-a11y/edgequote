@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Sparkles, Search, MapPin, Image as ImageIcon, Satellite, Eye, RefreshCw, AlertTriangle, Home, Brain, Activity } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { PHOTO_BUCKET } from '@/lib/photos'
@@ -9,7 +9,7 @@ import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Banner } from '@/components/ui/Banner'
 import { Tabs } from '@/components/ui/Tabs'
-import { SectionHeading } from '@/components/ui/SectionHeading'
+import { Collapsible } from '@/components/ui/Collapsible'
 import { InlineEmpty } from '@/components/ui/EmptyState'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { IntelligenceReport } from './IntelligenceReport'
@@ -17,7 +17,7 @@ import { TwinPanel } from './TwinPanel'
 import { PropertyTimeline } from './PropertyTimeline'
 import { cn } from '@/lib/utils'
 import { toneSoft } from '@/lib/tone'
-import { DIFFICULTY_LABELS } from '@/lib/vision/labels'
+import { CONFIDENCE_TONE, DIFFICULTY_LABELS } from '@/lib/vision/labels'
 import type { AnalyzeResponse, ConfidenceBand, Difficulty, PropertyIntelligence, PropertyTwin } from '@/lib/vision/types'
 
 // One property as the picker needs it (built server-side in the page).
@@ -35,7 +35,13 @@ export interface VisionPropertyLite {
   analyzedAt: string | null
 }
 
-const BAND_TONE = { high: 'success', medium: 'warn', low: 'danger' } as const
+// Everything we load for one property — cached so re-selecting is instant.
+interface Bundle {
+  intel: PropertyIntelligence | null
+  twin: PropertyTwin | null
+  timeline: PropertyIntelligence[]
+  photoUrls: Record<string, string>
+}
 
 export function VisionClient({ properties, aiEnabled }: { properties: VisionPropertyLite[]; aiEnabled: boolean }) {
   const supabase = useMemo(() => createClient(), [])
@@ -51,6 +57,12 @@ export function VisionClient({ properties, aiEnabled }: { properties: VisionProp
   const [reused, setReused] = useState(false)
   const [tab, setTab] = useState<'now' | 'timeline'>('now')
 
+  // Session cache of loaded property data + the currently-loading id (race guard).
+  const cacheRef = useRef<Map<string, Bundle>>(new Map())
+  const selectedIdRef = useRef<string | null>(selectedId)
+  const btnRefs = useRef<Map<string, HTMLButtonElement>>(new Map())
+  const detailRef = useRef<HTMLDivElement>(null)
+
   const selected = properties.find(p => p.id === selectedId) || null
 
   const filtered = useMemo(() => {
@@ -63,35 +75,62 @@ export function VisionClient({ properties, aiEnabled }: { properties: VisionProp
     )
   }, [properties, query])
 
-  async function loadTimeline(id: string) {
-    const [timelineRes, photosRes] = await Promise.all([
+  const applyBundle = useCallback((b: Bundle) => {
+    setIntel(b.intel); setTwin(b.twin); setTimeline(b.timeline); setPhotoUrls(b.photoUrls)
+  }, [])
+
+  // ONE query set per property: timeline (the latest active row is just its first
+  // element — no separate "active" query), the twin, and photo URLs. Cached.
+  const loadProperty = useCallback(async (id: string): Promise<Bundle> => {
+    const [tlRes, twinRes, photosRes] = await Promise.all([
       supabase.from('property_intelligence').select('*').eq('property_id', id).order('created_at', { ascending: false }).limit(24),
+      supabase.from('property_twin').select('*').eq('property_id', id).maybeSingle(),
       supabase.from('job_photos').select('id, storage_path').eq('property_id', id),
     ])
-    setTimeline((timelineRes.data as unknown as PropertyIntelligence[]) || [])
-    const map: Record<string, string> = {}
+    const tl = (tlRes.data as unknown as PropertyIntelligence[]) || []
+    const photoUrls: Record<string, string> = {}
     for (const ph of (photosRes.data as { id: string; storage_path: string }[] | null) || []) {
-      map[ph.id] = supabase.storage.from(PHOTO_BUCKET).getPublicUrl(ph.storage_path).data.publicUrl
+      photoUrls[ph.id] = supabase.storage.from(PHOTO_BUCKET).getPublicUrl(ph.storage_path).data.publicUrl
     }
-    setPhotoUrls(map)
-  }
+    const bundle: Bundle = {
+      intel: tl.find(r => r.status === 'active') ?? tl[0] ?? null,  // current read (newest active)
+      twin: (twinRes.data as unknown as PropertyTwin) ?? null,
+      timeline: tl,
+      photoUrls,
+    }
+    cacheRef.current.set(id, bundle)
+    return bundle
+  }, [supabase])
 
-  async function selectProperty(id: string) {
-    setSelectedId(id)
-    setIntel(null); setTwin(null); setTimeline([]); setError(null); setReused(false); setTab('now')
-    setLoadingIntel(true)
-    try {
-      const [intelRes, twinRes] = await Promise.all([
-        supabase.from('property_intelligence').select('*').eq('property_id', id).eq('status', 'active').order('created_at', { ascending: false }).limit(1).maybeSingle(),
-        supabase.from('property_twin').select('*').eq('property_id', id).maybeSingle(),
-        loadTimeline(id),
-      ])
-      if (intelRes.data) setIntel(intelRes.data as unknown as PropertyIntelligence)
-      if (twinRes.data) setTwin(twinRes.data as unknown as PropertyTwin)
-    } finally {
-      setLoadingIntel(false)
+  const selectProperty = useCallback((id: string, opts?: { scroll?: boolean }) => {
+    selectedIdRef.current = id
+    setSelectedId(id); setError(null); setReused(false); setTab('now')
+
+    if (opts?.scroll && typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches) {
+      requestAnimationFrame(() => detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
     }
-  }
+
+    const cached = cacheRef.current.get(id)
+    if (cached) {
+      applyBundle(cached)                                    // instant — no skeleton
+      setLoadingIntel(false)
+      // Revalidate quietly in the background (no flash) in case it changed elsewhere.
+      void loadProperty(id).then(b => { if (selectedIdRef.current === id) applyBundle(b) }).catch(() => {})
+      return
+    }
+    setIntel(null); setTwin(null); setTimeline([]); setPhotoUrls({}); setLoadingIntel(true)
+    loadProperty(id)
+      .then(b => { if (selectedIdRef.current === id) applyBundle(b) })
+      .catch(() => {})
+      .finally(() => { if (selectedIdRef.current === id) setLoadingIntel(false) })
+  }, [applyBundle, loadProperty])
+
+  // Auto-load the initially-selected property on mount (READ-ONLY — never analyzes),
+  // so the owner doesn't have to click the row that already looks selected.
+  useEffect(() => {
+    if (selectedIdRef.current) selectProperty(selectedIdRef.current)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   async function analyze(force: boolean) {
     if (!selected) return
@@ -103,16 +142,29 @@ export function VisionClient({ properties, aiEnabled }: { properties: VisionProp
         body: JSON.stringify({ propertyId: selected.id, includeSatellite: true, force }),
       })
       const data = (await res.json()) as AnalyzeResponse
-      if (!data.ok || !data.intelligence) { setError(data.error || 'Analysis failed. Please try again.'); return }
+      if (!data.ok || !data.intelligence) { setError(data.error || 'Couldn’t analyze this property. Please try again.'); return }
       setIntel(data.intelligence)
       if (data.twin) setTwin(data.twin)
       setReused(!!data.reused)
-      await loadTimeline(selected.id)
+      const b = await loadProperty(selected.id)               // refresh timeline + cache
+      if (selectedIdRef.current === selected.id) applyBundle(b)
     } catch {
-      setError('Network error — please try again.')
+      setError('Network problem — check your connection and try again.')
     } finally {
       setAnalyzing(false)
     }
+  }
+
+  // Roving arrow-key navigation through the property list.
+  function onItemKey(e: React.KeyboardEvent, id: string) {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+    e.preventDefault()
+    const ids = filtered.map(p => p.id)
+    const cur = ids.indexOf(id)
+    const nextId = e.key === 'ArrowDown' ? ids[Math.min(ids.length - 1, cur + 1)] : ids[Math.max(0, cur - 1)]
+    if (!nextId) return
+    btnRefs.current.get(nextId)?.focus()
+    selectProperty(nextId)
   }
 
   const canAnalyze = !!selected && aiEnabled && (selected.hasLocation || selected.photoCount > 0)
@@ -131,31 +183,43 @@ export function VisionClient({ properties, aiEnabled }: { properties: VisionProp
       )}
 
       {properties.length === 0 ? (
-        <Card className="p-6"><InlineEmpty icon={Home}>No properties yet. Add a property (with a location or photos) to analyze it.</InlineEmpty></Card>
+        <Card className="p-6"><InlineEmpty icon={Home}>No properties yet. Add a property (with a location or photos) and it’ll show up here to analyze.</InlineEmpty></Card>
       ) : (
         <div className="grid lg:grid-cols-[20rem_1fr] gap-5">
           {/* Property picker */}
           <div className="space-y-3">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-faint" />
-              <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search properties…"
-                className="w-full rounded-xl bg-surface border border-border pl-9 pr-3 py-2.5 text-sm text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40" />
+              <input
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                onKeyDown={e => { if (e.key === 'ArrowDown' && filtered[0]) { e.preventDefault(); btnRefs.current.get(filtered[0].id)?.focus() } }}
+                placeholder="Search properties…"
+                aria-label="Search properties by address, customer or neighbourhood"
+                className="w-full rounded-xl bg-surface border border-border pl-9 pr-3 py-2.5 text-sm text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40"
+              />
             </div>
-            <div className="rounded-card border border-border bg-surface divide-y divide-border max-h-[70vh] overflow-y-auto">
+            <div className="rounded-card border border-border bg-surface divide-y divide-border max-h-[45vh] lg:max-h-[70vh] overflow-y-auto">
               {filtered.length === 0 ? (
-                <InlineEmpty>No matches</InlineEmpty>
+                <InlineEmpty>No properties match “{query.trim()}”.</InlineEmpty>
               ) : filtered.map(p => {
                 const active = p.id === selectedId
                 return (
-                  <button key={p.id} onClick={() => selectProperty(p.id)}
-                    className={cn('w-full text-left px-3.5 py-3 transition-colors', active ? 'bg-accent/10' : 'hover:bg-surface-raised')}>
+                  <button
+                    key={p.id}
+                    ref={el => { if (el) btnRefs.current.set(p.id, el); else btnRefs.current.delete(p.id) }}
+                    onClick={() => selectProperty(p.id, { scroll: true })}
+                    onKeyDown={e => onItemKey(e, p.id)}
+                    aria-current={active ? 'true' : undefined}
+                    className={cn('w-full text-left px-3.5 py-3 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-inset', active ? 'bg-accent/10' : 'hover:bg-surface-raised')}
+                  >
                     <p className="text-sm font-semibold text-ink truncate">{p.address}</p>
                     <p className="text-[11px] text-ink-faint truncate">{p.customerName || 'No customer'}{p.neighborhood ? ` · ${p.neighborhood}` : ''}</p>
                     <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
                       {p.hasLocation && <Chip icon={Satellite}>Satellite</Chip>}
                       {p.photoCount > 0 && <Chip icon={ImageIcon}>{p.photoCount}</Chip>}
                       {p.hasAnalysis && p.confidence_band && (
-                        <span className={cn('inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full border', toneSoft[BAND_TONE[p.confidence_band]])}>
+                        <span className={cn('inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full border', toneSoft[CONFIDENCE_TONE[p.confidence_band]])}>
                           <Brain className="w-2.5 h-2.5" />{p.mowing_difficulty ? DIFFICULTY_LABELS[p.mowing_difficulty] : p.confidence_band}
                         </span>
                       )}
@@ -167,9 +231,9 @@ export function VisionClient({ properties, aiEnabled }: { properties: VisionProp
           </div>
 
           {/* Detail */}
-          <div className="space-y-4 min-w-0">
+          <div ref={detailRef} className="space-y-4 min-w-0 scroll-mt-4">
             {!selected ? (
-              <Card className="p-6"><InlineEmpty icon={Eye}>Select a property to analyze.</InlineEmpty></Card>
+              <Card className="p-6"><InlineEmpty icon={Eye}>Select a property to see its intelligence.</InlineEmpty></Card>
             ) : (
               <>
                 <Card className="p-4">
@@ -192,7 +256,7 @@ export function VisionClient({ properties, aiEnabled }: { properties: VisionProp
                   )}
                 </Card>
 
-                {reused && intel && <Banner tone="neutral" icon={Eye}>Showing the existing analysis — the imagery hasn’t changed since it was last run. Use “Re-analyze” to force a fresh read.</Banner>}
+                {reused && intel && <Banner tone="neutral" icon={Eye}>Showing the existing analysis — the imagery hasn’t changed since it last ran. Use “Re-analyze” to force a fresh read.</Banner>}
                 {error && <Banner tone="danger" icon={AlertTriangle}>{error}</Banner>}
 
                 {(twin || timeline.length > 0) && !analyzing && (
@@ -207,33 +271,40 @@ export function VisionClient({ properties, aiEnabled }: { properties: VisionProp
                 )}
 
                 {analyzing ? (
-                  <div className="space-y-4">
-                    <Skeleton className="h-24 w-full rounded-card" />
-                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">{[0, 1, 2, 3].map(i => <Skeleton key={i} className="h-20 rounded-card" />)}</div>
-                    <Skeleton className="h-40 w-full rounded-card" />
-                  </div>
+                  <AnalyzingSkeleton />
                 ) : loadingIntel ? (
-                  <Skeleton className="h-40 w-full rounded-card" />
+                  <AnalyzingSkeleton />
                 ) : tab === 'timeline' ? (
                   <PropertyTimeline entries={timeline} photoUrlById={photoUrls} />
                 ) : (twin || intel) ? (
-                  <div className="space-y-6">
+                  <div className="space-y-5">
                     {twin && <TwinPanel twin={twin} />}
                     {intel && (
-                      <div>
-                        <SectionHeading icon={Eye} title="This analysis" sub="The latest raw read" />
+                      <Collapsible title="This analysis" icon={Eye} summary="The latest raw read — detections, estimates & upsells">
                         <IntelligenceReport intel={intel} />
-                      </div>
+                      </Collapsible>
                     )}
                   </div>
                 ) : (
-                  <Card className="p-6"><InlineEmpty icon={Sparkles}>{canAnalyze ? 'No analysis yet. Run AI Vision to read this property and start its memory.' : 'Add imagery first.'}</InlineEmpty></Card>
+                  <Card className="p-6"><InlineEmpty icon={Sparkles}>{canAnalyze ? 'No analysis yet. Run AI Vision to read this property and start its memory.' : 'Add a photo or a location, then run AI Vision.'}</InlineEmpty></Card>
                 )}
               </>
             )}
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// Skeleton that mirrors the twin layout so loaded content lands where the
+// placeholder was (no jump). Used for both first-load and analyzing.
+function AnalyzingSkeleton() {
+  return (
+    <div className="space-y-5" aria-busy="true" aria-live="polite">
+      <Card className="p-4"><Skeleton className="h-4 w-40" /><Skeleton className="h-3 w-full mt-3" /><Skeleton className="h-3 w-2/3 mt-2" /><div className="flex gap-2 mt-3">{[0, 1, 2, 3].map(i => <Skeleton key={i} className="h-6 w-20 rounded-full" />)}</div></Card>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">{[0, 1, 2, 3].map(i => <Skeleton key={i} className="h-16 rounded-card" />)}</div>
+      <Skeleton className="h-32 w-full rounded-card" />
     </div>
   )
 }

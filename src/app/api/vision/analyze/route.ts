@@ -3,7 +3,8 @@ import { createClient } from '@/lib/supabase/server'
 import { aiEnabled } from '@/lib/ai/anthropic'
 import { analyzeImages } from '@/lib/ai/vision'
 import { listPhotos } from '@/lib/photos'
-import { gatherImages, latestForProperty, persistAnalysis, type AnalysisInput, type AnalyzablePhoto } from '@/lib/vision/data'
+import { gatherImages, latestForProperty, persistAnalysis, planImageSet, type AnalysisInput, type AnalyzablePhoto } from '@/lib/vision/data'
+import { satelliteConfigured } from '@/lib/vision/staticMap'
 import { buildAnalysisPrompt } from '@/lib/vision/prompt'
 import { updateTwinAfterAnalysis } from '@/lib/vision/intelligence'
 import { getTwin } from '@/lib/vision/twin'
@@ -60,20 +61,27 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     id: p.id, url: p.url, kind: p.kind, caption: p.caption, taken_at: p.taken_at,
   }))
 
-  // Gather the actual image bytes + a signature for exactly what we're analysing.
-  const gathered = await gatherImages({ lat: property.lat, lng: property.lng, includeSatellite, photos })
-  if (!gathered.images.length) {
+  // Decide WHICH imagery this run covers — without downloading anything yet.
+  const plan = planImageSet({ lat: property.lat, lng: property.lng, includeSatellite, satelliteAvailable: satelliteConfigured(), photos })
+  if (!plan.satellitePlanned && !plan.photoPlan.length) {
     return json({ ok: false, aiEnabled: true, error: 'No imagery to analyze. Add a photo, or set the property location so the satellite view is available.' }, 422)
   }
 
-  // Reuse: if nothing changed since the last analysis, return it + the twin (no
-  // model call, no new observations — the twin already reflects this read).
+  // Reuse: if the imagery is identical to the last analysis, return it + the twin
+  // with NO model call AND no image downloads — the twin already reflects this
+  // read. This is the common re-open case, so it must be cheap.
   if (!force) {
     const latest = await latestForProperty(supabase, user.id, propertyId)
-    if (latest && latest.image_signature === gathered.signature) {
+    if (latest && latest.image_signature === plan.signature) {
       const twin = await getTwin(supabase, user.id, propertyId)
       return json({ ok: true, aiEnabled: true, intelligence: latest, twin: twin ?? undefined, reused: true })
     }
+  }
+
+  // Changed (or forced): now pay to download the bytes and (re)analyze.
+  const gathered = await gatherImages(plan, { lat: property.lat, lng: property.lng })
+  if (!gathered.images.length) {
+    return json({ ok: false, aiEnabled: true, error: 'No imagery could be loaded. Check the photos or property location and try again.' }, 422)
   }
 
   // Lawn size to anchor the labour estimate: stored field, else newest measurement.

@@ -5,14 +5,12 @@ import { StatTile } from '@/components/ui/StatTile'
 import { cn } from '@/lib/utils'
 import { toneSoft, toneText } from '@/lib/tone'
 import { FEATURE_KEYS, type Detection, type PropertyIntelligence } from '@/lib/vision/types'
-import { DIFFICULTY_LABELS, DIFFICULTY_TONE, FEATURE_LABELS, featureTone } from '@/lib/vision/labels'
+import { CONFIDENCE_TONE, DIFFICULTY_LABELS, DIFFICULTY_TONE, FEATURE_LABELS, featureTone } from '@/lib/vision/labels'
 
 // ── AI Vision — the report ────────────────────────────────────────────────────
 // A read-only render of one property_intelligence row. Pure + presentational so
 // it can be dropped anywhere later (e.g. a property detail tab). Everything here
 // is framed as a RECOMMENDATION; nothing is or implies a price.
-
-const BAND_TONE = { high: 'success', medium: 'warn', low: 'danger' } as const
 
 function round(n: number | null | undefined): string {
   return n == null ? '—' : Math.round(n).toLocaleString()
@@ -31,14 +29,14 @@ export function IntelligenceReport({ intel }: { intel: PropertyIntelligence }) {
       <Card className="p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
-            <div className={cn('w-12 h-12 rounded-2xl border flex flex-col items-center justify-center shrink-0', toneSoft[BAND_TONE[band]])}>
+            <div className={cn('w-12 h-12 rounded-2xl border flex flex-col items-center justify-center shrink-0', toneSoft[CONFIDENCE_TONE[band]])}>
               <span className="text-base font-black leading-none">{Math.round(intel.confidence ?? 0)}</span>
               <span className="text-[8px] uppercase tracking-wide leading-none mt-0.5 opacity-70">conf</span>
             </div>
             <div className="min-w-0">
               <p className="text-sm font-bold text-ink flex items-center gap-1.5">
                 <Sparkles className="w-3.5 h-3.5 text-accent" /> AI Vision read
-                <span className={cn('text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-full border', toneSoft[BAND_TONE[band]])}>
+                <span className={cn('text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-full border', toneSoft[CONFIDENCE_TONE[band]])}>
                   {band} confidence
                 </span>
               </p>

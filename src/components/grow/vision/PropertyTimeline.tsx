@@ -6,15 +6,13 @@ import { cn } from '@/lib/utils'
 import { toneSoft } from '@/lib/tone'
 import { InlineEmpty } from '@/components/ui/EmptyState'
 import { detectChanges } from '@/lib/vision/change'
-import { FEATURE_LABELS } from '@/lib/vision/labels'
-import type { ConfidenceBand, PropertyIntelligence } from '@/lib/vision/types'
+import { CONFIDENCE_TONE, FEATURE_LABELS } from '@/lib/vision/labels'
+import type { PropertyIntelligence } from '@/lib/vision/types'
 
 // ── AI Vision — property timeline ─────────────────────────────────────────────
 // Every analysis over time, newest first. Each entry shows the read + how it
 // changed from the PREVIOUS one (improvements green, deterioration red), and
 // expands to its summary, detections and the photos that fed it. Read-only.
-
-const BAND_TONE: Record<ConfidenceBand, 'success' | 'warn' | 'danger'> = { high: 'success', medium: 'warn', low: 'danger' }
 
 export function PropertyTimeline({ entries, photoUrlById }: { entries: PropertyIntelligence[]; photoUrlById: Record<string, string> }) {
   const [open, setOpen] = useState<string | null>(entries[0]?.id ?? null)
@@ -36,7 +34,7 @@ export function PropertyTimeline({ entries, photoUrlById }: { entries: PropertyI
 
         return (
           <div key={e.id} className="rounded-card border border-border bg-surface overflow-hidden">
-            <button onClick={() => setOpen(isOpen ? null : e.id)} className="w-full flex items-center gap-3 px-3.5 py-3 text-left hover:bg-surface-raised transition-colors">
+            <button onClick={() => setOpen(isOpen ? null : e.id)} aria-expanded={isOpen} className="w-full flex items-center gap-3 px-3.5 py-3 text-left hover:bg-surface-raised transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-inset">
               {/* timeline dot */}
               <div className="flex flex-col items-center shrink-0">
                 <div className={cn('w-2.5 h-2.5 rounded-full', i === 0 ? 'bg-accent' : 'bg-ink-faint/40')} />
@@ -47,7 +45,7 @@ export function PropertyTimeline({ entries, photoUrlById }: { entries: PropertyI
                   <span className="text-[11px] text-ink-faint font-normal ml-2">{e.source} · {e.image_count} img</span>
                 </p>
                 <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                  <span className={cn('text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-full border', toneSoft[BAND_TONE[band]])}>{Math.round(e.confidence ?? 0)} {band}</span>
+                  <span className={cn('text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-full border', toneSoft[CONFIDENCE_TONE[band]])}>{Math.round(e.confidence ?? 0)} {band}</span>
                   {health && <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-surface text-ink-muted border-border">turf {health}</span>}
                   {ups > 0 && <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full border bg-emerald-500/15 text-emerald-400 border-emerald-500/25"><TrendingUp className="w-2.5 h-2.5" />{ups}</span>}
                   {downs > 0 && <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full border bg-red-500/10 text-red-400 border-red-500/20"><TrendingDown className="w-2.5 h-2.5" />{downs}</span>}
@@ -74,7 +72,7 @@ export function PropertyTimeline({ entries, photoUrlById }: { entries: PropertyI
                   <div className="flex gap-2 overflow-x-auto no-scrollbar">
                     {photoRefs.map(ref => photoUrlById[ref] ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img key={ref} src={photoUrlById[ref]} alt="" className="w-16 h-16 rounded-lg object-cover border border-border shrink-0" />
+                      <img key={ref} src={photoUrlById[ref]} alt={`Property photo analyzed ${(e.observed_at || e.created_at || '').slice(0, 10)}`} loading="lazy" className="w-16 h-16 rounded-lg object-cover border border-border shrink-0" />
                     ) : (
                       <div key={ref} className="w-16 h-16 rounded-lg border border-border bg-surface-raised flex items-center justify-center shrink-0"><Camera className="w-4 h-4 text-ink-faint" /></div>
                     ))}

@@ -6,6 +6,7 @@ import { SectionHeading } from '@/components/ui/SectionHeading'
 import { cn, formatCurrency } from '@/lib/utils'
 import { toneSoft, toneText, type Tone } from '@/lib/tone'
 import { SEASON_LABELS } from '@/lib/vision/season'
+import { FORECAST_TONE } from '@/lib/vision/labels'
 import type {
   ChangeSummary, CrmBlock, ForecastBlock, MarketingSummary, OpportunityBlock, OppTier, PropertyTwin, SeasonalBlock,
 } from '@/lib/vision/types'
@@ -16,7 +17,6 @@ import type {
 // Read-only; recommendations only.
 
 const TIER_TONE: Record<OppTier, Tone> = { high: 'success', medium: 'warn', low: 'neutral' }
-const BAND_TONE = { high: 'success', medium: 'warn', low: 'neutral' } as const
 
 function daysUntil(iso: string): number {
   return Math.round((new Date(iso + 'T00:00:00').getTime() - Date.now()) / 86_400_000)
@@ -110,7 +110,7 @@ export function TwinPanel({ twin }: { twin: PropertyTwin }) {
                 </div>
                 <div className="shrink-0 text-right">
                   <p className="text-xs font-semibold text-ink">{f.predicted_for}</p>
-                  <p className={cn('text-[10px]', toneText[BAND_TONE[f.confidence]])}>{horizonLabel(f.predicted_for)}</p>
+                  <p className={cn('text-[10px]', toneText[FORECAST_TONE[f.confidence]])}>{horizonLabel(f.predicted_for)}</p>
                 </div>
               </div>
             ))}

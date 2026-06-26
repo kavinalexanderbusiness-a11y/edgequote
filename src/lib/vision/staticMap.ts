@@ -9,6 +9,12 @@ import 'server-only'
 
 export const SATELLITE_ZOOM = 20 // property-level detail (driveway / beds / edges visible)
 
+// Whether the satellite still can be fetched at all (maps key present). Lets the
+// route plan the image set — and serve cache hits — without touching the network.
+export function satelliteConfigured(): boolean {
+  return !!process.env.GOOGLE_MAPS_API_KEY
+}
+
 export interface FetchedImage {
   mediaType: 'image/jpeg'
   dataBase64: string

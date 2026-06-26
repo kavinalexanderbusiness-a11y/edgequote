@@ -59,33 +59,57 @@ export interface GatheredImages {
   satelliteUsed: boolean
 }
 
-// Build the model's image set: the satellite still first (overview), then before/
-// after/ground photos (current detail). Returns a stable signature describing
-// exactly which imagery this covers, so an identical request can be served from
-// cache instead of re-billing the model.
-export async function gatherImages(opts: {
+// Prefer before→after→general, newest first, capped — the most informative set.
+const PHOTO_ORDER = { before: 0, after: 1, general: 2 } as const
+function rankPhotos(photos: AnalyzablePhoto[]): AnalyzablePhoto[] {
+  return [...photos]
+    .sort((a, b) => (PHOTO_ORDER[a.kind] - PHOTO_ORDER[b.kind]) || ((b.taken_at || '').localeCompare(a.taken_at || '')))
+    .slice(0, MAX_PHOTOS)
+}
+
+// THE one signature format — used by both the prospective plan and the actual
+// gather, so the cache-hit check and the stored key can never disagree on shape.
+function signatureFor(satellite: boolean, photoIds: string[]): string {
+  return `sat:${satellite ? SATELLITE_ZOOM : 0}|photos:${[...photoIds].sort().join(',')}`
+}
+
+// What a run WILL analyze, decided WITHOUT fetching a single byte. The route uses
+// the plan's signature to serve a cache hit (identical imagery already analysed)
+// without paying the satellite + photo download cost on every re-open.
+export interface ImagePlan {
+  satellitePlanned: boolean
+  photoPlan: AnalyzablePhoto[]
+  signature: string
+}
+export function planImageSet(opts: {
   lat: number | null
   lng: number | null
   includeSatellite: boolean
+  satelliteAvailable: boolean
   photos: AnalyzablePhoto[]
-}): Promise<GatheredImages> {
+}): ImagePlan {
+  const satellitePlanned = opts.includeSatellite && opts.lat != null && opts.lng != null && opts.satelliteAvailable
+  const photoPlan = rankPhotos(opts.photos)
+  return { satellitePlanned, photoPlan, signature: signatureFor(satellitePlanned, photoPlan.map(p => p.id)) }
+}
+
+// Fetch the actual bytes for a plan (satellite first, then photos). The returned
+// signature reflects what ACTUALLY loaded (a failed fetch drops out), so the
+// stored key is always truthful. Only runs once we've decided to (re)analyze.
+export async function gatherImages(plan: ImagePlan, ctx: { lat: number | null; lng: number | null }): Promise<GatheredImages> {
   const images: VisionImage[] = []
   let satelliteUsed = false
 
-  if (opts.includeSatellite && opts.lat != null && opts.lng != null) {
-    const sat = await fetchSatelliteImage(opts.lat, opts.lng)
+  if (plan.satellitePlanned && ctx.lat != null && ctx.lng != null) {
+    const sat = await fetchSatelliteImage(ctx.lat, ctx.lng)
     if (sat) {
       images.push({ label: 'Satellite aerial view (top-down, may be a few months old):', mediaType: sat.mediaType, dataBase64: sat.dataBase64 })
       satelliteUsed = true
     }
   }
 
-  // Prefer before→after→general, newest first, capped — the most informative set.
-  const order = { before: 0, after: 1, general: 2 } as const
-  const ranked = [...opts.photos].sort((a, b) => (order[a.kind] - order[b.kind]) || ((b.taken_at || '').localeCompare(a.taken_at || '')))
   const usedPhotoIds: string[] = []
-  for (const p of ranked) {
-    if (usedPhotoIds.length >= MAX_PHOTOS) break
+  for (const p of plan.photoPlan) {
     const img = await fetchRemoteImage(p.url)
     if (!img) continue
     images.push({ label: photoLabel(p, usedPhotoIds.length), mediaType: img.mediaType, dataBase64: img.dataBase64 })
@@ -93,8 +117,7 @@ export async function gatherImages(opts: {
   }
 
   const source: IntelSource = satelliteUsed && usedPhotoIds.length ? 'combined' : satelliteUsed ? 'satellite' : 'photos'
-  const signature = `sat:${satelliteUsed ? SATELLITE_ZOOM : 0}|photos:${[...usedPhotoIds].sort().join(',')}`
-  return { images, source, signature, usedPhotoIds, satelliteUsed }
+  return { images, source, signature: signatureFor(satelliteUsed, usedPhotoIds), usedPhotoIds, satelliteUsed }
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────────
