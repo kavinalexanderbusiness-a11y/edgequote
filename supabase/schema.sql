@@ -157,6 +157,12 @@ create table if not exists public.service_templates (
   name                text not null,
   category            text not null default 'General',
   default_rate        numeric(8,2) not null default 50.00,
+  -- How default_rate reads in the UI (label only — the value is unchanged), see
+  -- lib/servicePricing.ts. Added by migration 2026-06-25g.
+  pricing_display_type text not null default 'starting_from'
+                        check (pricing_display_type in (
+                          'starting_from','hourly','per_sqft','per_linear_ft','starting_from_materials','hourly_materials'
+                        )),
   default_description text,
   notes               text,
   is_active           boolean not null default true,
