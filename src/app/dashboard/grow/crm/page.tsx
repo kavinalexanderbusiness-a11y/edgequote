@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card } from '@/components/ui/Card'
+import { Skeleton } from '@/components/ui/Skeleton'
 import { FollowUpRadar } from '@/components/grow/FollowUpRadar'
 import { CampaignManager } from '@/components/grow/CampaignManager'
 import { reviewStatus, type ReviewStatus } from '@/lib/crm/reviews'
@@ -21,13 +22,14 @@ export default function CrmAutomationPage() {
   const supabase = useMemo(() => createClient(), [])
   const router = useRouter()
   const [uid, setUid] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
   const [reviews, setReviews] = useState({ reviewed: 0, requested: 0, declined: 0, notAsked: 0, avg: 0 })
   const [refs, setRefs] = useState({ joined: 0, invited: 0, rewarded: 0 })
 
   async function load() {
     const { data: { user } } = await supabase.auth.getUser()
     setUid(user?.id || null)
-    if (!user) return
+    if (!user) { setLoading(false); return }
     const [custRes, refRes] = await Promise.all([
       supabase.from('customers').select('reviewed_at, review_requested_at, review_declined_at, review_rating').eq('user_id', user.id).is('archived_at', null),
       supabase.from('referrals').select('status').eq('user_id', user.id),
@@ -47,6 +49,7 @@ export default function CrmAutomationPage() {
       invited: rstatus.filter(r => r.status === 'invited').length,
       rewarded: rstatus.filter(r => r.status === 'rewarded').length,
     })
+    setLoading(false)
   }
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
   useRealtimeRefresh('customers', uid ? `user_id=eq.${uid}` : null, load)
@@ -55,7 +58,7 @@ export default function CrmAutomationPage() {
   return (
     <div className="max-w-5xl space-y-6">
       <div className="flex items-center gap-3">
-        <button onClick={() => router.back()} className="text-ink-muted hover:text-ink transition-colors"><ArrowLeft className="w-4 h-4" /></button>
+        <button onClick={() => router.back()} aria-label="Go back" className="text-ink-muted hover:text-ink transition-colors rounded p-1 -m-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><ArrowLeft className="w-4 h-4" /></button>
         <PageHeader title="Customer Automation" description="Reviews, referrals, follow-ups and campaigns — all wired into your customers and messaging." />
       </div>
 
@@ -65,12 +68,12 @@ export default function CrmAutomationPage() {
           <div className="flex items-center gap-2 mb-3">
             <Star className="w-4 h-4 text-amber-400" />
             <p className="text-sm font-bold text-ink">Reviews</p>
-            {reviews.avg > 0 && <span className="ml-auto text-xs text-ink-muted flex items-center gap-1"><Star className="w-3 h-3 text-amber-400 fill-amber-400" /> {reviews.avg.toFixed(1)} avg</span>}
+            {!loading && reviews.avg > 0 && <span className="ml-auto text-xs text-ink-muted flex items-center gap-1"><Star className="w-3 h-3 text-amber-400 fill-amber-400" /> {reviews.avg.toFixed(1)} avg</span>}
           </div>
           <div className="grid grid-cols-3 gap-2 text-center">
-            <Stat label="Reviewed" value={reviews.reviewed} tone="text-emerald-400" />
-            <Stat label="Requested" value={reviews.requested} tone="text-amber-400" />
-            <Stat label="Not asked" value={reviews.notAsked} tone="text-ink" />
+            <Stat label="Reviewed" value={reviews.reviewed} tone="text-emerald-400" loading={loading} />
+            <Stat label="Requested" value={reviews.requested} tone="text-amber-400" loading={loading} />
+            <Stat label="Not asked" value={reviews.notAsked} tone="text-ink" loading={loading} />
           </div>
           <p className="text-[11px] text-ink-faint mt-3">Ask from any customer’s profile, or auto-ask after a completed visit (Settings → Automated messages).</p>
         </Card>
@@ -81,9 +84,9 @@ export default function CrmAutomationPage() {
             <p className="text-sm font-bold text-ink">Referrals</p>
           </div>
           <div className="grid grid-cols-3 gap-2 text-center">
-            <Stat label="Joined" value={refs.joined} tone="text-emerald-400" />
-            <Stat label="Invited" value={refs.invited} tone="text-amber-400" />
-            <Stat label="Rewarded" value={refs.rewarded} tone="text-accent" />
+            <Stat label="Joined" value={refs.joined} tone="text-emerald-400" loading={loading} />
+            <Stat label="Invited" value={refs.invited} tone="text-amber-400" loading={loading} />
+            <Stat label="Rewarded" value={refs.rewarded} tone="text-accent" loading={loading} />
           </div>
           <p className="text-[11px] text-ink-faint mt-3">Record referrals on a customer’s profile. Customers added with a referrer link in automatically.</p>
         </Card>
@@ -98,10 +101,12 @@ export default function CrmAutomationPage() {
   )
 }
 
-function Stat({ label, value, tone }: { label: string; value: number; tone: string }) {
+function Stat({ label, value, tone, loading }: { label: string; value: number; tone: string; loading?: boolean }) {
   return (
     <div className="rounded-xl border border-border bg-surface py-3">
-      <p className={`text-2xl font-black tracking-tight ${tone}`}>{value}</p>
+      {loading
+        ? <Skeleton className="h-7 w-8 mx-auto" />
+        : <p className={`text-2xl font-black tracking-tight ${tone}`}>{value}</p>}
       <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint mt-0.5">{label}</p>
     </div>
   )
