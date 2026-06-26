@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { renderMessage, MsgType, MSG_LABELS } from '@/lib/comms/templates'
 import { sendSms, sendEmail, commsEnabled } from '@/lib/comms/send'
 import { getOrCreateConversation } from '@/lib/comms/conversation'
+import { SKIP_REASON } from '@/lib/comms/skipReasons'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 
 // Manual send — fired by an owner action (Day Ops one-tap buttons, the editable
@@ -81,13 +82,13 @@ export async function POST(req: NextRequest) {
   const attempts: { channel: string; status: string; detail?: string; sent: boolean }[] = []
 
   if (channels.includes('sms')) {
-    if (!c.sms_opt_in) { results.sms = { sent: false, reason: 'no-optin' }; attempts.push({ channel: 'sms', status: 'skipped', detail: 'no opt-in', sent: false }) }
-    else if (!c.phone) { results.sms = { sent: false, reason: 'no-phone' }; attempts.push({ channel: 'sms', status: 'skipped', detail: 'no phone', sent: false }) }
+    if (!c.sms_opt_in) { results.sms = { sent: false, reason: 'no-optin' }; attempts.push({ channel: 'sms', status: 'skipped', detail: SKIP_REASON.NO_OPT_IN, sent: false }) }
+    else if (!c.phone) { results.sms = { sent: false, reason: 'no-phone' }; attempts.push({ channel: 'sms', status: 'skipped', detail: SKIP_REASON.NO_PHONE, sent: false }) }
     else { const r = await sendSms(c.phone, outText); results.sms = r; attempts.push({ channel: 'sms', status: r.reason, detail: r.error, sent: r.sent }) }
   }
   if (channels.includes('email')) {
-    if (!c.email_opt_in) { results.email = { sent: false, reason: 'no-optin' }; attempts.push({ channel: 'email', status: 'skipped', detail: 'no opt-in', sent: false }) }
-    else if (!c.email) { results.email = { sent: false, reason: 'no-email' }; attempts.push({ channel: 'email', status: 'skipped', detail: 'no email', sent: false }) }
+    if (!c.email_opt_in) { results.email = { sent: false, reason: 'no-optin' }; attempts.push({ channel: 'email', status: 'skipped', detail: SKIP_REASON.NO_OPT_IN, sent: false }) }
+    else if (!c.email) { results.email = { sent: false, reason: 'no-email' }; attempts.push({ channel: 'email', status: 'skipped', detail: SKIP_REASON.NO_EMAIL, sent: false }) }
     else { const r = await sendEmail(c.email, rendered.subject, outHtml, outText); results.email = r; attempts.push({ channel: 'email', status: r.reason, detail: r.error, sent: r.sent }) }
   }
   if (channels.includes('push')) {

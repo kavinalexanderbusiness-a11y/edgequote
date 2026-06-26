@@ -8,6 +8,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { renderMessage } from '@/lib/comms/templates'
 import { sendSms, sendEmail, commsEnabled } from '@/lib/comms/send'
 import { getOrCreateConversation } from '@/lib/comms/conversation'
+import { SKIP_REASON } from '@/lib/comms/skipReasons'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 
 function formatAmount(n: number): string {
@@ -67,15 +68,20 @@ export async function sendPaymentReceipt(
       // Log the attempt only for live channels (skip noise when comms are disabled).
       const live = ch === 'email' ? commsEnabled().email : commsEnabled().sms
       if (!live) continue
-      await logReceipt(sb, opts.userId, opts.customerId, ch, wasSent ? 'sent' : 'skipped', wasSent ? messageId : null)
+      // Truthful canonical skip reason (receipts: email is transactional → only the
+      // address can be missing; SMS still respects opt-in).
+      const detail = wasSent ? null
+        : ch === 'email' ? SKIP_REASON.NO_EMAIL
+        : !c.sms_opt_in ? SKIP_REASON.NO_OPT_IN : SKIP_REASON.NO_PHONE
+      await logReceipt(sb, opts.userId, opts.customerId, ch, wasSent ? 'sent' : 'skipped', wasSent ? messageId : null, detail)
     }
   } catch (e) {
     console.error('[receipt] send failed:', e)
   }
 }
 
-async function logReceipt(sb: SupabaseClient, userId: string, customerId: string, channel: string, status: string, messageId: string | null): Promise<void> {
-  const base = { user_id: userId, customer_id: customerId, job_id: null, channel, template: 'receipt', status, detail: null as string | null }
+async function logReceipt(sb: SupabaseClient, userId: string, customerId: string, channel: string, status: string, messageId: string | null, detail: string | null = null): Promise<void> {
+  const base = { user_id: userId, customer_id: customerId, job_id: null, channel, template: 'receipt', status, detail }
   if (messageId) {
     const { error } = await sb.from('notification_log').insert({ ...base, message_id: messageId })
     if (!error) return

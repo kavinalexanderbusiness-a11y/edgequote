@@ -1,18 +1,21 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import { MSG_LABELS, MsgType } from '@/lib/comms/templates'
+import { describeSkip } from '@/lib/comms/skipReasons'
+import { statusMeta, TONE_CLASS } from '@/lib/comms/logStatus'
 import { SmsCost } from '@/components/comms/SmsCost'
 import { Send, StickyNote, Clock, Mail, MessageSquare } from 'lucide-react'
 import { format } from 'date-fns'
 import { Skeleton } from '@/components/ui/Skeleton'
 
 interface Msg { id: string; created_at: string; direction: string; channel: string; body: string; status: string | null }
-interface Log { id: string; created_at: string; channel: string; template: string; status: string; message_id: string | null }
-type Item = { id: string; at: string; kind: 'in' | 'out' | 'note' | 'event'; channel: string; body: string; status?: string | null }
+interface Log { id: string; created_at: string; channel: string; template: string; status: string; message_id: string | null; detail: string | null }
+type Item = { id: string; at: string; kind: 'in' | 'out' | 'note' | 'event'; channel: string; body: string; status?: string | null; template?: string; detail?: string | null }
 
 // One customer's unified timeline: inbound SMS + portal requests, outbound
 // replies, internal notes, and templated sends (from notification_log). Reply by
@@ -38,7 +41,7 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
     if (!uid) { if (mySeq === reqSeq.current) setLoading(false); return }
     const [mRes, lRes] = await Promise.all([
       supabase.from('messages').select('id, created_at, direction, channel, body, status').eq('customer_id', cid).eq('user_id', uid).order('created_at'),
-      supabase.from('notification_log').select('id, created_at, channel, template, status, message_id').eq('customer_id', cid).eq('user_id', uid).neq('template', 'reply').order('created_at'),
+      supabase.from('notification_log').select('id, created_at, channel, template, status, message_id, detail').eq('customer_id', cid).eq('user_id', uid).neq('template', 'reply').order('created_at'),
     ])
     // Mark THIS conversation read (you opened it) regardless of a later switch; only
     // the latest load is allowed to repaint the visible thread + refresh inbox counts.
@@ -50,18 +53,12 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
     }))
     // A log row linked to a thread message is already shown as the full bubble —
     // skip its event pill so a sent message isn't displayed twice.
-    const logs: Item[] = (lRes.data as Log[] || []).filter(l => !l.message_id).map(l => {
-      // notification_log statuses: 'sent' | 'skipped' (no opt-in/contact) |
-      // 'disabled' (messaging not set up) | 'error'. Don't claim "Sent" unless it was.
-      const verb = l.status === 'sent' ? 'Sent'
-        : l.status === 'skipped' ? 'Not sent (no opt-in)'
-        : l.status === 'disabled' ? 'Not sent (messaging off)'
-        : 'Send failed'
-      return {
-        id: 'l' + l.id, at: l.created_at, channel: l.channel, kind: 'event', status: l.status,
-        body: `${verb} · ${MSG_LABELS[l.template as MsgType] || l.template} · ${l.channel}`,
-      }
-    })
+    // Carry the raw log fields; the timeline badge + TRUTHFUL skip reason are derived
+    // at render from status + detail (never a hardcoded "no opt-in").
+    const logs: Item[] = (lRes.data as Log[] || []).filter(l => !l.message_id).map(l => ({
+      id: 'l' + l.id, at: l.created_at, channel: l.channel, kind: 'event',
+      status: l.status, template: l.template, detail: l.detail, body: '',
+    }))
     setItems([...msgs, ...logs].sort((a, b) => a.at.localeCompare(b.at)))
     setLoading(false)
   }
@@ -123,7 +120,7 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
             <p className="text-sm font-medium text-ink">No messages yet</p>
             <p className="text-xs text-ink-muted mt-0.5">Send the first message below — it’ll save to this customer’s history.</p>
           </div>
-        ) : items.map(it => <Bubble key={it.id} it={it} />)}
+        ) : items.map(it => <Bubble key={it.id} it={it} customerId={customerId} />)}
         <div ref={endRef} />
       </div>
 
@@ -150,11 +147,27 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
   )
 }
 
-function Bubble({ it }: { it: Item }) {
+function Bubble({ it, customerId }: { it: Item; customerId: string }) {
   const time = (() => { try { return format(new Date(it.at), 'MMM d, h:mm a') } catch { return '' } })()
   if (it.kind === 'event') {
-    const notSent = it.status && it.status !== 'sent'
-    return <div className="text-center"><span className={cn('inline-block text-[10px] rounded-full px-2.5 py-0.5 border', notSent ? 'text-amber-400 bg-amber-500/10 border-amber-500/25' : 'text-ink-faint bg-bg-tertiary border-border')}>{it.body} · {time}</span></div>
+    // Badge from status (future-proof) + the TRUTHFUL skip reason from detail.
+    const meta = statusMeta(it.status)
+    const templateLabel = MSG_LABELS[it.template as MsgType] || it.template || ''
+    const skip = it.status === 'skipped' ? describeSkip(it.detail) : null
+    const reason = it.status === 'disabled' ? 'messaging not set up' : skip?.label   // never claim "no opt-in" unless that's the reason
+    return (
+      <div className="text-center space-y-0.5">
+        <span className={cn('inline-flex items-center gap-1 text-[10px] rounded-full px-2.5 py-0.5 border', TONE_CLASS[meta.tone])}>
+          <meta.Icon className="w-2.5 h-2.5 shrink-0" />
+          {meta.label}{reason && it.status !== 'sent' ? ` (${reason})` : ''} · {templateLabel} · {it.channel} · {time}
+        </span>
+        {skip?.action && (
+          <Link href={`/dashboard/customers/${customerId}`} className="block text-[10px] text-accent hover:underline">
+            {skip.action === 'add_email' ? 'Add an email address →' : 'Add a phone number →'}
+          </Link>
+        )}
+      </div>
+    )
   }
   const sending = it.status === 'sending'
   if (it.kind === 'note') {

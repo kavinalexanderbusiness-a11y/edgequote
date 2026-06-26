@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/Button'
 import { formatCurrency, formatDate, getInitials } from '@/lib/utils'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { CustomerComms } from '@/components/customers/CustomerComms'
+import { CommsHealth } from '@/components/customers/CommsHealth'
 import { ConversationThread } from '@/components/messages/ConversationThread'
 import { PaymentMethodCard } from '@/components/payments/PaymentMethodCard'
 import {
@@ -460,6 +461,9 @@ export default function CustomerDetailPage() {
           </div>
         </CardBody>
       </Card>
+
+      {/* Communication health — opt-in/contact mismatches (only shows when relevant) */}
+      <CommsHealth customer={customer} onChange={patch => setCustomer({ ...customer, ...patch })} />
 
       {/* Conversation — two-way SMS + portal thread */}
       <Card>
