@@ -14,6 +14,7 @@ import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Collapsible } from '@/components/ui/Collapsible'
 import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
 import { formatCurrency, formatDate, suggestTravelFee, cn } from '@/lib/utils'
+import { formatServicePrice } from '@/lib/servicePricing'
 import { laborSuggestion, pricingConfigFromSettings, latestSavedRecommendation, recommendationIsStale, pricingPackage } from '@/lib/pricing'
 import { evaluatePrice, PriceGuardrail } from '@/lib/priceGuardrails'
 import { PriceGuardrailNote } from '@/components/pricing/PriceGuardrailNote'
@@ -283,7 +284,7 @@ export function QuoteBuilder({
   const activeTemplates = templates.filter(t => t.is_active)
   const templateOptions = [
     { value: '', label: 'Select a service...' },
-    ...activeTemplates.map(t => ({ value: t.id, label: `${t.name} — ${formatCurrency(t.default_rate)}/hr` })),
+    ...activeTemplates.map(t => ({ value: t.id, label: `${t.name} — ${formatServicePrice(t)}` })),
   ]
   const statusOptions = [
     { value: 'draft', label: 'Draft' }, { value: 'sent', label: 'Sent' },
