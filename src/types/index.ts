@@ -650,6 +650,27 @@ export interface TravelFeeTier {
   user_id: string
 }
 
+// How a service template's price is displayed. The default_rate column holds the
+// value; this drives the label + unit (see src/lib/servicePricing.ts).
+export const PRICING_DISPLAY_TYPES = [
+  'starting_from',
+  'hourly',
+  'per_sqft',
+  'per_linear_ft',
+  'starting_from_materials',
+  'hourly_materials',
+] as const
+export type PricingDisplayType = typeof PRICING_DISPLAY_TYPES[number]
+
+export const PRICING_DISPLAY_TYPE_LABELS: Record<PricingDisplayType, string> = {
+  starting_from: 'Starting From',
+  hourly: 'Hourly',
+  per_sqft: 'Per Sq Ft',
+  per_linear_ft: 'Per Linear Ft',
+  starting_from_materials: 'Starting From + Materials',
+  hourly_materials: 'Hourly + Materials',
+}
+
 export interface ServiceTemplate {
   id: string
   created_at: string
@@ -657,6 +678,7 @@ export interface ServiceTemplate {
   name: string
   category: string
   default_rate: number
+  pricing_display_type: PricingDisplayType
   default_description: string | null
   notes: string | null
   is_active: boolean
@@ -668,6 +690,7 @@ export interface ServiceTemplateFormValues {
   name: string
   category: string
   default_rate: number
+  pricing_display_type: PricingDisplayType
   default_description: string
   notes: string
   is_active: boolean
