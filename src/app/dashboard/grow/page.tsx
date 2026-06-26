@@ -7,7 +7,7 @@ import { SuggestionsCenter } from '@/components/grow/SuggestionsCenter'
 import { CustomerHealthPanel } from '@/components/grow/CustomerHealthPanel'
 import { WinLossPanel } from '@/components/grow/WinLossPanel'
 import {
-  BarChart3, Gauge, HeartPulse, Map as MapIcon, Target, ShieldCheck, CalendarCheck, ArrowRight, TrendingUp, CloudRain,
+  BarChart3, Gauge, HeartPulse, Map as MapIcon, Target, ShieldCheck, CalendarCheck, ArrowRight, TrendingUp, CloudRain, Sparkles, Images,
 } from 'lucide-react'
 
 // ── Grow hub ──────────────────────────────────────────────────────────────────
@@ -54,6 +54,36 @@ export default function GrowPage() {
   return (
     <div className="max-w-5xl space-y-6">
       <PageHeader title="Grow" description="Everything that grows Edge Property Services, in one place." />
+
+      {/* Marketing Studio — the flagship: turn finished jobs into ready-to-post marketing. */}
+      <div className="grid sm:grid-cols-2 gap-3">
+        <Link href="/dashboard/grow/studio">
+          <Card className="p-4 h-full border-accent/30 bg-gradient-to-br from-accent/[0.08] to-transparent hover:border-accent/50 transition-colors">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
+                <Sparkles className="w-5 h-5 text-accent" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-bold text-ink flex items-center gap-1.5">Marketing Studio <ArrowRight className="w-3.5 h-3.5 text-accent" /></p>
+                <p className="text-xs text-ink-muted mt-0.5">Finished a job? Turn it into a Facebook, Instagram or Google post in your brand voice — one tap.</p>
+              </div>
+            </div>
+          </Card>
+        </Link>
+        <Link href="/dashboard/grow/library">
+          <Card className="p-4 h-full border-accent/30 bg-gradient-to-br from-accent/[0.08] to-transparent hover:border-accent/50 transition-colors">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
+                <Images className="w-5 h-5 text-accent" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-bold text-ink flex items-center gap-1.5">Content Library <ArrowRight className="w-3.5 h-3.5 text-accent" /></p>
+                <p className="text-xs text-ink-muted mt-0.5">Every completed job, searchable by service, neighborhood and season — reuse any of it.</p>
+              </div>
+            </div>
+          </Card>
+        </Link>
+      </div>
 
       {/* Intelligence — the owner's command center: report (BI) + act (Revenue Intel). */}
       <div className="grid sm:grid-cols-2 gap-3">
