@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { Button } from '@/components/ui/Button'
+import { Menu } from '@/components/ui/Menu'
 import { CrmCampaign, CampaignKind } from '@/types'
 import { DEFAULT_TEMPLATES, MsgType } from '@/lib/comms/templates'
 import { CAMPAIGN_KINDS, CAMPAIGN_PRESETS, describeSchedule } from '@/lib/crm/campaigns'
@@ -35,7 +36,6 @@ export function CampaignManager() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [saving, setSaving] = useState(false)
-  const [picking, setPicking] = useState(false)
   const [creating, setCreating] = useState(false)
 
   async function load() {
@@ -58,7 +58,7 @@ export function CampaignManager() {
   async function createFromPreset(presetIdx: number) {
     if (!uid) return
     const p = CAMPAIGN_PRESETS[presetIdx]
-    setPicking(false); setCreating(true)
+    setCreating(true)
     const { data, error } = await supabase.from('crm_campaigns').insert({
       user_id: uid, name: p.name, kind: p.kind, enabled: false,
       channels: p.channels, template_key: null, custom_body: null,
@@ -128,25 +128,22 @@ export function CampaignManager() {
           <p className="text-base font-bold text-ink">Campaigns</p>
           <p className="text-xs text-ink-muted">{loading ? 'Loading…' : `${campaigns.length} campaign${campaigns.length !== 1 ? 's' : ''} · ${enabledCount} active`}</p>
         </div>
-        <div className="relative shrink-0">
-          <Button size="sm" onClick={() => setPicking(p => !p)} loading={creating}><Plus className="w-3.5 h-3.5" /> New</Button>
-          {picking && (
-            <div className="absolute right-0 mt-1 w-60 rounded-xl border border-border bg-surface shadow-lg z-10 overflow-hidden">
-              {CAMPAIGN_PRESETS.map((p, i) => {
-                const Icon = KIND_ICON[p.kind]
-                return (
-                  <button key={i} onClick={() => createFromPreset(i)} className="w-full text-left px-3 py-2.5 hover:bg-surface-raised flex items-center gap-2.5 border-b border-border last:border-0">
-                    <Icon className="w-4 h-4 text-accent shrink-0" />
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-ink">{p.name}</p>
-                      <p className="text-[11px] text-ink-faint truncate">{CAMPAIGN_KINDS[p.kind].blurb}</p>
-                    </div>
-                  </button>
-                )
-              })}
-            </div>
+        <Menu
+          align="end"
+          width={320}
+          ariaLabel="New campaign"
+          className="shrink-0"
+          items={CAMPAIGN_PRESETS.map((p, i) => ({
+            key: String(i),
+            label: p.name,
+            description: CAMPAIGN_KINDS[p.kind].blurb,
+            icon: KIND_ICON[p.kind],
+            onSelect: () => createFromPreset(i),
+          }))}>
+          {({ open, toggle, triggerProps }) => (
+            <Button size="sm" onClick={toggle} loading={creating} {...triggerProps}><Plus className="w-3.5 h-3.5" /> New</Button>
           )}
-        </div>
+        </Menu>
       </div>
 
       {!loading && campaigns.length === 0 ? (
