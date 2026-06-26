@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { PHOTO_BUCKET } from '@/lib/photos'
-import { scoreCandidate, type ScoreCustomer, type ScoreProperty, type ScorePhoto } from './score'
-import type { MarketingCandidate } from './types'
+import { scoreCandidate, seasonOf, type ScoreCustomer, type ScoreProperty, type ScorePhoto } from './score'
+import type { ContentPiece, MarketingCandidate, MarketingChannel } from './types'
 
 // ── Marketing data layer ────────────────────────────────────────────────────────
 // Assembles scored MarketingCandidates from the data the app already holds — jobs,
@@ -104,4 +104,54 @@ export async function assembleCandidate(supabase: SupabaseClient, userId: string
   if (!job) return null
   const maps = await loadMaps(supabase, userId, [job])
   return toCandidate(job, maps)
+}
+
+// Persist a generated draft: upsert the marketing_assets anchor (idempotent, one
+// per job; status stays 'candidate' until published) + insert the content_pieces
+// row. Shared by the streaming and non-streaming generate routes so the write
+// path lives in one place. Returns the saved piece, or null on failure.
+export async function persistDraft(
+  supabase: SupabaseClient,
+  userId: string,
+  candidate: MarketingCandidate,
+  channel: MarketingChannel,
+  draft: { title?: string | null; body: string; hashtags: string[]; model: string | null; promptVersion: string },
+): Promise<ContentPiece | null> {
+  const { data: assetRow } = await supabase.from('marketing_assets')
+    .upsert({
+      user_id: userId,
+      job_id: candidate.jobId,
+      customer_id: candidate.customerId,
+      property_id: candidate.propertyId,
+      service_type: candidate.serviceType,
+      neighborhood: candidate.neighborhood,
+      season: seasonOf(candidate.date),
+      quality_score: candidate.score,
+      has_before: candidate.hasBefore,
+      has_after: candidate.hasAfter,
+      best_before_photo_id: candidate.bestBeforePhotoId,
+      best_after_photo_id: candidate.bestAfterPhotoId,
+      ai_rationale: candidate.rationale,
+    }, { onConflict: 'user_id,job_id' })
+    .select('id').maybeSingle()
+  const assetId = (assetRow as { id: string } | null)?.id ?? null
+
+  const hashtags = draft.hashtags.map(h => String(h).replace(/^#/, '').trim()).filter(Boolean).slice(0, 8)
+  const { data: pieceRow } = await supabase.from('content_pieces')
+    .insert({
+      user_id: userId,
+      asset_id: assetId,
+      job_id: candidate.jobId,
+      customer_id: candidate.customerId,
+      channel,
+      kind: 'organic',
+      title: draft.title?.trim() || null,
+      body: draft.body.trim(),
+      hashtags,
+      status: 'draft',
+      model: draft.model,
+      prompt_version: draft.promptVersion,
+    })
+    .select('*').single()
+  return (pieceRow as ContentPiece | null) ?? null
 }

@@ -88,3 +88,76 @@ export async function generateStructured<T>(opts: GenerateOpts): Promise<AiResul
     return { ok: false, reason: 'error', error: e instanceof Error ? e.message : 'generation failed' }
   }
 }
+
+interface StreamOpts {
+  system: string
+  prompt: string
+  model?: string
+  maxTokens?: number
+}
+
+// Stream a plain-text completion token-by-token. `onDelta` fires for each text
+// chunk (the route re-emits these to the browser for a live "watch it write"
+// feel); the full accumulated text comes back in the result. Parses the Messages
+// API SSE stream by hand (no SDK) — same disabled-by-default contract as above.
+export async function streamText(opts: StreamOpts, onDelta: (text: string) => void): Promise<AiResult<string>> {
+  if (!aiEnabled()) return { ok: false, reason: 'disabled' }
+  const model = opts.model || DEFAULT_AI_MODEL
+  try {
+    const res = await fetch(ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'x-api-key': process.env.ANTHROPIC_API_KEY!,
+        'anthropic-version': ANTHROPIC_VERSION,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: opts.maxTokens ?? 1024,
+        stream: true,
+        system: opts.system,
+        messages: [{ role: 'user', content: opts.prompt }],
+      }),
+    })
+    if (!res.ok || !res.body) {
+      const detail = await res.text().catch(() => '')
+      let msg = `Anthropic ${res.status}`
+      try { const j = JSON.parse(detail); if (j?.error?.message) msg = `Anthropic ${res.status}: ${j.error.message}` }
+      catch { if (detail) msg += `: ${detail.slice(0, 300)}` }
+      return { ok: false, reason: 'error', error: msg }
+    }
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let full = ''
+    // SSE: events are separated by a blank line; each carries a `data: <json>` line.
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let sep: number
+      while ((sep = buffer.indexOf('\n\n')) !== -1) {
+        const event = buffer.slice(0, sep)
+        buffer = buffer.slice(sep + 2)
+        for (const line of event.split('\n')) {
+          const m = line.match(/^data:\s?(.*)$/)
+          if (!m) continue
+          const data = m[1]
+          if (!data || data === '[DONE]') continue
+          try {
+            const evt = JSON.parse(data)
+            if (evt.type === 'content_block_delta' && evt.delta?.type === 'text_delta') {
+              full += evt.delta.text
+              onDelta(evt.delta.text)
+            } else if (evt.type === 'error') {
+              return { ok: false, reason: 'error', error: evt.error?.message || 'stream error' }
+            }
+          } catch { /* keep-alive / partial — ignore */ }
+        }
+      }
+    }
+    return { ok: true, data: full, model }
+  } catch (e) {
+    return { ok: false, reason: 'error', error: e instanceof Error ? e.message : 'stream failed' }
+  }
+}

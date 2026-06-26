@@ -29,8 +29,6 @@ export function StudioClient({ candidates, aiEnabled, businessName, logoUrl, ini
   )
   const [activeChannel, setActiveChannel] = useState<MarketingChannel>('facebook')
   const [draftsByKey, setDraftsByKey] = useState<Record<string, ContentPiece>>({})
-  const [generating, setGenerating] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   // Per-job photo-marketing consent, lifted here so it survives channel switches.
   const [consentJobs, setConsentJobs] = useState<Set<string>>(
     () => new Set(candidates.filter(c => c.photoConsent).map(c => c.jobId)),
@@ -64,28 +62,6 @@ export function StudioClient({ candidates, aiEnabled, businessName, logoUrl, ini
       })
     return () => { active = false }
   }, [selectedJobId, supabase])
-
-  async function generate(ch: MarketingChannel) {
-    if (!selectedJobId) return
-    setGenerating(true); setError(null)
-    try {
-      const res = await fetch('/api/marketing/generate', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ jobId: selectedJobId, channel: ch }),
-      })
-      const json = await res.json()
-      if (json.ok && json.piece) {
-        setDraftsByKey(prev => ({ ...prev, [`${selectedJobId}:${ch}`]: json.piece }))
-      } else {
-        setError(json.error || 'Could not generate that post.')
-      }
-    } catch {
-      setError('Could not reach the generator. Try again.')
-    } finally {
-      setGenerating(false)
-    }
-  }
 
   if (!candidates.length) {
     return (
@@ -166,17 +142,14 @@ export function StudioClient({ candidates, aiEnabled, businessName, logoUrl, ini
 
             <Tabs tabs={CHANNEL_TABS} active={activeChannel} onChange={k => setActiveChannel(k as MarketingChannel)} />
 
-            {error && <Banner tone="danger" onDismiss={() => setError(null)}>{error}</Banner>}
-
             <ContentComposer
               key={draftKey}
               candidate={selected}
               ch={activeChannel}
               draft={draftsByKey[draftKey] || null}
+              aiEnabled={aiEnabled}
               businessName={businessName}
               logoUrl={logoUrl}
-              generating={generating}
-              onGenerate={() => generate(activeChannel)}
               onDraftChange={piece => setDraftsByKey(prev => ({ ...prev, [`${piece.job_id}:${piece.channel}`]: piece }))}
               onGrantConsent={selected.customerId ? () => grantConsent(selected.customerId!, selected.jobId) : undefined}
             />

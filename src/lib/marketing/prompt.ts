@@ -10,6 +10,21 @@ import type { MarketingCandidate, MarketingChannel } from './types'
 // so a generated post can't promise a service or price that wasn't performed.
 
 export const PROMPT_VERSION = 'studio-organic-v1'
+export const STREAM_PROMPT_VERSION = 'studio-organic-stream-v1'
+
+// The facts the model may use — and nothing else (shared by both prompt builders).
+function factsFor(candidate: MarketingCandidate): string[] {
+  const facts: string[] = []
+  facts.push(`Service performed: ${candidate.serviceType || 'property maintenance'}`)
+  if (candidate.neighborhood) facts.push(`Neighbourhood: ${candidate.neighborhood}`)
+  else if (candidate.city) facts.push(`Area: ${candidate.city}`)
+  if (candidate.season) facts.push(`Season: ${candidate.season}`)
+  if (candidate.lawnSqft) facts.push(`Lawn size: about ${Math.round(candidate.lawnSqft).toLocaleString()} sq ft`)
+  if (candidate.hasBefore && candidate.hasAfter) facts.push('We have a before-and-after photo pair to attach.')
+  else if (candidate.hasAfter) facts.push('We have a finished "after" photo to attach.')
+  if (candidate.hasReview) facts.push('This customer was happy and left us a review.')
+  return facts
+}
 
 const SYSTEM = `You are an expert social media copywriter for a local property-care business (lawn care, landscaping, snow removal). You write posts the business owner can publish as-is.
 
@@ -27,17 +42,7 @@ export function buildGenerateInput(
   voice: BrandVoice,
 ): { system: string; prompt: string; schema: JsonSchema; toolName: string; toolDescription: string } {
   const def = channelDef(ch)
-
-  // ── The facts the model may use (and nothing else). ──
-  const facts: string[] = []
-  facts.push(`Service performed: ${candidate.serviceType || 'property maintenance'}`)
-  if (candidate.neighborhood) facts.push(`Neighbourhood: ${candidate.neighborhood}`)
-  else if (candidate.city) facts.push(`Area: ${candidate.city}`)
-  if (candidate.season) facts.push(`Season: ${candidate.season}`)
-  if (candidate.lawnSqft) facts.push(`Lawn size: about ${Math.round(candidate.lawnSqft).toLocaleString()} sq ft`)
-  if (candidate.hasBefore && candidate.hasAfter) facts.push('We have a before-and-after photo pair to attach.')
-  else if (candidate.hasAfter) facts.push('We have a finished "after" photo to attach.')
-  if (candidate.hasReview) facts.push('This customer was happy and left us a review.')
+  const facts = factsFor(candidate)
 
   const properties: Record<string, unknown> = {
     body: { type: 'string', description: `The post text for ${def.label}. Aim for roughly ${def.maxChars} characters or fewer.` },
@@ -82,4 +87,36 @@ export function buildGenerateInput(
     toolName: 'compose_post',
     toolDescription: `Provide the finished ${def.label} post for the owner to review and publish.`,
   }
+}
+
+// Streaming variant: same facts + rules, but the model returns the post as PLAIN
+// TEXT (so it can stream into the composer live). Hashtag channels put their tags
+// on the final line; the route splits them back out into the hashtags field.
+const STREAM_SYSTEM = `${SYSTEM}
+
+Output format: write ONLY the post text, exactly as the owner would paste it. No preamble, no quotes, no "Here's your post", no labels or section headers.`
+
+export function buildStreamInput(
+  candidate: MarketingCandidate,
+  ch: MarketingChannel,
+  voice: BrandVoice,
+): { system: string; prompt: string; maxTokens: number } {
+  const def = channelDef(ch)
+  const facts = factsFor(candidate)
+  const prompt = [
+    `Write one ${def.label} post for this business.`,
+    '',
+    'BUSINESS:',
+    brandVoicePromptBlock(voice),
+    '',
+    'THIS JOB:',
+    ...facts,
+    '',
+    `PLATFORM STYLE (${def.label}): ${def.styleHint}`,
+    `Aim for roughly ${def.maxChars} characters or fewer.`,
+    def.usesHashtags
+      ? 'End the post with 3-6 relevant hashtags on the final line (with the # symbol).'
+      : 'Do NOT use hashtags.',
+  ].filter(line => line !== '').join('\n')
+  return { system: STREAM_SYSTEM, prompt, maxTokens: 700 }
 }
