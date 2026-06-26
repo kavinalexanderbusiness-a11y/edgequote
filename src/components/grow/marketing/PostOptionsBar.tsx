@@ -2,13 +2,17 @@
 
 import { FilterPill } from '@/components/ui/FilterPill'
 import { cn } from '@/lib/utils'
-import { Smile, Hash, Megaphone, Leaf, MapPin } from 'lucide-react'
-import type { PostLength, PostOptions } from '@/lib/marketing/types'
+import { Smile } from 'lucide-react'
+import { WRITING_STYLES } from '@/lib/marketing/styles'
+import { WRITING_STYLES_LIST, type PostLength, type PostOptions, type WritingStyle } from '@/lib/marketing/types'
 
 // ── Post options ──────────────────────────────────────────────────────────────────
-// The owner's creative controls — length + the on/off style modifiers. Lifted into
-// the Studio so a single setting drives BOTH a per-channel generate and "Generate all
-// platforms"; the chosen options ride along in every generate request.
+// Three controls that actually change the result: the writing VOICE, the LENGTH, and
+// emoji on/off. Everything else a marketing manager would decide — local references,
+// the seasonal angle, the call to action, platform-appropriate hashtags — the engine
+// now handles automatically and intelligently, so those toggles were removed (fewer
+// decisions, the same or better output). Lifted into the Studio so one setting drives
+// a per-channel generate, "Generate all platforms", and campaigns alike.
 
 const LENGTHS: { key: PostLength; label: string }[] = [
   { key: 'short', label: 'Short' },
@@ -23,31 +27,27 @@ export function PostOptionsBar({ options, onChange, className }: {
 }) {
   const set = (patch: Partial<PostOptions>) => onChange({ ...options, ...patch })
   return (
-    <div className={cn('space-y-2', className)}>
-      <div className="flex items-center gap-1.5 flex-wrap">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mr-0.5">Length</span>
+    <div className={cn('space-y-2.5', className)}>
+      <div>
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-1.5">Voice</p>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {WRITING_STYLES_LIST.map(s => (
+            <FilterPill key={s} active={options.style === s} onClick={() => set({ style: s as WritingStyle })}>
+              <span title={WRITING_STYLES[s].blurb}>{WRITING_STYLES[s].label}</span>
+            </FilterPill>
+          ))}
+        </div>
+      </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Length</span>
         {LENGTHS.map(l => (
           <FilterPill key={l.key} active={options.length === l.key} onClick={() => set({ length: l.key })}>
             {l.label}
           </FilterPill>
         ))}
-      </div>
-      <div className="flex items-center gap-1.5 flex-wrap">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mr-0.5">Style</span>
+        <span className="w-px h-4 bg-border mx-1" />
         <FilterPill active={options.emojis} onClick={() => set({ emojis: !options.emojis })}>
           <Smile className="w-3 h-3" /> Emojis
-        </FilterPill>
-        <FilterPill active={options.hashtags} onClick={() => set({ hashtags: !options.hashtags })}>
-          <Hash className="w-3 h-3" /> Hashtags
-        </FilterPill>
-        <FilterPill active={options.cta} onClick={() => set({ cta: !options.cta })}>
-          <Megaphone className="w-3 h-3" /> CTA
-        </FilterPill>
-        <FilterPill active={options.seasonal} onClick={() => set({ seasonal: !options.seasonal })}>
-          <Leaf className="w-3 h-3" /> Seasonal
-        </FilterPill>
-        <FilterPill active={options.local} onClick={() => set({ local: !options.local })}>
-          <MapPin className="w-3 h-3" /> Local
         </FilterPill>
       </div>
     </div>

@@ -13,8 +13,22 @@ export type ContentStatus = 'draft' | 'approved' | 'published' | 'scheduled' | '
 // there's a single place that turns these into instructions (lib/marketing/prompt).
 export type PostLength = 'short' | 'medium' | 'long'
 
+// The writing voice the owner picks before generating. The brand attributes are
+// always-on; the style is a lens on top (see lib/marketing/styles.ts).
+export type WritingStyle =
+  | 'professional' | 'premium' | 'friendly' | 'educational' | 'storytelling'
+  | 'luxury' | 'community' | 'funny' | 'promotional'
+
+export const WRITING_STYLES_LIST: WritingStyle[] = [
+  'professional', 'premium', 'friendly', 'educational', 'storytelling', 'luxury', 'community', 'funny', 'promotional',
+]
+
+// The kind of call to action a post closes with — rotated so the feed never repeats.
+export type CtaIntent = 'booking' | 'estimate' | 'referral' | 'review' | 'weekly' | 'seasonal'
+
 export interface PostOptions {
   length: PostLength
+  style: WritingStyle // writing voice
   emojis: boolean
   hashtags: boolean   // only takes effect where the channel itself supports hashtags
   cta: boolean        // end with a call to action
@@ -24,6 +38,7 @@ export interface PostOptions {
 
 export const DEFAULT_POST_OPTIONS: PostOptions = {
   length: 'medium',
+  style: 'professional',
   emojis: true,
   hashtags: true,
   cta: true,
@@ -36,15 +51,41 @@ export const DEFAULT_POST_OPTIONS: PostOptions = {
 export function normalizePostOptions(raw: unknown): PostOptions {
   const o = (raw && typeof raw === 'object') ? raw as Record<string, unknown> : {}
   const length: PostLength = o.length === 'short' || o.length === 'long' ? o.length : 'medium'
+  const style: WritingStyle = WRITING_STYLES_LIST.includes(o.style as WritingStyle) ? o.style as WritingStyle : 'professional'
   const bool = (v: unknown, d: boolean) => (typeof v === 'boolean' ? v : d)
   return {
     length,
+    style,
     emojis: bool(o.emojis, DEFAULT_POST_OPTIONS.emojis),
     hashtags: bool(o.hashtags, DEFAULT_POST_OPTIONS.hashtags),
     cta: bool(o.cta, DEFAULT_POST_OPTIONS.cta),
     seasonal: bool(o.seasonal, DEFAULT_POST_OPTIONS.seasonal),
     local: bool(o.local, DEFAULT_POST_OPTIONS.local),
   }
+}
+
+// ── Marketing quality score ──────────────────────────────────────────────────────
+// A deterministic, AI-free score (0-100 per dimension) computed AFTER generation. If a
+// post falls below threshold the route regenerates once. Stored in content_pieces.meta.
+export interface QualityScore {
+  hook: number
+  readability: number
+  localRelevance: number
+  ctaStrength: number
+  originality: number
+  brandConsistency: number
+  total: number
+  pass: boolean
+  flags: string[]      // human-readable issues found (debug)
+}
+
+// The "what to write about" for a post — decoupled from where the facts came from
+// (a finished job, an enriched intelligence read, or a themed campaign).
+export interface GenSubject {
+  facts: string[]
+  season: Season | null
+  neighborhood: string | null
+  city: string | null
 }
 
 // A postable job, scored live from jobs + job_photos + property + customer.

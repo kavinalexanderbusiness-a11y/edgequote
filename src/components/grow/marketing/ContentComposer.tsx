@@ -9,8 +9,20 @@ import { RewriteToolbar } from './RewriteToolbar'
 import { channel as channelDef } from '@/lib/marketing/channels'
 import { lengthChars } from '@/lib/marketing/prompt'
 import { cn } from '@/lib/utils'
-import { Sparkles, RefreshCw, Copy, Check, Download, ExternalLink, ImageOff, Lock, CheckCircle2, Loader2 } from 'lucide-react'
-import { DEFAULT_POST_OPTIONS, type ContentPiece, type MarketingCandidate, type MarketingChannel, type PostOptions, type PostText, type RewriteAction, type RewriteResponse } from '@/lib/marketing/types'
+import { Sparkles, RefreshCw, Copy, Check, Download, ExternalLink, ImageOff, Lock, CheckCircle2, Loader2, Gauge } from 'lucide-react'
+import { DEFAULT_POST_OPTIONS, type ContentPiece, type MarketingCandidate, type MarketingChannel, type PostOptions, type PostText, type QualityScore, type RewriteAction, type RewriteResponse } from '@/lib/marketing/types'
+
+// The deterministic quality score lives on the saved piece's meta.
+function pieceQuality(piece: ContentPiece | null): { score: QualityScore; note: string } | null {
+  const meta = piece?.meta as { quality?: QualityScore; qualityNote?: string } | undefined
+  if (!meta?.quality || typeof meta.quality.total !== 'number') return null
+  return { score: meta.quality, note: meta.qualityNote || '' }
+}
+function scoreTone(total: number): string {
+  if (total >= 85) return 'text-emerald-400'
+  if (total >= 72) return 'text-accent'
+  return 'text-amber-400'
+}
 
 function parseHashtags(text: string): string[] {
   return Array.from(new Set(
@@ -58,8 +70,14 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
   const [copied, setCopied] = useState(false)
   const [posted, setPosted] = useState(false)
   const [streaming, setStreaming] = useState(false)
+  const [polishing, setPolishing] = useState(false)
   const [genError, setGenError] = useState<string | null>(null)
   const [rewriting, setRewriting] = useState<RewriteAction | null>(null)
+  // Developer/debug mode (?debug=1) surfaces the quality breakdown + "why it's stronger".
+  const [debug, setDebug] = useState(false)
+  useEffect(() => { try { setDebug(new URLSearchParams(window.location.search).get('debug') === '1') } catch { /* ignore */ } }, [])
+
+  const quality = useMemo(() => pieceQuality(draft), [draft])
 
   // Reset the editable fields whenever a different draft is shown (new generation).
   useEffect(() => {
@@ -97,7 +115,7 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
 
   // Stream the post in live (the "watch it write" path).
   async function runGenerate() {
-    setGenError(null); setStreaming(true)
+    setGenError(null); setStreaming(true); setPolishing(false)
     setTitle(''); setBody(''); setHashtagsText('')
     try {
       const res = await fetch('/api/marketing/generate/stream', {
@@ -129,6 +147,7 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
           let evt: { t: string; text?: string; piece?: ContentPiece; error?: string }
           try { evt = JSON.parse(line) } catch { continue }
           if (evt.t === 'delta' && evt.text) { sawDelta = true; setBody(prev => prev + evt.text) }
+          else if (evt.t === 'polishing') { setPolishing(true) }
           else if (evt.t === 'done' && evt.piece) { applyPiece(evt.piece); onDraftChange?.(evt.piece); finished = true }
           else if (evt.t === 'error') {
             if (!sawDelta && await fallbackGenerate()) { finished = true; break }
@@ -139,7 +158,7 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
     } catch {
       if (!await fallbackGenerate()) setGenError('Could not reach the generator. Try again.')
     } finally {
-      setStreaming(false)
+      setStreaming(false); setPolishing(false)
     }
   }
 
@@ -249,11 +268,33 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
             <RefreshCw className="w-3.5 h-3.5" /> Regenerate
           </Button>
           <span className="text-[11px] text-ink-faint inline-flex items-center gap-1.5">
-            {streaming ? <><Loader2 className="w-3 h-3 animate-spin" /> Writing…</>
+            {polishing ? <><Sparkles className="w-3 h-3 text-accent animate-pulse" /> Polishing for quality…</>
+              : streaming ? <><Loader2 className="w-3 h-3 animate-spin" /> Writing…</>
               : rewriting ? <><Loader2 className="w-3 h-3 animate-spin" /> Rewriting…</>
               : saving ? 'Saving…' : saved ? 'Saved' : `${body.length} chars · target ~${charTarget}`}
           </span>
+          {!streaming && !rewriting && quality && (
+            <span className={cn('text-[11px] font-semibold inline-flex items-center gap-1', scoreTone(quality.score.total))} title="Marketing quality score">
+              <Gauge className="w-3 h-3" /> {quality.score.total}/100
+            </span>
+          )}
         </div>
+
+        {/* Debug: why this post is strong (prompt-quality evaluation) */}
+        {debug && quality && (
+          <div className="rounded-lg border border-border bg-surface/60 p-2.5 text-[11px] text-ink-muted space-y-1">
+            <div className="flex flex-wrap gap-x-3 gap-y-0.5 font-mono">
+              <span>hook {quality.score.hook}</span>
+              <span>read {quality.score.readability}</span>
+              <span>local {quality.score.localRelevance}</span>
+              <span>cta {quality.score.ctaStrength}</span>
+              <span>orig {quality.score.originality}</span>
+              <span>brand {quality.score.brandConsistency}</span>
+            </div>
+            {quality.note && <p className="text-ink-faint">{quality.note}</p>}
+            {quality.score.flags.length > 0 && <p className="text-amber-400/80">flags: {quality.score.flags.join('; ')}</p>}
+          </div>
+        )}
 
         {/* One-click AI rewrites of the current text */}
         {body.trim() && aiEnabled && (
