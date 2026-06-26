@@ -243,9 +243,17 @@ function drawPill(ctx: CanvasRenderingContext2D, which: 'before' | 'after', text
   const { w, h, fs } = pillSize(ctx, text, W, H)
   const r = h / 2
   ctx.save()
+  // Soft drop shadow so the pill reads cleanly over a busy/bright photo.
+  ctx.shadowColor = 'rgba(0,0,0,0.38)'
+  ctx.shadowBlur = h * 0.28
+  ctx.shadowOffsetY = h * 0.07
   ctx.fillStyle = which === 'before' ? BEFORE_BG : AFTER_BG
   roundRect(ctx, x, y, w, h, r)
   ctx.fill()
+  // Reset the shadow before the text so the glyphs stay crisp.
+  ctx.shadowColor = 'transparent'
+  ctx.shadowBlur = 0
+  ctx.shadowOffsetY = 0
   ctx.fillStyle = '#0b1018'
   ctx.font = `700 ${fs}px ${FONT}`
   ctx.textBaseline = 'middle'

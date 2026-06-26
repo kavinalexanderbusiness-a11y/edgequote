@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { aiEnabled, generateStructured } from '@/lib/ai/anthropic'
+import { aiEnabled, generateStructured, downscaleImageUrl } from '@/lib/ai/anthropic'
+import { getPropertyContexts, propertyContextBlock } from '@/lib/ai/propertyContext'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -12,6 +13,12 @@ export const maxDuration = 60
 // suggested headline. DISABLED-SAFE: with no ANTHROPIC_API_KEY this returns
 // { disabled:true } and the client keeps its deterministic ordering. The owner
 // triggers this explicitly — we never auto-send customer photos off-platform.
+//
+// The AI result is no longer thrown away: each ranked pair is captured as a
+// marketing_assets row (reusable by Marketing Studio / Content Library / future
+// AI) and the ranking is enriched with any property intelligence already on file
+// (shared brain — analyse once, reuse everywhere). Both are best-effort and
+// fault-tolerant: if those tables aren't present yet, the response is unchanged.
 
 // Bound cost/latency: at most this many pairs (×2 images) per request.
 const MAX_CANDIDATES = 6
@@ -21,6 +28,12 @@ interface Candidate {
   label: string
   beforeUrl: string
   afterUrl: string
+  // Optional — the client sends these so the AI pick can be persisted as a
+  // reusable asset. Older clients that omit them still work (asset just lacks
+  // the photo FKs / neighborhood).
+  beforePhotoId?: string
+  afterPhotoId?: string
+  neighborhood?: string
 }
 
 interface RankItem {
@@ -32,6 +45,28 @@ interface AiResult {
   ranking: RankItem[]
   bestIndex: number
   headline: string
+}
+
+interface JobRow {
+  id: string
+  customer_id: string | null
+  property_id: string | null
+  service_type: string | null
+  completed_at: string | null
+  scheduled_date: string | null
+}
+
+function clampScore(n: number): number {
+  return Math.max(0, Math.min(100, Math.round(n)))
+}
+
+function seasonOf(iso: string | null): string {
+  const d = iso ? new Date(iso) : new Date()
+  const m = d.getMonth() // 0-11
+  if (m >= 2 && m <= 4) return 'spring'
+  if (m >= 5 && m <= 7) return 'summer'
+  if (m >= 8 && m <= 10) return 'fall'
+  return 'winter'
 }
 
 export async function POST(req: NextRequest) {
@@ -48,10 +83,38 @@ export async function POST(req: NextRequest) {
     .slice(0, MAX_CANDIDATES)
   if (!candidates.length) return NextResponse.json({ error: 'no candidates' }, { status: 400 })
 
-  // Build one user turn: a framing line + (label, before img, after img) per pair.
+  // Resolve each candidate job's customer/property/service from the source of
+  // truth (not the client) — used both to enrich the prompt with cached property
+  // intelligence and to capture the asset afterwards. Best-effort.
+  const jobMap = new Map<string, JobRow>()
+  try {
+    const { data: jobRows } = await supabase
+      .from('jobs')
+      .select('id,customer_id,property_id,service_type,completed_at,scheduled_date')
+      .eq('user_id', user.id)
+      .in('id', candidates.map(c => c.jobId))
+    for (const j of (jobRows as JobRow[]) || []) jobMap.set(j.id, j)
+  } catch { /* table/columns unavailable — proceed without context */ }
+
+  // Pull any analysis already on file for these properties — reuse, never
+  // re-analyse. Empty when Vision hasn't run / table absent → prompt unchanged.
+  const contexts = await getPropertyContexts(
+    supabase,
+    candidates.map(c => jobMap.get(c.jobId)?.property_id),
+  )
+
+  // Optionally shrink images before the model fetches them (images are >90% of
+  // the bill). Opt-in: set AI_IMAGE_MAX_EDGE only with Supabase image transforms
+  // enabled. Unset → original URLs → identical to before.
+  const maxEdge = Number(process.env.AI_IMAGE_MAX_EDGE)
+  const img = (url: string) => (maxEdge > 0 ? downscaleImageUrl(url, maxEdge) : url)
+
+  // Build one user turn: a STABLE instruction prefix (cache breakpoint) then,
+  // per pair, a label + any known property facts + the before/after images.
   const blocks: Parameters<typeof generateStructured>[0]['blocks'] = [
     {
       type: 'text',
+      cache: true,
       text:
         `You are picking the single strongest BEFORE/AFTER pair for a lawn & property care business to post on social media. ` +
         `There are ${candidates.length} candidate pairs, indexed from 0. For each, the BEFORE photo comes first, then the AFTER. ` +
@@ -61,14 +124,17 @@ export async function POST(req: NextRequest) {
     },
   ]
   candidates.forEach((c, i) => {
-    blocks.push({ type: 'text', text: `--- Pair ${i} — ${c.label} ---\nBEFORE:` })
-    blocks.push({ type: 'image', url: c.beforeUrl })
+    const ctxLine = propertyContextBlock(contexts.get(jobMap.get(c.jobId)?.property_id || ''))
+    blocks.push({ type: 'text', text: `--- Pair ${i} — ${c.label} ---${ctxLine ? `\n${ctxLine}` : ''}\nBEFORE:` })
+    blocks.push({ type: 'image', url: img(c.beforeUrl) })
     blocks.push({ type: 'text', text: 'AFTER:' })
-    blocks.push({ type: 'image', url: c.afterUrl })
+    blocks.push({ type: 'image', url: img(c.afterUrl) })
   })
 
   const result = await generateStructured<AiResult>({
     blocks,
+    tier: 'vision',
+    cacheTools: true,
     maxTokens: 1200,
     tool: {
       name: 'rank_pairs',
@@ -108,15 +174,47 @@ export async function POST(req: NextRequest) {
     const r = byIndex.get(i)
     return {
       jobId: c.jobId,
-      score: r ? Math.max(0, Math.min(100, Math.round(r.score))) : 0,
+      score: r ? clampScore(r.score) : 0,
       rationale: r?.rationale || '',
     }
   })
   const best = candidates[result.bestIndex]
+  const headline = result.headline || ''
+
+  // ── Capture the AI result as reusable marketing assets (don't discard it) ───
+  // One row per ranked pair, upserted on (user_id, job_id). The winner keeps the
+  // headline. Best-effort: a missing table / FK never affects the response, and
+  // we deliberately don't send `status` so a row the owner already acted on
+  // (used/dismissed) keeps its state.
+  try {
+    const assetRows = candidates.map((c, i) => {
+      const j = jobMap.get(c.jobId)
+      const r = byIndex.get(i)
+      const isWinner = i === result.bestIndex
+      const rationale = r?.rationale || ''
+      return {
+        user_id: user.id,
+        job_id: c.jobId,
+        customer_id: j?.customer_id ?? null,
+        property_id: j?.property_id ?? null,
+        service_type: j?.service_type ?? null,
+        neighborhood: c.neighborhood ?? null,
+        season: seasonOf(j?.completed_at ?? j?.scheduled_date ?? null),
+        quality_score: r ? clampScore(r.score) : null,
+        has_before: true,
+        has_after: true,
+        best_before_photo_id: c.beforePhotoId ?? null,
+        best_after_photo_id: c.afterPhotoId ?? null,
+        ai_rationale: isWinner && headline ? `${headline} — ${rationale}`.trim() : rationale,
+      }
+    })
+    await supabase.from('marketing_assets').upsert(assetRows, { onConflict: 'user_id,job_id' })
+  } catch { /* persistence is best-effort — never block the AI result */ }
+
   return NextResponse.json({
     ok: true,
     bestJobId: best ? best.jobId : ranking.slice().sort((a, b) => b.score - a.score)[0]?.jobId,
-    headline: result.headline || '',
+    headline,
     ranking,
   })
 }

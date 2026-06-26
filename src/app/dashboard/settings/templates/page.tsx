@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useBusinessData } from '@/hooks/useBusinessData'
 import type { ServiceTemplate, ServiceTemplateFormValues } from '@/types'
@@ -22,6 +22,7 @@ export default function ServiceTemplatesPage() {
 
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<ServiceTemplate | null>(null)
+  const formRef = useRef<HTMLDivElement>(null)
 
   const { register, handleSubmit, reset, watch, setValue, formState: { isSubmitting } } =
     useForm<ServiceTemplateFormValues>({
@@ -31,6 +32,14 @@ export default function ServiceTemplatesPage() {
   const isActive = watch('is_active')
   const pdType = watch('pricing_display_type')
   const priceVal = watch('default_rate')
+
+  // The editor is an inline panel rendered at the TOP of the page. Without this,
+  // clicking a row's Edit (or Add) while scrolled down the list opens the form
+  // above the fold — so it looks like "nothing happened". Bring it into view
+  // whenever it opens, and when switching which service is being edited.
+  useEffect(() => {
+    if (showForm) formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [showForm, editing])
 
   function openNew() {
     reset({ name: '', category: 'Lawn Care', pricing_display_type: 'starting_from', default_rate: 65, default_description: '', notes: '', is_active: true })
@@ -92,6 +101,7 @@ export default function ServiceTemplatesPage() {
       />
 
       {showForm && (
+        <div ref={formRef}>
         <Card>
           <CardHeader className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-ink">{editing ? 'Edit Service' : 'New Service'}</h2>
@@ -124,6 +134,7 @@ export default function ServiceTemplatesPage() {
             </form>
           </CardBody>
         </Card>
+        </div>
       )}
 
       {Object.keys(grouped).length === 0 ? (
