@@ -7,7 +7,7 @@ import { SuggestionsCenter } from '@/components/grow/SuggestionsCenter'
 import { CustomerHealthPanel } from '@/components/grow/CustomerHealthPanel'
 import { WinLossPanel } from '@/components/grow/WinLossPanel'
 import {
-  BarChart3, Gauge, HeartPulse, Map as MapIcon, Target, ShieldCheck, CalendarCheck, ArrowRight, TrendingUp, CloudRain,
+  BarChart3, Gauge, HeartPulse, Map as MapIcon, Target, ShieldCheck, CalendarCheck, ArrowRight, TrendingUp, CloudRain, Images, Sparkles,
 } from 'lucide-react'
 
 // ── Grow hub ──────────────────────────────────────────────────────────────────
@@ -31,6 +31,12 @@ const GROUPS: { title: string; tools: Tool[] }[] = [
     tools: [
       { label: 'Saturation Map', href: '/dashboard/saturation', icon: MapIcon, blurb: 'Where your routes are strong and where to grow next.' },
       { label: 'Neighbor Leads', href: '/dashboard/neighbors', icon: Target, blurb: 'Door-knock prospects right next to your best customers.' },
+    ],
+  },
+  {
+    title: 'Show off your work',
+    tools: [
+      { label: 'Before / After Studio', href: '/dashboard/grow/before-after', icon: Images, blurb: 'Turn job photos into branded before/after posts — AI picks the best pair.' },
     ],
   },
   {
@@ -83,6 +89,21 @@ export default function GrowPage() {
           </Card>
         </Link>
       </div>
+
+      {/* Customer Automation — reviews, referrals, follow-ups & campaigns. */}
+      <Link href="/dashboard/grow/crm">
+        <Card className="p-4 border-accent/30 bg-gradient-to-br from-accent/[0.08] to-transparent hover:border-accent/50 transition-colors">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
+              <Sparkles className="w-5 h-5 text-accent" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-bold text-ink flex items-center gap-1.5">Customer Automation <ArrowRight className="w-3.5 h-3.5 text-accent" /></p>
+              <p className="text-xs text-ink-muted mt-0.5">Review pipeline, referral tracking, follow-up radar, and birthday/anniversary/win-back/marketing campaigns.</p>
+            </div>
+          </div>
+        </Card>
+      </Link>
 
       {/* Suggestions Center — the action feed comes first. */}
       <SuggestionsCenter />

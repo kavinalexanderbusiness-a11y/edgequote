@@ -14,6 +14,8 @@ export type MsgType =
   | 'estimate_reminder' | 'payment_reminder' | 'estimate_followup'
   // Payment receipt — auto-sent after a successful (AutoPay) payment.
   | 'receipt'
+  // CRM growth campaigns (lib/crm/campaigns — driven by /api/cron/campaigns).
+  | 'birthday' | 'anniversary' | 'win_back' | 'marketing'
 
 export const MSG_LABELS: Record<MsgType, string> = {
   on_my_way: 'On my way',
@@ -34,6 +36,10 @@ export const MSG_LABELS: Record<MsgType, string> = {
   payment_reminder: 'Payment reminder',
   estimate_followup: 'Estimate follow-up',
   receipt: 'Payment receipt',
+  birthday: 'Birthday greeting',
+  anniversary: 'Anniversary greeting',
+  win_back: 'Win-back / re-engagement',
+  marketing: 'Marketing check-in',
 }
 
 // The variables a template may reference, with a short hint for the editor.
@@ -219,6 +225,38 @@ This confirms your invoice has been **paid in full**. You can view your payment 
 We appreciate your business!
 
 — {{business_name}}`,
+
+  birthday: `Hi {{first_name}},
+
+Happy birthday from everyone at {{business_name}}!
+
+We hope you have a wonderful day. Thank you for being a valued customer—we truly appreciate you.`,
+
+  anniversary: `Hi {{first_name}},
+
+We just wanted to say thank you. It's been a real pleasure looking after your property as a customer of {{business_name}}.
+
+We appreciate your continued trust and look forward to many more seasons of keeping things looking their best.
+
+If there's ever anything we can do for you, just reply to this message.`,
+
+  win_back: `Hi {{first_name}},
+
+It's been a little while, and we'd love to help keep your property looking its best again.
+
+If you'd like to book a visit or have any questions, simply reply to this message—we're always happy to help.
+
+Thank you, and we hope to see you again soon!
+
+— {{business_name}}`,
+
+  marketing: `Hi {{first_name}},
+
+Just checking in from {{business_name}}.
+
+If there's anything we can help with around your property this season, simply reply to this message and we'll take care of it.
+
+Thank you for being a valued customer!`,
 }
 
 const SUBJECTS: Record<MsgType, string> = {
@@ -229,6 +267,7 @@ const SUBJECTS: Record<MsgType, string> = {
   early_arrival: 'We can come earlier today', confirm: 'Confirming your service',
   estimate_reminder: 'Your upcoming estimate', payment_reminder: 'Invoice reminder', estimate_followup: 'Following up on your quote',
   receipt: 'Payment received — thank you',
+  birthday: 'Happy birthday!', anniversary: 'Thank you', win_back: 'We’d love to see you again', marketing: 'A quick hello',
 }
 
 export interface MsgVars {
@@ -267,14 +306,22 @@ function interpolate(tpl: string, v: MsgVars): string {
   return tpl.replace(/\{\{\s*([a-z_]+)\s*\}\}/g, (_m, key: string) => (key in sub ? sub[key] : '')).replace(/[ \t]{2,}/g, ' ').trim()
 }
 
-// Resolve the owner's custom template (if any) else the default, and fill it in.
-export function renderMessage(type: MsgType, custom: Partial<Record<MsgType, string>> | null | undefined, vars: MsgVars): RenderedMessage {
-  const tpl = (custom && custom[type] && custom[type]!.trim()) ? custom[type]! : DEFAULT_TEMPLATES[type]
-  const raw = interpolate(tpl, vars)
+// Render an arbitrary body string (a default template OR owner-authored campaign
+// copy) into the per-channel shapes. Interpolation, **bold** handling and the
+// email wrapper are identical to renderMessage, so manual and automated sends
+// look the same in the customer's thread/inbox.
+export function renderBody(rawBody: string, vars: MsgVars, subject: string): RenderedMessage {
+  const raw = interpolate(rawBody, vars)
   // SMS/plain: strip the **bold** markers. Email: render them as <strong>.
   const sms = raw.replace(/\*\*(.+?)\*\*/g, '$1')
-  const subject = SUBJECTS[type] || `A message from ${vars.businessName || 'your service provider'}`
   const htmlBody = raw.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>')
   const html = `<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;font-size:15px;line-height:1.55;color:#1A2333">${htmlBody}</div>`
   return { sms, subject, html, text: sms }
+}
+
+// Resolve the owner's custom template (if any) else the default, and fill it in.
+export function renderMessage(type: MsgType, custom: Partial<Record<MsgType, string>> | null | undefined, vars: MsgVars): RenderedMessage {
+  const tpl = (custom && custom[type] && custom[type]!.trim()) ? custom[type]! : DEFAULT_TEMPLATES[type]
+  const subject = SUBJECTS[type] || `A message from ${vars.businessName || 'your service provider'}`
+  return renderBody(tpl, vars, subject)
 }

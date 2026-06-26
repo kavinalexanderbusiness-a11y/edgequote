@@ -29,6 +29,23 @@ export interface Customer {
   // Communication consent — gates all SMS/email sends (default off).
   sms_opt_in: boolean
   email_opt_in: boolean
+  // ── CRM automation ──
+  // Review lifecycle on top of reviewed_at (status DERIVED in lib/crm/reviews):
+  //   declined → review_declined_at · reviewed → reviewed_at · requested →
+  //   review_requested_at · else not_requested. review_source/_rating are the
+  //   editable details once a review lands.
+  reviewed_at?: string | null
+  review_requested_at?: string | null
+  review_source?: string | null
+  review_rating?: number | null
+  review_declined_at?: string | null
+  // Optional dates that power the birthday / anniversary campaigns (month+day
+  // matched; year ignored). 'YYYY-MM-DD'.
+  birthday?: string | null
+  anniversary?: string | null
+  // Denormalised last OUTBOUND touch (maintained from messages by a trigger) —
+  // powers "not contacted in X days" + the win-back campaign.
+  last_contacted_at?: string | null
   // ── Recurring card-on-file AutoPay ──
   // Stripe customer id (lazily created on first card save). We store only this id +
   // the display metadata on PaymentMethod; Stripe holds the card itself.
@@ -485,6 +502,49 @@ export interface CustomerFormValues {
   notes: string
   acquisition_source: string
   referred_by_customer_id: string
+  birthday: string
+  anniversary: string
+}
+
+// ── CRM automation ──────────────────────────────────────────────────────────
+// A referral and its outcome. The referred person is referenced by FK once they
+// become a customer (referred_customer_id) — never duplicated. Bridges the
+// existing customers.referred_by_customer_id link (see migration 2026-06-25h).
+export interface Referral {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  referrer_customer_id: string
+  referred_customer_id: string | null
+  referred_name: string | null
+  referred_contact: string | null
+  status: 'invited' | 'joined' | 'rewarded' | 'declined'
+  reward: string | null
+  notes: string | null
+  joined_at: string | null
+  rewarded_at: string | null
+}
+
+export type CampaignKind = 'birthday' | 'anniversary' | 'win_back' | 'broadcast'
+
+// A customer-centric automated outreach the owner defines; the daily cron
+// (/api/cron/campaigns) resolves the audience and sends through the existing
+// comms pipeline. Distinct from job-triggered business_settings.automations.
+export interface CrmCampaign {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  name: string
+  kind: CampaignKind
+  enabled: boolean
+  channels: string[]
+  template_key: string | null
+  custom_body: string | null
+  audience: { recurring_only?: boolean }
+  schedule: { days?: number; lead_days?: number; day_of_month?: number; every_months?: number }
+  last_run_at: string | null
 }
 
 export const ACQUISITION_SOURCES = [

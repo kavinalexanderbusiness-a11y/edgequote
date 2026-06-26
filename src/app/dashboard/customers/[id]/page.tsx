@@ -21,13 +21,15 @@ import { formatCurrency, formatDate, getInitials } from '@/lib/utils'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { CustomerComms } from '@/components/customers/CustomerComms'
 import { CommsHealth } from '@/components/customers/CommsHealth'
+import { ReviewLifecycle } from '@/components/customers/ReviewLifecycle'
+import { ReferralPanel } from '@/components/customers/ReferralPanel'
 import { ConversationThread } from '@/components/messages/ConversationThread'
 import { PaymentMethodCard } from '@/components/payments/PaymentMethodCard'
 import {
   ArrowLeft, Phone, MessageSquare, FilePlus, CalendarPlus, Mail, MapPin, Repeat,
   FileText, Send, RotateCw, CheckCircle2, Wrench, Receipt, DollarSign, Sparkles, Users,
   Edit2, ExternalLink, Ruler, AlertTriangle, StickyNote, Wallet, Timer, CalendarClock,
-  Link2, Check,
+  Link2, Check, Cake, PartyPopper,
 } from 'lucide-react'
 
 const WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
@@ -36,6 +38,16 @@ const OPEN_INVOICE = new Set(['unpaid', 'sent'])
 function localToday(): string {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+// Month + day from a 'YYYY-MM-DD' string (no timezone drift) — e.g. "Jun 25".
+function mdLabel(dateStr: string | null | undefined): string | null {
+  if (!dateStr) return null
+  const p = String(dateStr).slice(0, 10).split('-')
+  const m = Number(p[1]), d = Number(p[2])
+  if (!m || !d) return null
+  return `${MONTHS[m - 1]} ${d}`
 }
 
 interface TimelineEvent {
@@ -69,7 +81,6 @@ export default function CustomerDetailPage() {
 
   const [customer, setCustomer] = useState<Customer | null>(null)
   const [referrer, setReferrer] = useState<{ id: string; name: string } | null>(null)
-  const [referredCustomers, setReferredCustomers] = useState<{ id: string; name: string }[]>([])
   const [referredRevenue, setReferredRevenue] = useState(0)
   const [properties, setProperties] = useState<Property[]>([])
   const [quotes, setQuotes] = useState<Quote[]>([])
@@ -159,7 +170,6 @@ export default function CustomerDetailPage() {
       // Advocates: who this customer referred, and the revenue they generated.
       const { data: referred } = await supabase.from('customers').select('id, name').eq('referred_by_customer_id', id)
       const referredList = (referred as { id: string; name: string }[]) || []
-      setReferredCustomers(referredList)
       if (referredList.length > 0) {
         const { data: rq } = await supabase.from('quotes').select('total, status').in('customer_id', referredList.map(r => r.id))
         const rev = ((rq as { total: number; status: string }[]) || [])
@@ -440,6 +450,12 @@ export default function CustomerDetailPage() {
                 {lastServicedDays != null && (
                   <span className="text-xs text-ink-faint">Last serviced {lastServicedDays}d ago</span>
                 )}
+                {mdLabel(customer.birthday) && (
+                  <span className="text-xs text-ink-faint flex items-center gap-1"><Cake className="w-3 h-3" /> {mdLabel(customer.birthday)}</span>
+                )}
+                {mdLabel(customer.anniversary) && (
+                  <span className="text-xs text-ink-faint flex items-center gap-1"><PartyPopper className="w-3 h-3" /> {mdLabel(customer.anniversary)}</span>
+                )}
               </div>
             </div>
           </div>
@@ -478,6 +494,9 @@ export default function CustomerDetailPage() {
 
       {/* Communication — consent + history */}
       <CustomerComms customerId={customer.id} smsOptIn={!!customer.sms_opt_in} emailOptIn={!!customer.email_opt_in} />
+
+      {/* Review lifecycle — ask, then record the outcome (stops asking once done) */}
+      <ReviewLifecycle customer={customer} onChange={patch => setCustomer({ ...customer, ...patch })} />
 
       {/* Notes & access info — prominent, quick-edit */}
       <Card>
@@ -777,25 +796,8 @@ export default function CustomerDetailPage() {
         </Card>
       </div>
 
-      {/* Referrals — advocates this customer brought in */}
-      {referredCustomers.length > 0 && (
-        <Card>
-          <CardHeader className="flex items-center gap-2">
-            <Users className="w-4 h-4 text-accent" />
-            <h2 className="text-sm font-semibold text-ink">Referrals from {customer.name.split(' ')[0]}</h2>
-            <span className="ml-auto text-xs text-ink-muted">{referredCustomers.length} referred · <span className="text-accent font-semibold">{formatCurrency(referredRevenue)}</span> generated</span>
-          </CardHeader>
-          <CardBody>
-            <div className="flex flex-wrap gap-2">
-              {referredCustomers.map(r => (
-                <Link key={r.id} href={`/dashboard/customers/${r.id}`} className="text-xs flex items-center gap-1 text-ink border border-border rounded-lg px-2.5 py-1 hover:border-border-strong transition-colors">
-                  {r.name}
-                </Link>
-              ))}
-            </div>
-          </CardBody>
-        </Card>
-      )}
+      {/* Referrals — advocates this customer brought in (with statuses + rewards) */}
+      <ReferralPanel customer={customer} referrer={referrer} referredRevenue={referredRevenue} />
     </div>
   )
 }

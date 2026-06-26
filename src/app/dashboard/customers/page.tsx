@@ -56,6 +56,8 @@ export default function CustomersPage() {
       ...values,
       acquisition_source: values.acquisition_source || null,
       referred_by_customer_id: values.referred_by_customer_id || null,
+      birthday: values.birthday || null,
+      anniversary: values.anniversary || null,
     }
   }
 
@@ -196,6 +198,8 @@ export default function CustomersPage() {
                 notes: editing.notes || '',
                 acquisition_source: editing.acquisition_source || '',
                 referred_by_customer_id: editing.referred_by_customer_id || '',
+                birthday: editing.birthday || '',
+                anniversary: editing.anniversary || '',
               } : undefined}
               onSubmit={editing ? handleEdit : handleAdd}
               onCancel={() => { setShowForm(false); setEditing(null) }}

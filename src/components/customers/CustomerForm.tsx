@@ -24,6 +24,8 @@ export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel
       province: 'AB',
       acquisition_source: '',
       referred_by_customer_id: '',
+      birthday: '',
+      anniversary: '',
       ...defaultValues,
     },
   })
@@ -119,6 +121,21 @@ export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel
             )}
           />
         )}
+      </div>
+
+      {/* Optional dates that power birthday / anniversary campaigns (Grow → Customer
+          automation). Month + day are used; the year is fine to leave approximate. */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <Input
+          label="Birthday (optional)"
+          type="date"
+          {...register('birthday')}
+        />
+        <Input
+          label="Customer anniversary (optional)"
+          type="date"
+          {...register('anniversary')}
+        />
       </div>
 
       <Textarea

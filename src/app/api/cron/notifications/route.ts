@@ -15,7 +15,7 @@ export const dynamic = 'force-dynamic'
 //   • needs SUPABASE_SERVICE_ROLE_KEY to read across customers,
 //   • de-dupes via notification_log and honours per-customer opt-in.
 
-interface CronCustomer { name: string; phone: string | null; email: string | null; sms_opt_in: boolean; email_opt_in: boolean; reviewed_at: string | null }
+interface CronCustomer { name: string; phone: string | null; email: string | null; sms_opt_in: boolean; email_opt_in: boolean; reviewed_at: string | null; review_declined_at: string | null }
 interface CronJob { id: string; user_id: string; customer_id: string | null; scheduled_date: string; customers: CronCustomer | null }
 
 export async function GET(req: NextRequest) {
@@ -48,7 +48,7 @@ export async function GET(req: NextRequest) {
     const { data } = await supabase.from('notification_log').select('id').eq('user_id', userId).eq('job_id', jobId).eq('template', template).eq('status', 'sent').limit(1)
     return !!(data && data.length)
   }
-  const sel = 'id, user_id, customer_id, scheduled_date, customers(name, phone, email, sms_opt_in, email_opt_in, reviewed_at)'
+  const sel = 'id, user_id, customer_id, scheduled_date, customers(name, phone, email, sms_opt_in, email_opt_in, reviewed_at, review_declined_at)'
   let sent = 0
 
   async function runBatch(rows: CronJob[], template: 'reminder' | 'review_request', dateLabel?: string) {
@@ -59,7 +59,7 @@ export async function GET(req: NextRequest) {
       const info = await bizInfo(j.user_id)
       if (template === 'reminder' && !info.automations.reminder) continue       // automation off for this owner
       if (template === 'review_request' && !info.automations.review) continue
-      if (template === 'review_request' && c.reviewed_at) continue              // already left a review — don't ask again
+      if (template === 'review_request' && (c.reviewed_at || c.review_declined_at)) continue  // already reviewed or opted out — don't ask again
       const token = await ensurePortalToken(supabase, j.user_id, j.customer_id)
       const msg = renderMessage(template, info.templates, { firstName: c.name, businessName: info.name, dateLabel, portalLink: token ? portalUrl(token) : undefined, reviewLink: info.reviewUrl || undefined })
       if (c.sms_opt_in && c.phone) { const r = await sendSms(c.phone, msg.sms); await supabase.from('notification_log').insert({ user_id: j.user_id, customer_id: j.customer_id, job_id: j.id, channel: 'sms', template, status: r.reason, detail: r.error ?? null }); if (r.sent) sent++ }
