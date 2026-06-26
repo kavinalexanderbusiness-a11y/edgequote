@@ -102,5 +102,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const pieces = results.flatMap(r => ('piece' in r ? [r.piece] : []))
   const errors = results.flatMap(r => ('error' in r ? [{ channel: r.channel, error: r.error }] : []))
-  return NextResponse.json({ ok: pieces.length > 0, aiEnabled: true, campaign, pieces, errors } satisfies CampaignGenerateResponse)
+
+  // Nothing generated → don't leave an empty campaign behind (keeps the campaign
+  // count equal to the number of campaigns that actually produced posts). The client
+  // shows a real error built from `errors`, not a misleading "campaign created".
+  if (pieces.length === 0) {
+    await supabase.from('marketing_campaigns').delete().eq('id', campaign.id)
+    return NextResponse.json({ ok: false, aiEnabled: true, pieces: [], errors } satisfies CampaignGenerateResponse)
+  }
+
+  return NextResponse.json({ ok: true, aiEnabled: true, campaign, pieces, errors } satisfies CampaignGenerateResponse)
 }
