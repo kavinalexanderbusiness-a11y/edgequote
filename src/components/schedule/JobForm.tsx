@@ -17,6 +17,7 @@ import {
 } from '@/lib/seasons'
 import { WeeklyScheduler } from '@/components/schedule/WeeklyScheduler'
 import { SmartLaborField } from '@/components/labor/SmartLaborField'
+import type { Cadence } from '@/lib/labor'
 import { resolvePrefs, type PrefSource } from '@/lib/preferences'
 import { Repeat, Sparkles, Snowflake, Sun, AlertTriangle, CalendarRange } from 'lucide-react'
 
@@ -87,6 +88,16 @@ function presetToInterval(preset: RepeatPreset, customUnit: RecurUnit, customCou
     case 'm1': return { unit: 'month', count: 1 }
     case 'custom': return { unit: customUnit, count: Math.max(1, customCount) }
   }
+}
+
+// Map a recurrence interval to the labor engine's cadence bucket, so the Smart
+// Labor estimate learns "weekly mow from weekly mow" (not all mows pooled).
+function intervalToCadence(iv: { unit: RecurUnit; count: number } | null): Cadence {
+  if (!iv) return 'one_time'
+  if (iv.unit === 'month') return 'monthly'
+  if (iv.unit === 'week') return iv.count <= 1 ? 'weekly' : iv.count === 2 ? 'biweekly' : 'monthly'
+  if (iv.unit === 'day') return iv.count <= 10 ? 'weekly' : iv.count <= 18 ? 'biweekly' : 'monthly'
+  return 'one_time'
 }
 
 type EndMode = 'season' | 'on' | 'after' | 'never'
@@ -334,6 +345,16 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     : endMode === 'on' && endDate ? `until ${endDate}`
     : 'no end date (kept rolling on your calendar)'
 
+  // Cadence for the Smart Labor estimate: this job's own repeat, else the
+  // property's existing series cadence, else one-time. So a weekly mow's duration
+  // learns from weekly mows.
+  const laborCadence: Cadence = (() => {
+    const iv = presetToInterval(preset, customUnit, customCount)
+    if (iv) return intervalToCadence(iv)
+    const s = propSeries[0]
+    return s?.unit ? intervalToCadence({ unit: s.unit as RecurUnit, count: s.count || 1 }) : 'one_time'
+  })()
+
   return (
     <form
       onSubmit={handleSubmit((values) => {
@@ -446,6 +467,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
         serviceType={serviceType}
         crewSize={Number(watch('crew_size')) || 1}
         propertyId={selectedPropertyId || null}
+        cadence={laborCadence}
         price={Number(watch('price')) || (measuredPrice ?? 0)}
         value={Number(watch('duration_minutes')) || null}
         onApply={(min) => setValue('duration_minutes', min, { shouldValidate: true })}

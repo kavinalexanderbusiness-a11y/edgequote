@@ -4,6 +4,7 @@ import { toast } from '@/lib/toast'
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { loadAnalyticsCore } from '@/lib/analyticsData'
 import { Customer } from '@/types'
 import { format } from 'date-fns'
 import { Coord, haversineKm, geocodeAddressDetailed } from '@/lib/geo'
@@ -60,13 +61,11 @@ export default function NeighborsPage() {
   async function load() {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { setLoading(false); return }
-    const [lRes, cRes, pRes, jRes, qRes, rRes] = await Promise.all([
+    const [lRes, cRes, pRes, core] = await Promise.all([
       supabase.from('neighbor_leads').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
       supabase.from('customers').select('*').eq('user_id', user.id).order('name'),
       supabase.from('properties').select('id, customer_id, address, lat, lng, city, postal_code, neighborhood').eq('user_id', user.id),
-      supabase.from('jobs').select('id, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, properties(lat, lng, city, postal_code, neighborhood)').eq('user_id', user.id),
-      supabase.from('quotes').select('id, status, property_id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user.id),
-      supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user.id),
+      loadAnalyticsCore(supabase),
     ])
     setLeads((lRes.data as Lead[]) || [])
     setCustomers((cRes.data as Customer[]) || [])
@@ -74,11 +73,11 @@ export default function NeighborsPage() {
     setProperties(props)
 
     const quotesById: Record<string, ProfitQuote> = {}
-    for (const q of (qRes.data as (ProfitQuote & { id: string })[]) || []) quotesById[q.id] = q
+    for (const q of (core?.quotes as unknown as (ProfitQuote & { id: string })[]) || []) quotesById[q.id] = q
     const recById: Record<string, RecInfo> = {}
-    for (const r of (rRes.data as (RecInfo & { id: string })[]) || []) recById[r.id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count }
+    for (const r of (core?.recurrences as unknown as (RecInfo & { id: string })[]) || []) recById[r.id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count }
     setCtx({ quotesById, recById, base: null, today: format(new Date(), 'yyyy-MM-dd') })
-    setJobs(((jRes.data as unknown as Array<Record<string, any>>) || []).map(j => ({
+    setJobs(((core?.jobs as unknown as Array<Record<string, any>>) || []).map(j => ({
       id: j.id, scheduled_date: j.scheduled_date, status: j.status, service_type: j.service_type,
       quote_id: j.quote_id, recurrence_id: j.recurrence_id, duration_minutes: j.duration_minutes,
       actual_minutes: j.actual_minutes, price: j.price, customer_id: j.customer_id,
@@ -89,7 +88,7 @@ export default function NeighborsPage() {
     // Pending quote demand per hood (warm areas to knock).
     const pend: Record<string, number> = {}
     const propsById = new Map(props.map(p => [p.id, p]))
-    for (const q of (qRes.data as unknown as Array<{ status: string; property_id: string | null }>) || []) {
+    for (const q of (core?.quotes as unknown as Array<{ status: string; property_id: string | null }>) || []) {
       if (q.status !== 'draft' && q.status !== 'sent') continue
       const p = q.property_id ? propsById.get(q.property_id) : null
       if (!p) continue

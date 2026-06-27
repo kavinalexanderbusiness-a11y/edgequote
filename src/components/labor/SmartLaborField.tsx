@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import {
-  loadLaborModel, estimateLabor, laborEconomics, LaborModel, LaborEstimate, Confidence,
+  loadLaborModel, estimateLabor, laborEconomics, LaborModel, LaborEstimate, Confidence, Cadence,
 } from '@/lib/labor'
 import { cn } from '@/lib/utils'
 import { Sparkles, Check, HelpCircle, Gauge } from 'lucide-react'
@@ -21,7 +21,7 @@ const CONF_LABEL: Record<Confidence, string> = { high: 'High confidence', medium
 // SAFETY: only auto-fills an empty field or one it filled itself — NEVER overwrites
 // a value you typed, never touches pricing, always overridable.
 export function SmartLaborField({
-  sqft, serviceType, crewSize, propertyId, isInitialVisit, overgrowth, price, value, onApply, readOnly,
+  sqft, serviceType, crewSize, propertyId, isInitialVisit, overgrowth, cadence, price, value, onApply, readOnly,
 }: {
   sqft: number
   serviceType: string | null
@@ -29,6 +29,7 @@ export function SmartLaborField({
   propertyId?: string | null
   isInitialVisit?: boolean
   overgrowth?: number
+  cadence?: Cadence | null   // recurrence cadence so weekly learns from weekly
   price?: number          // per-visit value, for the profit layer (read-only; never changes price)
   value: number | null    // the form's current duration (minutes)
   onApply: (minutes: number) => void
@@ -49,8 +50,8 @@ export function SmartLaborField({
 
   const est: LaborEstimate | null = useMemo(() => {
     if (sqft <= 0 && !propertyId) return null
-    return estimateLabor({ sqft, serviceType, crewSize, propertyId, isInitialVisit, overgrowth }, model)
-  }, [sqft, serviceType, crewSize, propertyId, isInitialVisit, overgrowth, model])
+    return estimateLabor({ sqft, serviceType, crewSize, propertyId, isInitialVisit, overgrowth, cadence }, model)
+  }, [sqft, serviceType, crewSize, propertyId, isInitialVisit, overgrowth, cadence, model])
 
   // Auto-fill: only when ON and the field is empty OR still holds the last value we
   // applied (i.e. you haven't typed your own). Live-recalcs when crew/sqft change.
