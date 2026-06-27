@@ -1,10 +1,12 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { toast } from '@/lib/toast'
 import { createClient } from '@/lib/supabase/client'
 import { Job, JobStatus, JobRecurrence, JobLineItem, RecurrenceScope, PRICE_REASONS, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
 import { Coord } from '@/lib/geo'
 import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, nearestNeighborRoute, roundTripMapsUrl, routeStats, directionsUrl, computeDayEtas, roughFinishEstimate, dayLoad, minutesToTime12, timeToMinutes, DEFAULT_JOB_MIN } from '@/lib/route'
+import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
 import { buildRoadDistance } from '@/lib/distance'
 import { jobVisitValue, effectiveFreq, quoteVisitAmount } from '@/lib/invoicing'
 import { addonsTotal } from '@/lib/jobPricing'
@@ -15,7 +17,7 @@ import { JobAddons } from '@/components/schedule/JobAddons'
 import { JobMessages } from '@/components/schedule/JobMessages'
 import {
   DollarSign, Clock, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
-  MapPin, Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, Trash2, CloudRain, Play, Timer, Camera, PlusCircle, MessageSquare,
+  MapPin, Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, Trash2, CloudRain, Play, Timer, Camera, PlusCircle, MessageSquare, Send,
 } from 'lucide-react'
 
 export interface QuoteLite {
@@ -88,6 +90,41 @@ export function DayOpsPanel({
   const [addonsId, setAddonsId] = useState<string | null>(null)
   // Which job's one-tap messaging panel is open.
   const [messageId, setMessageId] = useState<string | null>(null)
+  // Job currently sending a one-tap "On my way" (locks the button against double-tap).
+  const [sendingEta, setSendingEta] = useState<string | null>(null)
+
+  // One-tap "On my way" — no composer, no typing. Sends the owner's on_my_way
+  // template with the default ETA through the SAME pipeline as the editable
+  // composer (/api/comms/send: opt-in-gated, logged, threaded, and it stamps
+  // on_my_way_at so the customer portal shows a live status). The "Message" panel
+  // remains for a custom ETA or wording.
+  async function sendOnMyWay(job: Job) {
+    if (sendingEta) return
+    if (!job.customer_id) { toast.error('Link a customer to this job to send updates.'); return }
+    setSendingEta(job.id)
+    try {
+      const res = await fetch('/api/comms/send', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerId: job.customer_id, template: 'on_my_way', jobId: job.id,
+          channels: ['sms', 'email'],
+          vars: { eta: '15', address: job.properties?.address ?? undefined },
+        }),
+      })
+      const data = (await res.json().catch(() => ({}))) as { results?: Record<string, { sent?: boolean; reason?: string }> }
+      const results = data.results || {}
+      const sent = Object.entries(results).filter(([, v]) => v.sent).map(([ch]) => ch)
+      if (sent.length) { toast.success(`“On my way” sent by ${sent.join(' & ')}.`); return }
+      const reasons = Object.values(results).map(v => v.reason)
+      if (reasons.includes('no-optin')) toast.error('Customer hasn’t opted in — turn on SMS/email on their profile.')
+      else if (reasons.includes('disabled')) toast.error('Messaging is off — add Twilio/Resend keys in Settings.')
+      else toast.error('Nothing sent — no phone or email on file for this customer.')
+    } catch {
+      toast.error('Could not reach the server. Please try again.')
+    } finally {
+      setSendingEta(null)
+    }
+  }
 
   function openPrice(job: Job) {
     setQuickId(null); setMoveId(null); setPhotoId(null); setAddonsId(null)
@@ -149,6 +186,10 @@ export function DayOpsPanel({
   }
   const [route, setRoute] = useState<{ ordered: OrderedRouteStop[]; totalKm: number; mapsUrl: string | null; usedGoogle: boolean; usedRoad: boolean } | null>(null)
   const [routing, setRouting] = useState(false)
+  // Learned drive speed + load/unload overhead from completed routes — sharpens the
+  // route's drive minutes and per-stop ETAs over time (falls back to 2 min/km).
+  const [travel, setTravel] = useState<TravelModel>(DEFAULT_TRAVEL_MODEL)
+  useEffect(() => { let alive = true; loadTravelModel(supabase).then(m => { if (alive) setTravel(m) }); return () => { alive = false } }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const lastKey = useRef<string>('')
 
   // The BASE value of one visit, from its quote/price (cadence-aware). One engine.
@@ -226,13 +267,13 @@ export function DayOpsPanel({
     if (oa !== ob) return oa - ob
     return (a.start_time || '').localeCompare(b.start_time || '')
   })
-  const stats = route && totalStops > 0 ? routeStats(locatedCoords, route.totalKm) : null
+  const stats = route && totalStops > 0 ? routeStats(locatedCoords, route.totalKm, travel) : null
 
   // Real-world timing: work start + route order + drive legs + job durations →
   // an arrival time per stop and the day's estimated finish (ONE engine, lib/route).
   const durByJob: Record<string, number> = {}
   for (const j of active) durByJob[j.id] = j.duration_minutes || DEFAULT_JOB_MIN
-  const etas = route && route.ordered.length > 0 ? computeDayEtas(workStartTime, route.ordered, durByJob) : null
+  const etas = route && route.ordered.length > 0 ? computeDayEtas(workStartTime, route.ordered, durByJob, travel) : null
   const etaByJob: Record<string, string> = {}
   const arrivalMinByJob: Record<string, number> = {}
   if (etas) for (const s of etas.stops) { etaByJob[s.jobId] = s.arrival; arrivalMinByJob[s.jobId] = s.arrivalMin }
@@ -534,6 +575,8 @@ export function DayOpsPanel({
                         {/* One-tap Done — complete a scheduled visit without a check-in (no time tracked); completeJob handles the missing started_at and offers Undo. */}
                         {job.status === 'scheduled' && <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onMarkDone(job) } finally { setActing(null) } }} icon={CheckCircle2} label="Done" tone="emerald" />}
                         {job.status === 'in_progress' && <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onMarkDone(job) } finally { setActing(null) } }} icon={CheckCircle2} label="Complete" tone="emerald" />}
+                        {/* One-tap "On my way" — sends the default-ETA text with a single click (no composer). */}
+                        {job.status === 'scheduled' && <ActionBtn disabled={sendingEta !== null} onClick={() => sendOnMyWay(job)} icon={Send} label={sendingEta === job.id ? 'Sending…' : 'On my way'} tone="sky" />}
                         <ActionBtn onClick={() => (quickId === job.id ? setQuickId(null) : openQuick(job))} icon={SlidersHorizontal} label="Quick" />
                         <ActionBtn onClick={() => onOpenJob(job)} icon={Pencil} label="Open" />
                         <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setAddonsId(null); setMessageId(messageId === job.id ? null : job.id) }} icon={MessageSquare} label="Message" />

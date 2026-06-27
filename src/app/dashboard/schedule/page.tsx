@@ -840,10 +840,10 @@ export default function SchedulePage() {
     const failed = results.find(r => r.error)
     if (failed?.error) setBanner('Could not save the job: ' + failed.error.message)
 
-    if (values.status === 'completed' && job.recurrence_id) {
+    if (values.status === 'completed' && job.status !== 'completed') {
       const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed' })
-      if (res.created) setBanner(`Draft invoice ${res.invoiceNumber} created from the completed visit — review it in Invoices.`)
-      else if (res.reason === 'exists') setBanner('That visit already has an invoice.')
+      if (res.created) setBanner(`Draft invoice ${res.invoiceNumber} created from the completed job — review it in Invoices.`)
+      else if (res.reason === 'exists') setBanner('That job already has an invoice.')
     }
   }
 
@@ -1058,11 +1058,9 @@ export default function SchedulePage() {
     const { error } = await supabase.from('jobs').update({ status: 'completed', completed_at: now, actual_minutes: actual }).eq('id', job.id)
     if (error) { setBanner('Could not complete the job: ' + error.message); return }
     let invoiceCreated = false
-    if (job.recurrence_id) {
-      const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed', actual_minutes: actual })
-      if (res.created) { invoiceCreated = true; setBanner(`Draft invoice ${res.invoiceNumber} created. Review in Invoices.`) }
-      else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this visit has no price. Set a price to bill it.')
-    }
+    const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed', actual_minutes: actual })
+    if (res.created) { invoiceCreated = true; setBanner(`Draft invoice ${res.invoiceNumber} created. Review in Invoices.`) }
+    else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
     // Automated job-complete message (opt-in + dedupe are enforced by the route).
     if (automations.job_complete && job.customer_id) {
       fetch('/api/comms/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ customerId: job.customer_id, template: 'job_complete', jobId: job.id, dedupe: true }) }).catch(() => {})
@@ -1085,7 +1083,7 @@ export default function SchedulePage() {
       price: patch.price,
     }).eq('id', job.id)
     if (error) { setBanner('Could not save the job: ' + error.message); return }
-    if (patch.status === 'completed' && job.status !== 'completed' && job.recurrence_id) {
+    if (patch.status === 'completed' && job.status !== 'completed') {
       const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed' })
       if (res.created) setBanner(`Saved — draft invoice ${res.invoiceNumber} created.`)
     }

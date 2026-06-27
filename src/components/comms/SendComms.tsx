@@ -14,11 +14,15 @@ interface Props {
   label?: string
   jobId?: string | null
   vars?: { amount?: string; eta?: string | number }
+  // Fired once with the delivered channels when at least one send succeeds — lets the
+  // caller advance its own state (e.g. flip an invoice to "Sent"). Optional, so existing
+  // callers (the quote sender) are unaffected.
+  onSent?: (channels: string[]) => void
 }
 
 interface Outcome { ok: boolean; text: string }
 
-export function SendComms({ customerId, template, label = 'Send', jobId = null, vars }: Props) {
+export function SendComms({ customerId, template, label = 'Send', jobId = null, vars, onSent }: Props) {
   const [busy, setBusy] = useState<string | null>(null)
   const [outcome, setOutcome] = useState<Outcome | null>(null)
 
@@ -30,7 +34,10 @@ export function SendComms({ customerId, template, label = 'Send', jobId = null, 
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ customerId, template, channels, jobId, vars }),
       })
-      setOutcome(summarize(await res.json()))
+      const data = (await res.json()) as { results?: Record<string, { sent?: boolean }> }
+      const sentChannels = Object.entries(data.results || {}).filter(([, v]) => v.sent).map(([ch]) => ch)
+      setOutcome(summarize(data))
+      if (sentChannels.length) onSent?.(sentChannels)
     } catch (e) {
       setOutcome({ ok: false, text: e instanceof Error ? e.message : 'Failed to send.' })
     }

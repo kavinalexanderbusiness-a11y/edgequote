@@ -152,23 +152,38 @@ export async function syncDraftInvoiceAmounts(
   return changed
 }
 
-// When a recurring visit is completed, create a DRAFT invoice for that visit,
-// pulling customer/property/service/pricing from the originating quote.
-// Never sends. De-dupes by job_id so a visit can't be double-invoiced.
+// When a billable job is completed — a one-time job OR a recurring visit — create a
+// DRAFT invoice for it, pulling customer/property/service/pricing from the job and
+// its originating quote. Never sends. De-dupes by job_id so a visit can't be
+// double-invoiced, and (for one-time jobs) by quote_id so it can't collide with a
+// manual "Convert to Invoice". An unpriced job drafts nothing (never a $0 invoice).
 export async function createDraftInvoiceForCompletedJob(supabase: Supa, job: Job): Promise<AutoInvoiceResult> {
-  if (!job.recurrence_id) return { created: false, reason: 'not-recurring' }
-
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { created: false, reason: 'error' }
 
-  // Prevent duplicates — one invoice per completed visit.
+  // Prevent duplicates — one invoice per completed visit (job_id is the atomic key;
+  // a partial unique index on invoices(job_id) is the race backstop further down).
   const { data: existing } = await supabase.from('invoices').select('id').eq('job_id', job.id).limit(1)
   if (existing && existing.length > 0) return { created: false, reason: 'exists' }
 
-  // Recurrence cadence drives which quoted price applies (interval-aware).
-  const { data: rec } = await supabase.from('job_recurrences').select('freq, interval_unit, interval_count').eq('id', job.recurrence_id).maybeSingle()
-  const r = rec as { freq: string | null; interval_unit: string | null; interval_count: number | null } | null
-  const freq = effectiveFreq(r?.freq ?? null, r?.interval_unit ?? null, r?.interval_count ?? null)
+  // A one-time job billed from a quote yields exactly ONE invoice. That quote may
+  // already have been turned into an invoice manually (the "Convert to Invoice" path
+  // stamps quote_id but no job_id), so dedupe by quote_id too — otherwise completing
+  // the job would double-bill the customer. Recurring jobs intentionally skip this:
+  // many visits share one quote_id and each visit is invoiced separately.
+  if (!job.recurrence_id && job.quote_id) {
+    const { data: q } = await supabase.from('invoices').select('id').eq('quote_id', job.quote_id).limit(1)
+    if (q && q.length > 0) return { created: false, reason: 'exists' }
+  }
+
+  // Recurrence cadence drives which quoted price applies (interval-aware). A one-time
+  // job has no recurrence → freq stays null and the first-visit price applies.
+  let freq: string | null = null
+  if (job.recurrence_id) {
+    const { data: rec } = await supabase.from('job_recurrences').select('freq, interval_unit, interval_count').eq('id', job.recurrence_id).maybeSingle()
+    const r = rec as { freq: string | null; interval_unit: string | null; interval_count: number | null } | null
+    freq = effectiveFreq(r?.freq ?? null, r?.interval_unit ?? null, r?.interval_count ?? null)
+  }
 
   // Originating quote → pricing + fallbacks for customer/address.
   let quote: Record<string, unknown> | null = null
@@ -224,7 +239,7 @@ export async function createDraftInvoiceForCompletedJob(supabase: Supa, job: Job
     status: 'draft',
     issued_date: today,
     due_date: dueISO,
-    notes: `Auto-generated from completed ${freq || 'recurring'} visit on ${job.scheduled_date}.`,
+    notes: `Auto-generated from completed ${job.recurrence_id ? `${freq || 'recurring'} visit` : 'job'} on ${job.scheduled_date}.`,
   }).select('id').single()
 
   if (error || !created) {

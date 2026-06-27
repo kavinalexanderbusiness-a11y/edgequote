@@ -72,7 +72,7 @@ export function MissedJobs() {
   async function markDone(row: MissedRow) {
     setBusy(row.id)
     await supabase.from('jobs').update({ status: 'completed', completed_at: new Date().toISOString() }).eq('id', row.id)
-    if (row.job.recurrence_id) await createDraftInvoiceForCompletedJob(supabase, { ...row.job, status: 'completed' })
+    await createDraftInvoiceForCompletedJob(supabase, { ...row.job, status: 'completed' })
     setRows(prev => prev.filter(r => r.id !== row.id))
     setBusy(null)
   }
