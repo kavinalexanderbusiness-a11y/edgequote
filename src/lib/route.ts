@@ -234,16 +234,30 @@ export async function optimizeRoute(base: Coord, stops: RouteStop[]): Promise<Ro
   return { ordered, totalKm: total, usedGoogle, missing, mapsUrl }
 }
 
-export const AVG_SPEED_KM_PER_MIN = 0.5 // ~30 km/h urban
+export const AVG_SPEED_KM_PER_MIN = 0.5 // ~30 km/h urban (fallback when nothing learned)
+
+// A learned/overridable speed model. Defaults reproduce the legacy constant exactly
+// (2 min/km, no per-stop overhead), so any caller that doesn't pass one is unchanged.
+// lib/travelLearning supplies a learned { minPerKm, overheadMin } from completed routes.
+export interface SpeedModel { minPerKm?: number; overheadMin?: number }
+const DEFAULT_MIN_PER_KM = 1 / AVG_SPEED_KM_PER_MIN // = 2
+
+// THE one place a leg's distance becomes drive minutes (load/unload overhead + drive).
+export function legMinutes(km: number, speed?: SpeedModel): number {
+  const mpk = speed?.minPerKm ?? DEFAULT_MIN_PER_KM
+  const oh = speed?.overheadMin ?? 0
+  return Math.round(oh + Math.max(0, km) * mpk)
+}
 
 // Density stats for a set of located stops + the optimized total distance.
 export function routeStats(
   located: { lat: number; lng: number }[],
   totalKm: number,
+  speed?: SpeedModel,
 ): { avgLegKm: number; driveMinutes: number; clusters: number } {
   const n = located.length
   const avgLegKm = n > 0 ? Math.round((totalKm / n) * 10) / 10 : 0
-  const driveMinutes = Math.round(totalKm / AVG_SPEED_KM_PER_MIN)
+  const driveMinutes = Math.round(totalKm * (speed?.minPerKm ?? DEFAULT_MIN_PER_KM))
   // Connected components: stops within 1 km link into the same cluster.
   const CLUSTER_KM = 1
   const parent = located.map((_, i) => i)
@@ -296,6 +310,7 @@ export function recommendScheduleDays(
     radiusKm?: number
     customerPreferredDays?: number[] // the customer's preferred weekdays (boost)
     customerAvoidDays?: number[]     // the customer's avoid weekdays (excluded)
+    speed?: SpeedModel               // learned travel speed (else legacy 2 min/km)
   },
 ): ScheduleModes {
   const horizon = opts.horizonDays ?? 28
@@ -329,16 +344,16 @@ export function recommendScheduleDays(
     if (base && located.length) {
       const without = routeKmEstimate(base, located)
       const withT = routeKmEstimate(base, [...located, { lat: target.lat, lng: target.lng }])
-      addedDriveMin = Math.round(Math.max(0, withT - without) / AVG_SPEED_KM_PER_MIN)
+      addedDriveMin = legMinutes(Math.max(0, withT - without), opts.speed)
     } else if (base) {
-      addedDriveMin = Math.round(routeKmEstimate(base, [{ lat: target.lat, lng: target.lng }]) / AVG_SPEED_KM_PER_MIN)
+      addedDriveMin = legMinutes(routeKmEstimate(base, [{ lat: target.lat, lng: target.lng }]), opts.speed)
     } else if (located.length) {
-      addedDriveMin = Math.round((Math.min(...located.map(p => haversineKm(target, p))) * 2) / AVG_SPEED_KM_PER_MIN)
+      addedDriveMin = legMinutes(Math.min(...located.map(p => haversineKm(target, p))) * 2, opts.speed)
     } else {
       // No base AND an empty day: opening a brand-new isolated trip. Charge the
       // worst-case in-radius detour so revenue mode can't prefer it over joining
       // an existing nearby cluster (0 here would invert the driving signal).
-      addedDriveMin = Math.round((radius * 2) / AVG_SPEED_KM_PER_MIN)
+      addedDriveMin = legMinutes(radius * 2, opts.speed)
     }
 
     days.push({
@@ -400,12 +415,13 @@ export function computeDayEtas(
   startHHmm: string | null | undefined,
   ordered: { jobId: string; legKm: number | null }[],
   durationMinByJob: Record<string, number>,
+  speed?: SpeedModel,   // learned travel speed + load/unload overhead (else legacy 2 min/km)
 ): DayEtas {
   const startMin = timeToMinutes(startHHmm || DEFAULT_WORK_START)
   let t = startMin
   const stops: EtaStop[] = []
   for (const s of ordered) {
-    t += s.legKm != null ? Math.round(s.legKm / AVG_SPEED_KM_PER_MIN) : FALLBACK_LEG_MIN
+    t += s.legKm != null ? legMinutes(s.legKm, speed) : FALLBACK_LEG_MIN
     stops.push({ jobId: s.jobId, arrivalMin: t, arrival: minutesToTime12(t) })
     t += durationMinByJob[s.jobId] ?? DEFAULT_JOB_MIN
   }

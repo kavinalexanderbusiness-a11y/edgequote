@@ -6,6 +6,8 @@ import { RecentQuotes } from '@/components/dashboard/RecentQuotes'
 import { AcquisitionInsights } from '@/components/dashboard/AcquisitionInsights'
 import { DashboardTopSuggestions } from '@/components/dashboard/DashboardTopSuggestions'
 import { TodaysPriorities } from '@/components/dashboard/TodaysPriorities'
+import { UnscheduledAccepted } from '@/components/dashboard/UnscheduledAccepted'
+import { TodayJobs } from '@/components/dashboard/TodayJobs'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { DashboardStats, Quote } from '@/types'
 import Link from 'next/link'
@@ -83,10 +85,15 @@ export default async function DashboardPage() {
           </Link>
         }
       />
-      {/* Ranked action queue — leads the page so the most valuable next moves are
-          one short list, not a scan across every card below. Rendered above the
-          customizable sections so it always stays on top. */}
+      {/* Operational block — what to work on RIGHT NOW, fixed above the customizable
+          business-overview sections so it always leads the page:
+            1. Today's Priorities — the ranked triage queue (money owed, risk, replies).
+            2. Accepted — not yet scheduled — committed revenue at risk, one-tap to book
+               (null when there's nothing slipping, so it's silent on a clean day).
+            3. Today's Jobs — the day's route with one-tap call / open-in-Maps. */}
       <TodaysPriorities />
+      <UnscheduledAccepted />
+      <TodayJobs />
       <DashboardSections
         initialPrefs={(settingsRow as { dashboard_cards: { order: string[]; hidden: string[] } | null } | null)?.dashboard_cards ?? null}
         sections={{
