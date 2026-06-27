@@ -245,6 +245,7 @@ export function buildStreamInput(
 
 // ── AI rewrite tools — one gateway, a table of one-line transforms ──────────────────
 export const REWRITE_ACTIONS: Record<RewriteAction, { label: string; instruction: string }> = {
+  rewrite:       { label: 'Rewrite',          instruction: 'Rewrite this post from scratch in a fresh, clearly different way — same facts and platform, but a new hook, new angle and new wording. Do not reuse the opening line.' },
   shorter:       { label: 'Shorter',          instruction: 'Make it noticeably shorter and tighter — cut filler, keep the core message and the call to action.' },
   longer:        { label: 'Longer',           instruction: 'Expand it a little — add a sentence of helpful detail or a short story, without padding or repetition.' },
   professional:  { label: 'More professional', instruction: 'Make the tone more professional and polished, while still sounding like a real owner — no corporate jargon.' },

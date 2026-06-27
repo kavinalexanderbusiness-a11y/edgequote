@@ -171,6 +171,7 @@ export interface MarketingCampaign {
 // One-click transforms of an existing post. Each is just a one-line modifier fed into
 // the SAME gateway (see REWRITE_ACTIONS in prompt.ts) — never a forked prompt.
 export type RewriteAction =
+  | 'rewrite'
   | 'shorter' | 'longer' | 'professional' | 'friendly' | 'exciting' | 'premium'
   | 'local' | 'humorous' | 'seo' | 'remove_emojis' | 'add_emojis' | 'stronger_cta'
 
@@ -270,4 +271,70 @@ export interface PostFilters {
   status?: ContentStatus | null
   favorite?: boolean
   archived?: boolean           // when true, show archived only; default shows active only
+}
+
+// ── Social publishing ──────────────────────────────────────────────────────────────
+// How a post actually reaches a platform. 'manual' = copy & paste (works today for all
+// platforms); 'api' = direct publish through a connected account (lights up per-provider
+// as integrations land).
+export type ConnectionMode = 'manual' | 'api'
+export type ConnectionStatus = 'connected' | 'expired' | 'revoked'
+
+// A connected account (mirrors public.social_connections). Token columns are never
+// selected by the client — they're API-mode only and live server-side.
+export interface SocialConnection {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  platform: MarketingChannel
+  provider: string             // manual | meta | google | linkedin | threads
+  mode: ConnectionMode
+  account_id: string | null
+  account_name: string
+  account_url: string | null
+  avatar_url: string | null
+  status: ConnectionStatus
+  meta: Record<string, unknown>
+}
+
+// The publishing lifecycle: Draft → Scheduled → Queued → Publishing → Published / Failed.
+export type PublishJobStatus = 'draft' | 'scheduled' | 'queued' | 'publishing' | 'published' | 'failed' | 'canceled'
+
+// A publish attempt (mirrors public.publish_jobs). One per (content_piece, connection);
+// the unique idempotency_key guarantees a post is never published twice.
+export interface PublishJob {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  content_piece_id: string
+  connection_id: string | null
+  platform: MarketingChannel
+  mode: ConnectionMode
+  status: PublishJobStatus
+  scheduled_for: string | null
+  attempts: number
+  max_attempts: number
+  last_attempt_at: string | null
+  published_at: string | null
+  external_post_id: string | null
+  external_url: string | null
+  error: string | null
+  idempotency_key: string
+  meta: Record<string, unknown>
+}
+
+// POST /api/marketing/publish
+export interface PublishRequest {
+  pieceId: string
+  connectionId?: string | null   // which connected account; null → manual for the channel
+  scheduledFor?: string | null   // ISO — schedule instead of publish now
+}
+export interface PublishResponse {
+  ok: boolean
+  job?: PublishJob
+  // For manual mode the client completes the post (copy + open); these guide it.
+  manual?: { openUrl: string; caption: string }
+  error?: string
 }

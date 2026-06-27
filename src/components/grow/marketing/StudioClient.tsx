@@ -18,11 +18,12 @@ import { DEFAULT_POST_OPTIONS, type ContentPiece, type GenerateAllResponse, type
 
 const CHANNEL_TABS: TabItem[] = CHANNELS.map(c => ({ key: c.key, label: c.label, icon: c.icon }))
 
-export function StudioClient({ candidates, aiEnabled, businessName, logoUrl, initialJobId }: {
+export function StudioClient({ candidates, aiEnabled, businessName, logoUrl, userId, initialJobId }: {
   candidates: MarketingCandidate[]
   aiEnabled: boolean
   businessName: string
   logoUrl: string | null
+  userId: string
   initialJobId?: string
 }) {
   const supabase = useMemo(() => createClient(), [])
@@ -202,6 +203,7 @@ export function StudioClient({ candidates, aiEnabled, businessName, logoUrl, ini
               aiEnabled={aiEnabled}
               businessName={businessName}
               logoUrl={logoUrl}
+              userId={userId}
               options={options}
               onDraftChange={piece => setDraftsByKey(prev => ({ ...prev, [`${piece.job_id}:${piece.channel}`]: piece }))}
               onGrantConsent={selected.customerId ? () => grantConsent(selected.customerId!, selected.jobId) : undefined}

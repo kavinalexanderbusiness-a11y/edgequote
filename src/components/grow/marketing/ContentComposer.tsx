@@ -6,10 +6,11 @@ import { Button } from '@/components/ui/Button'
 import { Banner } from '@/components/ui/Banner'
 import { ChannelPreview } from './ChannelPreview'
 import { RewriteToolbar } from './RewriteToolbar'
+import { PublishPanel } from './PublishPanel'
 import { channel as channelDef } from '@/lib/marketing/channels'
 import { lengthChars } from '@/lib/marketing/prompt'
 import { cn } from '@/lib/utils'
-import { Sparkles, RefreshCw, Copy, Check, Download, ExternalLink, ImageOff, Lock, CheckCircle2, Loader2, Gauge } from 'lucide-react'
+import { Sparkles, RefreshCw, Copy, Check, Download, ImageOff, Lock, Loader2, Gauge } from 'lucide-react'
 import { DEFAULT_POST_OPTIONS, type ContentPiece, type MarketingCandidate, type MarketingChannel, type PostOptions, type PostText, type QualityScore, type RewriteAction, type RewriteResponse } from '@/lib/marketing/types'
 
 // The deterministic quality score lives on the saved piece's meta.
@@ -45,13 +46,14 @@ async function downloadImage(url: string, filename: string) {
   }
 }
 
-export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName, logoUrl, options = DEFAULT_POST_OPTIONS, onDraftChange, onGrantConsent }: {
+export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName, logoUrl, userId, options = DEFAULT_POST_OPTIONS, onDraftChange, onGrantConsent }: {
   candidate: MarketingCandidate
   ch: MarketingChannel
   draft: ContentPiece | null
   aiEnabled: boolean
   businessName: string
   logoUrl: string | null
+  userId: string
   options?: PostOptions
   onDraftChange?: (piece: ContentPiece) => void
   onGrantConsent?: () => void
@@ -68,7 +70,6 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [copied, setCopied] = useState(false)
-  const [posted, setPosted] = useState(false)
   const [streaming, setStreaming] = useState(false)
   const [polishing, setPolishing] = useState(false)
   const [genError, setGenError] = useState<string | null>(null)
@@ -84,7 +85,6 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
     setTitle(draft?.title || '')
     setBody(draft?.body || '')
     setHashtagsText((draft?.hashtags || []).join(' '))
-    setPosted(draft?.status === 'published')
     setSaved(false)
   }, [draft?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -96,7 +96,6 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
     setTitle(piece.title || '')
     setBody(piece.body || '')
     setHashtagsText((piece.hashtags || []).join(' '))
-    setPosted(piece.status === 'published')
   }
 
   // Non-streaming fallback (used if streaming is unavailable or fails before any text).
@@ -220,12 +219,6 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
     persist({ title: title.trim() || null, body: body.trim(), hashtags })
   }
 
-  async function markPosted() {
-    await persist({ status: 'published', published_at: new Date().toISOString() })
-    setPosted(true)
-    if (draft?.asset_id) await supabase.from('marketing_assets').update({ status: 'used' }).eq('id', draft.asset_id)
-  }
-
   function copyCaption() {
     const text = [body.trim(), hashtags.map(h => `#${h}`).join(' ')].filter(Boolean).join('\n\n')
     navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) })
@@ -333,32 +326,27 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
         </p>
       )}
 
-      {/* Publish actions (v1: copy + save photo + open the platform). Hidden mid-stream. */}
-      {!streaming && (
-        <div className="flex items-center gap-2 flex-wrap">
-          <Button size="sm" onClick={copyCaption}>
-            {copied ? <><Check className="w-3.5 h-3.5" /> Copied</> : <><Copy className="w-3.5 h-3.5" /> Copy caption</>}
-          </Button>
-          {canUsePhoto && (
-            <Button variant="secondary" size="sm" onClick={() => downloadImage(imageUrl!, `${(candidate.serviceType || 'post').replace(/\s+/g, '-').toLowerCase()}-${ch}.jpg`)}>
-              <Download className="w-3.5 h-3.5" /> Save photo
+      {/* Publishing workflow: schedule / publish to a connected account, or copy & paste. */}
+      {!streaming && draft && (
+        <>
+          <PublishPanel
+            piece={draft}
+            ch={ch}
+            userId={userId}
+            beforePublish={async () => { await persist({ title: title.trim() || null, body: body.trim(), hashtags }) }}
+            onPieceUpdate={p => onDraftChange?.(p)}
+          />
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button size="sm" variant="ghost" onClick={copyCaption}>
+              {copied ? <><Check className="w-3.5 h-3.5" /> Copied</> : <><Copy className="w-3.5 h-3.5" /> Copy caption</>}
             </Button>
-          )}
-          <Button variant="secondary" size="sm" onClick={() => window.open(def.openUrl, '_blank')}>
-            <ExternalLink className="w-3.5 h-3.5" /> Open {def.label}
-          </Button>
-          <button
-            type="button"
-            onClick={markPosted}
-            className={cn(
-              'inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-medium transition-colors',
-              posted ? 'text-emerald-400' : 'text-ink-muted hover:text-ink hover:bg-surface',
+            {canUsePhoto && (
+              <Button variant="ghost" size="sm" onClick={() => downloadImage(imageUrl!, `${(candidate.serviceType || 'post').replace(/\s+/g, '-').toLowerCase()}-${ch}.jpg`)}>
+                <Download className="w-3.5 h-3.5" /> Save photo
+              </Button>
             )}
-          >
-            <CheckCircle2 className={cn('w-4 h-4', posted && 'fill-emerald-400/20')} />
-            {posted ? 'Posted' : 'Mark as posted'}
-          </button>
-        </div>
+          </div>
+        </>
       )}
     </div>
   )
