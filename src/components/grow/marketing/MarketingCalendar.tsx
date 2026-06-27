@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/Button'
 import { Banner } from '@/components/ui/Banner'
@@ -11,8 +11,9 @@ import { channel as channelDef } from '@/lib/marketing/channels'
 import { listScheduledRange, listUnscheduledDrafts, setSchedule, markPublished, setStatus } from '@/lib/marketing/library'
 import { upcomingHolidays, upcomingSeasonReminders } from '@/lib/marketing/holidays'
 import { PublishingHub } from './PublishingHub'
+import { Skeleton } from '@/components/ui/Skeleton'
 import { cn } from '@/lib/utils'
-import { ChevronLeft, ChevronRight, CalendarDays, CalendarRange, Calendar as CalIcon, Sparkles, CalendarPlus, Send, ExternalLink, Copy, Check, X, CircleCheck, Clock, FileText, TriangleAlert, GripVertical, Loader2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, CalendarDays, CalendarRange, Calendar as CalIcon, Sparkles, CalendarPlus, Send, ExternalLink, Copy, Check, X, CircleCheck, Clock, FileText, TriangleAlert, GripVertical } from 'lucide-react'
 import type { ContentPiece, ContentStatus, MarketingChannel } from '@/lib/marketing/types'
 
 type View = 'month' | 'week' | 'day'
@@ -77,6 +78,15 @@ export function MarketingCalendar({ userId, aiEnabled, openPlan }: { userId: str
   }, [supabase, userId, range.from, range.to])
 
   useEffect(() => { load() }, [load])
+
+  // Process this owner's due scheduled posts once when the calendar opens, then refresh
+  // (no paid cron required). Idempotent — safe even if the daily backstop also runs.
+  const processedRef = useRef(false)
+  useEffect(() => {
+    if (processedRef.current) return
+    processedRef.current = true
+    fetch('/api/marketing/publish/process', { method: 'POST' }).then(() => load()).catch(() => {})
+  }, [load])
 
   // Bucket pieces by day.
   const byDay = useMemo(() => {
@@ -165,7 +175,9 @@ export function MarketingCalendar({ userId, aiEnabled, openPlan }: { userId: str
       <div className="grid lg:grid-cols-[1fr_280px] gap-4 items-start">
         <Card className="p-3">
           {loading ? (
-            <div className="h-[60vh] flex items-center justify-center text-ink-faint"><Loader2 className="w-5 h-5 animate-spin" /></div>
+            <div className="grid grid-cols-7 gap-1">
+              {Array.from({ length: 42 }).map((_, i) => <Skeleton key={i} className="min-h-[64px] sm:min-h-[88px] rounded-lg" />)}
+            </div>
           ) : view === 'month' ? (
             <MonthGrid cursor={cursor} byDay={byDay} markers={markers} todayKey={todayKey}
               onDropDay={drop} onDragOverDay={() => {}} setDragId={setDragId} onSelect={setSelected} />
@@ -225,7 +237,7 @@ function MonthGrid({ cursor, byDay, markers, todayKey, onDropDay, setDragId, onS
             <div key={k}
               onDragOver={e => e.preventDefault()}
               onDrop={() => onDropDay(k)}
-              className={cn('min-h-[88px] rounded-lg border p-1 flex flex-col gap-1', out ? 'border-border/50 bg-bg-tertiary/30' : 'border-border bg-bg-secondary', k === todayKey && 'ring-1 ring-accent/50')}
+              className={cn('min-h-[60px] sm:min-h-[88px] rounded-lg border p-1 flex flex-col gap-1', out ? 'border-border/50 bg-bg-tertiary/30' : 'border-border bg-bg-secondary', k === todayKey && 'ring-1 ring-accent/50')}
             >
               <div className="flex items-center justify-between">
                 <span className={cn('text-[11px] font-medium', out ? 'text-ink-faint/60' : 'text-ink-muted', k === todayKey && 'text-accent font-bold')}>{d.getDate()}</span>

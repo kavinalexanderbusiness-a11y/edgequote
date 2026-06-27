@@ -42,6 +42,9 @@ export function StudioClient({ candidates, aiEnabled, businessName, logoUrl, use
   const [consentJobs, setConsentJobs] = useState<Set<string>>(
     () => new Set(candidates.filter(c => c.photoConsent).map(c => c.jobId)),
   )
+  // Process any of this owner's due scheduled posts on load — this is what makes
+  // scheduling work without a paid cron (Vercel Hobby). Fire-and-forget + idempotent.
+  useEffect(() => { fetch('/api/marketing/publish/process', { method: 'POST' }).catch(() => {}) }, [])
   // Outcome notice when returning from an account-connect attempt (OAuth flow).
   const [connectNotice, setConnectNotice] = useState<string | null>(null)
   useEffect(() => {
