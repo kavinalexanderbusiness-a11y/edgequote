@@ -10,8 +10,6 @@ import { SEASON_LABELS } from './season'
 // images, no re-analysis. Graceful: returns null when AI is off or errors, and
 // the caller falls back to the deterministic narrative/digest.
 
-export const SYNTH_PROMPT_VERSION = 'vision-synthesis-v1'
-
 export interface SynthOut { change_narrative: string; digest: string }
 
 const SCHEMA: JsonSchema = {

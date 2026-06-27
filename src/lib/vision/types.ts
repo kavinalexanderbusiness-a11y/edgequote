@@ -132,14 +132,8 @@ export interface PropertyIntelligence {
 }
 
 // ── API contract (POST /api/vision/analyze) ───────────────────────────────────
-export interface AnalyzeRequest {
-  propertyId: string
-  photoIds?: string[]        // restrict to specific photos; omit = all property photos
-  includeSatellite?: boolean // default true
-  jobId?: string | null      // optional: tie the analysis to one visit
-  force?: boolean            // re-run even if an identical image set was already analysed
-}
-
+// The request body is read field-by-field in the route; the response is shared
+// with the client (VisionClient) below.
 export interface AnalyzeResponse {
   ok: boolean
   aiEnabled: boolean
