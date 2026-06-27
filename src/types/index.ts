@@ -99,8 +99,9 @@ export interface Property {
   notes: string | null
   measurement_history: MeasurementSnapshot[]
   // Permanently-saved lawn boundary + map identity (from a website measurement or
-  // an in-app trace). Polygon is an array of {lat,lng} rings (jsonb).
-  lawn_polygon?: unknown
+  // an in-app trace). The CURRENT boundary — section-tagged {lat,lng} rings (jsonb)
+  // — so a measured property can be reopened and redrawn without re-tracing.
+  lawn_polygon?: LawnPolygon | null
   google_place_id?: string | null
   maps_url?: string | null
   property_travel_distance_km?: number | null
@@ -140,6 +141,12 @@ export interface MeasurementSnapshot {
   sections?: LawnSections // per-section breakdown (front/back/left/right/boulevard/other)
   recommendation?: SavedRecommendation | null
   rate_per_1000?: number | null
+  // The exact traced boundary for THIS snapshot, so any past measurement can be
+  // redrawn/compared, not just the current one.
+  polygon?: LawnPolygon | null
+  // How the area was captured: 'traced' (drawn on the map), 'auto' (building-
+  // footprint estimate accepted as-is), 'manual' (typed), 'website' (online booking).
+  source?: string | null
   // legacy single-figure fields kept for older snapshots
   lawn_sqft?: number | null
   fence_length?: number | null
@@ -148,6 +155,14 @@ export interface MeasurementSnapshot {
   driveway_area?: number | null
   notes?: string | null
 }
+
+// A saved lawn boundary: each traced section as a closed ring of {lat,lng} points.
+// Stored on properties.lawn_polygon (current) and on each MeasurementSnapshot.
+export interface LawnPolygonSection {
+  section: string         // front | back | left | right | boulevard | other
+  ring: { lat: number; lng: number }[]
+}
+export type LawnPolygon = LawnPolygonSection[]
 
 // The six lawn sections the Measurement Tool traces, in square feet.
 export interface LawnSections {

@@ -232,6 +232,7 @@ export default function PropertiesPage() {
                           <History className="w-3 h-3 shrink-0" />
                           Measured {formatDate(last.date)}
                           {hist.length > 1 && <span>· {hist.length}× measured</span>}
+                          {Array.isArray(property.lawn_polygon) && property.lawn_polygon.length > 0 && <span className="text-accent">· boundary saved</span>}
                           {stale && <span className="text-amber-400">· may be outdated</span>}
                         </p>
                       )}

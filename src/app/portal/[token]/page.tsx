@@ -201,16 +201,19 @@ export default function PortalPage() {
   const photosByJob = groupPhotos(data.photos)
   const invoiceByJob = new Map((data.invoices || []).filter(i => i.job_id).map(i => [i.job_id as string, i]))
 
+  // Highest-value items first: Dashboard, then Documents (their records hub),
+  // then the money trail (Quotes → Invoices → Payments), then service history,
+  // photos, property, and finally the message-us action.
   const TABS: { key: Tab; label: string; icon: typeof Home; n?: number }[] = [
     { key: 'home', label: 'Home', icon: Home },
-    { key: 'timeline', label: 'Timeline', icon: Activity },
-    { key: 'service', label: 'Service', icon: History, n: derived.completed.length },
-    { key: 'photos', label: 'Photos', icon: ImageIcon, n: data.photos.length },
-    { key: 'property', label: 'Property', icon: MapPin },
     { key: 'documents', label: 'Documents', icon: FolderOpen, n: data.quotes.length + data.invoices.length },
     { key: 'quotes', label: 'Quotes', icon: FileText, n: data.quotes.length },
     { key: 'invoices', label: 'Invoices', icon: Receipt, n: data.invoices.length },
     { key: 'payments', label: 'Payments', icon: Wallet, n: data.payments.length },
+    { key: 'service', label: 'History', icon: History, n: derived.completed.length },
+    { key: 'timeline', label: 'Timeline', icon: Activity },
+    { key: 'photos', label: 'Photos', icon: ImageIcon, n: data.photos.length },
+    { key: 'property', label: 'Property', icon: MapPin },
     { key: 'request', label: 'Request', icon: MessageSquarePlus },
   ]
 
