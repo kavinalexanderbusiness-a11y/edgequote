@@ -17,8 +17,9 @@ import {
 } from '@/lib/seasons'
 import { WeeklyScheduler } from '@/components/schedule/WeeklyScheduler'
 import { SmartLaborField } from '@/components/labor/SmartLaborField'
+import { useSmartDuration } from '@/hooks/useSmartDuration'
 import { resolvePrefs, type PrefSource } from '@/lib/preferences'
-import { Repeat, Sparkles, Snowflake, Sun, AlertTriangle, CalendarRange } from 'lucide-react'
+import { Repeat, Sparkles, Snowflake, Sun, AlertTriangle, CalendarRange, Clock, Timer } from 'lucide-react'
 
 // Flexible recurrence: any interval (count + unit), three end modes.
 export interface Recurrence {
@@ -53,6 +54,16 @@ interface JobFormProps {
     propertyPrefs: PrefSource | null
     customerName: string | null
   }) => string[]
+  // Next-available start-time suggestion for the chosen date (page-supplied, so the
+  // day's existing schedule + work-start + the ETA engine stay in one place). Honours
+  // the customer's preferred time window. Returns a 24h value + a friendly label.
+  suggestStart?: (input: {
+    date: string
+    durationMin: number
+    customerPrefs: PrefSource | null
+    propertyPrefs: PrefSource | null
+    excludeJobId?: string
+  }) => { time: string; display: string; reason: string } | null
   onSubmit: (values: JobFormValues, recurrence: Recurrence, meta?: SuggestionMeta, opts?: { addAnother?: boolean }) => Promise<void>
   onCancel: () => void
   isEdit?: boolean
@@ -115,7 +126,7 @@ function recurrenceToUi(r?: Recurrence) {
   }
 }
 
-export function JobForm({ customers, defaultValues, excludeJobId, initialRecurrence, allowAddAnother, suggestedPrice, warnFor, onSubmit, onCancel, isEdit }: JobFormProps) {
+export function JobForm({ customers, defaultValues, excludeJobId, initialRecurrence, allowAddAnother, suggestedPrice, warnFor, suggestStart, onSubmit, onCancel, isEdit }: JobFormProps) {
   const supabase = createClient()
   const [properties, setProperties] = useState<Property[]>([])
   const addAnotherRef = useRef(false)
@@ -143,7 +154,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
         scheduled_date: '',
         start_time: '',
         end_time: '',
-        duration_minutes: 60,
+        duration_minutes: 0, // 0 = let the learned-duration engine fill it (see useSmartDuration)
         crew_size: 1,
         status: 'scheduled',
         notes: '',
@@ -174,6 +185,44 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   // Effective scheduling prefs (customer default + property override) for the
   // best-day picker — boosts the customer's preferred days, hides avoided ones.
   const effectivePrefs = resolvePrefs((selectedCustomer ?? null) as PrefSource | null, (selProp ?? null) as PrefSource | null)
+
+  // ── P1: learned on-site duration (the ONE engine) ──
+  // Defaults duration_minutes to the property/service's learned visit length the
+  // moment a property is selected — in quick-add AND advanced — so no job is ever
+  // saved with a flat guess. Never overwrites a number you typed (untouched guard).
+  const durationValue = Number(watch('duration_minutes')) || null
+  const smartDuration = useSmartDuration(
+    {
+      sqft: Number(selProp?.lawn_sqft) || 0,
+      serviceType: serviceType || null,
+      crewSize: Number(watch('crew_size')) || 1,
+      propertyId: selectedPropertyId || null,
+    },
+    {
+      value: durationValue,
+      onApply: (min) => setValue('duration_minutes', min, { shouldValidate: true }),
+      autoFill: !isEdit, // editing keeps the saved duration; new jobs get the learned default
+    },
+  )
+  const learnedEst = smartDuration.est
+
+  // ── P2 + P4: next-available start time (honours the customer's preferred window) ──
+  // Suggested only when a date is chosen and no start time is committed yet. Tapping
+  // "Use" commits it; left untouched, the job stays movable by the optimizer.
+  const startSuggestion = !startTime && scheduledDate && suggestStart
+    ? suggestStart({
+        date: scheduledDate,
+        durationMin: Number(watch('duration_minutes')) || learnedEst?.minutes || 45,
+        customerPrefs: (selectedCustomer ?? null) as PrefSource | null,
+        propertyPrefs: (selProp ?? null) as PrefSource | null,
+        excludeJobId,
+      })
+    : null
+  // Friendly read-back of a committed start time (so quick-add shows it without
+  // expanding the advanced panel).
+  const startDisplay = startTime
+    ? (() => { const [h, m] = startTime.split(':').map(Number); const h12 = h % 12 === 0 ? 12 : h % 12; return `${h12}:${String(m || 0).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}` })()
+    : null
   const scheduleWarnings = warnFor && customerId && scheduledDate
     ? warnFor({
         jobId: excludeJobId,
@@ -385,6 +434,38 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
         error={errors.scheduled_date?.message}
         {...register('scheduled_date', { required: 'Required' })} />
 
+      {/* P2/P4: next-available start time — appears once a date is chosen and no
+          start time is committed. Honours the customer's preferred window. */}
+      {startSuggestion && (
+        <button type="button"
+          onClick={() => setValue('start_time', startSuggestion.time, { shouldValidate: true })}
+          className="w-full flex items-center gap-2 rounded-xl border border-accent/25 bg-accent/[0.06] px-3 py-2 text-left hover:border-accent/40 transition-colors">
+          <Clock className="w-4 h-4 text-accent shrink-0" />
+          <span className="min-w-0 flex-1">
+            <span className="text-sm font-semibold text-ink">Start around {startSuggestion.display}</span>
+            <span className="block text-[11px] text-ink-muted">{startSuggestion.reason}</span>
+          </span>
+          <span className="text-[11px] font-semibold text-accent shrink-0">Use</span>
+        </button>
+      )}
+      {startDisplay && !startSuggestion && (
+        <p className="text-[11px] text-ink-muted flex items-center gap-1.5">
+          <Clock className="w-3.5 h-3.5 text-accent" /> Starts {startDisplay}
+          <button type="button" onClick={() => setValue('start_time', '', { shouldValidate: true })}
+            className="text-accent hover:underline ml-1">Clear</button>
+        </p>
+      )}
+
+      {/* P1 explainability: the learned on-site duration, visible without expanding
+          the advanced Smart Labor card. */}
+      {!isEdit && learnedEst && smartDuration.enabled && (
+        <p className="text-[11px] text-ink-muted flex items-center gap-1.5">
+          <Timer className="w-3.5 h-3.5 text-accent" />
+          ≈ {learnedEst.minutes} min on site
+          {learnedEst.reasons[0] ? <span className="text-ink-faint">· {learnedEst.reasons[0]}</span> : null}
+        </p>
+      )}
+
       {/* Soft cadence / customer-preference warnings — informational, never blocking */}
       {scheduleWarnings.length > 0 && (
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 space-y-1">
@@ -442,6 +523,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
       {/* Smart Labor Calculator V2 — learns duration from history; fills the field
           above (never overwrites a typed value, never affects price). */}
       <SmartLaborField
+        engine={smartDuration}
         sqft={Number(selProp?.lawn_sqft) || 0}
         serviceType={serviceType}
         crewSize={Number(watch('crew_size')) || 1}

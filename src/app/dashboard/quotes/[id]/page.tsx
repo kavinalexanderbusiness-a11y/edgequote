@@ -556,12 +556,12 @@ export default function QuoteDetailPage() {
           <span className="text-ink font-medium flex items-center gap-2">
             <CalendarPlus className="w-4 h-4 shrink-0 text-accent" /> Accepted — this job isn’t scheduled yet.
           </span>
-          <div className="flex items-center gap-2">
-            <Button size="sm" onClick={() => handleScheduleJob()} loading={scheduling}>
-              <CalendarPlus className="w-3.5 h-3.5" /> Schedule Job
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => router.push(`/dashboard/schedule?quote=${quote.id}`)}>Open scheduler</Button>
-          </div>
+          {/* One click opens the scheduler with everything prefilled — customer,
+              property, service, price, recurring cadence, learned visit length and a
+              suggested start time. Just pick the day. */}
+          <Button size="sm" onClick={() => router.push(`/dashboard/schedule?quote=${quote.id}`)}>
+            <CalendarPlus className="w-3.5 h-3.5" /> Schedule this job
+          </Button>
         </div>
       )}
 

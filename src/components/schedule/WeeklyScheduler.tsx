@@ -5,8 +5,9 @@ import { parseISO, format } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { Coord, SchedJob, geocodeAddress, fetchUpcomingSchedulingJobs, todayLocalISO } from '@/lib/geo'
 import { recommendScheduleDays, DayPlan } from '@/lib/route'
+import { loadDayStatuses, buildDayStatusMap } from '@/lib/dayStatus'
 import { formatCurrency } from '@/lib/utils'
-import { Trophy, Scale, DollarSign } from 'lucide-react'
+import { Trophy, Scale, DollarSign, Star } from 'lucide-react'
 
 const DEFAULT_WORK_DAYS = [5, 6, 0] // Fri/Sat/Sun
 
@@ -32,6 +33,8 @@ export function WeeklyScheduler({ coord, address, excludeJobId, targetHours, tar
   const [jobs, setJobs] = useState<SchedJob[]>([])
   const [base, setBase] = useState<Coord | null>(null)
   const [workDays, setWorkDays] = useState<number[]>(DEFAULT_WORK_DAYS)
+  // Owner-blocked days (rain / vacation / holiday / no crew) — never recommended.
+  const [blockedDates, setBlockedDates] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(true)
   const [geocoding, setGeocoding] = useState(false)
   const lastGeocoded = useRef<string | null>(null)
@@ -50,12 +53,14 @@ export function WeeklyScheduler({ coord, address, excludeJobId, targetHours, tar
     let active = true
     async function load() {
       const { data: { user } } = await supabase.auth.getUser()
-      const [rows, sRes] = await Promise.all([
+      const [rows, sRes, dayRows] = await Promise.all([
         fetchUpcomingSchedulingJobs(supabase, user!.id),
         supabase.from('business_settings').select('base_lat, base_lng, base_address, preferred_work_days').eq('user_id', user!.id).maybeSingle(),
+        loadDayStatuses(supabase, user!.id),
       ])
       if (!active) return
       setJobs(rows.filter(r => r.id !== excludeJobId))
+      setBlockedDates(buildDayStatusMap(dayRows).blockedDates)
       const s = sRes.data as { base_lat: number | null; base_lng: number | null; base_address: string | null; preferred_work_days: number[] | null } | null
       let b: Coord | null = s?.base_lat != null && s?.base_lng != null ? { lat: s.base_lat, lng: s.base_lng } : null
       if (!b && s?.base_address) b = await geocodeAddress(s.base_address)
@@ -79,6 +84,7 @@ export function WeeklyScheduler({ coord, address, excludeJobId, targetHours, tar
     targetValue,
     customerPreferredDays,
     customerAvoidDays,
+    excludeDates: blockedDates,
   })
   if (!modes.days.length) return <p className="text-xs text-ink-faint">No upcoming work days in range — set your Preferred Work Days in Settings.</p>
 
@@ -101,6 +107,9 @@ export function WeeklyScheduler({ coord, address, excludeJobId, targetHours, tar
               </div>
               <p className="text-base font-bold text-ink mt-1 leading-tight">{plan.weekday}</p>
               <p className="text-[11px] text-ink-faint">{format(parseISO(plan.date + 'T00:00:00'), 'MMM d')}</p>
+              {plan.customerPreferred && (
+                <p className="text-[10px] font-semibold text-amber-400 flex items-center gap-1 mt-1"><Star className="w-3 h-3 fill-amber-400" /> Customer’s preferred day</p>
+              )}
               <p className="text-[11px] text-ink-muted mt-1 flex-1">{stat(plan)}</p>
               {onPick && (
                 <button type="button" onClick={() => onPick(plan.date, plan)}

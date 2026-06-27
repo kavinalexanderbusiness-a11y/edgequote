@@ -1,10 +1,8 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
-import {
-  loadLaborModel, estimateLabor, laborEconomics, LaborModel, LaborEstimate, Confidence,
-} from '@/lib/labor'
+import { useState } from 'react'
+import { laborEconomics, Confidence } from '@/lib/labor'
+import { useSmartDuration, type SmartDuration } from '@/hooks/useSmartDuration'
 import { cn } from '@/lib/utils'
 import { Sparkles, Check, HelpCircle, Gauge } from 'lucide-react'
 
@@ -20,8 +18,13 @@ const CONF_LABEL: Record<Confidence, string> = { high: 'High confidence', medium
 // estimate + range + confidence + profit, and (when the toggle is ON) auto-fills.
 // SAFETY: only auto-fills an empty field or one it filled itself — NEVER overwrites
 // a value you typed, never touches pricing, always overridable.
+//
+// The estimate + auto-fill live in useSmartDuration (the ONE learned-duration
+// engine). Pass `engine` to share a model/auto-fill the PARENT already owns (so the
+// form's quick-add default and this card never fight or double-fetch); omit it and
+// the card self-manages (e.g. the read-only reference card on quotes).
 export function SmartLaborField({
-  sqft, serviceType, crewSize, propertyId, isInitialVisit, overgrowth, price, value, onApply, readOnly,
+  sqft, serviceType, crewSize, propertyId, isInitialVisit, overgrowth, price, value, onApply, readOnly, engine,
 }: {
   sqft: number
   serviceType: string | null
@@ -33,38 +36,18 @@ export function SmartLaborField({
   value: number | null    // the form's current duration (minutes)
   onApply: (minutes: number) => void
   readOnly?: boolean       // informational only (e.g. on quotes) — no auto-fill, no apply button
+  engine?: SmartDuration   // a parent-owned engine (skips this card's own load/auto-fill)
 }) {
-  const supabase = useMemo(() => createClient(), [])
-  const [model, setModel] = useState<LaborModel | null>(null)
-  const [enabled, setEnabled] = useState(true)
-  const [crewCost, setCrewCost] = useState(40)
   const [showWhy, setShowWhy] = useState(false)
-  const lastApplied = useRef<number | null>(null)
-
-  useEffect(() => {
-    let active = true
-    loadLaborModel(supabase).then(r => { if (active && r) { setModel(r.model); setEnabled(r.enabled); setCrewCost(r.crewCost) } })
-    return () => { active = false }
-  }, [supabase])
-
-  const est: LaborEstimate | null = useMemo(() => {
-    if (sqft <= 0 && !propertyId) return null
-    return estimateLabor({ sqft, serviceType, crewSize, propertyId, isInitialVisit, overgrowth }, model)
-  }, [sqft, serviceType, crewSize, propertyId, isInitialVisit, overgrowth, model])
-
-  // Auto-fill: only when ON and the field is empty OR still holds the last value we
-  // applied (i.e. you haven't typed your own). Live-recalcs when crew/sqft change.
-  useEffect(() => {
-    if (!enabled || !est || readOnly) return
-    const untouched = value == null || value === 0 || value === lastApplied.current
-    if (untouched && est.minutes !== value) {
-      lastApplied.current = est.minutes
-      onApply(est.minutes)
-    }
-  }, [enabled, est, value, onApply, readOnly])
-
+  // Self-managed engine for standalone use; inert when a parent engine is passed.
+  const own = useSmartDuration(
+    { sqft, serviceType, crewSize, propertyId, isInitialVisit, overgrowth },
+    { value, onApply, autoFill: !readOnly, skip: !!engine },
+  )
+  const sd = engine ?? own
+  const est = sd.est
   if (!est) return null
-  const econ = price && price > 0 ? laborEconomics(est.minutes, price, crewCost) : null
+  const econ = price && price > 0 ? laborEconomics(est.minutes, price, sd.crewCost) : null
   const applied = value === est.minutes
 
   return (
@@ -73,9 +56,9 @@ export function SmartLaborField({
         <span className="text-xs font-bold text-ink flex items-center gap-1.5"><Sparkles className="w-3.5 h-3.5 text-accent" /> Smart Labor Estimate</span>
         {/* ON/OFF toggle (hidden in read-only / quote mode) */}
         {!readOnly && (
-          <button type="button" onClick={() => setEnabled(e => !e)}
-            className={cn('text-[10px] font-semibold rounded-full px-2 py-0.5 border transition-colors', enabled ? 'text-accent border-accent/40 bg-accent/10' : 'text-ink-faint border-border')}>
-            {enabled ? 'Smart Estimate ON' : 'OFF'}
+          <button type="button" onClick={() => sd.setEnabled(!sd.enabled)}
+            className={cn('text-[10px] font-semibold rounded-full px-2 py-0.5 border transition-colors', sd.enabled ? 'text-accent border-accent/40 bg-accent/10' : 'text-ink-faint border-border')}>
+            {sd.enabled ? 'Smart Estimate ON' : 'OFF'}
           </button>
         )}
       </div>
@@ -102,7 +85,7 @@ export function SmartLaborField({
       <div className="flex items-center gap-2">
         {!readOnly && (applied
           ? <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400"><Check className="w-3.5 h-3.5" /> Applied</span>
-          : <button type="button" onClick={() => { lastApplied.current = est.minutes; onApply(est.minutes) }}
+          : <button type="button" onClick={() => onApply(est.minutes)}
               className="text-[11px] font-semibold text-accent hover:underline">Use estimate ({est.minutes} min)</button>)}
         {readOnly && <span className="text-[10px] text-ink-faint">Reference only — doesn’t change your price</span>}
         <button type="button" onClick={() => setShowWhy(v => !v)} className="ml-auto text-[11px] font-medium text-ink-faint hover:text-ink flex items-center gap-1"><HelpCircle className="w-3 h-3" /> Why?</button>

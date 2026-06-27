@@ -296,6 +296,7 @@ export function recommendScheduleDays(
     radiusKm?: number
     customerPreferredDays?: number[] // the customer's preferred weekdays (boost)
     customerAvoidDays?: number[]     // the customer's avoid weekdays (excluded)
+    excludeDates?: Set<string>       // owner-blocked days (rain/vacation/holiday/no crew) — never recommend
   },
 ): ScheduleModes {
   const horizon = opts.horizonDays ?? 28
@@ -306,6 +307,7 @@ export function recommendScheduleDays(
   const pref = new Set(opts.preferredDays || [])
   const custPref = new Set(opts.customerPreferredDays || [])
   const custAvoid = new Set(opts.customerAvoidDays || [])
+  const excludeDates = opts.excludeDates ?? null
   const base = opts.base ?? null
   const from = parseISO(opts.fromISO)
 
@@ -319,6 +321,7 @@ export function recommendScheduleDays(
     if (!preferAll && !pref.has(widx)) continue   // strong preference: only score work days
     if (custAvoid.has(widx)) continue             // customer asked not to be booked this weekday
     const iso = format(d, 'yyyy-MM-dd')
+    if (excludeDates?.has(iso)) continue          // owner blocked this day (rain/vacation/holiday/no crew)
     const dayJobs = byDate[iso] || []
     const located = dayJobs.filter(j => j.lat != null && j.lng != null).map(j => ({ lat: j.lat as number, lng: j.lng as number }))
     const nearby = located.map(p => haversineKm(target, p)).filter(km => km <= radius)

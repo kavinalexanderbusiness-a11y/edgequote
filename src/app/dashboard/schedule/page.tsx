@@ -11,6 +11,7 @@ import { Coord, geocodeAddress } from '@/lib/geo'
 import { JobForm, Recurrence, SuggestionMeta } from '@/components/schedule/JobForm'
 import { ScopeDialog } from '@/components/schedule/ScopeDialog'
 import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel } from '@/lib/recurrence'
+import { timeToMinutes, minutesToTime12, roughFinishEstimate, DEFAULT_JOB_MIN } from '@/lib/route'
 import type { JobRecurrence } from '@/types'
 import { createDraftInvoiceForCompletedJob, quoteVisitAmount, jobVisitValue, effectiveFreq, syncDraftInvoiceAmounts } from '@/lib/invoicing'
 import { resolveAutomations, Automations } from '@/lib/comms/automations'
@@ -315,6 +316,47 @@ export default function SchedulePage() {
       propertyPrefs: input.propertyPrefs,
       customerName: input.customerName,
     }).warnings
+  }
+
+  // P2/P4: the next-available start time for the job FORM on a chosen date. Reuses
+  // the ONE ETA engine (roughFinishEstimate) over the day's existing work + the
+  // owner's work-start, then honours the customer's preferred time window. Returns
+  // null for a blocked day (we never suggest starting work on a day off).
+  function suggestStartTime(input: {
+    date: string
+    durationMin: number
+    customerPrefs: PrefSource | null
+    propertyPrefs: PrefSource | null
+    excludeJobId?: string
+  }): { time: string; display: string; reason: string } | null {
+    if (!input.date) return null
+    if (dayStatusMap?.blockedDates.has(input.date)) return null
+    const toHHmm = (min: number) => {
+      const m = ((Math.round(min) % 1440) + 1440) % 1440
+      return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
+    }
+    const prefs = resolvePrefs(input.customerPrefs, input.propertyPrefs)
+    const dayJobs = jobs.filter(j => j.scheduled_date === input.date && j.id !== input.excludeJobId
+      && j.status !== 'cancelled' && j.status !== 'completed')
+    let slotMin: number
+    let reason: string
+    if (dayJobs.length === 0) {
+      slotMin = timeToMinutes(workStartTime)
+      reason = `Your day starts at ${minutesToTime12(slotMin)}`
+    } else {
+      const laborMin = dayJobs.reduce((s, j) => s + (j.duration_minutes || DEFAULT_JOB_MIN), 0)
+      slotMin = roughFinishEstimate(workStartTime, laborMin, dayJobs.length).finishMin
+      reason = `Next open slot after ${dayJobs.length} job${dayJobs.length !== 1 ? 's' : ''} that day`
+    }
+    // Never earlier than the customer's preferred start; note the promised window.
+    if (prefs.timeStart) {
+      const lo = timeToMinutes(prefs.timeStart)
+      if (slotMin < lo) {
+        slotMin = lo
+        reason = `Honours the preferred ${prefs.timeStart}${prefs.timeEnd ? `–${prefs.timeEnd}` : '+'} window`
+      }
+    }
+    return { time: toHHmm(slotMin), display: minutesToTime12(slotMin), reason }
   }
 
   // ── Schedule Health ──
@@ -1278,12 +1320,15 @@ export default function SchedulePage() {
     })
   }
 
-  // Next date on/after `fromISO`+1 whose weekday is a preferred work day.
+  // Next date on/after `fromISO`+1 whose weekday is a preferred work day AND isn't
+  // owner-blocked (rain/vacation/holiday/no crew) — higher-priority day states
+  // suppress this lower-priority bump target.
   function nextWorkday(fromISO: string): string {
     const pref = preferredWorkDays.length ? new Set(preferredWorkDays) : null
     let d = addDays(parseISO(fromISO), 1)
-    for (let i = 0; i < 21; i++) {
-      if (!pref || pref.has(getDay(d))) return format(d, 'yyyy-MM-dd')
+    for (let i = 0; i < 30; i++) {
+      const iso = format(d, 'yyyy-MM-dd')
+      if ((!pref || pref.has(getDay(d))) && !dayStatusMap?.blockedDates.has(iso)) return iso
       d = addDays(d, 1)
     }
     return format(addDays(parseISO(fromISO), 1), 'yyyy-MM-dd')
@@ -1583,11 +1628,17 @@ export default function SchedulePage() {
                       ? effectiveFreq(recurrences[editing.recurrence_id].freq, recurrences[editing.recurrence_id].interval_unit, recurrences[editing.recurrence_id].interval_count)
                       : null,
                   ) || undefined
-                : undefined}
+                : quoteCtx
+                  ? quoteVisitAmount(
+                      quoteCtx as unknown as Record<string, unknown>,
+                      quoteRecurrence?.unit ? effectiveFreq(null, quoteRecurrence.unit, quoteRecurrence.count) : null,
+                    ) || undefined
+                  : undefined}
               onSubmit={editing ? handleEdit : handleAdd}
               onCancel={closeForm}
               isEdit={!!editing}
               warnFor={formMoveWarnings}
+              suggestStart={suggestStartTime}
             />
           </CardBody>
             </Card>
