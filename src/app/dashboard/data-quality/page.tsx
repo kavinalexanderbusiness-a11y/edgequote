@@ -1,4 +1,5 @@
 'use client'
+import { toast } from '@/lib/toast'
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import Link from 'next/link'
@@ -157,7 +158,7 @@ export default function DataQualityPage() {
       )
       await supabase.from('quotes').update({ customer_id: ensured.customerId, property_id: ensured.propertyId }).eq('id', q.id)
       await load()
-    } catch (e) { alert('Could not fix quote: ' + (e instanceof Error ? e.message : 'error')) }
+    } catch (e) { toast.error('Could not fix quote: ' + (e instanceof Error ? e.message : 'error')) }
     finally { setWorking(null) }
   }
 
@@ -171,7 +172,7 @@ export default function DataQualityPage() {
       )
       await supabase.from('quotes').update({ property_id: ensured.propertyId }).eq('id', q.id)
       await load()
-    } catch (e) { alert('Could not link property: ' + (e instanceof Error ? e.message : 'error')) }
+    } catch (e) { toast.error('Could not link property: ' + (e instanceof Error ? e.message : 'error')) }
     finally { setWorking(null) }
   }
 
@@ -186,7 +187,7 @@ export default function DataQualityPage() {
         await supabase.from('quotes').update({ property_id: ensured.propertyId }).eq('id', q.id)
       }
       await load()
-    } catch (e) { alert('Could not link properties: ' + (e instanceof Error ? e.message : 'error')) }
+    } catch (e) { toast.error('Could not link properties: ' + (e instanceof Error ? e.message : 'error')) }
     finally { setWorking(null) }
   }
 
@@ -205,7 +206,7 @@ export default function DataQualityPage() {
         }
       }
       await load()
-    } catch (e) { alert('Could not geocode properties: ' + (e instanceof Error ? e.message : 'error')) }
+    } catch (e) { toast.error('Could not geocode properties: ' + (e instanceof Error ? e.message : 'error')) }
     finally { setWorking(null) }
   }
 
@@ -219,7 +220,7 @@ export default function DataQualityPage() {
         if (name) await supabase.from('properties').update({ neighborhood: name }).eq('id', p.id)
       }
       await load()
-    } catch (e) { alert('Could not resolve neighborhoods: ' + (e instanceof Error ? e.message : 'error')) }
+    } catch (e) { toast.error('Could not resolve neighborhoods: ' + (e instanceof Error ? e.message : 'error')) }
     finally { setWorking(null) }
   }
 
@@ -238,7 +239,7 @@ export default function DataQualityPage() {
         await supabase.from('jobs').update({ customer_id: custId, property_id: propId }).eq('id', j.id)
         await load()
       } else {
-        alert('This job has no property or quote to derive a customer from — open it on the Schedule and assign one.')
+        toast.error('This job has no property or quote to derive a customer from — open it on the Schedule and assign one.')
       }
     } finally { setWorking(null) }
   }

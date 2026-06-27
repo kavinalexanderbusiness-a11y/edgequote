@@ -1,4 +1,5 @@
 'use client'
+import { toast } from '@/lib/toast'
 
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
@@ -102,9 +103,9 @@ export default function CustomerDetailPage() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
       const token = await ensurePortalToken(supabase, user.id, customer.id)
-      if (!token) { alert('Could not create the portal link. Run the customer-portal migration first.'); return }
+      if (!token) { toast.error('Could not create the portal link. Run the customer-portal migration first.'); return }
       const url = portalUrl(token)
-      try { await navigator.clipboard.writeText(url) } catch { window.prompt('Copy this portal link:', url) }
+      try { await navigator.clipboard.writeText(url) } catch { toast('Portal link (copy manually): ' + url, { duration: 20000 }) }
       setPortalCopied(true); setTimeout(() => setPortalCopied(false), 2500)
     } finally { setPortalBusy(false) }
   }
@@ -228,7 +229,7 @@ export default function CustomerDetailPage() {
     setSavingNotes(true)
     const { error } = await supabase.from('customers').update({ notes: notesValue || null }).eq('id', customer.id)
     setSavingNotes(false)
-    if (error) { alert('Could not save the note: ' + error.message); return }   // keep the editor open
+    if (error) { toast.error('Could not save the note: ' + error.message); return }   // keep the editor open
     setCustomer({ ...customer, notes: notesValue || null })
     setEditingNotes(false)
   }
@@ -272,7 +273,7 @@ export default function CustomerDetailPage() {
     if (!confirm(`Pause ${plan.serviceName}? This cancels ${futureIds.length} upcoming visit${futureIds.length !== 1 ? 's' : ''}. Past visits are kept, and you can schedule it again anytime.`)) return
     setPausing(plan.recurrenceId)
     const { error } = await supabase.from('jobs').update({ status: 'cancelled' }).in('id', futureIds)
-    if (error) alert('Could not pause: ' + error.message)
+    if (error) toast.error('Could not pause: ' + error.message)
     else setJobs(prev => prev.map(j => futureIds.includes(j.id) ? { ...j, status: 'cancelled' } : j))
     setPausing(null)
   }
@@ -751,10 +752,10 @@ export default function CustomerDetailPage() {
                     <a href={mapsUrl} target="_blank" rel="noopener noreferrer" title="Open in Google Maps" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
                       <ExternalLink className="w-3.5 h-3.5" /> Maps
                     </a>
-                    <Link href={`/dashboard/quotes/new?customer=${customer.id}`} title="New quote" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
+                    <Link href={`/dashboard/quotes/new?customer=${customer.id}&property=${p.id}`} title="New quote" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
                       <FilePlus className="w-3.5 h-3.5" /> Quote
                     </Link>
-                    <Link href={`/dashboard/schedule?customer=${customer.id}`} title="Schedule job" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
+                    <Link href={`/dashboard/schedule?customer=${customer.id}&property=${p.id}`} title="Schedule job" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
                       <CalendarPlus className="w-3.5 h-3.5" /> Job
                     </Link>
                     <Link href={`/dashboard/properties/measure?id=${p.id}`} title="Re-measure property" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">

@@ -1,4 +1,5 @@
 'use client'
+import { toast } from '@/lib/toast'
 
 import { useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
@@ -66,21 +67,21 @@ export function ReviewLifecycle({ customer, onChange }: {
     }
     const { error } = await supabase.from('customers').update(patch).eq('id', customer.id)
     setSaving(false)
-    if (error) { alert('Could not save: ' + error.message); return }
+    if (error) { toast.error('Could not save: ' + error.message); return }
     onChange(patch); setEditing(false)
   }
 
   async function markDeclined() {
     const patch = { review_declined_at: new Date().toISOString() }
     const { error } = await supabase.from('customers').update(patch).eq('id', customer.id)
-    if (error) { alert('Could not save: ' + error.message); return }
+    if (error) { toast.error('Could not save: ' + error.message); return }
     onChange(patch)
   }
 
   async function reset() {
     const patch = { reviewed_at: null, review_requested_at: null, review_declined_at: null, review_source: null, review_rating: null }
     const { error } = await supabase.from('customers').update(patch).eq('id', customer.id)
-    if (error) { alert('Could not reset: ' + error.message); return }
+    if (error) { toast.error('Could not reset: ' + error.message); return }
     onChange(patch); setEditing(false); setRating(0); setSource('Google'); setDate(today)
   }
 

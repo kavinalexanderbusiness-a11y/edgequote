@@ -1,4 +1,5 @@
 'use client'
+import { toast } from '@/lib/toast'
 
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
@@ -206,7 +207,7 @@ export default function PricingRecoveryPage() {
     }
     if (field) insert[field] = price
     const { data: q, error } = await supabase.from('quotes').insert(insert).select('id').single()
-    if (error || !q) { setWorking(null); alert('Could not create quote: ' + (error?.message ?? '')); return }
+    if (error || !q) { setWorking(null); toast.error('Could not create quote: ' + (error?.message ?? '')); return }
     const ids = jobs.filter(j => j.recurrence_id === recId).map(j => j.id)
     await supabase.from('jobs').update({ quote_id: q.id }).in('id', ids)
     await load(); setWorking(null)

@@ -531,6 +531,8 @@ export function DayOpsPanel({
                       {/* One-tap actions */}
                       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
                         {job.status === 'scheduled' && <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onStartJob(job) } finally { setActing(null) } }} icon={Play} label="Start" tone="sky" />}
+                        {/* One-tap Done — complete a scheduled visit without a check-in (no time tracked); completeJob handles the missing started_at and offers Undo. */}
+                        {job.status === 'scheduled' && <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onMarkDone(job) } finally { setActing(null) } }} icon={CheckCircle2} label="Done" tone="emerald" />}
                         {job.status === 'in_progress' && <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onMarkDone(job) } finally { setActing(null) } }} icon={CheckCircle2} label="Complete" tone="emerald" />}
                         <ActionBtn onClick={() => (quickId === job.id ? setQuickId(null) : openQuick(job))} icon={SlidersHorizontal} label="Quick" />
                         <ActionBtn onClick={() => onOpenJob(job)} icon={Pencil} label="Open" />

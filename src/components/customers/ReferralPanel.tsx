@@ -1,4 +1,5 @@
 'use client'
+import { toast } from '@/lib/toast'
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
@@ -68,20 +69,21 @@ export function ReferralPanel({ customer, referrer, referredRevenue }: {
       status: 'invited',
     })
     setBusy(false)
-    if (error) { alert('Could not save referral: ' + error.message); return }
+    if (error) { toast.error('Could not save referral: ' + error.message); return }
     setForm({ name: '', contact: '', reward: '' }); setAdding(false); load()
   }
 
   async function patch(id: string, p: Partial<Referral>) {
     const { error } = await supabase.from('referrals').update(p).eq('id', id)
-    if (error) { alert('Could not update: ' + error.message); return }
+    if (error) { toast.error('Could not update: ' + error.message); return }
     load()
   }
   async function remove(id: string) {
-    if (!confirm('Remove this referral?')) return
+    const { data: row } = await supabase.from('referrals').select('*').eq('id', id).maybeSingle()
     const { error } = await supabase.from('referrals').delete().eq('id', id)
-    if (error) { alert('Could not remove: ' + error.message); return }
+    if (error) { toast.error('Could not remove: ' + error.message); return }
     load()
+    if (row) toast.undo('Referral removed', async () => { await supabase.from('referrals').insert(row); load() })
   }
 
   const joined = rows.filter(r => r.status === 'joined' || r.status === 'rewarded').length

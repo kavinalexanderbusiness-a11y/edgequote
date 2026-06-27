@@ -60,7 +60,6 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
   })
 
   async function handleDelete(id: string) {
-    if (!confirm('Delete this quote permanently?')) return
     setDeleting(id)
     await onDelete(id)
     setDeleting(null)

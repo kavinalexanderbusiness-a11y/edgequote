@@ -31,6 +31,9 @@ interface QuoteBuilderProps {
   tiers: TravelFeeTier[]
   settings?: BusinessSettings | null
   defaultCustomerId?: string
+  // When opened from a SPECIFIC property (per-property Quote button), load that
+  // property's address + saved lawn size instead of the customer's primary.
+  defaultPropertyId?: string
   defaultValues?: Partial<QuoteFormValues>
   onSubmit: (values: QuoteFormValues) => Promise<void>
   isEdit?: boolean
@@ -39,7 +42,7 @@ interface QuoteBuilderProps {
 const DEFAULT_RATE = 50
 
 export function QuoteBuilder({
-  customers, templates, tiers, settings, defaultCustomerId, defaultValues, onSubmit, isEdit,
+  customers, templates, tiers, settings, defaultCustomerId, defaultPropertyId, defaultValues, onSubmit, isEdit,
 }: QuoteBuilderProps) {
   const router = useRouter()
   const { register, handleSubmit, watch, setValue, getValues, control, formState: { errors, isSubmitting } } =
@@ -179,22 +182,20 @@ export function QuoteBuilder({
     }
   }, [customerId, customers, setValue, isEdit])
 
-  // Pull the latest measurement recommendation for the selected customer's
-  // primary property — measured prices become the suggestion, no re-measuring.
+  // Pull the latest measurement recommendation for the relevant property — the
+  // SPECIFIC property when one was requested (per-property Quote button), else the
+  // customer's primary. Measured prices become the suggestion, no re-measuring.
   useEffect(() => {
     if (!customerId || customerId === '__manual') { setSavedRec(null); return }
     let active = true
     async function load() {
       const supabase = createClient()
-      const { data } = await supabase
-        .from('properties')
-        .select('lawn_sqft, measurement_history')
-        .eq('customer_id', customerId)
-        .order('is_primary', { ascending: false })
-        .limit(1)
-        .maybeSingle()
+      const cols = 'lawn_sqft, measurement_history, address, city, province'
+      const res = defaultPropertyId
+        ? await supabase.from('properties').select(cols).eq('id', defaultPropertyId).limit(1).maybeSingle()
+        : await supabase.from('properties').select(cols).eq('customer_id', customerId).order('is_primary', { ascending: false }).limit(1).maybeSingle()
       if (!active) return
-      const row = data as { lawn_sqft: number | null; measurement_history: MeasurementSnapshot[] } | null
+      const row = res.data as { lawn_sqft: number | null; measurement_history: MeasurementSnapshot[]; address: string | null; city: string | null; province: string | null } | null
       setSavedRec(latestSavedRecommendation(row?.measurement_history))
       // Default the Lawn Size from the property's saved size when it's still empty —
       // don't clobber an edit, a website-measurement handoff, or a manual entry.
@@ -202,10 +203,15 @@ export function QuoteBuilder({
       if (!isEdit && lawn > 0 && (Number(getValues('measured_sqft')) || 0) === 0) {
         setValue('measured_sqft', lawn)
       }
+      // Targeting a specific property → prefer its address over the customer default.
+      if (!isEdit && defaultPropertyId && row?.address) {
+        const full = [row.address, row.city, row.province].filter(Boolean).join(', ')
+        if (full) setValue('address', full)
+      }
     }
     load()
     return () => { active = false }
-  }, [customerId, isEdit, getValues, setValue])
+  }, [customerId, defaultPropertyId, isEdit, getValues, setValue])
 
   useEffect(() => {
     if (!templateId) return

@@ -11,6 +11,7 @@ import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, es
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { applyFeeRecovery } from '@/lib/invoiceTotals'
 import { LeadPrefillPayload, LEAD_PREFILL_KEY } from '@/lib/leads'
+import { toast } from '@/lib/toast'
 
 interface MeasurementPayload {
   customerId: string | null
@@ -38,6 +39,7 @@ export default function NewQuotePage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const defaultCustomerId = searchParams.get('customer') || undefined
+  const defaultPropertyId = searchParams.get('property') || undefined
   const [customers, setCustomers] = useState<Customer[]>([])
   const [templates, setTemplates] = useState<ServiceTemplate[]>([])
   const [tiers, setTiers] = useState<TravelFeeTier[]>([])
@@ -169,8 +171,9 @@ export default function NewQuotePage() {
         const { data: prop } = await supabase.from('properties').select('lawn_sqft, measurement_history').eq('id', propertyId).maybeSingle()
         const prior = Number((prop as { lawn_sqft: number | null } | null)?.lawn_sqft) || 0
         const changed = Math.round(prior) !== Math.round(measuredSqft)
-        // New or unchanged → sync silently. REPLACING a saved measurement → confirm first.
-        if (changed && (prior === 0 || confirm(`This property has a saved lawn size of ${prior.toLocaleString()} ft².\n\nReplace it with ${measuredSqft.toLocaleString()} ft²?`))) {
+        // New or unchanged → sync silently. A CHANGED size replaces the saved
+        // measurement non-blockingly (no up-front confirm) and offers a quick Undo.
+        if (changed) {
           const cfg = pricingConfigFromSettings(settings)
           const pkg = pricingPackage(measuredSqft, cfg, { overgrowth: Number(values.overgrowth_multiplier) || 1, nearbyCount: 0 })
           const rec = buildSavedRecommendation(pkg, estimateVisitMinutes(measuredSqft))
@@ -182,7 +185,7 @@ export default function NewQuotePage() {
             measurement_history: [...hist, { date: new Date().toISOString(), total_sqft: measuredSqft, sections: measurement?.sections ?? lead?.sections ?? undefined, recommendation: rec }],
           }
           // From a website lead → permanently persist the boundary/place/travel the
-          // website measured (gated by the SAME replace-confirm above).
+          // website measured.
           if (lead) {
             if (lead.lawnPolygon) patch.lawn_polygon = lead.lawnPolygon
             if (lead.placeId) patch.google_place_id = lead.placeId
@@ -193,6 +196,13 @@ export default function NewQuotePage() {
             if (lead.travelFee != null) patch.property_travel_fee = lead.travelFee
           }
           await supabase.from('properties').update(patch).eq('id', propertyId)
+          // Replaced an EXISTING saved size → let the owner undo without a blocking prompt.
+          if (prior > 0) {
+            const priorLawn = (prop as { lawn_sqft: number | null } | null)?.lawn_sqft ?? null
+            toast.undo(`Saved lawn size updated to ${measuredSqft.toLocaleString()} ft²`, async () => {
+              await supabase.from('properties').update({ lawn_sqft: priorLawn, measurement_history: hist }).eq('id', propertyId)
+            })
+          }
         }
       }
       // Website lead: link it to the new quote + clear the open-lead badge so the
@@ -207,7 +217,7 @@ export default function NewQuotePage() {
       }
       router.push(`/dashboard/quotes/${data.id}`)
     } else if (error) {
-      alert('Could not save quote: ' + error.message)
+      toast.error('Could not save quote: ' + error.message)
     }
   }
 
@@ -222,6 +232,7 @@ export default function NewQuotePage() {
         tiers={tiers}
         settings={settings}
         defaultCustomerId={lead?.customerId || measurement?.customerId || defaultCustomerId}
+        defaultPropertyId={measurement?.propertyId || defaultPropertyId}
         defaultValues={lead ? {
           // Pre-filled from a website quote request — review, adjust price, create.
           customer_id: lead.customerId || '',

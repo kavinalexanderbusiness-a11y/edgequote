@@ -9,6 +9,7 @@ import { Job, JOB_STATUS_COLORS, JOB_STATUS_LABELS } from '@/types'
 import { ScheduleItem, ITEM_META } from '@/lib/scheduleItems'
 import { cn } from '@/lib/utils'
 import { DayStatusMap, dayStatusMeta, dayStatusLabel, isDayBlocked } from '@/lib/dayStatus'
+import { toast } from '@/lib/toast'
 import { Repeat, Check, CheckCircle2, Plus } from 'lucide-react'
 
 export type CalendarView = 'month' | 'week' | 'day'
@@ -49,29 +50,47 @@ interface DragPayload { title: string; fromDate: string; commit: (toDate: string
 // ScheduleItem chips are therefore interchangeable from the drag engine's view.
 type ChipDragStart = (e: React.PointerEvent) => void
 
-function JobChip({ job, onSelect, onDragStart, recurLabel, value, addonCount }: { job: Job; onSelect: (j: Job) => void; onDragStart?: ChipDragStart; recurLabel?: string; value?: number; addonCount?: number }) {
+function JobChip({ job, onSelect, onDragStart, recurLabel, value, addonCount, onMarkDone }: { job: Job; onSelect: (j: Job) => void; onDragStart?: ChipDragStart; recurLabel?: string; value?: number; addonCount?: number; onMarkDone?: (j: Job) => void }) {
+  // One-tap Done from month/week — a small sibling button (not nested in the chip
+  // button) so it's valid markup, works on touch, and never starts a drag.
+  const canComplete = !!onMarkDone && job.status !== 'completed' && job.status !== 'cancelled'
   return (
-    <button
-      data-chip
-      onClick={(e) => { e.stopPropagation(); onSelect(job) }}
-      onPointerDown={onDragStart}
-      style={onDragStart ? { touchAction: 'none' } : undefined}
-      className={cn(
-        'w-full text-left px-1.5 py-0.5 rounded text-[11px] font-medium border truncate transition-opacity hover:opacity-80',
-        JOB_STATUS_COLORS[job.status]
-      )}
-      title={recurLabel ? `${job.title} · ${recurLabel} (recurring)` : job.title}
-    >
-      <span className="flex items-center gap-0.5">
-        {job.status === 'completed' && <Check className="w-2.5 h-2.5 shrink-0" />}
-        {job.recurrence_id && <Repeat className="w-2.5 h-2.5 shrink-0 opacity-70" />}
-        <span className={cn('truncate', job.status === 'completed' && 'line-through opacity-80')}>{job.start_time ? job.start_time.slice(0, 5) + ' ' : ''}{job.title}</span>
-        {addonCount != null && addonCount > 0 && (
-          <span className="shrink-0 text-[9px] font-bold text-accent" title={`${addonCount} add-on service${addonCount !== 1 ? 's' : ''}`}>+{addonCount}</span>
+    <div className="relative">
+      <button
+        data-chip
+        onClick={(e) => { e.stopPropagation(); onSelect(job) }}
+        onPointerDown={onDragStart}
+        style={onDragStart ? { touchAction: 'none' } : undefined}
+        className={cn(
+          'w-full text-left px-1.5 py-0.5 rounded text-[11px] font-medium border truncate transition-opacity hover:opacity-80',
+          canComplete && 'pr-6',
+          JOB_STATUS_COLORS[job.status]
         )}
-        {value != null && <span className={cn('ml-auto shrink-0 pl-1 font-semibold', value > 0 ? 'opacity-90' : 'text-amber-400')}>{value > 0 ? `$${value}` : '$?'}</span>}
-      </span>
-    </button>
+        title={recurLabel ? `${job.title} · ${recurLabel} (recurring)` : job.title}
+      >
+        <span className="flex items-center gap-0.5">
+          {job.status === 'completed' && <Check className="w-2.5 h-2.5 shrink-0" />}
+          {job.recurrence_id && <Repeat className="w-2.5 h-2.5 shrink-0 opacity-70" />}
+          <span className={cn('truncate', job.status === 'completed' && 'line-through opacity-80')}>{job.start_time ? job.start_time.slice(0, 5) + ' ' : ''}{job.title}</span>
+          {addonCount != null && addonCount > 0 && (
+            <span className="shrink-0 text-[9px] font-bold text-accent" title={`${addonCount} add-on service${addonCount !== 1 ? 's' : ''}`}>+{addonCount}</span>
+          )}
+          {value != null && <span className={cn('ml-auto shrink-0 pl-1 font-semibold', value > 0 ? 'opacity-90' : 'text-amber-400')}>{value > 0 ? `$${value}` : '$?'}</span>}
+        </span>
+      </button>
+      {canComplete && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onMarkDone!(job) }}
+          onPointerDown={(e) => e.stopPropagation()}
+          title="Mark done"
+          aria-label={`Mark ${job.title} done`}
+          className="absolute top-1/2 -translate-y-1/2 right-0.5 w-4 h-4 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500 hover:text-black flex items-center justify-center transition-colors"
+        >
+          <Check className="w-2.5 h-2.5" />
+        </button>
+      )}
+    </div>
   )
 }
 
@@ -212,11 +231,14 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
         const targetDate = d.over?.dataset.date
         d.over?.classList.remove('ring-2', 'ring-accent', 'ring-inset', 'bg-accent/5')
         if (targetDate && targetDate !== d.payload.fromDate) {
-          // Manual moves are still allowed onto a blocked day — but confirm first.
+          // Manual moves are still allowed onto a blocked day — commit it (the move
+          // itself offers Undo from the schedule page) and warn non-blockingly
+          // instead of interrupting the drag with a native confirm.
           if (isDayBlocked(dayStatusRef.current, targetDate)) {
             const meta = dayStatusMeta(dayStatusRef.current!.byDate[targetDate]?.status || 'custom')
             const label = format(new Date(targetDate + 'T00:00:00'), 'EEE, MMM d')
-            if (window.confirm(`${label} is marked unavailable (${meta.label}). Move “${d.payload.title}” there anyway?`)) d.payload.commit(targetDate)
+            d.payload.commit(targetDate)
+            toast(`Moved “${d.payload.title}” to ${label} — that day is marked ${meta.label}.`)
           } else {
             d.payload.commit(targetDate)
           }
@@ -296,7 +318,7 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
                 </div>
                 <div className="space-y-0.5">
                   {shownJobs.map(job => (
-                    <JobChip key={job.id} job={job} onSelect={selectJob} onDragStart={jobDragStart ? (e) => jobDragStart(e, job) : undefined} recurLabel={recurLabelFor(job)} value={valueByJobId?.[job.id]} addonCount={addonCountByJobId?.[job.id]} />
+                    <JobChip key={job.id} job={job} onSelect={selectJob} onDragStart={jobDragStart ? (e) => jobDragStart(e, job) : undefined} recurLabel={recurLabelFor(job)} value={valueByJobId?.[job.id]} addonCount={addonCountByJobId?.[job.id]} onMarkDone={onMarkDone} />
                   ))}
                   {shownItems.map(item => (
                     <ItemChip key={item.id} item={item} onSelect={selectItem} onDragStart={itemDragStart ? (e) => itemDragStart(e, item) : undefined} />
@@ -354,7 +376,7 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
                 </div>
                 <div className="space-y-1">
                   {dayJobs.map(job => (
-                    <JobChip key={job.id} job={job} onSelect={selectJob} onDragStart={jobDragStart ? (e) => jobDragStart(e, job) : undefined} recurLabel={recurLabelFor(job)} value={valueByJobId?.[job.id]} addonCount={addonCountByJobId?.[job.id]} />
+                    <JobChip key={job.id} job={job} onSelect={selectJob} onDragStart={jobDragStart ? (e) => jobDragStart(e, job) : undefined} recurLabel={recurLabelFor(job)} value={valueByJobId?.[job.id]} addonCount={addonCountByJobId?.[job.id]} onMarkDone={onMarkDone} />
                   ))}
                   {dayItems.map(item => (
                     <ItemChip key={item.id} item={item} onSelect={selectItem} onDragStart={itemDragStart ? (e) => itemDragStart(e, item) : undefined} />

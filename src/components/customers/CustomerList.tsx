@@ -9,6 +9,7 @@ import { createClient } from '@/lib/supabase/client'
 import { prefetchCustomer, hoverIntent } from '@/lib/prefetch'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { applyConsent, SMS_CONSENT_WARNING, ConsentChannel } from '@/lib/consent'
+import { toast as notify } from '@/lib/toast'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { Edit2, Trash2, Phone, Mail, FileText, Search, Link2, ExternalLink, Check, MessageSquare, ShieldAlert } from 'lucide-react'
@@ -112,7 +113,7 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
       const token = await getToken(customerId)
       if (!token) { showToast('Could not create the portal link — run the customer-portal migration first.'); return }
       const url = portalUrl(token)
-      try { await navigator.clipboard.writeText(url) } catch { window.prompt('Copy this portal link:', url) }
+      try { await navigator.clipboard.writeText(url) } catch { notify('Portal link (copy manually): ' + url, { duration: 20000 }) }
       showToast('Portal link copied to clipboard')
     } finally { setPortalBusy(null) }
   }

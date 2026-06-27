@@ -1,4 +1,5 @@
 'use client'
+import { toast } from '@/lib/toast'
 
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
@@ -72,7 +73,7 @@ export function CampaignManager() {
       audience: p.audience, schedule: p.schedule,
     }).select().single()
     setCreating(false)
-    if (error || !data) { alert('Could not create campaign: ' + error?.message); return }
+    if (error || !data) { toast.error('Could not create campaign: ' + error?.message); return }
     await load()
     startEdit(data as CrmCampaign)
   }
@@ -99,7 +100,7 @@ export function CampaignManager() {
       schedule: draft.schedule,
     }).eq('id', c.id)
     setSaving(false)
-    if (error) { alert('Could not save: ' + error.message); return }
+    if (error) { toast.error('Could not save: ' + error.message); return }
     setEditingId(null); setDraft(null); load()
   }
 
@@ -108,10 +109,11 @@ export function CampaignManager() {
     await supabase.from('crm_campaigns').update({ enabled: !c.enabled }).eq('id', c.id)
   }
   async function del(c: CrmCampaign) {
-    if (!confirm(`Delete the "${c.name}" campaign? This stops it sending and removes its history.`)) return
+    const { data: row } = await supabase.from('crm_campaigns').select('*').eq('id', c.id).maybeSingle()
     await supabase.from('crm_campaigns').delete().eq('id', c.id)
     if (editingId === c.id) { setEditingId(null); setDraft(null) }
     load()
+    if (row) toast.undo(`Deleted "${c.name}"`, async () => { await supabase.from('crm_campaigns').insert(row); load() })
   }
 
   function setSchedule(p: Partial<CrmCampaign['schedule']>) {

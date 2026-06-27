@@ -74,6 +74,7 @@ export default function SchedulePage() {
   const searchParams = useSearchParams()
   const quoteId = searchParams.get('quote')
   const customerParam = searchParams.get('customer')
+  const propertyParam = searchParams.get('property')
   const focusRec = searchParams.get('focus')
 
   const [jobs, setJobs] = useState<Job[]>([])
@@ -638,9 +639,11 @@ export default function SchedulePage() {
     if (!customerParam || quoteId) return
     setEditing(null)
     setQuotePrefill(null)
-    setCustomerPrefill({ customer_id: customerParam, scheduled_date: localToday() })
+    // Property-aware: a per-property "Job" button passes ?property= so the form
+    // opens on that exact property, not just the customer.
+    setCustomerPrefill({ customer_id: customerParam, ...(propertyParam ? { property_id: propertyParam } : {}), scheduled_date: localToday() })
     setShowForm(true)
-  }, [customerParam, quoteId])
+  }, [customerParam, propertyParam, quoteId])
 
   // Edit Schedule deep link (?focus=<recurrenceId>) — open the next upcoming
   // visit of that series for editing, so changes can be applied to the whole

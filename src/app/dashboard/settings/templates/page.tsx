@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/Button'
 import { Toggle } from '@/components/ui/Toggle'
 import { useForm } from 'react-hook-form'
 import { formatServicePrice, priceInputLabel, priceInputStep } from '@/lib/servicePricing'
+import { toast } from '@/lib/toast'
 import { Plus, Edit2, Trash2, X } from 'lucide-react'
 
 export default function ServiceTemplatesPage() {
@@ -77,9 +78,13 @@ export default function ServiceTemplatesPage() {
   }
 
   async function remove(t: ServiceTemplate) {
-    if (!confirm(`Delete "${t.name}"? This won't affect existing quotes.`)) return
     await supabase.from('service_templates').delete().eq('id', t.id)
     refresh()
+    // Reversible: re-insert the exact row (same id) on Undo.
+    toast.undo(`Deleted "${t.name}"`, async () => {
+      await supabase.from('service_templates').insert(t)
+      refresh()
+    })
   }
 
   const grouped = templates.reduce<Record<string, ServiceTemplate[]>>((acc, t) => {
