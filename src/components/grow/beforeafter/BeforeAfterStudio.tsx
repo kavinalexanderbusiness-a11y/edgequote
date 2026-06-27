@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { PHOTO_BUCKET } from '@/lib/photos'
 import { formatDate } from '@/lib/utils'
@@ -17,10 +17,15 @@ import { getPropertyContext, type PropertyIntelligence } from '@/lib/ai/property
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { Banner } from '@/components/ui/Banner'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { Skeleton } from '@/components/ui/Skeleton'
+import { Toggle } from '@/components/ui/Toggle'
+import { FilterPill } from '@/components/ui/FilterPill'
 import {
   Download, Images, Loader2, Wand2, Tag, BadgeCheck, AlertTriangle,
   SlidersHorizontal, RefreshCw, Layers, ShieldCheck, ChevronDown, ChevronUp, Camera,
-  Brain, BookMarked, Crown, CalendarDays, Check,
+  Brain, BookMarked, Crown, Check,
 } from 'lucide-react'
 
 // ── Before / After Studio ────────────────────────────────────────────────────
@@ -62,6 +67,7 @@ function seasonOf(iso: string | null): string {
 
 export function BeforeAfterStudio() {
   const supabase = useMemo(() => createClient(), [])
+  const router = useRouter()
 
   const [loading, setLoading] = useState(true)
   const [pairs, setPairs] = useState<BeforeAfterPair[]>([])
@@ -589,7 +595,7 @@ export function BeforeAfterStudio() {
             <Loader2 className="w-4 h-4 animate-spin mr-2" /> Finding your before &amp; after photos…
           </Card>
           <div className="space-y-3 hidden lg:block">
-            {[0, 1, 2].map(i => <Card key={i} className="h-20 bg-bg-tertiary animate-pulse" />)}
+            {[0, 1, 2].map(i => <Skeleton key={i} className="h-20 rounded-card" />)}
           </div>
         </div>
       </div>
@@ -600,20 +606,12 @@ export function BeforeAfterStudio() {
     return (
       <div className="space-y-6">
         {header}
-        <Card className="p-8 text-center">
-          <div className="w-12 h-12 rounded-2xl bg-accent/10 border border-accent/20 flex items-center justify-center mx-auto mb-3">
-            <Camera className="w-6 h-6 text-accent" />
-          </div>
-          <p className="text-sm font-semibold text-ink">No before/after pairs yet</p>
-          <p className="text-xs text-ink-muted mt-1 max-w-md mx-auto">
-            On a completed visit, snap a <span className="text-amber-300 font-medium">Before</span> and an{' '}
-            <span className="text-emerald-300 font-medium">After</span> photo — any completed job with both lands
-            here, ready to turn into a branded post in one tap.
-          </p>
-          <Link href="/dashboard/schedule" className="inline-flex items-center gap-1.5 mt-4 text-xs font-semibold text-accent hover:underline">
-            <CalendarDays className="w-3.5 h-3.5" /> Go to today’s jobs
-          </Link>
-        </Card>
+        <EmptyState
+          icon={Camera}
+          title="No before/after pairs yet"
+          description="Snap a Before and an After photo on a completed visit — any job with both lands here, ready to turn into a branded post in one tap."
+          action={{ label: 'Go to today’s jobs', onClick: () => router.push('/dashboard/schedule') }}
+        />
       </div>
     )
   }
@@ -634,9 +632,7 @@ export function BeforeAfterStudio() {
     <div className="space-y-6">
       {header}
       {aiNote && (
-        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-200/90 flex items-center gap-2">
-          <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> {aiNote}
-        </div>
+        <Banner tone="warn" icon={AlertTriangle} onDismiss={() => setAiNote(null)}>{aiNote}</Banner>
       )}
 
       {/* Gallery — only shown when there's an actual choice between pairs. */}
@@ -689,16 +685,14 @@ export function BeforeAfterStudio() {
 
       {/* Consent gate */}
       {consentBlocked && (
-        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3">
-          <ShieldCheck className="w-4 h-4 text-amber-300 shrink-0" />
-          <p className="text-xs text-amber-200/90 flex-1">
-            <span className="font-semibold">{selected?.context.customerName || 'This customer'}</span> hasn’t cleared their photos for public marketing.
-            Get a quick OK before you post, then mark it here.
-          </p>
-          <Button size="sm" variant="secondary" onClick={allowPhotos} className="shrink-0 border-amber-500/40 text-amber-200">
-            <BadgeCheck className="w-4 h-4" /> Mark allowed
-          </Button>
-        </div>
+        <Banner tone="warn" icon={ShieldCheck}
+          action={(
+            <Button size="sm" variant="secondary" onClick={allowPhotos} className="shrink-0">
+              <BadgeCheck className="w-4 h-4" /> Mark allowed
+            </Button>
+          )}>
+          <span className="font-semibold">{selected?.context.customerName || 'This customer'}</span> hasn’t cleared their photos for public marketing — get a quick OK, then mark it here.
+        </Banner>
       )}
 
       {/* Property Intelligence — reused from the shared brain (never re-analysed). */}
@@ -748,10 +742,10 @@ export function BeforeAfterStudio() {
               the preview live). Platforms first, generic shapes subtle. */}
           <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
             {EXPORT_PRESETS.filter(p => p.group === 'Platform').map(p => (
-              <Chip key={p.key} active={presetKey === p.key} onClick={() => setPresetKey(p.key)} title={`${p.w}×${p.h}${p.note ? ' · ' + p.note : ''}`}>{p.label}</Chip>
+              <FilterPill key={p.key} active={presetKey === p.key} onClick={() => setPresetKey(p.key)} title={`${p.w}×${p.h}${p.note ? ' · ' + p.note : ''}`}>{p.label}</FilterPill>
             ))}
             {EXPORT_PRESETS.filter(p => p.group === 'Format').map(p => (
-              <Chip key={p.key} active={presetKey === p.key} onClick={() => setPresetKey(p.key)} title={`${p.w}×${p.h}`} subtle>{p.label}</Chip>
+              <FilterPill key={p.key} active={presetKey === p.key} onClick={() => setPresetKey(p.key)} title={`${p.w}×${p.h}`}>{p.label}</FilterPill>
             ))}
           </div>
           {selected?.context.consent === true && (
@@ -795,18 +789,18 @@ export function BeforeAfterStudio() {
                 {/* Layout */}
                 <div>
                   <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-1.5 flex items-center gap-1"><Layers className="w-3 h-3" /> Layout</p>
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="flex flex-wrap gap-2">
                     {LAYOUTS.map(l => (
-                      <Chip key={l.key} active={layout === l.key} onClick={() => setLayout(l.key)} title={l.hint}>{l.label}</Chip>
+                      <FilterPill key={l.key} active={layout === l.key} onClick={() => setLayout(l.key)} title={l.hint}>{l.label}</FilterPill>
                     ))}
                   </div>
                 </div>
                 {/* Style */}
                 <div className="space-y-2">
                   <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1"><Tag className="w-3 h-3" /> Style</p>
-                  <Toggle on={showLabels} onToggle={() => setShowLabels(v => !v)} label="Before / After labels" />
-                  <Toggle on={showBranding} onToggle={() => setShowBranding(v => !v)} label="Branding footer" />
-                  <Toggle on={autoBalance} onToggle={() => setAutoBalance(v => !v)} label="Smart exposure balance" />
+                  <Toggle checked={showLabels} onChange={setShowLabels} label="Before / After labels" />
+                  <Toggle checked={showBranding} onChange={setShowBranding} label="Branding footer" />
+                  <Toggle checked={autoBalance} onChange={setAutoBalance} label="Smart exposure balance" />
                 </div>
                 {/* Framing */}
                 {selected && (
@@ -848,27 +842,6 @@ function SectionLabel({ icon: Icon, children }: { icon: typeof Images; children:
 }
 
 const FOCUS_RING = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50'
-
-function Chip({ active, onClick, children, title, subtle }: { active: boolean; onClick: () => void; children: React.ReactNode; title?: string; subtle?: boolean }) {
-  return (
-    <button onClick={onClick} title={title} aria-pressed={active}
-      className={`font-medium rounded-lg border transition-colors ${FOCUS_RING} ${subtle ? 'text-[11px] px-2 py-1' : 'text-xs px-2.5 py-1.5'} ${active ? 'bg-accent/15 border-accent/40 text-accent' : 'border-border text-ink-muted hover:text-ink hover:border-border-strong'}`}>
-      {children}
-    </button>
-  )
-}
-
-function Toggle({ on, onToggle, label }: { on: boolean; onToggle: () => void; label: string }) {
-  return (
-    <button onClick={onToggle} role="switch" aria-checked={on} aria-label={label}
-      className={`w-full flex items-center justify-between text-xs text-ink py-0.5 rounded ${FOCUS_RING}`}>
-      <span>{label}</span>
-      <span aria-hidden className={`w-9 h-5 rounded-full border transition-colors relative ${on ? 'bg-accent/30 border-accent/50' : 'bg-bg-tertiary border-border'}`}>
-        <span className={`absolute top-0.5 w-3.5 h-3.5 rounded-full transition-all ${on ? 'left-[18px] bg-accent' : 'left-0.5 bg-ink-faint'}`} />
-      </span>
-    </button>
-  )
-}
 
 function FocusRow({ label, focus, onChange }: { label: string; focus: Focus; onChange: (f: Focus) => void }) {
   return (

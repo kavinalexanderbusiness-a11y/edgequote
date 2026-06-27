@@ -34,6 +34,9 @@ const DEFAULT_SEASON_FACTOR: Record<Season, number> = { spring: 1.2, summer: 1.0
 const DEFAULT_FIRST_CUT_FACTOR = 1.35
 const MIN_CREW_SAMPLES = 4
 const MIN_SEASON_SAMPLES = 4
+// Same-cadence bucket needs this many timed jobs before it's preferred over the
+// cadence-agnostic combo (keeps thin buckets from hurting the estimate).
+const MIN_CADENCE_SAMPLES = 3
 
 // ── service combo normalization (req #4) ────────────────────────────────────────
 const TOKEN_HINTS: { token: string; re: RegExp }[] = [
@@ -62,6 +65,20 @@ export function comboLabel(key: string): string {
 }
 const isLawnCombo = (key: string) => key !== 'snow' && key !== 'other'
 
+// ── recurrence cadence (req: "weekly mowing learns from weekly mowing") ──────────
+// A SECOND axis ON TOP of the service combo — never mixes services, just refines a
+// service by how often it recurs (a bi-weekly mow is taller grass than a weekly one).
+export type Cadence = 'weekly' | 'biweekly' | 'monthly' | 'one_time'
+export function cadenceOf(frequency: string | null | undefined): Cadence {
+  const f = (frequency || '').toLowerCase()
+  if (!f) return 'one_time'
+  if (f.includes('bi') || f.includes('2 week') || f.includes('every other')) return 'biweekly'
+  if (f.includes('month')) return 'monthly'
+  if (f.includes('week')) return 'weekly'
+  return 'one_time'
+}
+const CADENCE_LABEL: Record<Cadence, string> = { weekly: 'weekly', biweekly: 'bi-weekly', monthly: 'monthly', one_time: 'one-time' }
+
 function seasonOf(dateISO: string | null | undefined): Season {
   if (!dateISO) return 'summer'
   const m = Number(dateISO.slice(5, 7))
@@ -88,6 +105,9 @@ const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n
 // ── the learned model ───────────────────────────────────────────────────────────
 export interface LaborModel {
   combos: Record<string, { soloPer1000: number; cv: number; n: number }> // solo-equivalent min / 1000 ft²
+  // The same combo split by recurrence cadence — "weekly mow" learns from "weekly
+  // mow". Falls back to `combos` when a cadence bucket is too thin (see estimateLabor).
+  combosByCadence: Record<string, Partial<Record<Cadence, { soloPer1000: number; cv: number; n: number }>>>
   lawnAll: { soloPer1000: number; cv: number; n: number }
   byProperty: Record<string, { soloMinutes: number[]; sqft: number | null }> // absolute solo-equiv minutes per visit
   crewEff: Record<number, number>          // learned-or-default effective-workers
@@ -128,6 +148,7 @@ export function learnLaborModel(obs: LaborObservation[]): LaborModel {
   // Normalize every sized observation to SOLO-equivalent duration per 1000 ft².
   const eff = (c: number) => crewEff[c] ?? DEFAULT_CREW_EFFICIENCY[c] ?? Math.max(1, c * 0.7)
   const comboVals: Record<string, number[]> = {}
+  const comboCadenceVals: Record<string, Partial<Record<Cadence, number[]>>> = {}
   const lawnVals: number[] = []
   const seasonVals: Record<Season, number[]> = { spring: [], summer: [], fall: [], winter: [] }
   const firstCutVals: number[] = []
@@ -145,6 +166,9 @@ export function learnLaborModel(obs: LaborObservation[]): LaborModel {
     const per1000 = soloMin / (Number(o.sqft) / 1000)
     const { key } = normalizeCombo(o.service_type)
     ;(comboVals[key] ||= []).push(per1000)
+    // Same combo, bucketed by recurrence cadence (weekly mow vs bi-weekly mow…).
+    const cad = cadenceOf(o.frequency)
+    ;((comboCadenceVals[key] ||= {})[cad] ||= []).push(per1000)
     if (isLawnCombo(key)) {
       lawnVals.push(per1000)
       seasonVals[seasonOf(o.service_date)].push(per1000)
@@ -154,6 +178,12 @@ export function learnLaborModel(obs: LaborObservation[]): LaborModel {
 
   const combos: LaborModel['combos'] = {}
   for (const [k, xs] of Object.entries(comboVals)) combos[k] = { soloPer1000: median(xs), cv: cv(xs), n: xs.length }
+  const combosByCadence: LaborModel['combosByCadence'] = {}
+  for (const [k, byCad] of Object.entries(comboCadenceVals)) {
+    const m: Partial<Record<Cadence, { soloPer1000: number; cv: number; n: number }>> = {}
+    for (const [c, xs] of Object.entries(byCad)) if (xs && xs.length) m[c as Cadence] = { soloPer1000: median(xs), cv: cv(xs), n: xs.length }
+    combosByCadence[k] = m
+  }
   const lawnAll = { soloPer1000: median(lawnVals), cv: cv(lawnVals), n: lawnVals.length }
 
   // Seasonal factors RELATIVE to overall (learned where enough data, else default).
@@ -166,7 +196,7 @@ export function learnLaborModel(obs: LaborObservation[]): LaborModel {
     ? clamp(median(firstCutVals) / median(nonFirstVals), 1.0, 2.0)
     : DEFAULT_FIRST_CUT_FACTOR
 
-  return { combos, lawnAll, byProperty, crewEff, crewManMinPer1000, season, firstCutFactor, totalSamples: obs.filter(o => o.actual_minutes > 0).length }
+  return { combos, combosByCadence, lawnAll, byProperty, crewEff, crewManMinPer1000, season, firstCutFactor, totalSamples: obs.filter(o => o.actual_minutes > 0).length }
 }
 
 // ── the estimate ─────────────────────────────────────────────────────────────────
@@ -178,6 +208,7 @@ export interface EstimateInput {
   isInitialVisit?: boolean
   date?: string | null       // for seasonality; defaults to today's month
   propertyId?: string | null
+  cadence?: Cadence | null   // recurrence: prefer same-cadence history for this service
 }
 export interface LaborEstimate {
   minutes: number
@@ -201,8 +232,14 @@ export function estimateLabor(input: EstimateInput, model: LaborModel | null): L
   const firstCutF = input.isInitialVisit ? (model ? model.firstCutFactor : DEFAULT_FIRST_CUT_FACTOR) : 1
 
   const reasons: string[] = []
-  const comboStats = model?.combos[key] && model.combos[key].n >= 2 ? model.combos[key]
-    : model && isLawnCombo(key) && model.lawnAll.n >= 2 ? model.lawnAll : null
+  // Prefer the SAME-cadence bucket for this service when it has enough data
+  // ("weekly mow learns from weekly mow"); else fall back to the cadence-agnostic
+  // combo, then the pooled lawn model, then the size model.
+  const cadBucket = input.cadence ? model?.combosByCadence[key]?.[input.cadence] : undefined
+  const cadStats = cadBucket && cadBucket.n >= MIN_CADENCE_SAMPLES ? cadBucket : null
+  const comboStats = cadStats
+    ?? (model?.combos[key] && model.combos[key].n >= 2 ? model.combos[key]
+      : model && isLawnCombo(key) && model.lawnAll.n >= 2 ? model.lawnAll : null)
   const comboN = comboStats?.n ?? 0
   const comboCv = comboStats?.cv ?? 0.3
 
@@ -211,7 +248,7 @@ export function estimateLabor(input: EstimateInput, model: LaborModel | null): L
   let usedSizeModel = false
   if (comboStats && sqft > 0) {
     comboSolo = comboStats.soloPer1000 * (sqft / 1000) * seasonF * firstCutF * og
-    reasons.push(`${comboN} similar ${comboLabel(key)} job${comboN !== 1 ? 's' : ''}`)
+    reasons.push(`${comboN} ${cadStats && input.cadence ? CADENCE_LABEL[input.cadence] + ' ' : 'similar '}${comboLabel(key)} job${comboN !== 1 ? 's' : ''}`)
     if (input.isInitialVisit) reasons.push('First cut of the season — heavier than a maintenance visit')
     if (season !== 'summer') reasons.push(`${season[0].toUpperCase() + season.slice(1)} adjustment applied`)
   } else {

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
+import { loadAnalyticsCore } from '@/lib/analyticsData'
 import { Coord, geocodeAddress } from '@/lib/geo'
 import {
   ProfitJob, ProfitQuote, ProfitContext, RecInfo, GRADE_COLORS,
@@ -73,21 +74,19 @@ export default function SaturationPage() {
       try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) { setLoadError('Session expired — sign in again.'); return }
-      const [jRes, pRes, qRes, cRes, rRes, sRes] = await Promise.all([
-        supabase.from('jobs').select('id, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, property_id, properties(lat, lng, city, postal_code, neighborhood)').eq('user_id', user!.id),
+      const [core, pRes, cRes, sRes] = await Promise.all([
+        loadAnalyticsCore(supabase),
         supabase.from('properties').select('id, customer_id, address, lat, lng, city, postal_code, neighborhood').eq('user_id', user!.id),
-        supabase.from('quotes').select('id, status, customer_id, property_id, customer_name, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
         supabase.from('customers').select('id, name').eq('user_id', user!.id),
-        supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user!.id),
         supabase.from('business_settings').select('base_lat, base_lng, base_address').eq('user_id', user!.id).maybeSingle(),
       ])
 
       const quotesById: Record<string, ProfitQuote> = {}
-      for (const q of (qRes.data as (ProfitQuote & { id: string })[]) || []) quotesById[q.id] = q
+      for (const q of (core?.quotes as unknown as (ProfitQuote & { id: string })[]) || []) quotesById[q.id] = q
       const recById: Record<string, RecInfo> = {}
-      for (const r of (rRes.data as (RecInfo & { id: string })[]) || []) recById[r.id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count }
+      for (const r of (core?.recurrences as unknown as (RecInfo & { id: string })[]) || []) recById[r.id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count }
 
-      setJobs(((jRes.data as unknown as Array<Record<string, any>>) || []).map(j => ({
+      setJobs(((core?.jobs as unknown as Array<Record<string, any>>) || []).map(j => ({
         id: j.id, scheduled_date: j.scheduled_date, status: j.status, service_type: j.service_type,
         quote_id: j.quote_id, recurrence_id: j.recurrence_id, duration_minutes: j.duration_minutes,
         actual_minutes: j.actual_minutes, price: j.price, customer_id: j.customer_id, property_id: j.property_id,
@@ -96,7 +95,7 @@ export default function SaturationPage() {
         neighborhood: j.properties?.neighborhood ?? null,
       })))
       setProperties((pRes.data as PropRow[]) || [])
-      setQuotes((qRes.data as QRow[]) || [])
+      setQuotes((core?.quotes as unknown as QRow[]) || [])
       const names: Record<string, string> = {}
       for (const c of (cRes.data as { id: string; name: string }[]) || []) names[c.id] = c.name
       setCustomersById(names)
