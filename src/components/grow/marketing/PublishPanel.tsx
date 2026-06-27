@@ -9,7 +9,7 @@ import { channel as channelDef } from '@/lib/marketing/channels'
 import { listConnections } from '@/lib/marketing/connections'
 import { listJobsForPiece, markManualPublished } from '@/lib/marketing/publishQueue'
 import { cn } from '@/lib/utils'
-import { Send, CalendarPlus, Settings2, CheckCircle2, Loader2, ExternalLink, Copy } from 'lucide-react'
+import { Send, CalendarPlus, Settings2, CheckCircle2, ExternalLink, Copy, Download } from 'lucide-react'
 import type { ContentPiece, MarketingChannel, PublishJob, PublishJobStatus, PublishResponse, SocialConnection } from '@/lib/marketing/types'
 
 const STATUS_LABEL: Record<PublishJobStatus, string> = {
@@ -19,10 +19,12 @@ const STATUS_LABEL: Record<PublishJobStatus, string> = {
 // The composer's publishing workflow: pick a connected account (or manual), then
 // Publish now or Schedule. Reflects the live job status. Manual mode copies the caption
 // + opens the platform, then the owner confirms with "Mark as posted".
-export function PublishPanel({ piece, ch, userId, beforePublish, onPieceUpdate }: {
+export function PublishPanel({ piece, ch, userId, hasPhoto, onSavePhoto, beforePublish, onPieceUpdate }: {
   piece: ContentPiece
   ch: MarketingChannel
   userId: string
+  hasPhoto?: boolean
+  onSavePhoto?: () => void
   beforePublish: () => Promise<void>
   onPieceUpdate?: (p: ContentPiece) => void
 }) {
@@ -136,6 +138,9 @@ export function PublishPanel({ piece, ch, userId, beforePublish, onPieceUpdate }
               <input type="date" value={scheduleDate} onChange={e => setScheduleDate(e.target.value)} className="bg-bg-tertiary border border-border rounded-lg px-2 py-1 text-xs text-ink" />
               <Button size="sm" onClick={() => send(`${scheduleDate}T09:00:00.000Z`)} loading={busy === 'schedule'}>Set</Button>
             </>
+          )}
+          {hasPhoto && onSavePhoto && (
+            <Button size="sm" variant="ghost" onClick={onSavePhoto}><Download className="w-3.5 h-3.5" /> Save photo</Button>
           )}
         </div>
       )}

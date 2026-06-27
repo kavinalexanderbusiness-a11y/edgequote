@@ -10,7 +10,7 @@ import { PublishPanel } from './PublishPanel'
 import { channel as channelDef } from '@/lib/marketing/channels'
 import { lengthChars } from '@/lib/marketing/prompt'
 import { cn } from '@/lib/utils'
-import { Sparkles, RefreshCw, Copy, Check, Download, ImageOff, Lock, Loader2, Gauge } from 'lucide-react'
+import { Sparkles, RefreshCw, ImageOff, Lock, Loader2, Gauge } from 'lucide-react'
 import { DEFAULT_POST_OPTIONS, type ContentPiece, type MarketingCandidate, type MarketingChannel, type PostOptions, type PostText, type QualityScore, type RewriteAction, type RewriteResponse } from '@/lib/marketing/types'
 
 // The deterministic quality score lives on the saved piece's meta.
@@ -69,7 +69,6 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
   const [hashtagsText, setHashtagsText] = useState('')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
-  const [copied, setCopied] = useState(false)
   const [streaming, setStreaming] = useState(false)
   const [polishing, setPolishing] = useState(false)
   const [genError, setGenError] = useState<string | null>(null)
@@ -219,11 +218,6 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
     persist({ title: title.trim() || null, body: body.trim(), hashtags })
   }
 
-  function copyCaption() {
-    const text = [body.trim(), hashtags.map(h => `#${h}`).join(' ')].filter(Boolean).join('\n\n')
-    navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) })
-  }
-
   return (
     <div className="space-y-4">
       {/* Editor */}
@@ -333,19 +327,11 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
             piece={draft}
             ch={ch}
             userId={userId}
+            hasPhoto={canUsePhoto}
+            onSavePhoto={canUsePhoto ? () => downloadImage(imageUrl!, `${(candidate.serviceType || 'post').replace(/\s+/g, '-').toLowerCase()}-${ch}.jpg`) : undefined}
             beforePublish={async () => { await persist({ title: title.trim() || null, body: body.trim(), hashtags }) }}
             onPieceUpdate={p => onDraftChange?.(p)}
           />
-          <div className="flex items-center gap-2 flex-wrap">
-            <Button size="sm" variant="ghost" onClick={copyCaption}>
-              {copied ? <><Check className="w-3.5 h-3.5" /> Copied</> : <><Copy className="w-3.5 h-3.5" /> Copy caption</>}
-            </Button>
-            {canUsePhoto && (
-              <Button variant="ghost" size="sm" onClick={() => downloadImage(imageUrl!, `${(candidate.serviceType || 'post').replace(/\s+/g, '-').toLowerCase()}-${ch}.jpg`)}>
-                <Download className="w-3.5 h-3.5" /> Save photo
-              </Button>
-            )}
-          </div>
         </>
       )}
     </div>

@@ -35,6 +35,8 @@ export function PublishingQueue({ userId }: { userId: string }) {
   const [retrying, setRetrying] = useState<string | null>(null)
 
   const load = useCallback(async () => {
+    // Process this owner's due jobs first (no cron needed), then show the result.
+    await fetch('/api/marketing/publish/process', { method: 'POST' }).catch(() => {})
     const [j, c] = await Promise.all([listJobs(supabase, userId, { limit: 60 }), listConnections(supabase, userId)])
     setJobs(j); setConns(c); setLoading(false)
   }, [supabase, userId])
