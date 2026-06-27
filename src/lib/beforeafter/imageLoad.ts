@@ -45,6 +45,14 @@ export function loadImage(src: string): Promise<HTMLImageElement> {
   return p
 }
 
+// Warm the cache for a URL without awaiting — call it for the pairs the owner is
+// about to view (the neighbours of the selected one) so switching and exporting
+// feel instant. Safe to call repeatedly; a no-op once cached.
+export function prefetch(src: string | null | undefined): void {
+  if (!src) return
+  void loadImage(src).catch(() => {})
+}
+
 export interface CropRect { sx: number; sy: number; sw: number; sh: number }
 
 // object-fit: cover — the largest centered (or focal-point) crop of the source

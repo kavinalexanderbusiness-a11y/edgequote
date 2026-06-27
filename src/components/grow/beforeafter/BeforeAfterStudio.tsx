@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { PHOTO_BUCKET } from '@/lib/photos'
 import { formatDate } from '@/lib/utils'
@@ -11,25 +12,53 @@ import {
   LAYOUTS, EXPORT_PRESETS, PLATFORM_KEYS, presetByKey, renderComposite, balanceFactor,
   BRAND_ACCENT, type LayoutKey, type Focus, type BrandInfo,
 } from '@/lib/beforeafter/layouts'
-import { loadImage, averageLuminance } from '@/lib/beforeafter/imageLoad'
+import { loadImage, averageLuminance, prefetch } from '@/lib/beforeafter/imageLoad'
+import { getPropertyContext, type PropertyIntelligence } from '@/lib/ai/propertyContext'
+import { PageHeader } from '@/components/layout/PageHeader'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import {
-  Sparkles, Download, Images, Loader2, Wand2, Tag, BadgeCheck, AlertTriangle,
+  Download, Images, Loader2, Wand2, Tag, BadgeCheck, AlertTriangle,
   SlidersHorizontal, RefreshCw, Layers, ShieldCheck, ChevronDown, ChevronUp, Camera,
+  Brain, BookMarked, Crown, CalendarDays, Check,
 } from 'lucide-react'
 
 // ── Before / After Studio ────────────────────────────────────────────────────
 // Reads the owner's completed jobs + their before/after photos, pairs them, lets
 // AI pick the strongest, then composites a branded post entirely in the browser
-// (one renderComposite engine for preview AND export). No new tables, no server
-// image processing — the only optional dependency is ANTHROPIC_API_KEY for the
-// AI pick, which degrades to the deterministic ranking when absent.
+// (one renderComposite engine for preview AND export). The only optional
+// dependency is ANTHROPIC_API_KEY for the AI pick, which degrades to the
+// deterministic ranking when absent.
+//
+// INTEGRATION (part of the one-AI-employee Grow platform, not a silo):
+// • Marketing Studio — every pick/export is persisted to `marketing_assets`
+//   (the shared contract). Marketing Studio's generator turns those assets into
+//   `content_pieces` captions; we never write captions here. Scores/rationale are
+//   READ BACK on load, so the work round-trips.
+// • Property Intelligence — reuses the cached `property_intelligence` brain via
+//   the shared read seam (prompt enrichment server-side + a UI chip). We NEVER
+//   re-analyse a property the vision feature already did.
+// • Consent — a non-consented customer's asset stays a `candidate` (never
+//   promoted to `used`/publishable) and is flagged in the gallery.
+// • No duplicate AI — only UNSCORED pairs are sent to the model; saved scores are
+//   reused on return (an explicit "re-score" forces a fresh look).
 
 interface Override { beforeId?: string; afterId?: string }
 interface AiRank { score: number; rationale: string }
+type AssetStatus = 'candidate' | 'used' | 'dismissed'
 
 const PREVIEW_LONG_EDGE = 1000
+
+// Season the asset belongs to (mirrors the server's seasonOf so a client-saved
+// asset and a server-saved one agree). Calgary-ish quarters.
+function seasonOf(iso: string | null): string {
+  const d = iso ? new Date(iso) : new Date()
+  const m = d.getMonth()
+  if (m >= 2 && m <= 4) return 'spring'
+  if (m >= 5 && m <= 7) return 'summer'
+  if (m >= 8 && m <= 10) return 'fall'
+  return 'winter'
+}
 
 export function BeforeAfterStudio() {
   const supabase = useMemo(() => createClient(), [])
@@ -51,17 +80,31 @@ export function BeforeAfterStudio() {
   const [overrides, setOverrides] = useState<Record<string, Override>>({})
   const [beforeFocus, setBeforeFocus] = useState<Focus>({ x: 0.5, y: 0.5 })
   const [afterFocus, setAfterFocus] = useState<Focus>({ x: 0.5, y: 0.5 })
-  const [showTune, setShowTune] = useState(false)
+  // Advanced controls (layout / style / framing) stay hidden behind one toggle —
+  // the defaults already compose a finished post, so most owners never open this.
+  const [showCustomize, setShowCustomize] = useState(false)
 
   // AI ranking state.
   const [aiBusy, setAiBusy] = useState(false)
   const [aiRanks, setAiRanks] = useState<Record<string, AiRank>>({})
-  const [aiHeadline, setAiHeadline] = useState<string | null>(null)
   const [aiNote, setAiNote] = useState<string | null>(null)
 
+  // Marketing Studio integration: lifecycle of each pair's saved marketing_asset.
+  const [assetStatus, setAssetStatus] = useState<Record<string, AssetStatus>>({})
+  // Property Intelligence: the selected property's cached brain (reused, not re-run).
+  const [pi, setPi] = useState<PropertyIntelligence | null>(null)
+
   const [downloading, setDownloading] = useState(false)
+  const [justDownloaded, setJustDownloaded] = useState(false)
+  const [batchProgress, setBatchProgress] = useState<string | null>(null)
   const [previewError, setPreviewError] = useState(false)
+  // Which pair the canvas has finished drawing — drives a one-time "rendering…"
+  // overlay on a fresh selection (control tweaks redraw from cache, no flicker).
+  const [readyJobId, setReadyJobId] = useState<string | null>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const galleryRef = useRef<HTMLDivElement>(null)
+  // Latest keyboard-shortcut handlers, so the (once-bound) listener never goes stale.
+  const keysRef = useRef<{ prev: () => void; next: () => void; download: () => void }>({ prev: () => {}, next: () => {}, download: () => {} })
 
   function publicUrl(path: string): string {
     return supabase.storage.from(PHOTO_BUCKET).getPublicUrl(path).data.publicUrl
@@ -151,6 +194,43 @@ export function BeforeAfterStudio() {
 
       const built = buildPairs(jobs, photos, contexts, Date.now())
 
+      // ── Read back any marketing_assets we already saved for these jobs ─────
+      // The shared Marketing Studio contract: a prior AI pick / export persisted
+      // its score, rationale, chosen photos and lifecycle. Restoring them means
+      // scores show instantly, the model is NOT re-run for already-analysed pairs
+      // (no duplicate AI), and the previously chosen before/after is reselected.
+      const restoredRanks: Record<string, AiRank> = {}
+      const restoredStatus: Record<string, AssetStatus> = {}
+      const restoredOverrides: Record<string, Override> = {}
+      if (jobIds.length) {
+        try {
+          const { data: assetRows, error: assetErr } = await supabase
+            .from('marketing_assets')
+            .select('job_id,quality_score,ai_rationale,status,best_before_photo_id,best_after_photo_id')
+            .eq('user_id', user.id)
+            .in('job_id', jobIds)
+          if (!assetErr) {
+            const photoIds = new Set(photos.map(p => p.id))
+            for (const a of (assetRows as Array<{ job_id: string; quality_score: number | null; ai_rationale: string | null; status: AssetStatus; best_before_photo_id: string | null; best_after_photo_id: string | null }>) || []) {
+              if (a.status) restoredStatus[a.job_id] = a.status
+              // ai_rationale present ⇒ this pair was AI-analysed; reuse it.
+              if (a.ai_rationale && a.ai_rationale.trim()) {
+                restoredRanks[a.job_id] = { score: a.quality_score ?? 0, rationale: a.ai_rationale.trim() }
+              }
+              const ov: Override = {}
+              if (a.best_before_photo_id && photoIds.has(a.best_before_photo_id)) ov.beforeId = a.best_before_photo_id
+              if (a.best_after_photo_id && photoIds.has(a.best_after_photo_id)) ov.afterId = a.best_after_photo_id
+              if (ov.beforeId || ov.afterId) restoredOverrides[a.job_id] = ov
+            }
+          }
+        } catch { /* table absent / not migrated — Studio still works */ }
+      }
+
+      // Order the gallery by the best score we know (saved AI score wins, else the
+      // deterministic score) so the strongest pair leads even on a cold load.
+      const ordered = [...built].sort((a, b) =>
+        (restoredRanks[b.jobId]?.score ?? b.score) - (restoredRanks[a.jobId]?.score ?? a.score))
+
       // Resolve the logo to an <img> for canvas branding (best-effort).
       let logo: HTMLImageElement | null = null
       if (s?.logo_url) { try { logo = await loadImage(s.logo_url) } catch { logo = null } }
@@ -164,8 +244,11 @@ export function BeforeAfterStudio() {
         logo,
         accent: BRAND_ACCENT,
       })
-      setPairs(built)
-      setSelectedJobId(built[0]?.jobId ?? null)
+      setAiRanks(restoredRanks)
+      setAssetStatus(restoredStatus)
+      setOverrides(restoredOverrides)
+      setPairs(ordered)
+      setSelectedJobId(ordered[0]?.jobId ?? null)
       setLoading(false)
     }
     load()
@@ -226,10 +309,70 @@ export function BeforeAfterStudio() {
       const ctx = canvas.getContext('2d')
       if (!ctx) return
       renderComposite(ctx, input)
+      if (!cancelled && selected) setReadyJobId(selected.jobId)
     }
     draw().catch(() => { if (!cancelled) setPreviewError(true) })
     return () => { cancelled = true }
   }, [selected, presetKey, buildInput])
+
+  // ── Prefetch the neighbouring pairs so the next click renders instantly ──────
+  useEffect(() => {
+    if (!selected) return
+    const i = pairs.findIndex(p => p.jobId === selected.jobId)
+    if (i === -1) return
+    for (const n of [pairs[i - 1], pairs[i + 1]]) {
+      if (n) { prefetch(n.before.url); prefetch(n.after.url) }
+    }
+  }, [selected, pairs])
+
+  // ── Property Intelligence (reuse the shared brain, never re-analyse) ─────────
+  // When the selected pair changes, read any cached analysis for its property
+  // through the SAME seam the AI picker uses. Empty/absent → nothing shown.
+  useEffect(() => {
+    let alive = true
+    setPi(null)
+    const propertyId = selected?.job.property_id
+    if (!propertyId) return
+    getPropertyContext(supabase, propertyId)
+      .then(ctx => { if (alive) setPi(ctx) })
+      .catch(() => { if (alive) setPi(null) })
+    return () => { alive = false }
+  }, [selected, supabase])
+
+  // ── Keyboard accelerators (← → switch pairs · D download) ────────────────────
+  // Pure shortcuts to actions that already exist; ignored while typing in a field.
+  function goRelative(delta: number) {
+    const i = pairs.findIndex(p => p.jobId === selectedJobId)
+    if (i === -1) return
+    const next = pairs[i + delta]
+    if (next) setSelectedJobId(next.jobId)
+  }
+  // Refresh the latest handlers every render so the once-bound listener never goes stale.
+  useEffect(() => {
+    keysRef.current = {
+      prev: () => goRelative(-1),
+      next: () => goRelative(1),
+      download: () => { if (!downloading && selected) downloadOne(presetKey) },
+    }
+  })
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const t = e.target as HTMLElement | null
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      if (e.key === 'ArrowRight') { e.preventDefault(); keysRef.current.next() }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); keysRef.current.prev() }
+      else if (e.key === 'd' || e.key === 'D') { e.preventDefault(); keysRef.current.download() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  // Keep the selected pair scrolled into view (centered) in the gallery strip.
+  useEffect(() => {
+    const el = galleryRef.current?.querySelector(`[data-pair="${selectedJobId}"]`) as HTMLElement | null
+    el?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' })
+  }, [selectedJobId])
 
   // ── Export ──────────────────────────────────────────────────────────────────
   const renderToBlob = useCallback(async (presetK: string): Promise<Blob | null> => {
@@ -258,11 +401,21 @@ export function BeforeAfterStudio() {
     setTimeout(() => URL.revokeObjectURL(url), 1000)
   }, [selected])
 
+  // Brief "Downloaded ✓" confirmation on the button (Canva-style feedback).
+  function flashDownloaded() {
+    setJustDownloaded(true)
+    window.setTimeout(() => setJustDownloaded(false), 1800)
+  }
+
   async function downloadOne(presetK: string) {
     setDownloading(true)
     try {
       const blob = await renderToBlob(presetK)
-      if (blob) triggerDownload(blob, presetK)
+      if (blob) {
+        triggerDownload(blob, presetK)
+        flashDownloaded()
+        if (selected && resolvedBefore && resolvedAfter) await saveAsset(selected, resolvedBefore, resolvedAfter, 'used')
+      }
     } finally {
       setDownloading(false)
     }
@@ -271,27 +424,52 @@ export function BeforeAfterStudio() {
   async function downloadAllPlatforms() {
     setDownloading(true)
     try {
-      for (const k of PLATFORM_KEYS) {
-        const blob = await renderToBlob(k)
-        if (blob) triggerDownload(blob, k)
+      let any = false
+      for (let i = 0; i < PLATFORM_KEYS.length; i++) {
+        setBatchProgress(`${i + 1}/${PLATFORM_KEYS.length}`)
+        const blob = await renderToBlob(PLATFORM_KEYS[i])
+        if (blob) { triggerDownload(blob, PLATFORM_KEYS[i]); any = true }
         await new Promise(r => setTimeout(r, 350)) // let each download register
       }
+      if (any) {
+        flashDownloaded()
+        if (selected && resolvedBefore && resolvedAfter) await saveAsset(selected, resolvedBefore, resolvedAfter, 'used')
+      }
     } finally {
+      setBatchProgress(null)
       setDownloading(false)
     }
   }
 
   // ── AI pick ─────────────────────────────────────────────────────────────────
-  async function pickStrongest() {
+  // Incremental by default: only pairs WITHOUT a saved AI score are sent to the
+  // model (never re-analyse the same imagery). `force` re-scores everything for a
+  // deliberate fresh look. The server persists each scored pair to marketing_assets,
+  // so the result survives a reload and feeds Marketing Studio.
+  async function pickStrongest(force = false) {
     if (!pairs.length) return
+    const pool = (force ? pairs : pairs.filter(p => !aiRanks[p.jobId])).slice(0, 6)
+
+    // Nothing new to analyse — reuse the saved scores and just jump to the best.
+    if (!pool.length) {
+      const best = [...pairs].sort((a, b) => (aiRanks[b.jobId]?.score ?? b.score) - (aiRanks[a.jobId]?.score ?? a.score))[0]
+      if (best) setSelectedJobId(best.jobId)
+      setAiNote('Every pair is already scored — reusing the saved analysis (no re-run).')
+      return
+    }
+
     setAiBusy(true)
     setAiNote(null)
     try {
-      const candidates = pairs.slice(0, 6).map(p => ({
+      const candidates = pool.map(p => ({
         jobId: p.jobId,
         label: [p.context.customerName, p.job.service_type, p.context.neighborhood].filter(Boolean).join(' · ') || p.job.title,
         beforeUrl: p.before.url,
         afterUrl: p.after.url,
+        // Lets the server capture this AI pick as a reusable marketing asset.
+        beforePhotoId: p.before.id,
+        afterPhotoId: p.after.id,
+        neighborhood: p.context.neighborhood ?? undefined,
       }))
       const res = await fetch('/api/grow/before-after/select', {
         method: 'POST',
@@ -307,21 +485,54 @@ export function BeforeAfterStudio() {
         setAiNote('Could not reach the AI just now — showing the smart ranking instead.')
         return
       }
-      const ranks: Record<string, AiRank> = {}
+      // Merge new scores into whatever we already had (incremental).
+      const merged: Record<string, AiRank> = { ...aiRanks }
+      const newStatus: Record<string, AssetStatus> = {}
       for (const r of data.ranking as Array<{ jobId: string; score: number; rationale: string }>) {
-        ranks[r.jobId] = { score: r.score, rationale: r.rationale }
+        merged[r.jobId] = { score: r.score, rationale: r.rationale }
+        if (!assetStatus[r.jobId]) newStatus[r.jobId] = 'candidate' // server saved it as a candidate
       }
-      setAiRanks(ranks)
-      setAiHeadline(data.headline || null)
+      setAiRanks(merged)
+      if (Object.keys(newStatus).length) setAssetStatus(prev => ({ ...prev, ...newStatus }))
       if (data.bestJobId) setSelectedJobId(data.bestJobId)
-      // Re-order the gallery by the AI score (fall back to deterministic).
-      setPairs(prev => [...prev].sort((a, b) => (ranks[b.jobId]?.score ?? b.score) - (ranks[a.jobId]?.score ?? a.score)))
+      // Re-order the gallery by the best score (AI where known, else deterministic).
+      setPairs(prev => [...prev].sort((a, b) => (merged[b.jobId]?.score ?? b.score) - (merged[a.jobId]?.score ?? a.score)))
     } catch {
       setAiNote('Could not reach the AI just now — showing the smart ranking instead.')
     } finally {
       setAiBusy(false)
     }
   }
+
+  // ── Save a reusable marketing asset (Marketing Studio contract) ──────────────
+  // Persists the CURRENT pair (with the owner's chosen before/after photos) to
+  // marketing_assets so Marketing Studio / Content Library can turn it into a post.
+  // Consent-aware: a customer who hasn't cleared their photos stays a `candidate`
+  // (never promoted to `used`/publishable). Best-effort + RLS-scoped (insert/update
+  // own); omits ai_rationale/quality_score so a prior AI score is preserved.
+  const saveAsset = useCallback(async (pair: BeforeAfterPair, before: PhotoLite, after: PhotoLite, intendedStatus: AssetStatus) => {
+    const consentClear = !consentSupported || pair.context.consent !== false
+    const status: AssetStatus = intendedStatus === 'used' && !consentClear ? 'candidate' : intendedStatus
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) return
+      await supabase.from('marketing_assets').upsert({
+        user_id: user.id,
+        job_id: pair.jobId,
+        customer_id: pair.job.customer_id,
+        property_id: pair.job.property_id,
+        service_type: pair.job.service_type,
+        neighborhood: pair.context.neighborhood,
+        season: seasonOf(pair.job.completed_at || pair.job.scheduled_date),
+        has_before: true,
+        has_after: true,
+        best_before_photo_id: before.id,
+        best_after_photo_id: after.id,
+        status,
+      }, { onConflict: 'user_id,job_id' })
+      setAssetStatus(prev => ({ ...prev, [pair.jobId]: status }))
+    } catch { /* table absent / not migrated — export still succeeds */ }
+  }, [supabase, consentSupported])
 
   // ── Consent ─────────────────────────────────────────────────────────────────
   async function allowPhotos() {
@@ -345,87 +556,140 @@ export function BeforeAfterStudio() {
   }
 
   // ── Render ──────────────────────────────────────────────────────────────────
+  const aiUsed = Object.keys(aiRanks).length > 0
+  const unscored = pairs.filter(p => !aiRanks[p.jobId]).length
+
+  // Header matches the Schedule reference: title + a count description + a single
+  // right-aligned secondary action. Shown in every state so the screen always
+  // says "what am I looking at" before anything else.
+  const header = (
+    <PageHeader
+      title="Before / After Studio"
+      description={loading
+        ? 'Loading your photos…'
+        : pairs.length
+          ? `${pairs.length} ready-to-post pair${pairs.length !== 1 ? 's' : ''}`
+          : 'Snap a before & after on a completed job to start'}
+      action={!loading && pairs.length ? (
+        <Button variant="secondary" onClick={() => pickStrongest(unscored === 0)} loading={aiBusy}
+          title={unscored === 0 ? 'Re-run the AI on every pair' : 'Score the pairs the AI hasn’t scored yet'}>
+          {unscored === 0 ? <RefreshCw className="w-4 h-4" /> : <Wand2 className="w-4 h-4" />}
+          {unscored === 0 ? 'Re-score' : aiUsed ? `Score ${unscored} more` : 'Pick strongest with AI'}
+        </Button>
+      ) : undefined}
+    />
+  )
+
   if (loading) {
     return (
-      <Card className="p-10 flex items-center justify-center text-ink-muted text-sm">
-        <Loader2 className="w-4 h-4 animate-spin mr-2" /> Finding your before &amp; after photos…
-      </Card>
+      <div className="space-y-6">
+        {header}
+        <div className="grid lg:grid-cols-[1fr_300px] gap-4">
+          <Card className="min-h-[320px] bg-bg-tertiary flex items-center justify-center text-ink-faint text-sm">
+            <Loader2 className="w-4 h-4 animate-spin mr-2" /> Finding your before &amp; after photos…
+          </Card>
+          <div className="space-y-3 hidden lg:block">
+            {[0, 1, 2].map(i => <Card key={i} className="h-20 bg-bg-tertiary animate-pulse" />)}
+          </div>
+        </div>
+      </div>
     )
   }
 
   if (!pairs.length) {
     return (
-      <Card className="p-8 text-center">
-        <div className="w-12 h-12 rounded-2xl bg-accent/10 border border-accent/20 flex items-center justify-center mx-auto mb-3">
-          <Camera className="w-6 h-6 text-accent" />
-        </div>
-        <p className="text-sm font-semibold text-ink">No before/after pairs yet</p>
-        <p className="text-xs text-ink-muted mt-1 max-w-md mx-auto">
-          On a completed visit, snap a <span className="text-amber-300 font-medium">Before</span> and an{' '}
-          <span className="text-emerald-300 font-medium">After</span> photo (the camera buttons on the job).
-          Any completed job with both will show up here, ready to turn into a post.
-        </p>
-      </Card>
+      <div className="space-y-6">
+        {header}
+        <Card className="p-8 text-center">
+          <div className="w-12 h-12 rounded-2xl bg-accent/10 border border-accent/20 flex items-center justify-center mx-auto mb-3">
+            <Camera className="w-6 h-6 text-accent" />
+          </div>
+          <p className="text-sm font-semibold text-ink">No before/after pairs yet</p>
+          <p className="text-xs text-ink-muted mt-1 max-w-md mx-auto">
+            On a completed visit, snap a <span className="text-amber-300 font-medium">Before</span> and an{' '}
+            <span className="text-emerald-300 font-medium">After</span> photo — any completed job with both lands
+            here, ready to turn into a branded post in one tap.
+          </p>
+          <Link href="/dashboard/schedule" className="inline-flex items-center gap-1.5 mt-4 text-xs font-semibold text-accent hover:underline">
+            <CalendarDays className="w-3.5 h-3.5" /> Go to today’s jobs
+          </Link>
+        </Card>
+      </div>
     )
   }
 
-  const aiUsed = Object.keys(aiRanks).length > 0
   const consentBlocked = consentSupported && selected?.context.consent === false
+  const selectedStatus = selected ? assetStatus[selected.jobId] : undefined
+  // The AI's top-scored pair (for the gallery crown).
+  const bestAiJobId = aiUsed
+    ? (pairs.reduce<{ id: string; s: number } | null>((acc, p) => {
+        const r = aiRanks[p.jobId]
+        if (!r) return acc
+        return !acc || r.score > acc.s ? { id: p.jobId, s: r.score } : acc
+      }, null)?.id ?? null)
+    : null
+  const previewBusy = !!selected && readyJobId !== selected.jobId && !previewError
 
   return (
-    <div className="space-y-4">
-      {/* AI pick bar */}
-      <Card className="p-3 flex flex-col sm:flex-row sm:items-center gap-3">
-        <div className="flex items-center gap-2.5 min-w-0 flex-1">
-          <div className="w-9 h-9 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
-            <Sparkles className="w-4 h-4 text-accent" />
-          </div>
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-ink">Pick the strongest pair</p>
-            <p className="text-xs text-ink-muted truncate">
-              {aiHeadline ? <>“{aiHeadline}” — AI’s pick of {pairs.length}.</> : <>Let AI compare your {pairs.length} pair{pairs.length !== 1 ? 's' : ''} and choose the most eye-catching.</>}
-            </p>
-          </div>
-        </div>
-        <Button size="sm" variant="secondary" onClick={pickStrongest} loading={aiBusy} className="shrink-0">
-          <Wand2 className="w-4 h-4" /> {aiUsed ? 'Re-pick with AI' : 'Pick strongest with AI'}
-        </Button>
-      </Card>
+    <div className="space-y-6">
+      {header}
       {aiNote && (
-        <p className="text-[11px] text-amber-300/90 flex items-center gap-1.5 -mt-2 px-1"><AlertTriangle className="w-3 h-3" /> {aiNote}</p>
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs text-amber-200/90 flex items-center gap-2">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> {aiNote}
+        </div>
       )}
 
-      {/* Gallery strip */}
-      <div className="flex gap-2.5 overflow-x-auto pb-1.5 -mx-1 px-1">
+      {/* Gallery — only shown when there's an actual choice between pairs. */}
+      {pairs.length > 1 && (
+      <div ref={galleryRef} className="flex gap-3 overflow-x-auto pb-2 -mx-1 px-1">
         {pairs.map(p => {
           const rank = aiRanks[p.jobId]
           const score = rank?.score ?? p.score
           const isSel = p.jobId === selectedJobId
           return (
-            <button key={p.jobId} onClick={() => setSelectedJobId(p.jobId)}
-              className={`shrink-0 w-44 rounded-xl border text-left overflow-hidden transition-colors ${isSel ? 'border-accent ring-1 ring-accent/40' : 'border-border hover:border-border-strong'}`}>
-              <div className="grid grid-cols-2 gap-px bg-border aspect-[2/1]">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={p.before.url} alt="before" loading="lazy" className="w-full h-full object-cover" />
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={p.after.url} alt="after" loading="lazy" className="w-full h-full object-cover" />
+            <button key={p.jobId} data-pair={p.jobId} onClick={() => setSelectedJobId(p.jobId)}
+              aria-pressed={isSel}
+              aria-label={`${p.context.customerName || p.job.title}, score ${score}${p.jobId === bestAiJobId ? ', AI pick' : ''}`}
+              className={`shrink-0 w-44 rounded-xl border text-left overflow-hidden transition-all duration-200 ${FOCUS_RING} ${isSel ? 'border-accent ring-2 ring-accent/40' : 'border-border hover:border-border-strong'}`}>
+              <div className="relative">
+                <div className="grid grid-cols-2 gap-px bg-border aspect-[2/1]">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={p.before.url} alt="before" loading="lazy" decoding="async" className="w-full h-full object-cover" />
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={p.after.url} alt="after" loading="lazy" decoding="async" className="w-full h-full object-cover" />
+                </div>
+                {p.jobId === bestAiJobId && (
+                  <span className="absolute top-1 right-1 inline-flex items-center gap-0.5 rounded-full bg-accent text-black text-[9px] font-bold px-1.5 py-0.5 shadow">
+                    <Crown className="w-2.5 h-2.5" /> AI pick
+                  </span>
+                )}
               </div>
               <div className="p-2">
                 <div className="flex items-center justify-between gap-1">
-                  <span className="text-xs font-medium text-ink truncate">{p.context.customerName || p.job.title}</span>
+                  <span className="flex items-center gap-1 min-w-0">
+                    {consentSupported && p.context.consent != null && (
+                      <span aria-hidden title={p.context.consent ? 'Cleared to post' : 'Not cleared for marketing'}
+                        className={`w-1.5 h-1.5 rounded-full shrink-0 ${p.context.consent ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+                    )}
+                    <span className="text-xs font-medium text-ink truncate">{p.context.customerName || p.job.title}</span>
+                  </span>
                   <span className={`text-[10px] font-bold tabular-nums shrink-0 ${rank ? 'text-accent' : 'text-ink-faint'}`}>{score}</span>
                 </div>
                 <p className="text-[10px] text-ink-faint truncate">{p.job.service_type || 'Service'} · {formatDate(p.job.completed_at || p.job.scheduled_date)}</p>
+                {assetStatus[p.jobId] === 'used' && (
+                  <span className="mt-1 inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wide text-accent"><BookMarked className="w-2.5 h-2.5" /> Used</span>
+                )}
                 {rank?.rationale && <p className="text-[10px] text-ink-muted mt-1 line-clamp-2">{rank.rationale}</p>}
               </div>
             </button>
           )
         })}
       </div>
+      )}
 
       {/* Consent gate */}
       {consentBlocked && (
-        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 flex flex-col sm:flex-row sm:items-center gap-2.5">
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-3">
           <ShieldCheck className="w-4 h-4 text-amber-300 shrink-0" />
           <p className="text-xs text-amber-200/90 flex-1">
             <span className="font-semibold">{selected?.context.customerName || 'This customer'}</span> hasn’t cleared their photos for public marketing.
@@ -437,13 +701,40 @@ export function BeforeAfterStudio() {
         </div>
       )}
 
-      {/* Editor: preview + controls */}
-      <div className="grid lg:grid-cols-[1fr_320px] gap-4">
-        {/* Preview — canvas stays mounted (error shows as an overlay) so picking
-            another pair always redraws. */}
-        <Card className="p-4 flex flex-col items-center justify-center bg-bg-tertiary min-h-[320px]">
-          <div className="relative w-full flex items-center justify-center">
-            <canvas ref={canvasRef} className={`max-h-[58vh] max-w-full w-auto h-auto rounded-lg shadow-lg ${previewError ? 'opacity-20' : ''}`} />
+      {/* Property Intelligence — reused from the shared brain (never re-analysed). */}
+      {pi && (pi.summary || (pi.detections || []).length > 0) && (
+        <div className="rounded-xl border border-accent/20 bg-accent/[0.06] px-4 py-3 flex items-start gap-3">
+          <Brain className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+          <div className="min-w-0 text-xs">
+            <span className="font-semibold text-ink">Property intelligence</span>
+            {pi.summary && <span className="text-ink-muted"> — {pi.summary}</span>}
+            {(pi.detections || []).length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-1.5">
+                {(pi.detections || []).slice(0, 8).map(d => (
+                  <span key={d} className="text-[10px] rounded px-1.5 py-0.5 bg-bg-tertiary border border-border text-ink-muted">{d}</span>
+                ))}
+              </div>
+            )}
+            <p className="text-[10px] text-ink-faint mt-1">From a prior AI analysis — reused here, not re-run.</p>
+          </div>
+        </div>
+      )}
+
+      {/* Editor: a hero preview with the size strip right under it, a one-tap
+          download, and ALL advanced controls hidden behind one "Customize". */}
+      <div className="grid lg:grid-cols-[1fr_300px] gap-4">
+        {/* Preview hero — canvas stays mounted (error shows as an overlay) so
+            picking another pair always redraws. */}
+        <Card className="p-4 sm:p-6 bg-gradient-to-b from-surface to-bg-tertiary">
+          <div className="relative w-full flex items-center justify-center min-h-[240px]">
+            <canvas ref={canvasRef} role="img"
+              aria-label={selected ? `Before and after composite for ${selected.context.customerName || selected.job.title}` : 'Before and after preview'}
+              className={`max-h-[46vh] sm:max-h-[58vh] max-w-full w-auto h-auto rounded-xl shadow-2xl ring-1 ring-black/10 transition-opacity duration-200 ${previewError || previewBusy ? 'opacity-30' : 'opacity-100'}`} />
+            {previewBusy && !previewError && (
+              <div className="absolute inset-0 flex items-center justify-center text-ink-faint">
+                <Loader2 className="w-6 h-6 animate-spin" />
+              </div>
+            )}
             {previewError && (
               <div className="absolute inset-0 flex items-center justify-center text-center text-ink-muted text-sm px-4">
                 <span>
@@ -453,92 +744,97 @@ export function BeforeAfterStudio() {
               </div>
             )}
           </div>
-          {selected && (
-            <p className="text-[11px] text-ink-faint mt-3 text-center">
-              {presetByKey(presetKey).label} · {presetByKey(presetKey).w}×{presetByKey(presetKey).h}
-              {selected.context.consent === true && <span className="text-emerald-400"> · cleared to post</span>}
+          {/* Size strip — the one export control kept visible (changing it reshapes
+              the preview live). Platforms first, generic shapes subtle. */}
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+            {EXPORT_PRESETS.filter(p => p.group === 'Platform').map(p => (
+              <Chip key={p.key} active={presetKey === p.key} onClick={() => setPresetKey(p.key)} title={`${p.w}×${p.h}${p.note ? ' · ' + p.note : ''}`}>{p.label}</Chip>
+            ))}
+            {EXPORT_PRESETS.filter(p => p.group === 'Format').map(p => (
+              <Chip key={p.key} active={presetKey === p.key} onClick={() => setPresetKey(p.key)} title={`${p.w}×${p.h}`} subtle>{p.label}</Chip>
+            ))}
+          </div>
+          {selected?.context.consent === true && (
+            <p className="text-[11px] text-emerald-400 mt-2 text-center flex items-center justify-center gap-1">
+              <Check className="w-3 h-3" /> Cleared to post
             </p>
           )}
         </Card>
 
-        {/* Controls */}
+        {/* Actions — download is the hero; customization is one tap away. */}
         <div className="space-y-3">
-          {/* Layout */}
-          <Card className="p-3">
-            <SectionLabel icon={Layers}>Layout</SectionLabel>
-            <div className="flex flex-wrap gap-1.5 mt-2">
-              {LAYOUTS.map(l => (
-                <Chip key={l.key} active={layout === l.key} onClick={() => setLayout(l.key)} title={l.hint}>{l.label}</Chip>
-              ))}
-            </div>
-          </Card>
-
-          {/* Size */}
-          <Card className="p-3">
-            <SectionLabel icon={Images}>Size</SectionLabel>
-            <p className="text-[10px] uppercase tracking-wide text-ink-faint mt-2 mb-1">Platform</p>
-            <div className="flex flex-wrap gap-1.5">
-              {EXPORT_PRESETS.filter(p => p.group === 'Platform').map(p => (
-                <Chip key={p.key} active={presetKey === p.key} onClick={() => setPresetKey(p.key)} title={`${p.w}×${p.h}${p.note ? ' · ' + p.note : ''}`}>{p.label}</Chip>
-              ))}
-            </div>
-            <p className="text-[10px] uppercase tracking-wide text-ink-faint mt-3 mb-1">Format</p>
-            <div className="flex flex-wrap gap-1.5">
-              {EXPORT_PRESETS.filter(p => p.group === 'Format').map(p => (
-                <Chip key={p.key} active={presetKey === p.key} onClick={() => setPresetKey(p.key)} title={`${p.w}×${p.h}`}>{p.label}</Chip>
-              ))}
-            </div>
-          </Card>
-
-          {/* Toggles */}
           <Card className="p-3 space-y-2">
-            <SectionLabel icon={Tag}>Style</SectionLabel>
-            <Toggle on={showLabels} onToggle={() => setShowLabels(v => !v)} label="Before / After labels" />
-            <Toggle on={showBranding} onToggle={() => setShowBranding(v => !v)} label="Branding footer" />
-            <Toggle on={autoBalance} onToggle={() => setAutoBalance(v => !v)} label="Smart exposure balance" />
-            {showLabels && (
-              <div className="grid grid-cols-2 gap-2 pt-1">
-                <input value={labelBefore} onChange={e => setLabelBefore(e.target.value)} placeholder="Before"
-                  className="bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-ink outline-none focus:border-accent" />
-                <input value={labelAfter} onChange={e => setLabelAfter(e.target.value)} placeholder="After"
-                  className="bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-ink outline-none focus:border-accent" />
-              </div>
-            )}
-          </Card>
-
-          {/* Fine-tune */}
-          <Card className="p-3">
-            <button onClick={() => setShowTune(v => !v)} className="w-full flex items-center justify-between">
-              <SectionLabel icon={SlidersHorizontal}>Fine-tune framing</SectionLabel>
-              {showTune ? <ChevronUp className="w-4 h-4 text-ink-faint" /> : <ChevronDown className="w-4 h-4 text-ink-faint" />}
-            </button>
-            {showTune && selected && (
-              <div className="mt-3 space-y-3">
-                <FocusRow label="Before" focus={beforeFocus} onChange={setBeforeFocus} />
-                <FocusRow label="After" focus={afterFocus} onChange={setAfterFocus} />
-                <button onClick={resetFraming} className="text-[11px] text-accent hover:underline flex items-center gap-1">
-                  <RefreshCw className="w-3 h-3" /> Reset framing
-                </button>
-                {selected.beforeOptions.length > 1 && (
-                  <SwapRow label="Swap before" photos={selected.beforeOptions} activeId={resolvedBefore?.id} onPick={setBeforePhoto} />
-                )}
-                {selected.afterOptions.length > 1 && (
-                  <SwapRow label="Swap after" photos={selected.afterOptions} activeId={resolvedAfter?.id} onPick={setAfterPhoto} />
-                )}
-              </div>
-            )}
-          </Card>
-
-          {/* Export */}
-          <Card className="p-3 space-y-2">
-            <SectionLabel icon={Download}>Download</SectionLabel>
-            <Button onClick={() => downloadOne(presetKey)} loading={downloading} className="w-full">
-              <Download className="w-4 h-4" /> Download {presetByKey(presetKey).label}
+            <Button size="lg" onClick={() => downloadOne(presetKey)} disabled={downloading} loading={downloading && !batchProgress} className="w-full" title="Download (D)">
+              {justDownloaded
+                ? <><Check className="w-4 h-4" /> Downloaded</>
+                : <><Download className="w-4 h-4" /> Download {presetByKey(presetKey).label}</>}
             </Button>
             <Button variant="secondary" onClick={downloadAllPlatforms} loading={downloading} className="w-full">
-              <Images className="w-4 h-4" /> Download all platforms ({PLATFORM_KEYS.length})
+              <Images className="w-4 h-4" /> {batchProgress ? `Saving ${batchProgress}…` : `All platforms (${PLATFORM_KEYS.length})`}
             </Button>
-            <p className="text-[10px] text-ink-faint text-center">Saves a ready-to-post image. Nothing is published automatically.</p>
+            {selectedStatus === 'used' && (
+              <p className="text-[10px] text-ink-faint text-center flex items-center justify-center gap-1">
+                <BookMarked className="w-3 h-3" /> Saved to Marketing Studio
+              </p>
+            )}
+            {/* Screen-reader announcement for download progress / completion. */}
+            <span className="sr-only" aria-live="polite">
+              {justDownloaded ? 'Image downloaded.' : batchProgress ? `Saving image ${batchProgress}.` : ''}
+            </span>
+          </Card>
+
+          {/* Customize — every advanced control lives here, closed by default. */}
+          <Card className="p-3">
+            <button onClick={() => setShowCustomize(v => !v)} aria-expanded={showCustomize}
+              className={`w-full flex items-center justify-between rounded ${FOCUS_RING}`}>
+              <SectionLabel icon={SlidersHorizontal}>Customize</SectionLabel>
+              {showCustomize ? <ChevronUp className="w-4 h-4 text-ink-faint" /> : <ChevronDown className="w-4 h-4 text-ink-faint" />}
+            </button>
+            {showCustomize && (
+              <div className="mt-3 space-y-4">
+                {/* Layout */}
+                <div>
+                  <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-1.5 flex items-center gap-1"><Layers className="w-3 h-3" /> Layout</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {LAYOUTS.map(l => (
+                      <Chip key={l.key} active={layout === l.key} onClick={() => setLayout(l.key)} title={l.hint}>{l.label}</Chip>
+                    ))}
+                  </div>
+                </div>
+                {/* Style */}
+                <div className="space-y-2">
+                  <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1"><Tag className="w-3 h-3" /> Style</p>
+                  <Toggle on={showLabels} onToggle={() => setShowLabels(v => !v)} label="Before / After labels" />
+                  <Toggle on={showBranding} onToggle={() => setShowBranding(v => !v)} label="Branding footer" />
+                  <Toggle on={autoBalance} onToggle={() => setAutoBalance(v => !v)} label="Smart exposure balance" />
+                </div>
+                {/* Framing */}
+                {selected && (
+                  <div className="space-y-3">
+                    <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1"><SlidersHorizontal className="w-3 h-3" /> Framing</p>
+                    {showLabels && (
+                      <div className="grid grid-cols-2 gap-2">
+                        <input value={labelBefore} onChange={e => setLabelBefore(e.target.value)} placeholder="Before"
+                          className="bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-ink outline-none focus:border-accent" />
+                        <input value={labelAfter} onChange={e => setLabelAfter(e.target.value)} placeholder="After"
+                          className="bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-ink outline-none focus:border-accent" />
+                      </div>
+                    )}
+                    <FocusRow label="Before" focus={beforeFocus} onChange={setBeforeFocus} />
+                    <FocusRow label="After" focus={afterFocus} onChange={setAfterFocus} />
+                    <button onClick={resetFraming} className="text-[11px] text-accent hover:underline flex items-center gap-1">
+                      <RefreshCw className="w-3 h-3" /> Reset framing
+                    </button>
+                    {selected.beforeOptions.length > 1 && (
+                      <SwapRow label="Swap before" photos={selected.beforeOptions} activeId={resolvedBefore?.id} onPick={setBeforePhoto} />
+                    )}
+                    {selected.afterOptions.length > 1 && (
+                      <SwapRow label="Swap after" photos={selected.afterOptions} activeId={resolvedAfter?.id} onPick={setAfterPhoto} />
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </Card>
         </div>
       </div>
@@ -551,10 +847,12 @@ function SectionLabel({ icon: Icon, children }: { icon: typeof Images; children:
   return <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint flex items-center gap-1.5"><Icon className="w-3.5 h-3.5" /> {children}</p>
 }
 
-function Chip({ active, onClick, children, title }: { active: boolean; onClick: () => void; children: React.ReactNode; title?: string }) {
+const FOCUS_RING = 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50'
+
+function Chip({ active, onClick, children, title, subtle }: { active: boolean; onClick: () => void; children: React.ReactNode; title?: string; subtle?: boolean }) {
   return (
-    <button onClick={onClick} title={title}
-      className={`text-xs font-medium rounded-lg px-2.5 py-1.5 border transition-colors ${active ? 'bg-accent/15 border-accent/40 text-accent' : 'border-border text-ink-muted hover:text-ink hover:border-border-strong'}`}>
+    <button onClick={onClick} title={title} aria-pressed={active}
+      className={`font-medium rounded-lg border transition-colors ${FOCUS_RING} ${subtle ? 'text-[11px] px-2 py-1' : 'text-xs px-2.5 py-1.5'} ${active ? 'bg-accent/15 border-accent/40 text-accent' : 'border-border text-ink-muted hover:text-ink hover:border-border-strong'}`}>
       {children}
     </button>
   )
@@ -562,9 +860,10 @@ function Chip({ active, onClick, children, title }: { active: boolean; onClick: 
 
 function Toggle({ on, onToggle, label }: { on: boolean; onToggle: () => void; label: string }) {
   return (
-    <button onClick={onToggle} className="w-full flex items-center justify-between text-xs text-ink py-0.5">
+    <button onClick={onToggle} role="switch" aria-checked={on} aria-label={label}
+      className={`w-full flex items-center justify-between text-xs text-ink py-0.5 rounded ${FOCUS_RING}`}>
       <span>{label}</span>
-      <span className={`w-9 h-5 rounded-full border transition-colors relative ${on ? 'bg-accent/30 border-accent/50' : 'bg-bg-tertiary border-border'}`}>
+      <span aria-hidden className={`w-9 h-5 rounded-full border transition-colors relative ${on ? 'bg-accent/30 border-accent/50' : 'bg-bg-tertiary border-border'}`}>
         <span className={`absolute top-0.5 w-3.5 h-3.5 rounded-full transition-all ${on ? 'left-[18px] bg-accent' : 'left-0.5 bg-ink-faint'}`} />
       </span>
     </button>
@@ -576,12 +875,12 @@ function FocusRow({ label, focus, onChange }: { label: string; focus: Focus; onC
     <div>
       <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-1">{label} framing</p>
       <div className="flex items-center gap-2">
-        <span className="text-[10px] text-ink-faint w-3">↔</span>
-        <input type="range" min={0} max={100} value={Math.round(focus.x * 100)} onChange={e => onChange({ ...focus, x: Number(e.target.value) / 100 })} className="flex-1 accent-accent h-1" />
+        <span className="text-[10px] text-ink-faint w-3" aria-hidden>↔</span>
+        <input type="range" min={0} max={100} aria-label={`${label} horizontal framing`} value={Math.round(focus.x * 100)} onChange={e => onChange({ ...focus, x: Number(e.target.value) / 100 })} className={`flex-1 accent-accent h-1 ${FOCUS_RING}`} />
       </div>
       <div className="flex items-center gap-2 mt-1">
-        <span className="text-[10px] text-ink-faint w-3">↕</span>
-        <input type="range" min={0} max={100} value={Math.round(focus.y * 100)} onChange={e => onChange({ ...focus, y: Number(e.target.value) / 100 })} className="flex-1 accent-accent h-1" />
+        <span className="text-[10px] text-ink-faint w-3" aria-hidden>↕</span>
+        <input type="range" min={0} max={100} aria-label={`${label} vertical framing`} value={Math.round(focus.y * 100)} onChange={e => onChange({ ...focus, y: Number(e.target.value) / 100 })} className={`flex-1 accent-accent h-1 ${FOCUS_RING}`} />
       </div>
     </div>
   )
@@ -593,10 +892,10 @@ function SwapRow({ label, photos, activeId, onPick }: { label: string; photos: P
       <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-1">{label}</p>
       <div className="flex gap-1.5 overflow-x-auto pb-1">
         {photos.map(p => (
-          <button key={p.id} onClick={() => onPick(p.id)}
-            className={`shrink-0 w-12 h-12 rounded-lg overflow-hidden border-2 ${activeId === p.id ? 'border-accent' : 'border-transparent opacity-70 hover:opacity-100'}`}>
+          <button key={p.id} onClick={() => onPick(p.id)} aria-label={label} aria-pressed={activeId === p.id}
+            className={`shrink-0 w-12 h-12 rounded-lg overflow-hidden border-2 ${FOCUS_RING} ${activeId === p.id ? 'border-accent' : 'border-transparent opacity-70 hover:opacity-100'}`}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={p.url} alt="" loading="lazy" className="w-full h-full object-cover" />
+            <img src={p.url} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
           </button>
         ))}
       </div>

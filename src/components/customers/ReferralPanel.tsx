@@ -1,4 +1,5 @@
 'use client'
+import { toast } from '@/lib/toast'
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
@@ -6,6 +7,9 @@ import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { Input } from '@/components/ui/Input'
+import { InlineEmpty } from '@/components/ui/EmptyState'
+import { Skeleton } from '@/components/ui/Skeleton'
 import { Customer, Referral } from '@/types'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { Gift, Users, Plus, Check, Trophy, ThumbsDown, Trash2, ExternalLink } from 'lucide-react'
@@ -31,6 +35,7 @@ export function ReferralPanel({ customer, referrer, referredRevenue }: {
   const [uid, setUid] = useState<string | null>(null)
   const [rows, setRows] = useState<Referral[]>([])
   const [names, setNames] = useState<Record<string, string>>({})
+  const [loading, setLoading] = useState(true)
   const [adding, setAdding] = useState(false)
   const [busy, setBusy] = useState(false)
   const [form, setForm] = useState({ name: '', contact: '', reward: '' })
@@ -48,6 +53,7 @@ export function ReferralPanel({ customer, referrer, referredRevenue }: {
       for (const c of (cs as { id: string; name: string }[]) || []) map[c.id] = c.name
       setNames(map)
     }
+    setLoading(false)
   }
   useEffect(() => { load() }, [customer.id]) // eslint-disable-line react-hooks/exhaustive-deps
   useRealtimeRefresh('referrals', `referrer_customer_id=eq.${customer.id}`, load)
@@ -63,20 +69,21 @@ export function ReferralPanel({ customer, referrer, referredRevenue }: {
       status: 'invited',
     })
     setBusy(false)
-    if (error) { alert('Could not save referral: ' + error.message); return }
+    if (error) { toast.error('Could not save referral: ' + error.message); return }
     setForm({ name: '', contact: '', reward: '' }); setAdding(false); load()
   }
 
   async function patch(id: string, p: Partial<Referral>) {
     const { error } = await supabase.from('referrals').update(p).eq('id', id)
-    if (error) { alert('Could not update: ' + error.message); return }
+    if (error) { toast.error('Could not update: ' + error.message); return }
     load()
   }
   async function remove(id: string) {
-    if (!confirm('Remove this referral?')) return
+    const { data: row } = await supabase.from('referrals').select('*').eq('id', id).maybeSingle()
     const { error } = await supabase.from('referrals').delete().eq('id', id)
-    if (error) { alert('Could not remove: ' + error.message); return }
+    if (error) { toast.error('Could not remove: ' + error.message); return }
     load()
+    if (row) toast.undo('Referral removed', async () => { await supabase.from('referrals').insert(row); load() })
   }
 
   const joined = rows.filter(r => r.status === 'joined' || r.status === 'rewarded').length
@@ -93,28 +100,38 @@ export function ReferralPanel({ customer, referrer, referredRevenue }: {
       </CardHeader>
       <CardBody className="space-y-3">
         {referrer && (
-          <Link href={`/dashboard/customers/${referrer.id}`} className="inline-flex items-center gap-1.5 text-xs text-ink-muted hover:text-ink">
+          <Link href={`/dashboard/customers/${referrer.id}`} className="inline-flex items-center gap-1.5 text-xs text-ink-muted hover:text-ink rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
             <Users className="w-3.5 h-3.5" /> Referred by <span className="font-medium text-ink">{referrer.name}</span>
           </Link>
         )}
 
-        {rows.length === 0 ? (
-          <p className="text-sm text-ink-muted">No referrals tracked yet. Record who {firstName} sends your way.</p>
+        {loading ? (
+          <div className="space-y-3 py-1" aria-hidden="true">
+            {[0, 1].map(i => (
+              <div key={i} className="flex items-start gap-3">
+                <div className="min-w-0 flex-1"><Skeleton className="h-3.5 w-32" /><Skeleton className="h-2.5 w-44 mt-1.5" /></div>
+                <Skeleton className="h-6 w-16" />
+              </div>
+            ))}
+          </div>
+        ) : rows.length === 0 ? (
+          <InlineEmpty icon={Gift}>No referrals tracked yet — record who {firstName} sends your way.</InlineEmpty>
         ) : (
-          <div className="divide-y divide-border -my-1">
+          <ul className="divide-y divide-border -my-1">
             {rows.map(r => {
               const m = STATUS_META[r.status]
               const linkedName = r.referred_customer_id ? names[r.referred_customer_id] : null
+              const who = linkedName || r.referred_name || 'Someone'
               return (
-                <div key={r.id} className="py-2.5 flex items-start gap-3">
+                <li key={r.id} className="py-2.5 flex items-start gap-3">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
                       {linkedName && r.referred_customer_id ? (
-                        <Link href={`/dashboard/customers/${r.referred_customer_id}`} className="text-sm font-medium text-ink hover:text-accent flex items-center gap-1">
+                        <Link href={`/dashboard/customers/${r.referred_customer_id}`} className="text-sm font-medium text-ink hover:text-accent flex items-center gap-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                           {linkedName} <ExternalLink className="w-3 h-3 text-ink-faint" />
                         </Link>
                       ) : (
-                        <span className="text-sm font-medium text-ink">{r.referred_name || 'Someone'}</span>
+                        <span className="text-sm font-medium text-ink">{who}</span>
                       )}
                       <span className={`text-[10px] uppercase tracking-wide font-semibold rounded px-1.5 py-0.5 border ${m.tone}`}>{m.label}</span>
                     </div>
@@ -122,43 +139,38 @@ export function ReferralPanel({ customer, referrer, referredRevenue }: {
                       {[r.referred_contact, r.reward && `Reward: ${r.reward}`, r.joined_at && `joined ${formatDate(r.joined_at)}`].filter(Boolean).join(' · ') || `Added ${formatDate(r.created_at)}`}
                     </p>
                   </div>
-                  <div className="flex items-center gap-1 shrink-0">
+                  <div className="flex items-center gap-0.5 shrink-0">
                     {r.status === 'invited' && (
                       <>
-                        <button title="Mark joined" onClick={() => patch(r.id, { status: 'joined', joined_at: new Date().toISOString() })} className="p-1.5 rounded-lg text-ink-muted hover:text-emerald-400 hover:bg-surface-raised"><Check className="w-4 h-4" /></button>
-                        <button title="Declined" onClick={() => patch(r.id, { status: 'declined' })} className="p-1.5 rounded-lg text-ink-muted hover:text-ink hover:bg-surface-raised"><ThumbsDown className="w-4 h-4" /></button>
+                        <button aria-label={`Mark ${who} as joined`} title="Mark joined" onClick={() => patch(r.id, { status: 'joined', joined_at: new Date().toISOString() })} className="p-2 rounded-lg text-ink-muted hover:text-emerald-400 hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><Check className="w-4 h-4" /></button>
+                        <button aria-label={`Mark ${who} as declined`} title="Declined" onClick={() => patch(r.id, { status: 'declined' })} className="p-2 rounded-lg text-ink-muted hover:text-ink hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><ThumbsDown className="w-4 h-4" /></button>
                       </>
                     )}
                     {r.status === 'joined' && (
-                      <button title="Mark rewarded" onClick={() => patch(r.id, { status: 'rewarded', rewarded_at: new Date().toISOString() })} className="p-1.5 rounded-lg text-ink-muted hover:text-accent hover:bg-surface-raised"><Trophy className="w-4 h-4" /></button>
+                      <button aria-label={`Mark ${who} as rewarded`} title="Mark rewarded" onClick={() => patch(r.id, { status: 'rewarded', rewarded_at: new Date().toISOString() })} className="p-2 rounded-lg text-ink-muted hover:text-accent hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><Trophy className="w-4 h-4" /></button>
                     )}
-                    <button title="Remove" onClick={() => remove(r.id)} className="p-1.5 rounded-lg text-ink-faint hover:text-red-400 hover:bg-surface-raised"><Trash2 className="w-4 h-4" /></button>
+                    <button aria-label={`Remove referral of ${who}`} title="Remove" onClick={() => remove(r.id)} className="p-2 rounded-lg text-ink-faint hover:text-red-400 hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><Trash2 className="w-4 h-4" /></button>
                   </div>
-                </div>
+                </li>
               )
             })}
-          </div>
+          </ul>
         )}
 
         {adding ? (
           <div className="space-y-2 rounded-xl border border-border p-3">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <input autoFocus value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Who they referred *"
-                className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3 py-2 text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent" />
-              <input value={form.contact} onChange={e => setForm({ ...form, contact: e.target.value })} placeholder="Phone or email (optional)"
-                className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3 py-2 text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent" />
+              <Input aria-label="Who they referred" autoFocus value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Who they referred *" />
+              <Input aria-label="Phone or email" value={form.contact} onChange={e => setForm({ ...form, contact: e.target.value })} placeholder="Phone or email (optional)" />
             </div>
-            <input value={form.reward} onChange={e => setForm({ ...form, reward: e.target.value })} placeholder="Reward, e.g. “$25 credit” (optional)"
-              className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3 py-2 text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent" />
+            <Input aria-label="Reward" value={form.reward} onChange={e => setForm({ ...form, reward: e.target.value })} placeholder="Reward, e.g. “$25 credit” (optional)" />
             <div className="flex items-center gap-2">
               <Button size="sm" onClick={addReferral} loading={busy} disabled={!form.name.trim()}>Save</Button>
               <Button size="sm" variant="ghost" onClick={() => { setAdding(false); setForm({ name: '', contact: '', reward: '' }) }}>Cancel</Button>
             </div>
           </div>
         ) : (
-          <button onClick={() => setAdding(true)} className="text-xs text-accent hover:underline flex items-center gap-1">
-            <Plus className="w-3.5 h-3.5" /> Record a referral
-          </button>
+          <Button size="sm" variant="ghost" onClick={() => setAdding(true)} className="text-accent"><Plus className="w-3.5 h-3.5" /> Record a referral</Button>
         )}
       </CardBody>
     </Card>

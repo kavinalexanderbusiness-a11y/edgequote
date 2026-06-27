@@ -1,4 +1,5 @@
 'use client'
+import { toast } from '@/lib/toast'
 
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
@@ -139,18 +140,18 @@ export default function CustomersPage() {
       ].filter(Boolean).join(', ')
       if (!confirm(`This customer has ${parts}.\n\nTo protect that history, they'll be ARCHIVED (hidden from your list but fully preserved) — not deleted. You can restore them anytime from "Show archived".\n\nArchive this customer?`)) return
       const { error } = await supabase.from('customers').update({ archived_at: new Date().toISOString() }).eq('id', id)
-      if (error) { alert('Could not archive the customer: ' + error.message); return }
+      if (error) { toast.error('Could not archive the customer: ' + error.message); return }
     } else {
       if (!confirm('Delete this customer permanently? They have no quotes, invoices, jobs, payments, or messages, so nothing else is affected. This cannot be undone.')) return
       const { error } = await supabase.from('customers').delete().eq('id', id)
-      if (error) { alert('Could not delete the customer: ' + error.message); return }
+      if (error) { toast.error('Could not delete the customer: ' + error.message); return }
     }
     await fetchCustomers()
   }
 
   async function handleRestore(id: string) {
     const { error } = await supabase.from('customers').update({ archived_at: null }).eq('id', id)
-    if (error) { alert('Could not restore the customer: ' + error.message); return }
+    if (error) { toast.error('Could not restore the customer: ' + error.message); return }
     await fetchCustomers()
   }
 

@@ -1,4 +1,5 @@
 'use client'
+import { toast } from '@/lib/toast'
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
@@ -44,9 +45,11 @@ export default function QuotesPage() {
 
   async function handleDelete(id: string) {
     const prev = quotes
+    const { data: row } = await supabase.from('quotes').select('*').eq('id', id).maybeSingle()
     setQuotes(p => p.filter(q => q.id !== id))   // optimistic
     const { error } = await supabase.from('quotes').delete().eq('id', id)
-    if (error) { setQuotes(prev); alert('Could not delete the quote: ' + error.message) }
+    if (error) { setQuotes(prev); toast.error('Could not delete the quote: ' + error.message); return }
+    if (row) toast.undo('Quote deleted', async () => { await supabase.from('quotes').insert(row); fetchQuotes() })
   }
 
   return (

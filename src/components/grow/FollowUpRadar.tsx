@@ -5,7 +5,9 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { loadFollowUpRadar, RadarItem } from '@/lib/crm/radar'
-import { Bell, MessageSquare, Clock, ArrowRight, Loader2 } from 'lucide-react'
+import { InlineEmpty } from '@/components/ui/EmptyState'
+import { Skeleton } from '@/components/ui/Skeleton'
+import { Bell, MessageSquare, Clock, ArrowRight, PartyPopper } from 'lucide-react'
 
 const THRESHOLDS = [14, 30, 60, 90]
 
@@ -46,20 +48,27 @@ export function FollowUpRadar() {
       </div>
 
       {/* Not-contacted-in window */}
-      <div className="px-4 py-2.5 border-b border-border flex flex-wrap items-center gap-1.5">
+      <div role="group" aria-label="Quiet-for window" className="px-4 py-2.5 border-b border-border flex flex-wrap items-center gap-1.5">
         <span className="text-[11px] text-ink-faint mr-1">Quiet for</span>
         {THRESHOLDS.map(t => (
-          <button key={t} onClick={() => setThreshold(t)}
-            className={`text-xs font-semibold rounded-full px-2.5 py-0.5 border transition-colors ${threshold === t ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink'}`}>
+          <button key={t} onClick={() => setThreshold(t)} aria-pressed={threshold === t} aria-label={`${t} days or more`}
+            className={`text-xs font-semibold rounded-full px-2.5 py-1 border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${threshold === t ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink'}`}>
             {t}d
           </button>
         ))}
       </div>
 
       {loading ? (
-        <p className="px-5 py-8 text-center text-sm text-ink-muted flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading…</p>
+        <div className="divide-y divide-border" aria-hidden="true">
+          {[0, 1, 2, 3].map(i => (
+            <div key={i} className="flex items-center gap-3 px-4 py-2.5">
+              <Skeleton className="w-8 h-8 rounded-lg shrink-0" />
+              <div className="min-w-0 flex-1"><Skeleton className="h-3 w-28" /><Skeleton className="h-2.5 w-40 mt-1.5" /></div>
+            </div>
+          ))}
+        </div>
       ) : items.length === 0 ? (
-        <p className="px-5 py-8 text-center text-sm text-ink-muted">Everyone’s been contacted recently. 🎉</p>
+        <InlineEmpty icon={PartyPopper}>Everyone’s been contacted recently — nothing to chase.</InlineEmpty>
       ) : (
         <>
           <div className="divide-y divide-border">
@@ -67,7 +76,7 @@ export function FollowUpRadar() {
               const Icon = i.unansweredInbound ? MessageSquare : Clock
               const tone = i.unansweredInbound ? 'text-amber-400 bg-amber-500/10 border-amber-500/20' : 'text-ink-muted bg-surface border-border'
               return (
-                <Link key={i.customerId} href={`/dashboard/customers/${i.customerId}`} className="flex items-center gap-3 px-4 py-2.5 hover:bg-surface-raised transition-colors">
+                <Link key={i.customerId} href={`/dashboard/customers/${i.customerId}`} className="flex items-center gap-3 px-4 py-2.5 hover:bg-surface-raised transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40">
                   <div className={`w-8 h-8 rounded-lg border flex items-center justify-center shrink-0 ${tone}`}>
                     <Icon className="w-4 h-4" />
                   </div>
@@ -81,7 +90,7 @@ export function FollowUpRadar() {
             })}
           </div>
           {items.length > 8 && (
-            <button onClick={() => setShowAll(s => !s)} className="w-full py-2.5 text-xs font-medium text-accent hover:bg-surface-raised border-t border-border transition-colors">
+            <button onClick={() => setShowAll(s => !s)} aria-expanded={showAll} className="w-full py-2.5 text-xs font-medium text-accent hover:bg-surface-raised border-t border-border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40">
               {showAll ? 'Show less' : `Show all ${items.length}`}
             </button>
           )}

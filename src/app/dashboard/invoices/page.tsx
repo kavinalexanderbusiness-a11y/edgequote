@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/Button'
 import { SendComms } from '@/components/comms/SendComms'
 import { PaymentHistory } from '@/components/payments/PaymentHistory'
 import { invoiceTotals } from '@/lib/invoiceTotals'
+import { toast as notify } from '@/lib/toast'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { FileText, User, Check, FileDown, Trash2, CreditCard, Zap, AlertTriangle } from 'lucide-react'
 
@@ -145,7 +146,7 @@ export default function InvoicesPage() {
       a.remove()
       setTimeout(() => URL.revokeObjectURL(url), 10000)
     } catch {
-      alert('Could not generate the invoice PDF. Please try again.')
+      notify.error('Could not generate the invoice PDF. Please try again.')
     } finally {
       setOpeningId(null)
     }
@@ -156,7 +157,7 @@ export default function InvoicesPage() {
     const next = STATUS_CYCLE[(idx + 1) % STATUS_CYCLE.length]
     setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: next } : i))
     const { error } = await supabase.from('invoices').update({ status: next }).eq('id', inv.id)
-    if (error) { setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: inv.status } : i)); alert('Could not update status: ' + error.message) }
+    if (error) { setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: inv.status } : i)); notify.error('Could not update status: ' + error.message) }
   }
 
   // One tap straight to paid — the most common action on billing day shouldn't
@@ -165,7 +166,7 @@ export default function InvoicesPage() {
     const pm = method ?? inv.payment_method ?? null
     setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: 'paid' as InvoiceStatus, payment_method: pm } : i))
     const { error } = await supabase.from('invoices').update({ status: 'paid', paid_at: new Date().toISOString(), payment_method: pm }).eq('id', inv.id)
-    if (error) { setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: inv.status } : i)); alert('Could not update status: ' + error.message) }
+    if (error) { setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: inv.status } : i)); notify.error('Could not update status: ' + error.message) }
   }
 
   // ── Undo (same pattern as the Schedule page) ──
@@ -206,7 +207,7 @@ export default function InvoicesPage() {
     setDeletingId(inv.id)
     const row = invoiceInsertRow(inv)
     const { error } = await supabase.from('invoices').delete().eq('id', inv.id)
-    if (error) alert('Could not delete: ' + error.message)
+    if (error) notify.error('Could not delete: ' + error.message)
     else {
       setInvoices(prev => prev.filter(i => i.id !== inv.id))
       offerUndo(`Deleted ${inv.invoice_number}`, async () => { await supabase.from('invoices').insert(row) })
@@ -372,7 +373,7 @@ export default function InvoicesPage() {
                         <Zap className="w-3.5 h-3.5" /> Charge card
                       </Button>
                     )}
-                    {(inv.status === 'unpaid' || inv.status === 'sent') && (
+                    {(inv.status === 'draft' || inv.status === 'unpaid' || inv.status === 'sent') && (
                       <select
                         defaultValue=""
                         onChange={e => { const m = e.target.value as 'etransfer' | 'cash' | 'cheque' | ''; if (m) markPaid(inv, m) }}

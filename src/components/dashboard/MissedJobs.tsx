@@ -1,4 +1,5 @@
 'use client'
+import { toast } from '@/lib/toast'
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
@@ -85,7 +86,7 @@ export function MissedJobs() {
       dup = j.recurrence_id ? dup.eq('recurrence_id', j.recurrence_id) : dup.eq('customer_id', j.customer_id as string)
       const { data: existing } = await dup
       if (existing && existing.length > 0) {
-        alert('This customer already has a visit scheduled today. Mark this missed one Done if it was actually serviced, or delete it on the Schedule.')
+        toast.error('This customer already has a visit scheduled today. Mark this missed one Done if it was actually serviced, or delete it on the Schedule.')
         setBusy(null)
         return
       }

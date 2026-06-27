@@ -257,7 +257,6 @@ export default function MessagesPage() {
     toggleMute: async (c: Convo) => { patch(c.id, { muted: !c.muted }); await supabase.from('conversations').update({ muted: !c.muted }).eq('id', c.id) },
     del: async (c: Convo) => {
       if (!confirm(`Permanently delete this conversation with ${nameOf(c)}?\n\nThis erases the entire message history and CANNOT be undone. Archiving keeps everything instead.`)) return
-      if (!confirm('Are you absolutely sure? This is permanent.')) return
       removeLocal(c.id)
       await supabase.from('conversations').delete().eq('id', c.id)
     },
@@ -274,7 +273,6 @@ export default function MessagesPage() {
     if (!ids.length) return
     if (op === 'delete') {
       if (!confirm(`Permanently delete ${ids.length} conversation${ids.length !== 1 ? 's' : ''}? This erases their message history and cannot be undone.`)) return
-      if (!confirm('Are you absolutely sure? This is permanent.')) return
       setRows(cs => cs.filter(c => !selectedIds.has(c.id)))
       setSearchResults(rs => rs ? rs.filter(c => !selectedIds.has(c.id)) : rs)
       await supabase.from('conversations').delete().in('id', ids)

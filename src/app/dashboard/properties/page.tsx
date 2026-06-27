@@ -1,4 +1,5 @@
 'use client'
+import { toast } from '@/lib/toast'
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
@@ -155,7 +156,7 @@ export default function PropertiesPage() {
       const snapshot = { date: new Date().toISOString(), total_sqft: sqft, recommendation: rec }
       const nextHistory = [...hist, snapshot]
       const { error } = await supabase.from('properties').update({ measurement_history: nextHistory }).eq('id', p.id)
-      if (error) alert('Could not recalculate: ' + error.message)
+      if (error) toast.error('Could not recalculate: ' + error.message)
       else setProperties(prev => prev.map(x => x.id === p.id ? { ...x, measurement_history: nextHistory as Property['measurement_history'] } : x))
     } finally { setRecalcId(null) }
   }

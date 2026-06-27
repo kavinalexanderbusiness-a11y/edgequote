@@ -1,4 +1,5 @@
 'use client'
+import { toast } from '@/lib/toast'
 
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
@@ -147,7 +148,7 @@ export default function NeighborsPage() {
         source_property_id: source?.id ?? null,
         status: 'prospect',
       })
-      if (error) alert('Could not add lead: ' + error.message)
+      if (error) toast.error('Could not add lead: ' + error.message)
       else { setNewAddress(''); await load() }
     } finally { setAdding(false) }
   }
@@ -155,7 +156,7 @@ export default function NeighborsPage() {
   async function setStatus(lead: Lead, status: LeadStatus) {
     setWorking(lead.id)
     const { error } = await supabase.from('neighbor_leads').update({ status }).eq('id', lead.id)
-    if (error) alert('Could not update: ' + error.message)
+    if (error) toast.error('Could not update: ' + error.message)
     else setLeads(prev => prev.map(l => l.id === lead.id ? { ...l, status } : l))
     setWorking(null)
   }
@@ -177,14 +178,15 @@ export default function NeighborsPage() {
       }).eq('id', lead.id)
       if (thenQuote) router.push(`/dashboard/quotes/new?customer=${ensured.customerId}`)
       else await load()
-    } catch (e) { alert('Could not convert: ' + (e instanceof Error ? e.message : 'error')) }
+    } catch (e) { toast.error('Could not convert: ' + (e instanceof Error ? e.message : 'error')) }
     finally { setWorking(null) }
   }
 
   async function deleteLead(lead: Lead) {
-    if (!confirm(`Delete lead ${lead.address}?`)) return
+    const { data: row } = await supabase.from('neighbor_leads').select('*').eq('id', lead.id).maybeSingle()
     await supabase.from('neighbor_leads').delete().eq('id', lead.id)
     setLeads(prev => prev.filter(l => l.id !== lead.id))
+    if (row) toast.undo(`Deleted lead ${lead.address}`, async () => { await supabase.from('neighbor_leads').insert(row); setLeads(prev => [lead, ...prev]) })
   }
 
   const counts = useMemo(() => {

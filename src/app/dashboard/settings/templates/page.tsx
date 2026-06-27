@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useBusinessData } from '@/hooks/useBusinessData'
 import type { ServiceTemplate, ServiceTemplateFormValues } from '@/types'
@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/Button'
 import { Toggle } from '@/components/ui/Toggle'
 import { useForm } from 'react-hook-form'
 import { formatServicePrice, priceInputLabel, priceInputStep } from '@/lib/servicePricing'
+import { toast } from '@/lib/toast'
 import { Plus, Edit2, Trash2, X } from 'lucide-react'
 
 export default function ServiceTemplatesPage() {
@@ -22,6 +23,7 @@ export default function ServiceTemplatesPage() {
 
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<ServiceTemplate | null>(null)
+  const formRef = useRef<HTMLDivElement>(null)
 
   const { register, handleSubmit, reset, watch, setValue, formState: { isSubmitting } } =
     useForm<ServiceTemplateFormValues>({
@@ -31,6 +33,14 @@ export default function ServiceTemplatesPage() {
   const isActive = watch('is_active')
   const pdType = watch('pricing_display_type')
   const priceVal = watch('default_rate')
+
+  // The editor is an inline panel rendered at the TOP of the page. Without this,
+  // clicking a row's Edit (or Add) while scrolled down the list opens the form
+  // above the fold — so it looks like "nothing happened". Bring it into view
+  // whenever it opens, and when switching which service is being edited.
+  useEffect(() => {
+    if (showForm) formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [showForm, editing])
 
   function openNew() {
     reset({ name: '', category: 'Lawn Care', pricing_display_type: 'starting_from', default_rate: 65, default_description: '', notes: '', is_active: true })
@@ -68,9 +78,13 @@ export default function ServiceTemplatesPage() {
   }
 
   async function remove(t: ServiceTemplate) {
-    if (!confirm(`Delete "${t.name}"? This won't affect existing quotes.`)) return
     await supabase.from('service_templates').delete().eq('id', t.id)
     refresh()
+    // Reversible: re-insert the exact row (same id) on Undo.
+    toast.undo(`Deleted "${t.name}"`, async () => {
+      await supabase.from('service_templates').insert(t)
+      refresh()
+    })
   }
 
   const grouped = templates.reduce<Record<string, ServiceTemplate[]>>((acc, t) => {
@@ -92,6 +106,7 @@ export default function ServiceTemplatesPage() {
       />
 
       {showForm && (
+        <div ref={formRef}>
         <Card>
           <CardHeader className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-ink">{editing ? 'Edit Service' : 'New Service'}</h2>
@@ -124,6 +139,7 @@ export default function ServiceTemplatesPage() {
             </form>
           </CardBody>
         </Card>
+        </div>
       )}
 
       {Object.keys(grouped).length === 0 ? (

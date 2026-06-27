@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
 import { SendComms } from '@/components/comms/SendComms'
 import { formatCurrency, formatDate, applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
+import { toast } from '@/lib/toast'
 import { addDays, format as formatDfn, parseISO } from 'date-fns'
 import { needsFollowUp, daysSince, logFollowUpPatch, markWonPatch } from '@/lib/followup'
 import { ensureCustomerAndProperty } from '@/lib/customers'
@@ -147,18 +148,25 @@ export default function QuoteDetailPage() {
       setQuote(data)
       setEditing(false)
       // Keep the lawn size on the property in sync (it's a core attribute, not just
-      // quote data). New/unchanged → silent; REPLACING a saved measurement → confirm.
+      // quote data). New/unchanged → silent; a CHANGED size replaces it non-blockingly
+      // with a quick Undo (no up-front confirm).
       const measuredSqft = Number(values.measured_sqft) || 0
       if (propertyId && measuredSqft > 0) {
         const { data: prop } = await supabase.from('properties').select('lawn_sqft').eq('id', propertyId).maybeSingle()
         const prior = Number((prop as { lawn_sqft: number | null } | null)?.lawn_sqft) || 0
         const changed = Math.round(prior) !== Math.round(measuredSqft)
-        if (changed && (prior === 0 || confirm(`This property has a saved lawn size of ${prior.toLocaleString()} ft².\n\nReplace it with ${measuredSqft.toLocaleString()} ft²?`))) {
+        if (changed) {
           await supabase.from('properties').update({ lawn_sqft: measuredSqft }).eq('id', propertyId)
+          if (prior > 0) {
+            const priorLawn = (prop as { lawn_sqft: number | null } | null)?.lawn_sqft ?? null
+            toast.undo(`Saved lawn size updated to ${measuredSqft.toLocaleString()} ft²`, async () => {
+              await supabase.from('properties').update({ lawn_sqft: priorLawn }).eq('id', propertyId)
+            })
+          }
         }
       }
     } else if (error) {
-      alert('Could not update quote: ' + error.message)
+      toast.error('Could not update quote: ' + error.message)
     }
   }
 
@@ -180,7 +188,7 @@ export default function QuoteDetailPage() {
       a.remove()
       setTimeout(() => URL.revokeObjectURL(url), 10000)
     } catch {
-      alert('Could not generate the PDF. Please try again.')
+      toast.error('Could not generate the PDF. Please try again.')
     } finally {
       setPdfLoading(false)
     }
@@ -359,11 +367,11 @@ export default function QuoteDetailPage() {
         try { window.sessionStorage.setItem('eq_quote_dup_from', quote.quote_number) } catch { /* ignore */ }
         router.push(`/dashboard/quotes/${data.id}`)
       } else if (error) {
-        alert('Could not duplicate quote: ' + error.message)
+        toast.error('Could not duplicate quote: ' + error.message)
         setDuplicating(false)
       }
     } catch {
-      alert('Could not duplicate quote. Please try again.')
+      toast.error('Could not duplicate quote. Please try again.')
       setDuplicating(false)
     }
   }
