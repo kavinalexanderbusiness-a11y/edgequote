@@ -1,5 +1,5 @@
 import {
-  Brain, TrendingUp, TrendingDown, CalendarClock, Sparkles, Leaf, Megaphone, UserPlus, Minus, ArrowRight,
+  Brain, TrendingUp, TrendingDown, CalendarClock, Sparkles, Leaf, Minus,
 } from 'lucide-react'
 import { Card } from '@/components/ui/Card'
 import { SectionHeading } from '@/components/ui/SectionHeading'
@@ -9,7 +9,7 @@ import { SEASON_LABELS } from '@/lib/vision/season'
 import { FORECAST_TONE, shortDate } from '@/lib/vision/labels'
 import { Pill } from './ui'
 import type {
-  ChangeSummary, CrmBlock, ForecastBlock, MarketingSummary, OpportunityBlock, OppTier, PropertyTwin, SeasonalBlock,
+  ChangeSummary, ForecastBlock, OpportunityBlock, OppTier, PropertyTwin, SeasonalBlock,
 } from '@/lib/vision/types'
 
 // ── AI Vision — the digital-twin panel ────────────────────────────────────────
@@ -35,8 +35,6 @@ export function TwinPanel({ twin }: { twin: PropertyTwin }) {
   const seasonal = 'season' in twin.seasonal ? (twin.seasonal as SeasonalBlock) : null
   const forecast = 'items' in twin.forecast ? (twin.forecast as ForecastBlock) : null
   const opps = 'items' in twin.opportunities ? (twin.opportunities as OpportunityBlock) : null
-  const marketing = 'highlights' in twin.marketing ? (twin.marketing as MarketingSummary) : null
-  const crm = 'never_purchased' in twin.crm ? (twin.crm as CrmBlock) : null
 
   return (
     <div className="space-y-5">
@@ -134,31 +132,6 @@ export function TwinPanel({ twin }: { twin: PropertyTwin }) {
         </div>
       )}
 
-      {/* Reusable signals for Marketing + CRM */}
-      <div className="grid sm:grid-cols-2 gap-3">
-        {marketing && marketing.highlights.length > 0 && (
-          <Card className="p-3.5">
-            <SectionHeading icon={Megaphone} title="Marketing angles" className="mb-2" />
-            <ul className="space-y-1">
-              {marketing.highlights.map((h, i) => (
-                <li key={i} className="text-xs text-ink-muted flex items-center gap-1.5"><ArrowRight className="w-3 h-3 text-accent shrink-0" />{h}</li>
-              ))}
-            </ul>
-            <p className="text-[10px] text-ink-faint mt-2">Marketing Studio reads these without re-analyzing photos.</p>
-          </Card>
-        )}
-        {crm && crm.recommendations.length > 0 && (
-          <Card className="p-3.5">
-            <SectionHeading icon={UserPlus} title="Never purchased" className="mb-2" />
-            <ul className="space-y-1">
-              {crm.recommendations.map((r, i) => (
-                <li key={i} className="text-xs text-ink-muted flex items-center gap-1.5"><ArrowRight className="w-3 h-3 text-blue-400 shrink-0" /><span className="font-medium text-ink">{r.label}</span> — {r.why}</li>
-              ))}
-            </ul>
-            <p className="text-[10px] text-ink-faint mt-2">Surfaced for CRM — recommendations only.</p>
-          </Card>
-        )}
-      </div>
     </div>
   )
 }

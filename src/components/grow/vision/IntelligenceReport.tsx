@@ -113,29 +113,6 @@ export function IntelligenceReport({ intel }: { intel: PropertyIntelligence }) {
         )}
       </div>
 
-      {/* Upsells — recommendations only */}
-      {a.upsells && a.upsells.length > 0 && (
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint px-1 mb-2">Suggested upsells <span className="text-ink-faint/70 normal-case font-normal">— recommendations, pricing unchanged</span></p>
-          <div className="space-y-2">
-            {a.upsells.map((u, i) => (
-              <Card key={`${u.key}-${i}`} className="p-3 flex items-start gap-3">
-                <div className="w-8 h-8 rounded-xl bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-                  <Sparkles className="w-4 h-4 text-accent" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-ink flex items-center gap-2">
-                    {u.label}
-                    <span className="text-[10px] font-medium text-ink-faint">{Math.round(u.confidence)}%</span>
-                  </p>
-                  <p className="text-xs text-ink-muted mt-0.5">{u.reason}</p>
-                </div>
-              </Card>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* Limitations */}
       {a.limitations && a.limitations.length > 0 && (
         <div>
