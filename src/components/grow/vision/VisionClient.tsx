@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/Button'
 import { Banner } from '@/components/ui/Banner'
 import { Tabs } from '@/components/ui/Tabs'
 import { Collapsible } from '@/components/ui/Collapsible'
-import { InlineEmpty } from '@/components/ui/EmptyState'
+import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { IntelligenceReport } from './IntelligenceReport'
 import { TwinPanel } from './TwinPanel'
@@ -178,7 +178,7 @@ export function VisionClient({ properties, aiEnabled }: { properties: VisionProp
   const hasContent = !!(twin || intel || timeline.length) // is there a prior read to keep on screen?
 
   return (
-    <div className="max-w-6xl space-y-5">
+    <div className="space-y-5">
       <PageHeader
         title="AI Vision"
         description="A living digital twin of every property — it reads imagery, remembers what it saw, tracks change over time, and recommends what's next. Recommendations only."
@@ -191,9 +191,9 @@ export function VisionClient({ properties, aiEnabled }: { properties: VisionProp
       )}
 
       {properties.length === 0 ? (
-        <Card className="p-6"><InlineEmpty icon={Home}>No properties yet. Add a property (with a location or photos) and it’ll show up here to analyze.</InlineEmpty></Card>
+        <EmptyState icon={Home} title="No properties yet" description="Add a property — with a location or photos — and it’ll show up here to analyze." />
       ) : (
-        <div className="grid lg:grid-cols-[20rem_1fr] gap-5">
+        <div className="grid lg:grid-cols-[300px_1fr] gap-5 items-start">
           {/* Property picker */}
           <div className="space-y-3">
             <div className="relative">
