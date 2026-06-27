@@ -8,12 +8,14 @@ import { Banner } from '@/components/ui/Banner'
 import { Card } from '@/components/ui/Card'
 import { Tabs, type TabItem } from '@/components/ui/Tabs'
 import { Button } from '@/components/ui/Button'
+import { Collapsible } from '@/components/ui/Collapsible'
 import { AssetCard } from './AssetCard'
 import { ContentComposer } from './ContentComposer'
 import { PostOptionsBar } from './PostOptionsBar'
 import { CHANNELS } from '@/lib/marketing/channels'
+import { WRITING_STYLES } from '@/lib/marketing/styles'
 import { formatDate } from '@/lib/utils'
-import { Images, Sparkles, Lightbulb, Wand2 } from 'lucide-react'
+import { Images, Sparkles, Lightbulb, Wand2, SlidersHorizontal } from 'lucide-react'
 import { DEFAULT_POST_OPTIONS, type ContentPiece, type GenerateAllResponse, type MarketingCandidate, type MarketingChannel, type PostOptions } from '@/lib/marketing/types'
 
 const CHANNEL_TABS: TabItem[] = CHANNELS.map(c => ({ key: c.key, label: c.label, icon: c.icon }))
@@ -40,6 +42,24 @@ export function StudioClient({ candidates, aiEnabled, businessName, logoUrl, use
   const [consentJobs, setConsentJobs] = useState<Set<string>>(
     () => new Set(candidates.filter(c => c.photoConsent).map(c => c.jobId)),
   )
+  // Outcome notice when returning from an account-connect attempt (OAuth flow).
+  const [connectNotice, setConnectNotice] = useState<string | null>(null)
+  useEffect(() => {
+    try {
+      const p = new URLSearchParams(window.location.search)
+      const c = p.get('connect')
+      if (!c) return
+      const plat = p.get('platform') || 'that platform'
+      setConnectNotice(
+        c === 'soon' ? `One-tap publishing for ${plat} is coming soon — add the account under Accounts to schedule and copy-publish now.`
+          : c === 'pending' ? 'Account connected — finishing setup. You can publish manually in the meantime.'
+          : c === 'denied' ? 'Connection cancelled.'
+          : 'Couldn’t complete that connection. Add the account manually for now.',
+      )
+      const clean = new URL(window.location.href); clean.searchParams.delete('connect'); clean.searchParams.delete('platform')
+      window.history.replaceState({}, '', clean.toString())
+    } catch { /* ignore */ }
+  }, [])
 
   const base = candidates.find(c => c.jobId === selectedJobId) || null
   // Reflect a freshly-granted consent immediately, without a round-trip.
@@ -122,6 +142,7 @@ export function StudioClient({ candidates, aiEnabled, businessName, logoUrl, use
           AI isn’t connected yet, so posts can’t be generated. Add your Anthropic key to switch it on — you can still browse your postable jobs below.
         </Banner>
       )}
+      {connectNotice && <Banner tone="info" onDismiss={() => setConnectNotice(null)}>{connectNotice}</Banner>}
 
       <div className="grid lg:grid-cols-[300px_1fr] gap-5 items-start">
         {/* Ranked candidate list */}
@@ -177,17 +198,21 @@ export function StudioClient({ candidates, aiEnabled, businessName, logoUrl, use
               )}
             </Card>
 
-            {/* Creative controls + one-click all-platforms generate */}
+            {/* Create posts — one-click all-platforms, with voice/length tucked away. */}
             <Card className="p-4 space-y-3">
-              <div className="flex items-start justify-between gap-3 flex-wrap">
-                <PostOptionsBar options={options} onChange={setOptions} className="flex-1 min-w-[240px]" />
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <p className="text-sm font-semibold text-ink">Create posts</p>
                 <Button onClick={generateAll} loading={genAll} disabled={!aiEnabled} className="shrink-0">
                   <Wand2 className="w-4 h-4" /> Generate all platforms
                 </Button>
               </div>
-              <p className="text-[11px] text-ink-faint">
-                These settings apply to every post — generate one platform below, or all {CHANNELS.length} at once.
-              </p>
+              <Collapsible
+                title="Voice & length"
+                icon={SlidersHorizontal}
+                summary={`${WRITING_STYLES[options.style].label} · ${options.length[0].toUpperCase()}${options.length.slice(1)}${options.emojis ? ' · emoji' : ''}`}
+              >
+                <PostOptionsBar options={options} onChange={setOptions} />
+              </Collapsible>
               {genAllMsg && (
                 <Banner tone={genAllMsg.tone} onDismiss={() => setGenAllMsg(null)}>{genAllMsg.text}</Banner>
               )}

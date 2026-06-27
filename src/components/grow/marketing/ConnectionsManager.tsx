@@ -69,9 +69,16 @@ export function ConnectionsManager({ userId }: { userId: string }) {
                     : `Direct publishing via ${p.apiName} · coming soon`}
                 </p>
               </div>
-              <Button size="sm" variant="secondary" onClick={() => { setAdding(adding === def.key ? null : def.key); setName(''); setUrl('') }}>
-                <Plus className="w-3.5 h-3.5" /> Add account
-              </Button>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {p.apiStatus === 'planned' && (
+                  <a href={`/api/marketing/connect/${def.key}`} className="text-[11px] text-accent hover:underline inline-flex items-center gap-1" title={`Connect via ${p.apiName}`}>
+                    <Link2 className="w-3 h-3" /> Connect
+                  </a>
+                )}
+                <Button size="sm" variant="secondary" onClick={() => { setAdding(adding === def.key ? null : def.key); setName(''); setUrl('') }}>
+                  <Plus className="w-3.5 h-3.5" /> Add account
+                </Button>
+              </div>
             </div>
 
             {accounts.length > 0 && (
