@@ -6,11 +6,24 @@ import { Button } from '@/components/ui/Button'
 import { Banner } from '@/components/ui/Banner'
 import { ChannelPreview } from './ChannelPreview'
 import { RewriteToolbar } from './RewriteToolbar'
+import { PublishPanel } from './PublishPanel'
 import { channel as channelDef } from '@/lib/marketing/channels'
 import { lengthChars } from '@/lib/marketing/prompt'
 import { cn } from '@/lib/utils'
-import { Sparkles, RefreshCw, Copy, Check, Download, ExternalLink, ImageOff, Lock, CheckCircle2, Loader2 } from 'lucide-react'
-import { DEFAULT_POST_OPTIONS, type ContentPiece, type MarketingCandidate, type MarketingChannel, type PostOptions, type PostText, type RewriteAction, type RewriteResponse } from '@/lib/marketing/types'
+import { Sparkles, RefreshCw, Copy, Check, Download, ImageOff, Lock, Loader2, Gauge } from 'lucide-react'
+import { DEFAULT_POST_OPTIONS, type ContentPiece, type MarketingCandidate, type MarketingChannel, type PostOptions, type PostText, type QualityScore, type RewriteAction, type RewriteResponse } from '@/lib/marketing/types'
+
+// The deterministic quality score lives on the saved piece's meta.
+function pieceQuality(piece: ContentPiece | null): { score: QualityScore; note: string } | null {
+  const meta = piece?.meta as { quality?: QualityScore; qualityNote?: string } | undefined
+  if (!meta?.quality || typeof meta.quality.total !== 'number') return null
+  return { score: meta.quality, note: meta.qualityNote || '' }
+}
+function scoreTone(total: number): string {
+  if (total >= 85) return 'text-emerald-400'
+  if (total >= 72) return 'text-accent'
+  return 'text-amber-400'
+}
 
 function parseHashtags(text: string): string[] {
   return Array.from(new Set(
@@ -33,13 +46,14 @@ async function downloadImage(url: string, filename: string) {
   }
 }
 
-export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName, logoUrl, options = DEFAULT_POST_OPTIONS, onDraftChange, onGrantConsent }: {
+export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName, logoUrl, userId, options = DEFAULT_POST_OPTIONS, onDraftChange, onGrantConsent }: {
   candidate: MarketingCandidate
   ch: MarketingChannel
   draft: ContentPiece | null
   aiEnabled: boolean
   businessName: string
   logoUrl: string | null
+  userId: string
   options?: PostOptions
   onDraftChange?: (piece: ContentPiece) => void
   onGrantConsent?: () => void
@@ -56,17 +70,21 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [copied, setCopied] = useState(false)
-  const [posted, setPosted] = useState(false)
   const [streaming, setStreaming] = useState(false)
+  const [polishing, setPolishing] = useState(false)
   const [genError, setGenError] = useState<string | null>(null)
   const [rewriting, setRewriting] = useState<RewriteAction | null>(null)
+  // Developer/debug mode (?debug=1) surfaces the quality breakdown + "why it's stronger".
+  const [debug, setDebug] = useState(false)
+  useEffect(() => { try { setDebug(new URLSearchParams(window.location.search).get('debug') === '1') } catch { /* ignore */ } }, [])
+
+  const quality = useMemo(() => pieceQuality(draft), [draft])
 
   // Reset the editable fields whenever a different draft is shown (new generation).
   useEffect(() => {
     setTitle(draft?.title || '')
     setBody(draft?.body || '')
     setHashtagsText((draft?.hashtags || []).join(' '))
-    setPosted(draft?.status === 'published')
     setSaved(false)
   }, [draft?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -78,7 +96,6 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
     setTitle(piece.title || '')
     setBody(piece.body || '')
     setHashtagsText((piece.hashtags || []).join(' '))
-    setPosted(piece.status === 'published')
   }
 
   // Non-streaming fallback (used if streaming is unavailable or fails before any text).
@@ -97,7 +114,7 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
 
   // Stream the post in live (the "watch it write" path).
   async function runGenerate() {
-    setGenError(null); setStreaming(true)
+    setGenError(null); setStreaming(true); setPolishing(false)
     setTitle(''); setBody(''); setHashtagsText('')
     try {
       const res = await fetch('/api/marketing/generate/stream', {
@@ -129,6 +146,7 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
           let evt: { t: string; text?: string; piece?: ContentPiece; error?: string }
           try { evt = JSON.parse(line) } catch { continue }
           if (evt.t === 'delta' && evt.text) { sawDelta = true; setBody(prev => prev + evt.text) }
+          else if (evt.t === 'polishing') { setPolishing(true) }
           else if (evt.t === 'done' && evt.piece) { applyPiece(evt.piece); onDraftChange?.(evt.piece); finished = true }
           else if (evt.t === 'error') {
             if (!sawDelta && await fallbackGenerate()) { finished = true; break }
@@ -139,7 +157,7 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
     } catch {
       if (!await fallbackGenerate()) setGenError('Could not reach the generator. Try again.')
     } finally {
-      setStreaming(false)
+      setStreaming(false); setPolishing(false)
     }
   }
 
@@ -201,12 +219,6 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
     persist({ title: title.trim() || null, body: body.trim(), hashtags })
   }
 
-  async function markPosted() {
-    await persist({ status: 'published', published_at: new Date().toISOString() })
-    setPosted(true)
-    if (draft?.asset_id) await supabase.from('marketing_assets').update({ status: 'used' }).eq('id', draft.asset_id)
-  }
-
   function copyCaption() {
     const text = [body.trim(), hashtags.map(h => `#${h}`).join(' ')].filter(Boolean).join('\n\n')
     navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) })
@@ -249,11 +261,33 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
             <RefreshCw className="w-3.5 h-3.5" /> Regenerate
           </Button>
           <span className="text-[11px] text-ink-faint inline-flex items-center gap-1.5">
-            {streaming ? <><Loader2 className="w-3 h-3 animate-spin" /> Writing…</>
+            {polishing ? <><Sparkles className="w-3 h-3 text-accent animate-pulse" /> Polishing for quality…</>
+              : streaming ? <><Loader2 className="w-3 h-3 animate-spin" /> Writing…</>
               : rewriting ? <><Loader2 className="w-3 h-3 animate-spin" /> Rewriting…</>
               : saving ? 'Saving…' : saved ? 'Saved' : `${body.length} chars · target ~${charTarget}`}
           </span>
+          {!streaming && !rewriting && quality && (
+            <span className={cn('text-[11px] font-semibold inline-flex items-center gap-1', scoreTone(quality.score.total))} title="Marketing quality score">
+              <Gauge className="w-3 h-3" /> {quality.score.total}/100
+            </span>
+          )}
         </div>
+
+        {/* Debug: why this post is strong (prompt-quality evaluation) */}
+        {debug && quality && (
+          <div className="rounded-lg border border-border bg-surface/60 p-2.5 text-[11px] text-ink-muted space-y-1">
+            <div className="flex flex-wrap gap-x-3 gap-y-0.5 font-mono">
+              <span>hook {quality.score.hook}</span>
+              <span>read {quality.score.readability}</span>
+              <span>local {quality.score.localRelevance}</span>
+              <span>cta {quality.score.ctaStrength}</span>
+              <span>orig {quality.score.originality}</span>
+              <span>brand {quality.score.brandConsistency}</span>
+            </div>
+            {quality.note && <p className="text-ink-faint">{quality.note}</p>}
+            {quality.score.flags.length > 0 && <p className="text-amber-400/80">flags: {quality.score.flags.join('; ')}</p>}
+          </div>
+        )}
 
         {/* One-click AI rewrites of the current text */}
         {body.trim() && aiEnabled && (
@@ -292,32 +326,27 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
         </p>
       )}
 
-      {/* Publish actions (v1: copy + save photo + open the platform). Hidden mid-stream. */}
-      {!streaming && (
-        <div className="flex items-center gap-2 flex-wrap">
-          <Button size="sm" onClick={copyCaption}>
-            {copied ? <><Check className="w-3.5 h-3.5" /> Copied</> : <><Copy className="w-3.5 h-3.5" /> Copy caption</>}
-          </Button>
-          {canUsePhoto && (
-            <Button variant="secondary" size="sm" onClick={() => downloadImage(imageUrl!, `${(candidate.serviceType || 'post').replace(/\s+/g, '-').toLowerCase()}-${ch}.jpg`)}>
-              <Download className="w-3.5 h-3.5" /> Save photo
+      {/* Publishing workflow: schedule / publish to a connected account, or copy & paste. */}
+      {!streaming && draft && (
+        <>
+          <PublishPanel
+            piece={draft}
+            ch={ch}
+            userId={userId}
+            beforePublish={async () => { await persist({ title: title.trim() || null, body: body.trim(), hashtags }) }}
+            onPieceUpdate={p => onDraftChange?.(p)}
+          />
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button size="sm" variant="ghost" onClick={copyCaption}>
+              {copied ? <><Check className="w-3.5 h-3.5" /> Copied</> : <><Copy className="w-3.5 h-3.5" /> Copy caption</>}
             </Button>
-          )}
-          <Button variant="secondary" size="sm" onClick={() => window.open(def.openUrl, '_blank')}>
-            <ExternalLink className="w-3.5 h-3.5" /> Open {def.label}
-          </Button>
-          <button
-            type="button"
-            onClick={markPosted}
-            className={cn(
-              'inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-medium transition-colors',
-              posted ? 'text-emerald-400' : 'text-ink-muted hover:text-ink hover:bg-surface',
+            {canUsePhoto && (
+              <Button variant="ghost" size="sm" onClick={() => downloadImage(imageUrl!, `${(candidate.serviceType || 'post').replace(/\s+/g, '-').toLowerCase()}-${ch}.jpg`)}>
+                <Download className="w-3.5 h-3.5" /> Save photo
+              </Button>
             )}
-          >
-            <CheckCircle2 className={cn('w-4 h-4', posted && 'fill-emerald-400/20')} />
-            {posted ? 'Posted' : 'Mark as posted'}
-          </button>
-        </div>
+          </div>
+        </>
       )}
     </div>
   )

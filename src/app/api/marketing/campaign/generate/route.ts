@@ -2,13 +2,16 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { aiEnabled, generateStructured } from '@/lib/ai/studioGateway'
 import { assembleCandidate, listCandidates, loadBrandVoice, upsertAsset, insertPiece, type PieceAnchor } from '@/lib/marketing/data'
-import { buildPostInput, subjectFromCandidate, PROMPT_VERSION } from '@/lib/marketing/prompt'
+import { buildPostInput, subjectFromCandidate, type PromptExtras, PROMPT_VERSION } from '@/lib/marketing/prompt'
 import { campaignDef, campaignDirective, campaignSubject, isCampaignKind } from '@/lib/marketing/campaigns'
+import { buildAvoidance } from '@/lib/marketing/memory'
+import { generateScoredDraft, joinDirectives } from '@/lib/marketing/generation'
+import type { ScoreContext } from '@/lib/marketing/quality'
 import { isChannel } from '@/lib/marketing/channels'
-import { setSchedule } from '@/lib/marketing/library'
+import { listRecentPieces, setSchedule } from '@/lib/marketing/library'
 import { normalizePostOptions, type ContentPiece, type GeneratedDraft, type CampaignGenerateResponse, type MarketingCampaign, type MarketingChannel } from '@/lib/marketing/types'
 
-export const maxDuration = 60
+export const maxDuration = 90
 
 // One campaign → one post per selected channel. The campaign's angle (directive) +
 // subject (a real anchor job when one fits, else a themed subject) feed the SAME
@@ -56,6 +59,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   const directive = campaignDirective(kind, voice, { holiday })
   const anchor: PieceAnchor = candidate ?? { jobId: null, customerId: null, date: null }
   const assetId = candidate ? await upsertAsset(supabase, user.id, candidate) : null
+  const recent = await listRecentPieces(supabase, user.id, 8)
 
   // Create the campaign record up front so every post links back to it.
   const { data: campRow } = await supabase.from('marketing_campaigns').insert({
@@ -76,21 +80,31 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   type Outcome = { piece: ContentPiece } | { channel: MarketingChannel; error: string }
   const results = await Promise.all(channels.map(async (ch, i): Promise<Outcome> => {
-    const input = buildPostInput(subject, ch, voice, options, directive)
-    const result = await generateStructured<GeneratedDraft>({
-      system: input.system, prompt: input.prompt,
-      toolName: input.toolName, toolDescription: input.toolDescription, schema: input.schema,
-    })
-    if (!result.ok) return { channel: ch, error: result.error || 'generation failed' }
+    // The campaign directive already drives the CTA (review/referral/etc.), so we leave
+    // ctaIntent null and let the directive lead — but still apply style + anti-repetition.
+    const extras: PromptExtras = { style: options.style, ctaIntent: null, avoidance: buildAvoidance(recent, ch) }
+    const scoreCtx: ScoreContext = {
+      channel: ch,
+      neighborhood: candidate?.neighborhood ?? null,
+      city: candidate?.city ?? voice.city,
+      recentBodies: recent.map(r => r.body),
+      emojisRequested: options.emojis,
+    }
+    const run = (extra: string | null) => generateStructured<GeneratedDraft>(
+      buildPostInput(subject, ch, voice, options, joinDirectives(directive, extra), extras),
+    )
+    const out = await generateScoredDraft(run, scoreCtx)
+    if (!out.ok) return { channel: ch, error: out.error }
+    const { draft, score, regenerated, note } = out.result
     let piece = await insertPiece(supabase, user.id, anchor, ch, assetId, {
-      title: result.data.title ?? null,
-      body: result.data.body ?? '',
-      hashtags: Array.isArray(result.data.hashtags) ? result.data.hashtags : [],
-      model: result.model,
+      title: draft.title ?? null,
+      body: draft.body ?? '',
+      hashtags: Array.isArray(draft.hashtags) ? draft.hashtags : [],
+      model: out.result.model,
       promptVersion: PROMPT_VERSION,
       season: def.season ?? candidate?.season ?? null,
       campaignId: campaign.id,
-      meta: { options, campaignKind: kind },
+      meta: { options, style: options.style, campaignKind: kind, quality: score, qualityNote: note, regenerated },
     })
     if (!piece) return { channel: ch, error: 'could not save draft' }
     if (scheduleFrom) {
@@ -102,5 +116,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const pieces = results.flatMap(r => ('piece' in r ? [r.piece] : []))
   const errors = results.flatMap(r => ('error' in r ? [{ channel: r.channel, error: r.error }] : []))
-  return NextResponse.json({ ok: pieces.length > 0, aiEnabled: true, campaign, pieces, errors } satisfies CampaignGenerateResponse)
+
+  // Nothing generated → don't leave an empty campaign behind (keeps the campaign
+  // count equal to the number of campaigns that actually produced posts). The client
+  // shows a real error built from `errors`, not a misleading "campaign created".
+  if (pieces.length === 0) {
+    await supabase.from('marketing_campaigns').delete().eq('id', campaign.id)
+    return NextResponse.json({ ok: false, aiEnabled: true, pieces: [], errors } satisfies CampaignGenerateResponse)
+  }
+
+  return NextResponse.json({ ok: true, aiEnabled: true, campaign, pieces, errors } satisfies CampaignGenerateResponse)
 }

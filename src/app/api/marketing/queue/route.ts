@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { aiEnabled, generateStructured } from '@/lib/ai/studioGateway'
 import { listCandidates, loadBrandVoice, upsertAsset, insertPiece, type PieceAnchor } from '@/lib/marketing/data'
 import { buildPostInput, subjectFromCandidate, type GenSubject, PROMPT_VERSION } from '@/lib/marketing/prompt'
+import { buildGenerationContext, generateScoredDraft, joinDirectives } from '@/lib/marketing/generation'
 import { campaignSubject } from '@/lib/marketing/campaigns'
 import { isChannel } from '@/lib/marketing/channels'
 import { listRecentPieces, setSchedule } from '@/lib/marketing/library'
@@ -11,9 +12,11 @@ import { normalizePostOptions, type ContentPiece, type GeneratedDraft, type Mark
 export const maxDuration = 120
 
 // Smart Publishing Queue — generate (and schedule) a batch of VARIED posts in one go,
-// e.g. a month of content. Variety is engineered, not hoped for: each post rotates the
-// anchor job, the channel, the length, and a distinct angle, and is told to read unlike
-// the recent posts. Reuses the same prompt framework + gateway as everything else.
+// e.g. a month of content. Variety is engineered: each post rotates the anchor job, the
+// channel, the length, a distinct angle, and the CTA, and carries the anti-repetition
+// memory so the feed never reads the same. Each post is scored (stored on the piece);
+// to keep a 16-post batch affordable, the queue does NOT auto-regenerate — the owner can
+// regenerate any single post from the composer.
 
 const MAX_COUNT = 16
 const ROTATION: MarketingChannel[] = ['facebook', 'instagram', 'gbp', 'nextdoor', 'threads', 'linkedin']
@@ -64,14 +67,6 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     listRecentPieces(supabase, userId, 12),
   ])
 
-  // Anti-repetition context: a few recent post openings the model should avoid echoing.
-  const recentSnippets = recent.map(p => p.body.replace(/\s+/g, ' ').trim().slice(0, 90)).filter(Boolean).slice(0, 6)
-  const avoidBlock = recentSnippets.length
-    ? `Make this DISTINCT from the business's recent posts — do NOT reuse their opening lines or structure:\n${recentSnippets.map(s => `- "${s}…"`).join('\n')}`
-    : ''
-
-  // Build the plan. Cycle candidates so a small job pool still yields varied posts;
-  // if there are no candidates at all, fall back to themed seasonal subjects.
   const assetCache = new Map<string, string | null>()
   async function assetFor(c: MarketingCandidate): Promise<string | null> {
     if (assetCache.has(c.jobId)) return assetCache.get(c.jobId)!
@@ -91,24 +86,31 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   type Outcome = { piece: ContentPiece } | { error: string }
   const results = await inChunks(plan, 4, async (p): Promise<Outcome> => {
     const subject: GenSubject = p.candidate ? subjectFromCandidate(p.candidate) : campaignSubject('custom', voice, {})
-    const directive = [`Content-plan post. Angle: ${p.angle}`, avoidBlock].filter(Boolean).join('\n\n')
     const postOptions = { ...options, length: p.length }
-    const input = buildPostInput(subject, p.channel, voice, postOptions, directive)
-    const result = await generateStructured<GeneratedDraft>({
-      system: input.system, prompt: input.prompt,
-      toolName: input.toolName, toolDescription: input.toolDescription, schema: input.schema,
+    const { extras, ctaIntent, scoreCtx } = buildGenerationContext({
+      channel: p.channel, options: postOptions, recent,
+      neighborhood: p.candidate?.neighborhood ?? null, city: p.candidate?.city ?? voice.city,
+      hasReview: p.candidate?.hasReview ?? false, recurring: false, seasonStart: false,
+      ctaOffset: p.index,
     })
-    if (!result.ok) return { error: `${p.channel}: ${result.error || 'generation failed'}` }
+    const directive = `Content-plan post. Angle: ${p.angle}`
+    const run = (extra: string | null) => generateStructured<GeneratedDraft>(
+      buildPostInput(subject, p.channel, voice, postOptions, joinDirectives(directive, extra), extras),
+    )
+    const out = await generateScoredDraft(run, scoreCtx, { regenerate: false })
+    if (!out.ok) return { error: `${p.channel}: ${out.error}` }
+    const { draft, score, regenerated, note } = out.result
+
     const assetId = p.candidate ? await assetFor(p.candidate) : null
     const anchor: PieceAnchor = p.candidate ?? { jobId: null, customerId: null, date: null }
     let piece = await insertPiece(supabase, userId, anchor, p.channel, assetId, {
-      title: result.data.title ?? null,
-      body: result.data.body ?? '',
-      hashtags: Array.isArray(result.data.hashtags) ? result.data.hashtags : [],
-      model: result.model,
+      title: draft.title ?? null,
+      body: draft.body ?? '',
+      hashtags: Array.isArray(draft.hashtags) ? draft.hashtags : [],
+      model: out.result.model,
       promptVersion: PROMPT_VERSION,
       season: p.candidate?.season ?? null,
-      meta: { options: postOptions, queue: true, angle: p.angle },
+      meta: { options: postOptions, style: postOptions.style, ctaIntent, queue: true, angle: p.angle, quality: score, qualityNote: note, regenerated },
     })
     if (!piece) return { error: `${p.channel}: could not save draft` }
     if (startDate) {

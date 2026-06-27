@@ -1,15 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { aiEnabled, generateStructured } from '@/lib/ai/studioGateway'
-import { assembleCandidate, loadBrandVoice, persistDraft } from '@/lib/marketing/data'
-import { buildGenerateInput, PROMPT_VERSION } from '@/lib/marketing/prompt'
+import { loadBrandVoice, persistDraft } from '@/lib/marketing/data'
+import { assembleIntelligence, intelligenceSubject } from '@/lib/marketing/intelligence'
+import { buildPostInput, PROMPT_VERSION } from '@/lib/marketing/prompt'
+import { buildGenerationContext, generateScoredDraft, joinDirectives } from '@/lib/marketing/generation'
+import { listRecentPieces } from '@/lib/marketing/library'
 import { isChannel } from '@/lib/marketing/channels'
 import { normalizePostOptions, type GeneratedDraft, type GenerateResponse } from '@/lib/marketing/types'
 
-// Generate one channel post from a completed job. The owner's session scopes every
-// read (RLS); we assemble the candidate, draft in the owner's brand voice, then
-// persist a marketing_assets anchor (upsert, one per job) + a content_pieces draft.
-// Nothing is sent or published — the draft is the owner's to edit and post.
+export const maxDuration = 60
+
+// Generate one channel post from a completed job. Assembles the job's intelligence,
+// reads recent posts to steer away from them (anti-repetition + CTA rotation), drafts
+// in the brand voice + chosen style, scores the result, and regenerates once if it's
+// weak — so the owner only ever sees a strong post.
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -26,33 +31,39 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ ok: false, aiEnabled: false, error: 'AI is not configured yet.' } satisfies GenerateResponse)
   }
 
-  const candidate = await assembleCandidate(supabase, user.id, jobId)
-  if (!candidate) {
+  const intel = await assembleIntelligence(supabase, user.id, jobId)
+  if (!intel) {
     return NextResponse.json({ ok: false, aiEnabled: true, error: 'job not found' } satisfies GenerateResponse, { status: 404 })
   }
+  const candidate = intel.candidate
 
-  const voice = await loadBrandVoice(supabase, user.id)
-
-  const input = buildGenerateInput(candidate, channel, voice, options)
-  const result = await generateStructured<GeneratedDraft>({
-    system: input.system,
-    prompt: input.prompt,
-    toolName: input.toolName,
-    toolDescription: input.toolDescription,
-    schema: input.schema,
+  const [voice, recent] = await Promise.all([
+    loadBrandVoice(supabase, user.id),
+    listRecentPieces(supabase, user.id, 8),
+  ])
+  const subject = intelligenceSubject(intel, voice)
+  const { extras, ctaIntent, scoreCtx } = buildGenerationContext({
+    channel, options, recent,
+    neighborhood: candidate.neighborhood, city: candidate.city,
+    hasReview: candidate.hasReview, recurring: intel.recurring, seasonStart: intel.seasonStart,
   })
-  if (!result.ok) {
-    return NextResponse.json({ ok: false, aiEnabled: true, error: result.error || 'generation failed' } satisfies GenerateResponse, { status: 502 })
-  }
 
-  const draft = result.data
+  const run = (extra: string | null) => generateStructured<GeneratedDraft>(
+    buildPostInput(subject, channel, voice, options, joinDirectives(null, extra), extras),
+  )
+  const out = await generateScoredDraft(run, scoreCtx)
+  if (!out.ok) {
+    return NextResponse.json({ ok: false, aiEnabled: true, error: out.error } satisfies GenerateResponse, { status: 502 })
+  }
+  const { draft, score, regenerated, note } = out.result
+
   const piece = await persistDraft(supabase, user.id, candidate, channel, {
     title: draft.title ?? null,
     body: draft.body ?? '',
     hashtags: Array.isArray(draft.hashtags) ? draft.hashtags : [],
-    model: result.model,
+    model: out.result.model,
     promptVersion: PROMPT_VERSION,
-    meta: { options },
+    meta: { options, style: options.style, ctaIntent, quality: score, qualityNote: note, regenerated },
   })
   if (!piece) {
     return NextResponse.json({ ok: false, aiEnabled: true, error: 'could not save draft' } satisfies GenerateResponse, { status: 500 })

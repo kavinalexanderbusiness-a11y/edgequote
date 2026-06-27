@@ -26,6 +26,7 @@ export default async function StudioPage({ searchParams }: { searchParams: Promi
         aiEnabled={aiEnabled()}
         businessName={biz?.company_name || 'Your business'}
         logoUrl={biz?.logo_url || null}
+        userId={user.id}
         initialJobId={sp.job}
       />
     </div>

@@ -10,8 +10,9 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { channel as channelDef } from '@/lib/marketing/channels'
 import { listScheduledRange, listUnscheduledDrafts, setSchedule, markPublished, setStatus } from '@/lib/marketing/library'
 import { upcomingHolidays, upcomingSeasonReminders } from '@/lib/marketing/holidays'
+import { PublishingHub } from './PublishingHub'
 import { cn } from '@/lib/utils'
-import { ChevronLeft, ChevronRight, CalendarDays, CalendarRange, Calendar as CalIcon, Sparkles, CalendarPlus, ExternalLink, Copy, Check, X, CircleCheck, Clock, FileText, TriangleAlert, GripVertical, Loader2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, CalendarDays, CalendarRange, Calendar as CalIcon, Sparkles, CalendarPlus, Send, ExternalLink, Copy, Check, X, CircleCheck, Clock, FileText, TriangleAlert, GripVertical, Loader2 } from 'lucide-react'
 import type { ContentPiece, ContentStatus, MarketingChannel } from '@/lib/marketing/types'
 
 type View = 'month' | 'week' | 'day'
@@ -49,6 +50,7 @@ export function MarketingCalendar({ userId, aiEnabled, openPlan }: { userId: str
   const [selected, setSelected] = useState<ContentPiece | null>(null)
   const [dragId, setDragId] = useState<string | null>(null)
   const [planOpen, setPlanOpen] = useState(!!openPlan)
+  const [hubOpen, setHubOpen] = useState(false)
 
   const todayKey = key(new Date())
 
@@ -151,9 +153,12 @@ export function MarketingCalendar({ userId, aiEnabled, openPlan }: { userId: str
           <FilterPill active={view === 'month'} onClick={() => setView('month')}><CalendarDays className="w-3 h-3" /> Month</FilterPill>
           <FilterPill active={view === 'week'} onClick={() => setView('week')}><CalendarRange className="w-3 h-3" /> Week</FilterPill>
           <FilterPill active={view === 'day'} onClick={() => setView('day')}><CalIcon className="w-3 h-3" /> Day</FilterPill>
+          <Button size="sm" variant="secondary" onClick={() => setHubOpen(true)}><Send className="w-4 h-4" /> Publishing</Button>
           <Button size="sm" onClick={() => setPlanOpen(o => !o)} disabled={!aiEnabled}><CalendarPlus className="w-4 h-4" /> Plan a month</Button>
         </div>
       </div>
+
+      <PublishingHub userId={userId} open={hubOpen} onClose={() => { setHubOpen(false); load() }} initialTab="queue" />
 
       {planOpen && <PlanPanel aiEnabled={aiEnabled} onClose={() => setPlanOpen(false)} onDone={() => { setPlanOpen(false); load() }} defaultStart={todayKey} />}
 
