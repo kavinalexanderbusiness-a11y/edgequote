@@ -10,7 +10,7 @@ import { PublishPanel } from './PublishPanel'
 import { channel as channelDef } from '@/lib/marketing/channels'
 import { lengthChars } from '@/lib/marketing/prompt'
 import { cn } from '@/lib/utils'
-import { Sparkles, RefreshCw, ImageOff, Lock, Loader2, Gauge } from 'lucide-react'
+import { Sparkles, RefreshCw, ImageOff, Lock, Loader2, Gauge, Pencil, Eye } from 'lucide-react'
 import { DEFAULT_POST_OPTIONS, type ContentPiece, type MarketingCandidate, type MarketingChannel, type PostOptions, type PostText, type QualityScore, type RewriteAction, type RewriteResponse } from '@/lib/marketing/types'
 
 // The deterministic quality score lives on the saved piece's meta.
@@ -220,8 +220,15 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
 
   return (
     <div className="space-y-4">
-      {/* Editor */}
-      <div className="space-y-3">
+      {/* Editor — the ONE editable place. Everything below the preview header is
+          a read-only mock, so the caption only ever lives here. */}
+      <div className="space-y-3 rounded-card border border-accent/30 bg-accent/[0.03] p-3">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-bold uppercase tracking-wide text-accent inline-flex items-center gap-1.5">
+            <Pencil className="w-3.5 h-3.5" /> Your caption
+          </span>
+          <span className="text-[11px] text-ink-faint">Type or edit here · {def.label}</span>
+        </div>
         {def.usesTitle && (
           <input
             value={title}
@@ -289,16 +296,26 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
         )}
       </div>
 
-      {/* Live preview */}
-      <ChannelPreview
-        ch={ch}
-        businessName={businessName}
-        logoUrl={logoUrl}
-        title={def.usesTitle ? title : null}
-        body={body}
-        hashtags={showHashtagField ? hashtags : []}
-        imageUrl={canUsePhoto ? imageUrl : null}
-      />
+      {/* Live preview — read-only mock of the published post (not editable) */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wide text-ink-muted inline-flex items-center gap-1.5">
+            <Eye className="w-3.5 h-3.5" /> Live preview
+          </span>
+          <span className="text-[11px] text-ink-faint inline-flex items-center gap-1">
+            <Lock className="w-3 h-3" /> Read-only · updates as you type
+          </span>
+        </div>
+        <ChannelPreview
+          ch={ch}
+          businessName={businessName}
+          logoUrl={logoUrl}
+          title={def.usesTitle ? title : null}
+          body={body}
+          hashtags={showHashtagField ? hashtags : []}
+          imageUrl={canUsePhoto ? imageUrl : null}
+        />
+      </div>
 
       {genError && <Banner tone="danger" onDismiss={() => setGenError(null)}>{genError}</Banner>}
 

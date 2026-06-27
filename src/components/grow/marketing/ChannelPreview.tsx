@@ -46,8 +46,11 @@ function PostImage({ url, className }: { url: string; className?: string }) {
 const PLACEHOLDER = 'Your post will appear here as you generate it…'
 
 export function ChannelPreview(props: PreviewProps) {
+  // The preview is a faithful but READ-ONLY mock: default cursor + non-selectable +
+  // pointer-events-none so it never looks or behaves like a text field. The caption
+  // is only ever edited in the composer above.
   const Card = ({ children }: { children: React.ReactNode }) => (
-    <div className="rounded-xl overflow-hidden border border-gray-200 shadow-sm bg-white text-[13px]">{children}</div>
+    <div aria-hidden className="rounded-xl overflow-hidden border border-gray-200 shadow-sm bg-white text-[13px] cursor-default select-none pointer-events-none">{children}</div>
   )
   switch (props.ch) {
     case 'facebook': return <Card><Facebook {...props} /></Card>
