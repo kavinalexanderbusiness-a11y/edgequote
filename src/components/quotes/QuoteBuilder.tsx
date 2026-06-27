@@ -196,12 +196,29 @@ export function QuoteBuilder({
         : await supabase.from('properties').select(cols).eq('customer_id', customerId).order('is_primary', { ascending: false }).limit(1).maybeSingle()
       if (!active) return
       const row = res.data as { lawn_sqft: number | null; measurement_history: MeasurementSnapshot[]; address: string | null; city: string | null; province: string | null } | null
-      setSavedRec(latestSavedRecommendation(row?.measurement_history))
+      const rec = latestSavedRecommendation(row?.measurement_history)
+      setSavedRec(rec)
       // Default the Lawn Size from the property's saved size when it's still empty —
       // don't clobber an edit, a website-measurement handoff, or a manual entry.
       const lawn = Number(row?.lawn_sqft) || 0
       if (!isEdit && lawn > 0 && (Number(getValues('measured_sqft')) || 0) === 0) {
         setValue('measured_sqft', lawn)
+      }
+      // Auto-reuse the saved measurement's recommended prices when starting a fresh
+      // quote and nothing's been priced yet — one less click, and a measured
+      // property never has to be re-priced by hand. Never overwrites typed values or
+      // a website/measurement handoff (those arrive with prices already set).
+      if (!isEdit && rec
+        && (Number(getValues('initial_price')) || 0) === 0
+        && (Number(getValues('weekly_price')) || 0) === 0
+        && (Number(getValues('biweekly_price')) || 0) === 0
+        && (Number(getValues('monthly_price')) || 0) === 0) {
+        setValue('initial_price', rec.rec.one_time)
+        setValue('weekly_price', rec.rec.weekly)
+        setValue('biweekly_price', rec.rec.biweekly)
+        setValue('monthly_price', rec.rec.monthly)
+        setValue('suggested_price', rec.rec.one_time)
+        if ((Number(getValues('measured_sqft')) || 0) === 0) setValue('measured_sqft', rec.sqft)
       }
       // Targeting a specific property → prefer its address over the customer default.
       if (!isEdit && defaultPropertyId && row?.address) {

@@ -14,10 +14,14 @@ import { SkeletonRows } from '@/components/ui/Skeleton'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { formatDate, formatCurrency, localTodayISO } from '@/lib/utils'
-import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes, latestSavedRecommendation, recommendationIsStale } from '@/lib/pricing'
+import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes, latestSavedRecommendation, recommendationIsStale, pricingConfidence } from '@/lib/pricing'
+import { resolvePrefs, prefSummary, type PrefSource } from '@/lib/preferences'
 import { LocatedJob, fetchLocatedUpcomingJobs, nearbyJobCount } from '@/lib/geo'
 import { JobPhotos } from '@/components/photos/JobPhotos'
-import { MapPin, Home, User, Ruler, History, RefreshCw, Trophy, DollarSign, CheckCircle2, Receipt, Timer, CalendarClock, AlertTriangle, Repeat, Camera, FileText } from 'lucide-react'
+import { MapPin, Home, User, Ruler, History, RefreshCw, Trophy, DollarSign, CheckCircle2, Receipt, Timer, CalendarClock, AlertTriangle, Repeat, Camera, FileText, Clock, StickyNote, ShieldCheck, CalendarPlus } from 'lucide-react'
+
+// Quote statuses that count as a "won" price — the accepted-price memory.
+const QUOTE_WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
 
 // Per-property performance, aggregated from completed jobs + invoices. Reuses
 // existing data — no new tables, no new pricing math.
@@ -82,6 +86,9 @@ export default function PropertiesPage() {
   const [lastQuoteByProp, setLastQuoteByProp] = useState<Record<string, LastQuote>>({})
   const [lastInvoiceByProp, setLastInvoiceByProp] = useState<Record<string, LastInvoice>>({})
   const [plansByProp, setPlansByProp] = useState<Record<string, ServicePlan[]>>({})
+  // Property memory derived from existing tables — no new schema.
+  const [nextVisitByProp, setNextVisitByProp] = useState<Record<string, { date: string; count: number }>>({})
+  const [quotePricingByProp, setQuotePricingByProp] = useState<Record<string, { quoted: number; accepted: number; lastAccepted: { total: number; quote_number: string; date: string } | null }>>({})
   const [recalcId, setRecalcId] = useState<string | null>(null)
 
   const supabase = createClient()
@@ -92,7 +99,7 @@ export default function PropertiesPage() {
       const [pRes, sRes, located, jRes, iRes, planJRes, rRes, qRes] = await Promise.all([
         supabase
           .from('properties')
-          .select('*, customers(id, name, email, phone)')
+          .select('*, customers(id, name, email, phone, preferred_days, avoid_days, pref_time_start, pref_time_end)')
           .eq('user_id', user!.id)
           .order('created_at', { ascending: false }),
         supabase.from('business_settings').select('*').eq('user_id', user!.id).maybeSingle(),
@@ -127,6 +134,31 @@ export default function PropertiesPage() {
         if (!cur || d > cur.date) lastI[inv.property_id] = { id: inv.id, invoice_number: inv.invoice_number, status: inv.status, date: d }
       }
       setLastInvoiceByProp(lastI)
+
+      // Next upcoming visit + upcoming count per property (from the jobs already fetched).
+      const today = localTodayISO()
+      const nextV: Record<string, { date: string; count: number }> = {}
+      for (const j of (jRes.data as PerfJob[]) || []) {
+        if (!j.property_id || (j.status !== 'scheduled' && j.status !== 'in_progress') || j.scheduled_date < today) continue
+        const cur = nextV[j.property_id]
+        if (!cur) nextV[j.property_id] = { date: j.scheduled_date, count: 1 }
+        else { cur.count++; if (j.scheduled_date < cur.date) cur.date = j.scheduled_date }
+      }
+      setNextVisitByProp(nextV)
+
+      // Pricing memory: how many times quoted, how many accepted, and the last
+      // accepted price — the real signal for future pricing (reuses qRes).
+      const qp: Record<string, { quoted: number; accepted: number; lastAccepted: { total: number; quote_number: string; date: string } | null }> = {}
+      for (const q of (qRes.data as QuoteRow[]) || []) {
+        if (!q.property_id) continue
+        const e = (qp[q.property_id] ||= { quoted: 0, accepted: 0, lastAccepted: null })
+        e.quoted++
+        if (QUOTE_WON.has(q.status)) {
+          e.accepted++
+          if (!e.lastAccepted || q.created_at > e.lastAccepted.date) e.lastAccepted = { total: Number(q.total) || 0, quote_number: q.quote_number, date: q.created_at }
+        }
+      }
+      setQuotePricingByProp(qp)
 
       // Group service plans by property (one recurring series may touch a property).
       const seasons = settingsToSeasons(settingsRow?.service_seasons)
@@ -189,6 +221,16 @@ export default function PropertiesPage() {
             const lastQuote = lastQuoteByProp[property.id]
             const lastInvoice = lastInvoiceByProp[property.id]
             const plans = plansByProp[property.id] || []
+            // Property memory (all derived from data already loaded).
+            const prefText = prefSummary(resolvePrefs(property.customers as unknown as PrefSource | null, property as unknown as PrefSource))
+            const nextVisit = nextVisitByProp[property.id]
+            const qp = quotePricingByProp[property.id]
+            const nearby = property.lat != null && property.lng != null ? nearbyJobCount({ lat: property.lat, lng: property.lng }, locatedJobs).count : 0
+            const confidence = saved ? pricingConfidence({ hasMeasurement: true, nearbyComparables: nearby }) : null
+            const estMin = perf?.avgActualMin ?? saved?.rec.est_minutes ?? null
+            const estFromActual = perf?.avgActualMin != null
+            const measured = !!saved || Number(property.lawn_sqft) > 0
+            const hasWonQuote = (qp?.accepted ?? 0) > 0
             return (
             <Card key={property.id}>
               <CardBody>
@@ -236,18 +278,46 @@ export default function PropertiesPage() {
                           {stale && <span className="text-amber-400">· may be outdated</span>}
                         </p>
                       )}
+                      {nextVisit && (
+                        <p className="text-xs text-ink-faint flex items-center gap-1">
+                          <CalendarClock className="w-3 h-3 shrink-0 text-accent" />
+                          Next visit {formatDate(nextVisit.date)}{nextVisit.count > 1 && <span>· {nextVisit.count} upcoming</span>}
+                        </p>
+                      )}
+                      {prefText && (
+                        <p className="text-xs text-ink-faint flex items-center gap-1">
+                          <Clock className="w-3 h-3 shrink-0" /> {prefText}
+                        </p>
+                      )}
+                      {property.notes && (
+                        <p className="text-xs text-ink-faint flex items-start gap-1">
+                          <StickyNote className="w-3 h-3 shrink-0 mt-0.5" /> <span className="line-clamp-2">{property.notes}</span>
+                        </p>
+                      )}
                     </div>
                   </div>
-                  <div className="flex flex-col items-end gap-2 shrink-0">
+                  <div className="flex flex-col items-stretch gap-2 shrink-0 w-[140px]">
+                    {/* Proactive next step — the one obvious action for where this
+                        property is in its lifecycle (reuses the saved measurement). */}
+                    {property.customer_id && measured && !hasWonQuote && (
+                      <Link href={`/dashboard/quotes/new?customer=${property.customer_id}&property=${property.id}`}>
+                        <Button size="sm" className="w-full"><FileText className="w-3.5 h-3.5" /> Create quote</Button>
+                      </Link>
+                    )}
+                    {property.customer_id && hasWonQuote && !nextVisit && (
+                      <Link href={`/dashboard/schedule?customer=${property.customer_id}&property=${property.id}`}>
+                        <Button size="sm" className="w-full"><CalendarPlus className="w-3.5 h-3.5" /> Schedule</Button>
+                      </Link>
+                    )}
                     <Link href={`/dashboard/properties/measure?id=${property.id}`}>
-                      <Button variant="secondary" size="sm">
+                      <Button variant="secondary" size="sm" className="w-full">
                         <Ruler className="w-3.5 h-3.5" /> {last ? 'Re-measure' : 'Measure'}
                       </Button>
                     </Link>
                     {property.lat && property.lng ? (
-                      <p className="text-xs text-accent font-medium">📍 Located</p>
+                      <p className="text-xs text-accent font-medium text-right">📍 Located</p>
                     ) : (
-                      <p className="text-xs text-ink-faint">No coords yet</p>
+                      <p className="text-xs text-ink-faint text-right">No coords yet</p>
                     )}
                   </div>
                 </div>
@@ -314,6 +384,22 @@ export default function PropertiesPage() {
                   </div>
                 )}
 
+                {/* Pricing memory — what this property has been quoted and accepted
+                    before (the real signal for what they'll pay next time). */}
+                {qp && qp.quoted > 0 && (
+                  <div className="mt-3 rounded-xl border border-border bg-bg-tertiary px-3 py-2 flex items-center gap-x-3 gap-y-1 flex-wrap text-xs">
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint">Pricing memory</span>
+                    {qp.lastAccepted ? (
+                      <span className="text-emerald-400 font-medium inline-flex items-center gap-1">
+                        <CheckCircle2 className="w-3 h-3" /> Last accepted {formatCurrency(qp.lastAccepted.total)} · {qp.lastAccepted.quote_number}
+                      </span>
+                    ) : (
+                      <span className="text-ink-muted">No accepted quote yet</span>
+                    )}
+                    <span className="text-ink-faint">{qp.quoted} quoted · {qp.accepted} accepted</span>
+                  </div>
+                )}
+
                 {/* Latest measurement — the saved pricing source of truth */}
                 {saved && (
                   <div className="mt-3 rounded-xl border border-accent/20 bg-accent/5 px-3 py-2.5">
@@ -333,6 +419,17 @@ export default function PropertiesPage() {
                         </div>
                       ))}
                     </div>
+                    {/* Estimated visit length + pricing confidence */}
+                    {(estMin != null || confidence) && (
+                      <div className="flex items-center gap-3 flex-wrap mt-2 pt-2 border-t border-accent/15 text-[11px] text-ink-muted">
+                        {estMin != null && (
+                          <span className="inline-flex items-center gap-1"><Timer className="w-3 h-3" /> Est. visit ~{estMin} min{estFromActual ? <span className="text-ink-faint"> · avg of {perf!.completedVisits}</span> : null}</span>
+                        )}
+                        {confidence && (
+                          <span className="inline-flex items-center gap-1"><ShieldCheck className="w-3 h-3" /> {confidence[0].toUpperCase() + confidence.slice(1)} confidence</span>
+                        )}
+                      </div>
+                    )}
                     {stale && (
                       <p className="mt-2 text-xs text-amber-400 flex items-center gap-1.5">
                         <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
