@@ -3,7 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { latestForProperty } from './data'
 import { getTwin } from './twin'
 import { confidenceBand, type CrmBlock, type MarketingSummary, type PropertyIntelligence, type PropertyTwin } from './types'
-import { DIFFICULTY_LABELS, FEATURE_LABELS } from './labels'
+import { DIFFICULTY_LABELS, FEATURE_LABELS, shortDate } from './labels'
 
 // ── AI Vision — reusable context for OTHER AI tools & systems ─────────────────
 // The payoff of the digital twin: any future AI feature (a quote assistant, the
@@ -17,8 +17,6 @@ import { DIFFICULTY_LABELS, FEATURE_LABELS } from './labels'
 //   getPropertyCrmRecommendations() → CRM: never-purchased services + natural recs
 //   getPropertyTwin()               → the whole digital twin
 
-function fmtDate(iso: string): string { return (iso || '').slice(0, 10) }
-
 // Compact prompt block from a SINGLE analysis (kept for callers without a twin).
 export function propertyContextBlock(intel: PropertyIntelligence | null): string | null {
   if (!intel || !intel.analysis) return null
@@ -27,7 +25,7 @@ export function propertyContextBlock(intel: PropertyIntelligence | null): string
   const present = (a.detections || []).filter(d => d.present)
   const conditions = present.filter(d => ['weeds', 'overgrowth', 'obstacles'].includes(d.key))
   const lines: string[] = []
-  lines.push(`AI VISION READ of this property (source: ${intel.source}, ${intel.image_count} image(s), as of ${fmtDate(intel.created_at)}; confidence ${Math.round(intel.confidence ?? 0)}/100 — ${band}):`)
+  lines.push(`AI VISION READ of this property (source: ${intel.source}, ${intel.image_count} image(s), as of ${shortDate(intel.created_at)}; confidence ${Math.round(intel.confidence ?? 0)}/100 — ${band}):`)
   if (a.summary) lines.push(a.summary)
   if (present.length) lines.push('On the ground: ' + present.map(d => `${FEATURE_LABELS[d.key]}${d.coverage && d.coverage !== 'none' ? ` (${d.coverage})` : ''}`).join(', ') + '.')
   if (conditions.length) lines.push('Conditions: ' + conditions.map(d => `${FEATURE_LABELS[d.key]}${d.notes ? ` — ${d.notes}` : ''}`).join('; ') + '.')
@@ -45,7 +43,7 @@ export function propertyContextBlock(intel: PropertyIntelligence | null): string
 export function twinContextBlock(twin: PropertyTwin | null): string | null {
   if (!twin) return null
   const lines: string[] = []
-  lines.push(`PROPERTY INTELLIGENCE (digital twin · ${twin.analysis_count} analysis${twin.analysis_count === 1 ? '' : 'es'} · updated ${fmtDate(twin.last_analyzed_at || twin.updated_at)}):`)
+  lines.push(`PROPERTY INTELLIGENCE (digital twin · ${twin.analysis_count} analysis${twin.analysis_count === 1 ? '' : 'es'} · updated ${shortDate(twin.last_analyzed_at || twin.updated_at)}):`)
   if (twin.digest) lines.push(twin.digest)
 
   // Memory snapshot (a few key tracked attributes + trend).

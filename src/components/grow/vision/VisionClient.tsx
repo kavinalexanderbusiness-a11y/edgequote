@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Sparkles, Search, MapPin, Image as ImageIcon, Satellite, Eye, RefreshCw, AlertTriangle, Home, Brain, Activity } from 'lucide-react'
+import { Sparkles, Search, MapPin, Image as ImageIcon, Satellite, Eye, RefreshCw, AlertTriangle, Home, Brain, Activity, Loader2 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { PHOTO_BUCKET } from '@/lib/photos'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -15,8 +15,8 @@ import { Skeleton } from '@/components/ui/Skeleton'
 import { IntelligenceReport } from './IntelligenceReport'
 import { TwinPanel } from './TwinPanel'
 import { PropertyTimeline } from './PropertyTimeline'
+import { Pill, FadeIn } from './ui'
 import { cn } from '@/lib/utils'
-import { toneSoft } from '@/lib/tone'
 import { CONFIDENCE_TONE, DIFFICULTY_LABELS } from '@/lib/vision/labels'
 import type { AnalyzeResponse, ConfidenceBand, Difficulty, PropertyIntelligence, PropertyTwin } from '@/lib/vision/types'
 
@@ -24,7 +24,6 @@ import type { AnalyzeResponse, ConfidenceBand, Difficulty, PropertyIntelligence,
 export interface VisionPropertyLite {
   id: string
   address: string
-  city: string | null
   neighborhood: string | null
   hasLocation: boolean
   customerName: string | null
@@ -32,7 +31,6 @@ export interface VisionPropertyLite {
   hasAnalysis: boolean
   confidence_band: ConfidenceBand | null
   mowing_difficulty: Difficulty | null
-  analyzedAt: string | null
 }
 
 // Everything we load for one property — cached so re-selecting is instant.
@@ -125,6 +123,15 @@ export function VisionClient({ properties, aiEnabled }: { properties: VisionProp
       .finally(() => { if (selectedIdRef.current === id) setLoadingIntel(false) })
   }, [applyBundle, loadProperty])
 
+  // Warm the cache when a row is hovered/focused so the click feels instant. Pure
+  // reads; each property prefetches at most once. (Never triggers analysis.)
+  const prefetchedRef = useRef<Set<string>>(new Set())
+  const prefetch = useCallback((id: string) => {
+    if (cacheRef.current.has(id) || prefetchedRef.current.has(id)) return
+    prefetchedRef.current.add(id)
+    loadProperty(id).catch(() => prefetchedRef.current.delete(id))
+  }, [loadProperty])
+
   // Auto-load the initially-selected property on mount (READ-ONLY — never analyzes),
   // so the owner doesn't have to click the row that already looks selected.
   useEffect(() => {
@@ -168,6 +175,7 @@ export function VisionClient({ properties, aiEnabled }: { properties: VisionProp
   }
 
   const canAnalyze = !!selected && aiEnabled && (selected.hasLocation || selected.photoCount > 0)
+  const hasContent = !!(twin || intel || timeline.length) // is there a prior read to keep on screen?
 
   return (
     <div className="max-w-6xl space-y-5">
@@ -210,6 +218,8 @@ export function VisionClient({ properties, aiEnabled }: { properties: VisionProp
                     ref={el => { if (el) btnRefs.current.set(p.id, el); else btnRefs.current.delete(p.id) }}
                     onClick={() => selectProperty(p.id, { scroll: true })}
                     onKeyDown={e => onItemKey(e, p.id)}
+                    onMouseEnter={() => prefetch(p.id)}
+                    onFocus={() => prefetch(p.id)}
                     aria-current={active ? 'true' : undefined}
                     className={cn('w-full text-left px-3.5 py-3 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-inset', active ? 'bg-accent/10' : 'hover:bg-surface-raised')}
                   >
@@ -219,9 +229,9 @@ export function VisionClient({ properties, aiEnabled }: { properties: VisionProp
                       {p.hasLocation && <Chip icon={Satellite}>Satellite</Chip>}
                       {p.photoCount > 0 && <Chip icon={ImageIcon}>{p.photoCount}</Chip>}
                       {p.hasAnalysis && p.confidence_band && (
-                        <span className={cn('inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full border', toneSoft[CONFIDENCE_TONE[p.confidence_band]])}>
-                          <Brain className="w-2.5 h-2.5" />{p.mowing_difficulty ? DIFFICULTY_LABELS[p.mowing_difficulty] : p.confidence_band}
-                        </span>
+                        <Pill tone={CONFIDENCE_TONE[p.confidence_band]} icon={Brain}>
+                          {p.mowing_difficulty ? DIFFICULTY_LABELS[p.mowing_difficulty] : p.confidence_band}
+                        </Pill>
                       )}
                     </div>
                   </button>
@@ -256,10 +266,10 @@ export function VisionClient({ properties, aiEnabled }: { properties: VisionProp
                   )}
                 </Card>
 
-                {reused && intel && <Banner tone="neutral" icon={Eye}>Showing the existing analysis — the imagery hasn’t changed since it last ran. Use “Re-analyze” to force a fresh read.</Banner>}
-                {error && <Banner tone="danger" icon={AlertTriangle}>{error}</Banner>}
+                {reused && intel && <div role="status" aria-live="polite"><Banner tone="neutral" icon={Eye}>Showing the existing analysis — the imagery hasn’t changed since it last ran. Use “Re-analyze” to force a fresh read.</Banner></div>}
+                {error && <div role="alert" aria-live="assertive"><Banner tone="danger" icon={AlertTriangle}>{error}</Banner></div>}
 
-                {(twin || timeline.length > 0) && !analyzing && (
+                {(twin || timeline.length > 0) && (
                   <Tabs
                     active={tab}
                     onChange={k => setTab(k as 'now' | 'timeline')}
@@ -270,24 +280,38 @@ export function VisionClient({ properties, aiEnabled }: { properties: VisionProp
                   />
                 )}
 
-                {analyzing ? (
-                  <AnalyzingSkeleton />
-                ) : loadingIntel ? (
-                  <AnalyzingSkeleton />
-                ) : tab === 'timeline' ? (
-                  <PropertyTimeline entries={timeline} photoUrlById={photoUrls} />
-                ) : (twin || intel) ? (
-                  <div className="space-y-5">
-                    {twin && <TwinPanel twin={twin} />}
-                    {intel && (
-                      <Collapsible title="This analysis" icon={Eye} summary="The latest raw read — detections, estimates & upsells">
-                        <IntelligenceReport intel={intel} />
-                      </Collapsible>
-                    )}
-                  </div>
-                ) : (
-                  <Card className="p-6"><InlineEmpty icon={Sparkles}>{canAnalyze ? 'No analysis yet. Run AI Vision to read this property and start its memory.' : 'Add a photo or a location, then run AI Vision.'}</InlineEmpty></Card>
-                )}
+                {/* During a RE-analysis we keep the existing read on screen (dimmed)
+                    so the page never blanks; only a first-ever analysis shows the
+                    skeleton. */}
+                <div className="relative">
+                  {loadingIntel || (analyzing && !hasContent) ? (
+                    <AnalyzingSkeleton />
+                  ) : (
+                    <FadeIn key={`${selected.id}:${tab}`}>
+                      {tab === 'timeline' ? (
+                        <PropertyTimeline entries={timeline} photoUrlById={photoUrls} />
+                      ) : (twin || intel) ? (
+                        <div className="space-y-5">
+                          {twin && <TwinPanel twin={twin} />}
+                          {intel && (
+                            <Collapsible title="This analysis" icon={Eye} summary="The latest raw read — detections, estimates & upsells">
+                              <IntelligenceReport intel={intel} />
+                            </Collapsible>
+                          )}
+                        </div>
+                      ) : (
+                        <Card className="p-6"><InlineEmpty icon={Sparkles}>{canAnalyze ? 'No analysis yet. Run AI Vision to read this property and start its memory.' : 'Add a photo or a location, then run AI Vision.'}</InlineEmpty></Card>
+                      )}
+                    </FadeIn>
+                  )}
+                  {analyzing && hasContent && (
+                    <div role="status" aria-live="polite" className="absolute inset-0 z-10 flex items-center justify-center rounded-card bg-bg-secondary/55 backdrop-blur-[1px]">
+                      <span className="inline-flex items-center gap-2 text-sm font-medium text-ink bg-surface border border-border rounded-full px-4 py-2 shadow-sm">
+                        <Loader2 className="w-4 h-4 animate-spin text-accent" /> Analyzing…
+                      </span>
+                    </div>
+                  )}
+                </div>
               </>
             )}
           </div>

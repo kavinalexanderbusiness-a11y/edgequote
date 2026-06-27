@@ -14,6 +14,13 @@ import type { Tone } from '@/lib/tone'
 export const CONFIDENCE_TONE: Record<ConfidenceBand, Tone> = { high: 'success', medium: 'warn', low: 'danger' }
 export const FORECAST_TONE: Record<ConfidenceBand, Tone> = { high: 'success', medium: 'warn', low: 'neutral' }
 
+// The short calendar date AI Vision shows everywhere ("2026-06-27"). One helper
+// so the `(iso || '').slice(0, 10)` that was sprinkled across components + the
+// context block lives in a single place.
+export function shortDate(iso: string | null | undefined): string {
+  return (iso || '').slice(0, 10)
+}
+
 export const FEATURE_LABELS: Record<FeatureKey, string> = {
   mowing_completed: 'Mowing completed',
   edging: 'Edging',

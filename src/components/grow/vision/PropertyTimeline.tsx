@@ -3,10 +3,10 @@
 import { useState } from 'react'
 import { TrendingUp, TrendingDown, ChevronDown, Camera, Activity } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { toneSoft } from '@/lib/tone'
 import { InlineEmpty } from '@/components/ui/EmptyState'
 import { detectChanges } from '@/lib/vision/change'
-import { CONFIDENCE_TONE, FEATURE_LABELS } from '@/lib/vision/labels'
+import { CONFIDENCE_TONE, FEATURE_LABELS, shortDate } from '@/lib/vision/labels'
+import { Pill } from './ui'
 import type { PropertyIntelligence } from '@/lib/vision/types'
 
 // ── AI Vision — property timeline ─────────────────────────────────────────────
@@ -41,15 +41,15 @@ export function PropertyTimeline({ entries, photoUrlById }: { entries: PropertyI
               </div>
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold text-ink">
-                  {(e.observed_at || e.created_at || '').slice(0, 10)}
+                  {shortDate(e.observed_at || e.created_at)}
                   <span className="text-[11px] text-ink-faint font-normal ml-2">{e.source} · {e.image_count} img</span>
                 </p>
                 <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                  <span className={cn('text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-full border', toneSoft[CONFIDENCE_TONE[band]])}>{Math.round(e.confidence ?? 0)} {band}</span>
-                  {health && <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-surface text-ink-muted border-border">turf {health}</span>}
-                  {ups > 0 && <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full border bg-emerald-500/15 text-emerald-400 border-emerald-500/25"><TrendingUp className="w-2.5 h-2.5" />{ups}</span>}
-                  {downs > 0 && <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full border bg-red-500/10 text-red-400 border-red-500/20"><TrendingDown className="w-2.5 h-2.5" />{downs}</span>}
-                  {change.is_first && <span className="text-[10px] px-1.5 py-0.5 rounded-full border bg-blue-500/10 text-blue-400 border-blue-500/20">baseline</span>}
+                  <Pill tone={CONFIDENCE_TONE[band]} className="uppercase tracking-wide">{Math.round(e.confidence ?? 0)} {band}</Pill>
+                  {health && <Pill tone="neutral">turf {health}</Pill>}
+                  {ups > 0 && <Pill tone="success" icon={TrendingUp}>{ups}</Pill>}
+                  {downs > 0 && <Pill tone="danger" icon={TrendingDown}>{downs}</Pill>}
+                  {change.is_first && <Pill tone="info">baseline</Pill>}
                 </div>
               </div>
               <ChevronDown className={cn('w-4 h-4 text-ink-faint shrink-0 transition-transform', isOpen && 'rotate-180')} />
@@ -72,7 +72,7 @@ export function PropertyTimeline({ entries, photoUrlById }: { entries: PropertyI
                   <div className="flex gap-2 overflow-x-auto no-scrollbar">
                     {photoRefs.map(ref => photoUrlById[ref] ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img key={ref} src={photoUrlById[ref]} alt={`Property photo analyzed ${(e.observed_at || e.created_at || '').slice(0, 10)}`} loading="lazy" className="w-16 h-16 rounded-lg object-cover border border-border shrink-0" />
+                      <img key={ref} src={photoUrlById[ref]} alt={`Property photo analyzed ${shortDate(e.observed_at || e.created_at)}`} loading="lazy" className="w-16 h-16 rounded-lg object-cover border border-border shrink-0" />
                     ) : (
                       <div key={ref} className="w-16 h-16 rounded-lg border border-border bg-surface-raised flex items-center justify-center shrink-0"><Camera className="w-4 h-4 text-ink-faint" /></div>
                     ))}

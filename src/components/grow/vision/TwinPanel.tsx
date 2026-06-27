@@ -6,7 +6,8 @@ import { SectionHeading } from '@/components/ui/SectionHeading'
 import { cn, formatCurrency } from '@/lib/utils'
 import { toneSoft, toneText, type Tone } from '@/lib/tone'
 import { SEASON_LABELS } from '@/lib/vision/season'
-import { FORECAST_TONE } from '@/lib/vision/labels'
+import { FORECAST_TONE, shortDate } from '@/lib/vision/labels'
+import { Pill } from './ui'
 import type {
   ChangeSummary, CrmBlock, ForecastBlock, MarketingSummary, OpportunityBlock, OppTier, PropertyTwin, SeasonalBlock,
 } from '@/lib/vision/types'
@@ -41,7 +42,7 @@ export function TwinPanel({ twin }: { twin: PropertyTwin }) {
     <div className="space-y-5">
       {/* Digest — the living state of this property */}
       <Card className="p-4 border-accent/30 bg-gradient-to-br from-accent/[0.06] to-transparent">
-        <SectionHeading icon={Brain} title="Property memory" sub={`${twin.analysis_count} analysis${twin.analysis_count === 1 ? '' : 'es'} on file · updated ${(twin.last_analyzed_at || twin.updated_at || '').slice(0, 10)}`} />
+        <SectionHeading icon={Brain} title="Property memory" sub={`${twin.analysis_count} analysis${twin.analysis_count === 1 ? '' : 'es'} on file · updated ${shortDate(twin.last_analyzed_at || twin.updated_at)}`} />
         {twin.digest && <p className="text-sm text-ink-muted leading-relaxed">{twin.digest}</p>}
         <MemoryChips twin={twin} />
       </Card>
@@ -49,7 +50,7 @@ export function TwinPanel({ twin }: { twin: PropertyTwin }) {
       {/* Change since last visit */}
       {change && (
         <div>
-          <SectionHeading icon={TrendingUp} title="Change detection" sub={change.is_first ? 'Baseline' : change.since ? `vs ${change.since.slice(0, 10)}` : undefined} />
+          <SectionHeading icon={TrendingUp} title="Change detection" sub={change.is_first ? 'Baseline' : change.since ? `vs ${shortDate(change.since)}` : undefined} />
           {change.narrative && <p className="text-sm text-ink-muted mb-2">{change.narrative}</p>}
           {change.signals.length > 0 ? (
             <div className="flex flex-wrap gap-2">
@@ -81,8 +82,8 @@ export function TwinPanel({ twin }: { twin: PropertyTwin }) {
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-ink flex items-center gap-2 flex-wrap">
                     {o.label}
-                    <span className={cn('text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-full border', toneSoft[TIER_TONE[o.tier]])}>{o.tier}</span>
-                    {o.never_purchased && <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full border bg-blue-500/10 text-blue-400 border-blue-500/20">Never bought</span>}
+                    <Pill tone={TIER_TONE[o.tier]} className="uppercase tracking-wide">{o.tier}</Pill>
+                    {o.never_purchased && <Pill tone="info" className="font-medium">Never bought</Pill>}
                   </p>
                   <p className="text-xs text-ink-muted mt-0.5">{o.reason}</p>
                 </div>

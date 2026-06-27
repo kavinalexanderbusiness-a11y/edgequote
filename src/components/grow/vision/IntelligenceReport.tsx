@@ -5,7 +5,8 @@ import { StatTile } from '@/components/ui/StatTile'
 import { cn } from '@/lib/utils'
 import { toneSoft, toneText } from '@/lib/tone'
 import { FEATURE_KEYS, type Detection, type PropertyIntelligence } from '@/lib/vision/types'
-import { CONFIDENCE_TONE, DIFFICULTY_LABELS, DIFFICULTY_TONE, FEATURE_LABELS, featureTone } from '@/lib/vision/labels'
+import { CONFIDENCE_TONE, DIFFICULTY_LABELS, DIFFICULTY_TONE, FEATURE_LABELS, featureTone, shortDate } from '@/lib/vision/labels'
+import { Pill } from './ui'
 
 // ── AI Vision — the report ────────────────────────────────────────────────────
 // A read-only render of one property_intelligence row. Pure + presentational so
@@ -36,12 +37,10 @@ export function IntelligenceReport({ intel }: { intel: PropertyIntelligence }) {
             <div className="min-w-0">
               <p className="text-sm font-bold text-ink flex items-center gap-1.5">
                 <Sparkles className="w-3.5 h-3.5 text-accent" /> AI Vision read
-                <span className={cn('text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded-full border', toneSoft[CONFIDENCE_TONE[band]])}>
-                  {band} confidence
-                </span>
+                <Pill tone={CONFIDENCE_TONE[band]} className="uppercase tracking-wide">{band} confidence</Pill>
               </p>
               <p className="text-[11px] text-ink-faint mt-0.5">
-                {intel.source} · {intel.image_count} image{intel.image_count === 1 ? '' : 's'} · {(intel.created_at || '').slice(0, 10)}
+                {intel.source} · {intel.image_count} image{intel.image_count === 1 ? '' : 's'} · {shortDate(intel.created_at)}
                 {intel.model ? ` · ${intel.model}` : ''}
               </p>
             </div>

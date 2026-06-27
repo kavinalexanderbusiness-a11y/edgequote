@@ -14,13 +14,13 @@ export default async function VisionPage() {
   const [propsRes, photosRes, intelRes] = await Promise.all([
     supabase
       .from('properties')
-      .select('id, address, city, neighborhood, lat, lng, customers(name)')
+      .select('id, address, neighborhood, lat, lng, customers(name)')
       .eq('user_id', user.id)
       .order('created_at', { ascending: false }),
     supabase.from('job_photos').select('property_id').eq('user_id', user.id),
     supabase
       .from('property_intelligence')
-      .select('property_id, confidence_band, mowing_difficulty, created_at')
+      .select('property_id, confidence_band, mowing_difficulty')
       .eq('user_id', user.id)
       .eq('status', 'active')
       .order('created_at', { ascending: false }),
@@ -33,13 +33,13 @@ export default async function VisionPage() {
   }
 
   // Latest active analysis headline per property (rows already newest-first).
-  const intelByProp = new Map<string, { confidence_band: ConfidenceBand | null; mowing_difficulty: Difficulty | null; created_at: string }>()
-  for (const r of (intelRes.data as { property_id: string; confidence_band: ConfidenceBand | null; mowing_difficulty: Difficulty | null; created_at: string }[] | null) || []) {
+  const intelByProp = new Map<string, { confidence_band: ConfidenceBand | null; mowing_difficulty: Difficulty | null }>()
+  for (const r of (intelRes.data as { property_id: string; confidence_band: ConfidenceBand | null; mowing_difficulty: Difficulty | null }[] | null) || []) {
     if (!intelByProp.has(r.property_id)) intelByProp.set(r.property_id, r)
   }
 
   const rows = (propsRes.data as Array<{
-    id: string; address: string; city: string | null; neighborhood: string | null
+    id: string; address: string; neighborhood: string | null
     lat: number | null; lng: number | null; customers: { name: string | null } | { name: string | null }[] | null
   }> | null) || []
 
@@ -49,7 +49,6 @@ export default async function VisionPage() {
     return {
       id: p.id,
       address: p.address,
-      city: p.city,
       neighborhood: p.neighborhood,
       hasLocation: p.lat != null && p.lng != null,
       customerName: cust?.name ?? null,
@@ -57,7 +56,6 @@ export default async function VisionPage() {
       hasAnalysis: !!headline,
       confidence_band: headline?.confidence_band ?? null,
       mowing_difficulty: headline?.mowing_difficulty ?? null,
-      analyzedAt: headline?.created_at ?? null,
     }
   })
 
