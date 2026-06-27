@@ -72,12 +72,18 @@ export async function updateTwinAfterAnalysis(
       observedAt, source: 'vision', model: intelligence.model || VISION_PROMPT_VERSION, rows: obsRows,
     })
 
-    // 2) Roll up the accumulated history.
-    const recent = await recentObservations(supabase, userId, property.id)
-    const attributes = rollupAttributes(recent)
+    // 2) All the reads this run needs are independent (the rollup just needs the
+    // observations emitted above) — fetch them concurrently, same data as before.
+    const [recent, prev, existing, purchase, values] = await Promise.all([
+      recentObservations(supabase, userId, property.id),
+      previousAnalysis(supabase, userId, property.id, intelligence.id),
+      getTwin(supabase, userId, property.id),
+      loadPurchaseHistory(supabase, userId, customerId),
+      loadServiceValues(supabase, userId),
+    ])
 
-    // 3) Change vs the previous analysis.
-    const prev = await previousAnalysis(supabase, userId, property.id, intelligence.id)
+    // 3) Roll up history + detect change vs the previous analysis.
+    const attributes = rollupAttributes(recent)
     const change = detectChanges(analysis, prev.analysis, prev.createdAt)
 
     // 4) Seasonal + forecast (deterministic).
@@ -85,10 +91,6 @@ export async function updateTwinAfterAnalysis(
     const forecast = buildForecast({ nowIso, analysis, attributes })
 
     // 5) Opportunities + CRM (reads purchase history, never edits CRM/pricing).
-    const [purchase, values] = await Promise.all([
-      loadPurchaseHistory(supabase, userId, customerId),
-      loadServiceValues(supabase, userId),
-    ])
     const opportunities = scoreOpportunities({ analysis, season: seasonal.season, purchased: purchase.purchased, values, attributes })
     const crm = buildCrm({ purchased: purchase.purchased, hasCustomer: purchase.hasCustomer, opportunities })
 
@@ -96,7 +98,6 @@ export async function updateTwinAfterAnalysis(
     const marketing = buildMarketing({ analysis, change, hasBeforeAfter })
 
     // 7) Counts + narrative (AI polish, graceful fallback to deterministic).
-    const existing = await getTwin(supabase, userId, property.id)
     const analysisCount = (existing?.analysis_count || 0) + 1
     const firstAnalyzedAt = existing?.first_analyzed_at || intelligence.created_at
 

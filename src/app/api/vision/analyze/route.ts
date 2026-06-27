@@ -5,6 +5,7 @@ import { analyzeImages } from '@/lib/ai/vision'
 import { listPhotos } from '@/lib/photos'
 import { gatherImages, latestForProperty, persistAnalysis, planImageSet, type AnalysisInput, type AnalyzablePhoto } from '@/lib/vision/data'
 import { satelliteConfigured } from '@/lib/vision/staticMap'
+import { checkAnalyzeAllowed } from '@/lib/vision/rateLimit'
 import { buildAnalysisPrompt } from '@/lib/vision/prompt'
 import { updateTwinAfterAnalysis } from '@/lib/vision/intelligence'
 import { getTwin } from '@/lib/vision/twin'
@@ -41,21 +42,23 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   if (!aiEnabled()) return json({ ok: false, aiEnabled: false, error: 'AI is not configured yet.' })
 
-  // Property (RLS-scoped to the owner).
-  const { data: prop } = await supabase
-    .from('properties')
-    .select('id, customer_id, address, city, neighborhood, lat, lng, lawn_sqft, measurement_history')
-    .eq('id', propertyId)
-    .maybeSingle()
-  if (!prop) return json({ ok: false, aiEnabled: true, error: 'property not found' }, 404)
-  const property = prop as {
+  // Property + photos are independent reads — fetch them together (RLS-scoped).
+  const [propRes, allPhotos] = await Promise.all([
+    supabase
+      .from('properties')
+      .select('id, customer_id, address, city, neighborhood, lat, lng, lawn_sqft, measurement_history')
+      .eq('id', propertyId)
+      .maybeSingle(),
+    listPhotos(supabase, user.id, { propertyId }),
+  ])
+  if (!propRes.data) return json({ ok: false, aiEnabled: true, error: 'property not found' }, 404)
+  const property = propRes.data as {
     id: string; customer_id: string | null; address: string | null; city: string | null
     neighborhood: string | null; lat: number | null; lng: number | null
     lawn_sqft: number | null; measurement_history: MeasurementSnapshot[] | null
   }
 
   // Photos for this property (or the requested subset).
-  const allPhotos = await listPhotos(supabase, user.id, { propertyId })
   const chosen = photoIds ? allPhotos.filter(p => photoIds.includes(p.id)) : allPhotos
   const photos: AnalyzablePhoto[] = chosen.map(p => ({
     id: p.id, url: p.url, kind: p.kind, caption: p.caption, taken_at: p.taken_at,
@@ -77,6 +80,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return json({ ok: true, aiEnabled: true, intelligence: latest, twin: twin ?? undefined, reused: true })
     }
   }
+
+  // We're now on the BILLED path (a real model call). Enforce cost/abuse limits
+  // here only — cache hits above returned for free and were never limited.
+  const gate = await checkAnalyzeAllowed(supabase, user.id, propertyId)
+  if (!gate.allowed) return json({ ok: false, aiEnabled: true, error: gate.message }, 429)
 
   // Changed (or forced): now pay to download the bytes and (re)analyze.
   const gathered = await gatherImages(plan, { lat: property.lat, lng: property.lng })

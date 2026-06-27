@@ -199,13 +199,10 @@ export async function persistAnalysis(
   },
 ): Promise<PropertyIntelligence | null> {
   const { analysis } = params
-  // Supersede the current read so the latest active row is always unambiguous.
-  await supabase
-    .from('property_intelligence')
-    .update({ status: 'superseded' })
-    .eq('user_id', params.userId)
-    .eq('property_id', params.propertyId)
-    .eq('status', 'active')
+  // Inserting this active row atomically supersedes the prior active read — the
+  // BEFORE INSERT trigger (migration RUN-2026-06-27-vision-active-integrity) does
+  // it in the same statement, and a partial unique index guarantees exactly one
+  // active per property. No separate (non-atomic) supersede step here.
 
   const detections = (analysis.detections || []).filter(d => d.present).map(d => d.key)
   const upsellKeys = (analysis.upsells || []).map(u => u.key)
