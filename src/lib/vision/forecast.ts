@@ -1,11 +1,12 @@
-import type { AttributeRollup, ConfidenceBand, Detection, ForecastBlock, ForecastItem, VisionAnalysis } from './types'
-import { COVERAGE_RANK } from './scales'
+import type { AttributeRollup, ConfidenceBand, ForecastBlock, ForecastItem, VisionAnalysis } from './types'
+import { coverageRank } from './scales'
 import { seasonForDate } from './season'
 
 // ── AI Vision — maintenance forecast ──────────────────────────────────────────
 // Predicts WHEN each recurring need is likely due next, from the current read +
-// the observation history's cadence. Pure (date math only). Recommendations only —
-// these are planning hints, never bookings.
+// the observation history's cadence + TREND (a condition that's deteriorating is
+// pulled sooner than the textbook interval). Pure (date math only).
+// Recommendations only — these are planning hints, never bookings.
 
 function addDays(iso: string, days: number): string {
   const d = new Date(iso)
@@ -23,33 +24,35 @@ export function buildForecast(opts: {
 }): ForecastBlock {
   const { nowIso, analysis, attributes } = opts
   const c = analysis.condition
-  const det = new Map<string, Detection>((analysis.detections || []).map(d => [d.key, d]))
-  const cov = (k: string) => { const d = det.get(k); return d?.present ? (COVERAGE_RANK[d.coverage] ?? 0) : 0 }
+  const worsening = (attr: string) => attributes[attr]?.trend === 'worsening'
   const season = seasonForDate(nowIso)
   const items: ForecastItem[] = []
   const add = (key: string, label: string, horizon: number, basis: string, confidence: ConfidenceBand) =>
     items.push({ key, label, predicted_for: addDays(nowIso, horizon), horizon_days: Math.round(horizon), basis, confidence })
 
   // Mulch refresh — annual cadence anchored on the last "fresh" observation if we
-  // have one; otherwise from current freshness.
+  // have one; pulled ~25% sooner when the twin sees mulch actively fading.
   if (c && c.mulch_condition !== 'none') {
     const hist = attributes['mulch_condition']?.history || []
     const lastFresh = hist.find(p => p.value === 'fresh')
+    const fade = worsening('mulch_condition') ? 0.75 : 1
     if (c.mulch_condition === 'bare' || c.mulch_condition === 'faded') {
       add('mulch_refresh', 'Mulch refresh', 14, `Mulch is ${c.mulch_condition} now.`, 'high')
     } else if (lastFresh) {
-      const horizon = Math.max(20, 330 - daysBetween(lastFresh.observed_at, nowIso))
-      add('mulch_refresh', 'Mulch refresh', horizon, `Mulch was fresh ~${daysBetween(lastFresh.observed_at, nowIso)} days ago; mulch typically lasts ~11 months.`, 'medium')
+      const elapsed = daysBetween(lastFresh.observed_at, nowIso)
+      add('mulch_refresh', 'Mulch refresh', Math.max(20, (330 - elapsed) * fade), `Mulch was fresh ~${elapsed} days ago; mulch typically lasts ~11 months.`, 'medium')
     } else {
-      add('mulch_refresh', 'Mulch refresh', c.mulch_condition === 'aging' ? 60 : 300, `Current mulch is ${c.mulch_condition}.`, c.mulch_condition === 'aging' ? 'medium' : 'low')
+      add('mulch_refresh', 'Mulch refresh', (c.mulch_condition === 'aging' ? 60 : 300) * fade, `Current mulch is ${c.mulch_condition}.`, c.mulch_condition === 'aging' ? 'medium' : 'low')
     }
   }
 
-  // Hedge / shrub trimming — from tidiness, refined by how fast it grew out before.
+  // Hedge / shrub trimming — from tidiness, pulled sooner when it's growing out
+  // faster than this property's norm.
   if (c && c.hedge_condition !== 'none') {
-    const base = c.hedge_condition === 'overgrown' ? 10 : c.hedge_condition === 'slightly_overgrown' ? 35 : 75
+    const fast = worsening('hedge_condition')
+    const base = (c.hedge_condition === 'overgrown' ? 10 : c.hedge_condition === 'slightly_overgrown' ? 35 : 75) * (fast ? 0.7 : 1)
     const conf: ConfidenceBand = c.hedge_condition === 'overgrown' ? 'high' : c.hedge_condition === 'slightly_overgrown' ? 'medium' : 'low'
-    add('hedge_trim', 'Hedge / shrub trimming', base, `Hedges are ${c.hedge_condition.replace('_', ' ')}.`, conf)
+    add('hedge_trim', 'Hedge / shrub trimming', base, `Hedges are ${c.hedge_condition.replace('_', ' ')}${fast ? ' and growing out quickly' : ''}.`, conf)
   }
 
   // Mowing frequency increase — the spring growth ramp. Target ~June 1 (peak
@@ -62,10 +65,9 @@ export function buildForecast(opts: {
   }
 
   // Weed treatment — present/rising weeds, or the summer flush.
-  const w = cov('weeds')
-  const weedTrend = attributes['weeds']?.trend
-  if (w >= 2 || (w >= 1 && weedTrend === 'worsening')) {
-    add('weed_treatment', 'Weed treatment', 12, 'Weeds are present and spreading — treat before they seed.', w >= 3 ? 'high' : 'medium')
+  const w = coverageRank(analysis, 'weeds')
+  if (w >= 2 || (w >= 1 && worsening('weeds'))) {
+    add('weed_treatment', 'Weed treatment', worsening('weeds') ? 7 : 12, `Weeds are present${worsening('weeds') ? ' and spreading' : ''} — treat before they seed.`, w >= 3 || worsening('weeds') ? 'high' : 'medium')
   } else if (season === 'spring') {
     add('weed_treatment', 'Weed treatment (pre-emergent)', 21, 'Spring is the window for pre-emergent weed control.', 'low')
   }

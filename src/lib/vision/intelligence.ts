@@ -89,7 +89,7 @@ export async function updateTwinAfterAnalysis(
       loadPurchaseHistory(supabase, userId, customerId),
       loadServiceValues(supabase, userId),
     ])
-    const opportunities = scoreOpportunities({ analysis, season: seasonal.season, purchased: purchase.purchased, values })
+    const opportunities = scoreOpportunities({ analysis, season: seasonal.season, purchased: purchase.purchased, values, attributes })
     const crm = buildCrm({ purchased: purchase.purchased, hasCustomer: purchase.hasCustomer, opportunities })
 
     // 6) Marketing signals (reusable, no re-analysis).

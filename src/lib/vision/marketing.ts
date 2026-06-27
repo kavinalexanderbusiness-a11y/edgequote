@@ -1,5 +1,5 @@
-import type { ChangeSummary, Detection, MarketingSummary, VisionAnalysis } from './types'
-import { COVERAGE_RANK } from './scales'
+import type { ChangeSummary, MarketingSummary, VisionAnalysis } from './types'
+import { coverageRank } from './scales'
 
 // ── AI Vision — marketing summary (reusable, no re-analysis) ──────────────────
 // Distils the current read + change into ready-to-use marketing signals so
@@ -14,8 +14,6 @@ export function buildMarketing(opts: {
 }): MarketingSummary {
   const { analysis, change, hasBeforeAfter } = opts
   const c = analysis.condition
-  const det = new Map<string, Detection>((analysis.detections || []).map(d => [d.key, d]))
-  const cov = (k: string) => { const d = det.get(k); return d?.present ? (COVERAGE_RANK[d.coverage] ?? 0) : 0 }
 
   const flags: string[] = []
   const highlights: string[] = []
@@ -23,8 +21,8 @@ export function buildMarketing(opts: {
   if (c && (c.mulch_condition === 'fresh' || c.mulch_condition === 'good')) {
     flags.push('fresh_mulch'); highlights.push('Fresh, sharp mulch beds')
   }
-  if (cov('edging') >= 3) { flags.push('edging_excellent'); highlights.push('Crisp, professional edging') }
-  if (c && c.lawn_health === 'excellent' && det.get('mowing_completed')?.present) {
+  if (coverageRank(analysis, 'edging') >= 3) { flags.push('edging_excellent'); highlights.push('Crisp, professional edging') }
+  if (c && c.lawn_health === 'excellent' && coverageRank(analysis, 'mowing_completed') > 0) {
     flags.push('beautiful_stripes'); highlights.push('Healthy, freshly cut lawn')
   }
 

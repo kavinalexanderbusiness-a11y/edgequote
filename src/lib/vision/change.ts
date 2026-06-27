@@ -1,5 +1,5 @@
 import type { ChangeSignal, ChangeSummary, VisionAnalysis } from './types'
-import { COVERAGE_RANK, ordinalRank } from './scales'
+import { coverageRank, ordinalRank } from './scales'
 
 // ── AI Vision — change detection ──────────────────────────────────────────────
 // Compares TODAY's analysis to the PREVIOUS one (structured data, not images) and
@@ -7,12 +7,6 @@ import { COVERAGE_RANK, ordinalRank } from './scales'
 // reliable; the human narrative is either this module's fallback or the AI
 // synthesis polish (lib/vision/synthesis). Comparing stored analyses — never
 // re-analysing imagery — is the whole point of accumulating knowledge.
-
-function coverageOf(a: VisionAnalysis | null, key: string): number {
-  const d = a?.detections?.find(x => x.key === key)
-  if (!d || !d.present) return 0
-  return COVERAGE_RANK[d.coverage] ?? 0
-}
 
 const HEALTH_DELTA = 8 // lawn-health score points before we call it a change
 
@@ -36,7 +30,7 @@ export function detectChanges(current: VisionAnalysis, previous: VisionAnalysis 
   }
 
   // Weeds.
-  const wNow = coverageOf(current, 'weeds'), wPrev = coverageOf(previous, 'weeds')
+  const wNow = coverageRank(current, 'weeds'), wPrev = coverageRank(previous, 'weeds')
   if (wNow > wPrev) signals.push({ key: 'weeds_increasing', label: 'Weeds increasing', attribute: 'weeds', direction: 'up', detail: 'More weed coverage than last time — worth treating before they seed.' })
   else if (wNow < wPrev) signals.push({ key: 'weeds_reduced', label: 'Weeds reduced', attribute: 'weeds', direction: 'down', detail: 'Less weed coverage than last time — treatment is holding.' })
 
@@ -56,7 +50,7 @@ export function detectChanges(current: VisionAnalysis, previous: VisionAnalysis 
   }
 
   // Tree growth (more canopy coverage detected).
-  const tNow = coverageOf(current, 'trees'), tPrev = coverageOf(previous, 'trees')
+  const tNow = coverageRank(current, 'trees'), tPrev = coverageRank(previous, 'trees')
   if (tNow > tPrev) signals.push({ key: 'tree_growth', label: 'Tree growth', attribute: 'trees', direction: 'up', detail: 'More tree canopy than last time — watch for shade/overhang.' })
 
   // New landscaping.
