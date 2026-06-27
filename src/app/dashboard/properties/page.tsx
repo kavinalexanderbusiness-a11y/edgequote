@@ -30,6 +30,7 @@ interface PropPerf {
   completedVisits: number
   avgInvoice: number        // avg paid invoice amount
   avgActualMin: number | null
+  lastActualMin: number | null  // actual minutes of the most recent timed completed visit
   lastServiceDate: string | null
 }
 type PerfJob = { property_id: string | null; status: string; scheduled_date: string; actual_minutes: number | null }
@@ -42,11 +43,12 @@ type LastInvoice = { id: string; invoice_number: string; status: string; date: s
 function buildPerformance(jobs: PerfJob[], invoices: PerfInvoice[]): Record<string, PropPerf> {
   const out: Record<string, PropPerf> = {}
   const ensure = (id: string): PropPerf =>
-    (out[id] ||= { lifetimeRevenue: 0, completedVisits: 0, avgInvoice: 0, avgActualMin: null, lastServiceDate: null })
+    (out[id] ||= { lifetimeRevenue: 0, completedVisits: 0, avgInvoice: 0, avgActualMin: null, lastActualMin: null, lastServiceDate: null })
 
   // Completed visits + actual-time + last service from jobs.
   const durSum: Record<string, number> = {}
   const durCount: Record<string, number> = {}
+  const lastActualDate: Record<string, string> = {} // newest timed visit per property
   for (const j of jobs) {
     if (!j.property_id || j.status !== 'completed') continue
     const p = ensure(j.property_id)
@@ -55,6 +57,10 @@ function buildPerformance(jobs: PerfJob[], invoices: PerfInvoice[]): Record<stri
     if (Number(j.actual_minutes) > 0) {
       durSum[j.property_id] = (durSum[j.property_id] || 0) + Number(j.actual_minutes)
       durCount[j.property_id] = (durCount[j.property_id] || 0) + 1
+      if (!lastActualDate[j.property_id] || j.scheduled_date >= lastActualDate[j.property_id]) {
+        lastActualDate[j.property_id] = j.scheduled_date
+        p.lastActualMin = Number(j.actual_minutes)
+      }
     }
   }
   for (const id of Object.keys(durCount)) out[id].avgActualMin = Math.round(durSum[id] / durCount[id])
@@ -231,6 +237,27 @@ export default function PropertiesPage() {
             const estFromActual = perf?.avgActualMin != null
             const measured = !!saved || Number(property.lawn_sqft) > 0
             const hasWonQuote = (qp?.accepted ?? 0) > 0
+
+            // Active recurring service (the dominant non-paused plan).
+            const activePlan = plans.find(p => !p.paused) ?? null
+            // Last actual visit vs the estimate (when both exist).
+            const estDur = saved?.rec.est_minutes ?? null
+            const durDelta = perf?.lastActualMin != null && estDur != null ? perf.lastActualMin - estDur : null
+            // Pricing drift: what was last accepted/quoted vs what we'd recommend now.
+            const lastPriceVal = qp?.lastAccepted?.total ?? lastQuote?.total ?? null
+            const recOneTime = saved?.rec.one_time ?? null
+            const drift = lastPriceVal && lastPriceVal > 0 && recOneTime ? Math.round(((recOneTime - lastPriceVal) / lastPriceVal) * 100) : null
+            const driftBig = drift != null && Math.abs(drift) >= 15
+            // Calm, actionable warnings (capped, summary-only).
+            const daysSinceISO = (iso: string) => Math.floor((Date.now() - new Date(iso + 'T00:00:00').getTime()) / 86400000)
+            const warnings: { text: string; amber: boolean }[] = []
+            if (stale) warnings.push({ text: 'Measurement is old', amber: true })
+            if (confidence === 'low') warnings.push({ text: 'Low pricing confidence', amber: true })
+            if (activePlan && !nextVisit) warnings.push({ text: 'Recurring — nothing scheduled', amber: true })
+            else if (activePlan && perf?.lastServiceDate && daysSinceISO(perf.lastServiceDate) > 45) warnings.push({ text: `Not serviced in ${daysSinceISO(perf.lastServiceDate)} days`, amber: true })
+            if (property.customer_id && (!perf || perf.completedVisits === 0)) warnings.push({ text: 'No completed jobs yet', amber: false })
+            if (driftBig) warnings.push({ text: `Pricing drift ${drift! > 0 ? '+' : ''}${drift}% vs last`, amber: false })
+            const topWarnings = warnings.slice(0, 3)
             return (
             <Card key={property.id}>
               <CardBody>
@@ -245,6 +272,11 @@ export default function PropertiesPage() {
                         {property.is_primary && (
                           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border uppercase tracking-wide bg-accent-dim text-accent border-accent/20">
                             Primary
+                          </span>
+                        )}
+                        {activePlan && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border uppercase tracking-wide bg-accent/10 text-accent border-accent/20">
+                            <Repeat className="w-2.5 h-2.5" /> {activePlan.cadenceLabel}
                           </span>
                         )}
                       </div>
@@ -278,10 +310,12 @@ export default function PropertiesPage() {
                           {stale && <span className="text-amber-400">· may be outdated</span>}
                         </p>
                       )}
-                      {nextVisit && (
+                      {(perf?.lastServiceDate || nextVisit) && (
                         <p className="text-xs text-ink-faint flex items-center gap-1">
                           <CalendarClock className="w-3 h-3 shrink-0 text-accent" />
-                          Next visit {formatDate(nextVisit.date)}{nextVisit.count > 1 && <span>· {nextVisit.count} upcoming</span>}
+                          {perf?.lastServiceDate && <>Last service {formatDate(perf.lastServiceDate)}</>}
+                          {perf?.lastServiceDate && nextVisit && <span> · </span>}
+                          {nextVisit && <>Next {formatDate(nextVisit.date)}{nextVisit.count > 1 ? ` (${nextVisit.count})` : ''}</>}
                         </p>
                       )}
                       {prefText && (
@@ -321,6 +355,18 @@ export default function PropertiesPage() {
                     )}
                   </div>
                 </div>
+
+                {/* Calm, actionable warnings — summary chips, never a list */}
+                {topWarnings.length > 0 && (
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {topWarnings.map((w, i) => (
+                      <span key={i}
+                        className={`inline-flex items-center gap-1 text-[11px] font-medium rounded-full px-2 py-0.5 border ${w.amber ? 'border-amber-500/30 bg-amber-500/10 text-amber-300' : 'border-border bg-bg-tertiary text-ink-muted'}`}>
+                        {w.amber && <AlertTriangle className="w-3 h-3" />} {w.text}
+                      </span>
+                    ))}
+                  </div>
+                )}
 
                 {/* Current Service Plan — the recurring schedule at a glance */}
                 {plans.length > 0 && (
@@ -397,6 +443,11 @@ export default function PropertiesPage() {
                       <span className="text-ink-muted">No accepted quote yet</span>
                     )}
                     <span className="text-ink-faint">{qp.quoted} quoted · {qp.accepted} accepted</span>
+                    {drift != null && recOneTime != null && (
+                      <span className={driftBig ? 'text-amber-400 font-medium' : 'text-ink-faint'} title="Current recommended one-time vs the last price">
+                        now ~{formatCurrency(recOneTime)} ({drift > 0 ? '+' : ''}{drift}%)
+                      </span>
+                    )}
                   </div>
                 )}
 
@@ -422,9 +473,14 @@ export default function PropertiesPage() {
                     {/* Estimated visit length + pricing confidence */}
                     {(estMin != null || confidence) && (
                       <div className="flex items-center gap-3 flex-wrap mt-2 pt-2 border-t border-accent/15 text-[11px] text-ink-muted">
-                        {estMin != null && (
+                        {durDelta != null && estDur != null && perf?.lastActualMin != null ? (
+                          <span className="inline-flex items-center gap-1" title="Last actual visit vs the estimate">
+                            <Timer className="w-3 h-3" /> Last visit {perf.lastActualMin}m vs ~{estDur}m est
+                            <span className={durDelta > 10 ? 'text-amber-400' : durDelta < -5 ? 'text-emerald-400' : 'text-ink-faint'}>({durDelta > 0 ? '+' : ''}{durDelta}m)</span>
+                          </span>
+                        ) : estMin != null ? (
                           <span className="inline-flex items-center gap-1"><Timer className="w-3 h-3" /> Est. visit ~{estMin} min{estFromActual ? <span className="text-ink-faint"> · avg of {perf!.completedVisits}</span> : null}</span>
-                        )}
+                        ) : null}
                         {confidence && (
                           <span className="inline-flex items-center gap-1"><ShieldCheck className="w-3 h-3" /> {confidence[0].toUpperCase() + confidence.slice(1)} confidence</span>
                         )}
