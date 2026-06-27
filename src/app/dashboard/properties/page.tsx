@@ -16,9 +16,11 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { formatDate, formatCurrency, localTodayISO } from '@/lib/utils'
 import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes, latestSavedRecommendation, recommendationIsStale, pricingConfidence } from '@/lib/pricing'
 import { resolvePrefs, prefSummary, type PrefSource } from '@/lib/preferences'
+import { computePropertyHealth } from '@/lib/propertyHealth'
+import { getPropertyContexts } from '@/lib/ai/propertyContext'
 import { LocatedJob, fetchLocatedUpcomingJobs, nearbyJobCount } from '@/lib/geo'
 import { JobPhotos } from '@/components/photos/JobPhotos'
-import { MapPin, Home, User, Ruler, History, RefreshCw, Trophy, DollarSign, CheckCircle2, Receipt, Timer, CalendarClock, AlertTriangle, Repeat, Camera, FileText, Clock, StickyNote, ShieldCheck, CalendarPlus } from 'lucide-react'
+import { MapPin, Home, User, Ruler, History, RefreshCw, Trophy, DollarSign, CheckCircle2, Receipt, Timer, CalendarClock, AlertTriangle, Repeat, Camera, FileText, Clock, StickyNote, ShieldCheck, CalendarPlus, Lightbulb } from 'lucide-react'
 
 // Quote statuses that count as a "won" price — the accepted-price memory.
 const QUOTE_WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
@@ -95,6 +97,9 @@ export default function PropertiesPage() {
   // Property memory derived from existing tables — no new schema.
   const [nextVisitByProp, setNextVisitByProp] = useState<Record<string, { date: string; count: number }>>({})
   const [quotePricingByProp, setQuotePricingByProp] = useState<Record<string, { quoted: number; accepted: number; lastAccepted: { total: number; quote_number: string; date: string } | null }>>({})
+  // Which properties already have an AI Vision analysis (fault-tolerant: empty when
+  // the feature/table isn't present). Feeds the health score; never required.
+  const [hasVisionByProp, setHasVisionByProp] = useState<Record<string, boolean>>({})
   const [recalcId, setRecalcId] = useState<string | null>(null)
 
   const supabase = createClient()
@@ -173,6 +178,15 @@ export default function PropertiesPage() {
       const byProp: Record<string, ServicePlan[]> = {}
       for (const plan of allPlans) if (plan.propertyId) (byProp[plan.propertyId] ||= []).push(plan)
       setPlansByProp(byProp)
+
+      // AI Vision reuse — which properties already have an analysis (one query,
+      // fault-tolerant: empty map if the table/feature isn't present). Feeds the
+      // health score; nothing breaks when AI Vision hasn't been wired in yet.
+      const propIds = ((pRes.data as Property[]) || []).map(p => p.id)
+      try {
+        const visionMap = await getPropertyContexts(supabase, propIds)
+        if (visionMap.size) setHasVisionByProp(Object.fromEntries(propIds.map(id => [id, visionMap.has(id)])))
+      } catch { /* AI Vision absent — health simply omits it */ }
       setLoading(false)
     }
     fetchProperties()
@@ -248,16 +262,30 @@ export default function PropertiesPage() {
             const recOneTime = saved?.rec.one_time ?? null
             const drift = lastPriceVal && lastPriceVal > 0 && recOneTime ? Math.round(((recOneTime - lastPriceVal) / lastPriceVal) * 100) : null
             const driftBig = drift != null && Math.abs(drift) >= 15
-            // Calm, actionable warnings (capped, summary-only).
+            // ── One Property Health score → one recommendation → one primary
+            // action. Consolidates every signal above so the card guides instead
+            // of listing (reuses the one lib/propertyHealth engine). ──
             const daysSinceISO = (iso: string) => Math.floor((Date.now() - new Date(iso + 'T00:00:00').getTime()) / 86400000)
-            const warnings: { text: string; amber: boolean }[] = []
-            if (stale) warnings.push({ text: 'Measurement is old', amber: true })
-            if (confidence === 'low') warnings.push({ text: 'Low pricing confidence', amber: true })
-            if (activePlan && !nextVisit) warnings.push({ text: 'Recurring — nothing scheduled', amber: true })
-            else if (activePlan && perf?.lastServiceDate && daysSinceISO(perf.lastServiceDate) > 45) warnings.push({ text: `Not serviced in ${daysSinceISO(perf.lastServiceDate)} days`, amber: true })
-            if (property.customer_id && (!perf || perf.completedVisits === 0)) warnings.push({ text: 'No completed jobs yet', amber: false })
-            if (driftBig) warnings.push({ text: `Pricing drift ${drift! > 0 ? '+' : ''}${drift}% vs last`, amber: false })
-            const topWarnings = warnings.slice(0, 3)
+            const health = computePropertyHealth({
+              hasCustomer: !!property.customer_id,
+              measured,
+              measurementStale: stale,
+              located: property.lat != null && property.lng != null,
+              pricingConfidence: confidence,
+              completedVisits: perf?.completedVisits ?? 0,
+              hasActiveRecurring: !!activePlan,
+              recurringNothingScheduled: !!activePlan && !nextVisit,
+              daysSinceLastService: perf?.lastServiceDate ? daysSinceISO(perf.lastServiceDate) : null,
+              hasUpcoming: !!nextVisit,
+              hasWonQuote,
+              quotedCount: qp?.quoted ?? 0,
+              pricingDriftPct: drift,
+              hasVision: !!hasVisionByProp[property.id],
+            })
+            const measureHref = `/dashboard/properties/measure?id=${property.id}`
+            const actionHref = health.action === 'quote' ? `/dashboard/quotes/new?customer=${property.customer_id}&property=${property.id}`
+              : health.action === 'schedule' ? `/dashboard/schedule?customer=${property.customer_id}&property=${property.id}`
+              : measureHref
             return (
             <Card key={property.id}>
               <CardBody>
@@ -279,6 +307,15 @@ export default function PropertiesPage() {
                             <Repeat className="w-2.5 h-2.5" /> {activePlan.cadenceLabel}
                           </span>
                         )}
+                        {/* One overall health score — measurement, pricing, history, recurring, scheduling, AI Vision */}
+                        <span title="Property health — measurement freshness, pricing confidence, service history, recurring status, scheduling & AI Vision"
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
+                            health.tone === 'good' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                            : health.tone === 'warn' ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
+                            : health.tone === 'new' ? 'border-sky-500/30 bg-sky-500/10 text-sky-300'
+                            : 'border-accent/20 bg-accent/10 text-accent'}`}>
+                          ♥ {health.score} · {health.label}
+                        </span>
                       </div>
                       {(property.city || property.province) && (
                         <p className="text-xs text-ink-muted flex items-center gap-1">
@@ -330,24 +367,26 @@ export default function PropertiesPage() {
                       )}
                     </div>
                   </div>
-                  <div className="flex flex-col items-stretch gap-2 shrink-0 w-[140px]">
-                    {/* Proactive next step — the one obvious action for where this
-                        property is in its lifecycle (reuses the saved measurement). */}
-                    {property.customer_id && measured && !hasWonQuote && (
-                      <Link href={`/dashboard/quotes/new?customer=${property.customer_id}&property=${property.id}`}>
-                        <Button size="sm" className="w-full"><FileText className="w-3.5 h-3.5" /> Create quote</Button>
-                      </Link>
-                    )}
-                    {property.customer_id && hasWonQuote && !nextVisit && (
-                      <Link href={`/dashboard/schedule?customer=${property.customer_id}&property=${property.id}`}>
-                        <Button size="sm" className="w-full"><CalendarPlus className="w-3.5 h-3.5" /> Schedule</Button>
-                      </Link>
-                    )}
-                    <Link href={`/dashboard/properties/measure?id=${property.id}`}>
-                      <Button variant="secondary" size="sm" className="w-full">
-                        <Ruler className="w-3.5 h-3.5" /> {last ? 'Re-measure' : 'Measure'}
+                  <div className="flex flex-col items-stretch gap-1.5 shrink-0 w-[150px]">
+                    {/* The ONE primary action for this property's current state. */}
+                    {health.action === 'recalc' ? (
+                      <Button size="sm" loading={recalcId === property.id} onClick={() => recalculate(property)} className="w-full">
+                        <RefreshCw className="w-3.5 h-3.5" /> {health.actionLabel}
                       </Button>
-                    </Link>
+                    ) : (
+                      <Link href={actionHref}>
+                        <Button size="sm" className="w-full">
+                          {health.action === 'quote' ? <FileText className="w-3.5 h-3.5" />
+                            : health.action === 'schedule' ? <CalendarPlus className="w-3.5 h-3.5" />
+                            : <Ruler className="w-3.5 h-3.5" />}
+                          {health.actionLabel}
+                        </Button>
+                      </Link>
+                    )}
+                    {/* Quiet utility — re-measuring is always one tap away, but never competes as the primary. */}
+                    {health.action !== 'measure' && health.action !== 'remeasure' && (
+                      <Link href={measureHref} className="text-[11px] text-ink-faint hover:text-ink text-right">Re-measure</Link>
+                    )}
                     {property.lat && property.lng ? (
                       <p className="text-xs text-accent font-medium text-right">📍 Located</p>
                     ) : (
@@ -356,15 +395,15 @@ export default function PropertiesPage() {
                   </div>
                 </div>
 
-                {/* Calm, actionable warnings — summary chips, never a list */}
-                {topWarnings.length > 0 && (
-                  <div className="mt-3 flex flex-wrap gap-1.5">
-                    {topWarnings.map((w, i) => (
-                      <span key={i}
-                        className={`inline-flex items-center gap-1 text-[11px] font-medium rounded-full px-2 py-0.5 border ${w.amber ? 'border-amber-500/30 bg-amber-500/10 text-amber-300' : 'border-border bg-bg-tertiary text-ink-muted'}`}>
-                        {w.amber && <AlertTriangle className="w-3 h-3" />} {w.text}
-                      </span>
-                    ))}
+                {/* THE single highest-priority recommendation — what to do next,
+                    not a wall of equal nudges. The matching primary action button
+                    lives in the action column. */}
+                {health.recommendation && (
+                  <div className={`mt-3 flex items-center gap-2 rounded-xl border px-3 py-2 ${health.tone === 'warn' ? 'border-amber-500/30 bg-amber-500/10' : 'border-accent/25 bg-accent/[0.06]'}`}>
+                    {health.tone === 'warn'
+                      ? <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                      : <Lightbulb className="w-4 h-4 text-accent shrink-0" />}
+                    <p className="text-xs text-ink flex-1 min-w-0">{health.recommendation}</p>
                   </div>
                 )}
 
