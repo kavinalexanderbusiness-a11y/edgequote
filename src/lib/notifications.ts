@@ -27,6 +27,24 @@ export function notifPriority(type: string): NotifPriority {
   return PRIORITY[type] ?? 'update'
 }
 
+// The one-click action verb per type — every notification offers an obvious next
+// step (it navigates to the notification's href). Falls back to "View".
+const ACTION_VERB: Record<string, string> = {
+  quote_accepted: 'Schedule',
+  invoice_paid: 'View',
+  new_message: 'Reply',
+  portal_request: 'View',
+  review_received: 'View',
+  website_lead: 'Build quote',
+  payment_failed: 'Fix payment',
+  autopay_review: 'Review',
+  payment_refunded: 'View',
+  payment_disputed: 'Review',
+}
+export function notificationActionLabel(type: string): string {
+  return ACTION_VERB[type] ?? 'View'
+}
+
 // Singular noun per type, for "3 invoices paid"-style group titles.
 const TYPE_NOUN: Record<string, string> = {
   quote_accepted: 'quote accepted',
