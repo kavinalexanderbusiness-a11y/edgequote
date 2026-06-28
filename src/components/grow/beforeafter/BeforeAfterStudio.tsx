@@ -267,6 +267,14 @@ export function BeforeAfterStudio() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reloadKey])
 
+  // Background uploads finish out-of-band (the global upload queue). Refresh the
+  // gallery when a batch completes so freshly-uploaded pairs appear automatically.
+  useEffect(() => {
+    const onComplete = () => setReloadKey(k => k + 1)
+    window.addEventListener('eq:upload-complete', onComplete)
+    return () => window.removeEventListener('eq:upload-complete', onComplete)
+  }, [])
+
   const selected = useMemo(() => pairs.find(p => p.jobId === selectedJobId) || null, [pairs, selectedJobId])
 
   // Resolve current before/after photos honoring per-pair swaps.
@@ -605,7 +613,8 @@ export function BeforeAfterStudio() {
               <button onClick={() => setShowUploader(false)} className="text-ink-faint hover:text-ink"><X className="w-5 h-5" /></button>
             </div>
             <div className="p-4">
-              <BeforeAfterUploader onUploaded={() => { setReloadKey(k => k + 1) }} onClose={() => setShowUploader(false)} />
+              {/* Refresh happens on the 'eq:upload-complete' event (background queue). */}
+              <BeforeAfterUploader onClose={() => setShowUploader(false)} />
             </div>
           </div>
         </div>

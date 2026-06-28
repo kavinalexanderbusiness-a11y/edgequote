@@ -5,6 +5,7 @@ import { InstallPrompt } from '@/components/pwa/InstallPrompt'
 import { CommandPalette } from '@/components/command/CommandPalette'
 import { Toaster } from '@/components/ui/Toaster'
 import { ConfirmHost } from '@/components/ui/ConfirmHost'
+import { UploadQueueWidget } from '@/components/photos/UploadQueueWidget'
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient()
@@ -22,6 +23,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       <CommandPalette />
       <Toaster />
       <ConfirmHost />
+      <UploadQueueWidget />
     </div>
   )
 }

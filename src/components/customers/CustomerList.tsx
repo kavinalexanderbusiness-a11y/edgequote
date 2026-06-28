@@ -10,9 +10,13 @@ import { prefetchCustomer, hoverIntent } from '@/lib/prefetch'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { applyConsent, SMS_CONSENT_WARNING, ConsentChannel } from '@/lib/consent'
 import { toast as notify } from '@/lib/toast'
+import { useBulkSelect } from '@/hooks/useBulkSelect'
+import { BulkActionBar, SelectCheckbox, SelectAllToggle, type BulkAction } from '@/components/ui/BulkActions'
+import { BulkMessageDialog } from '@/components/comms/BulkMessageDialog'
+import { exportRowsToCsv } from '@/lib/csv'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
-import { Edit2, Trash2, Phone, Mail, FileText, Search, Link2, ExternalLink, Check, MessageSquare, ShieldAlert } from 'lucide-react'
+import { Edit2, Trash2, Phone, Mail, FileText, Search, Link2, ExternalLink, Check, MessageSquare, ShieldAlert, Archive, Download, Send } from 'lucide-react'
 
 type ConsentFilter = '' | 'sms_in' | 'sms_out' | 'email_in' | 'email_out' | 'both' | 'neither'
 const CONSENT_FILTERS: { value: ConsentFilter; label: string }[] = [
@@ -39,9 +43,9 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
   const [deleting, setDeleting] = useState<string | null>(null)
   const [portalBusy, setPortalBusy] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [bulkBusy, setBulkBusy] = useState(false)
   const [smsConfirm, setSmsConfirm] = useState(false)
+  const [showMsg, setShowMsg] = useState(false)
+  const [busyKey, setBusyKey] = useState<string | null>(null)
 
   function matchesConsent(c: Customer): boolean {
     switch (consentFilter) {
@@ -67,24 +71,21 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
 
   function showToast(msg: string) { setToast(msg); setTimeout(() => setToast(null), 2600) }
 
-  const allFilteredSelected = filtered.length > 0 && filtered.every(c => selected.has(c.id))
-  function toggleSelect(id: string) {
-    setSelected(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
-  }
-  function toggleSelectAll() { setSelected(allFilteredSelected ? new Set() : new Set(filtered.map(c => c.id))) }
+  // Shared multi-select — same behavior as every other list.
+  const sel = useBulkSelect(filtered)
 
   async function runBulk(channel: ConsentChannel, value: boolean) {
     const supabase = createClient()
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
-    const targets = customers.filter(c => selected.has(c.id)).map(c => ({ id: c.id, sms_opt_in: c.sms_opt_in, email_opt_in: c.email_opt_in }))
+    const targets = sel.selectedItems.map(c => ({ id: c.id, sms_opt_in: c.sms_opt_in, email_opt_in: c.email_opt_in }))
     if (!targets.length) return
-    setBulkBusy(true)
+    setBusyKey(channel === 'sms' ? 'sms-on' : 'email-on')
     const res = await applyConsent(supabase, { targets, channel, value, userId: user.id, changedBy: user.email || user.id, source: 'bulk' })
-    setBulkBusy(false)
+    setBusyKey(null)
     if (res.error) { showToast('Could not update consent. Please try again.'); return }
     showToast(`${channel === 'sms' ? 'SMS' : 'Email'} consent ${value ? 'enabled' : 'disabled'} for ${res.changed} customer${res.changed !== 1 ? 's' : ''}.`)
-    setSelected(new Set())
+    sel.clear()
     await onRefresh()
   }
   // Enabling SMS always routes through an explicit confirmation first.
@@ -92,6 +93,48 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
     if (channel === 'sms' && value) { setSmsConfirm(true); return }
     runBulk(channel, value)
   }
+
+  // Bulk archive — reversible, with the shared Undo pattern (restores archived_at=null).
+  async function bulkArchive() {
+    const ids = sel.selectedItems.map(c => c.id)
+    if (!ids.length) return
+    const supabase = createClient()
+    setBusyKey('archive')
+    const { error } = await supabase.from('customers').update({ archived_at: new Date().toISOString() }).in('id', ids)
+    setBusyKey(null)
+    if (error) { notify.error('Could not archive: ' + error.message); return }
+    sel.clear()
+    await onRefresh()
+    notify.undo(`Archived ${ids.length} customer${ids.length !== 1 ? 's' : ''}`, async () => {
+      await supabase.from('customers').update({ archived_at: null }).in('id', ids); await onRefresh()
+    })
+  }
+
+  function exportSelected() {
+    const rows = sel.selectedItems
+    if (!rows.length) return
+    exportRowsToCsv(`customers-${rows.length}`, rows, [
+      { label: 'Name', value: c => c.name },
+      { label: 'Email', value: c => c.email },
+      { label: 'Phone', value: c => c.phone },
+      { label: 'Address', value: c => c.address },
+      { label: 'City', value: c => c.city },
+      { label: 'Province', value: c => c.province },
+      { label: 'SMS opt-in', value: c => (c.sms_opt_in ? 'yes' : 'no') },
+      { label: 'Email opt-in', value: c => (c.email_opt_in ? 'yes' : 'no') },
+      { label: 'Source', value: c => c.acquisition_source },
+      { label: 'Added', value: c => c.created_at },
+    ])
+    showToast(`Exported ${rows.length} customer${rows.length !== 1 ? 's' : ''} to CSV.`)
+  }
+
+  const bulkActions: BulkAction[] = [
+    { key: 'message', label: 'Message', icon: Send, tone: 'primary', onClick: () => setShowMsg(true) },
+    { key: 'archive', label: 'Archive', icon: Archive, onClick: bulkArchive },
+    { key: 'export', label: 'Export', icon: Download, onClick: exportSelected },
+    { key: 'email-on', label: 'Email on', icon: Mail, onClick: () => requestBulk('email', true) },
+    { key: 'sms-on', label: 'SMS on', icon: MessageSquare, onClick: () => requestBulk('sms', true) },
+  ]
 
   async function handleDelete(id: string) {
     // The page runs a record-aware safety check + an accurate confirmation
@@ -160,26 +203,11 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
         ))}
       </div>
 
-      {/* Bulk action bar */}
-      {selected.size > 0 && (
-        <div className="sticky top-2 z-20 flex items-center gap-2 flex-wrap bg-bg-secondary border border-accent/40 rounded-xl px-4 py-2.5 shadow-lg">
-          <span className="text-sm font-semibold text-ink">{selected.size} selected</span>
-          <span className="text-xs text-ink-faint">consent:</span>
-          <Button size="sm" variant="secondary" loading={bulkBusy} onClick={() => requestBulk('email', true)}><Mail className="w-3.5 h-3.5" /> Email on</Button>
-          <Button size="sm" variant="ghost" onClick={() => requestBulk('email', false)}>Email off</Button>
-          <Button size="sm" variant="secondary" loading={bulkBusy} onClick={() => requestBulk('sms', true)}><MessageSquare className="w-3.5 h-3.5" /> SMS on</Button>
-          <Button size="sm" variant="ghost" onClick={() => requestBulk('sms', false)}>SMS off</Button>
-          <button onClick={() => setSelected(new Set())} className="ml-auto text-xs font-medium text-ink-faint hover:text-ink">Clear</button>
-        </div>
-      )}
+      {/* Shared bulk action bar — same everywhere */}
+      <BulkActionBar count={sel.count} actions={bulkActions} onClear={sel.clear} busyKey={busyKey} />
 
       {/* Select all */}
-      {filtered.length > 0 && (
-        <label className="flex items-center gap-2 text-xs text-ink-muted cursor-pointer select-none">
-          <input type="checkbox" checked={allFilteredSelected} onChange={toggleSelectAll} className="w-4 h-4 rounded border-border-strong accent-accent" />
-          Select all {filtered.length}
-        </label>
-      )}
+      <SelectAllToggle allSelected={sel.allSelected} onToggle={sel.toggleAll} count={filtered.length} noun="customer" />
 
       {/* List */}
       {filtered.length === 0 ? (
@@ -190,9 +218,8 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
         <div className="grid gap-3">
           {filtered.map(c => (
             <Card key={c.id} {...hoverIntent(() => prefetchCustomer(c.id))}
-              className={cn('flex items-center gap-3 px-5 py-4 transition-colors', selected.has(c.id) ? 'border-accent/50' : 'hover:border-border-strong')}>
-              <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggleSelect(c.id)}
-                className="w-4 h-4 rounded border-border-strong accent-accent shrink-0" title="Select" />
+              className={cn('flex items-center gap-3 px-5 py-4 transition-colors', sel.isSelected(c.id) ? 'border-accent/50' : 'hover:border-border-strong')}>
+              <SelectCheckbox checked={sel.isSelected(c.id)} onToggle={shift => sel.toggle(c.id, shift)} />
               {/* Avatar */}
               <div className="w-10 h-10 rounded-full bg-accent/10 border border-accent/20 flex items-center justify-center flex-shrink-0">
                 <span className="text-sm font-bold text-accent">{getInitials(c.name)}</span>
@@ -254,13 +281,29 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
         </div>
       )}
 
+      {/* Bulk message — reuses the comms pipeline; review-request / reminder / etc. */}
+      {showMsg && (
+        <BulkMessageDialog
+          customerIds={sel.selectedItems.map(c => c.id)}
+          title="Message customers"
+          templates={[
+            { value: 'review_request', label: 'Request a Google review' },
+            { value: 'reminder', label: 'Quote reminder / follow-up' },
+            { value: 'thanks', label: 'Thank you' },
+            { value: 'win_back', label: 'Win-back — we miss you' },
+            { value: 'marketing', label: 'Promotion / update' },
+          ]}
+          onClose={sent => { setShowMsg(false); if (sent) sel.clear() }}
+        />
+      )}
+
       {/* SMS safety confirmation */}
       {smsConfirm && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setSmsConfirm(false)}>
           <div className="bg-bg-secondary border border-border-strong rounded-card max-w-md w-full p-5 space-y-4" onClick={e => e.stopPropagation()}>
             <p className="text-sm font-bold text-amber-400 flex items-center gap-2"><ShieldAlert className="w-4 h-4" /> Enable SMS consent?</p>
             <p className="text-sm text-ink-muted">{SMS_CONSENT_WARNING}</p>
-            <p className="text-xs text-ink-faint">This enables SMS for {selected.size} selected customer{selected.size !== 1 ? 's' : ''}.</p>
+            <p className="text-xs text-ink-faint">This enables SMS for {sel.count} selected customer{sel.count !== 1 ? 's' : ''}.</p>
             <div className="flex justify-end gap-2">
               <Button variant="ghost" size="sm" onClick={() => setSmsConfirm(false)}>Cancel</Button>
               <Button size="sm" onClick={() => { setSmsConfirm(false); runBulk('sms', true) }}>I confirm — enable SMS</Button>
