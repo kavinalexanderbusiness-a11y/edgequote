@@ -366,7 +366,11 @@ export interface InvoiceLineItem {
   kind: InvoiceLineKind
 }
 
-export type InvoiceStatus = 'draft' | 'unpaid' | 'sent' | 'paid'
+// Stored statuses. partial/overpaid are derived by the recompute_invoice_paid DB
+// trigger from the payment ledger (Total Paid vs Total). 'overdue' is a DISPLAY-only
+// overlay (time-based: balance owing + past due) — never stored.
+export type InvoiceStatus = 'draft' | 'unpaid' | 'sent' | 'partial' | 'paid' | 'overpaid'
+export type InvoiceDisplayStatus = InvoiceStatus | 'overdue'
 
 export interface Invoice {
   id: string
@@ -392,22 +396,64 @@ export interface Invoice {
   // How it was paid (set on mark-paid / by the Stripe webhook). null = unpaid.
   payment_method?: 'stripe' | 'etransfer' | 'cash' | 'cheque' | null
   paid_at?: string | null
+  // Total received toward this invoice (maintained by the recompute_invoice_paid
+  // trigger from the payment ledger). Balance = invoiceTotals(...).total − amount_paid.
+  amount_paid?: number
+  // Optional discount. `amount` is ALWAYS the net (post-discount) subtotal; these
+  // record how that net was reached so the breakdown + editor can show/reapply it.
+  discount_type?: 'amount' | 'percent' | null
+  discount_value?: number | null
   customers?: Pick<Customer, 'id' | 'name' | 'email' | 'phone'>
 }
 
-export const INVOICE_STATUS_LABELS: Record<InvoiceStatus, string> = {
+export const INVOICE_STATUS_LABELS: Record<InvoiceDisplayStatus, string> = {
   draft: 'Draft',
   unpaid: 'Unpaid',
   sent: 'Sent',
+  partial: 'Partially Paid',
   paid: 'Paid',
+  overpaid: 'Overpaid',
+  overdue: 'Overdue',
 }
 
-export const INVOICE_STATUS_COLORS: Record<InvoiceStatus, string> = {
-  draft:  'bg-ink-faint/15 text-ink-muted border-ink-faint/30',
-  unpaid: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
-  sent:   'bg-blue-500/10 text-blue-400 border-blue-500/20',
-  paid:   'bg-emerald-500/15 text-emerald-400 border-emerald-500/25',
+export const INVOICE_STATUS_COLORS: Record<InvoiceDisplayStatus, string> = {
+  draft:    'bg-ink-faint/15 text-ink-muted border-ink-faint/30',
+  unpaid:   'bg-amber-500/10 text-amber-400 border-amber-500/20',
+  sent:     'bg-blue-500/10 text-blue-400 border-blue-500/20',
+  partial:  'bg-sky-500/10 text-sky-400 border-sky-500/20',
+  paid:     'bg-emerald-500/15 text-emerald-400 border-emerald-500/25',
+  overpaid: 'bg-violet-500/10 text-violet-400 border-violet-500/20',
+  overdue:  'bg-red-500/10 text-red-400 border-red-500/20',
 }
+
+// A row in the unified payment ledger (existing `payments` table). kind='payment'
+// is money toward an invoice (negative = refund / moved-to-credit); kind='credit'
+// is a customer-credit movement (+granted / −used). One ledger, no separate system.
+export interface Payment {
+  id: string
+  created_at: string
+  user_id: string
+  customer_id: string | null
+  invoice_id: string | null
+  amount: number
+  currency: string
+  provider: string
+  kind: 'payment' | 'credit'
+  method: string | null
+  notes: string | null
+  status: string
+  paid_at: string | null
+  stripe_payment_intent?: string | null
+}
+
+// Manual payment methods the owner can record (Stripe rows come from the webhook).
+export const PAYMENT_METHODS: { value: string; label: string }[] = [
+  { value: 'etransfer', label: 'E-transfer' },
+  { value: 'cash', label: 'Cash' },
+  { value: 'cheque', label: 'Cheque' },
+  { value: 'credit', label: 'Customer credit' },
+  { value: 'other', label: 'Other' },
+]
 
 export interface Quote {
   id: string

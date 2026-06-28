@@ -91,10 +91,11 @@ export async function POST(req: NextRequest) {
           console.error('[stripe] payment upsert failed:', payRes.error.message)
           return NextResponse.json({ error: 'db write failed' }, { status: 500 })
         }
-        // Mark the invoice paid — scoped to the owner from metadata, and only
-        // while it's still owing (never un-pay or touch someone else's invoice).
-        const invRes = await sb.from('invoices').update({ status: 'paid', paid_at: now(), payment_method: 'stripe' })
-          .eq('id', invoiceId).eq('user_id', userId).neq('status', 'paid')
+        // The recompute_invoice_paid trigger derives status + paid_at from the ledger
+        // the moment the payment row lands; here we only stamp the method for display.
+        // Scoped to the owner from metadata (never touches someone else's invoice).
+        const invRes = await sb.from('invoices').update({ payment_method: 'stripe' })
+          .eq('id', invoiceId).eq('user_id', userId)
         if (invRes.error) {
           console.error('[stripe] invoice update failed:', invRes.error.message)
           return NextResponse.json({ error: 'db write failed' }, { status: 500 })
@@ -150,25 +151,29 @@ export async function POST(req: NextRequest) {
       if (invoiceId && userId) {
         // Deterministic dedupe key 'autopay:<invoiceId>' — a re-delivered event is a
         // no-op and a one-time payment (cs_… session id) never collides with it.
+        // .select() tells us whether THIS event inserted a NEW payment row. The
+        // recompute_invoice_paid trigger now derives the invoice status from the ledger
+        // the moment this row lands, so we gate the once-only receipt on the payment
+        // insert (a re-delivered event ignores the duplicate → no second receipt).
         const payRes = await sb.from('payments').upsert({
           user_id: userId, customer_id: customerId, invoice_id: invoiceId,
           amount: (pi.amount ?? 0) / 100, currency: pi.currency ?? 'cad',
           stripe_session_id: `autopay:${invoiceId}`, stripe_payment_intent: pi.id,
           status: 'paid', paid_at: now(),
-        }, { onConflict: 'stripe_session_id', ignoreDuplicates: true })
+        }, { onConflict: 'stripe_session_id', ignoreDuplicates: true }).select('id')
         if (payRes.error) {
           console.error('[stripe] autopay payment upsert failed:', payRes.error.message)
           return NextResponse.json({ error: 'db write failed' }, { status: 500 })
         }
-        // .select() tells us whether THIS event actually flipped the invoice — so the
-        // receipt fires exactly once (a retry flips 0 rows → no duplicate receipt).
-        const invRes = await sb.from('invoices').update({ status: 'paid', paid_at: now(), payment_method: 'stripe' })
-          .eq('id', invoiceId).eq('user_id', userId).neq('status', 'paid').select('id')
+        const isNewPayment = (payRes.data?.length ?? 0) > 0
+        // Stamp the payment method for display (the trigger owns status + paid_at).
+        const invRes = await sb.from('invoices').update({ payment_method: 'stripe' })
+          .eq('id', invoiceId).eq('user_id', userId)
         if (invRes.error) {
           console.error('[stripe] autopay invoice update failed:', invRes.error.message)
           return NextResponse.json({ error: 'db write failed' }, { status: 500 })
         }
-        if ((invRes.data?.length ?? 0) > 0) {
+        if (isNewPayment) {
           // The payment is already recorded + the invoice flipped, so the receipt is
           // pure best-effort. Time-box it: a slow/hung SMS/email provider must never
           // stall the webhook 200 (which would make Stripe needlessly retry).

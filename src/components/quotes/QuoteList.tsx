@@ -131,7 +131,8 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
               <tbody className="divide-y divide-border">
                 {filtered.map(q => (
                   <tr key={q.id} {...hoverIntent(() => router.prefetch(`/dashboard/quotes/${q.id}`))}
-                    className="hover:bg-surface-raised transition-colors group">
+                    onClick={() => router.push(`/dashboard/quotes/${q.id}`)}
+                    className="hover:bg-surface-raised transition-colors group cursor-pointer">
                     <td className="px-3 sm:px-5 py-3.5 font-mono text-xs text-ink-muted">
                       <span className="flex items-center gap-1.5">
                         {needsFollowUp(q) && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" title="Needs follow-up" />}
@@ -146,9 +147,9 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
                     </td>
                     <td className="px-3 sm:px-5 py-3.5 text-ink-muted hidden md:table-cell">{q.service_type}</td>
                     <td className="px-3 sm:px-5 py-3.5 font-semibold text-ink">{formatCurrency(q.total)}</td>
-                    <td className="px-3 sm:px-5 py-3.5"><QuoteStatusControl quoteId={q.id} status={q.status} followUpCount={q.follow_up_count} /></td>
+                    <td className="px-3 sm:px-5 py-3.5" onClick={e => e.stopPropagation()}><QuoteStatusControl quoteId={q.id} status={q.status} followUpCount={q.follow_up_count} /></td>
                     <td className="px-3 sm:px-5 py-3.5 text-ink-faint hidden lg:table-cell">{formatDate(q.created_at)}</td>
-                    <td className="px-3 sm:px-5 py-3.5">
+                    <td className="px-3 sm:px-5 py-3.5" onClick={e => e.stopPropagation()}>
                       <div className="flex items-center gap-1 justify-end">
                         <Button
                           variant="danger"

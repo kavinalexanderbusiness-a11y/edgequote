@@ -143,7 +143,7 @@ export function InvoiceDocument({ invoice, settings }: InvoicePDFProps) {
           </View>
           {(invoice.line_items && invoice.line_items.length > 0
             ? invoice.line_items
-            : [{ description: invoice.service_type || 'Services rendered', amount: Number(invoice.amount), kind: 'service' as const }]
+            : [{ description: invoice.service_type || 'Services rendered', amount: invoiceTotals(invoice.amount, settings, { type: invoice.discount_type, value: invoice.discount_value }).subtotal, kind: 'service' as const }]
           ).map((li, i) => (
             <View style={styles.tableRow} key={i}>
               <View style={styles.cellDesc}>
@@ -155,8 +155,8 @@ export function InvoiceDocument({ invoice, settings }: InvoicePDFProps) {
         </View>
 
         {(() => {
-          const t = invoiceTotals(invoice.amount, settings)
-          if (!t.hasGst) return (
+          const t = invoiceTotals(invoice.amount, settings, { type: invoice.discount_type, value: invoice.discount_value })
+          if (!t.hasGst && !t.hasDiscount) return (
             <View style={styles.grandRow}>
               <Text style={styles.grandLabel}>Amount Due</Text>
               <Text style={styles.grandValue}>{money(t.total)}</Text>
@@ -168,10 +168,18 @@ export function InvoiceDocument({ invoice, settings }: InvoicePDFProps) {
                 <Text style={styles.bodyText}>Subtotal</Text>
                 <Text style={styles.bodyText}>{money(t.subtotal)}</Text>
               </View>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginLeft: 'auto', width: '50%', marginTop: 2 }}>
-                <Text style={styles.bodyText}>GST ({t.gstPercent}%)</Text>
-                <Text style={styles.bodyText}>{money(t.gstAmount)}</Text>
-              </View>
+              {t.hasDiscount ? (
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginLeft: 'auto', width: '50%', marginTop: 2 }}>
+                  <Text style={styles.bodyText}>Discount{t.discountLabel ? ` (${t.discountLabel})` : ''}</Text>
+                  <Text style={styles.bodyText}>-{money(t.discountAmount)}</Text>
+                </View>
+              ) : null}
+              {t.hasGst ? (
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginLeft: 'auto', width: '50%', marginTop: 2 }}>
+                  <Text style={styles.bodyText}>GST ({t.gstPercent}%)</Text>
+                  <Text style={styles.bodyText}>{money(t.gstAmount)}</Text>
+                </View>
+              ) : null}
               <View style={styles.grandRow}>
                 <Text style={styles.grandLabel}>Total Due</Text>
                 <Text style={styles.grandValue}>{money(t.total)}</Text>

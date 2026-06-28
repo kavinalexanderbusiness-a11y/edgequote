@@ -14,6 +14,7 @@ import {
 } from '@/lib/beforeafter/layouts'
 import { loadImage, averageLuminance, prefetch } from '@/lib/beforeafter/imageLoad'
 import { getPropertyContext, type PropertyIntelligence } from '@/lib/ai/propertyContext'
+import { BeforeAfterUploader } from '@/components/photos/BeforeAfterUploader'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -25,7 +26,7 @@ import { FilterPill } from '@/components/ui/FilterPill'
 import {
   Download, Images, Loader2, Wand2, Tag, BadgeCheck, AlertTriangle,
   SlidersHorizontal, RefreshCw, Layers, ShieldCheck, ChevronDown, ChevronUp, Camera,
-  Brain, BookMarked, Crown, Check,
+  Brain, BookMarked, Crown, Check, UploadCloud, X,
 } from 'lucide-react'
 
 // ── Before / After Studio ────────────────────────────────────────────────────
@@ -68,6 +69,10 @@ function seasonOf(iso: string | null): string {
 export function BeforeAfterStudio() {
   const supabase = useMemo(() => createClient(), [])
   const router = useRouter()
+
+  // Smart uploader (drag-drop before/after) + a bump key to re-load after upload.
+  const [showUploader, setShowUploader] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
 
   const [loading, setLoading] = useState(true)
   const [pairs, setPairs] = useState<BeforeAfterPair[]>([])
@@ -260,7 +265,7 @@ export function BeforeAfterStudio() {
     load()
     return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [reloadKey])
 
   const selected = useMemo(() => pairs.find(p => p.jobId === selectedJobId) || null, [pairs, selectedJobId])
 
@@ -569,21 +574,43 @@ export function BeforeAfterStudio() {
   // right-aligned secondary action. Shown in every state so the screen always
   // says "what am I looking at" before anything else.
   const header = (
-    <PageHeader
-      title="Before / After Studio"
-      description={loading
-        ? 'Loading your photos…'
-        : pairs.length
-          ? `${pairs.length} ready-to-post pair${pairs.length !== 1 ? 's' : ''}`
-          : 'Snap a before & after on a completed job to start'}
-      action={!loading && pairs.length ? (
-        <Button variant="secondary" onClick={() => pickStrongest(unscored === 0)} loading={aiBusy}
-          title={unscored === 0 ? 'Re-run the AI on every pair' : 'Score the pairs the AI hasn’t scored yet'}>
-          {unscored === 0 ? <RefreshCw className="w-4 h-4" /> : <Wand2 className="w-4 h-4" />}
-          {unscored === 0 ? 'Re-score' : aiUsed ? `Score ${unscored} more` : 'Pick strongest with AI'}
-        </Button>
-      ) : undefined}
-    />
+    <>
+      <PageHeader
+        title="Before / After Studio"
+        description={loading
+          ? 'Loading your photos…'
+          : pairs.length
+            ? `${pairs.length} ready-to-post pair${pairs.length !== 1 ? 's' : ''}`
+            : 'Snap a before & after on a completed job to start'}
+        action={!loading ? (
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={() => setShowUploader(true)}>
+              <UploadCloud className="w-4 h-4" /> Add photos
+            </Button>
+            {pairs.length > 0 && (
+              <Button variant="secondary" onClick={() => pickStrongest(unscored === 0)} loading={aiBusy}
+                title={unscored === 0 ? 'Re-run the AI on every pair' : 'Score the pairs the AI hasn’t scored yet'}>
+                {unscored === 0 ? <RefreshCw className="w-4 h-4" /> : <Wand2 className="w-4 h-4" />}
+                {unscored === 0 ? 'Re-score' : aiUsed ? `Score ${unscored} more` : 'Pick strongest with AI'}
+              </Button>
+            )}
+          </div>
+        ) : undefined}
+      />
+      {showUploader && (
+        <div className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={() => setShowUploader(false)}>
+          <div className="w-full sm:max-w-lg bg-bg-secondary border border-border sm:rounded-card max-h-[95vh] overflow-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-3 border-b border-border sticky top-0 bg-bg-secondary">
+              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><UploadCloud className="w-4 h-4 text-accent" /> Add before/after photos</h2>
+              <button onClick={() => setShowUploader(false)} className="text-ink-faint hover:text-ink"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="p-4">
+              <BeforeAfterUploader onUploaded={() => { setReloadKey(k => k + 1) }} onClose={() => setShowUploader(false)} />
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   )
 
   if (loading) {
@@ -609,8 +636,8 @@ export function BeforeAfterStudio() {
         <EmptyState
           icon={Camera}
           title="No before/after pairs yet"
-          description="Snap a Before and an After photo on a completed visit — any job with both lands here, ready to turn into a branded post in one tap."
-          action={{ label: 'Go to today’s jobs', onClick: () => router.push('/dashboard/schedule') }}
+          description="Drag in a before & after — EdgeQuote sorts them, attaches them to the job, and pairs them automatically. Any job with both lands here, ready to post in one tap."
+          action={{ label: 'Upload before/after photos', onClick: () => setShowUploader(true) }}
         />
       </div>
     )

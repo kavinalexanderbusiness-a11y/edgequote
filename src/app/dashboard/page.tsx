@@ -20,16 +20,18 @@ export default async function DashboardPage() {
 
   const [{ data: quotes }, { data: invoices }, { data: jobs }, { data: settingsRow }] = await Promise.all([
     supabase.from('quotes').select('*').eq('user_id', user!.id).order('created_at', { ascending: false }),
-    supabase.from('invoices').select('amount, status').eq('user_id', user!.id),
+    supabase.from('invoices').select('amount, status, amount_paid').eq('user_id', user!.id),
     supabase.from('jobs').select('status, scheduled_date').eq('user_id', user!.id),
     supabase.from('business_settings').select('dashboard_cards').eq('user_id', user!.id).maybeSingle(),
   ])
 
   const allQuotes: Quote[] = quotes || []
-  const allInvoices = (invoices as { amount: number; status: string }[]) || []
+  const allInvoices = (invoices as { amount: number; status: string; amount_paid: number | null }[]) || []
   const allJobs = (jobs as { status: string; scheduled_date: string }[]) || []
-  const collectedRevenue = allInvoices.filter(i => i.status === 'paid').reduce((s, i) => s + Number(i.amount || 0), 0)
-  const outstandingRevenue = allInvoices.filter(i => i.status === 'unpaid' || i.status === 'sent').reduce((s, i) => s + Number(i.amount || 0), 0)
+  // Ledger-aware: Collected = money actually received (amount_paid, incl. partial
+  // payments); Outstanding = remaining balance across issued invoices.
+  const collectedRevenue = allInvoices.reduce((s, i) => s + (Number(i.amount_paid) || 0), 0)
+  const outstandingRevenue = allInvoices.filter(i => i.status !== 'draft').reduce((s, i) => s + Math.max(0, Number(i.amount || 0) - (Number(i.amount_paid) || 0)), 0)
 
   // Monthly revenue = total of quotes created this calendar month
   const now = new Date()

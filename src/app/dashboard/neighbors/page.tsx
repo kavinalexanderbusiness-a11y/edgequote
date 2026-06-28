@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { loadAnalyticsCore } from '@/lib/analyticsData'
+import { loadTravelModel } from '@/lib/travelLearning'
 import { Customer } from '@/types'
 import { format } from 'date-fns'
 import { Coord, haversineKm, geocodeAddressDetailed } from '@/lib/geo'
@@ -61,11 +62,12 @@ export default function NeighborsPage() {
   async function load() {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { setLoading(false); return }
-    const [lRes, cRes, pRes, core] = await Promise.all([
+    const [lRes, cRes, pRes, core, travel] = await Promise.all([
       supabase.from('neighbor_leads').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
       supabase.from('customers').select('*').eq('user_id', user.id).order('name'),
       supabase.from('properties').select('id, customer_id, address, lat, lng, city, postal_code, neighborhood').eq('user_id', user.id),
       loadAnalyticsCore(supabase),
+      loadTravelModel(supabase),
     ])
     setLeads((lRes.data as Lead[]) || [])
     setCustomers((cRes.data as Customer[]) || [])
@@ -76,7 +78,7 @@ export default function NeighborsPage() {
     for (const q of (core?.quotes as unknown as (ProfitQuote & { id: string })[]) || []) quotesById[q.id] = q
     const recById: Record<string, RecInfo> = {}
     for (const r of (core?.recurrences as unknown as (RecInfo & { id: string })[]) || []) recById[r.id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count }
-    setCtx({ quotesById, recById, base: null, today: format(new Date(), 'yyyy-MM-dd') })
+    setCtx({ quotesById, recById, base: null, today: format(new Date(), 'yyyy-MM-dd'), speed: travel })
     setJobs(((core?.jobs as unknown as Array<Record<string, any>>) || []).map(j => ({
       id: j.id, scheduled_date: j.scheduled_date, status: j.status, service_type: j.service_type,
       quote_id: j.quote_id, recurrence_id: j.recurrence_id, duration_minutes: j.duration_minutes,

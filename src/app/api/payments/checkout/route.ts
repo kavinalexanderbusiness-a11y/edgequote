@@ -20,25 +20,28 @@ export async function POST(req: NextRequest) {
   if (!invoiceId) return NextResponse.json({ error: 'bad request' }, { status: 400 })
 
   const { data: inv } = await supabase.from('invoices')
-    .select('id, invoice_number, service_type, amount, status, user_id, customer_id, customers(email)')
+    .select('id, invoice_number, service_type, amount, amount_paid, discount_type, discount_value, status, user_id, customer_id, customers(email)')
     .eq('id', invoiceId).eq('user_id', user.id).maybeSingle()
   if (!inv) return NextResponse.json({ error: 'invoice not found' }, { status: 404 })
   const invoice = inv as unknown as {
-    id: string; invoice_number: string; service_type: string | null; amount: number | string
+    id: string; invoice_number: string; service_type: string | null; amount: number | string; amount_paid: number | null
+    discount_type: 'amount' | 'percent' | null; discount_value: number | null
     status: string; user_id: string; customer_id: string | null; customers?: { email: string | null } | null
   }
-  if (invoice.status === 'paid') return NextResponse.json({ error: 'This invoice is already paid.' }, { status: 409 })
 
-  // Charge the GST-inclusive total (fee recovery is already baked into amount).
+  // Charge the remaining BALANCE (GST-inclusive total minus payments already recorded),
+  // so a partly-paid invoice only collects what's still owed.
   const { data: bs } = await supabase.from('business_settings').select('gst_percent').eq('user_id', user.id).maybeSingle()
-  const total = invoiceTotals(invoice.amount, bs as { gst_percent?: number | null } | null).total
+  const total = invoiceTotals(invoice.amount, bs as { gst_percent?: number | null } | null, { type: invoice.discount_type, value: invoice.discount_value }).total
+  const balance = Math.round((total - (Number(invoice.amount_paid) || 0)) * 100) / 100
+  if (balance <= 0) return NextResponse.json({ error: 'This invoice is already paid.' }, { status: 409 })
 
   const base = (process.env.NEXT_PUBLIC_APP_URL || '').replace(/\/$/, '')
   const result = await createInvoiceCheckoutSession(invoice, {
     successUrl: `${base}/dashboard/invoices?paid=1`,
     cancelUrl: `${base}/dashboard/invoices`,
     customerEmail: invoice.customers?.email ?? null,
-    chargeCents: Math.round(total * 100),
+    chargeCents: Math.round(balance * 100),
   })
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 502 })
   return NextResponse.json({ url: result.url })

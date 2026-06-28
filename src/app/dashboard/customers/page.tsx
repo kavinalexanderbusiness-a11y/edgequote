@@ -130,7 +130,9 @@ export default function CustomersPage() {
     const n = { quotes: qc.count || 0, invoices: ic.count || 0, jobs: jc.count || 0, payments: pc.count || 0, convos: cc.count || 0 }
     const total = n.quotes + n.invoices + n.jobs + n.payments + n.convos
 
+    const name = customers.find(c => c.id === id)?.name || 'Customer'
     if (total > 0) {
+      // Has history → ARCHIVE (everything preserved). Act now + offer Undo, no blocking confirm.
       const parts = [
         n.quotes && `${n.quotes} quote${n.quotes !== 1 ? 's' : ''}`,
         n.invoices && `${n.invoices} invoice${n.invoices !== 1 ? 's' : ''}`,
@@ -138,15 +140,20 @@ export default function CustomersPage() {
         n.payments && `${n.payments} payment${n.payments !== 1 ? 's' : ''}`,
         n.convos && `${n.convos} conversation${n.convos !== 1 ? 's' : ''}`,
       ].filter(Boolean).join(', ')
-      if (!confirm(`This customer has ${parts}.\n\nTo protect that history, they'll be ARCHIVED (hidden from your list but fully preserved) — not deleted. You can restore them anytime from "Show archived".\n\nArchive this customer?`)) return
       const { error } = await supabase.from('customers').update({ archived_at: new Date().toISOString() }).eq('id', id)
       if (error) { toast.error('Could not archive the customer: ' + error.message); return }
+      await fetchCustomers()
+      toast.undo(`Archived ${name} — ${parts} preserved`, async () => {
+        await supabase.from('customers').update({ archived_at: null }).eq('id', id); await fetchCustomers()
+      })
     } else {
-      if (!confirm('Delete this customer permanently? They have no quotes, invoices, jobs, payments, or messages, so nothing else is affected. This cannot be undone.')) return
+      // No history → safe hard delete, with a full-row Undo (re-insert restores it exactly).
+      const { data: row } = await supabase.from('customers').select('*').eq('id', id).maybeSingle()
       const { error } = await supabase.from('customers').delete().eq('id', id)
       if (error) { toast.error('Could not delete the customer: ' + error.message); return }
+      await fetchCustomers()
+      if (row) toast.undo(`Deleted ${name}`, async () => { await supabase.from('customers').insert(row); await fetchCustomers() })
     }
-    await fetchCustomers()
   }
 
   async function handleRestore(id: string) {
@@ -205,6 +212,7 @@ export default function CustomersPage() {
               onSubmit={editing ? handleEdit : handleAdd}
               onCancel={() => { setShowForm(false); setEditing(null) }}
               isEdit={!!editing}
+              autosaveKey={editing ? `customer:${editing.id}` : 'customer:new'}
             />
           </CardBody>
         </Card>

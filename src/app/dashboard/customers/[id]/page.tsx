@@ -34,7 +34,7 @@ import {
 } from 'lucide-react'
 
 const WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
-const OPEN_INVOICE = new Set(['unpaid', 'sent'])
+const OPEN_INVOICE = new Set(['unpaid', 'sent', 'partial'])
 
 function localToday(): string {
   const d = new Date()
@@ -185,7 +185,7 @@ export default function CustomerDetailPage() {
       // isn't present yet.
       const [mRes, payRes, srRes] = await Promise.all([
         supabase.from('messages').select('direction, channel, body, created_at').eq('customer_id', id).order('created_at', { ascending: false }).limit(50),
-        supabase.from('payments').select('amount, status, created_at').eq('customer_id', id),
+        supabase.from('payments').select('amount, status, kind, method, notes, created_at').eq('customer_id', id),
         supabase.from('service_requests').select('message, created_at').eq('customer_id', id),
       ])
       const extra: TimelineEvent[] = []
@@ -195,8 +195,18 @@ export default function CustomerDetailPage() {
         const chan = m.channel === 'email' ? 'email' : m.channel === 'portal' ? 'portal message' : 'SMS'
         extra.push({ at: m.created_at, kind: inbound ? 'message_in' : 'message_out', title: `${inbound ? 'Received' : 'Sent'} ${chan}`, sub: (m.body || '').slice(0, 90), href: '/dashboard/messages' })
       }
-      for (const p of (payRes.data as { amount: number; status: string; created_at: string }[]) || []) {
-        if (p.status === 'paid') extra.push({ at: p.created_at, kind: 'payment', title: 'Payment received', sub: formatCurrency(Number(p.amount)) })
+      // The ledger holds payments AND customer-credit movements (kind='credit') AND
+      // reversals (negative payments) — label each correctly instead of "Payment received".
+      for (const p of (payRes.data as { amount: number; status: string; kind: string; method: string | null; notes: string | null; created_at: string }[]) || []) {
+        if (p.status !== 'paid') continue
+        const amt = Number(p.amount) || 0
+        if (p.kind === 'credit') {
+          extra.push({ at: p.created_at, kind: 'payment', title: amt >= 0 ? `Credit added · ${formatCurrency(Math.abs(amt))}` : `Credit applied · ${formatCurrency(Math.abs(amt))}`, sub: p.notes || undefined })
+        } else if (amt < 0) {
+          extra.push({ at: p.created_at, kind: 'payment', title: `Refund · ${formatCurrency(Math.abs(amt))}`, sub: p.notes || undefined })
+        } else {
+          extra.push({ at: p.created_at, kind: 'payment', title: 'Payment received', sub: `${formatCurrency(amt)}${p.method && p.method !== 'stripe' ? ` · ${p.method}` : ''}` })
+        }
       }
       for (const sr of (srRes.data as { message: string; created_at: string }[]) || []) {
         extra.push({ at: sr.created_at, kind: 'portal_request', title: 'Portal service request', sub: (sr.message || '').slice(0, 90), href: '/dashboard/messages' })
@@ -307,8 +317,10 @@ export default function CustomerDetailPage() {
   // ── Revenue (three separate truths) ──
   const wonQuotes = quotes.filter(q => WON.has(q.status))
   const bookedRevenue = wonQuotes.reduce((s, q) => s + Number(q.total || 0), 0)
-  const collectedRevenue = invoices.filter(i => i.status === 'paid').reduce((s, i) => s + Number(i.amount || 0), 0)
-  const outstandingRevenue = invoices.filter(i => OPEN_INVOICE.has(i.status)).reduce((s, i) => s + Number(i.amount || 0), 0)
+  // Collected = money actually received (ledger amount_paid, incl. partial payments);
+  // Outstanding = remaining balance across issued invoices.
+  const collectedRevenue = invoices.reduce((s, i) => s + (Number(i.amount_paid) || 0), 0)
+  const outstandingRevenue = invoices.filter(i => i.status !== 'draft').reduce((s, i) => s + Math.max(0, Number(i.amount || 0) - (Number(i.amount_paid) || 0)), 0)
   const avgJobValue = wonQuotes.length > 0 ? bookedRevenue / wonQuotes.length : 0
 
   // ── Upcoming + retention ──

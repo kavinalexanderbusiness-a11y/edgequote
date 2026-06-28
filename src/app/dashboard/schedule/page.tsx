@@ -35,6 +35,7 @@ import type { HealthIssue, HealthJob } from '@/lib/scheduleHealth'
 import { ScheduleHealthCard } from '@/components/schedule/ScheduleHealthCard'
 import { DayStatusMenu } from '@/components/schedule/DayStatusMenu'
 import { buildDayStatusMap, buildCapacityForDate, loadDayStatuses, setDayStatus, setDayCapacity, clearDayStatus, DAY_STATUS_META, DAY_STATUS_SELECT, type DayStatusMap, type DayStatusRow, type DayStatus } from '@/lib/dayStatus'
+import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { DaySettingsBar } from '@/components/schedule/DaySettingsBar'
 import { WeatherRainCard, type RainMoveSummary } from '@/components/schedule/WeatherRainCard'
@@ -70,6 +71,9 @@ function recFromRow(r: JobRecurrence): Recurrence {
 
 export default function SchedulePage() {
   const supabase = createClient()
+  // Learned drive speed — feeds the proactive optimizer suggestions below.
+  const [travel, setTravel] = useState<TravelModel>(DEFAULT_TRAVEL_MODEL)
+  useEffect(() => { loadTravelModel(supabase).then(setTravel) }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const router = useRouter()
   const searchParams = useSearchParams()
   const quoteId = searchParams.get('quote')
@@ -190,8 +194,8 @@ export default function SchedulePage() {
     for (const [id, r] of Object.entries(recurrences)) recs[id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count }
     const crew = defaultCrew > 0 ? defaultCrew : 1
     const capacityForDate = buildCapacityForDate(dayStatusMap, { crew, hours: (capacityHours > 0 ? capacityHours : 8) / crew })
-    return { today: localToday(), base: baseCoord, preferredDays: preferredWorkDays, capacityHours, recurrences: recs, roadDist, dayStatusMap, capacityForDate }
-  }, [recurrences, baseCoord, preferredWorkDays, capacityHours, roadDist, dayStatusMap, defaultCrew])
+    return { today: localToday(), base: baseCoord, preferredDays: preferredWorkDays, capacityHours, recurrences: recs, roadDist, dayStatusMap, capacityForDate, minPerKm: travel.minPerKm }
+  }, [recurrences, baseCoord, preferredWorkDays, capacityHours, roadDist, dayStatusMap, defaultCrew, travel.minPerKm])
 
   // Proactive auto-suggestions (overloaded days, isolated jobs, recurring-cluster
   // opportunities) — same engines, shown without opening the optimizer.
