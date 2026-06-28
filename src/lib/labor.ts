@@ -63,7 +63,49 @@ export const COMBO_LABEL: Record<string, string> = {
 export function comboLabel(key: string): string {
   return COMBO_LABEL[key] || key.split('+').map(t => t[0].toUpperCase() + t.slice(1)).join(' + ')
 }
-const isLawnCombo = (key: string) => key !== 'snow' && key !== 'other'
+
+// ── service identity — STRICT per-service learning (the ONE service normalizer) ──
+// Every service builds its OWN knowledge: mowing learns only from mowing, mulch
+// only from mulch, rock only from rock, spring cleanup only from spring cleanup.
+// Edging/trimming fold INTO mowing (they ride along on a mow visit); everything
+// else stays separate. Unknown/ad-hoc services slug to their own bucket so even a
+// service we never enumerated still accrues history. Keyed off the free-text
+// service_type — the only service identity labor_observations / quotes both carry.
+// Order matters: more specific patterns win (snow & seasonal cleanups before the
+// generic ones; mowing last so its broad /cut|trim|edg/ never steals another service).
+interface ServiceDef { key: string; label: string; re: RegExp }
+const SERVICE_DEFS: ServiceDef[] = [
+  { key: 'snow',           label: 'Snow removal',     re: /snow|plow|plough|shovel|\bice\b|salt|de-?ice/i },
+  { key: 'spring-cleanup', label: 'Spring cleanup',   re: /spring[\s-]*(clean|clear|tidy|refresh)/i },
+  { key: 'fall-cleanup',   label: 'Fall cleanup',     re: /(fall|autumn)[\s-]*(clean|clear|tidy)|leaf|leaves/i },
+  { key: 'cleanup',        label: 'Yard cleanup',     re: /clean[\s-]*up|yard[\s-]*clean|debris|tidy[\s-]*up/i },
+  { key: 'mulch',          label: 'Mulch',            re: /mulch/i },
+  { key: 'rock',           label: 'Rock / stone',     re: /\brock|\bstone|gravel|river[\s-]*rock|aggregate|landscape[\s-]*fabric/i },
+  { key: 'sod',            label: 'Sod / new lawn',   re: /\bsod\b|turf[\s-]*install|new[\s-]*lawn|lawn[\s-]*install/i },
+  { key: 'aeration',       label: 'Aeration',         re: /aerat|dethatch|de-?thatch|overseed|core[\s-]*aerat/i },
+  { key: 'fertilizing',    label: 'Fertilizing',      re: /fertil|weed[\s&]*feed|lawn[\s-]*treatment|nutrient/i },
+  { key: 'weed-control',   label: 'Weed control',     re: /weed/i },
+  { key: 'hedge',          label: 'Hedge / shrub',    re: /hedge|shrub|bush|prun|topiary/i },
+  { key: 'garden-beds',    label: 'Garden beds',      re: /garden|flower[\s-]*bed|\bbed[\s-]*(prep|maint|install)|planting/i },
+  { key: 'gutter',         label: 'Gutter cleaning',  re: /gutter|eaves?[\s-]*trough/i },
+  { key: 'pressure-wash',  label: 'Pressure washing', re: /pressure[\s-]*wash|power[\s-]*wash/i },
+  { key: 'mowing',         label: 'Mowing',           re: /mow|grass[\s-]*cut|lawn[\s-]*cut|\bcut\b|trim|whipper|string|edg/i },
+]
+const SERVICE_LABELS: Record<string, string> = Object.fromEntries(SERVICE_DEFS.map(d => [d.key, d.label]))
+function slugify(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32)
+}
+// THE service key for all learning (labor + pricing). Same input → same bucket.
+export function serviceKey(serviceType: string | null | undefined): string {
+  const s = (serviceType || '').trim()
+  if (!s) return 'other'
+  for (const d of SERVICE_DEFS) if (d.re.test(s)) return d.key
+  return slugify(s) || 'other'
+}
+export function serviceLabel(key: string): string {
+  return SERVICE_LABELS[key] || key.split('-').map(t => t ? t[0].toUpperCase() + t.slice(1) : t).join(' ') || 'Service'
+}
+const isMowing = (key: string) => key === 'mowing'
 
 // ── recurrence cadence (req: "weekly mowing learns from weekly mowing") ──────────
 // A SECOND axis ON TOP of the service combo — never mixes services, just refines a
@@ -158,18 +200,22 @@ export function learnLaborModel(obs: LaborObservation[]): LaborModel {
   for (const o of obs) {
     if (!(o.actual_minutes > 0)) continue
     const soloMin = o.actual_minutes * eff(Math.max(1, o.crew_size || 1)) // solo-equivalent absolute minutes
+    const key = serviceKey(o.service_type)
+    // Property history is service-scoped — this property's MOWING never informs its
+    // MULCH. Key = property::service so "this exact property, this exact service".
     if (o.property_id) {
-      const p = (byProperty[o.property_id] ||= { soloMinutes: [], sqft: o.sqft })
+      const pk = `${o.property_id}::${key}`
+      const p = (byProperty[pk] ||= { soloMinutes: [], sqft: o.sqft })
       p.soloMinutes.push(soloMin); if (o.sqft) p.sqft = o.sqft
     }
     if (!(Number(o.sqft) > 0)) continue
     const per1000 = soloMin / (Number(o.sqft) / 1000)
-    const { key } = normalizeCombo(o.service_type)
     ;(comboVals[key] ||= []).push(per1000)
-    // Same combo, bucketed by recurrence cadence (weekly mow vs bi-weekly mow…).
+    // Same service, bucketed by recurrence cadence (weekly mow vs bi-weekly mow…).
     const cad = cadenceOf(o.frequency)
     ;((comboCadenceVals[key] ||= {})[cad] ||= []).push(per1000)
-    if (isLawnCombo(key)) {
+    if (isMowing(key)) {
+      // Season + first-cut are grass-growth effects — learned from MOWING only.
       lawnVals.push(per1000)
       seasonVals[seasonOf(o.service_date)].push(per1000)
       if (o.is_initial_visit) firstCutVals.push(per1000); else nonFirstVals.push(per1000)
@@ -220,45 +266,54 @@ export interface LaborEstimate {
   basis: 'property' | 'learned' | 'size-model'
   reasons: string[]
   manMinutes: number         // crew-independent work (for capacity/crew planning — future)
+  // STRICT per-service: true only when THIS service has real history to learn from.
+  // When false the number is a rough size guess — callers should NOT auto-apply it
+  // (don't guess), they should show "not enough data" and fall back to manual entry.
+  enoughData: boolean
+  serviceKey: string
+  serviceLabel: string
 }
 
 export function estimateLabor(input: EstimateInput, model: LaborModel | null): LaborEstimate {
   const sqft = Math.max(0, input.sqft || 0)
   const crew = Math.max(1, Math.round(input.crewSize || 1))
   const og = input.overgrowth && input.overgrowth > 0 ? input.overgrowth : 1
-  const { key } = normalizeCombo(input.serviceType)
+  const key = serviceKey(input.serviceType)
+  const svcLabel = serviceLabel(key)
   const season = seasonOf(input.date ?? null)
-  const seasonF = model ? model.season[season] : DEFAULT_SEASON_FACTOR[season]
-  const firstCutF = input.isInitialVisit ? (model ? model.firstCutFactor : DEFAULT_FIRST_CUT_FACTOR) : 1
+  // Season + first-cut adjustments are grass-growth effects — only applied to mowing.
+  const seasonF = isMowing(key) ? (model ? model.season[season] : DEFAULT_SEASON_FACTOR[season]) : 1
+  const firstCutF = input.isInitialVisit && isMowing(key) ? (model ? model.firstCutFactor : DEFAULT_FIRST_CUT_FACTOR) : 1
 
   const reasons: string[] = []
-  // Prefer the SAME-cadence bucket for this service when it has enough data
-  // ("weekly mow learns from weekly mow"); else fall back to the cadence-agnostic
-  // combo, then the pooled lawn model, then the size model.
+  // STRICT per-service: prefer the same-cadence bucket for THIS service when it has
+  // enough data ("weekly mow learns from weekly mow"), else the cadence-agnostic
+  // history for THIS service. NO cross-service borrowing — mulch never learns from
+  // mowing. When this service has no history we DON'T guess (see usedSizeModel).
   const cadBucket = input.cadence ? model?.combosByCadence[key]?.[input.cadence] : undefined
   const cadStats = cadBucket && cadBucket.n >= MIN_CADENCE_SAMPLES ? cadBucket : null
-  const comboStats = cadStats
-    ?? (model?.combos[key] && model.combos[key].n >= 2 ? model.combos[key]
-      : model && isLawnCombo(key) && model.lawnAll.n >= 2 ? model.lawnAll : null)
+  const comboStats = cadStats ?? (model?.combos[key] && model.combos[key].n >= 2 ? model.combos[key] : null)
   const comboN = comboStats?.n ?? 0
   const comboCv = comboStats?.cv ?? 0.3
 
-  // Combo-based solo-equivalent minutes (size-model fallback when no learned data).
+  // Service-specific solo-equivalent minutes; size-model only when this service has
+  // no learned data yet (flagged so the UI shows "not enough data" instead of guessing).
   let comboSolo: number
   let usedSizeModel = false
   if (comboStats && sqft > 0) {
     comboSolo = comboStats.soloPer1000 * (sqft / 1000) * seasonF * firstCutF * og
-    reasons.push(`${comboN} ${cadStats && input.cadence ? CADENCE_LABEL[input.cadence] + ' ' : 'similar '}${comboLabel(key)} job${comboN !== 1 ? 's' : ''}`)
-    if (input.isInitialVisit) reasons.push('First cut of the season — heavier than a maintenance visit')
-    if (season !== 'summer') reasons.push(`${season[0].toUpperCase() + season.slice(1)} adjustment applied`)
+    reasons.push(`${comboN} ${cadStats && input.cadence ? CADENCE_LABEL[input.cadence] + ' ' : 'similar '}${svcLabel} job${comboN !== 1 ? 's' : ''}`)
+    if (firstCutF > 1) reasons.push('First cut of the season — heavier than a maintenance visit')
+    if (isMowing(key) && season !== 'summer') reasons.push(`${season[0].toUpperCase() + season.slice(1)} adjustment applied`)
   } else {
     comboSolo = estimateVisitMinutes(sqft) * firstCutF * og
     usedSizeModel = true
-    reasons.push('Size-based estimate — time a few of these jobs to sharpen it')
+    reasons.push(`Not enough ${svcLabel} history yet — rough size estimate. Time a few ${svcLabel} jobs to unlock a smart default.`)
   }
 
-  // Property-level weighting — the property's OWN history dominates when present.
-  const propStats = input.propertyId ? model?.byProperty[input.propertyId] : undefined
+  // Property-level weighting — the property's OWN history for THIS service dominates
+  // when present (service-scoped: this property's mowing, not its mulch).
+  const propStats = input.propertyId ? model?.byProperty[`${input.propertyId}::${key}`] : undefined
   const propN = propStats?.soloMinutes.length ?? 0
   let solo = comboSolo
   let propCv = comboCv
@@ -267,8 +322,11 @@ export function estimateLabor(input: EstimateInput, model: LaborModel | null): L
     propCv = cv(propStats.soloMinutes)
     const w = clamp(propN / (propN + 2), 0, 0.85) // heavy property weight, capped
     solo = w * propSolo + (1 - w) * comboSolo
-    reasons.unshift(`${propN} past visit${propN !== 1 ? 's' : ''} to this exact property (weighted ${Math.round(w * 100)}%)`)
+    reasons.unshift(`${propN} past ${svcLabel} visit${propN !== 1 ? 's' : ''} to this exact property (weighted ${Math.round(w * 100)}%)`)
   }
+  // Enough data to trust = this service has its own history (learned or this
+  // property's). A pure size guess does NOT count — that's the "don't guess" case.
+  const enoughData = !!comboStats || propN >= 1
 
   const minutes = clamp(Math.round(solo / crewEffFn(model, crew)), 10, 240)
   const manMinutes = Math.round(solo)
@@ -293,11 +351,13 @@ export function estimateLabor(input: EstimateInput, model: LaborModel | null): L
     confidencePct = clamp(Math.round((usedSizeModel ? 35 : 45) - varianceCv * 10), 25, 50)
     basis = usedSizeModel ? 'size-model' : 'learned'
   }
-  if (confidence === 'high' && basis === 'property') reasons.unshift('High confidence — this property has its own track record')
-  else if (confidence === 'high') reasons.unshift('High confidence — large sample of similar jobs')
-  else if (confidence === 'low') reasons.push('Low confidence — based mostly on lawn size')
+  // When there's no service history yet, force low confidence — never present a
+  // size guess as if it were learned ("don't guess").
+  if (!enoughData) { confidence = 'low'; confidencePct = Math.min(confidencePct, 30) }
+  if (confidence === 'high' && basis === 'property') reasons.unshift(`High confidence — this property has its own ${svcLabel} track record`)
+  else if (confidence === 'high') reasons.unshift(`High confidence — large sample of ${svcLabel} jobs`)
 
-  return { minutes, minMinutes, maxMinutes, confidence, confidencePct, sampleSize: propN + comboN, basis, reasons, manMinutes }
+  return { minutes, minMinutes, maxMinutes, confidence, confidencePct, sampleSize: propN + comboN, basis, reasons, manMinutes, enoughData, serviceKey: key, serviceLabel: svcLabel }
 }
 
 // ── recommendation layer (req #4) ─────────────────────────────────────────────────
@@ -339,27 +399,27 @@ export function buildLaborInsights(
   const overallAccuracyPct = scored.length >= 3 ? Math.max(0, Math.round((1 - scored.reduce((s, o) => s + ape(o), 0) / scored.length) * 100)) : null
   const avgErrorPct = scored.length >= 3 ? Math.round((scored.reduce((s, o) => s + ape(o), 0) / scored.length) * 100) : null
 
-  // Per-combo accuracy.
+  // Per-service accuracy.
   const comboAcc: Record<string, { errs: number[]; }> = {}
-  for (const o of scored) { const { key } = normalizeCombo(o.service_type); (comboAcc[key] ||= { errs: [] }).errs.push(ape(o)) }
+  for (const o of scored) { const key = serviceKey(o.service_type); (comboAcc[key] ||= { errs: [] }).errs.push(ape(o)) }
   const accList: ServiceAccuracy[] = Object.entries(comboAcc).filter(([, v]) => v.errs.length >= 2).map(([combo, v]) => {
     const avgErr = v.errs.reduce((a, b) => a + b, 0) / v.errs.length
-    return { combo, label: comboLabel(combo), n: v.errs.length, accuracyPct: Math.max(0, Math.round((1 - avgErr) * 100)), avgErrorPct: Math.round(avgErr * 100) }
+    return { combo, label: serviceLabel(combo), n: v.errs.length, accuracyPct: Math.max(0, Math.round((1 - avgErr) * 100)), avgErrorPct: Math.round(avgErr * 100) }
   }).sort((a, b) => b.accuracyPct - a.accuracyPct)
 
-  // Per-combo profitability (labor actuals × revenue) — ties labor into BI/Revenue Intel.
+  // Per-service profitability (labor actuals × revenue) — ties labor into BI/Revenue Intel.
   const comboProfit: Record<string, { rev: number; hours: number; profit: number; n: number }> = {}
   for (const o of obs) {
     if (!o.job_id || !(o.actual_minutes > 0)) continue
     const rev = ctx.valueByJob[o.job_id]
     if (rev == null) continue
-    const { key } = normalizeCombo(o.service_type)
+    const key = serviceKey(o.service_type)
     const hours = o.actual_minutes / 60
     const e = (comboProfit[key] ||= { rev: 0, hours: 0, profit: 0, n: 0 })
     e.rev += rev; e.hours += hours; e.profit += rev - hours * ctx.crewCost; e.n++
   }
   const profitList: ServiceProfit[] = Object.entries(comboProfit).filter(([, v]) => v.n >= 2).map(([combo, v]) => ({
-    combo, label: comboLabel(combo), n: v.n, revPerHour: v.hours > 0 ? Math.round(v.rev / v.hours) : 0, profit: Math.round(v.profit),
+    combo, label: serviceLabel(combo), n: v.n, revPerHour: v.hours > 0 ? Math.round(v.rev / v.hours) : 0, profit: Math.round(v.profit),
   })).sort((a, b) => b.revPerHour - a.revPerHour)
 
   // Per-property accuracy + worst individual misses.
@@ -367,7 +427,7 @@ export function buildLaborInsights(
   const misses: PredictionMiss[] = []
   for (const o of scored) {
     if (o.property_id) (propAcc[o.property_id] ||= []).push(ape(o))
-    misses.push({ propertyName: o.property_id ? (ctx.nameByProperty[o.property_id] || 'Property') : 'Property', combo: comboLabel(normalizeCombo(o.service_type).key), estimated: o.estimated_minutes as number, actual: o.actual_minutes, errorPct: Math.round(ape(o) * 100), date: o.service_date })
+    misses.push({ propertyName: o.property_id ? (ctx.nameByProperty[o.property_id] || 'Property') : 'Property', combo: serviceLabel(serviceKey(o.service_type)), estimated: o.estimated_minutes as number, actual: o.actual_minutes, errorPct: Math.round(ape(o) * 100), date: o.service_date })
   }
   const bestProperties: PropertyAccuracy[] = Object.entries(propAcc).filter(([, v]) => v.length >= 2).map(([pid, v]) => ({
     propertyId: pid, name: ctx.nameByProperty[pid] || 'Property', n: v.length, accuracyPct: Math.max(0, Math.round((1 - v.reduce((a, b) => a + b, 0) / v.length) * 100)),

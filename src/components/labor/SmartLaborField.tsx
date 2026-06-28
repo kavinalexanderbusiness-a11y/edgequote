@@ -6,20 +6,26 @@ import {
   loadLaborModel, estimateLabor, laborEconomics, LaborModel, LaborEstimate, Confidence, Cadence,
 } from '@/lib/labor'
 import { cn } from '@/lib/utils'
-import { Sparkles, Check, HelpCircle, Gauge } from 'lucide-react'
+import { Sparkles, Check, HelpCircle, Gauge, RotateCw, Hourglass } from 'lucide-react'
 
 const CONF_TONE: Record<Confidence, string> = {
   high: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
   medium: 'text-amber-400 border-amber-500/30 bg-amber-500/10',
   low: 'text-ink-muted border-border bg-bg-tertiary',
 }
-const CONF_LABEL: Record<Confidence, string> = { high: 'High confidence', medium: 'Medium', low: 'Low — size-based' }
+const CONF_LABEL: Record<Confidence, string> = { high: 'High confidence', medium: 'Medium', low: 'Low' }
 
 // ── Smart Labor Calculator V2 — drop-in estimate widget ─────────────────────────
-// Additive: the form owns `value` (duration minutes); this shows the learned
-// estimate + range + confidence + profit, and (when the toggle is ON) auto-fills.
-// SAFETY: only auto-fills an empty field or one it filled itself — NEVER overwrites
-// a value you typed, never touches pricing, always overridable.
+// The estimated duration is a SMART DEFAULT, not a locked value:
+//  • Auto-fills ONLY when THIS service has real history to learn from (never guesses
+//    from lawn size alone — if there's no service history it shows "not enough data"
+//    and leaves the field for manual entry).
+//  • Recalculates automatically when service / property / crew / recurrence /
+//    measurement change — while you haven't typed your own value.
+//  • The moment you type a duration it becomes an override: auto-fill stops until
+//    you explicitly Recalculate.
+// Service-specific throughout (lib/labor serviceKey): mowing learns only from mowing.
+// Never touches pricing.
 export function SmartLaborField({
   sqft, serviceType, crewSize, propertyId, isInitialVisit, overgrowth, cadence, price, value, onApply, readOnly,
 }: {
@@ -53,10 +59,15 @@ export function SmartLaborField({
     return estimateLabor({ sqft, serviceType, crewSize, propertyId, isInitialVisit, overgrowth, cadence }, model)
   }, [sqft, serviceType, crewSize, propertyId, isInitialVisit, overgrowth, cadence, model])
 
-  // Auto-fill: only when ON and the field is empty OR still holds the last value we
-  // applied (i.e. you haven't typed your own). Live-recalcs when crew/sqft change.
+  // You're "in auto mode" until you type your own duration. Then it's an override and
+  // we stop changing it until you click Recalculate.
+  const isOverride = value != null && value !== 0 && value !== lastApplied.current
+
+  // Auto-fill: only when ON, in auto mode, AND we actually have service history to
+  // trust ("don't guess"). Live-recalcs when service/property/crew/recurrence/sqft
+  // change because `est` is in the dep list.
   useEffect(() => {
-    if (!enabled || !est || readOnly) return
+    if (!enabled || !est || readOnly || !est.enoughData) return
     const untouched = value == null || value === 0 || value === lastApplied.current
     if (untouched && est.minutes !== value) {
       lastApplied.current = est.minutes
@@ -65,6 +76,28 @@ export function SmartLaborField({
   }, [enabled, est, value, onApply, readOnly])
 
   if (!est) return null
+  const recalc = () => { lastApplied.current = est.minutes; onApply(est.minutes) }
+
+  // ── Not enough history for THIS service → don't guess; invite manual entry ──────
+  if (!est.enoughData) {
+    return (
+      <div className="rounded-xl border border-border bg-bg-tertiary p-3 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-bold text-ink flex items-center gap-1.5"><Hourglass className="w-3.5 h-3.5 text-ink-faint" /> Smart Labor Estimate</span>
+          <span className="text-[10px] font-semibold rounded-full px-2 py-0.5 border text-ink-muted border-border">Not enough {est.serviceLabel} data</span>
+        </div>
+        <p className="text-[11px] text-ink-muted">
+          No {est.serviceLabel.toLowerCase()} history yet — EdgeQuote won&apos;t guess. {readOnly ? 'Time a few' : 'Enter the duration manually and complete a few'} {est.serviceLabel.toLowerCase()} jobs and it&apos;ll start auto-filling a learned estimate.
+        </p>
+        {!readOnly && (
+          <button type="button" onClick={recalc} className="text-[11px] font-semibold text-ink-faint hover:text-ink">
+            Use rough size estimate ({est.minutes} min) anyway
+          </button>
+        )}
+      </div>
+    )
+  }
+
   const econ = price && price > 0 ? laborEconomics(est.minutes, price, crewCost) : null
   const applied = value === est.minutes
 
@@ -76,7 +109,7 @@ export function SmartLaborField({
         {!readOnly && (
           <button type="button" onClick={() => setEnabled(e => !e)}
             className={cn('text-[10px] font-semibold rounded-full px-2 py-0.5 border transition-colors', enabled ? 'text-accent border-accent/40 bg-accent/10' : 'text-ink-faint border-border')}>
-            {enabled ? 'Smart Estimate ON' : 'OFF'}
+            {enabled ? 'Auto-fill ON' : 'Auto-fill OFF'}
           </button>
         )}
       </div>
@@ -84,14 +117,14 @@ export function SmartLaborField({
       <div className="flex items-end justify-between gap-3">
         <div>
           <p className="text-2xl font-black text-ink leading-none">{est.minutes} <span className="text-sm font-semibold text-ink-muted">min</span></p>
-          <p className="text-[11px] text-ink-muted mt-1">Range {est.minMinutes}–{est.maxMinutes} min · {est.sampleSize} job{est.sampleSize !== 1 ? 's' : ''}</p>
+          <p className="text-[11px] text-ink-muted mt-1">Range {est.minMinutes}–{est.maxMinutes} min · {est.sampleSize} {est.serviceLabel.toLowerCase()} job{est.sampleSize !== 1 ? 's' : ''}</p>
         </div>
         <span className={cn('text-[10px] font-semibold rounded-full px-2 py-0.5 border', CONF_TONE[est.confidence])}>
           {est.confidencePct}% · {CONF_LABEL[est.confidence]}
         </span>
       </div>
 
-      {/* Recommendation layer (req #4) — read-only; never affects price. */}
+      {/* Recommendation layer — read-only; never affects price. */}
       {econ && (
         <div className="grid grid-cols-3 gap-2">
           <Mini label="$/labor hr" value={`$${econ.revPerLaborHour}`} />
@@ -103,11 +136,13 @@ export function SmartLaborField({
       <div className="flex items-center gap-2">
         {!readOnly && (applied
           ? <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400"><Check className="w-3.5 h-3.5" /> Applied</span>
-          : <button type="button" onClick={() => { lastApplied.current = est.minutes; onApply(est.minutes) }}
-              className="text-[11px] font-semibold text-accent hover:underline">Use estimate ({est.minutes} min)</button>)}
+          : isOverride
+            ? <button type="button" onClick={recalc} className="inline-flex items-center gap-1 text-[11px] font-semibold text-accent hover:underline"><RotateCw className="w-3 h-3" /> Recalculate ({est.minutes} min)</button>
+            : <button type="button" onClick={recalc} className="text-[11px] font-semibold text-accent hover:underline">Use estimate ({est.minutes} min)</button>)}
         {readOnly && <span className="text-[10px] text-ink-faint">Reference only — doesn’t change your price</span>}
         <button type="button" onClick={() => setShowWhy(v => !v)} className="ml-auto text-[11px] font-medium text-ink-faint hover:text-ink flex items-center gap-1"><HelpCircle className="w-3 h-3" /> Why?</button>
       </div>
+      {!readOnly && isOverride && <p className="text-[10px] text-ink-faint">You typed a custom duration — auto-fill is paused until you Recalculate.</p>}
 
       {showWhy && (
         <ul className="space-y-0.5 border-t border-border pt-2">

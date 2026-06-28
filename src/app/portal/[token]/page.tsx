@@ -21,11 +21,11 @@ import {
 // with photos & invoices, a before/after gallery, and quick service requests.
 
 interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null }
-interface PortalInvoice { id: string; invoice_number: string; service_type: string | null; amount: number; status: string; issued_date: string | null; due_date: string | null; notes: string | null; address: string | null; line_items: { description: string; amount: number; kind: string }[] | null; job_id: string | null; created_at: string }
+interface PortalInvoice { id: string; invoice_number: string; service_type: string | null; amount: number; status: string; issued_date: string | null; due_date: string | null; notes: string | null; address: string | null; line_items: { description: string; amount: number; kind: string }[] | null; job_id: string | null; created_at: string; discount_type?: 'amount' | 'percent' | null; discount_value?: number | null; amount_paid?: number | null }
 interface PortalJob { id: string; recurrence_id: string | null; service_type: string | null; title: string; scheduled_date: string; status: string; on_my_way_at: string | null; started_at: string | null; completed_at: string | null; notes: string | null }
 interface PortalRec { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null; end_date: string | null }
 interface PortalPhoto { id: string; job_id: string | null; storage_path: string; kind: string; caption: string | null; taken_at: string }
-interface PortalPayment { id: string; amount: number; status: string; paid_at: string | null; provider: string; invoice_id: string | null; created_at: string }
+interface PortalPayment { id: string; amount: number; status: string; paid_at: string | null; provider: string; invoice_id: string | null; created_at: string; kind?: string }
 interface PortalCard { brand: string | null; last4: string | null; exp_month: number | null; exp_year: number | null }
 interface PortalData {
   customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null; city: string | null; sms_opt_in?: boolean | null; email_opt_in?: boolean | null; reviewed_at?: string | null; autopay_enabled?: boolean | null }
@@ -173,7 +173,13 @@ export default function PortalPage() {
     const completed = jobs.filter(j => j.status === 'completed').sort((a, b) => b.scheduled_date.localeCompare(a.scheduled_date))
     const nextService = upcoming[0] || null
     const lastCompleted = completed[0] || null
-    const outstanding = (data.invoices || []).filter(i => i.status === 'unpaid' || i.status === 'sent').reduce((s, i) => s + Number(i.amount || 0), 0)
+    // Outstanding = unpaid BALANCE (total − payments recorded) across issued invoices,
+    // so partial payments and discounts are reflected. Same engine as the dashboard.
+    const gstPct = Number(data.business?.gst_percent) || 0
+    const outstanding = (data.invoices || []).filter(i => i.status !== 'draft').reduce((s, i) => {
+      const total = invoiceTotals(i.amount, { gst_percent: gstPct }, { type: i.discount_type, value: i.discount_value }).total
+      return s + Math.max(0, Math.round((total - (Number(i.amount_paid) || 0)) * 100) / 100)
+    }, 0)
     // Active plans: recurrences that still have an upcoming visit.
     const recById = new Map(data.recurrences.map(r => [r.id, r]))
     const activeRecIds = [...new Set(upcoming.map(j => j.recurrence_id).filter(Boolean) as string[])]
@@ -201,16 +207,20 @@ export default function PortalPage() {
   const photosByJob = groupPhotos(data.photos)
   const invoiceByJob = new Map((data.invoices || []).filter(i => i.job_id).map(i => [i.job_id as string, i]))
 
+  // Ordered by how often a customer reaches for each: Home first, then Documents
+  // (their central records hub) immediately after, then the things they act on (pay
+  // invoices, accept quotes, manage payments), then service history & photos, then
+  // the rest. Reordering only — every tab is preserved.
   const TABS: { key: Tab; label: string; icon: typeof Home; n?: number }[] = [
     { key: 'home', label: 'Home', icon: Home },
-    { key: 'timeline', label: 'Timeline', icon: Activity },
+    { key: 'documents', label: 'Documents', icon: FolderOpen, n: data.quotes.length + data.invoices.length },
+    { key: 'invoices', label: 'Invoices', icon: Receipt, n: data.invoices.length },
+    { key: 'quotes', label: 'Quotes', icon: FileText, n: data.quotes.length },
+    { key: 'payments', label: 'Payments', icon: Wallet, n: data.payments.length },
     { key: 'service', label: 'Service', icon: History, n: derived.completed.length },
     { key: 'photos', label: 'Photos', icon: ImageIcon, n: data.photos.length },
+    { key: 'timeline', label: 'Timeline', icon: Activity },
     { key: 'property', label: 'Property', icon: MapPin },
-    { key: 'documents', label: 'Documents', icon: FolderOpen, n: data.quotes.length + data.invoices.length },
-    { key: 'quotes', label: 'Quotes', icon: FileText, n: data.quotes.length },
-    { key: 'invoices', label: 'Invoices', icon: Receipt, n: data.invoices.length },
-    { key: 'payments', label: 'Payments', icon: Wallet, n: data.payments.length },
     { key: 'request', label: 'Request', icon: MessageSquarePlus },
   ]
 
@@ -246,7 +256,8 @@ export default function PortalPage() {
               <CheckCircle2 className="w-4 h-4" /> Payment received — thank you! Your invoice will update shortly.
             </div>
           )}
-          {tab === 'home' && <HomeTab data={data} derived={derived} biz={biz} onRequest={() => setTab('request')} />}
+          {tab === 'home' && <HomeTab data={data} derived={derived} biz={biz} onRequest={() => setTab('request')}
+            paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} onOpenInvoices={() => setTab('invoices')} />}
           {tab === 'home' && biz?.review_url && derived.lastCompleted && !data.customer.reviewed_at && (
             <ReviewCard reviewUrl={biz.review_url} businessName={biz.company_name} reviewed={markedReviewed} onReviewed={markReviewed} />
           )}
@@ -297,8 +308,19 @@ function StatusStepper({ s }: { s: LiveStatus }) {
 }
 
 // ── Home ──
-function HomeTab({ data, derived, biz, onRequest }: { data: PortalData; derived: Derived; biz: PortalData['business']; onRequest: () => void }) {
+function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId, onOpenInvoices }: {
+  data: PortalData; derived: Derived; biz: PortalData['business']; onRequest: () => void
+  paymentsEnabled: boolean; pay: (id: string) => void; payingId: string | null; onOpenInvoices: () => void
+}) {
   const next = derived.nextService
+  const owing = (data.invoices || []).filter(i => i.status === 'unpaid' || i.status === 'sent')
+  // Tapping the balance goes straight to paying: one owing invoice + online payments
+  // on → open its checkout directly; otherwise jump to the Invoices tab to pick one.
+  function payOutstanding() {
+    if (payingId) return
+    if (paymentsEnabled && owing.length === 1) pay(owing[0].id)
+    else onOpenInvoices()
+  }
   return (
     <div className="space-y-3">
       {/* Next service hero */}
@@ -324,9 +346,21 @@ function HomeTab({ data, derived, biz, onRequest }: { data: PortalData; derived:
         )}
       </div>
 
-      {/* Stat cards */}
+      {/* Stat cards — the balance is tappable straight to payment when money is owed */}
       <div className="grid grid-cols-2 gap-3">
-        <StatCard label="Outstanding balance" value={formatCurrency(derived.outstanding)} tone={derived.outstanding > 0 ? 'text-amber-400' : 'text-emerald-400'} icon={Receipt} />
+        {derived.outstanding > 0 ? (
+          <button type="button" onClick={payOutstanding} disabled={payingId !== null}
+            className="text-left rounded-card border border-amber-500/30 bg-amber-500/[0.06] p-3.5 transition-colors hover:border-amber-500/50 active:scale-[0.99] disabled:opacity-60">
+            <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1"><Receipt className="w-3 h-3" /> Outstanding balance</p>
+            <p className="text-lg font-bold mt-1 text-amber-400">{formatCurrency(derived.outstanding)}</p>
+            <span className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-accent">
+              {payingId ? <Loader2 className="w-3 h-3 animate-spin" /> : <CreditCard className="w-3 h-3" />}
+              {paymentsEnabled ? (owing.length === 1 ? 'Pay now' : 'View & pay') : 'View invoices'}
+            </span>
+          </button>
+        ) : (
+          <StatCard label="Outstanding balance" value={formatCurrency(0)} tone="text-emerald-400" icon={Receipt} />
+        )}
         <StatCard label="Last completed" value={derived.lastCompleted ? formatDate(derived.lastCompleted.scheduled_date) : '—'} icon={CheckCircle2} />
       </div>
 
@@ -504,8 +538,10 @@ function InvoicesTab({ invoices, paymentsEnabled, pay, payingId, gstPercent, cus
   return (
     <div className="space-y-3">
       {invoices.map(inv => {
-        const owing = inv.status === 'unpaid' || inv.status === 'sent'
-        const t = invoiceTotals(inv.amount, { gst_percent: gstPercent })
+        const t = invoiceTotals(inv.amount, { gst_percent: gstPercent }, { type: inv.discount_type, value: inv.discount_value })
+        const paid = Math.round((Number(inv.amount_paid) || 0) * 100) / 100
+        const balance = Math.round((t.total - paid) * 100) / 100
+        const owing = balance > 0 && inv.status !== 'draft'
         return (
         <div key={inv.id} className="rounded-card border border-border bg-bg-secondary p-4">
           <div className="flex items-start justify-between gap-2">
@@ -517,18 +553,26 @@ function InvoicesTab({ invoices, paymentsEnabled, pay, payingId, gstPercent, cus
               {inv.line_items.map((li, i) => <p key={i} className="text-xs flex justify-between gap-3"><span className="text-ink-faint">{li.description}</span><span className="text-ink-muted">{formatCurrency(Number(li.amount))}</span></p>)}
             </div>
           )}
-          {t.hasGst && (
+          {(t.hasGst || t.hasDiscount) && (
             <div className="mt-2 space-y-0.5 text-xs border-t border-border pt-2">
               <p className="flex justify-between gap-3"><span className="text-ink-faint">Subtotal</span><span className="text-ink-muted">{formatCurrency(t.subtotal)}</span></p>
-              <p className="flex justify-between gap-3"><span className="text-ink-faint">GST ({t.gstPercent}%)</span><span className="text-ink-muted">{formatCurrency(t.gstAmount)}</span></p>
+              {t.hasDiscount && <p className="flex justify-between gap-3"><span className="text-ink-faint">Discount{t.discountLabel ? ` (${t.discountLabel})` : ''}</span><span className="text-emerald-400">−{formatCurrency(t.discountAmount)}</span></p>}
+              {t.hasGst && <p className="flex justify-between gap-3"><span className="text-ink-faint">GST ({t.gstPercent}%)</span><span className="text-ink-muted">{formatCurrency(t.gstAmount)}</span></p>}
               <p className="flex justify-between gap-3 font-semibold"><span className="text-ink">Total</span><span className="text-ink">{formatCurrency(t.total)}</span></p>
+            </div>
+          )}
+          {/* Paid / Balance once a payment has been recorded */}
+          {paid > 0 && (
+            <div className="mt-2 flex items-center justify-between gap-3 text-xs border-t border-border pt-2">
+              <span className="text-ink-faint">Paid <span className="font-semibold text-emerald-400">{formatCurrency(paid)}</span></span>
+              <span className="text-ink-faint">Balance <span className={`font-semibold ${balance > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>{formatCurrency(Math.max(0, balance))}</span></span>
             </div>
           )}
           <DocActions filename={`${inv.invoice_number}.pdf`} getBlob={() => renderPortalInvoiceBlob(inv, customerName, fallbackAddress, business)} />
           {paymentsEnabled && owing && (
             <div className="mt-3">
               <Button size="sm" onClick={() => pay(inv.id)} loading={payingId === inv.id}>
-                <CreditCard className="w-4 h-4" /> Pay {formatCurrency(t.total)}
+                <CreditCard className="w-4 h-4" /> Pay {formatCurrency(balance)}
               </Button>
             </div>
           )}
@@ -734,10 +778,20 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
   token: string; paymentsEnabled: boolean; card: PortalCard | null; autopayEnabled: boolean; onChanged: () => void
 }) {
   const invById = new Map(invoices.map(i => [i.id, i]))
-  const totalPaid = payments.reduce((s, p) => s + Number(p.amount || 0), 0)
+  // Receipts (money movements) vs the customer-credit ledger — kept apart so totals
+  // and history stay honest.
+  const receipts = payments.filter(p => p.kind !== 'credit')
+  const totalPaid = receipts.reduce((s, p) => s + Number(p.amount || 0), 0)
+  const availableCredit = Math.round(payments.filter(p => p.kind === 'credit').reduce((s, p) => s + Number(p.amount || 0), 0) * 100) / 100
   return (
     <div className="space-y-3">
       {paymentsEnabled && <AutoPayCard token={token} card={card} autopayEnabled={autopayEnabled} onChanged={onChanged} />}
+      {availableCredit > 0 && (
+        <div className="rounded-card border border-accent/25 bg-accent/[0.06] p-3.5 flex items-center justify-between gap-3">
+          <p className="text-[10px] uppercase tracking-wide text-accent font-semibold flex items-center gap-1"><Wallet className="w-3 h-3" /> Available credit</p>
+          <p className="text-lg font-bold text-accent">{formatCurrency(availableCredit)}</p>
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-3">
         <div className="rounded-card border border-emerald-500/20 bg-emerald-500/[0.06] p-3.5">
           <p className="text-[10px] uppercase tracking-wide text-emerald-400 font-semibold flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Total paid</p>
@@ -748,9 +802,9 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
           <p className={cn('text-lg font-bold mt-1', outstanding > 0 ? 'text-amber-400' : 'text-emerald-400')}>{formatCurrency(outstanding)}</p>
         </div>
       </div>
-      {payments.length === 0 ? (
-        <Empty text="No payments yet. Your paid invoices will appear here." />
-      ) : payments.map(p => {
+      {receipts.length === 0 ? (
+        <Empty text="No payments yet. Your payments will appear here." />
+      ) : receipts.map(p => {
         const inv = p.invoice_id ? invById.get(p.invoice_id) : null
         return (
           <div key={p.id} className="rounded-card border border-border bg-bg-secondary p-4 flex items-center justify-between gap-3">
@@ -980,8 +1034,15 @@ function QuoteStatusPill({ status }: { status: string }) {
   return <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', tone)}>{status}</span>
 }
 function InvoiceStatusPill({ status }: { status: string }) {
-  const tone = status === 'paid' ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : 'text-amber-400 border-amber-500/30 bg-amber-500/10'
-  return <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', tone)}>{status}</span>
+  const map: Record<string, { label: string; tone: string }> = {
+    paid:     { label: 'Paid',           tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' },
+    overpaid: { label: 'Overpaid',       tone: 'text-violet-400 border-violet-500/30 bg-violet-500/10' },
+    partial:  { label: 'Partially Paid', tone: 'text-sky-400 border-sky-500/30 bg-sky-500/10' },
+    sent:     { label: 'Sent',           tone: 'text-blue-400 border-blue-500/30 bg-blue-500/10' },
+    draft:    { label: 'Draft',          tone: 'text-ink-muted border-border bg-bg-tertiary' },
+  }
+  const m = map[status] || { label: status === 'unpaid' ? 'Unpaid' : status, tone: 'text-amber-400 border-amber-500/30 bg-amber-500/10' }
+  return <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', m.tone)}>{m.label}</span>
 }
 
 function groupPhotos(photos: PortalPhoto[]): Map<string, PortalPhoto[]> {

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Coord, DaySuggestion, LocatedJob, geocodeAddress, suggestBestDays, fetchLocatedUpcomingJobs, todayLocalISO } from '@/lib/geo'
+import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
 import { Sparkles, MapPin, Clock, Navigation } from 'lucide-react'
 
 interface Props {
@@ -20,6 +21,7 @@ export function BestDaySuggestions({ coord, address, excludeJobId, onPick, onTop
   const supabase = createClient()
   const [target, setTarget] = useState<Coord | null>(coord ?? null)
   const [jobs, setJobs] = useState<LocatedJob[]>([])
+  const [travel, setTravel] = useState<TravelModel>(DEFAULT_TRAVEL_MODEL)
   const [loading, setLoading] = useState(true)
   const [geocoding, setGeocoding] = useState(false)
   const lastGeocoded = useRef<string | null>(null)
@@ -47,9 +49,13 @@ export function BestDaySuggestions({ coord, address, excludeJobId, onPick, onTop
     let active = true
     async function load() {
       const { data: { user } } = await supabase.auth.getUser()
-      const rows = await fetchLocatedUpcomingJobs(supabase, user!.id)
+      const [rows, travelM] = await Promise.all([
+        fetchLocatedUpcomingJobs(supabase, user!.id),
+        loadTravelModel(supabase),
+      ])
       if (!active) return
       setJobs(rows)
+      setTravel(travelM)
       setLoading(false)
     }
     load()
@@ -57,7 +63,7 @@ export function BestDaySuggestions({ coord, address, excludeJobId, onPick, onTop
   }, [supabase])
 
   const suggestions = target
-    ? suggestBestDays(target, jobs.filter(j => j.id !== excludeJobId), { fromISO: todayLocalISO() })
+    ? suggestBestDays(target, jobs.filter(j => j.id !== excludeJobId), { fromISO: todayLocalISO(), minPerKm: travel.minPerKm, overheadMin: travel.overheadMin })
     : []
 
   // Report the top suggestion upward for telemetry whenever it changes.

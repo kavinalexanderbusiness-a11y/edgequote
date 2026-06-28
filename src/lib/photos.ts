@@ -66,17 +66,20 @@ async function downscale(file: File, maxDim = 1600, quality = 0.82): Promise<Blo
 
 // Upload one photo: resize → store in the bucket → catalogue row. Returns the
 // new row (with URL) so the caller can prepend it optimistically.
+export interface UploadPhotoOpts {
+  userId: string
+  file: File
+  propertyId: string | null
+  jobId?: string | null
+  customerId?: string | null
+  kind: PhotoKind
+  caption?: string | null
+  takenAt?: string | null   // ISO capture time (from EXIF) — drives before/after ordering
+}
+
 export async function uploadPhoto(
   supabase: SupabaseClient,
-  opts: {
-    userId: string
-    file: File
-    propertyId: string | null
-    jobId?: string | null
-    customerId?: string | null
-    kind: PhotoKind
-    caption?: string | null
-  },
+  opts: UploadPhotoOpts,
 ): Promise<JobPhotoView | null> {
   const blob = await downscale(opts.file)
   // Stable-enough unique name without a server round-trip. Date.now()+random is
@@ -89,7 +92,7 @@ export async function uploadPhoto(
     .upload(path, blob, { upsert: false, contentType: 'image/jpeg' })
   if (upErr) return null
 
-  const row = {
+  const row: Record<string, unknown> = {
     user_id: opts.userId,
     job_id: opts.jobId ?? null,
     property_id: opts.propertyId,
@@ -98,6 +101,9 @@ export async function uploadPhoto(
     kind: opts.kind,
     caption: opts.caption ?? null,
   }
+  // Stamp the real capture time so the Studio's "earliest before / latest after"
+  // ordering is honest (defaults to now() when EXIF is absent).
+  if (opts.takenAt) row.taken_at = opts.takenAt
   const { data, error } = await supabase.from('job_photos').insert(row).select('*').single()
   if (error || !data) {
     // Roll back the orphaned file so storage never drifts from the catalogue.
@@ -105,6 +111,16 @@ export async function uploadPhoto(
     return null
   }
   return { ...(data as JobPhoto), url: publicUrl(supabase, path) }
+}
+
+// Upload many photos AT ONCE (parallel) — each compresses + catalogues independently
+// via uploadPhoto, so one slow/failed file never blocks the others. Returns the rows
+// that succeeded (nulls dropped), preserving input order for the successes.
+export async function uploadPhotos(
+  supabase: SupabaseClient,
+  items: UploadPhotoOpts[],
+): Promise<(JobPhotoView | null)[]> {
+  return Promise.all(items.map(it => uploadPhoto(supabase, it)))
 }
 
 // Update a photo's caption or before/after tag.

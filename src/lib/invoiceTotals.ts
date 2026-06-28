@@ -35,13 +35,78 @@ export function applyFeeRecovery(price: number | null | undefined, s: FeeSetting
   return round2(p * feeRecoveryMultiplier(s))
 }
 
-export interface InvoiceTotals { subtotal: number; gstPercent: number; gstAmount: number; total: number; hasGst: boolean }
+// ── Discounts (fixed $ or %) ─────────────────────────────────────────────────
+// ONE definition of "apply a discount to a subtotal", used at SAVE time (the draft
+// editor + the draft-sync engine) to compute the NET amount we store. The display
+// side (invoiceTotals) reverses it from the stored net — never duplicating the math.
+export type DiscountType = 'amount' | 'percent'
+export interface DiscountInput { type?: DiscountType | null; value?: number | null }
 
-// Split a stored invoice `amount` (the subtotal — already includes any baked-in
-// fee recovery) into Subtotal / GST / Total. GST only appears when gst_percent > 0.
-export function invoiceTotals(amount: number | string | null | undefined, s: FeeSettings | null | undefined): InvoiceTotals {
-  const subtotal = round2(Number(amount) || 0)
+// gross → { net, discountAmount }. A $ discount is capped at the subtotal; a %
+// discount is capped at 100. Invalid/zero discounts pass the gross through.
+export function applyDiscount(grossSubtotal: number, d: DiscountInput | null | undefined): { net: number; discountAmount: number } {
+  const gross = round2(Number(grossSubtotal) || 0)
+  const value = Number(d?.value)
+  if (!d?.type || !Number.isFinite(value) || value <= 0 || gross <= 0) return { net: gross, discountAmount: 0 }
+  if (d.type === 'amount') {
+    const amt = Math.min(round2(value), gross)
+    return { net: round2(gross - amt), discountAmount: amt }
+  }
+  const p = Math.min(value, 100)
+  const amt = round2(gross * p / 100)
+  return { net: round2(gross - amt), discountAmount: amt }
+}
+
+export interface InvoiceTotals {
+  subtotal: number          // pre-discount (gross)
+  discountAmount: number
+  discountedSubtotal: number // = the stored net amount
+  discountLabel: string | null // e.g. "10%" for a percentage; null for a fixed $
+  gstPercent: number
+  gstAmount: number
+  total: number
+  hasGst: boolean
+  hasDiscount: boolean
+}
+
+const trimNum = (n: number) => (Number.isInteger(n) ? String(n) : String(round2(n)))
+
+// Split a stored invoice `amount` (the NET subtotal — already post-discount and
+// inclusive of any baked-in fee recovery) into a full breakdown. The optional
+// discount reconstructs the pre-discount gross for DISPLAY only; GST and the total
+// are computed on the net `amount`, so charged totals never change. Backward
+// compatible: called without a discount it returns subtotal === amount as before.
+export function invoiceTotals(
+  amount: number | string | null | undefined,
+  s: FeeSettings | null | undefined,
+  discount?: DiscountInput | null,
+): InvoiceTotals {
+  const net = round2(Number(amount) || 0)
+  const value = Number(discount?.value)
+  let discountAmount = 0
+  let discountLabel: string | null = null
+  if (discount?.type && Number.isFinite(value) && value > 0 && net > 0) {
+    if (discount.type === 'amount') {
+      discountAmount = round2(value)
+    } else {
+      // net = gross·(1 − p/100) ⇒ discountAmount = net·p/(100 − p) (exact inverse).
+      const p = Math.min(value, 100)
+      discountAmount = p < 100 ? round2(net * p / (100 - p)) : 0
+      discountLabel = `${trimNum(p)}%`
+    }
+  }
+  const gross = round2(net + discountAmount)
   const gstPercent = Number(s?.gst_percent) || 0
-  const gstAmount = gstPercent > 0 ? round2(subtotal * gstPercent / 100) : 0
-  return { subtotal, gstPercent, gstAmount, total: round2(subtotal + gstAmount), hasGst: gstPercent > 0 }
+  const gstAmount = gstPercent > 0 ? round2(net * gstPercent / 100) : 0
+  return {
+    subtotal: gross,
+    discountAmount,
+    discountedSubtotal: net,
+    discountLabel,
+    gstPercent,
+    gstAmount,
+    total: round2(net + gstAmount),
+    hasGst: gstPercent > 0,
+    hasDiscount: discountAmount > 0,
+  }
 }

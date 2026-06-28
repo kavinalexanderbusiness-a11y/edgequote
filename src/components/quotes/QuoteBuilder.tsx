@@ -5,6 +5,9 @@ import { useForm, Controller } from 'react-hook-form'
 import { useRouter } from 'next/navigation'
 import { Input } from '@/components/ui/Input'
 import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
+import { CustomerPicker } from '@/components/ui/CustomerPicker'
+import { useAutosave } from '@/hooks/useAutosave'
+import { AutosaveStatus, DraftRestoreBanner } from '@/components/ui/Autosave'
 import { QuoteMeasure } from '@/components/quotes/QuoteMeasure'
 import { Select } from '@/components/ui/Select'
 import { Textarea } from '@/components/ui/Textarea'
@@ -23,6 +26,7 @@ import { createClient } from '@/lib/supabase/client'
 import type { MeasurementSnapshot, SavedRecommendation } from '@/types'
 import { BestDaySuggestions } from '@/components/schedule/BestDaySuggestions'
 import { SmartLaborField } from '@/components/labor/SmartLaborField'
+import { PriceIntelligence } from '@/components/pricing/PriceIntelligence'
 import { Clock, DollarSign, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, SlidersHorizontal, CheckCircle2, Users } from 'lucide-react'
 
 interface QuoteBuilderProps {
@@ -37,15 +41,20 @@ interface QuoteBuilderProps {
   defaultValues?: Partial<QuoteFormValues>
   onSubmit: (values: QuoteFormValues) => Promise<void>
   isEdit?: boolean
+  /** Autosave key — defaults per new/edit; pass a precise one (e.g. `quote:${id}`). */
+  autosaveKey?: string
+  /** Server record's updated_at — drafts older than this are never offered. */
+  autosaveBaselineUpdatedAt?: string | null
 }
 
 const DEFAULT_RATE = 50
 
 export function QuoteBuilder({
   customers, templates, tiers, settings, defaultCustomerId, defaultPropertyId, defaultValues, onSubmit, isEdit,
+  autosaveKey, autosaveBaselineUpdatedAt,
 }: QuoteBuilderProps) {
   const router = useRouter()
-  const { register, handleSubmit, watch, setValue, getValues, control, formState: { errors, isSubmitting } } =
+  const { register, handleSubmit, watch, setValue, getValues, reset, control, formState: { errors, isSubmitting } } =
     useForm<QuoteFormValues>({
       defaultValues: {
         customer_id: defaultCustomerId || '',
@@ -72,6 +81,16 @@ export function QuoteBuilder({
         ...defaultValues,
       },
     })
+
+  // Autosave the whole quote — survives refresh / crash / accidental close (shared engine).
+  const formValues = watch()
+  const autosave = useAutosave<QuoteFormValues>({
+    key: autosaveKey || (isEdit ? 'quote:edit' : 'quote:new'),
+    value: formValues,
+    baselineUpdatedAt: autosaveBaselineUpdatedAt ?? null,
+    isEmpty: v => !v.customer_id && !v.customer_name?.trim() && !v.address?.trim() && !v.service_type?.trim() && !(Number(v.initial_price) > 0),
+  })
+  const submit = handleSubmit(async v => { await onSubmit(v); autosave.clear() })
 
   const [calcLoading, setCalcLoading] = useState(false)
   const [calcMsg, setCalcMsg] = useState<string | null>(null)
@@ -282,11 +301,6 @@ export function QuoteBuilder({
     }
   }
 
-  const customerOptions = [
-    { value: '', label: 'Select a customer...' },
-    ...customers.map(c => ({ value: c.id, label: c.name })),
-    { value: '__manual', label: '+ Enter manually' },
-  ]
   const activeTemplates = templates.filter(t => t.is_active)
   const templateOptions = [
     { value: '', label: 'Select a service...' },
@@ -301,21 +315,36 @@ export function QuoteBuilder({
   const showManualName = !customerId || customerId === '__manual'
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="pb-24 lg:pb-0">
+    <form onSubmit={submit} className="pb-24 lg:pb-0">
+      {autosave.draft && (
+        <div className="mb-4">
+          <DraftRestoreBanner
+            savedAt={autosave.savedAt}
+            label="unsaved quote"
+            onRestore={() => { const v = autosave.restore(); if (v) reset(v) }}
+            onDiscard={autosave.discard}
+          />
+        </div>
+      )}
       <div className="grid lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-4">
           {/* ── FAST PATH — Customer → Property → Service → Price → Save ── */}
           <Card>
-            <CardHeader className="flex items-center justify-between">
+            <CardHeader className="flex items-center justify-between gap-2">
               <h2 className="text-sm font-semibold text-ink">{isEdit ? 'Quote details' : 'New quote'}</h2>
-              {initialManual && (
-                <span className="text-[10px] uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5">Manual price</span>
-              )}
+              <div className="flex items-center gap-2">
+                <AutosaveStatus status={autosave.status} savedAt={autosave.savedAt} />
+                {initialManual && (
+                  <span className="text-[10px] uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5">Manual price</span>
+                )}
+              </div>
             </CardHeader>
             <CardBody className="space-y-4">
-              {/* Customer */}
+              {/* Customer — type-to-search picker (scales past a giant <select>) */}
               <Controller name="customer_id" control={control}
-                render={({ field }) => (<Select label="Customer" options={customerOptions} {...field} />)} />
+                render={({ field }) => (
+                  <CustomerPicker label="Customer" customers={customers} value={field.value || ''} onChange={field.onChange} />
+                )} />
               {showManualName && (
                 <div className="space-y-3 rounded-xl border border-accent/20 bg-accent/5 p-3">
                   <p className="text-[11px] text-ink-muted flex items-center gap-1.5">
@@ -417,6 +446,32 @@ export function QuoteBuilder({
                   </div>
                   <p className="text-[10px] text-ink-faint mt-1.5">Tap a price to use it. Editing a price below overrides it until you tap a suggestion again.</p>
                 </div>
+              )}
+
+              {/* Pricing Intelligence — win-rate-aware recommendation for THIS service,
+                  fed by your accepted/declined quote history. Explains itself; never
+                  below your minimum. Falls back to the standard price until the service
+                  has its own history. */}
+              {measuredSqft > 0 && (
+                <PriceIntelligence
+                  sqft={measuredSqft}
+                  serviceType={watch('service_type')}
+                  cadence={suggested?.recommended ?? 'one_time'}
+                  overgrowth={overgrowth}
+                  propertyId={defaultPropertyId}
+                  customerId={customerId && customerId !== '__manual' ? customerId : undefined}
+                  currentPrice={(suggested?.recommended ?? 'one_time') === 'one_time' ? initialPrice
+                    : (suggested?.recommended === 'weekly' ? weeklyPrice
+                      : suggested?.recommended === 'biweekly' ? biweeklyPrice : monthlyPrice)}
+                  onApply={(price) => {
+                    const c = suggested?.recommended ?? 'one_time'
+                    if (c === 'weekly') setValue('weekly_price', price)
+                    else if (c === 'biweekly') setValue('biweekly_price', price)
+                    else if (c === 'monthly') setValue('monthly_price', price)
+                    else { setValue('initial_price', price); setInitialManual(true) }
+                    setValue('suggested_price', price)
+                  }}
+                />
               )}
 
               {/* Service */}
@@ -645,6 +700,11 @@ export function QuoteBuilder({
           address={address}
           travelFee={Number(travelFee) || 0}
           cfg={pricingConfigFromSettings(settings)}
+          serviceType={watch('service_type')}
+          propertyId={defaultPropertyId}
+          customerId={customerId && customerId !== '__manual' ? customerId : undefined}
+          services={templates.map(t => t.name).filter((n): n is string => !!n)}
+          onServiceChange={(n) => setValue('service_type', n)}
           onClose={() => setShowMeasure(false)}
           onApply={(sel) => {
             // Fill the selected pricing STRUCTURE — first visit always at the

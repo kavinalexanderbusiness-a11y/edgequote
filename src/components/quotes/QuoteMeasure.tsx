@@ -8,6 +8,7 @@ import { Coord } from '@/lib/geo'
 import { ProspectContext, loadProspectContext, assessProspect } from '@/lib/prospect'
 import { PricePackagePanel, CadenceSelection } from '@/components/pricing/PricePackagePanel'
 import { DecisionSummary } from '@/components/pricing/DecisionSummary'
+import { PriceIntelligence } from '@/components/pricing/PriceIntelligence'
 import { AutoMeasureBanner } from '@/components/measure/AutoMeasureBanner'
 import { recordMeasurement, neighborhoodOf, AutoMeasureResult } from '@/lib/autoMeasure'
 import { DEFAULT_CREW_COST, crewCostPerHour as resolveCrewCost } from '@/lib/economics'
@@ -32,11 +33,16 @@ interface Props {
   address: string
   travelFee: number
   cfg: PricingConfig
+  serviceType?: string | null   // the selected service — pricing/duration learn from THIS service only
+  propertyId?: string | null
+  customerId?: string | null
+  services?: string[]           // selectable service names (so the service is chosen BEFORE measuring)
+  onServiceChange?: (name: string) => void
   onApply: (sel: MeasureApplyPayload) => void
   onClose: () => void
 }
 
-export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Props) {
+export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId, customerId, services, onServiceChange, onApply, onClose }: Props) {
   const supabase = createClient()
   const [center, setCenter] = useState<Coord | null>(null)
   const [hoodName, setHoodName] = useState<string | null>(null)
@@ -267,9 +273,8 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
     ? pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount: nearby, neighborhoodName: hoodName, valueGrade: assessment?.score ?? null })
     : null
 
-  function applySelection(sel: CadenceSelection) {
-    if (!pkg) return
-    // Record auto vs accepted so the estimate self-calibrates (best-effort).
+  // Record auto vs accepted so the estimate self-calibrates (best-effort).
+  function recordMeasure() {
     ;(async () => {
       const { data: { user } } = await supabase.auth.getUser()
       if (user) recordMeasurement(supabase, {
@@ -277,6 +282,11 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
         neighborhood: neighborhoodOf(null, null, hoodName), auto: autoRef.current, acceptedSqft: totalSqft,
       }).catch(() => {})
     })()
+  }
+
+  function applySelection(sel: CadenceSelection) {
+    if (!pkg) return
+    recordMeasure()
     onApply({
       cadence: sel.cadence,
       price: sel.price,
@@ -289,6 +299,24 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
     })
   }
 
+  // Apply the win-rate-aware price for the recommended cadence — overrides just that
+  // cadence's field with the learned price; everything else stays the engine package.
+  function applyIntelligent(price: number) {
+    if (!pkg) return
+    recordMeasure()
+    const c = pkg.recommended.cadence
+    onApply({
+      cadence: c,
+      price,
+      oneTime: c === 'one_time' ? price : pkg.oneTime,
+      weekly: c === 'weekly' ? price : pkg.options[0].price,
+      biweekly: c === 'biweekly' ? price : pkg.options[1].price,
+      monthly: c === 'monthly' ? price : pkg.options[2].price,
+      totalSqft,
+      suggested: (c === 'one_time' ? price : pkg.oneTime) + Number(travelFee || 0),
+    })
+  }
+
   return (
     <div className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center p-0 sm:p-4">
       <div className="w-full sm:max-w-3xl bg-bg-secondary border border-border sm:rounded-card max-h-[95vh] overflow-auto">
@@ -298,6 +326,24 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
         </div>
 
         <div className="p-4 space-y-4">
+          {/* Service FIRST — measurement, pricing, duration & profitability are all
+              specific to this service (req: auto-select the service before measuring). */}
+          {services && services.length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap rounded-xl border border-accent/20 bg-accent/[0.04] px-3 py-2">
+              <Ruler className="w-3.5 h-3.5 text-accent shrink-0" />
+              <span className="text-xs font-medium text-ink">Service</span>
+              <select
+                value={serviceType ?? ''}
+                onChange={e => onServiceChange?.(e.target.value)}
+                className="bg-bg border border-border-strong rounded-lg px-2.5 py-1.5 text-sm text-ink outline-none focus:border-accent">
+                <option value="">Select a service…</option>
+                {services.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+              <span className="text-[11px] text-ink-faint">
+                {serviceType ? 'Pricing & duration are specific to this service' : 'Pick a service for service-specific pricing'}
+              </span>
+            </div>
+          )}
           {center && (
             <AutoMeasureBanner lat={center.lat} lng={center.lng}
               neighborhood={neighborhoodOf(null, null, hoodName)}
@@ -360,6 +406,22 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
                       <DecisionSummary a={assessment} pkg={pkg} onUse={applySelection} />
                     ) : (
                       <PricePackagePanel pkg={pkg} onUse={applySelection} />
+                    )}
+                    {/* Service-specific win-rate intelligence — learns from THIS service's
+                        accepted/declined quotes only; sharpens the price above, explains
+                        why, never below your minimum. Standard price until it has history. */}
+                    {serviceType && (
+                      <PriceIntelligence
+                        sqft={totalSqft}
+                        serviceType={serviceType}
+                        cadence={pkg.recommended.cadence}
+                        overgrowth={overgrowth}
+                        propertyId={propertyId}
+                        customerId={customerId}
+                        nearbyCount={nearby}
+                        nearbyRecurring={prospect?.nearbyRecurring ?? null}
+                        onApply={applyIntelligent}
+                      />
                     )}
                   </div>
                 ) : (

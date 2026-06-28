@@ -5,6 +5,7 @@ import { parseISO, format } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { Coord, SchedJob, geocodeAddress, fetchUpcomingSchedulingJobs, todayLocalISO } from '@/lib/geo'
 import { recommendScheduleDays, DayPlan } from '@/lib/route'
+import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
 import { formatCurrency } from '@/lib/utils'
 import { Trophy, Scale, DollarSign } from 'lucide-react'
 
@@ -32,6 +33,7 @@ export function WeeklyScheduler({ coord, address, excludeJobId, targetHours, tar
   const [jobs, setJobs] = useState<SchedJob[]>([])
   const [base, setBase] = useState<Coord | null>(null)
   const [workDays, setWorkDays] = useState<number[]>(DEFAULT_WORK_DAYS)
+  const [travel, setTravel] = useState<TravelModel>(DEFAULT_TRAVEL_MODEL)
   const [loading, setLoading] = useState(true)
   const [geocoding, setGeocoding] = useState(false)
   const lastGeocoded = useRef<string | null>(null)
@@ -50,11 +52,13 @@ export function WeeklyScheduler({ coord, address, excludeJobId, targetHours, tar
     let active = true
     async function load() {
       const { data: { user } } = await supabase.auth.getUser()
-      const [rows, sRes] = await Promise.all([
+      const [rows, sRes, travelM] = await Promise.all([
         fetchUpcomingSchedulingJobs(supabase, user!.id),
         supabase.from('business_settings').select('base_lat, base_lng, base_address, preferred_work_days').eq('user_id', user!.id).maybeSingle(),
+        loadTravelModel(supabase),
       ])
       if (!active) return
+      setTravel(travelM)
       setJobs(rows.filter(r => r.id !== excludeJobId))
       const s = sRes.data as { base_lat: number | null; base_lng: number | null; base_address: string | null; preferred_work_days: number[] | null } | null
       let b: Coord | null = s?.base_lat != null && s?.base_lng != null ? { lat: s.base_lat, lng: s.base_lng } : null
@@ -79,6 +83,7 @@ export function WeeklyScheduler({ coord, address, excludeJobId, targetHours, tar
     targetValue,
     customerPreferredDays,
     customerAvoidDays,
+    speed: travel,
   })
   if (!modes.days.length) return <p className="text-xs text-ink-faint">No upcoming work days in range — set your Preferred Work Days in Settings.</p>
 

@@ -4,6 +4,7 @@ import { Sidebar } from '@/components/layout/Sidebar'
 import { InstallPrompt } from '@/components/pwa/InstallPrompt'
 import { CommandPalette } from '@/components/command/CommandPalette'
 import { Toaster } from '@/components/ui/Toaster'
+import { ConfirmHost } from '@/components/ui/ConfirmHost'
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient()
@@ -20,6 +21,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       <InstallPrompt />
       <CommandPalette />
       <Toaster />
+      <ConfirmHost />
     </div>
   )
 }

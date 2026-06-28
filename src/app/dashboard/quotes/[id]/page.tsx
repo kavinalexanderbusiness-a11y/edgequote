@@ -461,6 +461,8 @@ export default function QuoteDetailPage() {
         }}
         onSubmit={handleUpdate}
         isEdit
+        autosaveKey={`quote:${quote.id}`}
+        autosaveBaselineUpdatedAt={quote.updated_at}
       />
     </div>
   )
@@ -469,14 +471,17 @@ export default function QuoteDetailPage() {
     <div className="max-w-3xl space-y-6">
       {/* Responsive header: title + actions on one row on desktop (lg); on
           tablet/mobile the action toolbar wraps onto its own row beneath the
-          quote number, which stays min-w-0/break-words so it's never covered. */}
+          title. The title group is flex-1 so it CLAIMS the width the (shrink-0)
+          toolbar doesn't use — without flex-1 it collapsed to ~0 and the quote
+          number stacked one character per line. The number truncates rather than
+          wrapping, so it always stays on one line. */}
       <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
-        <div className="flex items-start gap-3 min-w-0">
+        <div className="flex items-start gap-3 flex-1 min-w-0">
           <button onClick={() => router.back()} className="mt-1 shrink-0 text-ink-muted hover:text-ink transition-colors" aria-label="Back">
             <ArrowLeft className="w-4 h-4" />
           </button>
           <div className="min-w-0">
-            <h1 className="text-xl font-bold text-ink tracking-tight break-words">{quote.quote_number}</h1>
+            <h1 className="text-xl font-bold text-ink tracking-tight truncate">{quote.quote_number}</h1>
             <p className="text-sm text-ink-muted mt-0.5">Created {formatDate(quote.created_at)}</p>
           </div>
         </div>

@@ -34,7 +34,7 @@ function localTodayISO(): string {
 }
 
 interface JobLite { quote_id: string | null; customer_id: string | null; status: string; scheduled_date: string; recurrence_id: string | null; price: number | null }
-interface InvoiceLite { amount: number | null; status: string }
+interface InvoiceLite { amount: number | null; status: string; amount_paid: number | null }
 
 export function TodaysPriorities() {
   const supabase = useMemo(() => createClient(), [])
@@ -50,7 +50,7 @@ export function TodaysPriorities() {
       const [qRes, iRes, jRes, rRes, cRes] = await Promise.all([
         // Quotes drive follow-ups + accepted-not-scheduled (reuse those exact signals).
         supabase.from('quotes').select('*').eq('user_id', user.id),
-        supabase.from('invoices').select('amount, status').eq('user_id', user.id),
+        supabase.from('invoices').select('amount, status, amount_paid').eq('user_id', user.id),
         supabase.from('jobs').select('quote_id, customer_id, status, scheduled_date, recurrence_id, price').eq('user_id', user.id),
         supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user.id),
         // Unread conversations — same source as the Messages inbox.
@@ -68,8 +68,9 @@ export function TodaysPriorities() {
 
       // 1) Money already owed — invoices sent/unpaid. The single most valuable thing
       //    to chase: work done, just not collected.
-      const owed = invoices.filter(i => i.status === 'unpaid' || i.status === 'sent')
-      const owedTotal = owed.reduce((s, i) => s + Number(i.amount || 0), 0)
+      // Owed = remaining BALANCE across issued invoices (partial payments count).
+      const owed = invoices.filter(i => i.status !== 'draft' && (Number(i.amount || 0) - (Number(i.amount_paid) || 0)) > 0.01)
+      const owedTotal = owed.reduce((s, i) => s + Math.max(0, Number(i.amount || 0) - (Number(i.amount_paid) || 0)), 0)
       if (owed.length > 0) {
         next.push({
           key: 'unpaid', icon: DollarSign, tone: 'text-red-400 bg-red-500/10 border-red-500/20',

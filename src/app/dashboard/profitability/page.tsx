@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { loadAnalyticsCore } from '@/lib/analyticsData'
+import { loadTravelModel } from '@/lib/travelLearning'
 import { Coord, geocodeAddress } from '@/lib/geo'
 import {
   ProfitJob, ProfitQuote, ProfitContext, RecInfo, RouteProfit, Grade, GRADE_COLORS,
@@ -55,9 +56,10 @@ export default function ProfitabilityPage() {
       try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) { setLoadError('Session expired — sign in again.'); return }
-      const [core, sRes] = await Promise.all([
+      const [core, sRes, travel] = await Promise.all([
         loadAnalyticsCore(supabase),
         supabase.from('business_settings').select('base_lat, base_lng, base_address').eq('user_id', user!.id).maybeSingle(),
+        loadTravelModel(supabase),
       ])
 
       const quotesById: Record<string, ProfitQuote> = {}
@@ -82,7 +84,7 @@ export default function ProfitabilityPage() {
         const c = await geocodeAddress(s.base_address)
         if (c) { base = c; await supabase.from('business_settings').update({ base_lat: c.lat, base_lng: c.lng }).eq('user_id', user!.id) }
       }
-      setCtx({ quotesById, recById, base, today: format(new Date(), 'yyyy-MM-dd') })
+      setCtx({ quotesById, recById, base, today: format(new Date(), 'yyyy-MM-dd'), speed: travel })
       } catch (e) {
         setLoadError(e instanceof Error ? e.message : 'Could not load profitability data.')
       } finally {

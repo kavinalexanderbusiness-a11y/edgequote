@@ -4,25 +4,34 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { Invoice, InvoiceStatus, INVOICE_STATUS_LABELS, INVOICE_STATUS_COLORS, BusinessSettings } from '@/types'
+import { InvoicePaymentControls } from '@/components/payments/InvoicePaymentControls'
+import { invoiceBalance, displayInvoiceStatus } from '@/lib/payments/ledger'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { Button } from '@/components/ui/Button'
+import { Input } from '@/components/ui/Input'
+import { Textarea } from '@/components/ui/Textarea'
 import { SendComms } from '@/components/comms/SendComms'
 import { PaymentHistory } from '@/components/payments/PaymentHistory'
-import { invoiceTotals } from '@/lib/invoiceTotals'
+import { invoiceTotals, applyDiscount, type DiscountType } from '@/lib/invoiceTotals'
 import { toast as notify } from '@/lib/toast'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
-import { FileText, User, Check, FileDown, Trash2, CreditCard, Zap, AlertTriangle } from 'lucide-react'
+import { FileText, User, Check, FileDown, Trash2, CreditCard, Zap, AlertTriangle, Pencil, Percent, DollarSign, X } from 'lucide-react'
 
-const STATUS_CYCLE: InvoiceStatus[] = ['unpaid', 'sent', 'paid']
 const FILTERS: { value: '' | InvoiceStatus; label: string }[] = [
   { value: '', label: 'All' },
   { value: 'draft', label: 'Drafts' },
   { value: 'unpaid', label: 'Unpaid' },
   { value: 'sent', label: 'Sent' },
+  { value: 'partial', label: 'Partial' },
   { value: 'paid', label: 'Paid' },
 ]
+
+function todayISO(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
 
 export default function InvoicesPage() {
   const supabase = useMemo(() => createClient(), [])
@@ -39,13 +48,15 @@ export default function InvoicesPage() {
   const [cardCustomers, setCardCustomers] = useState<Set<string>>(new Set())
   const [toast, setToast] = useState<string | null>(null)
   const [uid, setUid] = useState<string | null>(null)
+  const [editId, setEditId] = useState<string | null>(null)   // invoice whose inline draft editor is open
+  const [creditByCustomer, setCreditByCustomer] = useState<Record<string, number>>({})   // available credit per customer
 
   async function fetchInvoices() {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) { setLoadError('Session expired — sign in again.'); return }
       setUid(user.id)
-      const [iRes, sRes, pmRes] = await Promise.all([
+      const [iRes, sRes, pmRes, crRes] = await Promise.all([
         supabase
           .from('invoices')
           .select('*, customers(id, name, email, phone)')
@@ -54,6 +65,8 @@ export default function InvoicesPage() {
         supabase.from('business_settings').select('*').eq('user_id', user.id).maybeSingle(),
         // Which customers have a saved card → enables the "Charge saved card" action.
         supabase.from('payment_methods').select('customer_id').eq('user_id', user.id),
+        // Customer credit ledger (kind='credit') → available credit per customer.
+        supabase.from('payments').select('customer_id, amount').eq('user_id', user.id).eq('kind', 'credit'),
       ])
       // A failed fetch must NOT render as "No invoices yet" on billing day.
       if (iRes.error) { setLoadError('Could not load invoices: ' + iRes.error.message); return }
@@ -61,6 +74,11 @@ export default function InvoicesPage() {
       setInvoices((iRes.data as Invoice[]) || [])
       setSettings(sRes.data as BusinessSettings | null)
       setCardCustomers(new Set(((pmRes.data as { customer_id: string }[] | null) || []).map(r => r.customer_id)))
+      const credit: Record<string, number> = {}
+      for (const r of (crRes.data as { customer_id: string | null; amount: number }[] | null) || []) {
+        if (r.customer_id) credit[r.customer_id] = Math.round(((credit[r.customer_id] || 0) + Number(r.amount || 0)) * 100) / 100
+      }
+      setCreditByCustomer(credit)
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : 'Could not load invoices.')
     } finally {
@@ -152,21 +170,24 @@ export default function InvoicesPage() {
     }
   }
 
+  // Status pill toggles ONLY the lifecycle states (unpaid ↔ sent). paid / partial /
+  // overpaid are derived from the payment ledger by the DB trigger — never set here.
   async function cycleStatus(inv: Invoice) {
-    const idx = STATUS_CYCLE.indexOf(inv.status)
-    const next = STATUS_CYCLE[(idx + 1) % STATUS_CYCLE.length]
+    if (inv.status !== 'unpaid' && inv.status !== 'sent') return
+    const next: InvoiceStatus = inv.status === 'unpaid' ? 'sent' : 'unpaid'
     setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: next } : i))
     const { error } = await supabase.from('invoices').update({ status: next }).eq('id', inv.id)
     if (error) { setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: inv.status } : i)); notify.error('Could not update status: ' + error.message) }
   }
 
-  // One tap straight to paid — the most common action on billing day shouldn't
-  // require cycling through "sent".
-  async function markPaid(inv: Invoice, method?: 'etransfer' | 'cash' | 'cheque') {
-    const pm = method ?? inv.payment_method ?? null
-    setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: 'paid' as InvoiceStatus, payment_method: pm } : i))
-    const { error } = await supabase.from('invoices').update({ status: 'paid', paid_at: new Date().toISOString(), payment_method: pm }).eq('id', inv.id)
-    if (error) { setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: inv.status } : i)); notify.error('Could not update status: ' + error.message) }
+  // Sending an invoice IS issuing it — advance draft/unpaid → sent automatically so
+  // the owner never has to tap the status pill afterwards (one intent, one action).
+  // Never downgrades an already-sent/partly-paid/paid invoice.
+  async function markSent(inv: Invoice) {
+    if (inv.status !== 'draft' && inv.status !== 'unpaid') return
+    setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: 'sent' as InvoiceStatus } : i))
+    const { error } = await supabase.from('invoices').update({ status: 'sent' }).eq('id', inv.id)
+    if (error) { setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: inv.status } : i)); notify.error('Could not mark sent: ' + error.message) }
   }
 
   // ── Undo (same pattern as the Schedule page) ──
@@ -197,33 +218,32 @@ export default function InvoicesPage() {
     }
   }
 
-  // Delete any invoice — confirm first, with a stronger warning for Paid
-  // (it's part of your collected-revenue history). Undo restores it fully.
+  // Delete any invoice — act now, offer Undo (restores it fully, reconnecting its job/
+  // quote/customer/payment links) instead of a blocking confirm. Paid invoices flag the
+  // collected-revenue impact in the Undo toast.
   async function deleteInvoice(inv: Invoice) {
-    const msg = inv.status === 'paid'
-      ? `${inv.invoice_number} is PAID (${formatCurrency(Number(inv.amount))}) — deleting it removes collected revenue from your records. Delete anyway?`
-      : `Delete ${inv.invoice_number} (${formatCurrency(Number(inv.amount))})?`
-    if (!confirm(msg)) return
     setDeletingId(inv.id)
     const row = invoiceInsertRow(inv)
     const { error } = await supabase.from('invoices').delete().eq('id', inv.id)
     if (error) notify.error('Could not delete: ' + error.message)
     else {
       setInvoices(prev => prev.filter(i => i.id !== inv.id))
-      offerUndo(`Deleted ${inv.invoice_number}`, async () => { await supabase.from('invoices').insert(row) })
+      const label = inv.status === 'paid' ? `Deleted PAID ${inv.invoice_number} (${formatCurrency(Number(inv.amount))})` : `Deleted ${inv.invoice_number}`
+      offerUndo(label, async () => { await supabase.from('invoices').insert(row) })
     }
     setDeletingId(null)
   }
 
   const drafts = invoices.filter(i => i.status === 'draft')
   const draftsTotal = drafts.reduce((sum, i) => sum + Number(i.amount || 0), 0)
+  // Outstanding = the unpaid BALANCE across issued invoices (partial payments count);
+  // Collected = total actually received (amount_paid), so both reflect the ledger.
   const outstanding = invoices
-    .filter(i => i.status === 'unpaid' || i.status === 'sent')
-    .reduce((sum, i) => sum + Number(i.amount || 0), 0)
-  const paidTotal = invoices
-    .filter(i => i.status === 'paid')
-    .reduce((sum, i) => sum + Number(i.amount || 0), 0)
+    .filter(i => i.status !== 'draft')
+    .reduce((sum, i) => sum + Math.max(0, invoiceBalance(i, settings).balance), 0)
+  const paidTotal = invoices.reduce((sum, i) => sum + (Number(i.amount_paid) || 0), 0)
   const visible = filter ? invoices.filter(i => i.status === filter) : invoices
+  const today = todayISO()
 
   return (
     <div className="max-w-4xl space-y-6">
@@ -274,7 +294,7 @@ export default function InvoicesPage() {
           </Card>
           <Card>
             <CardBody>
-              <p className="text-xs text-ink-faint uppercase tracking-wide font-semibold mb-1">Paid</p>
+              <p className="text-xs text-ink-faint uppercase tracking-wide font-semibold mb-1">Collected</p>
               <p className="text-2xl font-bold text-accent">{formatCurrency(paidTotal)}</p>
             </CardBody>
           </Card>
@@ -335,56 +355,62 @@ export default function InvoicesPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap sm:gap-3 sm:shrink-0 sm:justify-end">
-                    <div className="text-right">
-                      <span className="text-lg font-bold text-ink">{formatCurrency(invoiceTotals(inv.amount, settings).total)}</span>
-                      {settings && Number(settings.gst_percent) > 0 && (
-                        <p className="text-[10px] text-ink-faint">incl. {formatCurrency(invoiceTotals(inv.amount, settings).gstAmount)} GST</p>
-                      )}
-                      {(() => {
-                        const n = (inv.line_items || []).filter(li => li.kind === 'addon').length
-                        return n > 0 ? <p className="text-[10px] font-semibold text-accent">+{n} service{n !== 1 ? 's' : ''}</p> : null
-                      })()}
-                    </div>
+                    {(() => {
+                      const t = invoiceTotals(inv.amount, settings, { type: inv.discount_type, value: inv.discount_value })
+                      const addonN = (inv.line_items || []).filter(li => li.kind === 'addon').length
+                      return (
+                        <div className="text-right">
+                          <span className="text-lg font-bold text-ink">{formatCurrency(t.total)}</span>
+                          {t.hasDiscount && (
+                            <p className="text-[10px] font-semibold text-emerald-400">{t.discountLabel ? `${t.discountLabel} off` : 'Discount'} −{formatCurrency(t.discountAmount)}</p>
+                          )}
+                          {t.hasGst && (
+                            <p className="text-[10px] text-ink-faint">incl. {formatCurrency(t.gstAmount)} GST</p>
+                          )}
+                          {addonN > 0 && <p className="text-[10px] font-semibold text-accent">+{addonN} service{addonN !== 1 ? 's' : ''}</p>}
+                        </div>
+                      )
+                    })()}
                     <Button onClick={() => openInvoicePdf(inv)} variant="secondary" size="sm" loading={openingId === inv.id}>
                       <FileDown className="w-3.5 h-3.5" /> PDF
                     </Button>
-                    <button
-                      onClick={() => cycleStatus(inv)}
-                      title="Click to change status"
-                      className={`text-[10px] px-2.5 py-1 rounded-full border uppercase tracking-wide font-semibold flex items-center gap-1 transition-opacity hover:opacity-80 ${INVOICE_STATUS_COLORS[inv.status]}`}
-                    >
-                      {inv.status === 'paid' && <Check className="w-3 h-3" />}
-                      {INVOICE_STATUS_LABELS[inv.status]}
-                    </button>
+                    {/* Draft invoices are still mutable history-wise — edit details + discount inline. */}
+                    {inv.status === 'draft' && (
+                      <Button onClick={() => setEditId(editId === inv.id ? null : inv.id)} variant="ghost" size="sm" title="Edit this draft">
+                        <Pencil className="w-3.5 h-3.5" /> Edit
+                      </Button>
+                    )}
+                    {(() => {
+                      const ds = displayInvoiceStatus(inv, settings, today)
+                      const clickable = inv.status === 'unpaid' || inv.status === 'sent'
+                      return (
+                        <button
+                          onClick={() => cycleStatus(inv)}
+                          disabled={!clickable}
+                          title={clickable ? 'Toggle sent / unpaid' : undefined}
+                          className={`text-[10px] px-2.5 py-1 rounded-full border uppercase tracking-wide font-semibold flex items-center gap-1 ${clickable ? 'transition-opacity hover:opacity-80' : 'cursor-default'} ${INVOICE_STATUS_COLORS[ds]}`}
+                        >
+                          {ds === 'paid' && <Check className="w-3 h-3" />}
+                          {INVOICE_STATUS_LABELS[ds]}
+                        </button>
+                      )
+                    })()}
                     {/* AutoPay held this invoice for review (amount differs from usual). */}
                     {inv.status === 'draft' && (inv.notes || '').includes('AutoPay held') && (
                       <span title={inv.notes || undefined} className="text-[10px] px-2 py-1 rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-400 font-semibold flex items-center gap-1">
                         <AlertTriangle className="w-3 h-3" /> Review
                       </span>
                     )}
-                    {paymentsEnabled && (inv.status === 'unpaid' || inv.status === 'sent') && (
-                      <Button onClick={() => payNow(inv)} size="sm" loading={payingId === inv.id} title="Create a Stripe payment link">
+                    {paymentsEnabled && inv.status !== 'draft' && invoiceBalance(inv, settings).balance > 0 && (
+                      <Button onClick={() => payNow(inv)} size="sm" loading={payingId === inv.id} title="Create a Stripe payment link for the balance">
                         <CreditCard className="w-3.5 h-3.5" /> Pay
                       </Button>
                     )}
                     {/* Charge the saved card directly — recurring invoices, customer with a card on file. */}
-                    {paymentsEnabled && inv.customer_id && cardCustomers.has(inv.customer_id) && inv.job_id && inv.status !== 'paid' && (
+                    {paymentsEnabled && inv.customer_id && cardCustomers.has(inv.customer_id) && inv.job_id && invoiceBalance(inv, settings).balance > 0 && (
                       <Button onClick={() => chargeSavedCard(inv)} size="sm" variant="secondary" loading={chargingId === inv.id} title="Charge the customer's saved card on file">
                         <Zap className="w-3.5 h-3.5" /> Charge card
                       </Button>
-                    )}
-                    {(inv.status === 'draft' || inv.status === 'unpaid' || inv.status === 'sent') && (
-                      <select
-                        defaultValue=""
-                        onChange={e => { const m = e.target.value as 'etransfer' | 'cash' | 'cheque' | ''; if (m) markPaid(inv, m) }}
-                        title="Mark paid by method"
-                        className="text-xs rounded-lg border border-border-strong bg-surface text-ink-muted px-2 py-1.5 outline-none focus:border-accent"
-                      >
-                        <option value="">Mark paid…</option>
-                        <option value="etransfer">E-transfer</option>
-                        <option value="cash">Cash</option>
-                        <option value="cheque">Cheque</option>
-                      </select>
                     )}
                     {inv.status === 'paid' && inv.payment_method && (
                       <span className="text-[10px] text-ink-faint capitalize">{inv.payment_method === 'etransfer' ? 'E-transfer' : inv.payment_method}</span>
@@ -395,9 +421,27 @@ export default function InvoicesPage() {
                     </Button>
                   </div>
                 </div>
+                {editId === inv.id && (
+                  <DraftInvoiceEditor
+                    inv={inv}
+                    settings={settings}
+                    onCancel={() => setEditId(null)}
+                    onSaved={patch => { setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, ...patch } as Invoice : i)); setEditId(null) }}
+                  />
+                )}
+                {/* Record payments, resolve overpayments, apply credit — issued invoices only */}
+                {inv.status !== 'draft' && uid && (
+                  <InvoicePaymentControls
+                    invoice={inv}
+                    settings={settings}
+                    uid={uid}
+                    credit={inv.customer_id ? (creditByCustomer[inv.customer_id] || 0) : 0}
+                    onChanged={fetchInvoices}
+                  />
+                )}
                 {inv.customer_id && (
                   <div className="mt-3 pt-3 border-t border-border">
-                    <SendComms customerId={inv.customer_id} template="invoice" vars={{ amount: formatCurrency(Number(inv.amount)) }} label="Send invoice" />
+                    <SendComms customerId={inv.customer_id} template="invoice" vars={{ amount: formatCurrency(Number(inv.amount)) }} label="Send invoice" onSent={() => markSent(inv)} />
                   </div>
                 )}
               </CardBody>
@@ -407,6 +451,145 @@ export default function InvoicesPage() {
       )}
 
       {!loading && !loadError && invoices.length > 0 && <PaymentHistory />}
+    </div>
+  )
+}
+
+// ── Inline draft-invoice editor ──────────────────────────────────────────────
+// Edits a DRAFT invoice in place (no navigation): customer, service, due date,
+// notes, and a discount (fixed $ or %). The discount reuses applyDiscount/
+// invoiceTotals — the SAME engine the list, portal, PDF and Stripe charge use — so
+// `amount` stays the net subtotal and every total stays consistent. The base amount
+// is editable only for simple (≤1 line) invoices; itemized job invoices keep their
+// engine-priced breakdown and are adjusted on the schedule, but can still be discounted.
+function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
+  inv: Invoice
+  settings: BusinessSettings | null
+  onSaved: (patch: Partial<Invoice>) => void
+  onCancel: () => void
+}) {
+  const supabase = useMemo(() => createClient(), [])
+  const liSum = (inv.line_items || []).reduce((s, li) => s + Number(li.amount || 0), 0)
+  const itemized = (inv.line_items?.length ?? 0) > 1
+  const initial = invoiceTotals(inv.amount, settings, { type: inv.discount_type, value: inv.discount_value })
+
+  const [name, setName] = useState(inv.customer_name || '')
+  const [service, setService] = useState(inv.service_type || '')
+  const [due, setDue] = useState(inv.due_date || '')
+  const [notes, setNotes] = useState(inv.notes || '')
+  const [base, setBase] = useState(String(Math.round(itemized ? liSum : initial.subtotal)))
+  const [dType, setDType] = useState<'' | DiscountType>(inv.discount_type ?? '')
+  const [dValue, setDValue] = useState(inv.discount_value != null ? String(inv.discount_value) : '')
+  const [saving, setSaving] = useState(false)
+
+  const grossNum = Math.round(itemized ? liSum : (Number(base) || 0))
+  const discount = dType && Number(dValue) > 0 ? { type: dType, value: Number(dValue) } : null
+  const { net } = applyDiscount(grossNum, discount)
+  const t = invoiceTotals(net, settings, discount)
+
+  async function save() {
+    setSaving(true)
+    const hasD = !!dType && Number(dValue) > 0
+    const patch: Record<string, unknown> = {
+      customer_name: name.trim() || inv.customer_name,
+      service_type: service.trim() || null,
+      due_date: due || null,
+      notes: notes.trim() || null,
+      amount: Math.round(net),
+      discount_type: hasD ? dType : null,
+      discount_value: hasD ? Number(dValue) : null,
+    }
+    // Keep a single (non-itemized) line item in step with an edited base so the PDF
+    // total never diverges; itemized invoices keep their breakdown untouched.
+    if (!itemized && (inv.line_items?.length ?? 0) === 1) {
+      patch.line_items = [{ ...inv.line_items![0], amount: grossNum }]
+    }
+    const { error } = await supabase.from('invoices').update(patch).eq('id', inv.id)
+    setSaving(false)
+    if (error) { notify.error('Could not save the invoice: ' + error.message); return }
+    onSaved(patch as Partial<Invoice>)
+  }
+
+  return (
+    <div className="mt-3 pt-3 border-t border-border space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold text-ink uppercase tracking-wide flex items-center gap-1.5"><Pencil className="w-3.5 h-3.5 text-accent" /> Edit draft</p>
+        <button onClick={onCancel} className="text-ink-faint hover:text-ink" aria-label="Close editor"><X className="w-4 h-4" /></button>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <Input label="Customer name" value={name} onChange={e => setName(e.target.value)} />
+        <Input label="Service" value={service} onChange={e => setService(e.target.value)} placeholder="e.g. Weekly mowing" />
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <Input label="Due date" type="date" value={due} onChange={e => setDue(e.target.value)} />
+        {itemized ? (
+          <div>
+            <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Subtotal (from services)</label>
+            <div className="mt-1.5 px-3.5 py-3 rounded-xl bg-bg-tertiary border border-border text-sm text-ink-muted">{formatCurrency(liSum)} · edit services on the schedule</div>
+          </div>
+        ) : (
+          <Input label="Amount (before discount)" type="number" min="0" step="1" value={base} onChange={e => setBase(e.target.value)} />
+        )}
+      </div>
+
+      {/* Discount — none / fixed $ / percentage */}
+      <div>
+        <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Discount</label>
+        <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+          <div className="flex rounded-lg border border-border-strong overflow-hidden">
+            <DiscBtn active={dType === ''} onClick={() => setDType('')}>None</DiscBtn>
+            <DiscBtn active={dType === 'amount'} onClick={() => setDType('amount')}><DollarSign className="w-3.5 h-3.5" /></DiscBtn>
+            <DiscBtn active={dType === 'percent'} onClick={() => setDType('percent')}><Percent className="w-3.5 h-3.5" /></DiscBtn>
+          </div>
+          {dType && (
+            <div className="relative w-36">
+              <input
+                type="number" min="0" step={dType === 'percent' ? '1' : '5'} max={dType === 'percent' ? '100' : undefined}
+                autoFocus value={dValue} onChange={e => setDValue(e.target.value)}
+                placeholder={dType === 'percent' ? '10' : '25'}
+                className="w-full bg-bg-tertiary border border-border-strong rounded-xl pl-3 pr-8 py-2.5 text-base sm:text-sm text-ink outline-none focus:border-accent"
+              />
+              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-faint text-sm">{dType === 'percent' ? '%' : '$'}</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <Textarea label="Notes" value={notes} onChange={e => setNotes(e.target.value)} rows={2} placeholder="Optional note shown on the invoice" />
+
+      {/* Live breakdown — exactly what the customer, PDF and Stripe charge will show */}
+      <div className="rounded-xl border border-border bg-bg-tertiary px-3.5 py-2.5 space-y-1 text-sm">
+        <Row label="Subtotal" value={formatCurrency(t.subtotal)} />
+        {t.hasDiscount && <Row label={`Discount${t.discountLabel ? ` (${t.discountLabel})` : ''}`} value={`−${formatCurrency(t.discountAmount)}`} tone="text-emerald-400" />}
+        {t.hasDiscount && <Row label="After discount" value={formatCurrency(t.discountedSubtotal)} muted />}
+        {t.hasGst && <Row label={`GST (${t.gstPercent}%)`} value={formatCurrency(t.gstAmount)} muted />}
+        <div className="flex justify-between pt-1.5 border-t border-border"><span className="font-semibold text-ink">Total</span><span className="font-bold text-accent">{formatCurrency(t.total)}</span></div>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <Button size="sm" onClick={save} loading={saving}><Check className="w-3.5 h-3.5" /> Save draft</Button>
+        <Button size="sm" variant="ghost" onClick={onCancel}>Cancel</Button>
+      </div>
+    </div>
+  )
+}
+
+function DiscBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button type="button" onClick={onClick}
+      className={cn('px-3 py-2 text-xs font-medium flex items-center gap-1 border-r border-border-strong last:border-r-0 transition-colors',
+        active ? 'bg-accent text-black' : 'bg-surface text-ink-muted hover:text-ink')}>
+      {children}
+    </button>
+  )
+}
+
+function Row({ label, value, tone, muted }: { label: string; value: string; tone?: string; muted?: boolean }) {
+  return (
+    <div className="flex justify-between">
+      <span className={muted ? 'text-ink-faint' : 'text-ink-muted'}>{label}</span>
+      <span className={cn('font-medium', tone || (muted ? 'text-ink-muted' : 'text-ink'))}>{value}</span>
     </div>
   )
 }

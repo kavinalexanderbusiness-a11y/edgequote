@@ -1,6 +1,7 @@
 import type { createClient } from '@/lib/supabase/client'
 import type { Job, InvoiceLineItem, JobLineItem } from '@/types'
 import { localTodayISO, maxNumericSuffix } from '@/lib/utils'
+import { applyDiscount, type DiscountType } from '@/lib/invoiceTotals'
 import { addDays, format, parseISO } from 'date-fns'
 
 type Supa = ReturnType<typeof createClient>
@@ -110,8 +111,8 @@ export async function syncDraftInvoiceAmounts(
 ): Promise<number> {
   const ids = [...new Set(jobIds.filter(Boolean))]
   if (ids.length === 0) return 0
-  const { data: invData } = await supabase.from('invoices').select('id, job_id, amount, notes, line_items').in('job_id', ids).eq('status', 'draft')
-  const invoices = (invData as { id: string; job_id: string; amount: number; notes: string | null; line_items: InvoiceLineItem[] | null }[] | null) || []
+  const { data: invData } = await supabase.from('invoices').select('id, job_id, amount, notes, line_items, discount_type, discount_value').in('job_id', ids).eq('status', 'draft')
+  const invoices = (invData as { id: string; job_id: string; amount: number; notes: string | null; line_items: InvoiceLineItem[] | null; discount_type: DiscountType | null; discount_value: number | null }[] | null) || []
   if (invoices.length === 0) return 0
 
   const jobIdsWithInv = [...new Set(invoices.map(i => i.job_id))]
@@ -140,7 +141,10 @@ export async function syncDraftInvoiceAmounts(
     const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
     const base = jobVisitValue(j.price, quote, freq, j.is_initial_visit)
     const { lineItems, total } = buildInvoiceLineItems({ serviceType: j.service_type, baseAmount: base, freq, isInitial: j.is_initial_visit, addons: addonsByJob[inv.job_id], quote })
-    const amount = Math.round(total)
+    // line_items stay the GROSS services; the stored amount is the NET, so a manual
+    // discount on this draft is preserved when its job price changes (one engine).
+    const { net } = applyDiscount(Math.round(total), { type: inv.discount_type, value: inv.discount_value })
+    const amount = Math.round(net)
     const prev = Math.round(Number(inv.amount))
     const sameLines = JSON.stringify(inv.line_items ?? null) === JSON.stringify(lineItems)
     if (!(amount > 0) || (amount === prev && sameLines)) continue

@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Job, JobRecurrence } from '@/types'
 import { Coord } from '@/lib/geo'
 import { optimizeSchedule, metricsWithMoves, manualCadenceCheck, OptimizationResult, OptimizeMode, OptimizeScope, OptJob, PlannedMove, CadenceVisit, CadenceRecs } from '@/lib/optimizer'
+import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
 import type { DayStatusMap } from '@/lib/dayStatus'
 import { resolvePrefs } from '@/lib/preferences'
 import { localTodayISO, formatCurrency, cn } from '@/lib/utils'
@@ -67,6 +68,9 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
   const [running, setRunning] = useState(false)
   const [applying, setApplying] = useState(false)
   const [result, setResult] = useState<OptimizationResult | null>(null)
+  // Learned drive speed — the optimizer's capacity/drive-time math sharpens over time.
+  const [travel, setTravel] = useState<TravelModel>(DEFAULT_TRAVEL_MODEL)
+  useEffect(() => { loadTravelModel(supabase).then(setTravel) }, [supabase])
   // Cherry-picking: moves the owner has UNTICKED (default = everything applies).
   const [deselected, setDeselected] = useState<Set<string>>(new Set())
   // The exact job snapshot the result was computed from — selection metrics and
@@ -131,6 +135,7 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
         roadDist,
         dayStatusMap,
         capacityForDate,
+        minPerKm: travel.minPerKm,
       }))
       setRunning(false)
     }, 30)
@@ -167,9 +172,9 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
     if (!result) return null
     if (deselected.size === 0 || !lastOptJobs) return result.after
     return metricsWithMoves(lastOptJobs, {
-      scope: result.scope, anchorDate, today: localTodayISO(), base: baseCoord, capacityHours, roadDist, capacityForDate,
+      scope: result.scope, anchorDate, today: localTodayISO(), base: baseCoord, capacityHours, roadDist, capacityForDate, minPerKm: travel.minPerKm,
     }, selectedMoves)
-  }, [result, lastOptJobs, deselected, selectedMoves, anchorDate, baseCoord, capacityHours, roadDist, capacityForDate])
+  }, [result, lastOptJobs, deselected, selectedMoves, anchorDate, baseCoord, capacityHours, roadDist, capacityForDate, travel.minPerKm])
   const selKmSaved = result && effAfter ? Math.round((result.before.totalKm - effAfter.totalKm) * 10) / 10 : 0
   const selMinSaved = result && effAfter ? result.before.driveMinutes - effAfter.driveMinutes : 0
   const selDaysAffected = new Set(selectedMoves.flatMap(m => [m.from, m.to])).size
