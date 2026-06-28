@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { uploadPhotos, UploadPhotoOpts, JobPhotoView } from '@/lib/photos'
 import { captureStampFor, CaptureStamp } from '@/lib/exif'
 import { detectBeforeAfter, DetectConfidence } from '@/lib/beforeafter/autodetect'
-import { resolveTargetJob, ensurePair, JobRow } from '@/lib/beforeafter/autopair'
+import { resolveTargetJob, JobRow } from '@/lib/beforeafter/autopair'
+import { enqueueUploads } from '@/lib/uploadQueue'
 import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
@@ -47,7 +47,7 @@ export function BeforeAfterUploader({
   customerId?: string | null
   jobId?: string | null
   propertyLabel?: string | null
-  onUploaded?: (added: JobPhotoView[]) => void
+  onUploaded?: () => void   // fired once the batch is ENQUEUED (uploads run in the background)
   onClose?: () => void
   autoFocusDrop?: boolean
 }) {
@@ -184,48 +184,35 @@ export function BeforeAfterUploader({
 
   async function doUpload() {
     if (!propertyId) { toast('Pick a property first', { tone: 'error' }); return }
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) { toast('Not signed in', { tone: 'error' }); return }
     setUploading(true)
-    setStaged(prev => prev.map(s => ({ ...s, status: 'uploading' })))
-
-    const items: UploadPhotoOpts[] = staged.map(s => ({
-      userId: user.id, file: s.file, propertyId, jobId: jobId ?? null, customerId,
-      kind: s.kind,
-      // Only stamp an EXACT (EXIF) time; otherwise let the DB default to now() but
-      // keep capture ORDER via a tiny offset so before sorts before after.
-      takenAt: s.stamp?.exact ? new Date(s.stamp.ms).toISOString() : null,
-    }))
-    const rows = await uploadPhotos(supabase, items)
-    const ok = rows.filter((r): r is JobPhotoView => !!r)
-    setStaged(prev => prev.map((s, i) => ({ ...s, status: rows[i] ? 'done' : 'error' })))
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) { setUploading(false); toast('Not signed in', { tone: 'error' }); return }
 
     // Remember the context for next time.
     if (!fixedContext && ctxLabel) {
       try { localStorage.setItem(LAST_CTX_KEY, JSON.stringify({ propertyId, customerId, label: ctxLabel } satisfies LastCtx)) } catch { /* ignore */ }
     }
 
-    // Auto-pair in the background once a before + after both exist on a job.
-    const okBefore = ok.filter(r => r.kind === 'before').sort((a, b) => Date.parse(a.taken_at) - Date.parse(b.taken_at))
-    const okAfter = ok.filter(r => r.kind === 'after').sort((a, b) => Date.parse(a.taken_at) - Date.parse(b.taken_at))
-    if (jobId && job && okBefore.length && okAfter.length) {
-      void ensurePair(supabase, {
-        userId: user.id, job,
-        beforePhotoId: okBefore[0].id,
-        afterPhotoId: okAfter[okAfter.length - 1].id,
-      }, Date.now())
-    }
+    // Hand off to the background queue — it compresses + uploads (parallel, retrying),
+    // auto-pairs into marketing_assets, and reports progress in the global tray. The
+    // owner keeps working immediately; the queue owns the previews from here.
+    enqueueUploads({
+      ctx: { userId: user.id, propertyId, jobId: jobId ?? null, customerId },
+      pairJob: job,
+      label: ctxLabel || undefined,
+      items: staged.map(s => ({
+        file: s.file,
+        kind: s.kind,
+        takenAt: s.stamp?.exact ? new Date(s.stamp.ms).toISOString() : null,
+      })),
+    })
 
+    toast('Uploading in the background — keep working', { tone: 'success' })
+    staged.forEach(s => URL.revokeObjectURL(s.url))
+    setStaged([])
     setUploading(false)
-    if (ok.length) {
-      const paired = jobId && okBefore.length && okAfter.length
-      toast(`${ok.length} photo${ok.length !== 1 ? 's' : ''} uploaded${paired ? ' · before/after paired' : ''}`, { tone: 'success' })
-      onUploaded?.(ok)
-      staged.forEach(s => URL.revokeObjectURL(s.url))
-      setStaged([])
-    } else {
-      toast('Upload failed — try again', { tone: 'error' })
-    }
+    onUploaded?.()
+    onClose?.()
   }
 
   return (
