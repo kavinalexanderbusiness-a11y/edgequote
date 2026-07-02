@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { format, parseISO } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { MsgType, renderMessage } from '@/lib/comms/templates'
+import { summarizeSendOutcome as summarize, type SendOutcome as Outcome } from '@/lib/comms/sendOutcome'
 import { SmsCost } from '@/components/comms/SmsCost'
 import { localTodayISO, cn } from '@/lib/utils'
 import {
@@ -39,8 +40,6 @@ const ACTIONS: { type: MsgType; label: string; icon: typeof Navigation; tone?: s
   { type: 'rescheduled', label: 'Rescheduled', icon: CalendarClock, reschedule: 'date' },
   { type: 'rain_delay', label: 'Weather delay', icon: CloudRain, reschedule: 'weather', tone: 'text-blue-300 border-blue-400/30 bg-blue-400/10 hover:bg-blue-400/20' },
 ]
-
-interface Outcome { ok: boolean; text: string }
 
 export function JobMessages({ jobId, customerId, customerName, visitDate, timeWindow, address }: Props) {
   const supabase = useMemo(() => createClient(), [])
@@ -228,15 +227,3 @@ function ChannelChip({ label, icon: Icon, on, onClick }: { label: string; icon: 
   )
 }
 
-// Turn the send route response into one human line.
-function summarize(data: { results?: Record<string, { sent?: boolean; reason?: string; error?: string }> }): Outcome {
-  const r = data.results || {}
-  const sent = Object.entries(r).filter(([, v]) => v.sent).map(([ch]) => ch)
-  if (sent.length) return { ok: true, text: `Sent by ${sent.join(' & ')} — saved to the customer's timeline.` }
-  const reasons = Object.values(r).map(v => v.reason)
-  if (reasons.includes('no-optin')) return { ok: false, text: 'Customer hasn’t opted in — turn on SMS/email on their profile.' }
-  if (reasons.includes('disabled')) return { ok: false, text: 'Messaging is off — add Twilio/Resend keys in Settings.' }
-  const err = Object.values(r).find(v => v.error)?.error
-  if (err) return { ok: false, text: err }
-  return { ok: false, text: 'Nothing sent (no phone/email on file).' }
-}

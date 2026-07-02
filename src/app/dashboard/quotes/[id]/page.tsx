@@ -19,11 +19,6 @@ import { addLineItems } from '@/lib/jobPricing'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { Edit2, ArrowLeft, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Send } from 'lucide-react'
 
-function localToday(): string {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
 export default function QuoteDetailPage() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
@@ -278,7 +273,7 @@ export default function QuoteDetailPage() {
         quote_id: quote.id,
         title: `${quote.service_type} — ${quote.customer_name}`,
         service_type: quote.service_type,
-        scheduled_date: dateOverride || localToday(),
+        scheduled_date: dateOverride || localTodayISO(),
         duration_minutes: Math.round(Number(quote.hours) * 60) + extraMinutes,
         crew_size: quote.crew_size,
         status: 'scheduled',

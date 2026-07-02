@@ -15,6 +15,7 @@ import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
 import { settingsToSeasons, DEFAULT_SEASONS, ServiceSeasons } from '@/lib/seasons'
 import { resolvePrefs, prefSummary, hasAnyPref } from '@/lib/preferences'
 import { SchedulePrefsFields, PrefsDraft, EMPTY_DRAFT, toDraft, draftToRow } from '@/components/customers/SchedulePrefsFields'
+import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -95,6 +96,7 @@ export default function CustomerDetailPage() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [portalBusy, setPortalBusy] = useState(false)
   const [portalCopied, setPortalCopied] = useState(false)
+  const [showMessage, setShowMessage] = useState(false)
 
   async function copyPortalLink() {
     if (!customer) return
@@ -484,10 +486,15 @@ export default function CustomerDetailPage() {
             <a href={phone ? `tel:${phone}` : undefined} aria-disabled={!phone} className={`h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border transition-colors ${phone ? 'bg-surface border-border text-ink hover:border-border-strong' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}>
               <Phone className="w-4 h-4" /> Call
             </a>
-            <a href={phone ? `sms:${phone}` : undefined} aria-disabled={!phone} className={`h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border transition-colors ${phone ? 'bg-surface border-border text-ink hover:border-border-strong' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}>
-              <MessageSquare className="w-4 h-4" /> Text
-            </a>
+            {/* Opens the ONE shared Send Message dialog (templates + editable body,
+                logged to the thread) — not a device-only sms: deep link. */}
+            <button onClick={() => setShowMessage(true)}
+              className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border bg-surface border-border text-ink hover:border-border-strong transition-colors">
+              <MessageSquare className="w-4 h-4" /> Message
+            </button>
           </div>
+          <SendMessageDialog open={showMessage} onClose={() => setShowMessage(false)}
+            customerId={customer.id} customerName={customer.name} />
         </CardBody>
       </Card>
 

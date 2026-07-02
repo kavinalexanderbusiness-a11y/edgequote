@@ -5,7 +5,7 @@ import { toast } from '@/lib/toast'
 import { createClient } from '@/lib/supabase/client'
 import { Job, JobStatus, JobRecurrence, JobLineItem, RecurrenceScope, PRICE_REASONS, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
 import { Coord } from '@/lib/geo'
-import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, nearestNeighborRoute, roundTripMapsUrl, routeStats, directionsUrl, computeDayEtas, roughFinishEstimate, dayLoad, minutesToTime12, timeToMinutes, DEFAULT_JOB_MIN } from '@/lib/route'
+import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, nearestNeighborRoute, sequenceRoute, roundTripMapsUrl, routeStats, directionsUrl, computeDayEtas, roughFinishEstimate, dayLoad, minutesToTime12, timeToMinutes, DEFAULT_JOB_MIN } from '@/lib/route'
 import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
 import { buildRoadDistance } from '@/lib/distance'
 import { jobVisitValue, effectiveFreq, quoteVisitAmount } from '@/lib/invoicing'
@@ -15,9 +15,11 @@ import { Button } from '@/components/ui/Button'
 import { JobPhotos } from '@/components/photos/JobPhotos'
 import { JobAddons } from '@/components/schedule/JobAddons'
 import { JobMessages } from '@/components/schedule/JobMessages'
+import { SendMessageDialog, type MessageRecipient } from '@/components/comms/SendMessageDialog'
 import {
   DollarSign, Clock, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
   MapPin, Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, Trash2, CloudRain, Play, Timer, Camera, PlusCircle, MessageSquare, Send,
+  ChevronUp, ChevronDown,
 } from 'lucide-react'
 
 export interface QuoteLite {
@@ -90,6 +92,8 @@ export function DayOpsPanel({
   const [addonsId, setAddonsId] = useState<string | null>(null)
   // Which job's one-tap messaging panel is open.
   const [messageId, setMessageId] = useState<string | null>(null)
+  // "Message today's customers" dialog (day-level bulk send).
+  const [showDayMsg, setShowDayMsg] = useState(false)
   // Job currently sending a one-tap "On my way" (locks the button against double-tap).
   const [sendingEta, setSendingEta] = useState<string | null>(null)
 
@@ -207,6 +211,17 @@ export function DayOpsPanel({
   const active = jobs.filter(j => j.status !== 'cancelled')
   const completed = active.filter(j => j.status === 'completed')
   const remaining = active.filter(j => j.status !== 'completed')
+  // Recipients for "Message today's customers" — one per customer scheduled today.
+  const dayRecipients: MessageRecipient[] = (() => {
+    const seen = new Set<string>()
+    const out: MessageRecipient[] = []
+    for (const j of active) {
+      if (!j.customer_id || seen.has(j.customer_id)) continue
+      seen.add(j.customer_id)
+      out.push({ customerId: j.customer_id, name: j.customers?.name || j.title, phone: j.customers?.phone ?? null, service: j.service_type })
+    }
+    return out
+  })()
   const totalMin = active.reduce((s, j) => s + (j.duration_minutes || 0), 0)
   const estHours = Math.round((totalMin / 60) * 10) / 10
   const totalRevenue = active.reduce((s, j) => s + jobTotal(j), 0)
@@ -260,20 +275,79 @@ export function DayOpsPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date, baseCoord?.lat, baseCoord?.lng, active.map(j => j.id).join(',')])
 
-  const orderByJobId = new Map(route?.ordered.map(s => [s.jobId, s.order]) ?? [])
+  // ── Manual route order (drag-and-drop) ──
+  // jobs.route_order is the saved manual sequence; localSeq is the optimistic
+  // override while a reorder persists ('auto' = owner just reset to optimizer).
+  const [localSeq, setLocalSeq] = useState<string[] | 'auto' | null>(null)
+  useEffect(() => { setLocalSeq(null) }, [date])
+  const savedSeq = active.some(j => j.route_order != null)
+    ? [...active].sort((a, b) => (a.route_order ?? 999) - (b.route_order ?? 999)).map(j => j.id)
+    : null
+  const manualSeq = localSeq === 'auto' ? null : (localSeq ?? savedSeq)
+
+  // The EFFECTIVE route: the owner's manual sequence when set (via the same
+  // sequenceRoute engine → same OrderedRouteStop shape), else the optimizer's.
+  // ETAs, stats, Open-in-Maps and the list order all read from this ONE value,
+  // so a reorder re-flows everything instantly with no special cases.
+  const manualRoute = manualSeq && baseCoord
+    ? sequenceRoute(baseCoord, active.map(job => ({
+        jobId: job.id,
+        title: job.customers?.name || job.title,
+        address: job.properties?.address || job.title,
+        propertyId: job.properties?.id ?? null,
+        lat: job.properties?.lat ?? null,
+        lng: job.properties?.lng ?? null,
+      })), manualSeq)
+    : null
+  const effOrdered: OrderedRouteStop[] = manualRoute ? manualRoute.ordered : route?.ordered ?? []
+  const effTotalKm = manualRoute ? manualRoute.totalKm : route?.totalKm ?? 0
+  const effMapsUrl = manualRoute && baseCoord ? roundTripMapsUrl(baseCoord, manualRoute.ordered) : route?.mapsUrl ?? null
+
+  const orderByJobId = new Map(effOrdered.map(s => [s.jobId, s.order]))
   const sortedJobs = [...active].sort((a, b) => {
     const oa = orderByJobId.get(a.id) ?? 999
     const ob = orderByJobId.get(b.id) ?? 999
     if (oa !== ob) return oa - ob
     return (a.start_time || '').localeCompare(b.start_time || '')
   })
-  const stats = route && totalStops > 0 ? routeStats(locatedCoords, route.totalKm, travel) : null
+  const stats = (manualRoute || route) && totalStops > 0 ? routeStats(locatedCoords, effTotalKm, travel) : null
+
+  // Reorder: swap instantly (optimistic), then persist the whole day's sequence.
+  async function applyOrder(seq: string[]) {
+    setLocalSeq(seq)
+    await Promise.all(seq.map((id, i) => supabase.from('jobs').update({ route_order: i + 1 }).eq('id', id)))
+  }
+  function moveStop(id: string, dir: -1 | 1) {
+    const seq = (manualSeq ?? sortedJobs.map(j => j.id)).slice()
+    const i = seq.indexOf(id)
+    const j = i + dir
+    if (i < 0 || j < 0 || j >= seq.length) return
+    ;[seq[i], seq[j]] = [seq[j], seq[i]]
+    applyOrder(seq)
+  }
+  const dragId = useRef<string | null>(null)
+  function dropOn(targetId: string) {
+    const from = dragId.current
+    dragId.current = null
+    if (!from || from === targetId) return
+    const seq = (manualSeq ?? sortedJobs.map(j => j.id)).slice()
+    const fi = seq.indexOf(from)
+    const ti = seq.indexOf(targetId)
+    if (fi < 0 || ti < 0) return
+    seq.splice(fi, 1)
+    seq.splice(ti, 0, from)
+    applyOrder(seq)
+  }
+  async function resetOrder() {
+    setLocalSeq('auto')
+    await supabase.from('jobs').update({ route_order: null }).in('id', active.map(j => j.id))
+  }
 
   // Real-world timing: work start + route order + drive legs + job durations →
   // an arrival time per stop and the day's estimated finish (ONE engine, lib/route).
   const durByJob: Record<string, number> = {}
   for (const j of active) durByJob[j.id] = j.duration_minutes || DEFAULT_JOB_MIN
-  const etas = route && route.ordered.length > 0 ? computeDayEtas(workStartTime, route.ordered, durByJob, travel) : null
+  const etas = effOrdered.length > 0 ? computeDayEtas(workStartTime, effOrdered, durByJob, travel) : null
   const etaByJob: Record<string, string> = {}
   const arrivalMinByJob: Record<string, number> = {}
   if (etas) for (const s of etas.stops) { etaByJob[s.jobId] = s.arrival; arrivalMinByJob[s.jobId] = s.arrivalMin }
@@ -321,6 +395,10 @@ export function DayOpsPanel({
 
   return (
     <div className="rounded-card border border-border bg-bg-secondary overflow-hidden">
+      {/* Message today's customers — the shared Send-Message dialog, prefilled with the day's recipients */}
+      {showDayMsg && (
+        <SendMessageDialog open recipients={dayRecipients} title="Message today's customers" onClose={() => setShowDayMsg(false)} />
+      )}
       {/* Header: date + add */}
       <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-3 bg-gradient-to-r from-accent/5 to-transparent">
         <div className="min-w-0 flex items-center gap-2">
@@ -339,6 +417,11 @@ export function DayOpsPanel({
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {dayRecipients.length > 0 && (
+            <Button size="sm" variant="secondary" onClick={() => setShowDayMsg(true)} title="Message everyone scheduled today">
+              <MessageSquare className="w-4 h-4" /> Message all
+            </Button>
+          )}
           {remaining.length > 0 && (
             <Button size="sm" variant="secondary" onClick={onRainDelay} title="Bump all remaining jobs to your next work day">
               <CloudRain className="w-4 h-4" /> Rain delay
@@ -392,21 +475,27 @@ export function DayOpsPanel({
             <div className="flex items-center justify-between gap-2">
               <span className="flex items-center gap-1.5 text-xs font-semibold text-ink-muted uppercase tracking-wide">
                 <RouteIcon className="w-3.5 h-3.5 text-accent" /> Route
+                {manualSeq && (
+                  <button onClick={resetOrder} title="Back to the optimized order"
+                    className="normal-case tracking-normal text-[10px] font-semibold text-amber-300 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5 hover:bg-amber-500/20">
+                    Custom order · Reset
+                  </button>
+                )}
               </span>
-              {route?.mapsUrl && (
-                <a href={route.mapsUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-accent font-medium flex items-center gap-1 hover:underline">
+              {effMapsUrl && (
+                <a href={effMapsUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-accent font-medium flex items-center gap-1 hover:underline">
                   <ExternalLink className="w-3 h-3" /> Open in Maps
                 </a>
               )}
             </div>
             {!baseCoord ? (
               <p className="text-xs text-amber-400 mt-1.5">Set your base address in Settings to optimize the route.</p>
-            ) : routing ? (
+            ) : routing && !manualRoute ? (
               <p className="text-xs text-ink-faint mt-1.5">Optimizing route…</p>
-            ) : route && stats ? (
+            ) : (manualRoute || route) && stats ? (
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1.5 text-xs text-ink-muted">
-                <span className="flex items-center gap-1"><Navigation className="w-3 h-3" /> ~{route.totalKm} km</span>
-                {route.usedRoad && <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-400 border border-emerald-500/30 bg-emerald-500/10 rounded px-1.5 py-0.5">Real-road</span>}
+                <span className="flex items-center gap-1"><Navigation className="w-3 h-3" /> ~{effTotalKm} km</span>
+                {!manualRoute && route?.usedRoad && <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-400 border border-emerald-500/30 bg-emerald-500/10 rounded px-1.5 py-0.5">Real-road</span>}
                 <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> ~{stats.driveMinutes} min driving</span>
                 <span className="flex items-center gap-1"><MapPin className="w-3 h-3" /> {stats.clusters} cluster{stats.clusters !== 1 ? 's' : ''}</span>
                 <span>{stats.avgLegKm} km avg between stops</span>
@@ -425,16 +514,37 @@ export function DayOpsPanel({
               const addons = addonsFor(job)
               const total = value + addonsTotal(addons)  // base + add-ons (billed amount)
               const qVal = quoteValueFor(job)
+              const idx = sortedJobs.findIndex(j => j.id === job.id)
               return (
-                <div key={job.id} className={cn('rounded-xl border px-3 py-2.5', JOB_STATUS_COLORS[job.status])}>
+                <div key={job.id}
+                  draggable={sortedJobs.length > 1}
+                  onDragStart={() => { dragId.current = job.id }}
+                  onDragOver={e => e.preventDefault()}
+                  onDrop={() => dropOn(job.id)}
+                  className={cn('rounded-xl border px-3 py-2.5', JOB_STATUS_COLORS[job.status], sortedJobs.length > 1 && 'cursor-grab active:cursor-grabbing')}>
                   <div className="flex items-start gap-2.5">
-                    <div className={cn(
-                      'w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5',
-                      done ? 'bg-emerald-500/20 text-emerald-300'
-                        : job.status === 'in_progress' ? 'bg-sky-400 text-black animate-pulse'
-                        : 'bg-accent text-black'
-                    )}>
-                      {done ? <Check className="w-4 h-4" /> : job.status === 'in_progress' ? <Play className="w-3.5 h-3.5 fill-current" /> : (order ?? '–')}
+                    <div className="flex flex-col items-center gap-0.5 shrink-0">
+                      <div className={cn(
+                        'w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold mt-0.5',
+                        done ? 'bg-emerald-500/20 text-emerald-300'
+                          : job.status === 'in_progress' ? 'bg-sky-400 text-black animate-pulse'
+                          : 'bg-accent text-black'
+                      )}>
+                        {done ? <Check className="w-4 h-4" /> : job.status === 'in_progress' ? <Play className="w-3.5 h-3.5 fill-current" /> : (order ?? '–')}
+                      </div>
+                      {/* Touch-friendly reorder (drag works on desktop) */}
+                      {sortedJobs.length > 1 && (
+                        <div className="flex flex-col">
+                          <button onClick={e => { e.stopPropagation(); moveStop(job.id, -1) }} disabled={idx === 0}
+                            aria-label="Move up" className="text-ink-faint hover:text-ink disabled:opacity-25 leading-none">
+                            <ChevronUp className="w-3.5 h-3.5" />
+                          </button>
+                          <button onClick={e => { e.stopPropagation(); moveStop(job.id, 1) }} disabled={idx === sortedJobs.length - 1}
+                            aria-label="Move down" className="text-ink-faint hover:text-ink disabled:opacity-25 leading-none">
+                            <ChevronDown className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">

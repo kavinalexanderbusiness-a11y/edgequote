@@ -373,7 +373,8 @@ export default function MessagesPage() {
           <BulkBtn icon={Pin} label="Pin" onClick={() => bulk('pin')} />
           <BulkBtn icon={BellOff} label="Mute" onClick={() => bulk('mute')} />
           <BulkBtn icon={Bell} label="Unmute" onClick={() => bulk('unmute')} />
-          <BulkBtn icon={Trash2} label="Delete" onClick={() => bulk('delete')} danger />
+          {/* Permanent delete only inside Archived — archive is the safe default elsewhere. */}
+          {filter === 'archived' && <BulkBtn icon={Trash2} label="Delete" onClick={() => bulk('delete')} danger />}
         </div>
       )}
 
@@ -600,8 +601,13 @@ function ConversationRow({ c, selected, actions, query, selectMode, checked, onT
           <Item icon={MailOpen} label="Mark unread" onClick={() => actions.markUnread(c)} />
           <Item icon={c.muted ? Bell : BellOff} label={c.muted ? 'Unmute' : 'Mute notifications'} onClick={() => actions.toggleMute(c)} />
           <Item icon={User} label="View customer" onClick={() => router.push(`/dashboard/customers/${c.customer_id}`)} />
-          <div className="border-t border-border my-1" />
-          <Item icon={Trash2} label="Delete permanently" onClick={() => actions.del(c)} danger />
+          {/* Permanent delete only for ARCHIVED conversations — archive is the safe default. */}
+          {c.archived_at && (
+            <>
+              <div className="border-t border-border my-1" />
+              <Item icon={Trash2} label="Delete permanently" onClick={() => actions.del(c)} danger />
+            </>
+          )}
         </div>
       )}
     </div>

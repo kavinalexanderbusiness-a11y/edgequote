@@ -12,7 +12,8 @@ import { applyConsent, SMS_CONSENT_WARNING, ConsentChannel } from '@/lib/consent
 import { toast as notify } from '@/lib/toast'
 import { useBulkSelect } from '@/hooks/useBulkSelect'
 import { BulkActionBar, SelectCheckbox, SelectAllToggle, type BulkAction } from '@/components/ui/BulkActions'
-import { BulkMessageDialog } from '@/components/comms/BulkMessageDialog'
+import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
+import type { MsgType } from '@/lib/comms/templates'
 import { exportRowsToCsv } from '@/lib/csv'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
@@ -44,7 +45,10 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
   const [portalBusy, setPortalBusy] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [smsConfirm, setSmsConfirm] = useState(false)
-  const [showMsg, setShowMsg] = useState(false)
+  // Which template the Send-Message dialog opens on (null = closed; 'choose' = let the
+  // owner pick). Lets "Send introduction" / "Review request" be one-tap entries into
+  // THE same dialog instead of separate UIs.
+  const [msgTemplate, setMsgTemplate] = useState<'choose' | MsgType | null>(null)
   const [busyKey, setBusyKey] = useState<string | null>(null)
 
   function matchesConsent(c: Customer): boolean {
@@ -129,7 +133,10 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
   }
 
   const bulkActions: BulkAction[] = [
-    { key: 'message', label: 'Message', icon: Send, tone: 'primary', onClick: () => setShowMsg(true) },
+    { key: 'message', label: 'Message', icon: Send, tone: 'primary', onClick: () => setMsgTemplate('choose') },
+    // One-tap entries into THE same dialog, preselected — not separate UIs.
+    { key: 'introduction', label: 'Send introduction', icon: MessageSquare, onClick: () => setMsgTemplate('introduction') },
+    { key: 'review', label: 'Review request', icon: Check, onClick: () => setMsgTemplate('review_request') },
     { key: 'archive', label: 'Archive', icon: Archive, onClick: bulkArchive },
     { key: 'export', label: 'Export', icon: Download, onClick: exportSelected },
     { key: 'email-on', label: 'Email on', icon: Mail, onClick: () => requestBulk('email', true) },
@@ -281,19 +288,15 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
         </div>
       )}
 
-      {/* Bulk message — reuses the comms pipeline; review-request / reminder / etc. */}
-      {showMsg && (
-        <BulkMessageDialog
-          customerIds={sel.selectedItems.map(c => c.id)}
+      {/* THE shared multi-recipient Send-Message dialog — 'choose' opens on the default
+          template list; a specific value ("introduction"/"review_request") preselects it. */}
+      {msgTemplate && (
+        <SendMessageDialog
+          open
+          recipients={sel.selectedItems.map(c => ({ customerId: c.id, name: c.name, phone: c.phone }))}
           title="Message customers"
-          templates={[
-            { value: 'review_request', label: 'Request a Google review' },
-            { value: 'reminder', label: 'Quote reminder / follow-up' },
-            { value: 'thanks', label: 'Thank you' },
-            { value: 'win_back', label: 'Win-back — we miss you' },
-            { value: 'marketing', label: 'Promotion / update' },
-          ]}
-          onClose={sent => { setShowMsg(false); if (sent) sel.clear() }}
+          defaultTemplate={msgTemplate === 'choose' ? undefined : msgTemplate}
+          onClose={sent => { setMsgTemplate(null); if (sent) sel.clear() }}
         />
       )}
 

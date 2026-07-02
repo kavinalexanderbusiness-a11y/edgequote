@@ -16,6 +16,10 @@ export type MsgType =
   | 'receipt'
   // CRM growth campaigns (lib/crm/campaigns — driven by /api/cron/campaigns).
   | 'birthday' | 'anniversary' | 'win_back' | 'marketing'
+  // Standard business announcement — introduction / new phone number.
+  | 'introduction'
+  // Free-form one-off message (the shared Send Message dialog's blank slate).
+  | 'custom'
 
 export const MSG_LABELS: Record<MsgType, string> = {
   on_my_way: 'On my way',
@@ -40,6 +44,8 @@ export const MSG_LABELS: Record<MsgType, string> = {
   anniversary: 'Anniversary greeting',
   win_back: 'Win-back / re-engagement',
   marketing: 'Marketing check-in',
+  introduction: 'Introduction / new number',
+  custom: 'Custom message',
 }
 
 // The variables a template may reference, with a short hint for the editor.
@@ -75,6 +81,14 @@ This is a friendly reminder that {{business_name}} is scheduled to service your 
 If anything changes before then, simply reply to this message.
 
 We look forward to seeing you tomorrow!`,
+
+  introduction: `Hi {{first_name}},
+
+This is {{business_name}} — please save our new number so you can always reach us here.
+
+We truly appreciate your business and are always a text away if you need anything or want to book a service.
+
+Thank you!`,
 
   eta: `Hi {{first_name}},
 
@@ -257,6 +271,10 @@ Just checking in from {{business_name}}.
 If there's anything we can help with around your property this season, simply reply to this message and we'll take care of it.
 
 Thank you for being a valued customer!`,
+
+  custom: `Hi {{first_name}},
+
+`,
 }
 
 const SUBJECTS: Record<MsgType, string> = {
@@ -268,6 +286,8 @@ const SUBJECTS: Record<MsgType, string> = {
   estimate_reminder: 'Your upcoming estimate', payment_reminder: 'Invoice reminder', estimate_followup: 'Following up on your quote',
   receipt: 'Payment received — thank you',
   birthday: 'Happy birthday!', anniversary: 'Thank you', win_back: 'We’d love to see you again', marketing: 'A quick hello',
+  introduction: 'Our new number — please save it',
+  custom: '', // falsy → renderMessage falls back to "A message from {business}"
 }
 
 export interface MsgVars {

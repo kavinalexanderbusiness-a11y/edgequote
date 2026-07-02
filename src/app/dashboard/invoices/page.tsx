@@ -12,12 +12,12 @@ import { SkeletonRows } from '@/components/ui/Skeleton'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Textarea } from '@/components/ui/Textarea'
-import { SendComms } from '@/components/comms/SendComms'
+import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { PaymentHistory } from '@/components/payments/PaymentHistory'
 import { invoiceTotals, applyDiscount, type DiscountType } from '@/lib/invoiceTotals'
 import { toast as notify } from '@/lib/toast'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
-import { FileText, User, Check, FileDown, Trash2, CreditCard, Zap, AlertTriangle, Pencil, Percent, DollarSign, X } from 'lucide-react'
+import { FileText, User, Check, FileDown, Trash2, CreditCard, Zap, AlertTriangle, Pencil, Percent, DollarSign, X, MessageSquare } from 'lucide-react'
 
 const FILTERS: { value: '' | InvoiceStatus; label: string }[] = [
   { value: '', label: 'All' },
@@ -42,6 +42,8 @@ export default function InvoicesPage() {
   const [openingId, setOpeningId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [filter, setFilter] = useState<'' | InvoiceStatus>('')
+  // The ONE shared Send Message dialog, opened for a specific invoice's customer.
+  const [msgInvoice, setMsgInvoice] = useState<Invoice | null>(null)
   const [paymentsEnabled, setPaymentsEnabled] = useState(false)
   const [payingId, setPayingId] = useState<string | null>(null)
   const [chargingId, setChargingId] = useState<string | null>(null)
@@ -441,7 +443,9 @@ export default function InvoicesPage() {
                 )}
                 {inv.customer_id && (
                   <div className="mt-3 pt-3 border-t border-border">
-                    <SendComms customerId={inv.customer_id} template="invoice" vars={{ amount: formatCurrency(Number(inv.amount)) }} label="Send invoice" onSent={() => markSent(inv)} />
+                    <Button variant="secondary" size="sm" onClick={() => setMsgInvoice(inv)}>
+                      <MessageSquare className="w-3.5 h-3.5" /> Send invoice
+                    </Button>
                   </div>
                 )}
               </CardBody>
@@ -451,6 +455,14 @@ export default function InvoicesPage() {
       )}
 
       {!loading && !loadError && invoices.length > 0 && <PaymentHistory />}
+
+      {/* ONE shared Send Message dialog — sending marks the invoice sent. */}
+      {msgInvoice?.customer_id && (
+        <SendMessageDialog open onClose={() => setMsgInvoice(null)}
+          customerId={msgInvoice.customer_id} customerName={msgInvoice.customer_name}
+          defaultTemplate="invoice" vars={{ amount: formatCurrency(Number(msgInvoice.amount)) }}
+          onSent={() => markSent(msgInvoice)} />
+      )}
     </div>
   )
 }
