@@ -119,6 +119,8 @@ function hoursBetween(start: string, end: string): number {
   const mins = (Number(eh) * 60 + Number(em)) - (Number(sh) * 60 + Number(sm))
   return Math.max(0, mins / 60)
 }
+function hhmmToMin(hhmm: string): number { const [h, m = '0'] = hhmm.split(':'); return Number(h) * 60 + Number(m) }
+function minToHHMM(min: number): string { return `${String(Math.floor(min / 60) % 24).padStart(2, '0')}:${String(Math.round(min) % 60).padStart(2, '0')}` }
 
 // Crew working that day (override → default).
 export function dayCrew(row: DayStatusRow | null | undefined, def: CapacityDefaults): number {
@@ -132,6 +134,16 @@ export function dayWorkHours(row: DayStatusRow | null | undefined, def: Capacity
 export function dayLaborHours(row: DayStatusRow | null | undefined, def: CapacityDefaults): number {
   if (row?.blocks) return 0
   return dayCrew(row, def) * dayWorkHours(row, def)
+}
+// Effective working START for a day (override → business default), 'HH:mm'. The
+// scheduler feeds this to the timing engine so ETAs shift when the day's start does.
+export function dayStartTime(row: DayStatusRow | null | undefined, defaultStart: string): string {
+  return row?.starts_at?.slice(0, 5) || defaultStart
+}
+// Effective working END for a day: explicit override, else start + per-crew hours.
+export function dayEndTime(row: DayStatusRow | null | undefined, def: CapacityDefaults, defaultStart: string): string {
+  if (row?.ends_at) return row.ends_at.slice(0, 5)
+  return minToHHMM(hhmmToMin(dayStartTime(row, defaultStart)) + Math.round(def.hours * 60))
 }
 // A per-date labor-hours function for the optimizer / capacity math / Weather Ops.
 export function buildCapacityForDate(map: DayStatusMap | null | undefined, def: CapacityDefaults): (dateISO: string) => number {

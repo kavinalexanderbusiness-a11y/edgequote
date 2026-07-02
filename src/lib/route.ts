@@ -156,6 +156,32 @@ export function routeKmEstimate(base: Coord, located: { lat: number; lng: number
   return located.length ? nnOrder(base, located, dist).totalKm : 0
 }
 
+// Route for a FIXED visit sequence (the owner's drag-and-drop order). Emits the
+// SAME OrderedRouteStop shape the optimizer does, so ETAs / Open-in-Maps / stats
+// consume a manual order with zero special-casing. Un-located stops keep a null
+// legKm (the ETA engine applies its fallback leg). Round-trip km for parity.
+export function sequenceRoute(base: Coord, stops: RouteStop[], seq: string[], dist: DistFn = haversineKm): { ordered: OrderedRouteStop[]; totalKm: number } {
+  const byId = new Map(stops.map(s => [s.jobId, s]))
+  const ordered: OrderedRouteStop[] = []
+  let prev: Coord = base
+  let total = 0
+  for (const id of seq) {
+    const s = byId.get(id)
+    if (!s) continue
+    let legKm: number | null = null
+    if (s.lat != null && s.lng != null) {
+      const cur = { lat: s.lat, lng: s.lng }
+      const d = dist(prev, cur)
+      legKm = Math.round(d * 10) / 10
+      total += d
+      prev = cur
+    }
+    ordered.push({ ...s, order: ordered.length + 1, legKm })
+  }
+  // One-way total (base → …stops), matching nnOrder/nearestNeighborRoute parity.
+  return { ordered, totalKm: Math.round(total * 10) / 10 }
+}
+
 // A stop's Maps locator: the real street ADDRESS when we have it (so Google
 // shows the named place, not a "dropped pin" at bare coordinates), else the
 // lat/lng. Returns null for a stop with neither.

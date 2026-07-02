@@ -1,4 +1,5 @@
-import type { CaptureStamp } from '@/lib/exif'
+import type { CaptureStamp, CaptureMeta } from '@/lib/exif'
+import { haversineKm } from '@/lib/geo'
 
 // ── Before/After auto-detection ──────────────────────────────────────────────────
 // Decides which dropped photos are "before" and which are "after" from capture time
@@ -69,4 +70,79 @@ export function detectBeforeAfter(stamps: CaptureStamp[]): DetectResult {
   if (n === 2 && method === 'capture-time' && allExact && (gapMs ?? 0) >= MIN_WORK_GAP_MS) confidence = 'high'
 
   return { items, confidence, method, gapMs }
+}
+
+// ── Multi-job clustering (same-day bulk drops) ────────────────────────────────────
+// The SAME time-gap idea, generalized: within one visit, before→after are minutes
+// apart; between two visits you drive somewhere — a much bigger gap (or a GPS jump).
+// So: sort by capture time, break into VISIT clusters wherever the gap exceeds the
+// between-jobs threshold or the location moves lots-apart, then run the existing
+// before/after split INSIDE each cluster. One engine — detectBeforeAfter is reused
+// verbatim per cluster, never re-implemented.
+
+const BETWEEN_JOBS_GAP_MS = 45 * 60_000  // ≥45 min of silence = you moved on
+const BETWEEN_JOBS_KM = 0.25             // consecutive shots >250 m apart = new site
+
+export interface PhotoGroup {
+  indices: number[]                 // original input indices, capture-time order
+  detect: DetectResult              // before/after split INSIDE this cluster
+  startMs: number
+  endMs: number
+  centroid: { lat: number; lng: number } | null   // mean GPS of located shots
+  confidence: DetectConfidence      // cluster-boundary confidence
+}
+export interface GroupResult {
+  groups: PhotoGroup[]
+  confidence: DetectConfidence      // overall: lowest group boundary confidence
+}
+
+// metas must be parallel to the caller's file list (same indices).
+export function clusterPhotoGroups(metas: CaptureMeta[]): GroupResult {
+  if (!metas.length) return { groups: [], confidence: 'low' }
+  const order = metas.map((m, index) => ({ ...m, index }))
+    .sort((a, b) => (a.ms - b.ms) || (a.index - b.index))
+  const haveTimes = order.some(o => o.ms > 0) && new Set(order.map(o => o.ms)).size > 1
+
+  // Break into clusters at big time gaps / GPS jumps. Without usable times we can't
+  // distinguish visits — everything stays one low-confidence cluster.
+  const clusters: (typeof order)[] = [[order[0]]]
+  if (haveTimes) {
+    for (let i = 1; i < order.length; i++) {
+      const prev = order[i - 1], cur = order[i]
+      const gap = cur.ms - prev.ms
+      const moved = prev.lat != null && prev.lng != null && cur.lat != null && cur.lng != null
+        ? haversineKm({ lat: prev.lat, lng: prev.lng }, { lat: cur.lat, lng: cur.lng })
+        : null
+      const newVisit = gap >= BETWEEN_JOBS_GAP_MS || (moved != null && moved >= BETWEEN_JOBS_KM && gap >= 5 * 60_000)
+      if (newVisit) clusters.push([cur])
+      else clusters[clusters.length - 1].push(cur)
+    }
+  } else {
+    for (let i = 1; i < order.length; i++) clusters[0].push(order[i])
+  }
+
+  const groups: PhotoGroup[] = clusters.map(c => {
+    const located = c.filter(x => x.lat != null && x.lng != null)
+    const centroid = located.length
+      ? { lat: located.reduce((s, x) => s + (x.lat as number), 0) / located.length, lng: located.reduce((s, x) => s + (x.lng as number), 0) / located.length }
+      : null
+    // Reuse THE before/after detector on just this cluster's stamps.
+    const detect = detectBeforeAfter(c.map(x => ({ ms: x.ms, exact: x.exact })))
+    // Remap detect's local indices back to the ORIGINAL input indices.
+    detect.items = detect.items.map((it, local) => ({ ...it, index: c[local].index }))
+    const allExact = c.every(x => x.exact)
+    const boundary: DetectConfidence = !haveTimes ? 'low' : allExact ? 'high' : 'medium'
+    return {
+      indices: c.map(x => x.index),
+      detect,
+      startMs: c[0].ms,
+      endMs: c[c.length - 1].ms,
+      centroid,
+      confidence: boundary,
+    }
+  })
+
+  const rank: Record<DetectConfidence, number> = { high: 2, medium: 1, low: 0 }
+  const overall = groups.reduce<DetectConfidence>((worst, g) => (rank[g.confidence] < rank[worst] ? g.confidence : worst), 'high')
+  return { groups, confidence: groups.length ? overall : 'low' }
 }

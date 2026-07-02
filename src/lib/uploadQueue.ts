@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/client'
 import { uploadPhoto } from '@/lib/photos'
 import type { PhotoKind } from '@/types'
 import { ensurePair, type JobRow } from '@/lib/beforeafter/autopair'
+import { visualHash } from '@/lib/dedup'
 import { toast } from '@/lib/toast'
 
 // ── Background upload queue — ONE engine for "uploads that keep going" ────────────
@@ -18,7 +19,7 @@ import { toast } from '@/lib/toast'
 //     same rows — no new storage, no parallel photo system.
 
 export interface QueueCtx { userId: string; propertyId: string | null; jobId: string | null; customerId: string | null }
-export interface EnqueueItem { file: File; kind: PhotoKind; takenAt?: string | null }
+export interface EnqueueItem { file: File; kind: PhotoKind; takenAt?: string | null; contentHash?: string | null }
 export interface EnqueueGroup {
   ctx: QueueCtx
   items: EnqueueItem[]
@@ -42,6 +43,7 @@ export interface QueueItem {
   error?: string
   rowId?: string
   takenAt: string | null
+  contentHash: string | null   // visual hash (lib/dedup) — durable dedup, stored on the row
 }
 
 const MAX_CONCURRENT = 3
@@ -85,9 +87,14 @@ async function run(id: string) {
   patch(id, { status: 'uploading' })
   let row: { id: string } | null = null
   try {
+    // Compute the visual hash off the enqueue path (cheap 8×8 canvas) so durable
+    // dedup rides along with the upload without ever blocking the UI.
+    const hash = it.contentHash ?? await visualHash(it.file).catch(() => null)
+    if (hash && !it.contentHash) patch(id, { contentHash: hash })
     row = await uploadPhoto(client(), {
       userId: it.ctx.userId, file: it.file, propertyId: it.ctx.propertyId,
       jobId: it.ctx.jobId, customerId: it.ctx.customerId, kind: it.kind, takenAt: it.takenAt,
+      contentHash: hash,
     })
   } catch { row = null }
 
@@ -158,7 +165,7 @@ export function enqueueUploads(group: EnqueueGroup): string {
       id: `${groupId}-${added.length}-${Math.random().toString(36).slice(2, 7)}`,
       sig, file: f, previewUrl: URL.createObjectURL(f), kind: e.kind,
       ctx: group.ctx, groupId, label: group.label || '', pairJob: group.pairJob ?? null,
-      status: 'queued', attempts: 0, takenAt: e.takenAt ?? null,
+      status: 'queued', attempts: 0, takenAt: e.takenAt ?? null, contentHash: e.contentHash ?? null,
     })
   }
   if (added.length) { items = [...items, ...added]; emit(); pump() }

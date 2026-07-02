@@ -1,4 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { findPropertyMatch, type PropertyLite } from '@/lib/dedup'
+import { haversineKm } from '@/lib/geo'
+import type { PhotoGroup } from '@/lib/beforeafter/autodetect'
 
 // ── Before/After: job resolution + auto-pairing ──────────────────────────────────
 // Two reuse-only helpers, no new storage:
@@ -20,6 +23,7 @@ export interface JobRow {
   status: string | null
   customer_id: string | null
   property_id: string | null
+  start_time?: string | null
 }
 
 export interface ResolvedJob {
@@ -70,6 +74,81 @@ export async function resolveTargetJob(
   // Ambiguous → ask, offering the most relevant jobs first.
   const candidates = (active.length ? active : jobs).slice(0, 8)
   return { jobId: null, job: null, candidates, needsAsk: candidates.length > 1 }
+}
+
+// ── same-day multi-job group assignment ──────────────────────────────────────────
+// Given the clusters from clusterPhotoGroups, figure out WHERE each one belongs:
+// GPS centroid → nearest property (THE dedup engine's coordinate matcher), then the
+// day's jobs on that property (THE job resolver above, narrowed to the capture day).
+// High-signal assignments come back resolved; anything genuinely ambiguous comes
+// back with candidates so the UI can ask ONE question per group — never guess.
+
+export interface GroupAssignment {
+  group: PhotoGroup
+  property: PropertyLite | null
+  propertyCandidates: PropertyLite[]   // when the location is ambiguous
+  job: JobRow | null
+  jobCandidates: JobRow[]
+  confident: boolean                   // property AND job resolved without asking
+}
+
+export async function assignPhotoGroups(
+  supabase: SupabaseClient,
+  userId: string,
+  groups: PhotoGroup[],
+  fallback: { propertyId: string | null },
+  nowMs: number,
+): Promise<GroupAssignment[]> {
+  if (!groups.length) return []
+  // One fetch of the user's located properties serves every group.
+  const { data: propRows } = await supabase
+    .from('properties').select('id,address,lat,lng,customer_id').eq('user_id', userId)
+  const properties = (propRows as PropertyLite[]) || []
+
+  const out: GroupAssignment[] = []
+  for (const group of groups) {
+    // 1) Property — GPS first (same-lot matcher), else the caller's context.
+    let property: PropertyLite | null = null
+    let propertyCandidates: PropertyLite[] = []
+    if (group.centroid) {
+      const c = group.centroid
+      const hit = findPropertyMatch(properties, { lat: c.lat, lng: c.lng })
+      if (hit) property = hit.property
+      else {
+        // GPS present but nothing lot-close — offer the nearest few and ask.
+        propertyCandidates = properties
+          .filter(p => p.lat != null && p.lng != null)
+          .map(p => ({ p, km: haversineKm(c, { lat: p.lat!, lng: p.lng! }) }))
+          .sort((a, b) => a.km - b.km)
+          .slice(0, 3)
+          .filter(x => x.km <= 2)
+          .map(x => x.p)
+      }
+    }
+    if (!property && fallback.propertyId) property = properties.find(p => p.id === fallback.propertyId) ?? null
+
+    // 2) Job — this property's jobs on the CAPTURE day beat the generic resolver.
+    let job: JobRow | null = null
+    let jobCandidates: JobRow[] = []
+    if (property) {
+      const dayISO = group.startMs > 0 ? new Date(group.startMs).toISOString().slice(0, 10) : null
+      if (dayISO) {
+        const { data } = await supabase.from('jobs')
+          .select('id,title,service_type,scheduled_date,completed_at,status,customer_id,property_id,start_time')
+          .eq('user_id', userId).eq('property_id', property.id).eq('scheduled_date', dayISO)
+        const dayJobs = ((data as JobRow[]) || []).filter(j => (j.status || '').toLowerCase() !== 'cancelled')
+        if (dayJobs.length === 1) job = dayJobs[0]
+        else if (dayJobs.length > 1) jobCandidates = dayJobs
+      }
+      if (!job && !jobCandidates.length) {
+        const r = await resolveTargetJob(supabase, userId, property.id, null, nowMs)
+        job = r.job
+        jobCandidates = r.candidates
+      }
+    }
+    out.push({ group, property, propertyCandidates, job, jobCandidates, confident: !!property && !!job })
+  }
+  return out
 }
 
 // ── deterministic marketing_assets materialization ──────────────────────────────

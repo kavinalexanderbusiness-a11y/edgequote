@@ -2,7 +2,7 @@
 
 import { Job } from '@/types'
 import { cn } from '@/lib/utils'
-import { DayStatusRow, dayStatusMeta } from '@/lib/dayStatus'
+import { DayStatusRow, dayStatusMeta, dayCrew, dayWorkHours, dayLaborHours, dayStartTime, dayEndTime, hasCapacityOverride } from '@/lib/dayStatus'
 import {
   Users, Clock, Gauge, Minus, Plus, RotateCcw, Wand2, CloudRain, CalendarX2,
   CalendarPlus, AlertTriangle,
@@ -25,7 +25,6 @@ interface Props {
 }
 
 const toMin = (hhmm: string) => { const [h, m] = hhmm.split(':'); return Number(h) * 60 + Number(m || '0') }
-const toHHMM = (min: number) => `${String(Math.floor(min / 60) % 24).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`
 const to12 = (hhmm: string) => { const [h, m] = hhmm.split(':').map(Number); const ap = h < 12 ? 'AM' : 'PM'; const hr = h % 12 || 12; return `${hr}:${String(m).padStart(2, '0')} ${ap}` }
 const round1 = (n: number) => Math.round(n * 10) / 10
 
@@ -38,20 +37,22 @@ export function DaySettingsBar({
   onSetCapacity, onResetCapacity, onToggleDisable, onAutoOptimize, onWeatherOps, onAddJob,
 }: Props) {
   const blocked = !!row?.blocks
-  const perCrewHours = (capacityHours > 0 ? capacityHours : 8) / (defaultCrew > 0 ? defaultCrew : 1)
+  // ONE capacity engine (lib/dayStatus) — the Day Ops panel, optimizer and Weather
+  // Ops all read these same helpers, so this bar never drifts from the rest of the
+  // day. Business default per-crew work-hours = daily_capacity_hours ÷ default crew.
+  const def = { crew: defaultCrew > 0 ? defaultCrew : 1, hours: (capacityHours > 0 ? capacityHours : 8) / (defaultCrew > 0 ? defaultCrew : 1) }
 
-  const crew = row?.crew_size && row.crew_size > 0 ? row.crew_size : defaultCrew
-  const start = (row?.starts_at?.slice(0, 5)) || workStartTime
-  const defaultEnd = toHHMM(toMin(start) + Math.round(perCrewHours * 60))
-  const end = (row?.ends_at?.slice(0, 5)) || defaultEnd
-  const workHours = Math.max(0, (toMin(end) - toMin(start)) / 60)
-
-  const available = blocked ? 0 : round1(crew * workHours)                       // labor-hours
+  const crew = dayCrew(row, def)
+  const start = dayStartTime(row, workStartTime)
+  const end = dayEndTime(row, def, workStartTime)
+  const defaultEnd = dayEndTime(null, def, start)                 // end if hours weren't overridden
+  const workHours = dayWorkHours(row, def)
+  const available = round1(dayLaborHours(row, def))               // labor-hours (0 when blocked)
   const bookedMin = jobs.filter(j => j.status !== 'cancelled').reduce((s, j) => s + (j.duration_minutes || 0), 0)
   const booked = round1(bookedMin / 60)
   const remaining = round1(available - booked)
   const util = available > 0 ? Math.round((booked / available) * 100) : (booked > 0 ? 999 : 0)
-  const hasOverride = row?.crew_size != null || (!!row?.starts_at && !!row?.ends_at)
+  const hasOverride = hasCapacityOverride(row)
 
   const setCrew = (n: number) => onSetCapacity({ crewSize: Math.max(1, n) })
 

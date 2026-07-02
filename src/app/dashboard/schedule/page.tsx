@@ -34,7 +34,7 @@ import { analyzeScheduleHealth } from '@/lib/scheduleHealth'
 import type { HealthIssue, HealthJob } from '@/lib/scheduleHealth'
 import { ScheduleHealthCard } from '@/components/schedule/ScheduleHealthCard'
 import { DayStatusMenu } from '@/components/schedule/DayStatusMenu'
-import { buildDayStatusMap, buildCapacityForDate, loadDayStatuses, setDayStatus, setDayCapacity, clearDayStatus, DAY_STATUS_META, DAY_STATUS_SELECT, type DayStatusMap, type DayStatusRow, type DayStatus } from '@/lib/dayStatus'
+import { buildDayStatusMap, buildCapacityForDate, dayStartTime, loadDayStatuses, setDayStatus, setDayCapacity, clearDayStatus, DAY_STATUS_META, DAY_STATUS_SELECT, type DayStatusMap, type DayStatusRow, type DayStatus } from '@/lib/dayStatus'
 import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { DaySettingsBar } from '@/components/schedule/DaySettingsBar'
@@ -196,6 +196,18 @@ export default function SchedulePage() {
     const capacityForDate = buildCapacityForDate(dayStatusMap, { crew, hours: (capacityHours > 0 ? capacityHours : 8) / crew })
     return { today: localToday(), base: baseCoord, preferredDays: preferredWorkDays, capacityHours, recurrences: recs, roadDist, dayStatusMap, capacityForDate, minPerKm: travel.minPerKm }
   }, [recurrences, baseCoord, preferredWorkDays, capacityHours, roadDist, dayStatusMap, defaultCrew, travel.minPerKm])
+
+  // ── Effective capacity for the OPEN day (one source: lib/dayStatus) ──────────
+  // Feeds the Day Ops panel the day's real start time + labour-hours (after any
+  // crew / working-hours / start-end / disable override), reusing the SAME
+  // capacityForDate the optimizer uses. Because it derives from dayStatusMap +
+  // cursor, changing any of those instantly re-flows every ETA, the estimated
+  // finish, utilization, remaining hours and overbooked warnings — no refresh.
+  const dayView = useMemo(() => {
+    const iso = format(cursor, 'yyyy-MM-dd')
+    const row = dayStatusMap?.byDate[iso] ?? null
+    return { start: dayStartTime(row, workStartTime), laborHours: optBaseOpts.capacityForDate(iso) }
+  }, [cursor, dayStatusMap, workStartTime, optBaseOpts])
 
   // Proactive auto-suggestions (overloaded days, isolated jobs, recurring-cluster
   // opportunities) — same engines, shown without opening the optimizer.
@@ -1650,8 +1662,8 @@ export default function SchedulePage() {
           onDeleteLineItem={removeLineItem}
           getPreviousAddons={getPreviousAddons}
           onCopyPreviousAddons={copyPreviousAddons}
-          workStartTime={workStartTime}
-          capacityHours={capacityHours}
+          workStartTime={dayView.start}
+          capacityHours={dayView.laborHours}
           onRainDelay={() => rainDelayDay(format(cursor, 'yyyy-MM-dd'))}
           onAddJob={() => openNewJob(cursor)}
           onQuickSave={quickSaveJob}

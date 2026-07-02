@@ -4,6 +4,9 @@ import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { PhotoKind, PHOTO_KIND_LABELS } from '@/types'
 import { JobPhotoView, listPhotos, uploadPhoto, deletePhoto, updatePhoto } from '@/lib/photos'
+import { captureStampFor } from '@/lib/exif'
+import { visualHash, findPhotoMatch } from '@/lib/dedup'
+import { toast } from '@/lib/toast'
 import { formatDate } from '@/lib/utils'
 import { Camera, ImagePlus, Trash2, X, Loader2, Check } from 'lucide-react'
 
@@ -59,11 +62,22 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', cl
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { setBusyKind(null); return }
     const added: JobPhotoView[] = []
+    let skippedDups = 0
     for (const file of files) {
-      const row = await uploadPhoto(supabase, { userId: user.id, file, propertyId, jobId, customerId, kind })
+      // Same enrichment as the bulk uploader (ONE dedup + EXIF engine): stamp the
+      // real capture time and store the visual hash; skip an already-uploaded shot.
+      const [stamp, hash] = await Promise.all([captureStampFor(file), visualHash(file)])
+      const match = findPhotoMatch(photos, { contentHash: hash, takenAtMs: stamp.ms, exactTime: stamp.exact })
+      if (match && match.confident) { skippedDups++; continue }
+      const row = await uploadPhoto(supabase, {
+        userId: user.id, file, propertyId, jobId, customerId, kind,
+        takenAt: stamp.exact ? new Date(stamp.ms).toISOString() : null,
+        contentHash: hash,
+      })
       if (row) added.push(row)
     }
     if (added.length) setPhotos(prev => [...added, ...prev])
+    if (skippedDups) toast(`${skippedDups} photo${skippedDups !== 1 ? 's were' : ' was'} already uploaded — skipped`, { tone: 'info' })
     setBusyKind(null)
   }
 

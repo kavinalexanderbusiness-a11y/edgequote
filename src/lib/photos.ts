@@ -74,7 +74,8 @@ export interface UploadPhotoOpts {
   customerId?: string | null
   kind: PhotoKind
   caption?: string | null
-  takenAt?: string | null   // ISO capture time (from EXIF) — drives before/after ordering
+  takenAt?: string | null      // ISO capture time (from EXIF) — drives before/after ordering
+  contentHash?: string | null  // visual hash (lib/dedup) — durable duplicate detection
 }
 
 export async function uploadPhoto(
@@ -104,7 +105,14 @@ export async function uploadPhoto(
   // Stamp the real capture time so the Studio's "earliest before / latest after"
   // ordering is honest (defaults to now() when EXIF is absent).
   if (opts.takenAt) row.taken_at = opts.takenAt
-  const { data, error } = await supabase.from('job_photos').insert(row).select('*').single()
+  if (opts.contentHash) row.content_hash = opts.contentHash
+  let { data, error } = await supabase.from('job_photos').insert(row).select('*').single()
+  // content_hash is from the 2026-07-02 migration — retry without it when the
+  // column doesn't exist yet (dedup degrades to session-only, upload still works).
+  if (error && opts.contentHash && /content_hash/i.test(error.message || '')) {
+    delete row.content_hash
+    ;({ data, error } = await supabase.from('job_photos').insert(row).select('*').single())
+  }
   if (error || !data) {
     // Roll back the orphaned file so storage never drifts from the catalogue.
     await supabase.storage.from(PHOTO_BUCKET).remove([path])

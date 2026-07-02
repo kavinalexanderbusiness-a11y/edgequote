@@ -19,6 +19,7 @@ import { WeeklyScheduler } from '@/components/schedule/WeeklyScheduler'
 import { SmartLaborField } from '@/components/labor/SmartLaborField'
 import type { Cadence } from '@/lib/labor'
 import { resolvePrefs, type PrefSource } from '@/lib/preferences'
+import { findJobMatch, type JobLiteForMatch } from '@/lib/dedup'
 import { Repeat, Sparkles, Snowflake, Sun, AlertTriangle, CalendarRange } from 'lucide-react'
 
 // Flexible recurrence: any interval (count + unit), three end modes.
@@ -329,6 +330,32 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     return () => { active = false }
   }, [selectedPropertyId, isEdit, supabase])
 
+  // Same-day duplicate visit — THE unified dedup engine (lib/dedup): same property +
+  // same day + same service (or the same recurring series already has that visit).
+  // Never blocks saving; asks the one question so a double-booking is deliberate.
+  const [dupJob, setDupJob] = useState<{ title: string; time: string | null; reason: string } | null>(null)
+  useEffect(() => {
+    if (!selectedPropertyId || !scheduledDate || !serviceType) { setDupJob(null); return }
+    let active = true
+    const t = setTimeout(async () => {
+      const { data } = await supabase
+        .from('jobs')
+        .select('id, property_id, scheduled_date, service_type, recurrence_id, status, title, start_time')
+        .eq('property_id', selectedPropertyId)
+        .eq('scheduled_date', scheduledDate)
+      if (!active) return
+      const match = findJobMatch((data as JobLiteForMatch[]) || [], {
+        propertyId: selectedPropertyId, date: scheduledDate, serviceType, excludeJobId,
+      })
+      setDupJob(match ? {
+        title: match.job.title || match.job.service_type || 'a visit',
+        time: match.job.start_time ?? null,
+        reason: match.reason === 'recurrence-visit' ? 'this recurring series already has that visit' : 'same property, same day, same service',
+      } : null)
+    }, 300)
+    return () => { active = false; clearTimeout(t) }
+  }, [selectedPropertyId, scheduledDate, serviceType, excludeJobId, supabase])
+
   const customerOptions = [
     { value: '', label: 'Select a customer...' },
     ...customers.map(c => ({ value: c.id, label: c.name })),
@@ -405,6 +432,20 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
       <Input label="Date" type="date"
         error={errors.scheduled_date?.message}
         {...register('scheduled_date', { required: 'Required' })} />
+
+      {/* Duplicate-visit check (unified dedup engine) — one clear question, never blocks */}
+      {dupJob && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5">
+          <p className="text-xs text-amber-300 flex items-start gap-1.5">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
+            <span>
+              Existing match found — <span className="font-semibold">{dupJob.title}</span>
+              {dupJob.time ? ` at ${dupJob.time}` : ''} is already booked ({dupJob.reason}).
+              Save anyway only if this is deliberately a second visit.
+            </span>
+          </p>
+        </div>
+      )}
 
       {/* Soft cadence / customer-preference warnings — informational, never blocking */}
       {scheduleWarnings.length > 0 && (
