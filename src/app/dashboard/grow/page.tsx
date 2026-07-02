@@ -57,14 +57,14 @@ const GROUPS: { title: string; tools: Tool[] }[] = [
 
 export default function GrowPage() {
   return (
-    <div className="max-w-5xl space-y-6">
+    <div className="max-w-5xl space-y-8">
       <PageHeader title="Grow" description="Everything that grows Edge Property Services, in one place." />
 
       {/* Intelligence — the owner's command center: report (BI) + act (Revenue Intel). */}
-      <div className="grid sm:grid-cols-2 gap-3">
+      <div className="grid sm:grid-cols-2 gap-4">
         <Link href="/dashboard/intelligence">
-          <Card className="p-4 h-full border-accent/30 bg-gradient-to-br from-accent/[0.08] to-transparent hover:border-accent/50 transition-colors">
-            <div className="flex items-center gap-3">
+          <Card className="p-5 h-full border-accent/30 bg-gradient-to-br from-accent/[0.08] to-transparent hover:border-accent/50 transition-colors">
+            <div className="flex items-center gap-3.5">
               <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
                 <BarChart3 className="w-5 h-5 text-accent" />
               </div>
@@ -76,8 +76,8 @@ export default function GrowPage() {
           </Card>
         </Link>
         <Link href="/dashboard/revenue-intelligence">
-          <Card className="p-4 h-full border-accent/30 bg-gradient-to-br from-accent/[0.08] to-transparent hover:border-accent/50 transition-colors">
-            <div className="flex items-center gap-3">
+          <Card className="p-5 h-full border-accent/30 bg-gradient-to-br from-accent/[0.08] to-transparent hover:border-accent/50 transition-colors">
+            <div className="flex items-center gap-3.5">
               <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
                 <TrendingUp className="w-5 h-5 text-accent" />
               </div>
@@ -92,8 +92,8 @@ export default function GrowPage() {
 
       {/* Customer Automation — reviews, referrals, follow-ups & campaigns. */}
       <Link href="/dashboard/grow/crm">
-        <Card className="p-4 border-accent/30 bg-gradient-to-br from-accent/[0.08] to-transparent hover:border-accent/50 transition-colors">
-          <div className="flex items-center gap-3">
+        <Card className="p-5 border-accent/30 bg-gradient-to-br from-accent/[0.08] to-transparent hover:border-accent/50 transition-colors">
+          <div className="flex items-center gap-3.5">
             <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
               <Sparkles className="w-5 h-5 text-accent" />
             </div>
@@ -113,13 +113,13 @@ export default function GrowPage() {
       <WinLossPanel />
 
       {GROUPS.map(group => (
-        <div key={group.title} className="space-y-2">
+        <div key={group.title} className="space-y-3">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint px-1">{group.title}</p>
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-2">
             {group.tools.map(({ label, href, icon: Icon, blurb }) => (
               <Link key={href} href={href}>
-                <Card className="p-4 hover:border-accent/40 transition-colors h-full">
-                  <div className="flex items-start gap-3">
+                <Card className="p-5 hover:border-accent/40 transition-colors h-full">
+                  <div className="flex items-start gap-3.5">
                     <div className="w-9 h-9 rounded-xl bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
                       <Icon className="w-4 h-4 text-accent" />
                     </div>

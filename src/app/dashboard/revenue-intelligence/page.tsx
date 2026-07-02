@@ -9,6 +9,7 @@ import {
 } from '@/lib/revenueIntelligence'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
+import { StatTile } from '@/components/ui/StatTile'
 import { Skeleton, SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { formatCurrency, cn } from '@/lib/utils'
@@ -75,12 +76,15 @@ export default function RevenueIntelligencePage() {
         description="Every customer scored for the moves that grow revenue — ranked by expected impact."
         action={<Link href="/dashboard/intelligence"><Button variant="secondary" size="sm">View BI dashboard <ArrowRight className="w-3.5 h-3.5" /></Button></Link>} />
 
-      {/* Summary */}
+      {/* Summary — upside on the left, risk on the right (the two numbers that matter) */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <Tile label="Recurring opportunity" value={formatCurrency(summary.totalOpportunity)} sub="/yr if all won" accent />
         <Tile label="One-time opportunity" value={formatCurrency(summary.totalOneTime)} />
-        <Tile label="Open opportunities" value={String(live.length)} sub={`${actedCount} acted · ${wonCount} won`} />
-        <Tile label="Revenue from acted" value={formatCurrency(wonValue)} sub="tracked wins" />
+        <Tile label="Revenue from acted" value={formatCurrency(wonValue)} sub={`${actedCount} acted · ${wonCount} won`} />
+        {(() => {
+          const atRisk = ltvForecast.reduce((s, f) => s + (Number(f.churnRiskImpact) || 0), 0)
+          return <Tile label="Revenue at churn risk" value={formatCurrency(atRisk)} sub="/yr — see forecast below" danger={atRisk > 0} />
+        })()}
       </div>
 
       {/* Top action */}
@@ -149,14 +153,9 @@ export default function RevenueIntelligencePage() {
   )
 }
 
-function Tile({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: boolean }) {
-  return (
-    <div className={cn('rounded-card border p-3.5', accent ? 'border-accent/30 bg-accent/[0.05]' : 'border-border bg-bg-secondary')}>
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className={cn('text-xl font-black mt-1', accent ? 'text-accent' : 'text-ink')}>{value}</p>
-      {sub && <p className="text-[11px] text-ink-muted mt-0.5">{sub}</p>}
-    </div>
-  )
+// Thin adapter over the ONE shared KPI tile (no local tile styles to drift).
+function Tile({ label, value, sub, accent, danger }: { label: string; value: string; sub?: string; accent?: boolean; danger?: boolean }) {
+  return <StatTile label={label} value={value} sub={sub} accent={accent} tone={danger ? 'danger' : undefined} tonedSurface={danger} />
 }
 
 function OppCard({ o, status, busy, onAct }: { o: Opportunity; status?: string; busy: boolean; onAct: (o: Opportunity, s: 'acted' | 'dismissed' | 'won') => void }) {
