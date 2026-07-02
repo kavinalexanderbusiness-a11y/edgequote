@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { toast } from '@/lib/toast'
+import { confirm } from '@/lib/confirm'
 import { createClient } from '@/lib/supabase/client'
 import { Job, JobStatus, JobRecurrence, JobLineItem, RecurrenceScope, PRICE_REASONS, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
 import { Coord } from '@/lib/geo'
@@ -19,7 +20,7 @@ import { SendMessageDialog, type MessageRecipient } from '@/components/comms/Sen
 import {
   DollarSign, Clock, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
   MapPin, Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, Trash2, CloudRain, Play, Timer, Camera, PlusCircle, MessageSquare, Send,
-  ChevronUp, ChevronDown,
+  ChevronUp, ChevronDown, Wand2,
 } from 'lucide-react'
 
 export interface QuoteLite {
@@ -338,9 +339,33 @@ export function DayOpsPanel({
     seq.splice(ti, 0, from)
     applyOrder(seq)
   }
-  async function resetOrder() {
+  // "Reset to best route": clear any manual order so the day snaps back to the
+  // continuously-computed optimized route (the SAME engine output in `route` —
+  // nothing is recomputed twice). ETAs, drive time, finish and Open-in-Maps all
+  // re-flow because effOrdered switches source. Confirms only when a manual
+  // order actually exists; offers Undo to restore the exact previous sequence.
+  const [optimizing, setOptimizing] = useState(false)
+  async function optimizeRouteNow() {
+    if (optimizing) return
+    const prevSeq = manualSeq // snapshot of the DISPLAYED order (undo target)
+    if (prevSeq) {
+      const ok = await confirm({
+        title: 'Re-optimize this day’s route?',
+        message: 'Your manual stop order will be replaced with the optimized route. You can undo right after.',
+        confirmLabel: 'Optimize',
+        icon: Wand2,
+      })
+      if (!ok) return
+    }
+    setOptimizing(true)
     setLocalSeq('auto')
     await supabase.from('jobs').update({ route_order: null }).in('id', active.map(j => j.id))
+    setOptimizing(false)
+    if (prevSeq) {
+      toast.undo('Route re-optimized — manual order cleared.', () => applyOrder(prevSeq))
+    } else {
+      toast.success('Route is optimized.')
+    }
   }
 
   // Real-world timing: work start + route order + drive legs + job durations →
@@ -476,17 +501,27 @@ export function DayOpsPanel({
               <span className="flex items-center gap-1.5 text-xs font-semibold text-ink-muted uppercase tracking-wide">
                 <RouteIcon className="w-3.5 h-3.5 text-accent" /> Route
                 {manualSeq && (
-                  <button onClick={resetOrder} title="Back to the optimized order"
-                    className="normal-case tracking-normal text-[10px] font-semibold text-amber-300 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5 hover:bg-amber-500/20">
-                    Custom order · Reset
-                  </button>
+                  <span className="normal-case tracking-normal text-[10px] font-semibold text-amber-300 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5">
+                    Custom order
+                  </span>
                 )}
               </span>
-              {effMapsUrl && (
-                <a href={effMapsUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-accent font-medium flex items-center gap-1 hover:underline">
-                  <ExternalLink className="w-3 h-3" /> Open in Maps
-                </a>
-              )}
+              <span className="flex items-center gap-3 shrink-0">
+                {/* Persistent "reset to best route" — reuses the continuously-computed
+                    optimized order; confirms only when a manual order would be lost. */}
+                {active.length > 1 && baseCoord && (
+                  <button onClick={optimizeRouteNow} disabled={optimizing}
+                    title="Recalculate the best stop order (clears manual reordering)"
+                    className="text-xs text-accent font-medium flex items-center gap-1 hover:underline disabled:opacity-50">
+                    <Wand2 className="w-3 h-3" /> Optimize route
+                  </button>
+                )}
+                {effMapsUrl && (
+                  <a href={effMapsUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-accent font-medium flex items-center gap-1 hover:underline">
+                    <ExternalLink className="w-3 h-3" /> Open in Maps
+                  </a>
+                )}
+              </span>
             </div>
             {!baseCoord ? (
               <p className="text-xs text-amber-400 mt-1.5">Set your base address in Settings to optimize the route.</p>
