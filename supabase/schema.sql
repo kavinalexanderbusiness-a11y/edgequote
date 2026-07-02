@@ -3210,3 +3210,22 @@ do $$ begin
 end $$;
 create index if not exists quote_services_user_quote_idx on public.quote_services(user_id, quote_id);
 create index if not exists quote_services_quote_sort_idx on public.quote_services(quote_id, sort_order);
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-07-02 — Manual route order (drag-and-drop day sequencing)
+-- ════════════════════════════════════════════════════════════
+-- null = automatic (optimizer orders the day); 1..N = the owner's manual order.
+alter table public.jobs add column if not exists route_order int;
+-- Moving a job to another date clears its manual order at the source (no app
+-- path can forget to) — it appends to the target day's sequence.
+create or replace function public.clear_route_order_on_move() returns trigger
+language plpgsql as $$
+begin
+  if new.scheduled_date is distinct from old.scheduled_date then
+    new.route_order := null;
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_jobs_clear_route_order on public.jobs;
+create trigger trg_jobs_clear_route_order before update of scheduled_date on public.jobs
+  for each row execute function public.clear_route_order_on_move();
