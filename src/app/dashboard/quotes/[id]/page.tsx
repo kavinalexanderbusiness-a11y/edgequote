@@ -3,17 +3,19 @@
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Quote, Customer, QuoteFormValues, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS, CONFIDENCE_COLORS } from '@/types'
+import { Quote, Customer, QuoteFormValues, QuoteService, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS, CONFIDENCE_COLORS } from '@/types'
+import { sumServiceLines, serviceLineTotals, splitServices } from '@/lib/quoteServices'
 import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Button } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
-import { SendComms } from '@/components/comms/SendComms'
+import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { formatCurrency, formatDate, applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
 import { toast } from '@/lib/toast'
 import { addDays, format as formatDfn, parseISO } from 'date-fns'
 import { needsFollowUp, daysSince, logFollowUpPatch, markWonPatch } from '@/lib/followup'
+import { addLineItems } from '@/lib/jobPricing'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { Edit2, ArrowLeft, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Send } from 'lucide-react'
 
@@ -26,6 +28,8 @@ export default function QuoteDetailPage() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
   const [quote, setQuote] = useState<Quote | null>(null)
+  // Multi-service breakdown (quote_services). Empty = legacy single-service quote.
+  const [services, setServices] = useState<QuoteService[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
   const [templates, setTemplates] = useState<ServiceTemplate[]>([])
   const [tiers, setTiers] = useState<TravelFeeTier[]>([])
@@ -38,6 +42,7 @@ export default function QuoteDetailPage() {
   const [converting, setConverting] = useState(false)
   const [convertMsg, setConvertMsg] = useState<string | null>(null)
   const [duplicating, setDuplicating] = useState(false)
+  const [showMessage, setShowMessage] = useState(false)
   const [savedCustomerMsg, setSavedCustomerMsg] = useState<string | null>(null)
   const [dupMsg, setDupMsg] = useState<string | null>(null)
 
@@ -74,14 +79,16 @@ export default function QuoteDetailPage() {
   useEffect(() => {
     async function load() {
       const { data: { user } } = await supabase.auth.getUser()
-      const [qRes, cRes, tRes, tierRes, sRes] = await Promise.all([
+      const [qRes, svcRes, cRes, tRes, tierRes, sRes] = await Promise.all([
         supabase.from('quotes').select('*').eq('id', id).eq('user_id', user!.id).single(),
+        supabase.from('quote_services').select('*').eq('quote_id', id).order('sort_order'),
         supabase.from('customers').select('*').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — archived hidden from the picker
         supabase.from('service_templates').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('travel_fee_tiers').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('business_settings').select('*').eq('user_id', user!.id).maybeSingle(),
       ])
       setQuote(qRes.data)
+      setServices((svcRes.data as QuoteService[]) || []) // error/absent table → [] (legacy)
       setCustomers(cRes.data || [])
       setTemplates(tRes.data || [])
       setTiers(tierRes.data || [])
@@ -115,6 +122,13 @@ export default function QuoteDetailPage() {
     const mult = Number(values.overgrowth_multiplier) || 1
     const finalRate = applyOvergrowth(Number(values.rate), mult)
 
+    // Multi-service: initial_price = primary + Σ additional line nets so the
+    // generated quotes.total stays correct. (Edit saves as-entered — fee recovery
+    // was baked in at creation, same as the single-service field.)
+    const extraLines = (values.services || []).filter(s => s.service_type.trim())
+    const extrasNet = sumServiceLines(extraLines).net
+    const initialWithExtras = (Number(values.initial_price) > 0 ? Number(values.initial_price) : 0) + extrasNet
+
     const { data, error } = await supabase
       .from('quotes')
       .update({
@@ -124,7 +138,7 @@ export default function QuoteDetailPage() {
         address: values.address,
         service_type: values.service_type,
         service_template_id: values.service_template_id || null,
-        initial_price: Number(values.initial_price) > 0 ? Number(values.initial_price) : null,
+        initial_price: initialWithExtras > 0 ? initialWithExtras : null,
         weekly_price: Number(values.weekly_price) > 0 ? Number(values.weekly_price) : null,
         biweekly_price: Number(values.biweekly_price) > 0 ? Number(values.biweekly_price) : null,
         monthly_price: Number(values.monthly_price) > 0 ? Number(values.monthly_price) : null,
@@ -145,6 +159,33 @@ export default function QuoteDetailPage() {
       .single()
 
     if (data) {
+      // Replace the service breakdown atomically-enough for a single owner:
+      // clear + reinsert (rows exist ONLY for multi-service quotes).
+      const { data: { user: u2 } } = await supabase.auth.getUser()
+      await supabase.from('quote_services').delete().eq('quote_id', id)
+      if (extraLines.length && u2) {
+        const { data: rows } = await supabase.from('quote_services').insert([
+          {
+            user_id: u2.id, quote_id: id, sort_order: 0,
+            service_type: values.service_type, service_template_id: values.service_template_id || null,
+            quantity: 1, unit: 'each', unit_price: Number(values.initial_price) || 0,
+            est_minutes: Math.round(Number(values.hours) * 60) || null,
+          },
+          ...extraLines.map((s, i) => ({
+            user_id: u2.id, quote_id: id, sort_order: i + 1,
+            service_type: s.service_type.trim(), service_template_id: s.service_template_id || null,
+            quantity: Number(s.quantity) > 0 ? Number(s.quantity) : 1,
+            unit: s.unit || 'each', unit_price: Number(s.unit_price) || 0,
+            est_minutes: Number(s.est_minutes) > 0 ? Math.round(Number(s.est_minutes)) : null,
+            discount_type: s.discount_type || null,
+            discount_value: s.discount_type && Number(s.discount_value) > 0 ? Number(s.discount_value) : null,
+            notes: s.notes?.trim() || null,
+          })),
+        ]).select('*')
+        setServices((rows as QuoteService[]) || [])
+      } else {
+        setServices([])
+      }
       setQuote(data)
       setEditing(false)
       // Keep the lawn size on the property in sync (it's a core attribute, not just
@@ -175,7 +216,7 @@ export default function QuoteDetailPage() {
     setPdfLoading(true)
     try {
       const { renderQuoteBlob } = await import('@/components/quotes/QuotePDF')
-      const blob = await renderQuoteBlob(quote, settings)
+      const blob = await renderQuoteBlob(quote, settings, services)
       const url = URL.createObjectURL(blob)
       // Hand the file directly to the device. On desktop this downloads the
       // PDF; on iOS it opens the PDF viewer / share sheet. Avoids the
@@ -226,7 +267,11 @@ export default function QuoteDetailPage() {
         if (props && props.length > 0) propertyId = props[0].id
       }
 
-      const { error } = await supabase.from('jobs').insert({
+      // Multi-service: the visit covers every line, so the job's duration includes
+      // the additional services' estimated minutes (primary = hours×60 as before).
+      const { primary: primaryLine, extras: extraLines } = splitServices(services)
+      const extraMinutes = extraLines.reduce((m, s) => m + (Number(s.est_minutes) || 0), 0)
+      const { data: newJob, error } = await supabase.from('jobs').insert({
         user_id: user!.id,
         customer_id: quote.customer_id,
         property_id: propertyId,
@@ -234,15 +279,33 @@ export default function QuoteDetailPage() {
         title: `${quote.service_type} — ${quote.customer_name}`,
         service_type: quote.service_type,
         scheduled_date: dateOverride || localToday(),
-        duration_minutes: Math.round(Number(quote.hours) * 60),
+        duration_minutes: Math.round(Number(quote.hours) * 60) + extraMinutes,
         crew_size: quote.crew_size,
         status: 'scheduled',
         notes: quote.notes,
-      })
+        // Multi-service quotes: the job's base value is the PRIMARY line only; the
+        // extras become job_line_items below. quote.initial_price caches primary +
+        // extras, so leaving price null would double-count once add-ons exist.
+        ...(extraLines.length && primaryLine ? { price: serviceLineTotals(primaryLine).net } : {}),
+      }).select('id').single()
 
-      if (error) {
-        setScheduleMsg('Could not create job: ' + error.message)
+      if (error || !newJob) {
+        setScheduleMsg('Could not create job: ' + (error?.message || 'unknown error'))
       } else {
+        // Extras → the EXISTING job add-on rows (one engine: lib/jobPricing
+        // addLineItems — same shape the visit add-on flow, invoice auto-draft and
+        // BI already consume). Base(primary) + add-ons(extras) = the quote total.
+        for (const s of extraLines) {
+          const qty = Number(s.quantity) > 0 ? Number(s.quantity) : 1
+          await addLineItems(supabase, {
+            userId: user!.id,
+            targetJobIds: [newJob.id],
+            description: `${s.service_type}${qty !== 1 ? ` ×${qty}` : ''}`,
+            amount: serviceLineTotals(s).net,
+            serviceType: s.service_type,
+            recurring: false,
+          })
+        }
         // Bump quote to scheduled if it was accepted
         if (quote.status === 'accepted') {
           await supabase.from('quotes').update({ status: 'scheduled' }).eq('id', quote.id)
@@ -288,6 +351,19 @@ export default function QuoteDetailPage() {
       const issued = localTodayISO()
       const dueISO = formatDfn(addDays(parseISO(issued), 14), 'yyyy-MM-dd')
 
+      // Multi-service: carry the full breakdown onto the invoice as line_items
+      // (the invoices jsonb snapshot shape), so the customer sees every service.
+      // amount stays quote.total — already the summed net + travel.
+      const lineItems = services.length
+        ? [
+            ...services.map(s => ({
+              description: s.quantity > 1 ? `${s.service_type} × ${s.quantity}` : s.service_type,
+              amount: serviceLineTotals(s).net,
+              kind: 'service' as const,
+            })),
+            ...(Number(quote.travel_fee) > 0 ? [{ description: 'Travel', amount: Number(quote.travel_fee), kind: 'travel' as const }] : []),
+          ]
+        : null
       const { error } = await supabase.from('invoices').insert({
         user_id: user!.id,
         quote_id: quote.id,
@@ -298,6 +374,7 @@ export default function QuoteDetailPage() {
         address: quote.address,
         service_type: quote.service_type,
         amount: quote.total,
+        line_items: lineItems,
         status: 'unpaid',
         issued_date: issued,
         due_date: dueISO,
@@ -364,6 +441,16 @@ export default function QuoteDetailPage() {
       }).select().single()
 
       if (!error && data) {
+        // Copy the multi-service breakdown onto the duplicate.
+        if (services.length) {
+          await supabase.from('quote_services').insert(services.map(s => ({
+            user_id: user!.id, quote_id: data.id, sort_order: s.sort_order,
+            service_type: s.service_type, service_template_id: s.service_template_id,
+            quantity: s.quantity, unit: s.unit, unit_price: s.unit_price,
+            est_minutes: s.est_minutes, discount_type: s.discount_type,
+            discount_value: s.discount_value, notes: s.notes,
+          })))
+        }
         try { window.sessionStorage.setItem('eq_quote_dup_from', quote.quote_number) } catch { /* ignore */ }
         router.push(`/dashboard/quotes/${data.id}`)
       } else if (error) {
@@ -428,6 +515,11 @@ export default function QuoteDetailPage() {
   const actualPrice = Number(quote.total)
   const priceDiff = suggestedPrice != null ? actualPrice - suggestedPrice : null
 
+  // Multi-service edit: quotes.initial_price stores the SUMMED net, so decompose
+  // it back into the builder's shape — primary price from row 0, extras from rows
+  // 1+. Legacy quotes (no rows) load exactly as before.
+  const { primary: primaryLine, extras: extraServiceRows } = splitServices(services)
+
   if (editing) return (
     <div className="max-w-5xl space-y-6">
       <PageHeader title={`Edit ${quote.quote_number}`} />
@@ -442,7 +534,18 @@ export default function QuoteDetailPage() {
           address: quote.address,
           service_type: quote.service_type,
           service_template_id: quote.service_template_id || '',
-          initial_price: quote.initial_price || 0,
+          initial_price: primaryLine ? primaryLine.unit_price : (quote.initial_price || 0),
+          services: extraServiceRows.map(s => ({
+            service_type: s.service_type,
+            service_template_id: s.service_template_id || '',
+            quantity: s.quantity,
+            unit: s.unit || 'each',
+            unit_price: s.unit_price,
+            est_minutes: s.est_minutes || 0,
+            discount_type: (s.discount_type || '') as '' | 'amount' | 'percent',
+            discount_value: s.discount_value || 0,
+            notes: s.notes || '',
+          })),
           weekly_price: quote.weekly_price || 0,
           biweekly_price: quote.biweekly_price || 0,
           monthly_price: quote.monthly_price || 0,
@@ -525,7 +628,7 @@ export default function QuoteDetailPage() {
         </div>
       </div>
 
-      {/* Send this quote to the customer (SMS / Email / Both) */}
+      {/* Send this quote to the customer — the ONE shared Send Message dialog. */}
       {quote.customer_id && (
         <Card>
           <CardBody className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -533,8 +636,13 @@ export default function QuoteDetailPage() {
               <p className="text-sm font-semibold text-ink">Send this quote to the customer</p>
               <p className="text-xs text-ink-muted mt-0.5">Texts/emails a personalized message with a link to view &amp; accept it in their portal.</p>
             </div>
-            <SendComms customerId={quote.customer_id} template="quote" label="Send quote" />
+            <Button variant="secondary" onClick={() => setShowMessage(true)}>
+              <MessageSquare className="w-4 h-4" /> Send quote
+            </Button>
           </CardBody>
+          <SendMessageDialog open={showMessage} onClose={() => setShowMessage(false)}
+            customerId={quote.customer_id} customerName={quote.customer_name}
+            defaultTemplate="quote" vars={{ amount: formatCurrency(quote.total) }} />
         </Card>
       )}
 
@@ -696,10 +804,31 @@ export default function QuoteDetailPage() {
             {quote.custom_travel_required && (
               <div className="flex items-center gap-2 text-xs text-amber-400 mb-1">Custom travel fee applied (beyond standard tiers)</div>
             )}
-            <div className="flex justify-between text-sm">
-              <span className="text-ink-muted">Initial / first visit</span>
-              <span className="text-ink font-medium">{formatCurrency(quote.initial_price ?? quote.subtotal)}</span>
-            </div>
+            {services.length > 0 ? (
+              // Multi-service breakdown — one row per line (rows are the source of
+              // truth; quotes.initial_price is their summed net).
+              <div className="space-y-1.5">
+                {services.map(s => {
+                  const t = serviceLineTotals(s)
+                  return (
+                    <div key={s.id} className="flex justify-between gap-3 text-sm">
+                      <span className="text-ink-muted min-w-0">
+                        {s.service_type}
+                        {Number(s.quantity) > 1 && <span className="text-ink-faint"> × {s.quantity}</span>}
+                        {t.discountAmount > 0 && <span className="text-emerald-400 text-xs"> (−{formatCurrency(t.discountAmount)})</span>}
+                        {s.notes && <span className="block text-xs text-ink-faint truncate">{s.notes}</span>}
+                      </span>
+                      <span className="text-ink font-medium shrink-0">{formatCurrency(t.net)}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="flex justify-between text-sm">
+                <span className="text-ink-muted">Initial / first visit</span>
+                <span className="text-ink font-medium">{formatCurrency(quote.initial_price ?? quote.subtotal)}</span>
+              </div>
+            )}
             {quote.travel_fee > 0 && (
               <div className="flex justify-between text-sm">
                 <span className="text-ink-muted">Travel Fee {quote.show_travel_separately ? '(shown to customer)' : '(in total)'}</span>

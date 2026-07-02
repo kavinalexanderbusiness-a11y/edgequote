@@ -242,6 +242,8 @@ export interface Job {
   // The first visit of a recurring series — derives the quote's INITIAL price,
   // not the cadence price. Editing the recurring price never touches it.
   is_initial_visit: boolean
+  // Manual day-route sequence (drag-and-drop). null/absent = automatic (optimizer).
+  route_order?: number | null
   customers?: Pick<Customer, 'id' | 'name' | 'phone' | 'preferred_days' | 'avoid_days' | 'pref_time_start' | 'pref_time_end'>
   properties?: Pick<Property, 'id' | 'address' | 'lat' | 'lng' | 'neighborhood' | 'preferred_days' | 'avoid_days' | 'pref_time_start' | 'pref_time_end'>
 }
@@ -507,6 +509,41 @@ export interface Quote {
   customers?: Pick<Customer, 'id' | 'name' | 'email' | 'phone'>
 }
 
+// One service line on a multi-service quote (quote_services child table).
+// sort_order 0 is the PRIMARY service (mapped to the classic single-service
+// fields in the builder); rows 1+ are additional services. When rows exist they
+// are the source of truth; quotes.service_type/initial_price are derived caches
+// (primary label + summed net) so the generated quotes.total stays correct.
+export interface QuoteService {
+  id: string
+  created_at: string
+  user_id: string
+  quote_id: string
+  service_type: string
+  service_template_id: string | null
+  quantity: number
+  unit: string | null            // each | hour | sqft | linear_ft
+  unit_price: number
+  est_minutes: number | null
+  discount_type: 'amount' | 'percent' | null
+  discount_value: number | null
+  notes: string | null
+  sort_order: number
+}
+
+// Form shape for an additional-service line in the builder ('' = unset selects).
+export interface QuoteServiceInput {
+  service_type: string
+  service_template_id: string
+  quantity: number
+  unit: string
+  unit_price: number
+  est_minutes: number
+  discount_type: '' | 'amount' | 'percent'
+  discount_value: number
+  notes: string
+}
+
 export interface QuoteFormValues {
   customer_id: string
   customer_name: string
@@ -535,6 +572,8 @@ export interface QuoteFormValues {
   // measure path records the same provenance as the standalone Measurement Tool.
   measured_sqft: number
   suggested_price: number
+  // Additional service lines beyond the primary one (multi-service quotes).
+  services: QuoteServiceInput[]
 }
 
 export interface CustomerFormValues {

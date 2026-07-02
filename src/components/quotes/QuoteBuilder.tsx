@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { useForm, Controller } from 'react-hook-form'
+import { useForm, useFieldArray, Controller } from 'react-hook-form'
 import { useRouter } from 'next/navigation'
 import { Input } from '@/components/ui/Input'
 import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
@@ -16,6 +16,7 @@ import { Toggle } from '@/components/ui/Toggle'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Collapsible } from '@/components/ui/Collapsible'
 import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
+import { sumServiceLines, serviceLineTotals, emptyServiceLine, SERVICE_UNITS } from '@/lib/quoteServices'
 import { formatCurrency, formatDate, suggestTravelFee, cn } from '@/lib/utils'
 import { formatServicePrice } from '@/lib/servicePricing'
 import { laborSuggestion, pricingConfigFromSettings, latestSavedRecommendation, recommendationIsStale, pricingPackage } from '@/lib/pricing'
@@ -27,7 +28,7 @@ import type { MeasurementSnapshot, SavedRecommendation } from '@/types'
 import { BestDaySuggestions } from '@/components/schedule/BestDaySuggestions'
 import { SmartLaborField } from '@/components/labor/SmartLaborField'
 import { PriceIntelligence } from '@/components/pricing/PriceIntelligence'
-import { Clock, DollarSign, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, SlidersHorizontal, CheckCircle2, Users } from 'lucide-react'
+import { Clock, DollarSign, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, SlidersHorizontal, CheckCircle2, Users, Layers, Plus, Trash2 } from 'lucide-react'
 
 interface QuoteBuilderProps {
   customers: Customer[]
@@ -78,9 +79,13 @@ export function QuoteBuilder({
         travel_fee: 0,
         notes: '',
         status: 'draft',
+        services: [],
         ...defaultValues,
       },
     })
+
+  // Additional service lines beyond the primary one (multi-service quotes).
+  const serviceLines = useFieldArray({ control, name: 'services' })
 
   // Autosave the whole quote — survives refresh / crash / accidental close (shared engine).
   const formValues = watch()
@@ -149,7 +154,11 @@ export function QuoteBuilder({
     [isManualEntry, customers, manualName, manualPhone, manualEmail, address],
   )
   const suggestedInitial = laborSuggestion(Number(hours), Number(crewSize), Number(rate), overgrowth || 1)
-  const effectiveTotal = initialPrice + Number(travelFee || 0)
+  // Additional service lines — summed by the ONE quote-services engine (same
+  // discount semantics as invoices). The first-visit total = primary + extras + travel.
+  const watchedServices = watch('services')
+  const extras = useMemo(() => sumServiceLines(watchedServices), [watchedServices])
+  const effectiveTotal = initialPrice + extras.net + Number(travelFee || 0)
 
   // Live suggested prices straight from the measured lawn — the compact one-tap
   // pricing. Same engine as everywhere else; we just surface the top three.
@@ -397,6 +406,15 @@ export function QuoteBuilder({
                   />
                 )} />
 
+              {/* Service FIRST (owner directive) — measurement, suggested pricing,
+                  intelligence, duration and profitability below are all specific to
+                  the selected service. */}
+              <Controller name="service_template_id" control={control}
+                render={({ field }) => (<Select label="Service" options={templateOptions} {...field} />)} />
+              <Input label="Service Name" placeholder="e.g. Lawn Mowing"
+                error={errors.service_type?.message}
+                {...register('service_type', { required: 'Service is required' })} />
+
               {/* Lawn size — a CORE property attribute (powers pricing, labour & future
                   analytics). Auto-filled from a website/satellite measurement or the
                   property's saved size; always editable, and synced back to the property
@@ -474,14 +492,84 @@ export function QuoteBuilder({
                 />
               )}
 
-              {/* Service */}
-              <Controller name="service_template_id" control={control}
-                render={({ field }) => (<Select label="Service" options={templateOptions} {...field} />)} />
-              <Input label="Service Name" placeholder="e.g. Lawn Mowing"
-                error={errors.service_type?.message}
-                {...register('service_type', { required: 'Service is required' })} />
             </CardBody>
           </Card>
+
+          {/* ── Additional services — a quote can hold one OR many services. Top-level
+              (not buried in Advanced Pricing): adding a second service is a primary
+              action. Each line has qty × unit price − discount; totals sum via the
+              one quote-services engine. The primary service above stays untouched. ── */}
+          <Collapsible title="Additional services" icon={Layers}
+            summary={serviceLines.fields.length ? `${serviceLines.fields.length} line${serviceLines.fields.length !== 1 ? 's' : ''} · ${formatCurrency(extras.net)}` : 'One-service quote — add mulch, cleanup, hedges…'}>
+            <div className="space-y-3">
+              {serviceLines.fields.map((f, i) => {
+                const line = watchedServices?.[i]
+                const net = line ? serviceLineTotals(line).net : 0
+                return (
+                  <div key={f.id} className="rounded-xl border border-border bg-bg-secondary p-3 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Service {i + 2}</p>
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-semibold text-ink tabular-nums">{formatCurrency(net)}</span>
+                        <button type="button" onClick={() => serviceLines.remove(i)} aria-label="Remove service"
+                          className="text-ink-faint hover:text-red-400 transition-colors">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3">
+                      <Input label="Service" placeholder="e.g. Hedge Trimming"
+                        {...register(`services.${i}.service_type` as const, { required: true })} />
+                      {templates.length > 0 && (
+                        <Select label="From template" placeholder="Pick…"
+                          options={templates.map(t => ({ value: t.id, label: t.name }))}
+                          value={watch(`services.${i}.service_template_id`) || ''}
+                          onChange={e => {
+                            const t = templates.find(x => x.id === e.target.value)
+                            setValue(`services.${i}.service_template_id`, e.target.value)
+                            if (t) {
+                              setValue(`services.${i}.service_type`, t.name)
+                              if (Number(t.default_rate) > 0) setValue(`services.${i}.unit_price`, Number(t.default_rate))
+                              const d = (t.pricing_display_type || '').toLowerCase()
+                              setValue(`services.${i}.unit`, d.includes('hour') ? 'hour' : d.includes('linear') ? 'linear_ft' : d.includes('sq') ? 'sqft' : 'each')
+                            }
+                          }} />
+                      )}
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <Input label="Qty" type="number" step="0.5" min="0"
+                        {...register(`services.${i}.quantity` as const, { min: 0 })} />
+                      <Select label="Unit" options={SERVICE_UNITS.map(u => ({ value: u.value, label: u.label }))}
+                        {...register(`services.${i}.unit` as const)} />
+                      <Input label="Unit price ($)" type="number" step="1" min="0"
+                        {...register(`services.${i}.unit_price` as const, { min: 0 })} />
+                      <Input label="Duration (min)" type="number" step="5" min="0"
+                        {...register(`services.${i}.est_minutes` as const, { min: 0 })} />
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-[auto_auto_1fr] gap-3 items-end">
+                      <Select label="Discount" placeholder="None"
+                        options={[{ value: 'amount', label: '$ off' }, { value: 'percent', label: '% off' }]}
+                        {...register(`services.${i}.discount_type` as const)} />
+                      <Input label="Value" type="number" step="1" min="0"
+                        {...register(`services.${i}.discount_value` as const, { min: 0 })} />
+                      <Input label="Notes" placeholder="Optional"
+                        {...register(`services.${i}.notes` as const)} />
+                    </div>
+                  </div>
+                )
+              })}
+              <Button type="button" variant="secondary" size="sm" onClick={() => serviceLines.append(emptyServiceLine())}>
+                <Plus className="w-3.5 h-3.5" /> Add service
+              </Button>
+              {extras.net > 0 && (
+                <p className="text-xs text-ink-muted">
+                  Additional services total <span className="font-semibold text-ink">{formatCurrency(extras.net)}</span>
+                  {extras.discountAmount > 0 && <> (after {formatCurrency(extras.discountAmount)} discounts)</>}
+                  {extras.minutes > 0 && <> · ≈{extras.minutes} min</>}
+                </p>
+              )}
+            </div>
+          </Collapsible>
 
           {/* ── Advanced Pricing — exact price + the full engine, collapsed until needed ── */}
           <Collapsible title="Advanced Pricing" icon={SlidersHorizontal} summary="Exact price · labour · recurring · travel — full control">
@@ -655,6 +743,12 @@ export function QuoteBuilder({
                   <span className="text-sm text-ink-muted">Initial Visit{initialManual ? ' (manual)' : ''}</span>
                   <span className="text-ink font-semibold">{formatCurrency(initialPrice)}</span>
                 </div>
+                {extras.net > 0 && (
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="flex items-center gap-2 text-ink-muted"><Layers className="w-3.5 h-3.5" /> Additional services ({serviceLines.fields.length})</span>
+                    <span className="text-ink font-medium">{formatCurrency(extras.net)}</span>
+                  </div>
+                )}
                 <div className="flex items-center justify-between text-sm">
                   <span className="flex items-center gap-2 text-ink-muted"><Car className="w-3.5 h-3.5" /> Travel{showTravelSeparately ? ' (shown)' : ''}</span>
                   <span className="text-ink font-medium">{formatCurrency(Number(travelFee))}</span>

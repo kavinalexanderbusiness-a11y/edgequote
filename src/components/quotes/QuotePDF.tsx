@@ -3,7 +3,8 @@
 import {
   Document, Page, Text, View, Image, StyleSheet, pdf,
 } from '@react-pdf/renderer'
-import type { Quote, BusinessSettings } from '@/types'
+import type { Quote, QuoteService, BusinessSettings } from '@/types'
+import { serviceLineTotals } from '@/lib/quoteServices'
 
 const COLORS = {
   green: '#00C896',
@@ -70,11 +71,15 @@ function dateStr(s: string | null) {
 interface QuotePDFProps {
   quote: Quote
   settings: BusinessSettings | null
+  // Multi-service breakdown (quote_services rows). Empty/absent = legacy single
+  // service; quote.initial_price already holds the summed net either way.
+  services?: QuoteService[]
 }
 
-export function QuoteDocument({ quote, settings }: QuotePDFProps) {
+export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
   const initialPrice = quote.initial_price ?? quote.subtotal
   const hasMaintenance = !!(quote.weekly_price || quote.biweekly_price || quote.monthly_price)
+  const lines = services && services.length ? services : null
   const company = settings?.company_name || 'Edge Property Services'
   const contactLines = [
     settings?.phone,
@@ -134,8 +139,10 @@ export function QuoteDocument({ quote, settings }: QuotePDFProps) {
             <Text style={styles.muted}>{quote.address}</Text>
           </View>
           <View style={styles.col}>
-            <Text style={styles.sectionTitle}>Service</Text>
-            <Text style={[styles.bodyText, { fontFamily: 'Helvetica-Bold' }]}>{quote.service_type}</Text>
+            <Text style={styles.sectionTitle}>{lines && lines.length > 1 ? 'Services' : 'Service'}</Text>
+            <Text style={[styles.bodyText, { fontFamily: 'Helvetica-Bold' }]}>
+              {lines && lines.length > 1 ? `${quote.service_type} + ${lines.length - 1} more` : quote.service_type}
+            </Text>
             <Text style={styles.muted}>Crew of {quote.crew_size} · {quote.hours} hrs estimated</Text>
           </View>
         </View>
@@ -148,14 +155,34 @@ export function QuoteDocument({ quote, settings }: QuotePDFProps) {
             <Text style={[styles.th, styles.cellQty]}>Details</Text>
             <Text style={[styles.th, styles.cellAmt]}>Amount</Text>
           </View>
-          <View style={styles.tableRow}>
-            <View style={styles.cellDesc}>
-              <Text style={styles.td}>{quote.service_type}</Text>
-              <Text style={styles.muted}>Initial / first visit</Text>
+          {lines ? (
+            // Multi-service: one row per line, net of its own discount (the same
+            // engine math as the app; quote.total already sums these + travel).
+            lines.map(s => {
+              const t = serviceLineTotals(s)
+              const qtyLabel = Number(s.quantity) > 1 ? `${s.quantity} × ${money(s.unit_price)}` : s.sort_order === 0 ? `${quote.crew_size} crew · ${quote.hours} hrs` : '—'
+              return (
+                <View key={s.id} style={styles.tableRow}>
+                  <View style={styles.cellDesc}>
+                    <Text style={styles.td}>{s.service_type}</Text>
+                    {s.notes ? <Text style={styles.muted}>{s.notes}</Text> : s.sort_order === 0 ? <Text style={styles.muted}>Initial / first visit</Text> : null}
+                    {t.discountAmount > 0 ? <Text style={styles.muted}>Includes {money(t.discountAmount)} discount</Text> : null}
+                  </View>
+                  <Text style={[styles.td, styles.cellQty]}>{qtyLabel}</Text>
+                  <Text style={[styles.td, styles.cellAmt]}>{money(t.net)}</Text>
+                </View>
+              )
+            })
+          ) : (
+            <View style={styles.tableRow}>
+              <View style={styles.cellDesc}>
+                <Text style={styles.td}>{quote.service_type}</Text>
+                <Text style={styles.muted}>Initial / first visit</Text>
+              </View>
+              <Text style={[styles.td, styles.cellQty]}>{quote.crew_size} crew · {quote.hours} hrs</Text>
+              <Text style={[styles.td, styles.cellAmt]}>{money(initialPrice)}</Text>
             </View>
-            <Text style={[styles.td, styles.cellQty]}>{quote.crew_size} crew · {quote.hours} hrs</Text>
-            <Text style={[styles.td, styles.cellAmt]}>{money(initialPrice)}</Text>
-          </View>
+          )}
           {quote.travel_fee > 0 ? (
             <View style={styles.tableRow}>
               <View style={styles.cellDesc}>
@@ -171,7 +198,7 @@ export function QuoteDocument({ quote, settings }: QuotePDFProps) {
         {/* Totals */}
         <View style={styles.totals}>
           <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Initial / first visit</Text>
+            <Text style={styles.totalLabel}>{lines && lines.length > 1 ? 'Services subtotal' : 'Initial / first visit'}</Text>
             <Text style={styles.totalValue}>{money(initialPrice)}</Text>
           </View>
           {quote.travel_fee > 0 ? (
@@ -244,6 +271,6 @@ export function QuoteDocument({ quote, settings }: QuotePDFProps) {
 
 // Render the quote to a PDF blob. Imported dynamically by the caller so the
 // heavy @react-pdf library only loads when the user actually opens a PDF.
-export async function renderQuoteBlob(quote: Quote, settings: BusinessSettings | null): Promise<Blob> {
-  return pdf(<QuoteDocument quote={quote} settings={settings} />).toBlob()
+export async function renderQuoteBlob(quote: Quote, settings: BusinessSettings | null, services?: QuoteService[]): Promise<Blob> {
+  return pdf(<QuoteDocument quote={quote} settings={settings} services={services} />).toBlob()
 }
