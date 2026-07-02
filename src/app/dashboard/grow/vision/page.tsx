@@ -5,8 +5,10 @@ import type { ConfidenceBand, Difficulty } from '@/lib/vision/types'
 
 // AI Vision — the property's AI brain. Server-fetches the owner's properties with
 // their photo counts + any existing analysis headline, then hands off to the
-// interactive picker. Everything is RLS-scoped to the owner.
-export default async function VisionPage() {
+// interactive picker. Everything is RLS-scoped to the owner. `?property=` deep-
+// links straight to one property (used by the property page + timelines).
+export default async function VisionPage({ searchParams }: { searchParams: Promise<{ property?: string }> }) {
+  const sp = await searchParams
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null // the dashboard layout already redirects unauthenticated users
@@ -59,5 +61,5 @@ export default async function VisionPage() {
     }
   })
 
-  return <VisionClient properties={properties} aiEnabled={aiEnabled()} />
+  return <VisionClient properties={properties} aiEnabled={aiEnabled()} initialPropertyId={sp.property} />
 }

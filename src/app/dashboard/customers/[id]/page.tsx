@@ -22,9 +22,14 @@ import { formatCurrency, formatDate, getInitials } from '@/lib/utils'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { CustomerComms } from '@/components/customers/CustomerComms'
 import { ConversationThread } from '@/components/messages/ConversationThread'
+import { Timeline } from '@/components/ui/Timeline'
+import {
+  eventsFromQuotes, eventsFromJobs, eventsFromInvoices, eventsFromCustomer,
+  fetchTimelineExtras, sortTimeline, type TimelineEvent,
+} from '@/lib/timeline'
 import {
   ArrowLeft, Phone, MessageSquare, FilePlus, CalendarPlus, Mail, MapPin, Repeat,
-  FileText, Send, RotateCw, CheckCircle2, Wrench, Receipt, DollarSign, Sparkles, Users,
+  FileText, RotateCw, Receipt, DollarSign, Sparkles, Users,
   Edit2, ExternalLink, Ruler, AlertTriangle, StickyNote, Wallet, Timer, CalendarClock,
   Link2, Check,
 } from 'lucide-react'
@@ -37,28 +42,8 @@ function localToday(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-interface TimelineEvent {
-  at: string
-  kind: 'quote_created' | 'quote_sent' | 'followup' | 'quote_accepted' | 'job_scheduled' | 'job_completed' | 'invoice_created' | 'invoice_paid' | 'message_in' | 'message_out' | 'payment' | 'portal_request'
-  title: string
-  sub?: string
-  href?: string
-}
-
-const EVENT_META: Record<TimelineEvent['kind'], { icon: typeof FileText; color: string }> = {
-  quote_created:   { icon: FileText,     color: 'text-ink-muted bg-surface border-border' },
-  quote_sent:      { icon: Send,         color: 'text-blue-400 bg-blue-500/10 border-blue-500/20' },
-  followup:        { icon: RotateCw,     color: 'text-amber-400 bg-amber-500/10 border-amber-500/20' },
-  quote_accepted:  { icon: CheckCircle2, color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' },
-  job_scheduled:   { icon: CalendarPlus, color: 'text-accent bg-accent/10 border-accent/20' },
-  job_completed:   { icon: Wrench,       color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' },
-  invoice_created: { icon: Receipt,      color: 'text-ink-muted bg-surface border-border' },
-  invoice_paid:    { icon: DollarSign,   color: 'text-accent bg-accent/10 border-accent/20' },
-  message_in:      { icon: MessageSquare,color: 'text-blue-400 bg-blue-500/10 border-blue-500/20' },
-  message_out:     { icon: Send,         color: 'text-ink-muted bg-surface border-border' },
-  payment:         { icon: DollarSign,   color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' },
-  portal_request:  { icon: StickyNote,   color: 'text-amber-400 bg-amber-500/10 border-amber-500/20' },
-}
+// Timeline types + builders live in THE shared engine (lib/timeline) — the same
+// feed powers this page and the property page.
 
 export default function CustomerDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -163,28 +148,17 @@ export default function CustomerDetailPage() {
       const { data: recs } = await supabase.from('job_recurrences').select('*').eq('customer_id', id)
       if (recs) setRecurrences(recs as JobRecurrence[])
 
-      // Unified timeline — messages (SMS/email/portal), payments, and portal
-      // service requests. Read-only aggregation; degrades gracefully if a table
-      // isn't present yet.
-      const [mRes, payRes, srRes] = await Promise.all([
-        supabase.from('messages').select('direction, channel, body, created_at').eq('customer_id', id).order('created_at', { ascending: false }).limit(50),
-        supabase.from('payments').select('amount, status, created_at').eq('customer_id', id),
-        supabase.from('service_requests').select('message, created_at').eq('customer_id', id),
-      ])
-      const extra: TimelineEvent[] = []
-      for (const m of (mRes.data as { direction: string; channel: string; body: string | null; created_at: string }[]) || []) {
-        if (m.direction === 'internal') continue // internal notes live in the notes card
-        const inbound = m.direction === 'inbound'
-        const chan = m.channel === 'email' ? 'email' : m.channel === 'portal' ? 'portal message' : 'SMS'
-        extra.push({ at: m.created_at, kind: inbound ? 'message_in' : 'message_out', title: `${inbound ? 'Received' : 'Sent'} ${chan}`, sub: (m.body || '').slice(0, 90), href: '/dashboard/messages' })
-      }
-      for (const p of (payRes.data as { amount: number; status: string; created_at: string }[]) || []) {
-        if (p.status === 'paid') extra.push({ at: p.created_at, kind: 'payment', title: 'Payment received', sub: formatCurrency(Number(p.amount)) })
-      }
-      for (const sr of (srRes.data as { message: string; created_at: string }[]) || []) {
-        extra.push({ at: sr.created_at, kind: 'portal_request', title: 'Portal service request', sub: (sr.message || '').slice(0, 90), href: '/dashboard/messages' })
-      }
-      setExtraTimeline(extra)
+      // Unified timeline extras — THE shared engine loads everything beyond
+      // quotes/jobs/invoices (messages, payments, portal requests, website leads,
+      // referrals, AI Vision analyses, photos, campaign sends, price changes,
+      // weather disruptions). Degrades gracefully if a table isn't present yet.
+      const loadedJobs = (jRes.data as Job[]) || []
+      const loadedProps = (pRes.data as Property[]) || []
+      setExtraTimeline(await fetchTimelineExtras(supabase, {
+        customerId: id,
+        jobs: loadedJobs.map(j => ({ id: j.id, title: j.title, scheduled_date: j.scheduled_date, property_id: j.property_id })),
+        properties: loadedProps.map(p => ({ id: p.id, address: p.address })),
+      }))
 
       const { data: settings } = await supabase.from('business_settings').select('service_seasons').eq('user_id', user!.id).maybeSingle()
       setSeasons(settingsToSeasons((settings as { service_seasons: unknown } | null)?.service_seasons))
@@ -327,24 +301,14 @@ export default function CustomerDetailPage() {
     openItems.push({ key: `inv-${inv.id}`, icon: Receipt, label: `${overdue ? 'Overdue' : 'Unpaid'} invoice ${inv.invoice_number}`, sub: `${formatCurrency(Number(inv.amount))}${inv.due_date ? ` · due ${formatDate(inv.due_date)}` : ''}`, href: '/dashboard/invoices', tone: overdue ? 'text-red-400' : 'text-amber-400' })
   }
 
-  // ── Timeline ──
-  const events: TimelineEvent[] = []
-  for (const q of quotes) {
-    events.push({ at: q.created_at, kind: 'quote_created', title: `Quote ${q.quote_number} created`, sub: `${q.service_type} · ${formatCurrency(Number(q.total))}`, href: `/dashboard/quotes/${q.id}` })
-    if (q.sent_at) events.push({ at: q.sent_at, kind: 'quote_sent', title: `Quote ${q.quote_number} sent`, href: `/dashboard/quotes/${q.id}` })
-    if (q.last_followed_up_at) events.push({ at: q.last_followed_up_at, kind: 'followup', title: `Followed up on ${q.quote_number}`, sub: `${q.follow_up_count} total`, href: `/dashboard/quotes/${q.id}` })
-    if (WON.has(q.status)) events.push({ at: q.updated_at, kind: 'quote_accepted', title: `Quote ${q.quote_number} accepted`, sub: formatCurrency(Number(q.total)), href: `/dashboard/quotes/${q.id}` })
-  }
-  for (const j of jobs) {
-    events.push({ at: j.created_at, kind: 'job_scheduled', title: `Job scheduled — ${j.title}`, sub: `for ${formatDate(j.scheduled_date)}` })
-    if (j.status === 'completed') events.push({ at: j.updated_at, kind: 'job_completed', title: `Job completed — ${j.title}` })
-  }
-  for (const inv of invoices) {
-    events.push({ at: inv.created_at, kind: 'invoice_created', title: `Invoice ${inv.invoice_number} created`, sub: formatCurrency(Number(inv.amount)) })
-    if (inv.status === 'paid') events.push({ at: inv.updated_at, kind: 'invoice_paid', title: `Invoice ${inv.invoice_number} paid`, sub: formatCurrency(Number(inv.amount)) })
-  }
-  events.push(...extraTimeline) // messages, payments, portal requests
-  events.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
+  // ── Timeline — THE shared engine (same feed as the property page) ──
+  const events: TimelineEvent[] = sortTimeline([
+    ...eventsFromCustomer(customer),
+    ...eventsFromQuotes(quotes),
+    ...eventsFromJobs(jobs),
+    ...eventsFromInvoices(invoices),
+    ...extraTimeline, // messages, payments, portal, leads, referrals, vision, photos, campaigns, price changes, weather
+  ])
 
   const phone = customer.phone
   const isHighValue = bookedRevenue >= 2000
@@ -645,30 +609,7 @@ export default function CustomerDetailPage() {
         <Card>
           <CardHeader><h2 className="text-sm font-semibold text-ink">Timeline</h2></CardHeader>
           <CardBody>
-            {events.length === 0 ? (
-              <p className="text-sm text-ink-muted">No history yet.</p>
-            ) : (
-              <div className="space-y-3">
-                {events.map((e, i) => {
-                  const meta = EVENT_META[e.kind]
-                  const Icon = meta.icon
-                  const row = (
-                    <div className="flex items-start gap-3">
-                      <div className={`w-7 h-7 rounded-lg border flex items-center justify-center shrink-0 ${meta.color}`}>
-                        <Icon className="w-3.5 h-3.5" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm text-ink">{e.title}</p>
-                        <p className="text-xs text-ink-faint">{formatDate(e.at)}{e.sub ? ` · ${e.sub}` : ''}</p>
-                      </div>
-                    </div>
-                  )
-                  return e.href
-                    ? <Link key={i} href={e.href} className="block hover:opacity-80 transition-opacity">{row}</Link>
-                    : <div key={i}>{row}</div>
-                })}
-              </div>
-            )}
+            <Timeline events={events} emptyText="No history yet — quotes, visits, invoices, messages and more will appear here." />
           </CardBody>
         </Card>
 
@@ -695,7 +636,9 @@ export default function CustomerDetailPage() {
               return (
                 <div key={p.id} className="rounded-xl border border-border p-3">
                   <div className="flex items-start justify-between gap-2">
-                    <p className="text-sm font-medium text-ink">{p.address}{p.is_primary ? ' · primary' : ''}</p>
+                    <Link href={`/dashboard/properties/${p.id}`} className="text-sm font-medium text-ink hover:text-accent transition-colors min-w-0" title="Open this property — history, intelligence, photos & value">
+                      {p.address}{p.is_primary ? ' · primary' : ''}
+                    </Link>
                     <span className="text-xs text-ink-muted shrink-0">{jobCount} job{jobCount !== 1 ? 's' : ''}</span>
                   </div>
                   {measures.length > 0 && (

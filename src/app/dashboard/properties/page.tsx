@@ -198,7 +198,9 @@ export default function PropertiesPage() {
                     </div>
                     <div className="space-y-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <p className="text-sm font-semibold text-ink">{property.address}</p>
+                        <Link href={`/dashboard/properties/${property.id}`} className="text-sm font-semibold text-ink hover:text-accent transition-colors" title="Open this property — history, intelligence, photos & value">
+                          {property.address}
+                        </Link>
                         {property.is_primary && (
                           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border uppercase tracking-wide bg-accent-dim text-accent border-accent/20">
                             Primary

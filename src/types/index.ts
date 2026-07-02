@@ -29,6 +29,13 @@ export interface Customer {
   // Communication consent — gates all SMS/email sends (default off).
   sms_opt_in: boolean
   email_opt_in: boolean
+  // Review lifecycle (CRM migration 2026-06-25h) — optional so older local
+  // schemas without the columns still typecheck; the timeline reads them.
+  review_requested_at?: string | null
+  reviewed_at?: string | null
+  review_declined_at?: string | null
+  review_source?: string | null
+  review_rating?: number | null
   user_id: string
 }
 

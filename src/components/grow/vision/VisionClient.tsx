@@ -41,10 +41,13 @@ interface Bundle {
   photoUrls: Record<string, string>
 }
 
-export function VisionClient({ properties, aiEnabled }: { properties: VisionPropertyLite[]; aiEnabled: boolean }) {
+export function VisionClient({ properties, aiEnabled, initialPropertyId }: { properties: VisionPropertyLite[]; aiEnabled: boolean; initialPropertyId?: string }) {
   const supabase = useMemo(() => createClient(), [])
   const [query, setQuery] = useState('')
-  const [selectedId, setSelectedId] = useState<string | null>(properties[0]?.id ?? null)
+  // A ?property= deep link (from the property page / timelines) wins over the default.
+  const [selectedId, setSelectedId] = useState<string | null>(
+    (initialPropertyId && properties.some(p => p.id === initialPropertyId) ? initialPropertyId : null) ?? properties[0]?.id ?? null
+  )
   const [intel, setIntel] = useState<PropertyIntelligence | null>(null)
   const [twin, setTwin] = useState<PropertyTwin | null>(null)
   const [timeline, setTimeline] = useState<PropertyIntelligence[]>([])

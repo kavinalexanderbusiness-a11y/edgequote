@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { formatDistanceToNow } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -158,6 +158,22 @@ export default function MessagesPage() {
     })()
     return () => { active = false }
   }, [filter]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Deep link: ?customer= opens that customer's conversation directly (used by
+  // the customer/property timelines) — works even if it isn't in the loaded page.
+  const searchParams = useSearchParams()
+  const wantCustomer = searchParams.get('customer')
+  const deepLinked = useRef(false)
+  useEffect(() => {
+    if (!uid || !wantCustomer || deepLinked.current) return
+    deepLinked.current = true
+    ;(async () => {
+      const { data } = await supabase.from('conversations').select(SELECT_COLS)
+        .eq('user_id', uid).eq('customer_id', wantCustomer)
+        .order('last_message_at', { ascending: false }).limit(1).maybeSingle()
+      if (data) setSel(data as unknown as Convo)
+    })()
+  }, [uid, wantCustomer]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Realtime: subscribe ONCE (reads the live filter via filterRef so a filter switch
   // never tears down the channel). Always refresh counts. Patch the changed row in
