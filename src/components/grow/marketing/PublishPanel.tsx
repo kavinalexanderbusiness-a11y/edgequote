@@ -149,9 +149,10 @@ export function PublishPanel({ piece, ch, userId, hasPhoto, onSavePhoto, beforeP
       ) : manualReady ? (
         // A queued manual post (incl. a scheduled one that came due) — always completable.
         <div className="space-y-2">
-          <p className="text-[11px] text-ink-muted">Ready to post. Copy the caption, open {def.label}, paste &amp; post, then mark it done.</p>
+          <p className="text-[11px] text-ink-muted">Ready to post. Copy the caption{hasPhoto ? ', save the photo' : ''}, open {def.label}, paste &amp; post, then mark it done.</p>
           <div className="flex items-center gap-2 flex-wrap">
             <Button size="sm" variant="secondary" onClick={() => { copyCaption(); setMsg({ tone: 'success', text: 'Caption copied.' }) }}><Copy className="w-3.5 h-3.5" /> Copy caption</Button>
+            {hasPhoto && onSavePhoto && <Button size="sm" variant="secondary" onClick={onSavePhoto}><Download className="w-3.5 h-3.5" /> Save photo</Button>}
             <Button size="sm" variant="secondary" onClick={openPlatform}><ExternalLink className="w-3.5 h-3.5" /> Open {def.label}</Button>
             <Button size="sm" onClick={confirmManual}><CheckCircle2 className="w-3.5 h-3.5" /> Mark as posted</Button>
           </div>

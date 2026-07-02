@@ -7,6 +7,7 @@ import { Banner } from '@/components/ui/Banner'
 import { ChannelPreview } from './ChannelPreview'
 import { RewriteToolbar } from './RewriteToolbar'
 import { PublishPanel } from './PublishPanel'
+import { downloadForPlatform } from '@/lib/marketing/platformImage'
 import { channel as channelDef } from '@/lib/marketing/channels'
 import { lengthChars } from '@/lib/marketing/prompt'
 import { cn } from '@/lib/utils'
@@ -31,20 +32,6 @@ function parseHashtags(text: string): string[] {
   )).slice(0, 8)
 }
 
-// Force a real file download even cross-origin (the public bucket allows GET).
-async function downloadImage(url: string, filename: string) {
-  try {
-    const res = await fetch(url)
-    const blob = await res.blob()
-    const obj = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = obj; a.download = filename
-    document.body.appendChild(a); a.click(); a.remove()
-    URL.revokeObjectURL(obj)
-  } catch {
-    window.open(url, '_blank') // fall back to opening it
-  }
-}
 
 export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName, logoUrl, userId, options = DEFAULT_POST_OPTIONS, onDraftChange, onGrantConsent }: {
   candidate: MarketingCandidate
@@ -303,7 +290,7 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
             <Eye className="w-3.5 h-3.5" /> Live preview
           </span>
           <span className="text-[11px] text-ink-faint inline-flex items-center gap-1">
-            <Lock className="w-3 h-3" /> Read-only · updates as you type
+            <Lock className="w-3 h-3" /> Read-only{canUsePhoto ? ` · photo auto-cropped for ${def.label}` : ''}
           </span>
         </div>
         <ChannelPreview
@@ -345,7 +332,7 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
             ch={ch}
             userId={userId}
             hasPhoto={canUsePhoto}
-            onSavePhoto={canUsePhoto ? () => downloadImage(imageUrl!, `${(candidate.serviceType || 'post').replace(/\s+/g, '-').toLowerCase()}-${ch}.jpg`) : undefined}
+            onSavePhoto={canUsePhoto ? () => downloadForPlatform(imageUrl!, ch, `${(candidate.serviceType || 'post').replace(/\s+/g, '-').toLowerCase()}-${ch}.jpg`) : undefined}
             beforePublish={async () => { await persist({ title: title.trim() || null, body: body.trim(), hashtags }) }}
             onPieceUpdate={p => onDraftChange?.(p)}
           />

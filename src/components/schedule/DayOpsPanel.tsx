@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/Button'
 import { JobPhotos } from '@/components/photos/JobPhotos'
 import { JobAddons } from '@/components/schedule/JobAddons'
 import { JobMessages } from '@/components/schedule/JobMessages'
+import { DayBulkMessage } from '@/components/schedule/DayBulkMessage'
 import {
   DollarSign, Clock, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
   MapPin, Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, Trash2, CloudRain, Play, Timer, Camera, PlusCircle, MessageSquare,
@@ -88,6 +89,8 @@ export function DayOpsPanel({
   const [addonsId, setAddonsId] = useState<string | null>(null)
   // Which job's one-tap messaging panel is open.
   const [messageId, setMessageId] = useState<string | null>(null)
+  // Bulk "Message today's customers" dialog.
+  const [showBulk, setShowBulk] = useState(false)
 
   function openPrice(job: Job) {
     setQuickId(null); setMoveId(null); setPhotoId(null); setAddonsId(null)
@@ -244,7 +247,13 @@ export function DayOpsPanel({
     if (startMin != null) windowByJob[j.id] = `${minutesToTime12(startMin)}–${minutesToTime12(startMin + 120)}`
   }
   const laborTotalMin = active.reduce((s, j) => s + (j.duration_minutes || DEFAULT_JOB_MIN), 0)
-  const load = dayLoad(laborTotalMin + (stats ? stats.driveMinutes : active.length * 10), capacityHours)
+  const dayWorkMin = laborTotalMin + (stats ? stats.driveMinutes : active.length * 10)
+  const load = dayLoad(dayWorkMin, capacityHours)
+  // Live capacity signals — recompute on every render, so a crew/hours/start/
+  // duration change (via Day Settings or an inline edit) updates them instantly.
+  const capMin = (capacityHours > 0 ? capacityHours : 8) * 60
+  const utilizationPct = Math.round((dayWorkMin / capMin) * 100)
+  const remainingHours = Math.round((remaining.reduce((s, j) => s + (j.duration_minutes || DEFAULT_JOB_MIN), 0) / 60) * 10) / 10
 
   // ── Live day tracking (check-in/check-out data) ──
   const isToday = date === localTodayISO()
@@ -298,6 +307,11 @@ export function DayOpsPanel({
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {active.some(j => !!j.customer_id) && (
+            <Button size="sm" variant="secondary" onClick={() => setShowBulk(true)} title="Message everyone scheduled today (on my way, running late, reminder, weather delay…)">
+              <MessageSquare className="w-4 h-4" /> Message all
+            </Button>
+          )}
           {remaining.length > 0 && (
             <Button size="sm" variant="secondary" onClick={onRainDelay} title="Bump all remaining jobs to your next work day">
               <CloudRain className="w-4 h-4" /> Rain delay
@@ -306,6 +320,8 @@ export function DayOpsPanel({
           <Button size="sm" onClick={onAddJob}><Plus className="w-4 h-4" /> Add job</Button>
         </div>
       </div>
+
+      {showBulk && <DayBulkMessage date={date} jobs={jobs} onClose={() => setShowBulk(false)} />}
 
       {/* Daily revenue forecast — the first thing you see */}
       <div className="grid grid-cols-3 sm:grid-cols-5 sm:divide-x divide-border border-b border-border">
@@ -339,9 +355,11 @@ export function DayOpsPanel({
       ) : (
         <div className="p-4 space-y-4">
           {/* Day operations breakdown */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-xs">
             <Stat label="Jobs done" value={`${completed.length} / ${active.length}`} />
             <Stat label="Completion" value={`${completionPct}%`} tone={completionPct === 100 && active.length > 0 ? 'text-emerald-400' : undefined} />
+            <Stat label="Utilization" value={`${utilizationPct}%`} tone={utilizationPct > 100 ? 'text-red-400' : utilizationPct >= 85 ? 'text-amber-400' : undefined} />
+            <Stat label="Work left" value={remainingHours > 0 ? `${remainingHours}h` : '—'} />
             <Stat label="Est. hours" value={totalMin > 0 ? `${estHours}h` : '—'} />
             <Stat label="Stops" value={String(totalStops)} />
           </div>

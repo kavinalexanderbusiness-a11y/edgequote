@@ -1699,8 +1699,8 @@ export default function SchedulePage() {
           onDeleteLineItem={removeLineItem}
           getPreviousAddons={getPreviousAddons}
           onCopyPreviousAddons={copyPreviousAddons}
-          workStartTime={workStartTime}
-          capacityHours={capacityHours}
+          workStartTime={dayStatusMap?.byDate[format(cursor, 'yyyy-MM-dd')]?.starts_at || workStartTime}
+          capacityHours={optBaseOpts.capacityForDate(format(cursor, 'yyyy-MM-dd')) || capacityHours}
           onRainDelay={() => rainDelayDay(format(cursor, 'yyyy-MM-dd'))}
           onAddJob={() => openNewJob(cursor)}
           onQuickSave={quickSaveJob}

@@ -1,7 +1,10 @@
 'use client'
 
+import { useEffect, useRef } from 'react'
 import { MoreHorizontal, ThumbsUp, MessageCircle, Share2, Send, Heart, Bookmark, Repeat2, Globe } from 'lucide-react'
 import type { MarketingChannel } from '@/lib/marketing/types'
+import { loadImage } from '@/lib/beforeafter/imageLoad'
+import { drawForPlatform, PLATFORM_IMAGE } from '@/lib/marketing/platformImage'
 
 // ── Channel preview ───────────────────────────────────────────────────────────────
 // A faithful mock of the post AS IT WILL LOOK on each real platform — authentic chrome,
@@ -38,9 +41,18 @@ function Body({ body, hashtags, link, placeholder }: { body: string; hashtags?: 
   )
 }
 
-function PostImage({ url, className }: { url: string; className?: string }) {
-  // eslint-disable-next-line @next/next/no-img-element
-  return <img src={url} alt="" className={className || 'w-full object-cover bg-gray-100'} />
+// WYSIWYG platform image: renders the photo auto-cropped + intelligently recentred
+// to the platform's aspect ratio (the exact frame that will post) — the owner never
+// crops by hand. Reuses the Before/After canvas engine (loadImage + coverCrop).
+function PlatformImage({ url, ch, className }: { url: string; ch: MarketingChannel; className?: string }) {
+  const ref = useRef<HTMLCanvasElement>(null)
+  useEffect(() => {
+    let active = true
+    loadImage(url).then(img => { if (active && ref.current) drawForPlatform(ref.current, img, ch) }).catch(() => {})
+    return () => { active = false }
+  }, [url, ch])
+  const spec = PLATFORM_IMAGE[ch]
+  return <canvas ref={ref} width={spec.w} height={spec.h} className={className} style={{ aspectRatio: `${spec.w} / ${spec.h}` }} />
 }
 
 const PLACEHOLDER = 'Your post will appear here as you generate it…'
@@ -75,7 +87,7 @@ function Facebook({ businessName, logoUrl, body, hashtags, imageUrl }: PreviewPr
         <MoreHorizontal className="w-5 h-5 text-[#65676b]" />
       </div>
       <div className="px-3 py-2"><Body body={body} hashtags={hashtags} link="#385898" placeholder={PLACEHOLDER} /></div>
-      {imageUrl && <PostImage url={imageUrl} className="w-full max-h-72 object-cover" />}
+      {imageUrl && <PlatformImage url={imageUrl} ch="facebook" className="w-full h-auto block" />}
       <div className="flex items-center justify-around border-t border-gray-200 mt-1 px-2 py-1.5 text-[#65676b] text-[12px] font-semibold">
         <span className="flex items-center gap-1.5"><ThumbsUp className="w-4 h-4" /> Like</span>
         <span className="flex items-center gap-1.5"><MessageCircle className="w-4 h-4" /> Comment</span>
@@ -96,7 +108,7 @@ function Instagram({ businessName, logoUrl, body, hashtags, imageUrl }: PreviewP
         <MoreHorizontal className="w-5 h-5" />
       </div>
       {imageUrl
-        ? <PostImage url={imageUrl} className="w-full aspect-square object-cover" />
+        ? <PlatformImage url={imageUrl} ch="instagram" className="w-full h-auto block" />
         : <div className="w-full aspect-square bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center text-gray-400 text-xs">Photo goes here</div>}
       <div className="flex items-center gap-4 px-3 pt-2.5">
         <Heart className="w-6 h-6" /><MessageCircle className="w-6 h-6" /><Send className="w-6 h-6" />
@@ -124,7 +136,7 @@ function Threads({ businessName, logoUrl, body, hashtags, imageUrl }: PreviewPro
             <MoreHorizontal className="w-4 h-4 text-gray-400 ml-auto" />
           </div>
           <div className="mt-0.5"><Body body={body} hashtags={hashtags.slice(0, 2)} link="#1d9bf0" placeholder={PLACEHOLDER} /></div>
-          {imageUrl && <PostImage url={imageUrl} className="w-full max-h-64 object-cover rounded-xl border border-gray-200 mt-2" />}
+          {imageUrl && <PlatformImage url={imageUrl} ch="threads" className="w-full h-auto block rounded-xl border border-gray-200 mt-2" />}
           <div className="flex items-center gap-5 mt-2.5 text-black">
             <Heart className="w-[18px] h-[18px]" /><MessageCircle className="w-[18px] h-[18px]" /><Repeat2 className="w-[18px] h-[18px]" /><Send className="w-[18px] h-[18px]" />
           </div>
@@ -138,7 +150,7 @@ function Threads({ businessName, logoUrl, body, hashtags, imageUrl }: PreviewPro
 function Gbp({ businessName, logoUrl, title, body, imageUrl }: PreviewProps) {
   return (
     <div className="text-[#202124]">
-      {imageUrl && <PostImage url={imageUrl} className="w-full max-h-56 object-cover" />}
+      {imageUrl && <PlatformImage url={imageUrl} ch="gbp" className="w-full h-auto block" />}
       <div className="px-3.5 py-3">
         <div className="flex items-center gap-2 mb-2">
           <Avatar logoUrl={logoUrl} businessName={businessName} size={28} />
@@ -168,7 +180,7 @@ function Nextdoor({ businessName, logoUrl, body, imageUrl }: PreviewProps) {
         <MoreHorizontal className="w-5 h-5 text-[#767676]" />
       </div>
       <div className="px-3.5 py-2"><p className="whitespace-pre-wrap break-words leading-snug">{body || <span className="italic text-gray-400">{PLACEHOLDER}</span>}</p></div>
-      {imageUrl && <PostImage url={imageUrl} className="w-full max-h-64 object-cover" />}
+      {imageUrl && <PlatformImage url={imageUrl} ch="nextdoor" className="w-full h-auto block" />}
       <div className="flex items-center gap-6 border-t border-gray-200 mt-1 px-3.5 py-2 text-[#767676] text-[12px] font-medium">
         <span className="flex items-center gap-1.5"><ThumbsUp className="w-4 h-4" /> Like</span>
         <span className="flex items-center gap-1.5"><MessageCircle className="w-4 h-4" /> Reply</span>
@@ -192,7 +204,7 @@ function LinkedIn({ businessName, logoUrl, body, hashtags, imageUrl }: PreviewPr
         <MoreHorizontal className="w-5 h-5 text-[rgba(0,0,0,0.6)]" />
       </div>
       <div className="px-3 py-2"><Body body={body} hashtags={hashtags} link="#0a66c2" placeholder={PLACEHOLDER} /></div>
-      {imageUrl && <PostImage url={imageUrl} className="w-full max-h-72 object-cover" />}
+      {imageUrl && <PlatformImage url={imageUrl} ch="linkedin" className="w-full h-auto block" />}
       <div className="flex items-center justify-around border-t border-gray-200 mt-1 px-2 py-1.5 text-[rgba(0,0,0,0.6)] text-[12px] font-semibold">
         <span className="flex items-center gap-1.5"><ThumbsUp className="w-4 h-4" /> Like</span>
         <span className="flex items-center gap-1.5"><MessageCircle className="w-4 h-4" /> Comment</span>
