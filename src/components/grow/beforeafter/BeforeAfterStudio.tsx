@@ -13,6 +13,7 @@ import {
   BRAND_ACCENT, type LayoutKey, type Focus, type BrandInfo,
 } from '@/lib/beforeafter/layouts'
 import { loadImage, averageLuminance, prefetch } from '@/lib/beforeafter/imageLoad'
+import { scorePairUrls, blendPairScore } from '@/lib/beforeafter/imageQuality'
 import { getPropertyContext, type PropertyIntelligence } from '@/lib/ai/propertyContext'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card } from '@/components/ui/Card'
@@ -256,6 +257,39 @@ export function BeforeAfterStudio() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Deterministic pixel quality per pair (0..100), computed client-side once the
+  // photos load — reuses the ONE image-ranking engine (lib/beforeafter/imageQuality).
+  const [pixelScores, setPixelScores] = useState<Record<string, number>>({})
+
+  // The single blended rank: AI Vision leads when present, else pixels lead the
+  // metadata floor (buildPairs.score). Manual override (before/after swap) is
+  // separate and always wins in the composer.
+  const blendOf = useCallback((p: BeforeAfterPair): number =>
+    blendPairScore({ meta: p.score, image: pixelScores[p.jobId] ?? null, ai: aiRanks[p.jobId]?.score ?? null }),
+    [pixelScores, aiRanks])
+
+  // Gallery order = strongest first, by the blended score. Derived, so it re-ranks
+  // live as pixel scores resolve or the AI pass returns — without mutating `pairs`.
+  const orderedPairs = useMemo(() => [...pairs].sort((a, b) => blendOf(b) - blendOf(a)), [pairs, blendOf])
+
+  // Assess each pair's photos once (bounded; loadImage is cached so the preview
+  // reuses the bytes). Never throws — a pair that can't be read just keeps its floor.
+  useEffect(() => {
+    if (!pairs.length) return
+    let alive = true
+    ;(async () => {
+      const next: Record<string, number> = {}
+      for (const p of pairs.slice(0, 12)) {
+        if (pixelScores[p.jobId] != null) continue
+        const s = await scorePairUrls(p.before.url, p.after.url)
+        if (s) next[p.jobId] = s.score
+      }
+      if (alive && Object.keys(next).length) setPixelScores(prev => ({ ...prev, ...next }))
+    })()
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pairs])
+
   const selected = useMemo(() => pairs.find(p => p.jobId === selectedJobId) || null, [pairs, selectedJobId])
 
   // Resolve current before/after photos honoring per-pair swaps.
@@ -316,14 +350,16 @@ export function BeforeAfterStudio() {
   }, [selected, presetKey, buildInput])
 
   // ── Prefetch the neighbouring pairs so the next click renders instantly ──────
+  // Uses the VISIBLE order (orderedPairs) so we warm the tiles actually adjacent
+  // in the gallery, not the raw meta order.
   useEffect(() => {
     if (!selected) return
-    const i = pairs.findIndex(p => p.jobId === selected.jobId)
+    const i = orderedPairs.findIndex(p => p.jobId === selected.jobId)
     if (i === -1) return
-    for (const n of [pairs[i - 1], pairs[i + 1]]) {
+    for (const n of [orderedPairs[i - 1], orderedPairs[i + 1]]) {
       if (n) { prefetch(n.before.url); prefetch(n.after.url) }
     }
-  }, [selected, pairs])
+  }, [selected, orderedPairs])
 
   // ── Property Intelligence (reuse the shared brain, never re-analyse) ─────────
   // When the selected pair changes, read any cached analysis for its property
@@ -342,9 +378,9 @@ export function BeforeAfterStudio() {
   // ── Keyboard accelerators (← → switch pairs · D download) ────────────────────
   // Pure shortcuts to actions that already exist; ignored while typing in a field.
   function goRelative(delta: number) {
-    const i = pairs.findIndex(p => p.jobId === selectedJobId)
+    const i = orderedPairs.findIndex(p => p.jobId === selectedJobId)
     if (i === -1) return
-    const next = pairs[i + delta]
+    const next = orderedPairs[i + delta]
     if (next) setSelectedJobId(next.jobId)
   }
   // Refresh the latest handlers every render so the once-bound listener never goes stale.
@@ -452,7 +488,7 @@ export function BeforeAfterStudio() {
 
     // Nothing new to analyse — reuse the saved scores and just jump to the best.
     if (!pool.length) {
-      const best = [...pairs].sort((a, b) => (aiRanks[b.jobId]?.score ?? b.score) - (aiRanks[a.jobId]?.score ?? a.score))[0]
+      const best = [...pairs].sort((a, b) => blendOf(b) - blendOf(a))[0]
       if (best) setSelectedJobId(best.jobId)
       setAiNote('Every pair is already scored — reusing the saved analysis (no re-run).')
       return
@@ -642,9 +678,9 @@ export function BeforeAfterStudio() {
       {/* Gallery — only shown when there's an actual choice between pairs. */}
       {pairs.length > 1 && (
       <div ref={galleryRef} className="flex gap-3 overflow-x-auto pb-2 -mx-1 px-1">
-        {pairs.map(p => {
+        {orderedPairs.map(p => {
           const rank = aiRanks[p.jobId]
-          const score = rank?.score ?? p.score
+          const score = Math.round(blendOf(p))
           const isSel = p.jobId === selectedJobId
           return (
             <button key={p.jobId} data-pair={p.jobId} onClick={() => setSelectedJobId(p.jobId)}

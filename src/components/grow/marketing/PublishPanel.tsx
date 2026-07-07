@@ -145,7 +145,7 @@ export function PublishPanel({ piece, ch, userId, hasPhoto, onSavePhoto, beforeP
       )}
 
       {published ? (
-        <p className="text-xs text-emerald-400 inline-flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5" /> Posted{currentJob?.published_at ? '' : ''}.</p>
+        <p className="text-xs text-emerald-400 inline-flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5" /> Posted.</p>
       ) : manualReady ? (
         // A queued manual post (incl. a scheduled one that came due) — always completable.
         <div className="space-y-2">

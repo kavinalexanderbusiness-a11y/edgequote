@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import { MoreHorizontal, ThumbsUp, MessageCircle, Share2, Send, Heart, Bookmark, Repeat2, Globe } from 'lucide-react'
 import type { MarketingChannel } from '@/lib/marketing/types'
 import { loadImage } from '@/lib/beforeafter/imageLoad'
@@ -57,13 +57,15 @@ function PlatformImage({ url, ch, className }: { url: string; ch: MarketingChann
 
 const PLACEHOLDER = 'Your post will appear here as you generate it…'
 
+// The preview is a faithful but READ-ONLY mock: default cursor + non-selectable +
+// pointer-events-none so it never looks or behaves like a text field. Defined at
+// module scope so ChannelPreview re-renders (every caption keystroke) don't remount
+// the subtree — including the PlatformImage <canvas>, which would otherwise re-crop.
+function Card({ children }: { children: ReactNode }) {
+  return <div aria-hidden className="rounded-xl overflow-hidden border border-gray-200 shadow-sm bg-white text-[13px] cursor-default select-none pointer-events-none">{children}</div>
+}
+
 export function ChannelPreview(props: PreviewProps) {
-  // The preview is a faithful but READ-ONLY mock: default cursor + non-selectable +
-  // pointer-events-none so it never looks or behaves like a text field. The caption
-  // is only ever edited in the composer above.
-  const Card = ({ children }: { children: React.ReactNode }) => (
-    <div aria-hidden className="rounded-xl overflow-hidden border border-gray-200 shadow-sm bg-white text-[13px] cursor-default select-none pointer-events-none">{children}</div>
-  )
   switch (props.ch) {
     case 'facebook': return <Card><Facebook {...props} /></Card>
     case 'instagram': return <Card><Instagram {...props} /></Card>

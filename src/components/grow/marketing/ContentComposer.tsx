@@ -214,8 +214,9 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
           <span className="text-xs font-bold uppercase tracking-wide text-accent inline-flex items-center gap-1.5">
             <Pencil className="w-3.5 h-3.5" /> Your caption
           </span>
-          <span className="text-[11px] text-ink-faint">Type or edit here · {def.label}</span>
+          <span className="text-[11px] text-ink-faint">{def.label}</span>
         </div>
+        <p className="text-[11px] text-ink-muted -mt-1.5">{def.why}</p>
         {def.usesTitle && (
           <input
             value={title}

@@ -134,6 +134,16 @@ export function MarketingCalendar({ userId, aiEnabled, openPlan }: { userId: str
     const saved = await setSchedule(supabase, p.id, null)
     if (saved) { setPieces(prev => prev.filter(x => x.id !== p.id)); setDrafts(prev => [saved, ...prev]); setSelected(null) }
   }
+  // Tap-based scheduling (works on touch where drag-and-drop doesn't).
+  async function scheduleOn(p: ContentPiece, dayKey: string) {
+    const scheduledFor = `${dayKey}T09:00:00.000Z`
+    const saved = await setSchedule(supabase, p.id, scheduledFor)
+    if (saved) {
+      setDrafts(prev => prev.filter(x => x.id !== p.id))
+      setPieces(prev => [...prev.filter(x => x.id !== p.id), saved])
+      setSelected(saved)
+    }
+  }
   async function publish(p: ContentPiece) {
     const saved = await markPublished(supabase, p.id)
     if (saved) { setPieces(prev => prev.map(x => x.id === p.id ? saved : x)); setSelected(saved) }
@@ -192,7 +202,7 @@ export function MarketingCalendar({ userId, aiEnabled, openPlan }: { userId: str
         {/* Draft tray — drag onto a day to schedule */}
         <div className="space-y-3">
           {selected && (
-            <PieceDetail piece={selected} onClose={() => setSelected(null)} onUnschedule={() => unschedule(selected)} onPublish={() => publish(selected)} onFail={() => fail(selected)} />
+            <PieceDetail piece={selected} onClose={() => setSelected(null)} onUnschedule={() => unschedule(selected)} onPublish={() => publish(selected)} onFail={() => fail(selected)} onSchedule={dayKey => scheduleOn(selected, dayKey)} />
           )}
           <Card className="p-3 space-y-2">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Unscheduled drafts · {drafts.length}</p>
@@ -360,11 +370,13 @@ function DraftChip({ piece, setDragId, onSelect }: { piece: ContentPiece; setDra
 }
 
 // ── Selected piece detail ──
-function PieceDetail({ piece, onClose, onUnschedule, onPublish, onFail }: {
-  piece: ContentPiece; onClose: () => void; onUnschedule: () => void; onPublish: () => void; onFail: () => void
+function PieceDetail({ piece, onClose, onUnschedule, onPublish, onFail, onSchedule }: {
+  piece: ContentPiece; onClose: () => void; onUnschedule: () => void; onPublish: () => void; onFail: () => void; onSchedule: (dayKey: string) => void
 }) {
   const def = channelDef(piece.channel)
   const [copied, setCopied] = useState(false)
+  const [pickDate, setPickDate] = useState(false)
+  const [date, setDate] = useState(() => (piece.scheduled_for ? piece.scheduled_for.slice(0, 10) : key(new Date())))
   function copy() {
     const text = [piece.body, piece.hashtags.map(h => `#${h}`).join(' ')].filter(Boolean).join('\n\n')
     navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) })
@@ -382,9 +394,16 @@ function PieceDetail({ piece, onClose, onUnschedule, onPublish, onFail }: {
         <Button size="sm" onClick={copy}>{copied ? <><Check className="w-3.5 h-3.5" /> Copied</> : <><Copy className="w-3.5 h-3.5" /> Copy</>}</Button>
         <Button size="sm" variant="secondary" onClick={() => window.open(def.openUrl, '_blank')}><ExternalLink className="w-3.5 h-3.5" /> Open</Button>
         {piece.status !== 'published' && <Button size="sm" variant="secondary" onClick={onPublish}><CircleCheck className="w-3.5 h-3.5" /> Mark posted</Button>}
+        {piece.status !== 'published' && <Button size="sm" variant="secondary" onClick={() => setPickDate(o => !o)}><CalendarPlus className="w-3.5 h-3.5" /> {piece.scheduled_for ? 'Reschedule' : 'Schedule'}</Button>}
         {piece.scheduled_for && piece.status !== 'published' && <Button size="sm" variant="ghost" onClick={onUnschedule}><Clock className="w-3.5 h-3.5" /> Unschedule</Button>}
         {piece.status === 'scheduled' && <Button size="sm" variant="ghost" onClick={onFail}><TriangleAlert className="w-3.5 h-3.5" /> Mark failed</Button>}
       </div>
+      {pickDate && piece.status !== 'published' && (
+        <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+          <input type="date" value={date} onChange={e => setDate(e.target.value)} className="bg-bg-tertiary border border-border rounded-lg px-2 py-1 text-xs text-ink" />
+          <Button size="sm" onClick={() => { onSchedule(date); setPickDate(false) }}>Set date</Button>
+        </div>
+      )}
     </Card>
   )
 }

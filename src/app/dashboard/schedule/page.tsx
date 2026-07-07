@@ -94,6 +94,9 @@ export default function SchedulePage() {
   // One-click undo for the last move/delete/done.
   const [undoAction, setUndoAction] = useState<{ label: string; run: () => Promise<void> } | null>(null)
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Fire the marketing auto-draft at most once per job per session, so a
+  // complete → undo → re-complete can't kick off overlapping draft generations.
+  const autoDraftFired = useRef<Set<string>>(new Set())
   const [recurrenceLabels, setRecurrenceLabels] = useState<Record<string, string>>({})
   const [recurrences, setRecurrences] = useState<Record<string, JobRecurrence>>({})
   const [quotesById, setQuotesById] = useState<Record<string, QuoteLite>>({})
@@ -108,7 +111,7 @@ export default function SchedulePage() {
   const [workStartTime, setWorkStartTime] = useState('08:00')
   const [capacityHours, setCapacityHours] = useState(8)
   const [defaultCrew, setDefaultCrew] = useState(1)
-  const [automations, setAutomations] = useState<Automations>({ reminder: true, job_complete: true, review: true })
+  const [automations, setAutomations] = useState<Automations>({ reminder: true, job_complete: true, review: true, marketing_draft: true })
   const [showOptimize, setShowOptimize] = useState(false)
   const [showRainCenter, setShowRainCenter] = useState(false)
   // Pre-scoped launch from an auto-suggestion (vs. the manual Optimize button).
@@ -1108,6 +1111,13 @@ export default function SchedulePage() {
     // Automated job-complete message (opt-in + dedupe are enforced by the route).
     if (automations.job_complete && job.customer_id) {
       fetch('/api/comms/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ customerId: job.customer_id, template: 'job_complete', jobId: job.id, dedupe: true }) }).catch(() => {})
+    }
+    // Best-effort marketing draft when this job has before+after photos (the route is
+    // idempotent + never publishes; the daily cron is the reliable backstop). Mirrors
+    // the fire-and-forget above — errors are swallowed so completion never breaks.
+    if (automations.marketing_draft && !autoDraftFired.current.has(job.id)) {
+      autoDraftFired.current.add(job.id)
+      fetch(`/api/marketing/auto-draft?jobId=${job.id}`, { method: 'POST' }).catch(() => {})
     }
     await fetchJobs()
     offerUndo('Job completed', async () => {
