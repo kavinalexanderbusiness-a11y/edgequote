@@ -8,7 +8,6 @@ import { Coord } from '@/lib/geo'
 import { ProspectContext, loadProspectContext, assessProspect } from '@/lib/prospect'
 import { PricePackagePanel, CadenceSelection } from '@/components/pricing/PricePackagePanel'
 import { DecisionSummary } from '@/components/pricing/DecisionSummary'
-import { PriceIntelligence } from '@/components/pricing/PriceIntelligence'
 import { AutoMeasureBanner } from '@/components/measure/AutoMeasureBanner'
 import { recordMeasurement, neighborhoodOf, AutoMeasureResult } from '@/lib/autoMeasure'
 import { DEFAULT_CREW_COST, crewCostPerHour as resolveCrewCost } from '@/lib/economics'
@@ -79,6 +78,11 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
   const preview = useRef<any>(null)
   const overrideRef = useRef(0)
   const autoRef = useRef<AutoMeasureResult | null>(null)
+  // The branded "Selected Property" pin (click-through; survives the whole trace).
+  const setCenterMarker = useRef<any>(null)
+  // 'located' = rooftop-accurate pin · 'approx' = low-confidence geocode (amber pin
+  // + warning, never silent) · 'failed' = no pin, owner must verify visually.
+  const [geoStatus, setGeoStatus] = useState<'none' | 'located' | 'approx' | 'failed'>('none')
 
   const [ready, setReady] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -173,6 +177,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
         if (cancelled || !mapEl.current) return
 
         let center: { lat: number; lng: number } | null = null
+        let precise = false
         if (address) {
           try {
             const res = await fetch('/api/geocode', {
@@ -183,11 +188,13 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
             const data = await res.json()
             if (res.ok && typeof data.lat === 'number') {
               center = { lat: data.lat, lng: data.lng }
+              precise = data.precise !== false // older API shape (no flag) = trust it
               if (typeof data.neighborhood === 'string') setHoodName(data.neighborhood)
             }
           } catch { /* ignore */ }
         }
         if (center) setCenter(center) // route-density context for the pricing package
+        setGeoStatus(center ? (precise ? 'located' : 'approx') : (address ? 'failed' : 'none'))
         if (!center) center = { lat: 51.0447, lng: -114.0719 }
         // Re-check after the geocode await — the modal may have been closed.
         if (cancelled || !mapEl.current) return
@@ -199,6 +206,35 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
           // Reliable single-click placement (see MeasureTool for the rationale).
           disableDoubleClickZoom: true, clickableIcons: false, gestureHandling: 'greedy',
         })
+
+        // ── Selected-property marker — instantly obvious WHICH lot is being quoted.
+        // Branded pin + label, click-through (clickable:false) so tracing is never
+        // blocked; stays up for the whole session. Skipped when geocoding failed;
+        // amber + "approximate" when the address didn't resolve to a rooftop.
+        if (setCenterMarker.current) { setCenterMarker.current.setMap(null); setCenterMarker.current = null }
+        if (address && gmap.current) {
+          const brand = precise ? '#00C896' : '#F59E0B'
+          setCenterMarker.current = new g.maps.Marker({
+            position: center, map: gmap.current, clickable: false, zIndex: 900,
+            title: precise ? 'Selected Property' : 'Approximate location',
+            label: {
+              text: precise ? 'Selected Property' : 'Approximate — verify',
+              color: '#FFFFFF', fontSize: '11px', fontWeight: '700',
+            },
+            icon: {
+              path: g.maps.SymbolPath.CIRCLE, scale: 9,
+              fillColor: brand, fillOpacity: 1,
+              strokeColor: '#FFFFFF', strokeWeight: 2.5,
+              labelOrigin: new g.maps.Point(0, -2.6),
+            },
+          })
+          // Opening pulse (3 beats) so the eye lands on the lot immediately —
+          // same animation style as the click feedback.
+          const pulseAt = (delay: number) => setTimeout(() => {
+            if (!cancelled && gmap.current) flashClick(new g.maps.LatLng(center!.lat, center!.lng))
+          }, delay)
+          pulseAt(150); pulseAt(650); pulseAt(1150)
+        }
         gmap.current.addListener('click', (e: any) => {
           flashClick(e.latLng)
           currentPath.current = [...currentPath.current, e.latLng]
@@ -219,6 +255,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
       if (g?.maps?.event && gmap.current) g.maps.event.clearInstanceListeners(gmap.current)
       committedOverlays.current.forEach(o => o.setMap(null)); committedOverlays.current = []
       currentOverlay.current?.setMap(null); currentOverlay.current = null
+      setCenterMarker.current?.setMap(null); setCenterMarker.current = null
       preview.current?.setMap(null); preview.current = null
       gmap.current = null
     }
@@ -299,24 +336,6 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
     })
   }
 
-  // Apply the win-rate-aware price for the recommended cadence — overrides just that
-  // cadence's field with the learned price; everything else stays the engine package.
-  function applyIntelligent(price: number) {
-    if (!pkg) return
-    recordMeasure()
-    const c = pkg.recommended.cadence
-    onApply({
-      cadence: c,
-      price,
-      oneTime: c === 'one_time' ? price : pkg.oneTime,
-      weekly: c === 'weekly' ? price : pkg.options[0].price,
-      biweekly: c === 'biweekly' ? price : pkg.options[1].price,
-      monthly: c === 'monthly' ? price : pkg.options[2].price,
-      totalSqft,
-      suggested: (c === 'one_time' ? price : pkg.oneTime) + Number(travelFee || 0),
-    })
-  }
-
   return (
     <div className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center p-0 sm:p-4">
       <div className="w-full sm:max-w-3xl bg-bg-secondary border border-border sm:rounded-card max-h-[95vh] overflow-auto">
@@ -357,6 +376,18 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
             </div>
           ) : (
             <>
+              {/* Geocoding honesty — say when the pin is approximate or missing
+                  instead of silently measuring the wrong lot. */}
+              {ready && geoStatus === 'approx' && (
+                <p className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-3 py-2">
+                  The address only resolved approximately — the amber pin may not be the exact lot. Verify before tracing.
+                </p>
+              )}
+              {ready && geoStatus === 'failed' && (
+                <p className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-3 py-2">
+                  Couldn&apos;t locate this address — showing the general area with no property pin. Check the address on the quote.
+                </p>
+              )}
               <div className="relative rounded-card overflow-hidden border border-border">
                 <div ref={mapEl} className="w-full h-[45vh] min-h-[300px] bg-bg-tertiary" />
                 {!ready && (
@@ -407,22 +438,10 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
                     ) : (
                       <PricePackagePanel pkg={pkg} onUse={applySelection} />
                     )}
-                    {/* Service-specific win-rate intelligence — learns from THIS service's
-                        accepted/declined quotes only; sharpens the price above, explains
-                        why, never below your minimum. Standard price until it has history. */}
-                    {serviceType && (
-                      <PriceIntelligence
-                        sqft={totalSqft}
-                        serviceType={serviceType}
-                        cadence={pkg.recommended.cadence}
-                        overgrowth={overgrowth}
-                        propertyId={propertyId}
-                        customerId={customerId}
-                        nearbyCount={nearby}
-                        nearbyRecurring={prospect?.nearbyRecurring ?? null}
-                        onApply={applyIntelligent}
-                      />
-                    )}
+                    {/* Pricing Intelligence intentionally NOT repeated here — it is the
+                        PRIMARY recommendation card in the Quote Builder itself, so the
+                        modal keeps ONE decision surface (verdict + accept) instead of
+                        three competing CTAs. */}
                   </div>
                 ) : (
                   <div className="border-t border-border pt-3 text-xs text-ink-faint">

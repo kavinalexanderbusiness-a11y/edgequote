@@ -62,6 +62,13 @@ const styles = StyleSheet.create({
 function money(n: number) {
   return new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(n)
 }
+
+// What the CUSTOMER should read for each internal status (portal vocabulary).
+const CUSTOMER_STATUS: Record<string, string> = {
+  draft: 'Awaiting approval', sent: 'Awaiting approval',
+  accepted: 'Approved', scheduled: 'Approved',
+  completed: 'Completed', paid: 'Paid', declined: 'Declined',
+}
 function dateStr(s: string | null) {
   // Date-only strings must anchor to LOCAL midnight or the PDF prints yesterday.
   const d = s ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(s) ? s + 'T00:00:00' : s) : new Date()
@@ -127,7 +134,9 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
           </View>
           <View>
             <Text style={styles.quoteBarLabel}>Status</Text>
-            <Text style={styles.quoteBarValue}>{quote.status.charAt(0).toUpperCase() + quote.status.slice(1)}</Text>
+            {/* Customer-facing vocabulary — never internal statuses like "Draft"
+                (the PDF renders BEFORE the draft→sent flip on send). */}
+            <Text style={styles.quoteBarValue}>{CUSTOMER_STATUS[quote.status] ?? 'Awaiting approval'}</Text>
           </View>
         </View>
 
@@ -143,7 +152,7 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
             <Text style={[styles.bodyText, { fontFamily: 'Helvetica-Bold' }]}>
               {lines && lines.length > 1 ? `${quote.service_type} + ${lines.length - 1} more` : quote.service_type}
             </Text>
-            <Text style={styles.muted}>Crew of {quote.crew_size} · {quote.hours} hrs estimated</Text>
+            {/* Crew/hours live in the table's Details column — not repeated here. */}
           </View>
         </View>
 
@@ -165,7 +174,7 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
                 <View key={s.id} style={styles.tableRow}>
                   <View style={styles.cellDesc}>
                     <Text style={styles.td}>{s.service_type}</Text>
-                    {s.notes ? <Text style={styles.muted}>{s.notes}</Text> : s.sort_order === 0 ? <Text style={styles.muted}>Initial / first visit</Text> : null}
+                    {s.notes ? <Text style={styles.muted}>{s.notes}</Text> : s.sort_order === 0 ? <Text style={styles.muted}>First visit</Text> : null}
                     {t.discountAmount > 0 ? <Text style={styles.muted}>Includes {money(t.discountAmount)} discount</Text> : null}
                   </View>
                   <Text style={[styles.td, styles.cellQty]}>{qtyLabel}</Text>
@@ -177,7 +186,7 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
             <View style={styles.tableRow}>
               <View style={styles.cellDesc}>
                 <Text style={styles.td}>{quote.service_type}</Text>
-                <Text style={styles.muted}>Initial / first visit</Text>
+                <Text style={styles.muted}>First visit</Text>
               </View>
               <Text style={[styles.td, styles.cellQty]}>{quote.crew_size} crew · {quote.hours} hrs</Text>
               <Text style={[styles.td, styles.cellAmt]}>{money(initialPrice)}</Text>
@@ -195,12 +204,16 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
           ) : null}
         </View>
 
-        {/* Totals */}
+        {/* Totals — the subtotal row only earns its place when it differs from
+            the single line above it (multi-service or a travel fee); otherwise a
+            one-service quote printed the same number three rows in a row. */}
         <View style={styles.totals}>
-          <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>{lines && lines.length > 1 ? 'Services subtotal' : 'Initial / first visit'}</Text>
-            <Text style={styles.totalValue}>{money(initialPrice)}</Text>
-          </View>
+          {((lines && lines.length > 1) || quote.travel_fee > 0) ? (
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>{lines && lines.length > 1 ? 'Services subtotal' : 'First visit'}</Text>
+              <Text style={styles.totalValue}>{money(initialPrice)}</Text>
+            </View>
+          ) : null}
           {quote.travel_fee > 0 ? (
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>Travel Fee</Text>
@@ -208,9 +221,18 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
             </View>
           ) : null}
           <View style={styles.grandRow}>
-            <Text style={styles.grandLabel}>First Invoice Total</Text>
+            {/* "Quote Total" unless maintenance options follow — then "First Visit
+                Total" is the honest headline. Never "invoice" on a quote. */}
+            <Text style={styles.grandLabel}>{hasMaintenance ? 'First Visit Total' : 'Quote Total'}</Text>
             <Text style={styles.grandValue}>{money(quote.total)}</Text>
           </View>
+          {Number(settings?.gst_percent) > 0 ? (
+            // The invoice adds GST on top of this total — say so on the quote, or
+            // the first bill looks like a bait-and-switch.
+            <Text style={[styles.muted, { textAlign: 'right', marginTop: 3 }]}>
+              Plus GST ({Number(settings?.gst_percent)}%) — added on your invoice
+            </Text>
+          ) : null}
         </View>
 
         {/* Ongoing maintenance options */}

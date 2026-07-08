@@ -17,7 +17,7 @@ import { useBulkSelect } from '@/hooks/useBulkSelect'
 import { BulkActionBar, SelectCheckbox, SelectAllToggle, type BulkAction } from '@/components/ui/BulkActions'
 import { exportRowsToCsv } from '@/lib/csv'
 import { addDays, format as formatDfn, parseISO } from 'date-fns'
-import { Search, Trash2, ArrowRight, Bell, Send, FileText, Copy, Download } from 'lucide-react'
+import { Search, Trash2, Bell, Send, FileText, Copy, Download } from 'lucide-react'
 
 interface QuoteListProps {
   quotes: Quote[]
@@ -219,7 +219,9 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
             className="w-full bg-surface border border-border-strong rounded-xl pl-10 pr-4 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
           />
         </div>
-        <div className="flex items-center gap-1.5 flex-wrap">
+        {/* One scrollable row on phones (the wrap made a 3-row wall of pills
+            before any quotes); wraps normally on desktop. */}
+        <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto sm:flex-wrap sm:overflow-visible pb-1 sm:pb-0">
           {followUpCount > 0 && (
             <button
               onClick={() => setFollowUpOnly(v => !v)}
@@ -271,7 +273,7 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
               <thead>
                 <tr className="border-b border-border">
                   <th className="w-10 px-3 py-3" aria-label="Select" />
-                  <th className="text-left px-3 sm:px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide">Quote #</th>
+                  <th className="text-left px-3 sm:px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide hidden sm:table-cell">Quote #</th>
                   <th className="text-left px-3 sm:px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide">Customer</th>
                   <th className="text-left px-3 sm:px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide hidden md:table-cell">Service</th>
                   <th className="text-left px-3 sm:px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide">Total</th>
@@ -288,7 +290,9 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
                     <td className="px-3 py-3.5" onClick={e => e.stopPropagation()}>
                       <SelectCheckbox checked={sel.isSelected(q.id)} onToggle={shift => sel.toggle(q.id, shift)} />
                     </td>
-                    <td className="px-3 sm:px-5 py-3.5 font-mono text-xs text-ink-muted">
+                    {/* Hidden on phones — the follow-up state it carried is already
+                        shown as "Sent Xd ago · follow up" under the customer name. */}
+                    <td className="px-3 sm:px-5 py-3.5 font-mono text-xs text-ink-muted hidden sm:table-cell">
                       <span className="flex items-center gap-1.5">
                         {needsFollowUp(q) && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" title="Needs follow-up" />}
                         {q.quote_number}
@@ -316,11 +320,8 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </Button>
-                        <Link href={`/dashboard/quotes/${q.id}`}>
-                          <Button variant="ghost" size="sm">
-                            <ArrowRight className="w-3.5 h-3.5" />
-                          </Button>
-                        </Link>
+                        {/* No arrow button — the whole row navigates (one less
+                            tap target squeezing phone rows). */}
                       </div>
                     </td>
                   </tr>

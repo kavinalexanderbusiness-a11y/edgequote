@@ -226,9 +226,13 @@ export async function POST(req: NextRequest) {
   }
 
   // ── Refund ────────────────────────────────────────────────────────────────
-  // A FULL refund reverts the invoice to unpaid + marks the payment refunded (so
-  // revenue stops counting it); a partial refund only notifies. Idempotent: the
-  // invoice flip is guarded by .eq('status','paid') and the notification is deduped.
+  // EVERY refund (full or partial) lands in the LEDGER as a negative payment row
+  // for the not-yet-recorded delta; the recompute_invoice_paid trigger then derives
+  // amount_paid + status (paid → partial → unpaid) — the webhook never writes
+  // invoice status directly (a multi-payment invoice must not flip to 'unpaid'
+  // because ONE of its charges was refunded). Idempotent two ways: the row's
+  // unique key encodes the CUMULATIVE refunded amount, and the delta is computed
+  // against refund rows already recorded for this charge.
   if (event.type === 'charge.refunded') {
     const ch = event.data.object as { id: string; payment_intent?: string | null; amount?: number; amount_refunded?: number; refunded?: boolean }
     const piId = typeof ch.payment_intent === 'string' ? ch.payment_intent : null
@@ -239,17 +243,29 @@ export async function POST(req: NextRequest) {
         const refunded = (ch.amount_refunded ?? 0) / 100
         const full = ch.refunded === true || (captured > 0 && refunded >= captured)
         const entityId = p.invoice_id ?? p.id
-        if (full && p.invoice_id) {
-          const invRes = await sb.from('invoices').update({ status: 'unpaid', payment_method: null, paid_at: null })
-            .eq('id', p.invoice_id).eq('user_id', p.user_id).eq('status', 'paid')
-          if (invRes.error) {
-            console.error('[stripe] refund invoice revert failed:', invRes.error.message)
-            return NextResponse.json({ error: 'db write failed' }, { status: 500 })
+        if (p.invoice_id && refunded > 0) {
+          const { data: prior } = await sb.from('payments').select('amount')
+            .eq('user_id', p.user_id).eq('invoice_id', p.invoice_id).eq('kind', 'payment')
+            .lt('amount', 0).like('stripe_session_id', `refund:${ch.id}:%`)
+          const already = ((prior as { amount: number }[] | null) || []).reduce((s, r) => s + Math.abs(Number(r.amount) || 0), 0)
+          const delta = Math.round((refunded - already) * 100) / 100
+          if (delta > 0.005) {
+            const refRes = await sb.from('payments').upsert({
+              user_id: p.user_id, customer_id: p.customer_id, invoice_id: p.invoice_id,
+              amount: -delta, currency: 'cad', provider: 'stripe', kind: 'payment', method: 'refund',
+              status: 'paid', paid_at: now(),
+              stripe_session_id: `refund:${ch.id}:${Math.round(refunded * 100)}`,
+              stripe_payment_intent: piId,
+              notes: full ? 'Full refund (Stripe)' : 'Partial refund (Stripe)',
+            }, { onConflict: 'stripe_session_id', ignoreDuplicates: true })
+            if (refRes.error) {
+              console.error('[stripe] refund ledger write failed:', refRes.error.message)
+              return NextResponse.json({ error: 'db write failed' }, { status: 500 })
+            }
           }
-          await sb.from('payments').update({ status: 'refunded' }).eq('id', p.id)
         }
         await notifyOnce(p.user_id, 'payment_refunded', entityId, full ? 'Payment refunded' : 'Partial refund',
-          `${p.invoiceNumber ? p.invoiceNumber + ': ' : ''}${cad(refunded)} refunded${full ? ' — the invoice is unpaid again.' : '.'}`, p.customer_id)
+          `${p.invoiceNumber ? p.invoiceNumber + ': ' : ''}${cad(refunded)} refunded${full ? ' — the invoice balance reopened.' : '.'}`, p.customer_id)
       }
     }
   }

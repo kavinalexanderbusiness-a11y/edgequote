@@ -47,7 +47,8 @@ export function PaymentHistory({ settings }: { settings?: BusinessSettings | nul
   }
 
   if (!loaded || rows.length === 0) return null
-  const total = rows.filter(r => r.kind === 'payment' && Number(r.amount) > 0).reduce((s, r) => s + Number(r.amount || 0), 0)
+  const paidRows = rows.filter(r => r.kind === 'payment' && Number(r.amount) > 0)
+  const total = paidRows.reduce((s, r) => s + Number(r.amount || 0), 0)
 
   return (
     <Card>
@@ -56,7 +57,7 @@ export function PaymentHistory({ settings }: { settings?: BusinessSettings | nul
           <p className="text-sm font-semibold text-ink flex items-center gap-2">
             <Wallet className="w-4 h-4 text-accent" /> Payment timeline
           </p>
-          <p className="text-xs text-ink-muted">{formatCurrency(total)} received (last {rows.length})</p>
+          <p className="text-xs text-ink-muted">{formatCurrency(total)} received · last {paidRows.length} payment{paidRows.length !== 1 ? 's' : ''}</p>
         </div>
         <div className="divide-y divide-border">
           {rows.map(r => {

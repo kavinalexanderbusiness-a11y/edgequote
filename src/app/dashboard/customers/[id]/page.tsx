@@ -20,6 +20,7 @@ import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
 import { formatCurrency, formatDate, getInitials } from '@/lib/utils'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { CustomerComms } from '@/components/customers/CustomerComms'
@@ -92,6 +93,7 @@ export default function CustomerDetailPage() {
   const [recurrences, setRecurrences] = useState<JobRecurrence[]>([])
   const [extraTimeline, setExtraTimeline] = useState<TimelineEvent[]>([])
   const [seasons, setSeasons] = useState<ServiceSeasons>(DEFAULT_SEASONS)
+  const [gstPercent, setGstPercent] = useState(0)
   const [pausing, setPausing] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -216,8 +218,9 @@ export default function CustomerDetailPage() {
       }
       setExtraTimeline(extra)
 
-      const { data: settings } = await supabase.from('business_settings').select('service_seasons').eq('user_id', user!.id).maybeSingle()
+      const { data: settings } = await supabase.from('business_settings').select('service_seasons, gst_percent').eq('user_id', user!.id).maybeSingle()
       setSeasons(settingsToSeasons((settings as { service_seasons: unknown } | null)?.service_seasons))
+      setGstPercent(Number((settings as { gst_percent?: number | null } | null)?.gst_percent) || 0)
 
       setLoading(false)
     }
@@ -296,7 +299,7 @@ export default function CustomerDetailPage() {
     setPausing(null)
   }
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading customer...</div>
+  if (loading) return <div className="max-w-5xl space-y-6"><SkeletonTiles count={4} /><SkeletonRows count={5} /></div>
   // Cached customer (if any) keeps showing on a revalidation blip; only when there's
   // genuinely nothing to show do we branch error-vs-not-found.
   if (!customer) return loadError ? (
@@ -328,7 +331,11 @@ export default function CustomerDetailPage() {
   // Collected = money actually received (ledger amount_paid, incl. partial payments);
   // Outstanding = remaining balance across issued invoices.
   const collectedRevenue = invoices.reduce((s, i) => s + (Number(i.amount_paid) || 0), 0)
-  const outstandingRevenue = invoices.filter(i => i.status !== 'draft').reduce((s, i) => s + Math.max(0, Number(i.amount || 0) - (Number(i.amount_paid) || 0)), 0)
+  // GST-inclusive + cancelled excluded — agrees with the Invoices page ledger math.
+  const custGstMult = 1 + (Number(gstPercent) || 0) / 100
+  const outstandingRevenue = invoices
+    .filter(i => i.status !== 'draft' && i.status !== 'cancelled')
+    .reduce((s, i) => s + Math.max(0, Math.round((Number(i.amount || 0) * custGstMult - (Number(i.amount_paid) || 0)) * 100) / 100), 0)
   const avgJobValue = wonQuotes.length > 0 ? bookedRevenue / wonQuotes.length : 0
 
   // ── Upcoming + retention ──

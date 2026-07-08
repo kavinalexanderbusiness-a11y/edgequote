@@ -27,6 +27,7 @@ const FILTERS: { value: '' | InvoiceDisplayStatus; label: string }[] = [
   { value: 'overdue', label: 'Overdue' },
   { value: 'partial', label: 'Partial' },
   { value: 'paid', label: 'Paid' },
+  { value: 'overpaid', label: 'Overpaid' },
   { value: 'cancelled', label: 'Cancelled' },
 ]
 
@@ -43,6 +44,7 @@ export default function InvoicesPage() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [openingId, setOpeningId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [cancellingId, setCancellingId] = useState<string | null>(null)
   const [filter, setFilter] = useState<'' | InvoiceDisplayStatus>('')
   // The ONE shared Send Message dialog, opened for a specific invoice's customer.
   const [msgInvoice, setMsgInvoice] = useState<Invoice | null>(null)
@@ -292,6 +294,13 @@ export default function InvoicesPage() {
           ))}
         </div>
       )}
+      {/* One-line status legend — 'Unpaid' vs 'Sent' is invisible tribal knowledge
+          otherwise (tap the status pill on a row to flip between them). */}
+      {!loading && !loadError && (filter === 'unpaid' || filter === 'sent') && (
+        <p className="text-[11px] text-ink-faint -mt-3">
+          Unpaid = issued but not yet sent to the customer · Sent = delivered, awaiting payment. Tap an invoice&apos;s status pill to switch.
+        </p>
+      )}
 
       {loading ? (
         <SkeletonRows count={6} />
@@ -368,7 +377,7 @@ export default function InvoicesPage() {
                           onClick={() => cycleStatus(inv)}
                           disabled={!clickable}
                           title={clickable ? 'Toggle sent / unpaid' : undefined}
-                          className={`text-[10px] px-2.5 py-1 rounded-full border uppercase tracking-wide font-semibold flex items-center gap-1 ${clickable ? 'transition-opacity hover:opacity-80' : 'cursor-default'} ${INVOICE_STATUS_COLORS[ds]}`}
+                          className={`text-[10px] px-2.5 rounded-full border uppercase tracking-wide font-semibold flex items-center gap-1 ${clickable ? 'py-2 min-h-[36px] transition-opacity hover:opacity-80' : 'py-1 cursor-default'} ${INVOICE_STATUS_COLORS[ds]}`}
                         >
                           {ds === 'paid' && <Check className="w-3 h-3" />}
                           {INVOICE_STATUS_LABELS[ds]}
@@ -403,9 +412,12 @@ export default function InvoicesPage() {
                     )}
                     {/* Cancel (issued, nothing received) — terminal but undoable; drafts keep Delete. */}
                     {inv.status !== 'draft' && inv.status !== 'cancelled' && (Number(inv.amount_paid) || 0) <= 0.01 && (
-                      <Button variant="ghost" size="sm" title="Cancel this invoice"
+                      <Button variant="ghost" size="sm" title="Cancel this invoice" loading={cancellingId === inv.id}
                         onClick={async () => {
+                          if (cancellingId) return
+                          setCancellingId(inv.id)
                           const res = await cancelInvoice(supabase, inv)
+                          setCancellingId(null)
                           if (res.error) { notify.error(res.error); return }
                           fetchInvoices()
                           notify.undo(`${inv.invoice_number} cancelled.`, async () => { await reactivateInvoice(supabase, inv.id); fetchInvoices() })
@@ -414,8 +426,14 @@ export default function InvoicesPage() {
                       </Button>
                     )}
                     {inv.status === 'cancelled' && (
-                      <Button variant="ghost" size="sm" title="Reactivate this invoice"
-                        onClick={async () => { await reactivateInvoice(supabase, inv.id); fetchInvoices(); notify.success(`${inv.invoice_number} reactivated.`) }}>
+                      <Button variant="ghost" size="sm" title="Reactivate this invoice" loading={cancellingId === inv.id}
+                        onClick={async () => {
+                          if (cancellingId) return
+                          setCancellingId(inv.id)
+                          await reactivateInvoice(supabase, inv.id)
+                          setCancellingId(null)
+                          fetchInvoices(); notify.success(`${inv.invoice_number} reactivated.`)
+                        }}>
                         Reactivate
                       </Button>
                     )}
@@ -548,8 +566,8 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
         <div className="flex items-center gap-2 mt-1.5 flex-wrap">
           <div className="flex rounded-lg border border-border-strong overflow-hidden">
             <DiscBtn active={dType === ''} onClick={() => setDType('')}>None</DiscBtn>
-            <DiscBtn active={dType === 'amount'} onClick={() => setDType('amount')}><DollarSign className="w-3.5 h-3.5" /></DiscBtn>
-            <DiscBtn active={dType === 'percent'} onClick={() => setDType('percent')}><Percent className="w-3.5 h-3.5" /></DiscBtn>
+            <DiscBtn active={dType === 'amount'} onClick={() => setDType('amount')} ariaLabel="Dollar discount"><DollarSign className="w-3.5 h-3.5" /></DiscBtn>
+            <DiscBtn active={dType === 'percent'} onClick={() => setDType('percent')} ariaLabel="Percent discount"><Percent className="w-3.5 h-3.5" /></DiscBtn>
           </div>
           {dType && (
             <div className="relative w-36">
@@ -584,9 +602,9 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
   )
 }
 
-function DiscBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+function DiscBtn({ active, onClick, children, ariaLabel }: { active: boolean; onClick: () => void; children: React.ReactNode; ariaLabel?: string }) {
   return (
-    <button type="button" onClick={onClick}
+    <button type="button" onClick={onClick} aria-label={ariaLabel} title={ariaLabel}
       className={cn('px-3 py-2 text-xs font-medium flex items-center gap-1 border-r border-border-strong last:border-r-0 transition-colors',
         active ? 'bg-accent text-black' : 'bg-surface text-ink-muted hover:text-ink')}>
       {children}
