@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { MsgType } from '@/lib/comms/templates'
+import { newClientMessageId } from '@/lib/comms/idempotency'
 import { cn } from '@/lib/utils'
 import { MessageSquare, Mail, Send, Loader2, Check, AlertTriangle } from 'lucide-react'
 
@@ -25,10 +26,12 @@ export function SendComms({ customerId, template, label = 'Send', jobId = null, 
   async function send(channels: ('sms' | 'email')[]) {
     if (!customerId) { setOutcome({ ok: false, text: 'No customer linked.' }); return }
     setBusy(channels.join('+')); setOutcome(null)
+    // One id per click → a double-click / accidental re-fire can't send twice.
+    const clientMessageId = newClientMessageId()
     try {
       const res = await fetch('/api/comms/send', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ customerId, template, channels, jobId, vars }),
+        body: JSON.stringify({ customerId, template, channels, jobId, vars, clientMessageId }),
       })
       setOutcome(summarize(await res.json()))
     } catch (e) {

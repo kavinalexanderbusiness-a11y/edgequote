@@ -76,17 +76,31 @@ export async function uploadPhoto(
     customerId?: string | null
     kind: PhotoKind
     caption?: string | null
+    // Offline support: a STABLE client-generated id makes the storage path
+    // deterministic, so replaying a queued upload can never create a second file
+    // or catalogue row (idempotent). `takenAt` preserves the capture time even when
+    // the photo syncs hours later. Both optional → the online path is unchanged.
+    uploadId?: string
+    takenAt?: string
   },
 ): Promise<JobPhotoView | null> {
-  const blob = await downscale(opts.file)
-  // Stable-enough unique name without a server round-trip. Date.now()+random is
-  // fine in app (client) code — the minifier-closure caveat is workflow-only.
-  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  const path = `${opts.userId}/${opts.propertyId ?? 'unassigned'}/${stamp}.jpg`
+  // Deterministic name from the stable uploadId (or a fresh stamp for the online path).
+  const key = opts.uploadId || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const path = `${opts.userId}/${opts.propertyId ?? 'unassigned'}/${key}.jpg`
 
+  // Idempotency (replay / multi-tab): if this exact object is already catalogued,
+  // return it instead of uploading again. The path is derived from uploadId, so this
+  // dedupes on storage_path with no schema change.
+  if (opts.uploadId) {
+    const { data: existing } = await supabase.from('job_photos').select('*')
+      .eq('user_id', opts.userId).eq('storage_path', path).maybeSingle()
+    if (existing) return { ...(existing as JobPhoto), url: publicUrl(supabase, path) }
+  }
+
+  const blob = await downscale(opts.file)
   const { error: upErr } = await supabase.storage
     .from(PHOTO_BUCKET)
-    .upload(path, blob, { upsert: false, contentType: 'image/jpeg' })
+    .upload(path, blob, { upsert: !!opts.uploadId, contentType: 'image/jpeg' })
   if (upErr) return null
 
   const row = {
@@ -97,6 +111,7 @@ export async function uploadPhoto(
     storage_path: path,
     kind: opts.kind,
     caption: opts.caption ?? null,
+    ...(opts.takenAt ? { taken_at: opts.takenAt } : {}),
   }
   const { data, error } = await supabase.from('job_photos').insert(row).select('*').single()
   if (error || !data) {
@@ -107,17 +122,22 @@ export async function uploadPhoto(
   return { ...(data as JobPhoto), url: publicUrl(supabase, path) }
 }
 
-// Update a photo's caption or before/after tag.
+// Update a photo's caption or before/after tag. Returns whether the write landed so
+// the caller can roll back an optimistic UI change on failure.
 export async function updatePhoto(
   supabase: SupabaseClient,
   id: string,
   patch: Partial<Pick<JobPhoto, 'kind' | 'caption'>>,
-): Promise<void> {
-  await supabase.from('job_photos').update(patch).eq('id', id)
+): Promise<boolean> {
+  const { error } = await supabase.from('job_photos').update(patch).eq('id', id)
+  return !error
 }
 
-// Delete a photo — removes both the catalogue row and the stored file.
-export async function deletePhoto(supabase: SupabaseClient, photo: JobPhoto): Promise<void> {
-  await supabase.from('job_photos').delete().eq('id', photo.id)
+// Delete a photo — removes both the catalogue row and the stored file. Returns whether
+// the catalogue delete succeeded (the file is only removed once the row is gone).
+export async function deletePhoto(supabase: SupabaseClient, photo: JobPhoto): Promise<boolean> {
+  const { error } = await supabase.from('job_photos').delete().eq('id', photo.id)
+  if (error) return false
   await supabase.storage.from(PHOTO_BUCKET).remove([photo.storage_path])
+  return true
 }

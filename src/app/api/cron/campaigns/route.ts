@@ -118,6 +118,14 @@ export async function GET(req: NextRequest) {
 
     for (const c of cands) {
       if (done.has(c.id)) continue
+      // RESERVE-THEN-SEND: claim the (campaign, customer, period) row BEFORE dispatching.
+      // The UNIQUE(campaign_id, customer_id, period_key) makes this atomic — a concurrent
+      // cron invocation (Vercel at-least-once) that already claimed this customer/period
+      // fails the insert and is skipped here, so the customer is never double-messaged.
+      const { error: claimErr } = await supabase.from('crm_campaign_log').insert({
+        user_id: camp.user_id, campaign_id: camp.id, customer_id: c.id, period_key: periodKey, status: 'sending',
+      })
+      if (claimErr) continue   // another run owns this customer/period → skip (no send)
       processed++
       const portalLink = needsPortal ? (await ensurePortalToken(supabase, camp.user_id, c.id).then(t => t ? portalUrl(t) : undefined)) : undefined
       const rendered = renderMessage(templateKey, customOverride, {
@@ -137,14 +145,12 @@ export async function GET(req: NextRequest) {
           status: a.status, detail: a.detail ?? null, message_id: a.sent ? res.messageId : null,
         })
       }
-      // Campaign dedupe + history (one row per customer per period). Recorded even
-      // when nothing sent (no consent), so it won't be retried within the period.
+      // Finalize the claimed row (UPDATE, not a second insert) with the real outcome.
       const overall = res.sentChannels.length ? 'sent' : (res.attempts.every(a => a.status === 'skipped') ? 'skipped' : 'failed')
       const firstDetail = res.attempts.find(a => !a.sent)?.detail ?? null
-      await supabase.from('crm_campaign_log').insert({
-        user_id: camp.user_id, campaign_id: camp.id, customer_id: c.id, period_key: periodKey,
+      await supabase.from('crm_campaign_log').update({
         channel: res.sentChannels[0] ?? null, status: overall, detail: firstDetail, message_id: res.messageId,
-      })
+      }).eq('campaign_id', camp.id).eq('customer_id', c.id).eq('period_key', periodKey)
       if (res.sentChannels.length) sent++
     }
 

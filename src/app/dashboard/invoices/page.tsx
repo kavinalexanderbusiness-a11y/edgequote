@@ -194,6 +194,9 @@ export default function InvoicesPage() {
       customer_name: i.customer_name, address: i.address, service_type: i.service_type,
       amount: i.amount, status: i.status, issued_date: i.issued_date, due_date: i.due_date,
       notes: i.notes, line_items: i.line_items,
+      // Carry the paid state so restoring a Paid invoice keeps its date + method (else a
+      // manually-paid invoice loses its only payment record).
+      paid_at: i.paid_at, payment_method: i.payment_method,
     }
   }
 

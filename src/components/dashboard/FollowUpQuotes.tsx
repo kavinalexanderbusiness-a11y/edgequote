@@ -36,9 +36,10 @@ export function FollowUpQuotes() {
 
   async function patch(q: FollowUpQuote, updates: Record<string, unknown>) {
     setBusy(q.id)
-    await supabase.from('quotes').update(updates).eq('id', q.id)
-    setQuotes(prev => prev.filter(x => x.id !== q.id))
+    const { error } = await supabase.from('quotes').update(updates).eq('id', q.id)
     setBusy(null)
+    if (error) return   // keep the quote on the follow-up radar if the write didn't land
+    setQuotes(prev => prev.filter(x => x.id !== q.id))
   }
 
   const total = quotes.reduce((sum, q) => sum + Number(q.total || 0), 0)

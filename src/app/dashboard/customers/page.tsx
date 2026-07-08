@@ -96,7 +96,8 @@ export default function CustomersPage() {
 
   async function handleEdit(values: CustomerFormValues) {
     if (!editing) return
-    await supabase.from('customers').update(normalize(values)).eq('id', editing.id)
+    const { error } = await supabase.from('customers').update(normalize(values)).eq('id', editing.id)
+    if (error) { toast.error('Could not save the customer: ' + error.message); return }   // keep the form open to retry
 
     // If address changed, update the primary property address too
     if (values.address) {

@@ -105,8 +105,12 @@ export function CampaignManager() {
   }
 
   async function toggleEnabled(c: CrmCampaign) {
-    setCampaigns(prev => prev.map(x => x.id === c.id ? { ...x, enabled: !x.enabled } : x))
-    await supabase.from('crm_campaigns').update({ enabled: !c.enabled }).eq('id', c.id)
+    setCampaigns(prev => prev.map(x => x.id === c.id ? { ...x, enabled: !x.enabled } : x))   // optimistic
+    const { error } = await supabase.from('crm_campaigns').update({ enabled: !c.enabled }).eq('id', c.id)
+    if (error) {
+      setCampaigns(prev => prev.map(x => x.id === c.id ? { ...x, enabled: c.enabled } : x))   // revert — the cron reads the DB flag
+      toast.error('Could not update campaign: ' + error.message)
+    }
   }
   async function del(c: CrmCampaign) {
     const { data: row } = await supabase.from('crm_campaigns').select('*').eq('id', c.id).maybeSingle()

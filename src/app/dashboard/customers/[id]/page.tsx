@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
+import { queueOrRun } from '@/lib/offline/outbox'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { custCacheKey, type CustomerPrefetch } from '@/lib/prefetch'
@@ -227,11 +228,18 @@ export default function CustomerDetailPage() {
   async function saveNotes() {
     if (!customer) return
     setSavingNotes(true)
-    const { error } = await supabase.from('customers').update({ notes: notesValue || null }).eq('id', customer.id)
-    setSavingNotes(false)
-    if (error) { toast.error('Could not save the note: ' + error.message); return }   // keep the editor open
-    setCustomer({ ...customer, notes: notesValue || null })
-    setEditingNotes(false)
+    const patch = { notes: notesValue || null }
+    try {
+      const outcome = await queueOrRun(
+        { kind: 'customer.update', payload: { id: customer.id, patch }, label: `Note · ${customer.name}` },
+        async () => { const { error } = await supabase.from('customers').update(patch).eq('id', customer.id); if (error) throw new Error(error.message) },
+      )
+      setCustomer({ ...customer, notes: patch.notes })
+      setEditingNotes(false)
+      if (outcome === 'queued') toast.info('Saved offline — syncs when you’re back online.')
+    } catch (e) {
+      toast.error('Could not save the note: ' + (e instanceof Error ? e.message : 'unknown error'))   // keep the editor open
+    } finally { setSavingNotes(false) }
   }
 
   function startEditPrefs() {
@@ -242,10 +250,15 @@ export default function CustomerDetailPage() {
     if (!customer) return
     setSavingPrefs(true)
     const row = draftToRow(prefsDraft)
-    const { error } = await supabase.from('customers').update(row).eq('id', customer.id)
-    if (!error) setCustomer({ ...customer, ...row })
-    setSavingPrefs(false)
-    setEditingPrefs(false)
+    try {
+      const outcome = await queueOrRun(
+        { kind: 'customer.update', payload: { id: customer.id, patch: row }, label: `Edit · ${customer.name}` },
+        async () => { const { error } = await supabase.from('customers').update(row).eq('id', customer.id); if (error) throw new Error(error.message) },
+      )
+      setCustomer({ ...customer, ...row })
+      if (outcome === 'queued') toast.info('Saved offline — syncs when you’re back online.')
+    } catch { toast.error('Could not save changes.') }
+    finally { setSavingPrefs(false); setEditingPrefs(false) }
   }
 
   function startEditPropPrefs(p: Property) {

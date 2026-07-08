@@ -64,10 +64,13 @@ export function PushNotificationSettings() {
   }
 
   async function setPref(key: string, value: boolean) {
+    const prev = prefs
     const next = { ...prefs, [key]: value }
     setPrefs(next)   // optimistic
     const { data: { user } } = await supabase.auth.getUser()
-    if (user) await supabase.from('business_settings').update({ notif_prefs: next }).eq('user_id', user.id)
+    if (!user) { setPrefs(prev); return }
+    const { error } = await supabase.from('business_settings').update({ notif_prefs: next }).eq('user_id', user.id)
+    if (error) setPrefs(prev)   // revert on a failed write
   }
 
   const iosNeedsInstall = isIos() && !isStandalone()

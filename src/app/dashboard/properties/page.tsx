@@ -152,7 +152,11 @@ export default function PropertiesPage() {
       const nearby = p.lat != null && p.lng != null ? nearbyJobCount({ lat: p.lat, lng: p.lng }, locatedJobs).count : 0
       const pkg = pricingPackage(sqft, cfg, { overgrowth: 1, nearbyCount: nearby, neighborhoodName: p.neighborhood })
       const rec = buildSavedRecommendation(pkg, estimateVisitMinutes(sqft), { hood: p.neighborhood })
-      const hist = Array.isArray(p.measurement_history) ? p.measurement_history : []
+      // Re-read the history immediately before appending so a concurrent save (a re-measure
+      // from another surface/device) can't be clobbered by this stale-array write.
+      const { data: fresh } = await supabase.from('properties').select('measurement_history').eq('id', p.id).maybeSingle()
+      const freshHist = (fresh as { measurement_history?: unknown } | null)?.measurement_history
+      const hist = Array.isArray(freshHist) ? freshHist : (Array.isArray(p.measurement_history) ? p.measurement_history : [])
       const snapshot = { date: new Date().toISOString(), total_sqft: sqft, recommendation: rec }
       const nextHistory = [...hist, snapshot]
       const { error } = await supabase.from('properties').update({ measurement_history: nextHistory }).eq('id', p.id)

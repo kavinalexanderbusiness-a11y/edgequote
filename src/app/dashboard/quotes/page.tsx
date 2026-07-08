@@ -49,7 +49,17 @@ export default function QuotesPage() {
     setQuotes(p => p.filter(q => q.id !== id))   // optimistic
     const { error } = await supabase.from('quotes').delete().eq('id', id)
     if (error) { setQuotes(prev); toast.error('Could not delete the quote: ' + error.message); return }
-    if (row) toast.undo('Quote deleted', async () => { await supabase.from('quotes').insert(row); fetchQuotes() })
+    if (row) {
+      // Restore must OMIT the GENERATED columns (man_hours/subtotal/total) — re-inserting
+      // them is rejected by Postgres, which would leave a dead "Undo" and lose the quote.
+      const insertable = { ...(row as Record<string, unknown>) }
+      delete insertable.man_hours; delete insertable.subtotal; delete insertable.total
+      toast.undo('Quote deleted', async () => {
+        const { error: rErr } = await supabase.from('quotes').insert(insertable)
+        if (rErr) { toast.error('Could not restore the quote: ' + rErr.message); return }
+        fetchQuotes()
+      })
+    }
   }
 
   return (

@@ -130,7 +130,8 @@ export function NotificationBell() {
   async function markRead(ids: string[]) {
     if (!ids.length) return
     setItems(prev => prev.map(n => ids.includes(n.id) ? { ...n, read: true } : n))
-    await supabase.from('notifications').update({ read: true, read_at: new Date().toISOString() }).in('id', ids)
+    const { error } = await supabase.from('notifications').update({ read: true, read_at: new Date().toISOString() }).in('id', ids)
+    if (error) setItems(prev => prev.map(n => ids.includes(n.id) ? { ...n, read: false } : n))   // revert unread state + badge
   }
   function openItem(n: AppNotification) {
     markRead([n.id]); setOpen(false)

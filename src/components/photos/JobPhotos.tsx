@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { queueOrRun } from '@/lib/offline/outbox'
 import { PhotoKind, PHOTO_KIND_LABELS } from '@/types'
 import { JobPhotoView, listPhotos, uploadPhoto, deletePhoto, updatePhoto } from '@/lib/photos'
 import { formatDate } from '@/lib/utils'
@@ -60,8 +61,24 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', cl
     if (!user) { setBusyKind(null); return }
     const added: JobPhotoView[] = []
     for (const file of files) {
-      const row = await uploadPhoto(supabase, { userId: user.id, file, propertyId, jobId, customerId, kind })
-      if (row) added.push(row)
+      // Stable upload id → deterministic path → idempotent replay (never a dup upload).
+      const uploadId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const takenAt = new Date().toISOString()
+      let row: JobPhotoView | null = null
+      try {
+        // Offline → the File is persisted in the ONE outbox and uploaded on reconnect
+        // through this SAME pipeline; online → uploads now.
+        const outcome = await queueOrRun(
+          { kind: 'photo.upload', payload: { uploadId, userId: user.id, propertyId, jobId: jobId ?? null, customerId: customerId ?? null, kind, caption: null, takenAt, file }, label: `Photo (${kind})` },
+          async () => { row = await uploadPhoto(supabase, { userId: user.id, file, propertyId, jobId, customerId, kind, uploadId, takenAt }); if (!row) throw new Error('upload failed') },
+        )
+        if (outcome === 'ran' && row) added.push(row)
+        else if (outcome === 'queued') {
+          // Optimistic local thumbnail so capture feels instant offline; the real row
+          // replaces it after sync on the next load. Object URL is session-local.
+          added.push({ id: 'pending-' + uploadId, user_id: user.id, job_id: jobId ?? null, property_id: propertyId, customer_id: customerId ?? null, storage_path: '', kind, caption: null, taken_at: takenAt, url: URL.createObjectURL(file) } as JobPhotoView)
+        }
+      } catch { /* real (online) upload failure — skip this file */ }
     }
     if (added.length) setPhotos(prev => [...added, ...prev])
     setBusyKind(null)
@@ -69,22 +86,25 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', cl
 
   async function remove(photo: JobPhotoView) {
     if (!confirm('Delete this photo? This cannot be undone.')) return
+    const snapshot = photos
     setPhotos(prev => prev.filter(p => p.id !== photo.id))
     setLightbox(null)
-    await deletePhoto(supabase, photo)
+    if (!(await deletePhoto(supabase, photo))) setPhotos(snapshot)   // restore on a failed delete
   }
 
   async function retag(photo: JobPhotoView, kind: PhotoKind) {
+    const snapshot = photos
     setPhotos(prev => prev.map(p => p.id === photo.id ? { ...p, kind } : p))
     setLightbox(prev => prev && prev.id === photo.id ? { ...prev, kind } : prev)
-    await updatePhoto(supabase, photo.id, { kind })
+    if (!(await updatePhoto(supabase, photo.id, { kind }))) setPhotos(snapshot)
   }
 
   async function saveCaption(photo: JobPhotoView, caption: string) {
     const clean = caption.trim() || null
+    const snapshot = photos
     setPhotos(prev => prev.map(p => p.id === photo.id ? { ...p, caption: clean } : p))
     setLightbox(prev => prev && prev.id === photo.id ? { ...prev, caption: clean } : prev)
-    await updatePhoto(supabase, photo.id, { caption: clean })
+    if (!(await updatePhoto(supabase, photo.id, { caption: clean }))) setPhotos(snapshot)
   }
 
   const uploading = busyKind !== null

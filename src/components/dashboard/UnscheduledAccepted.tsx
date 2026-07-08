@@ -47,7 +47,7 @@ export function UnscheduledAccepted() {
         .order('is_primary', { ascending: false }).limit(1)
       if (props && props.length > 0) propertyId = props[0].id
     }
-    await supabase.from('jobs').insert({
+    const { error: jobErr } = await supabase.from('jobs').insert({
       user_id: user!.id,
       customer_id: q.customer_id,
       property_id: propertyId,
@@ -60,6 +60,8 @@ export function UnscheduledAccepted() {
       status: 'scheduled',
       notes: q.notes,
     })
+    // If the job wasn't created, DON'T drop the at-risk quote from the safety-net list.
+    if (jobErr) { setScheduling(null); return }
     await supabase.from('quotes').update({ status: 'scheduled' }).eq('id', q.id)
     setQuotes(prev => prev.filter(x => x.id !== q.id))
     setScheduling(null)

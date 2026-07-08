@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { queueOrRun } from '@/lib/offline/outbox'
 import { QuoteStatus, STATUS_LABELS, STATUS_COLORS } from '@/types'
 import { ChevronDown } from 'lucide-react'
 
@@ -28,13 +29,22 @@ export function QuoteStatusControl({ quoteId, status, followUpCount, onChanged }
       updates.accepted_after_followup = (followUpCount ?? 0) > 0
       updates.follow_up_count_at_acceptance = followUpCount ?? 0
     }
-    await supabase.from('quotes').update(updates).eq('id', quoteId)
-    // Stamp the first send time only once (never overwrite the original).
-    if (s === 'sent') {
-      await supabase.from('quotes').update({ sent_at: new Date().toISOString() }).eq('id', quoteId).is('sent_at', null)
+    try {
+      await queueOrRun(
+        { kind: 'quote.update', payload: { id: quoteId, patch: updates }, label: `Quote → ${STATUS_LABELS[s]}` },
+        async () => {
+          const { error } = await supabase.from('quotes').update(updates).eq('id', quoteId)
+          if (error) throw new Error(error.message)
+          // Stamp the first send time only once (never overwrite the original) — online-only nicety.
+          if (s === 'sent') await supabase.from('quotes').update({ sent_at: new Date().toISOString() }).eq('id', quoteId).is('sent_at', null)
+        },
+      )
+    } catch {
+      setCurrent(status)   // hard failure → revert the optimistic status
+    } finally {
+      setSaving(false)
+      onChanged?.(s)
     }
-    setSaving(false)
-    onChanged?.(s)
   }
 
   return (

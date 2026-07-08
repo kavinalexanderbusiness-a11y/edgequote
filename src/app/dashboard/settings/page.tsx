@@ -15,7 +15,7 @@ import { MessageTemplateEditor } from '@/components/settings/MessageTemplateEdit
 import { MessagingUsage } from '@/components/settings/MessagingUsage'
 import { AutomationToggles } from '@/components/settings/AutomationToggles'
 import { PushNotificationSettings } from '@/components/settings/PushNotificationSettings'
-import { BookingLink } from '@/components/settings/BookingLink'
+import { WebsiteIntegration } from '@/components/settings/WebsiteIntegration'
 import { Tabs, type TabItem } from '@/components/ui/Tabs'
 import { useForm, Controller } from 'react-hook-form'
 import { cn } from '@/lib/utils'
@@ -547,7 +547,7 @@ export default function SettingsPage() {
 
       {/* BOOKING */}
       <div className={cn('space-y-6', tab !== 'booking' && 'hidden')}>
-        <BookingLink />
+        <WebsiteIntegration />
       </div>
     </div>
   )

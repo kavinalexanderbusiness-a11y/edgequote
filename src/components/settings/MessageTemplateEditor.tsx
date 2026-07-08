@@ -37,12 +37,16 @@ export function MessageTemplateEditor() {
   async function save() {
     setSaving(true)
     const { data: { user } } = await supabase.auth.getUser()
-    if (user) {
-      const clean: Record<string, string> = {}
-      for (const t of TYPES) { const v = templates[t]?.trim(); if (v) clean[t] = v } // drop empties → use defaults
-      await supabase.from('business_settings').update({ message_templates: clean, review_url: reviewUrl.trim() || null }).eq('user_id', user.id)
-    }
-    setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2000)
+    if (!user) { setSaving(false); return }
+    const clean: Record<string, string> = {}
+    for (const t of TYPES) { const v = templates[t]?.trim(); if (v) clean[t] = v } // drop empties → use defaults
+    // upsert (not update) so a missing settings row can't silently no-op; check the error
+    // so we never flash "Saved" on a write that didn't land.
+    const { error } = await supabase.from('business_settings')
+      .upsert({ user_id: user.id, message_templates: clean, review_url: reviewUrl.trim() || null }, { onConflict: 'user_id' })
+    setSaving(false)
+    if (error) return
+    setSaved(true); setTimeout(() => setSaved(false), 2000)
   }
 
   return (
