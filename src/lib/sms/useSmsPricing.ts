@@ -17,7 +17,8 @@ export async function loadSmsPricing(): Promise<SmsPricing> {
     _promise = (async () => {
       try {
         const supabase = createClient()
-        const { data: { user } } = await supabase.auth.getUser()
+        const { data: { session } } = await supabase.auth.getSession()
+        const user = session?.user
         if (!user) return DEFAULT_SMS_PRICING
         const { data } = await supabase.from('business_settings').select('sms_pricing').eq('user_id', user.id).maybeSingle()
         _cache = resolveSmsPricing((data as { sms_pricing?: unknown } | null)?.sms_pricing)

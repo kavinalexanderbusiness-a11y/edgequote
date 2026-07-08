@@ -69,7 +69,9 @@ export default function NewQuotePage() {
 
   useEffect(() => {
     async function load() {
-      const { data: { user } } = await supabase.auth.getUser()
+      // Local session read — no auth round-trip before the builder's data batch.
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
       const [customersRes, templatesRes, tiersRes, settingsRes] = await Promise.all([
         supabase.from('customers').select('*').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — archived hidden from the picker
         supabase.from('service_templates').select('*').eq('user_id', user!.id).order('sort_order'),

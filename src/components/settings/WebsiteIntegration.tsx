@@ -53,7 +53,8 @@ export function WebsiteIntegration() {
   }, [])
 
   const loadLastLead = useCallback(async () => {
-    const { data: { user } } = await supabase.auth.getUser()
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
     if (!user) return
     const { data } = await supabase.from('website_leads')
       .select('id, created_at, contact_name, requested_services, status')
@@ -71,7 +72,8 @@ export function WebsiteIntegration() {
   useEffect(() => {
     let active = true
     ;(async () => {
-      const { data: { user } } = await supabase.auth.getUser()
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
       if (!user) { if (active) setLoaded(true); return }
       const { data } = await supabase.from('business_settings')
         .select('booking_enabled, booking_token, website_lead_hourly_limit').eq('user_id', user.id).maybeSingle()

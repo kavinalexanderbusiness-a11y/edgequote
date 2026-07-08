@@ -36,7 +36,8 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', cl
   useEffect(() => {
     let alive = true
     async function load() {
-      const { data: { user } } = await supabase.auth.getUser()
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
       if (!user) { if (alive) setLoading(false); return }
       const rows = await listPhotos(supabase, user.id, { jobId, propertyId })
       if (alive) { setPhotos(rows); setLoading(false) }

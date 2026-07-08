@@ -24,7 +24,8 @@ export function MessageTemplateEditor() {
   const [saved, setSaved] = useState(false)
 
   async function load() {
-    const { data: { user } } = await supabase.auth.getUser()
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
     if (!user) { setLoading(false); return }
     const { data } = await supabase.from('business_settings').select('message_templates, review_url').eq('user_id', user.id).maybeSingle()
     const d = data as { message_templates: Partial<Record<MsgType, string>> | null; review_url: string | null } | null

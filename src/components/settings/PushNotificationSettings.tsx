@@ -40,7 +40,8 @@ export function PushNotificationSettings() {
       const s = await getPushState()
       if (!active) return
       setState(s)
-      const { data: { user } } = await supabase.auth.getUser()
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
       if (user) {
         const { data } = await supabase.from('business_settings').select('notif_prefs').eq('user_id', user.id).maybeSingle()
         if (active) setPrefs(((data as { notif_prefs?: Record<string, boolean> } | null)?.notif_prefs) || {})

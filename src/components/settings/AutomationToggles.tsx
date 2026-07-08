@@ -20,7 +20,8 @@ export function AutomationToggles() {
   const [loading, setLoading] = useState(true)
 
   async function load() {
-    const { data: { user } } = await supabase.auth.getUser()
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
     if (!user) { setLoading(false); return }
     const { data } = await supabase.from('business_settings').select('automations').eq('user_id', user.id).maybeSingle()
     setAuto(resolveAutomations((data as { automations: unknown } | null)?.automations))

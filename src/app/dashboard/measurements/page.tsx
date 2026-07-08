@@ -15,7 +15,8 @@ export default function MeasurementsPage() {
   useEffect(() => {
     (async () => {
       const supabase = createClient()
-      const { data: { user } } = await supabase.auth.getUser()
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
       if (user) setStats(await measurementStats(supabase, user.id))
       setLoading(false)
     })()

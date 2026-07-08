@@ -58,7 +58,9 @@ export default function NeighborsPage() {
   const [working, setWorking] = useState<string | null>(null)
 
   async function load() {
-    const { data: { user } } = await supabase.auth.getUser()
+    // Local session read — no auth round-trip before the data batch below.
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
     if (!user) { setLoading(false); return }
     const [lRes, cRes, pRes, jRes, qRes, rRes] = await Promise.all([
       supabase.from('neighbor_leads').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),

@@ -71,7 +71,8 @@ export default function SaturationPage() {
   useEffect(() => {
     async function load() {
       try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
       if (!user) { setLoadError('Session expired — sign in again.'); return }
       const [jRes, pRes, qRes, cRes, rRes, sRes] = await Promise.all([
         supabase.from('jobs').select('id, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, property_id, properties(lat, lng, city, postal_code, neighborhood)').eq('user_id', user!.id),

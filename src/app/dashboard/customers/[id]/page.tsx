@@ -140,13 +140,27 @@ export default function CustomerDetailPage() {
 
   useEffect(() => {
     async function load() {
-      const { data: { user } } = await supabase.auth.getUser()
-      const [cRes, pRes, qRes, jRes, iRes] = await Promise.all([
+      // Local session read (no GoTrue round-trip). ONE batch for everything that
+      // depends only on the customer id / user id — the referrer name + referred-revenue
+      // are the only reads that need a prior result, so they run in a tiny second
+      // round-trip below. This replaces ~5 serial hops that also re-ran in full on every
+      // realtime refresh.
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
+      const [cRes, pRes, qRes, jRes, iRes, refRes, recRes, mRes, payRes, srRes, setRes] = await Promise.all([
         supabase.from('customers').select('*').eq('id', id).eq('user_id', user!.id).single(),
         supabase.from('properties').select('*').eq('customer_id', id).order('is_primary', { ascending: false }),
         supabase.from('quotes').select('*').eq('customer_id', id).order('created_at', { ascending: false }),
         supabase.from('jobs').select('*').eq('customer_id', id).order('scheduled_date', { ascending: true }),
         supabase.from('invoices').select('*').eq('customer_id', id).order('created_at', { ascending: false }),
+        // Advocates this customer referred (needs only id).
+        supabase.from('customers').select('id, name').eq('referred_by_customer_id', id),
+        supabase.from('job_recurrences').select('*').eq('customer_id', id),
+        // Unified timeline sources — degrade gracefully if a table isn't present yet.
+        supabase.from('messages').select('direction, channel, body, created_at').eq('customer_id', id).order('created_at', { ascending: false }).limit(50),
+        supabase.from('payments').select('amount, status, created_at').eq('customer_id', id),
+        supabase.from('service_requests').select('message, created_at').eq('customer_id', id),
+        supabase.from('business_settings').select('service_seasons').eq('user_id', user!.id).maybeSingle(),
       ])
       // A transient/network error must NOT render as "Customer not found." Only a
       // genuine no-rows result (.single() → PGRST116) means the customer is truly gone.
@@ -165,30 +179,9 @@ export default function CustomerDetailPage() {
         jobs: (jRes.data as Job[]) || [], invoices: (iRes.data as Invoice[]) || [],
       })
 
-      if (cust?.referred_by_customer_id) {
-        const { data } = await supabase.from('customers').select('id, name').eq('id', cust.referred_by_customer_id).maybeSingle()
-        if (data) setReferrer(data as { id: string; name: string })
-      }
-      // Advocates: who this customer referred, and the revenue they generated.
-      const { data: referred } = await supabase.from('customers').select('id, name').eq('referred_by_customer_id', id)
-      const referredList = (referred as { id: string; name: string }[]) || []
-      if (referredList.length > 0) {
-        const { data: rq } = await supabase.from('quotes').select('total, status').in('customer_id', referredList.map(r => r.id))
-        const rev = ((rq as { total: number; status: string }[]) || [])
-          .filter(q => WON.has(q.status)).reduce((s, q) => s + Number(q.total || 0), 0)
-        setReferredRevenue(rev)
-      }
-      const { data: recs } = await supabase.from('job_recurrences').select('*').eq('customer_id', id)
-      if (recs) setRecurrences(recs as JobRecurrence[])
+      if (recRes.data) setRecurrences(recRes.data as JobRecurrence[])
+      setSeasons(settingsToSeasons((setRes.data as { service_seasons: unknown } | null)?.service_seasons))
 
-      // Unified timeline — messages (SMS/email/portal), payments, and portal
-      // service requests. Read-only aggregation; degrades gracefully if a table
-      // isn't present yet.
-      const [mRes, payRes, srRes] = await Promise.all([
-        supabase.from('messages').select('direction, channel, body, created_at').eq('customer_id', id).order('created_at', { ascending: false }).limit(50),
-        supabase.from('payments').select('amount, status, created_at').eq('customer_id', id),
-        supabase.from('service_requests').select('message, created_at').eq('customer_id', id),
-      ])
       const extra: TimelineEvent[] = []
       for (const m of (mRes.data as { direction: string; channel: string; body: string | null; created_at: string }[]) || []) {
         if (m.direction === 'internal') continue // internal notes live in the notes card
@@ -204,8 +197,24 @@ export default function CustomerDetailPage() {
       }
       setExtraTimeline(extra)
 
-      const { data: settings } = await supabase.from('business_settings').select('service_seasons').eq('user_id', user!.id).maybeSingle()
-      setSeasons(settingsToSeasons((settings as { service_seasons: unknown } | null)?.service_seasons))
+      // Dependent tail — the ONLY reads that need a prior result: the referrer's name
+      // (needs cust.referred_by_customer_id) and the revenue from people this customer
+      // referred (needs the referred list). Run them together, not serially.
+      const referredList = (refRes.data as { id: string; name: string }[]) || []
+      const [referrerRes, referredRevRes] = await Promise.all([
+        cust?.referred_by_customer_id
+          ? supabase.from('customers').select('id, name').eq('id', cust.referred_by_customer_id).maybeSingle()
+          : null,
+        referredList.length > 0
+          ? supabase.from('quotes').select('total, status').in('customer_id', referredList.map(r => r.id))
+          : null,
+      ])
+      if (referrerRes?.data) setReferrer(referrerRes.data as { id: string; name: string })
+      if (referredRevRes?.data) {
+        const rev = (referredRevRes.data as { total: number; status: string }[])
+          .filter(q => WON.has(q.status)).reduce((s, q) => s + Number(q.total || 0), 0)
+        setReferredRevenue(rev)
+      }
 
       setLoading(false)
     }

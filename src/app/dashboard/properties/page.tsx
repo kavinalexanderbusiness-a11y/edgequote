@@ -88,8 +88,10 @@ export default function PropertiesPage() {
 
   useEffect(() => {
     async function fetchProperties() {
-      const { data: { user } } = await supabase.auth.getUser()
-      const [pRes, sRes, located, jRes, iRes, planJRes, rRes, qRes] = await Promise.all([
+      // Local session read — no auth round-trip before the 8-query batch below.
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
+      const [pRes, sRes, located, jRes, iRes, rRes, qRes] = await Promise.all([
         supabase
           .from('properties')
           .select('*, customers(id, name, email, phone)')
@@ -97,10 +99,10 @@ export default function PropertiesPage() {
           .order('created_at', { ascending: false }),
         supabase.from('business_settings').select('*').eq('user_id', user!.id).maybeSingle(),
         fetchLocatedUpcomingJobs(supabase, user!.id),
-        supabase.from('jobs').select('property_id, status, scheduled_date, actual_minutes').eq('user_id', user!.id),
+        // ONE jobs read covering BOTH the per-property performance rollup AND the recurring
+        // service plans (recurring subset filtered client-side below) — was two full scans.
+        supabase.from('jobs').select('id, property_id, recurrence_id, service_type, status, scheduled_date, actual_minutes').eq('user_id', user!.id),
         supabase.from('invoices').select('id, property_id, invoice_number, amount, status, issued_date, created_at').eq('user_id', user!.id),
-        // Recurring visits (full fields buildServicePlans needs) + their series.
-        supabase.from('jobs').select('id, property_id, recurrence_id, service_type, scheduled_date, status').not('recurrence_id', 'is', null).eq('user_id', user!.id),
         supabase.from('job_recurrences').select('*').eq('user_id', user!.id),
         // Last quote per property (most recent non-draft).
         supabase.from('quotes').select('id, property_id, quote_number, total, status, created_at').eq('user_id', user!.id).neq('status', 'draft'),
@@ -130,7 +132,7 @@ export default function PropertiesPage() {
 
       // Group service plans by property (one recurring series may touch a property).
       const seasons = settingsToSeasons(settingsRow?.service_seasons)
-      const planJobs = (planJRes.data as Job[]) || []
+      const planJobs = ((jRes.data as Job[]) || []).filter(j => j.recurrence_id != null)
       const allPlans = buildServicePlans((rRes.data as JobRecurrence[]) || [], planJobs, seasons, localTodayISO())
       const byProp: Record<string, ServicePlan[]> = {}
       for (const plan of allPlans) if (plan.propertyId) (byProp[plan.propertyId] ||= []).push(plan)

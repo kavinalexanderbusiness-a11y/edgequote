@@ -27,7 +27,8 @@ export default function CrmAutomationPage() {
   const [refs, setRefs] = useState({ joined: 0, invited: 0, rewarded: 0 })
 
   async function load() {
-    const { data: { user } } = await supabase.auth.getUser()
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
     setUid(user?.id || null)
     if (!user) { setLoading(false); return }
     const [custRes, refRes] = await Promise.all([

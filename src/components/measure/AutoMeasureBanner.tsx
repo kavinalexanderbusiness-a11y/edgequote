@@ -39,7 +39,10 @@ export function AutoMeasureBanner({ lat, lng, neighborhood, onAuto, onUse }: {
     ;(async () => {
       try {
         const supabase = createClient()
-        const { data: { user } } = await supabase.auth.getUser()
+        // Local session read — this runs on every lat/lng change; no auth round-trip
+        // should gate the auto-measure result each time.
+        const { data: { session } } = await supabase.auth.getSession()
+        const user = session?.user
         const cal = user ? await getNeighborhoodRatio(supabase, user.id, neighborhood) : { ratio: undefined as number | undefined, calibrated: false }
         const r = await autoMeasureLawn(lat, lng, { ratio: cal.ratio, calibrated: cal.calibrated })
         if (!active) return
