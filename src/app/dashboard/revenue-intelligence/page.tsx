@@ -83,16 +83,25 @@ export default function RevenueIntelligencePage() {
         <Tile label="Revenue from acted" value={formatCurrency(wonValue)} sub={`${actedCount} acted · ${wonCount} won`} />
         {(() => {
           const atRisk = ltvForecast.reduce((s, f) => s + (Number(f.churnRiskImpact) || 0), 0)
-          return <Tile label="Revenue at churn risk" value={formatCurrency(atRisk)} sub="/yr — see forecast below" danger={atRisk > 0} />
+          // Tappable — opens + scrolls to the LTV forecast where the at-risk names live.
+          return (
+            <StatTile label="Revenue at churn risk" value={formatCurrency(atRisk)} sub="/yr — tap to see who" tone={atRisk > 0 ? 'danger' : undefined} tonedSurface={atRisk > 0}
+              onClick={() => { setShowForecast(true); setTimeout(() => document.getElementById('ltv-forecast')?.scrollIntoView({ behavior: 'smooth' }), 50) }} />
+          )
         })()}
       </div>
 
-      {/* Top action */}
+      {/* Top action — actionable, not just a headline (same act-tracking as the cards) */}
       {summary.topAction && (
-        <div className="rounded-card border border-accent/30 bg-gradient-to-br from-accent/[0.08] to-transparent p-4">
-          <p className="text-[11px] uppercase tracking-wide text-ink-faint flex items-center gap-1.5"><Trophy className="w-3.5 h-3.5 text-accent" /> Top move right now</p>
-          <p className="text-sm font-bold text-ink mt-1">{OPP_META[summary.topAction.kind].emoji} {summary.topAction.action} — {summary.topAction.customerName}</p>
-          <p className="text-xs text-ink-muted mt-0.5">+{formatCurrency(summary.topAction.expectedValue)}{summary.topAction.oneTime ? ' one-time' : '/yr'} · {summary.topAction.score}/100 likelihood</p>
+        <div className="rounded-card border border-accent/30 bg-gradient-to-br from-accent/[0.08] to-transparent p-4 flex flex-wrap items-center gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] uppercase tracking-wide text-ink-faint flex items-center gap-1.5"><Trophy className="w-3.5 h-3.5 text-accent" /> Top move right now</p>
+            <p className="text-sm font-bold text-ink mt-1">{OPP_META[summary.topAction.kind].emoji} {summary.topAction.action} — {summary.topAction.customerName}</p>
+            <p className="text-xs text-ink-muted mt-0.5">+{formatCurrency(summary.topAction.expectedValue)}{summary.topAction.oneTime ? ' one-time' : '/yr'} · {summary.topAction.score}/100 likelihood</p>
+          </div>
+          <Link href={summary.topAction.actionHref} onClick={() => act(summary.topAction!, 'acted')} className="shrink-0">
+            <Button size="sm">Take action <ArrowRight className="w-3.5 h-3.5" /></Button>
+          </Link>
         </div>
       )}
 
@@ -122,7 +131,7 @@ export default function RevenueIntelligencePage() {
       </div>
 
       {/* LTV Forecast */}
-      <div className="rounded-card border border-border bg-bg-secondary overflow-hidden">
+      <div id="ltv-forecast" className="rounded-card border border-border bg-bg-secondary overflow-hidden scroll-mt-4">
         <button onClick={() => setShowForecast(s => !s)} className="w-full px-5 py-3.5 flex items-center justify-between text-left">
           <span className="text-sm font-bold text-ink flex items-center gap-2"><Sparkles className="w-4 h-4 text-accent" /> Lifetime Value Forecast</span>
           <span className="text-xs text-ink-muted">{showForecast ? 'Hide' : `Show top ${Math.min(12, ltvForecast.length)}`}</span>

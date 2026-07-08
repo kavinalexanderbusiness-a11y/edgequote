@@ -2,10 +2,11 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { toast } from '@/lib/toast'
+import { confirm } from '@/lib/confirm'
 import { createClient } from '@/lib/supabase/client'
 import { Job, JobStatus, JobRecurrence, JobLineItem, RecurrenceScope, PRICE_REASONS, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
 import { Coord } from '@/lib/geo'
-import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, nearestNeighborRoute, sequenceRoute, roundTripMapsUrl, routeStats, directionsUrl, computeDayEtas, roughFinishEstimate, dayLoad, minutesToTime12, timeToMinutes, DEFAULT_JOB_MIN } from '@/lib/route'
+import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, nearestNeighborRoute, sequenceRoute, roundTripMapsUrl, MAX_MAPS_WAYPOINTS, routeStats, directionsUrl, computeDayEtas, roughFinishEstimate, dayLoad, minutesToTime12, timeToMinutes, DEFAULT_JOB_MIN } from '@/lib/route'
 import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
 import { buildRoadDistance } from '@/lib/distance'
 import { jobVisitValue, effectiveFreq, quoteVisitAmount } from '@/lib/invoicing'
@@ -19,7 +20,7 @@ import { SendMessageDialog, type MessageRecipient } from '@/components/comms/Sen
 import {
   DollarSign, Clock, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
   MapPin, Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, Trash2, CloudRain, Play, Timer, Camera, PlusCircle, MessageSquare, Send,
-  ChevronUp, ChevronDown,
+  ChevronUp, ChevronDown, Wand2,
 } from 'lucide-react'
 
 export interface QuoteLite {
@@ -301,7 +302,13 @@ export function DayOpsPanel({
     : null
   const effOrdered: OrderedRouteStop[] = manualRoute ? manualRoute.ordered : route?.ordered ?? []
   const effTotalKm = manualRoute ? manualRoute.totalKm : route?.totalKm ?? 0
-  const effMapsUrl = manualRoute && baseCoord ? roundTripMapsUrl(baseCoord, manualRoute.ordered) : route?.mapsUrl ?? null
+  // Navigation link: the REMAINING stops in the current (manual or optimized)
+  // order — completed stops don't need directions, and Google caps the URL at
+  // MAX_MAPS_WAYPOINTS anyway, so mid-day re-opens always cover what's next.
+  const doneIds = new Set(active.filter(j => j.status === 'completed').map(j => j.id))
+  const navStops = effOrdered.filter(s => !doneIds.has(s.jobId))
+  const effMapsUrl = baseCoord && navStops.length ? roundTripMapsUrl(baseCoord, navStops) : null
+  const mapsCapped = navStops.length > MAX_MAPS_WAYPOINTS
 
   const orderByJobId = new Map(effOrdered.map(s => [s.jobId, s.order]))
   const sortedJobs = [...active].sort((a, b) => {
@@ -313,10 +320,50 @@ export function DayOpsPanel({
   const stats = (manualRoute || route) && totalStops > 0 ? routeStats(locatedCoords, effTotalKm, travel) : null
 
   // Reorder: swap instantly (optimistic), then persist the whole day's sequence.
+  // Writes are CHAINED so two quick drags can't interleave their per-row updates
+  // (last full sequence wins), and failures surface instead of silently reverting
+  // on the next refresh.
+  const orderWrite = useRef<Promise<void>>(Promise.resolve())
+  // How many route_order writes are still in flight, and which props version the
+  // last write settled at — together they tell the release effect below when the
+  // props are FRESH (refetched after our writes), so it can safely hand authority
+  // back to the DB without flickering through a stale in-between state.
+  const pendingOrderWrites = useRef(0)
+  const propsVersion = useRef(0)
+  const settledAtVersion = useRef(0)
+  useEffect(() => { propsVersion.current++ }, [jobs])
   async function applyOrder(seq: string[]) {
     setLocalSeq(seq)
-    await Promise.all(seq.map((id, i) => supabase.from('jobs').update({ route_order: i + 1 }).eq('id', id)))
+    pendingOrderWrites.current++
+    orderWrite.current = orderWrite.current.then(async () => {
+      try {
+        const results = await Promise.all(seq.map((id, i) => supabase.from('jobs').update({ route_order: i + 1 }).eq('id', id)))
+        if (results.some(r => r.error)) {
+          // Reconcile, don't diverge: drop the optimistic order and fall back to
+          // the last persisted sequence from props (realtime refetch confirms it).
+          setLocalSeq(null)
+          toast.error('Could not save the new stop order — showing the last saved one.')
+        }
+      } finally {
+        pendingOrderWrites.current--
+        if (pendingOrderWrites.current === 0) settledAtVersion.current = propsVersion.current
+      }
+    })
+    await orderWrite.current
   }
+  // Release the optimistic override once the DB is the right authority again:
+  // • props MATCH the optimistic order (our write round-tripped) → release;
+  // • props are FRESH (refetched after our writes settled) and still differ →
+  //   another tab/device won the write — adopt the persisted truth (release)
+  //   instead of shadowing it forever.
+  const savedKey = savedSeq ? savedSeq.join('|') : ''
+  useEffect(() => {
+    if (localSeq === null || pendingOrderWrites.current > 0) return
+    const fresh = propsVersion.current > settledAtVersion.current
+    if (localSeq === 'auto') { if (!savedKey || fresh) setLocalSeq(null); return }
+    if (savedKey === localSeq.join('|') || fresh) setLocalSeq(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [localSeq, savedKey, jobs])
   function moveStop(id: string, dir: -1 | 1) {
     const seq = (manualSeq ?? sortedJobs.map(j => j.id)).slice()
     const i = seq.indexOf(id)
@@ -338,9 +385,42 @@ export function DayOpsPanel({
     seq.splice(ti, 0, from)
     applyOrder(seq)
   }
-  async function resetOrder() {
+  // "Reset to best route": clear any manual order so the day snaps back to the
+  // continuously-computed optimized route (the SAME engine output in `route` —
+  // nothing is recomputed twice). ETAs, drive time, finish and Open-in-Maps all
+  // re-flow because effOrdered switches source. Confirms only when a manual
+  // order actually exists; offers Undo to restore the exact previous sequence.
+  const [optimizing, setOptimizing] = useState(false)
+  async function optimizeRouteNow() {
+    if (optimizing) return
+    const prevSeq = manualSeq // snapshot of the DISPLAYED order (undo target)
+    if (prevSeq) {
+      const ok = await confirm({
+        title: 'Re-optimize this day’s route?',
+        message: 'Your manual stop order will be replaced with the optimized route. You can undo right after.',
+        confirmLabel: 'Optimize',
+        icon: Wand2,
+      })
+      if (!ok) return
+    }
+    setOptimizing(true)
     setLocalSeq('auto')
-    await supabase.from('jobs').update({ route_order: null }).in('id', active.map(j => j.id))
+    pendingOrderWrites.current++
+    const { error } = await supabase.from('jobs').update({ route_order: null }).in('id', active.map(j => j.id))
+    pendingOrderWrites.current--
+    if (pendingOrderWrites.current === 0) settledAtVersion.current = propsVersion.current
+    setOptimizing(false)
+    if (error) {
+      // Write failed → put the display back and say so (no fake success/undo).
+      setLocalSeq(prevSeq)
+      toast.error('Could not re-optimize: ' + error.message)
+      return
+    }
+    if (prevSeq) {
+      toast.undo('Route re-optimized — manual order cleared.', () => applyOrder(prevSeq))
+    } else {
+      toast.success('Route is optimized.')
+    }
   }
 
   // Real-world timing: work start + route order + drive legs + job durations →
@@ -476,17 +556,29 @@ export function DayOpsPanel({
               <span className="flex items-center gap-1.5 text-xs font-semibold text-ink-muted uppercase tracking-wide">
                 <RouteIcon className="w-3.5 h-3.5 text-accent" /> Route
                 {manualSeq && (
-                  <button onClick={resetOrder} title="Back to the optimized order"
-                    className="normal-case tracking-normal text-[10px] font-semibold text-amber-300 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5 hover:bg-amber-500/20">
-                    Custom order · Reset
-                  </button>
+                  <span className="normal-case tracking-normal text-[10px] font-semibold text-amber-300 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5">
+                    Custom order
+                  </span>
                 )}
               </span>
-              {effMapsUrl && (
-                <a href={effMapsUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-accent font-medium flex items-center gap-1 hover:underline">
-                  <ExternalLink className="w-3 h-3" /> Open in Maps
-                </a>
-              )}
+              <span className="flex items-center gap-3 shrink-0">
+                {/* Persistent "reset to best route" — reuses the continuously-computed
+                    optimized order; confirms only when a manual order would be lost. */}
+                {active.length > 1 && baseCoord && (
+                  <button onClick={optimizeRouteNow} disabled={optimizing}
+                    title="Recalculate the best stop order (clears manual reordering)"
+                    className="text-xs text-accent font-medium flex items-center gap-1 hover:underline disabled:opacity-50">
+                    <Wand2 className="w-3 h-3" /> Optimize route
+                  </button>
+                )}
+                {effMapsUrl && (
+                  <a href={effMapsUrl} target="_blank" rel="noopener noreferrer"
+                    title={mapsCapped ? `Google Maps caps directions at ${MAX_MAPS_WAYPOINTS} stops — this opens your next ${MAX_MAPS_WAYPOINTS}; reopen as you complete stops for the rest.` : 'Directions for the remaining stops, in order'}
+                    className="text-xs text-accent font-medium flex items-center gap-1 hover:underline">
+                    <ExternalLink className="w-3 h-3" /> {mapsCapped ? `Open in Maps (next ${MAX_MAPS_WAYPOINTS})` : 'Open in Maps'}
+                  </a>
+                )}
+              </span>
             </div>
             {!baseCoord ? (
               <p className="text-xs text-amber-400 mt-1.5">Set your base address in Settings to optimize the route.</p>

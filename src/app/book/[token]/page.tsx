@@ -10,7 +10,7 @@ import { loadGoogleMaps } from '@/lib/googleMaps'
 import { AddressAutocomplete, ParsedAddress } from '@/components/ui/AddressAutocomplete'
 import { Button } from '@/components/ui/Button'
 import { formatCurrency, cn } from '@/lib/utils'
-import { Leaf, Loader2, Undo2, Trash2, Check, ArrowRight, ArrowLeft, Ruler, CheckCircle2, Phone, Mail, Camera } from 'lucide-react'
+import { Leaf, Loader2, Undo2, Trash2, Check, ArrowRight, ArrowLeft, Ruler, CheckCircle2, Phone, Mail, Camera, MapPin } from 'lucide-react'
 
 // ── Public instant-quote + booking funnel ───────────────────────────────────
 // No login. A prospect enters their address, traces their lawn on satellite for
@@ -58,6 +58,9 @@ export default function BookPage() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [quoteNumber, setQuoteNumber] = useState<string | null>(null)
+  // Messaging consent — service categories default ON (they asked us to come),
+  // marketing defaults OFF (must be an explicit yes). Synced via booking_set_consent.
+  const [consentPrefs, setConsentPrefs] = useState({ reminders: true, invoices: true, estimates: true, seasonal: true, marketing: false })
 
   useEffect(() => {
     (async () => {
@@ -161,6 +164,28 @@ export default function BookPage() {
   function undo() { pts.current.pop(); redraw(); recompute() }
   function clearTrace() { pts.current = []; redraw(); recompute() }
 
+  // Read-only satellite preview for the property-confirmation card (the Weed-Man
+  // moment: "this is your home"). Same Maps loader as the tracer — no second
+  // imagery system — just non-interactive, marker on the rooftop.
+  const previewEl = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (step !== 'measure' || showTracer || measuring || !parsed?.lat || !parsed?.lng || !previewEl.current) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        await loadGoogleMaps()
+        if (cancelled || !previewEl.current) return
+        const g = (window as unknown as { google: { maps: { Map: new (el: HTMLElement, o: unknown) => unknown; Marker: new (o: unknown) => unknown } } }).google
+        const m = new g.maps.Map(previewEl.current, {
+          center: { lat: parsed.lat, lng: parsed.lng }, zoom: 19, mapTypeId: 'satellite', tilt: 0,
+          disableDefaultUI: true, draggable: false, clickableIcons: false, keyboardShortcuts: false, gestureHandling: 'none',
+        })
+        new g.maps.Marker({ position: { lat: parsed.lat, lng: parsed.lng }, map: m })
+      } catch { /* preview is decorative — the estimate card still works without it */ }
+    })()
+    return () => { cancelled = true }
+  }, [step, parsed, showTracer, measuring])
+
   async function submit() {
     if (!parsed || !plan || !name.trim()) return
     setSubmitting(true); setError(null)
@@ -187,6 +212,14 @@ export default function BookPage() {
     const res = data as { quote_number?: string; quote_id?: string } | null
     if (rpcErr || !res?.quote_number) { setError('Something went wrong — please try again or call us.'); return }
     setQuoteNumber(res.quote_number)
+    // Sync messaging consent into the customer record (best-effort). Channel
+    // opt-in = they gave us that contact method + at least one category on.
+    const anyOn = Object.values(consentPrefs).some(Boolean)
+    supabase.rpc('booking_set_consent', {
+      p_token: token, p_quote_id: res.quote_id ?? null,
+      p_sms_opt_in: anyOn && !!phone.trim(), p_email_opt_in: anyOn && !!email.trim(),
+      p_prefs: consentPrefs,
+    }).then(() => {}, () => {})
     // Record auto vs accepted area so the estimate self-calibrates (best-effort).
     supabase.rpc('record_booking_measurement', {
       p_token: token, p_quote_id: res.quote_id ?? null, p_lat: parsed.lat, p_lng: parsed.lng,
@@ -244,24 +277,32 @@ export default function BookPage() {
 
         {/* STEP: measure — auto by default, with adjust + redraw */}
         {step === 'measure' && (
-          <Section title="Your lawn" sub="We measure it automatically — accept it, tweak the number, or redraw it exactly.">
+          <Section title="Confirm your property" sub="Here's what we found — check the photo, confirm the size, and you're one tap from your price.">
             {measuring ? (
-              <div className="py-12 text-center text-sm text-ink-muted flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Measuring your lawn…</div>
+              <div className="py-12 text-center text-sm text-ink-muted flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Measuring your lawn from satellite…</div>
             ) : !showTracer && autoResult ? (
               <div className="space-y-3">
+                {/* The property, from above — confirmation that we're quoting the right home */}
+                <div className="rounded-xl overflow-hidden border border-border-strong">
+                  <div ref={previewEl} className="w-full h-56 bg-bg-tertiary" />
+                  <div className="px-4 py-2.5 bg-bg-secondary border-t border-border flex items-center gap-2">
+                    <MapPin className="w-3.5 h-3.5 text-accent shrink-0" />
+                    <p className="text-xs text-ink truncate">{parsed?.formatted || parsed?.address}</p>
+                  </div>
+                </div>
                 <div className="rounded-xl border border-accent/30 bg-accent/5 px-4 py-4">
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-sm text-ink-muted flex items-center gap-2"><Ruler className="w-4 h-4 text-accent" /> Estimated lawn size</span>
                     <ConfidenceBadge confidence={autoResult.confidence} />
                   </div>
                   <div className="flex items-end gap-2 mt-2">
-                    <input type="number" value={sqft || ''} onChange={e => setSqft(Number(e.target.value) || 0)}
+                    <input type="number" value={sqft || ''} onChange={e => setSqft(Number(e.target.value) || 0)} aria-label="Lawn size in square feet"
                       className="w-32 bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-xl font-bold text-ink outline-none focus:border-accent" />
                     <span className="text-sm text-ink-muted pb-2">sq ft</span>
                   </div>
-                  <p className="text-[11px] text-ink-faint mt-1">Auto-estimated — edit the number to adjust, or redraw it exactly below.</p>
+                  <p className="text-[11px] text-ink-faint mt-1">Not quite right? Edit the number, or measure it exactly on the map.</p>
                 </div>
-                <Button variant="secondary" className="w-full" onClick={() => setShowTracer(true)}><Ruler className="w-4 h-4" /> Redraw on the map</Button>
+                <Button variant="secondary" className="w-full" onClick={() => setShowTracer(true)}><Ruler className="w-4 h-4" /> Measure again on the map</Button>
               </div>
             ) : mapErr && mapErr !== 'manual' ? (
               <div className="space-y-3">
@@ -353,6 +394,26 @@ export default function BookPage() {
                   <input type="file" accept="image/*" multiple onChange={addPhotos} className="hidden" disabled={uploadingPhotos} />
                 </label>
                 {photoUrls.length > 0 && <p className="text-[11px] text-emerald-400">{photoUrls.length} photo{photoUrls.length !== 1 ? 's' : ''} attached</p>}
+              </div>
+
+              {/* Stay in the loop — synced straight into the business's messaging
+                  preferences (channel opt-ins + per-category prefs). */}
+              <div className="rounded-xl border border-border bg-bg-secondary px-4 py-3 space-y-2">
+                <p className="text-xs font-semibold text-ink-muted">Keep me updated by text & email about…</p>
+                {([
+                  ['reminders', 'Appointment reminders & service updates'],
+                  ['estimates', 'My estimate & quotes'],
+                  ['invoices', 'Invoices & receipts'],
+                  ['seasonal', 'Seasonal reminders'],
+                  ['marketing', 'Offers & news'],
+                ] as const).map(([k, label]) => (
+                  <label key={k} className="flex items-center gap-2.5 text-sm text-ink cursor-pointer">
+                    <input type="checkbox" checked={consentPrefs[k]} onChange={() => setConsentPrefs(p => ({ ...p, [k]: !p[k] }))}
+                      className="w-4 h-4 rounded border-border-strong accent-accent shrink-0" />
+                    {label}
+                  </label>
+                ))}
+                <p className="text-[10px] text-ink-faint">Reply STOP to any text to opt out. Change these anytime in your customer portal.</p>
               </div>
             </div>
             {plan && (

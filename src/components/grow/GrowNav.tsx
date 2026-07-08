@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Sprout, Sparkles, Images, Megaphone, Star, Gift, BarChart3, Bot, Inbox, type LucideIcon } from 'lucide-react'
+import { Sprout, Sparkles, Images, Megaphone, Star, Gift, BarChart3, Bot, type LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 // ── Grow section rail ───────────────────────────────────────────────────────────
@@ -17,11 +17,12 @@ const ITEMS: RailItem[] = [
   { label: 'Studio', href: '/dashboard/grow/studio', icon: Sparkles },
   { label: 'Library', href: '/dashboard/grow/library', icon: Images },
   { label: 'Campaigns', href: '/dashboard/grow/campaigns', icon: Megaphone },
-  { label: 'Reviews', icon: Star, soon: true },
-  { label: 'Referrals', icon: Gift, soon: true },
+  // Reviews & referrals SHIPPED — they live in Customer Automation (was a dead
+  // "Soon" pill while the feature was already running). One entry, not two.
+  { label: 'Automation', href: '/dashboard/grow/crm', icon: Star },
+  { label: 'Before/After', href: '/dashboard/grow/before-after', icon: Gift },
   { label: 'Analytics', icon: BarChart3, soon: true },
   { label: 'Coach', icon: Bot, soon: true },
-  { label: 'Pipeline', icon: Inbox, soon: true },
 ]
 
 export function GrowNav() {

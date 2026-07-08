@@ -1,5 +1,6 @@
 'use client'
 
+import { confirm as confirmDialog } from '@/lib/confirm'
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'

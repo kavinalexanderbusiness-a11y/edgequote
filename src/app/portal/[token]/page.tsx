@@ -35,7 +35,7 @@ interface PortalData {
   payment_method?: PortalCard | null
 }
 
-type Tab = 'home' | 'timeline' | 'service' | 'photos' | 'property' | 'documents' | 'quotes' | 'invoices' | 'payments' | 'request'
+type Tab = 'home' | 'timeline' | 'service' | 'photos' | 'property' | 'documents' | 'payments' | 'request'
 type LiveStatus = 'scheduled' | 'on_my_way' | 'in_progress' | 'completed'
 
 interface Derived {
@@ -95,9 +95,11 @@ export default function PortalPage() {
   }
 
   // Self-serve consent — updates the customer record immediately (token-scoped RPC).
-  async function saveConsent(next: { sms: boolean; email: boolean }) {
+  // `prefs` carries the per-category choices (reminders / invoices / estimates /
+  // marketing / seasonal); omitted = leave stored categories unchanged.
+  async function saveConsent(next: { sms: boolean; email: boolean }, prefs?: Record<string, boolean>) {
     setConsentState(next)
-    await supabase.rpc('portal_set_consent', { p_token: token, p_sms_opt_in: next.sms, p_email_opt_in: next.email })
+    await supabase.rpc('portal_set_consent', { p_token: token, p_sms_opt_in: next.sms, p_email_opt_in: next.email, p_prefs: prefs ?? null })
   }
 
   // Customer confirms they left a review → records it (notifies the owner, stops
@@ -146,9 +148,15 @@ export default function PortalPage() {
     setReqBusy(null)
     if (ok) { setReqSent(key); if (key === 'custom') setReqMsg(''); setTimeout(() => setReqSent(null), 4000) }
   }
+  // The customer opened this invoice (PDF or pay) — stamp viewed_at once so the
+  // owner's list shows 'Viewed'. Fire-and-forget; idempotent server-side.
+  function markInvoiceViewed(invoiceId: string) {
+    supabase.rpc('portal_mark_invoice_viewed', { p_token: token, p_invoice_id: invoiceId }).then(() => {}, () => {})
+  }
   async function pay(invoiceId: string) {
     if (payingId) return                       // re-entry guard — never start two checkout sessions
     setPayingId(invoiceId)
+    markInvoiceViewed(invoiceId)
     try {
       const res = await fetch('/api/portal/pay', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -211,11 +219,11 @@ export default function PortalPage() {
   // (their central records hub) immediately after, then the things they act on (pay
   // invoices, accept quotes, manage payments), then service history & photos, then
   // the rest. Reordering only — every tab is preserved.
+  // Documents IS the quotes+invoices hub (search, filters, pay & accept on the
+  // row) — no separate Invoices/Quotes tabs repeating the same records.
   const TABS: { key: Tab; label: string; icon: typeof Home; n?: number }[] = [
     { key: 'home', label: 'Home', icon: Home },
     { key: 'documents', label: 'Documents', icon: FolderOpen, n: data.quotes.length + data.invoices.length },
-    { key: 'invoices', label: 'Invoices', icon: Receipt, n: data.invoices.length },
-    { key: 'quotes', label: 'Quotes', icon: FileText, n: data.quotes.length },
     { key: 'payments', label: 'Payments', icon: Wallet, n: data.payments.length },
     { key: 'service', label: 'Service', icon: History, n: derived.completed.length },
     { key: 'photos', label: 'Photos', icon: ImageIcon, n: data.photos.length },
@@ -257,20 +265,19 @@ export default function PortalPage() {
             </div>
           )}
           {tab === 'home' && <HomeTab data={data} derived={derived} biz={biz} onRequest={() => setTab('request')}
-            paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} onOpenInvoices={() => setTab('invoices')} />}
+            paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} onOpenInvoices={() => setTab('documents')} />}
           {tab === 'home' && biz?.review_url && derived.lastCompleted && !data.customer.reviewed_at && (
             <ReviewCard reviewUrl={biz.review_url} businessName={biz.company_name} reviewed={markedReviewed} onReviewed={markReviewed} />
           )}
-          {tab === 'home' && consent && <ConsentCard consent={consent} onSave={saveConsent} />}
+          {tab === 'home' && consent && <ConsentCard token={token} consent={consent} onSave={saveConsent} />}
           {tab === 'timeline' && <TimelineTab data={data} photosByJob={photosByJob} />}
           {tab === 'service' && <ServiceTab completed={derived.completed} photosByJob={photosByJob} invoiceByJob={invoiceByJob} photoUrl={photoUrl} />}
           {tab === 'photos' && <GalleryTab photosByJob={photosByJob} jobs={data.jobs} photoUrl={photoUrl} />}
           {tab === 'property' && <PropertyTab property={data.property} />}
           {tab === 'payments' && <PaymentsTab payments={data.payments} invoices={data.invoices} outstanding={derived.outstanding}
             token={token} paymentsEnabled={paymentsEnabled} card={data.payment_method ?? null} autopayEnabled={!!data.customer.autopay_enabled} onChanged={load} />}
-          {tab === 'documents' && <DocumentsTab quotes={data.quotes} invoices={data.invoices} customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} business={biz} />}
-          {tab === 'quotes' && <QuotesTab quotes={data.quotes} accept={accept} accepting={accepting} customerName={data.customer.name} business={biz} />}
-          {tab === 'invoices' && <InvoicesTab invoices={data.invoices} paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} gstPercent={Number(data.business?.gst_percent) || 0} customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} business={biz} />}
+          {tab === 'documents' && <DocumentsTab quotes={data.quotes} invoices={data.invoices} customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} business={biz} onInvoiceOpen={markInvoiceViewed}
+            paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} accept={accept} accepting={accepting} />}
           {tab === 'request' && (
             <RequestTab presets={REQUEST_PRESETS} reqMsg={reqMsg} setReqMsg={setReqMsg} request={request} reqBusy={reqBusy} reqSent={reqSent} biz={biz} />
           )}
@@ -502,116 +509,47 @@ function Thumb({ p, photoUrl, wide }: { p: PortalPhoto; photoUrl: (s: string) =>
   )
 }
 
-// ── Quotes ──
-function QuotesTab({ quotes, accept, accepting, customerName, business }: { quotes: PortalQuote[]; accept: (id: string) => void; accepting: string | null; customerName: string; business: PortalData['business'] }) {
-  if (quotes.length === 0) return <Empty text="No quotes yet." />
-  return (
-    <div className="space-y-3">
-      {quotes.map(q => (
-        <div key={q.id} className="rounded-card border border-border bg-bg-secondary p-4">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0"><p className="text-sm font-semibold text-ink">{q.service_type}</p><p className="text-xs text-ink-muted">{q.quote_number} · {formatDate(q.created_at)}</p></div>
-            <QuoteStatusPill status={q.status} />
-          </div>
-          <div className="flex flex-wrap gap-2 mt-2">
-            {q.weekly_price ? <PriceChip label="Weekly" v={q.weekly_price} /> : null}
-            {q.biweekly_price ? <PriceChip label="Bi-weekly" v={q.biweekly_price} /> : null}
-            {q.monthly_price ? <PriceChip label="Monthly" v={q.monthly_price} /> : null}
-            {!q.weekly_price && !q.biweekly_price && !q.monthly_price ? <PriceChip label="Total" v={q.total} /> : null}
-          </div>
-          {q.notes && <p className="text-xs text-ink-muted mt-2 whitespace-pre-wrap">{q.notes}</p>}
-          <DocActions filename={`${q.quote_number}.pdf`} getBlob={() => renderPortalQuoteBlob(q, customerName, business)} />
-          {q.status === 'sent' && <div className="mt-3"><Button size="sm" onClick={() => accept(q.id)} loading={accepting === q.id}><Check className="w-4 h-4" /> Accept this quote</Button></div>}
-          {q.status === 'accepted' && <p className="mt-3 inline-flex items-center gap-1.5 text-sm font-semibold text-emerald-400"><CheckCircle2 className="w-4 h-4" /> Accepted — thank you!</p>}
-        </div>
-      ))}
-    </div>
-  )
-}
-
-// ── Invoices ──
-function InvoicesTab({ invoices, paymentsEnabled, pay, payingId, gstPercent, customerName, fallbackAddress, business }: {
-  invoices: PortalInvoice[]; paymentsEnabled: boolean; pay: (id: string) => void; payingId: string | null; gstPercent: number
-  customerName: string; fallbackAddress: string | null; business: PortalData['business']
-}) {
-  if (invoices.length === 0) return <Empty text="No invoices yet." />
-  return (
-    <div className="space-y-3">
-      {invoices.map(inv => {
-        const t = invoiceTotals(inv.amount, { gst_percent: gstPercent }, { type: inv.discount_type, value: inv.discount_value })
-        const paid = Math.round((Number(inv.amount_paid) || 0) * 100) / 100
-        const balance = Math.round((t.total - paid) * 100) / 100
-        const owing = balance > 0 && inv.status !== 'draft'
-        return (
-        <div key={inv.id} className="rounded-card border border-border bg-bg-secondary p-4">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0"><p className="text-sm font-semibold text-ink">{inv.service_type || 'Services'}</p><p className="text-xs text-ink-muted">{inv.invoice_number} · {inv.issued_date ? formatDate(inv.issued_date) : formatDate(inv.created_at)}{inv.due_date ? ` · due ${formatDate(inv.due_date)}` : ''}</p></div>
-            <div className="text-right"><p className="text-base font-bold text-ink">{formatCurrency(t.total)}</p><InvoiceStatusPill status={inv.status} /></div>
-          </div>
-          {inv.line_items && inv.line_items.length > 1 && (
-            <div className="mt-2 space-y-0.5">
-              {inv.line_items.map((li, i) => <p key={i} className="text-xs flex justify-between gap-3"><span className="text-ink-faint">{li.description}</span><span className="text-ink-muted">{formatCurrency(Number(li.amount))}</span></p>)}
-            </div>
-          )}
-          {(t.hasGst || t.hasDiscount) && (
-            <div className="mt-2 space-y-0.5 text-xs border-t border-border pt-2">
-              <p className="flex justify-between gap-3"><span className="text-ink-faint">Subtotal</span><span className="text-ink-muted">{formatCurrency(t.subtotal)}</span></p>
-              {t.hasDiscount && <p className="flex justify-between gap-3"><span className="text-ink-faint">Discount{t.discountLabel ? ` (${t.discountLabel})` : ''}</span><span className="text-emerald-400">−{formatCurrency(t.discountAmount)}</span></p>}
-              {t.hasGst && <p className="flex justify-between gap-3"><span className="text-ink-faint">GST ({t.gstPercent}%)</span><span className="text-ink-muted">{formatCurrency(t.gstAmount)}</span></p>}
-              <p className="flex justify-between gap-3 font-semibold"><span className="text-ink">Total</span><span className="text-ink">{formatCurrency(t.total)}</span></p>
-            </div>
-          )}
-          {/* Paid / Balance once a payment has been recorded */}
-          {paid > 0 && (
-            <div className="mt-2 flex items-center justify-between gap-3 text-xs border-t border-border pt-2">
-              <span className="text-ink-faint">Paid <span className="font-semibold text-emerald-400">{formatCurrency(paid)}</span></span>
-              <span className="text-ink-faint">Balance <span className={`font-semibold ${balance > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>{formatCurrency(Math.max(0, balance))}</span></span>
-            </div>
-          )}
-          <DocActions filename={`${inv.invoice_number}.pdf`} getBlob={() => renderPortalInvoiceBlob(inv, customerName, fallbackAddress, business)} />
-          {paymentsEnabled && owing && (
-            <div className="mt-3">
-              <Button size="sm" onClick={() => pay(inv.id)} loading={payingId === inv.id}>
-                <CreditCard className="w-4 h-4" /> Pay {formatCurrency(balance)}
-              </Button>
-            </div>
-          )}
-        </div>
-        )
-      })}
-    </div>
-  )
-}
 
 // ── Documents (central home for all customer records) ──────────────────────
 type DocKind = 'quote' | 'invoice'
-interface DocItem { id: string; kind: DocKind; number: string; title: string; date: string; status: string; amount: number; filename: string; getBlob: () => Promise<Blob> }
+// rawId/balance power the row's actions — Documents is THE records hub, so paying
+// an invoice or accepting a quote happens right on the row (no separate tabs).
+interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; amount: number; balance: number; filename: string; getBlob: () => Promise<Blob> }
 const KIND_META: Record<DocKind, { label: string; icon: typeof FileText; tone: string }> = {
   quote: { label: 'Quote', icon: FileText, tone: 'text-accent border-accent/25 bg-accent/10' },
   invoice: { label: 'Invoice', icon: Receipt, tone: 'text-sky-400 border-sky-500/25 bg-sky-500/10' },
 }
-const FUTURE_DOCS = ['Receipts', 'Service reports', 'Photos']
 
-function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, business }: {
+
+function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, business, onInvoiceOpen, paymentsEnabled, pay, payingId, accept, accepting }: {
   quotes: PortalQuote[]; invoices: PortalInvoice[]; customerName: string; fallbackAddress: string | null; business: PortalData['business']
+  onInvoiceOpen?: (invoiceId: string) => void
+  paymentsEnabled: boolean; pay: (invoiceId: string) => void; payingId: string | null
+  accept: (quoteId: string) => void; accepting: string | null
 }) {
   const [cat, setCat] = useState<'all' | DocKind>('all')
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<'newest' | 'oldest'>('newest')
 
+  const gstPct = Number(business?.gst_percent) || 0
   const docs = useMemo<DocItem[]>(() => {
     const q: DocItem[] = quotes.map(qq => ({
-      id: 'q' + qq.id, kind: 'quote', number: qq.quote_number, title: qq.service_type || 'Quote',
-      date: qq.issued_date || qq.created_at, status: qq.status, amount: Number(qq.total) || 0,
+      id: 'q' + qq.id, rawId: qq.id, kind: 'quote', number: qq.quote_number, title: qq.service_type || 'Quote',
+      date: qq.issued_date || qq.created_at, status: qq.status, amount: Number(qq.total) || 0, balance: 0,
       filename: `${qq.quote_number}.pdf`, getBlob: () => renderPortalQuoteBlob(qq, customerName, business),
     }))
-    const inv: DocItem[] = invoices.map(ii => ({
-      id: 'i' + ii.id, kind: 'invoice', number: ii.invoice_number, title: ii.service_type || 'Invoice',
-      date: ii.issued_date || ii.created_at, status: ii.status, amount: Number(ii.amount) || 0,
-      filename: `${ii.invoice_number}.pdf`, getBlob: () => renderPortalInvoiceBlob(ii, customerName, fallbackAddress, business),
-    }))
+    const inv: DocItem[] = invoices.map(ii => {
+      // Same balance math as the dashboard: discounted+GST total − payments recorded.
+      const total = invoiceTotals(ii.amount, { gst_percent: gstPct }, { type: ii.discount_type, value: ii.discount_value }).total
+      const balance = Math.max(0, Math.round((total - (Number(ii.amount_paid) || 0)) * 100) / 100)
+      return {
+        id: 'i' + ii.id, rawId: ii.id, kind: 'invoice' as const, number: ii.invoice_number, title: ii.service_type || 'Invoice',
+        date: ii.issued_date || ii.created_at, status: ii.status, amount: Number(ii.amount) || 0, balance,
+        filename: `${ii.invoice_number}.pdf`, getBlob: () => { onInvoiceOpen?.(ii.id); return renderPortalInvoiceBlob(ii, customerName, fallbackAddress, business) },
+      }
+    })
     return [...q, ...inv]
-  }, [quotes, invoices, customerName, fallbackAddress, business])
+  }, [quotes, invoices, customerName, fallbackAddress, business, onInvoiceOpen, gstPct])
 
   const counts = { all: docs.length, quote: docs.filter(d => d.kind === 'quote').length, invoice: docs.filter(d => d.kind === 'invoice').length }
 
@@ -645,11 +583,6 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, busines
             {c.label}{c.n > 0 && <span className="opacity-70"> {c.n}</span>}
           </button>
         ))}
-        {FUTURE_DOCS.map(f => (
-          <span key={f} className="text-xs font-medium rounded-full px-3 py-1.5 border border-dashed border-border text-ink-faint inline-flex items-center gap-1">
-            {f} <span className="text-[9px] uppercase tracking-wide opacity-80">Soon</span>
-          </span>
-        ))}
       </div>
 
       {/* Search + sort */}
@@ -669,13 +602,21 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, busines
       {filtered.length === 0 ? (
         <Empty text={docs.length === 0 ? 'No documents yet. Your quotes and invoices will appear here.' : 'No documents match your search.'} />
       ) : (
-        <div className="space-y-3">{filtered.map(d => <DocRow key={d.id} d={d} />)}</div>
+        <div className="space-y-3">{filtered.map(d => <DocRow key={d.id} d={d} paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} accept={accept} accepting={accepting} />)}</div>
       )}
     </div>
   )
 }
-function DocRow({ d }: { d: DocItem }) {
+function DocRow({ d, paymentsEnabled, pay, payingId, accept, accepting }: {
+  d: DocItem
+  paymentsEnabled: boolean; pay: (invoiceId: string) => void; payingId: string | null
+  accept: (quoteId: string) => void; accepting: string | null
+}) {
   const m = KIND_META[d.kind]
+  // The one action each document actually needs, right on the row: a sent quote
+  // can be accepted; an invoice with a balance can be paid.
+  const canAccept = d.kind === 'quote' && d.status === 'sent'
+  const canPay = d.kind === 'invoice' && paymentsEnabled && d.balance > 0 && d.status !== 'draft'
   return (
     <div className="rounded-card border border-border bg-bg-secondary p-4">
       <div className="flex items-start justify-between gap-2">
@@ -691,6 +632,16 @@ function DocRow({ d }: { d: DocItem }) {
           {d.kind === 'quote' ? <QuoteStatusPill status={d.status} /> : <InvoiceStatusPill status={d.status} />}
         </div>
       </div>
+      {(canAccept || canPay) && (
+        <div className="mt-3">
+          {canAccept && (
+            <Button size="sm" onClick={() => accept(d.rawId)} loading={accepting === d.rawId}><Check className="w-4 h-4" /> Accept this quote</Button>
+          )}
+          {canPay && (
+            <Button size="sm" onClick={() => pay(d.rawId)} loading={payingId === d.rawId}><CreditCard className="w-4 h-4" /> Pay {formatCurrency(d.balance)}</Button>
+          )}
+        </div>
+      )}
       <DocActions filename={d.filename} getBlob={d.getBlob} />
     </div>
   )
@@ -967,7 +918,31 @@ function ReviewCard({ reviewUrl, businessName, reviewed, onReviewed }: { reviewU
 }
 
 // ── Message preferences (self-serve consent) ──
-function ConsentCard({ consent, onSave }: { consent: { sms: boolean; email: boolean }; onSave: (c: { sms: boolean; email: boolean }) => void }) {
+function ConsentCard({ token, consent, onSave }: { token: string; consent: { sms: boolean; email: boolean }; onSave: (c: { sms: boolean; email: boolean }, prefs?: Record<string, boolean>) => void }) {
+  // Per-category preferences (customers.message_prefs) — loaded lazily so
+  // get_portal_data stays untouched; a missing key means "yes" (inherit).
+  const supabase = useMemo(() => createClient(), [])
+  const [prefs, setPrefs] = useState<Record<string, boolean> | null>(null)
+  useEffect(() => {
+    let alive = true
+    supabase.rpc('portal_get_prefs', { p_token: token })
+      .then(({ data }) => { if (alive) setPrefs((data as Record<string, boolean>) || {}) }, () => { if (alive) setPrefs({}) })
+    return () => { alive = false }
+  }, [token, supabase])
+
+  const CATS: [string, string][] = [
+    ['reminders', 'Appointment reminders & updates'],
+    ['estimates', 'Estimates & quotes'],
+    ['invoices', 'Invoices & receipts'],
+    ['seasonal', 'Seasonal reminders'],
+    ['marketing', 'Offers & news'],
+  ]
+  function toggleCat(k: string) {
+    const next = { ...(prefs || {}), [k]: !(prefs?.[k] !== false) }
+    setPrefs(next)
+    onSave(consent, next)
+  }
+
   return (
     <div className="rounded-card border border-border bg-bg-secondary p-4 mt-3">
       <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><MessageSquare className="w-4 h-4 text-accent" /> Message preferences</p>
@@ -976,6 +951,14 @@ function ConsentCard({ consent, onSave }: { consent: { sms: boolean; email: bool
         <PrefRow label="Text messages (SMS)" icon={MessageSquare} on={consent.sms} onChange={v => onSave({ ...consent, sms: v })} />
         <PrefRow label="Email" icon={Mail} on={consent.email} onChange={v => onSave({ ...consent, email: v })} />
       </div>
+      {prefs !== null && (consent.sms || consent.email) && (
+        <div className="mt-3 pt-3 border-t border-border space-y-2">
+          <p className="text-[10px] uppercase tracking-wide text-ink-faint">What we message you about</p>
+          {CATS.map(([k, label]) => (
+            <PrefRow key={k} label={label} icon={MessageSquare} on={prefs[k] !== false} onChange={() => toggleCat(k)} />
+          ))}
+        </div>
+      )}
     </div>
   )
 }

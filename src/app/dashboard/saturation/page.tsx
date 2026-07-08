@@ -270,7 +270,7 @@ export default function SaturationPage() {
   const m = model
 
   return (
-    <div className="max-w-5xl space-y-5">
+    <div className="max-w-5xl space-y-6">
       <PageHeader title="Saturation Map" description="Where your customers, revenue and routes concentrate — and where to grow next" />
 
       {loadError && (

@@ -158,6 +158,13 @@ export default function SettingsPage() {
         base_lat: null, base_lng: null,
       })
       .eq('user_id', user!.id)
+    // The sticky footer promises "save everything" — so it must also persist any
+    // edited travel-fee tier rows (they previously needed their own per-row save).
+    await Promise.all(localTiers.filter(t => t.id).map(t =>
+      supabase.from('travel_fee_tiers')
+        .update({ min_km: t.min_km, max_km: t.max_km, fee: t.fee, is_custom: t.fee === null })
+        .eq('id', t.id),
+    ))
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
     refresh()
@@ -425,7 +432,6 @@ export default function SettingsPage() {
                 <p className="text-xs text-ink-faint">Days past this show as overloaded; days with an hour+ spare show room for more jobs.</p>
               </div>
             </div>
-            <p className="text-xs text-ink-faint">Save (below) to apply.</p>
           </CardBody>
         </Card>
 

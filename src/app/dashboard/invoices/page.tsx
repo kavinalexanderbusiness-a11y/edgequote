@@ -3,9 +3,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
-import { Invoice, InvoiceStatus, INVOICE_STATUS_LABELS, INVOICE_STATUS_COLORS, BusinessSettings } from '@/types'
+import { Invoice, InvoiceStatus, InvoiceDisplayStatus, INVOICE_STATUS_LABELS, INVOICE_STATUS_COLORS, BusinessSettings, paymentMethodLabel } from '@/types'
 import { InvoicePaymentControls } from '@/components/payments/InvoicePaymentControls'
-import { invoiceBalance, displayInvoiceStatus } from '@/lib/payments/ledger'
+import { invoiceBalance, displayInvoiceStatus, cancelInvoice, reactivateInvoice } from '@/lib/payments/ledger'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { SkeletonRows } from '@/components/ui/Skeleton'
@@ -19,13 +19,15 @@ import { toast as notify } from '@/lib/toast'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { FileText, User, Check, FileDown, Trash2, CreditCard, Zap, AlertTriangle, Pencil, Percent, DollarSign, X, MessageSquare } from 'lucide-react'
 
-const FILTERS: { value: '' | InvoiceStatus; label: string }[] = [
+const FILTERS: { value: '' | InvoiceDisplayStatus; label: string }[] = [
   { value: '', label: 'All' },
   { value: 'draft', label: 'Drafts' },
   { value: 'unpaid', label: 'Unpaid' },
   { value: 'sent', label: 'Sent' },
+  { value: 'overdue', label: 'Overdue' },
   { value: 'partial', label: 'Partial' },
   { value: 'paid', label: 'Paid' },
+  { value: 'cancelled', label: 'Cancelled' },
 ]
 
 function todayISO(): string {
@@ -41,14 +43,13 @@ export default function InvoicesPage() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [openingId, setOpeningId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
-  const [filter, setFilter] = useState<'' | InvoiceStatus>('')
+  const [filter, setFilter] = useState<'' | InvoiceDisplayStatus>('')
   // The ONE shared Send Message dialog, opened for a specific invoice's customer.
   const [msgInvoice, setMsgInvoice] = useState<Invoice | null>(null)
   const [paymentsEnabled, setPaymentsEnabled] = useState(false)
   const [payingId, setPayingId] = useState<string | null>(null)
   const [chargingId, setChargingId] = useState<string | null>(null)
   const [cardCustomers, setCardCustomers] = useState<Set<string>>(new Set())
-  const [toast, setToast] = useState<string | null>(null)
   const [uid, setUid] = useState<string | null>(null)
   const [editId, setEditId] = useState<string | null>(null)   // invoice whose inline draft editor is open
   const [creditByCustomer, setCreditByCustomer] = useState<Record<string, number>>({})   // available credit per customer
@@ -100,16 +101,15 @@ export default function InvoicesPage() {
         body: JSON.stringify({ invoiceId: inv.id, manual: true }),
       })
       const d = await res.json().catch(() => ({}))
-      if (d.result === 'charged') setToast(`Charging the saved card for ${inv.invoice_number} — the invoice will update shortly.`)
-      else if (d.result === 'declined') setToast(`The card was declined for ${inv.invoice_number}. Try a payment link or ask the customer to update their card.`)
-      else if (d.result === 'skipped' && d.reason === 'no-card') setToast('That customer has no saved card on file.')
-      else if (d.result === 'skipped' && d.reason === 'already-charged') setToast('This invoice has already been charged.')
-      else if (d.result === 'skipped' && d.reason === 'webhook-unconfigured') setToast('Configure the Stripe webhook before charging saved cards.')
-      else if (!res.ok) setToast(d.error || 'Could not charge the saved card.')
-      else setToast('Could not charge the saved card for this invoice.')
-      setTimeout(() => setToast(null), 6000)
-    } catch {
-      setToast('Could not reach the server. Please try again.'); setTimeout(() => setToast(null), 5000)
+      if (d.result === 'charged') notify(`Charging the saved card for ${inv.invoice_number} — the invoice will update shortly.`)
+      else if (d.result === 'declined') notify(`The card was declined for ${inv.invoice_number}. Try a payment link or ask the customer to update their card.`)
+      else if (d.result === 'skipped' && d.reason === 'no-card') notify('That customer has no saved card on file.')
+      else if (d.result === 'skipped' && d.reason === 'already-charged') notify('This invoice has already been charged.')
+      else if (d.result === 'skipped' && d.reason === 'webhook-unconfigured') notify('Configure the Stripe webhook before charging saved cards.')
+      else if (!res.ok) notify(d.error || 'Could not charge the saved card.')
+      else notify('Could not charge the saved card for this invoice.')
+          } catch {
+      notify('Could not reach the server. Please try again.')
     } finally { setChargingId(null) }
   }
 
@@ -125,11 +125,10 @@ export default function InvoicesPage() {
   useEffect(() => {
     fetch('/api/payments/status').then(r => r.json()).then(d => setPaymentsEnabled(!!d.enabled)).catch(() => {})
     if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('paid') === '1') {
-      setToast('Payment received — updating the invoice…')
+      notify('Payment received — updating the invoice…')
       window.history.replaceState({}, '', '/dashboard/invoices')
       setTimeout(() => fetchInvoices(), 1500)
-      setTimeout(() => setToast(null), 6000)
-    }
+          }
   }, [])
 
   // Create a hosted Stripe payment link for this invoice — open it (take a card
@@ -142,13 +141,12 @@ export default function InvoicesPage() {
         body: JSON.stringify({ invoiceId: inv.id }),
       })
       const d = await res.json().catch(() => ({}))
-      if (!res.ok || !d.url) { setToast(d.error || 'Could not start payment.'); setTimeout(() => setToast(null), 5000); return }
+      if (!res.ok || !d.url) { notify(d.error || 'Could not start payment.'); return }
       try { await navigator.clipboard.writeText(d.url) } catch { /* clipboard optional */ }
       window.open(d.url, '_blank')
-      setToast('Payment link opened & copied — take a card or send the link.')
-      setTimeout(() => setToast(null), 6000)
-    } catch {
-      setToast('Could not reach the server. Please try again.'); setTimeout(() => setToast(null), 5000)
+      notify('Payment link opened & copied — take a card or send the link.')
+          } catch {
+      notify('Could not reach the server. Please try again.')
     } finally { setPayingId(null) }
   }
 
@@ -192,19 +190,9 @@ export default function InvoicesPage() {
     if (error) { setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: inv.status } : i)); notify.error('Could not mark sent: ' + error.message) }
   }
 
-  // ── Undo (same pattern as the Schedule page) ──
-  const [undoAction, setUndoAction] = useState<{ label: string; run: () => Promise<void> } | null>(null)
-  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // ── Undo — the ONE shared toast system (lib/toast), same as the rest of the app ──
   function offerUndo(label: string, run: () => Promise<void>) {
-    setUndoAction({ label, run })
-    if (undoTimer.current) clearTimeout(undoTimer.current)
-    undoTimer.current = setTimeout(() => setUndoAction(null), 8000)
-  }
-  async function runUndo() {
-    const a = undoAction
-    if (undoTimer.current) clearTimeout(undoTimer.current)
-    setUndoAction(null)
-    if (a) { await a.run(); await fetchInvoices() }
+    notify.undo(label, async () => { await run(); await fetchInvoices() })
   }
 
   // Insertable row (strips the joined customers object) so Undo can restore the
@@ -240,12 +228,17 @@ export default function InvoicesPage() {
   const draftsTotal = drafts.reduce((sum, i) => sum + Number(i.amount || 0), 0)
   // Outstanding = the unpaid BALANCE across issued invoices (partial payments count);
   // Collected = total actually received (amount_paid), so both reflect the ledger.
+  // Cancelled invoices are dead paper — excluded from money totals.
   const outstanding = invoices
-    .filter(i => i.status !== 'draft')
+    .filter(i => i.status !== 'draft' && i.status !== 'cancelled')
     .reduce((sum, i) => sum + Math.max(0, invoiceBalance(i, settings).balance), 0)
   const paidTotal = invoices.reduce((sum, i) => sum + (Number(i.amount_paid) || 0), 0)
-  const visible = filter ? invoices.filter(i => i.status === filter) : invoices
   const today = todayISO()
+  // Filter on the DISPLAY status so the lifecycle states (Overdue, Viewed) are
+  // filterable even though they're derived, not stored. Cancelled hides from All.
+  const visible = filter
+    ? invoices.filter(i => displayInvoiceStatus(i, settings, today) === filter || (filter !== 'cancelled' && i.status === filter))
+    : invoices.filter(i => i.status !== 'cancelled')
 
   return (
     <div className="max-w-4xl space-y-6">
@@ -254,24 +247,9 @@ export default function InvoicesPage() {
         description={`${invoices.length} invoice${invoices.length !== 1 ? 's' : ''}`}
       />
 
-      {toast && (
-        <div className="text-sm text-ink bg-accent/10 border border-accent/30 rounded-xl px-4 py-2.5">{toast}</div>
-      )}
-
       {loadError && (
         <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5">
           {loadError} <button onClick={() => { setLoading(true); fetchInvoices() }} className="underline font-medium ml-1">Retry</button>
-        </div>
-      )}
-
-      {/* Undo toast — restore the last deleted invoice */}
-      {undoAction && (
-        <div className="flex items-center justify-between gap-3 text-sm bg-ink text-bg border border-border-strong rounded-xl px-4 py-2.5 shadow-lg">
-          <span className="font-medium">{undoAction.label}</span>
-          <div className="flex items-center gap-3 shrink-0">
-            <button onClick={runUndo} className="font-bold underline">Undo</button>
-            <button onClick={() => setUndoAction(null)} className="opacity-60 hover:opacity-100">✕</button>
-          </div>
         </div>
       )}
 
@@ -415,12 +393,38 @@ export default function InvoicesPage() {
                       </Button>
                     )}
                     {inv.status === 'paid' && inv.payment_method && (
-                      <span className="text-[10px] text-ink-faint capitalize">{inv.payment_method === 'etransfer' ? 'E-transfer' : inv.payment_method}</span>
+                      <span className="text-[10px] text-ink-faint">{paymentMethodLabel(inv.payment_method)}</span>
                     )}
-                    <Button onClick={() => deleteInvoice(inv)} variant="ghost" size="sm" loading={deletingId === inv.id}
-                      className="hover:text-red-400" title="Delete invoice">
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </Button>
+                    {/* Send — the primary outbound action, in the cluster (not exiled below). */}
+                    {inv.customer_id && inv.status !== 'cancelled' && (
+                      <Button variant="secondary" size="sm" onClick={() => setMsgInvoice(inv)} title="Send this invoice to the customer">
+                        <MessageSquare className="w-3.5 h-3.5" /> Send
+                      </Button>
+                    )}
+                    {/* Cancel (issued, nothing received) — terminal but undoable; drafts keep Delete. */}
+                    {inv.status !== 'draft' && inv.status !== 'cancelled' && (Number(inv.amount_paid) || 0) <= 0.01 && (
+                      <Button variant="ghost" size="sm" title="Cancel this invoice"
+                        onClick={async () => {
+                          const res = await cancelInvoice(supabase, inv)
+                          if (res.error) { notify.error(res.error); return }
+                          fetchInvoices()
+                          notify.undo(`${inv.invoice_number} cancelled.`, async () => { await reactivateInvoice(supabase, inv.id); fetchInvoices() })
+                        }}>
+                        <X className="w-3.5 h-3.5" /> Cancel
+                      </Button>
+                    )}
+                    {inv.status === 'cancelled' && (
+                      <Button variant="ghost" size="sm" title="Reactivate this invoice"
+                        onClick={async () => { await reactivateInvoice(supabase, inv.id); fetchInvoices(); notify.success(`${inv.invoice_number} reactivated.`) }}>
+                        Reactivate
+                      </Button>
+                    )}
+                    {inv.status === 'draft' && (
+                      <Button onClick={() => deleteInvoice(inv)} variant="ghost" size="sm" loading={deletingId === inv.id}
+                        className="hover:text-red-400" title="Delete draft">
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    )}
                   </div>
                 </div>
                 {editId === inv.id && (
@@ -441,20 +445,13 @@ export default function InvoicesPage() {
                     onChanged={fetchInvoices}
                   />
                 )}
-                {inv.customer_id && (
-                  <div className="mt-3 pt-3 border-t border-border">
-                    <Button variant="secondary" size="sm" onClick={() => setMsgInvoice(inv)}>
-                      <MessageSquare className="w-3.5 h-3.5" /> Send invoice
-                    </Button>
-                  </div>
-                )}
               </CardBody>
             </Card>
           ))}
         </div>
       )}
 
-      {!loading && !loadError && invoices.length > 0 && <PaymentHistory />}
+      {!loading && !loadError && invoices.length > 0 && <PaymentHistory settings={settings} />}
 
       {/* ONE shared Send Message dialog — sending marks the invoice sent. */}
       {msgInvoice?.customer_id && (

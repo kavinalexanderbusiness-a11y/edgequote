@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
-import { renderMessage, MsgType } from '@/lib/comms/templates'
+import { renderMessage, MsgType, type MessagePrefs } from '@/lib/comms/templates'
 import { commsEnabled } from '@/lib/comms/send'
 import { dispatchToCustomer } from '@/lib/comms/dispatch'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
@@ -32,7 +32,8 @@ interface CampaignRow {
 }
 interface Cand {
   id: string; name: string; phone: string | null; email: string | null
-  sms_opt_in: boolean; email_opt_in: boolean; birthday: string | null; anniversary: string | null
+  sms_opt_in: boolean; email_opt_in: boolean; message_prefs?: MessagePrefs | null
+  birthday: string | null; anniversary: string | null
 }
 
 export async function GET(req: NextRequest) {
@@ -74,7 +75,7 @@ export async function GET(req: NextRequest) {
 
     // ── Candidate query ──
     let q = supabase.from('customers')
-      .select('id, name, phone, email, sms_opt_in, email_opt_in, birthday, anniversary')
+      .select('id, name, phone, email, sms_opt_in, email_opt_in, message_prefs, birthday, anniversary')
       .eq('user_id', camp.user_id).is('archived_at', null).limit(MAX_AUDIENCE + 1)
     if (camp.kind === 'birthday') q = q.not('birthday', 'is', null)
     if (camp.kind === 'anniversary') q = q.not('anniversary', 'is', null)
@@ -125,7 +126,7 @@ export async function GET(req: NextRequest) {
       })
       const res = await dispatchToCustomer(supabase, {
         userId: camp.user_id,
-        customer: { id: c.id, phone: c.phone, email: c.email, sms_opt_in: c.sms_opt_in, email_opt_in: c.email_opt_in },
+        customer: { id: c.id, phone: c.phone, email: c.email, sms_opt_in: c.sms_opt_in, email_opt_in: c.email_opt_in, message_prefs: c.message_prefs },
         channels, smsText: rendered.sms, emailSubject: rendered.subject, emailHtml: rendered.html, emailText: rendered.text,
         template: templateKey, meta: { campaign_id: camp.id, campaign_kind: camp.kind },
       })

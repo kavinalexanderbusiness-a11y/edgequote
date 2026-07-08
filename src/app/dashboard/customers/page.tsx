@@ -1,5 +1,6 @@
 'use client'
 import { toast } from '@/lib/toast'
+import { confirm as confirmDialog } from '@/lib/confirm'
 
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
@@ -77,7 +78,7 @@ export default function CustomersPage() {
       .single()
 
     if (error || !newCustomer) {
-      console.error('Failed to create customer:', error)
+      toast.error('Could not create the customer: ' + (error?.message ?? 'please try again.'))
       return
     }
 
@@ -148,7 +149,12 @@ export default function CustomersPage() {
   // unlinked (their customer_id FKs are set null).
   async function handleDeletePermanently(id: string) {
     const name = archived.find(c => c.id === id)?.name || 'this customer'
-    if (!confirm(`Permanently delete ${name}?\n\nThe customer record is removed for good. Their past quotes, invoices and jobs are kept but will no longer be linked to a customer. This CANNOT be undone.`)) return
+    const ok = await confirmDialog({
+      title: `Permanently delete ${name}?`,
+      message: 'The customer record is removed for good. Their past quotes, invoices and jobs are kept but will no longer be linked to a customer. This cannot be undone.',
+      confirmLabel: 'Delete permanently', destructive: true,
+    })
+    if (!ok) return
     const { error } = await supabase.from('customers').delete().eq('id', id)
     if (error) { toast.error('Could not delete: ' + error.message); return }
     await fetchCustomers()

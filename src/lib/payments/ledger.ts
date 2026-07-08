@@ -27,18 +27,46 @@ export function invoiceBalance(
   return { total, paid, balance, overpaid: balance < -0.01 ? round2(-balance) : 0 }
 }
 
-// Stored status overlaid with 'overdue' (balance owing + past the due date). The
-// partial/paid/overpaid states already come from the recompute_invoice_paid trigger.
+// Stored status overlaid with the display-only lifecycle states: 'overdue'
+// (balance owing + past the due date) and 'viewed' (sent + the customer opened it
+// in the portal). partial/paid/overpaid come from the recompute_invoice_paid
+// trigger; 'cancelled' is terminal and passes through untouched.
 export function displayInvoiceStatus(
-  inv: Pick<Invoice, 'status' | 'due_date' | 'amount' | 'amount_paid' | 'discount_type' | 'discount_value'>,
+  inv: Pick<Invoice, 'status' | 'due_date' | 'amount' | 'amount_paid' | 'discount_type' | 'discount_value'> & { viewed_at?: string | null },
   settings: FeeSettings | null | undefined,
   todayISO: string,
 ): InvoiceDisplayStatus {
+  if (inv.status === 'cancelled') return 'cancelled'
   const { balance } = invoiceBalance(inv, settings)
   if (balance > 0.01 && inv.due_date && inv.due_date < todayISO && (inv.status === 'unpaid' || inv.status === 'sent' || inv.status === 'partial')) {
     return 'overdue'
   }
+  if (inv.status === 'sent' && inv.viewed_at) return 'viewed'
   return inv.status
+}
+
+// Cancel an invoice (terminal — the ledger trigger never revives it). Guarded:
+// an invoice with money received must be refunded first, so the books balance.
+export async function cancelInvoice(sb: Supa, invoice: Invoice): Promise<{ error?: string }> {
+  if ((Number(invoice.amount_paid) || 0) > 0.01) {
+    return { error: 'This invoice has payments — refund them before cancelling.' }
+  }
+  const { error } = await sb.from('invoices').update({ status: 'cancelled' }).eq('id', invoice.id)
+  return error ? { error: error.message } : {}
+}
+
+// Undo a cancellation — back to unpaid (the trigger re-derives partial/paid if a
+// payment lands later).
+export async function reactivateInvoice(sb: Supa, invoiceId: string): Promise<{ error?: string }> {
+  const { error } = await sb.from('invoices').update({ status: 'unpaid' }).eq('id', invoiceId).eq('status', 'cancelled')
+  return error ? { error: error.message } : {}
+}
+
+// Receipt number for a ledger payment — deterministic from the payment row (no
+// counter table): RCT- + the row id's first 8 hex, uppercase. Unique per payment,
+// stable across re-renders/re-sends.
+export function receiptNumberFor(paymentId: string): string {
+  return `RCT-${paymentId.replace(/-/g, '').slice(0, 8).toUpperCase()}`
 }
 
 // Local-noon ISO for a yyyy-MM-dd so an evening entry can't stamp the next UTC day.
@@ -51,15 +79,15 @@ function dateToIso(date: string): string {
 // amount_paid + status. A negative amount is a reversal (refund / move-to-credit).
 export async function recordPayment(sb: Supa, p: {
   userId: string; invoice: Invoice; amount: number; method: string; date: string; notes?: string
-}): Promise<{ error?: string }> {
+}): Promise<{ error?: string; payment?: import('@/types').Payment }> {
   const amt = round2(p.amount)
   if (!amt) return { error: 'Enter a payment amount.' }
-  const { error } = await sb.from('payments').insert({
+  const { data, error } = await sb.from('payments').insert({
     user_id: p.userId, customer_id: p.invoice.customer_id, invoice_id: p.invoice.id,
     amount: amt, currency: 'cad', provider: p.method, kind: 'payment', method: p.method,
     status: 'paid', paid_at: dateToIso(p.date), notes: p.notes?.trim() || null,
-  })
-  return error ? { error: error.message } : {}
+  }).select('*').single()
+  return error ? { error: error.message } : { payment: data as import('@/types').Payment }
 }
 
 // Sum of the customer's credit ledger = currently available credit.

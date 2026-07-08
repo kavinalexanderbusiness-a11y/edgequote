@@ -235,6 +235,8 @@ export interface Job {
   // completed_at and derives actual_minutes.
   started_at: string | null
   completed_at: string | null
+  // Stamped by /api/comms/send when an "on my way" goes out (portal live status).
+  on_my_way_at?: string | null
   // Best-day suggester telemetry: what was recommended vs. what was picked,
   // so recommendation quality can be measured later.
   suggested_date: string | null
@@ -369,10 +371,12 @@ export interface InvoiceLineItem {
 }
 
 // Stored statuses. partial/overpaid are derived by the recompute_invoice_paid DB
-// trigger from the payment ledger (Total Paid vs Total). 'overdue' is a DISPLAY-only
-// overlay (time-based: balance owing + past due) — never stored.
-export type InvoiceStatus = 'draft' | 'unpaid' | 'sent' | 'partial' | 'paid' | 'overpaid'
-export type InvoiceDisplayStatus = InvoiceStatus | 'overdue'
+// trigger from the payment ledger (Total Paid vs Total); 'cancelled' is terminal
+// (the trigger never revives it). 'overdue' (balance owing + past due) and
+// 'viewed' (sent + customer opened it in the portal → viewed_at) are DISPLAY-only
+// overlays — never stored.
+export type InvoiceStatus = 'draft' | 'unpaid' | 'sent' | 'partial' | 'paid' | 'overpaid' | 'cancelled'
+export type InvoiceDisplayStatus = InvoiceStatus | 'overdue' | 'viewed'
 
 export interface Invoice {
   id: string
@@ -401,6 +405,8 @@ export interface Invoice {
   // Total received toward this invoice (maintained by the recompute_invoice_paid
   // trigger from the payment ledger). Balance = invoiceTotals(...).total − amount_paid.
   amount_paid?: number
+  // When the CUSTOMER first opened this invoice in the portal (drives 'Viewed').
+  viewed_at?: string | null
   // Optional discount. `amount` is ALWAYS the net (post-discount) subtotal; these
   // record how that net was reached so the breakdown + editor can show/reapply it.
   discount_type?: 'amount' | 'percent' | null
@@ -412,20 +418,24 @@ export const INVOICE_STATUS_LABELS: Record<InvoiceDisplayStatus, string> = {
   draft: 'Draft',
   unpaid: 'Unpaid',
   sent: 'Sent',
+  viewed: 'Viewed',
   partial: 'Partially Paid',
   paid: 'Paid',
   overpaid: 'Overpaid',
   overdue: 'Overdue',
+  cancelled: 'Cancelled',
 }
 
 export const INVOICE_STATUS_COLORS: Record<InvoiceDisplayStatus, string> = {
-  draft:    'bg-ink-faint/15 text-ink-muted border-ink-faint/30',
-  unpaid:   'bg-amber-500/10 text-amber-400 border-amber-500/20',
-  sent:     'bg-blue-500/10 text-blue-400 border-blue-500/20',
-  partial:  'bg-sky-500/10 text-sky-400 border-sky-500/20',
-  paid:     'bg-emerald-500/15 text-emerald-400 border-emerald-500/25',
-  overpaid: 'bg-violet-500/10 text-violet-400 border-violet-500/20',
-  overdue:  'bg-red-500/10 text-red-400 border-red-500/20',
+  draft:     'bg-ink-faint/15 text-ink-muted border-ink-faint/30',
+  unpaid:    'bg-amber-500/10 text-amber-400 border-amber-500/20',
+  sent:      'bg-blue-500/10 text-blue-400 border-blue-500/20',
+  viewed:    'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
+  partial:   'bg-sky-500/10 text-sky-400 border-sky-500/20',
+  paid:      'bg-emerald-500/15 text-emerald-400 border-emerald-500/25',
+  overpaid:  'bg-violet-500/10 text-violet-400 border-violet-500/20',
+  overdue:   'bg-red-500/10 text-red-400 border-red-500/20',
+  cancelled: 'bg-ink-faint/10 text-ink-faint border-ink-faint/20',
 }
 
 // A row in the unified payment ledger (existing `payments` table). kind='payment'
@@ -448,14 +458,27 @@ export interface Payment {
   stripe_payment_intent?: string | null
 }
 
-// Manual payment methods the owner can record (Stripe rows come from the webhook).
+// Manual payment methods the owner can record (Stripe rows come from the webhook;
+// 'card' = a card charged outside EdgeQuote, e.g. a terminal or another processor).
 export const PAYMENT_METHODS: { value: string; label: string }[] = [
-  { value: 'etransfer', label: 'E-transfer' },
   { value: 'cash', label: 'Cash' },
+  { value: 'etransfer', label: 'E-transfer' },
   { value: 'cheque', label: 'Cheque' },
+  { value: 'card', label: 'Credit card' },
   { value: 'credit', label: 'Customer credit' },
   { value: 'other', label: 'Other' },
 ]
+
+// Human label for any payment method value (ledger rows may also carry 'stripe'
+// from the webhook or 'refund'). One vocabulary for receipts, lists and PDFs.
+export function paymentMethodLabel(method: string | null | undefined): string {
+  if (!method) return 'Payment'
+  const hit = PAYMENT_METHODS.find(m => m.value === method)
+  if (hit) return hit.label
+  if (method === 'stripe') return 'Card (online)'
+  if (method === 'refund') return 'Refund'
+  return method.charAt(0).toUpperCase() + method.slice(1)
+}
 
 export interface Quote {
   id: string

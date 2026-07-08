@@ -23,9 +23,21 @@ export async function POST(req: NextRequest) {
     id: string; invoice_number: string; service_type: string | null; amount: number | string; amount_paid?: number | null
     status: string; user_id: string; customer_id: string | null; gst_percent?: number | null
   }
-  // Charge the remaining BALANCE (total minus payments already recorded), so a
-  // partly-paid invoice only collects what's still owed.
-  const total = invoiceTotals(invoice.amount, { gst_percent: invoice.gst_percent }).total
+  // Charge the remaining BALANCE (GST-inclusive total minus payments already
+  // recorded). The RPC doesn't return gst_percent, so resolve it from the owner's
+  // business_settings server-side (service role — anon can't read settings); a
+  // GST-registered business must charge tax on portal payments too.
+  let gst = Number(invoice.gst_percent)
+  if (!Number.isFinite(gst)) {
+    gst = 0
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL, svc = process.env.SUPABASE_SERVICE_ROLE_KEY
+    if (url && svc) {
+      const admin = createClient(url, svc)
+      const { data: bs } = await admin.from('business_settings').select('gst_percent').eq('user_id', invoice.user_id).maybeSingle()
+      gst = Number((bs as { gst_percent?: number | null } | null)?.gst_percent) || 0
+    }
+  }
+  const total = invoiceTotals(invoice.amount, { gst_percent: gst }).total
   const balance = Math.round((total - (Number(invoice.amount_paid) || 0)) * 100) / 100
   if (balance <= 0) return NextResponse.json({ error: 'This invoice is already paid.' }, { status: 409 })
 

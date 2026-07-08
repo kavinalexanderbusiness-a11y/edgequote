@@ -4,7 +4,9 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
-import { Phone, MapPin, Clock, Navigation } from 'lucide-react'
+import { InlineEmpty } from '@/components/ui/EmptyState'
+import { Skeleton } from '@/components/ui/Skeleton'
+import { Phone, MapPin, Clock, Navigation, CalendarDays } from 'lucide-react'
 
 interface TodayJob {
   id: string
@@ -48,11 +50,12 @@ export function TodayJobs() {
           Plan route <Navigation className="w-3 h-3" />
         </Link>
       </CardHeader>
-      <CardBody className="p-0">
+      <CardBody className={loading || jobs.length === 0 ? 'py-3' : 'p-0'}>
         {loading ? (
-          <div className="py-10 text-center text-sm text-ink-muted">Loading...</div>
+          <div className="px-5 space-y-2" aria-hidden="true"><Skeleton className="h-4 w-48" /><Skeleton className="h-4 w-36" /></div>
         ) : jobs.length === 0 ? (
-          <div className="py-10 text-center text-sm text-ink-muted">Nothing scheduled today.</div>
+          // Compact — a 3-day/week operator sees this most mornings; don't burn a tall card on it.
+          <InlineEmpty icon={CalendarDays}>Nothing scheduled today.</InlineEmpty>
         ) : (
           <div className="divide-y divide-border">
             {jobs.map(j => {

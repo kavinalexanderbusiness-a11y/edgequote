@@ -1,5 +1,6 @@
 'use client'
 import { toast } from '@/lib/toast'
+import { confirm as confirmDialog } from '@/lib/confirm'
 
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
@@ -282,7 +283,12 @@ export default function CustomerDetailPage() {
       .filter(j => j.recurrence_id === plan.recurrenceId && j.scheduled_date >= todayISO && (j.status === 'scheduled' || j.status === 'in_progress'))
       .map(j => j.id)
     if (futureIds.length === 0) return
-    if (!confirm(`Pause ${plan.serviceName}? This cancels ${futureIds.length} upcoming visit${futureIds.length !== 1 ? 's' : ''}. Past visits are kept, and you can schedule it again anytime.`)) return
+    const ok = await confirmDialog({
+      title: `Pause ${plan.serviceName}?`,
+      message: `This cancels ${futureIds.length} upcoming visit${futureIds.length !== 1 ? 's' : ''}. Past visits are kept, and you can schedule it again anytime.`,
+      confirmLabel: 'Pause plan',
+    })
+    if (!ok) return
     setPausing(plan.recurrenceId)
     const { error } = await supabase.from('jobs').update({ status: 'cancelled' }).in('id', futureIds)
     if (error) toast.error('Could not pause: ' + error.message)
@@ -498,6 +504,36 @@ export default function CustomerDetailPage() {
         </CardBody>
       </Card>
 
+      {/* Open items — "what needs action for this customer" comes FIRST, right under
+          the identity card (it was buried five cards deep). */}
+      <Card className={openItems.length > 0 ? 'border-amber-500/30' : ''}>
+        <CardHeader className="flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 text-amber-400" />
+          <h2 className="text-sm font-semibold text-ink">Open Items</h2>
+          {openItems.length > 0 && <span className="ml-auto text-xs font-semibold text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-full px-2 py-0.5">{openItems.length}</span>}
+        </CardHeader>
+        <CardBody className="p-0">
+          {openItems.length === 0 ? (
+            <p className="px-5 py-6 text-center text-sm text-ink-muted">Nothing needs action right now. 🎉</p>
+          ) : (
+            <div className="divide-y divide-border">
+              {openItems.map(item => {
+                const Icon = item.icon
+                return (
+                  <Link key={item.key} href={item.href} className="flex items-center gap-3 px-5 py-3 hover:bg-surface-raised transition-colors">
+                    <Icon className={`w-4 h-4 shrink-0 ${item.tone}`} />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-ink truncate">{item.label}</p>
+                      <p className="text-xs text-ink-muted truncate">{item.sub}</p>
+                    </div>
+                  </Link>
+                )
+              })}
+            </div>
+          )}
+        </CardBody>
+      </Card>
+
       {/* Communication health — opt-in/contact mismatches (only shows when relevant) */}
       <CommsHealth customer={customer} onChange={patch => setCustomer({ ...customer, ...patch })} />
 
@@ -586,35 +622,6 @@ export default function CustomerDetailPage() {
       {/* Payment method + AutoPay (card-on-file for recurring customers) */}
       <PaymentMethodCard customer={customer} onCustomerChange={patch => setCustomer({ ...customer, ...patch })} />
 
-      {/* Open items — what needs action */}
-      <Card className={openItems.length > 0 ? 'border-amber-500/30' : ''}>
-        <CardHeader className="flex items-center gap-2">
-          <AlertTriangle className="w-4 h-4 text-amber-400" />
-          <h2 className="text-sm font-semibold text-ink">Open Items</h2>
-          {openItems.length > 0 && <span className="ml-auto text-xs font-semibold text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-full px-2 py-0.5">{openItems.length}</span>}
-        </CardHeader>
-        <CardBody className="p-0">
-          {openItems.length === 0 ? (
-            <p className="px-5 py-6 text-center text-sm text-ink-muted">Nothing needs action right now. 🎉</p>
-          ) : (
-            <div className="divide-y divide-border">
-              {openItems.map(item => {
-                const Icon = item.icon
-                return (
-                  <Link key={item.key} href={item.href} className="flex items-center gap-3 px-5 py-3 hover:bg-surface-raised transition-colors">
-                    <Icon className={`w-4 h-4 shrink-0 ${item.tone}`} />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-ink truncate">{item.label}</p>
-                      <p className="text-xs text-ink-muted truncate">{item.sub}</p>
-                    </div>
-                  </Link>
-                )
-              })}
-            </div>
-          )}
-        </CardBody>
-      </Card>
-
       {/* Revenue + service history */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {revenueCards.map(c => {
@@ -681,7 +688,12 @@ export default function CustomerDetailPage() {
             </div>
           )}
           {upcoming.length === 0 ? (
-            <p className="text-sm text-ink-muted">No upcoming visits scheduled.</p>
+            // Empty state leads to the fix, not just the fact (the warning banner
+            // above already states it).
+            <p className="text-sm text-ink-muted">
+              No upcoming visits scheduled.{' '}
+              <Link href={`/dashboard/schedule?customer=${customer.id}`} className="text-accent font-medium hover:underline">Schedule a visit →</Link>
+            </p>
           ) : (
             <div className="divide-y divide-border -mx-2">
               {upcoming.map(j => (

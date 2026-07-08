@@ -7,9 +7,10 @@ import { formatCurrency } from '@/lib/utils'
 import { needsFollowUp } from '@/lib/followup'
 import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
 import type { Quote } from '@/types'
+import { SkeletonRows } from '@/components/ui/Skeleton'
 import {
   ListChecks, CheckCircle2, ArrowRight,
-  DollarSign, FileText, Bell, CalendarPlus, AlertTriangle, MessageSquare, Repeat,
+  DollarSign, FileText, Bell, MessageSquare, Repeat,
 } from 'lucide-react'
 
 // ONE ranked queue of the highest-value things to do right now, distilled from the
@@ -79,29 +80,9 @@ export function TodaysPriorities() {
         })
       }
 
-      // 2) Accepted but not scheduled — committed revenue most at risk of slipping.
-      //    Cancelled jobs must NOT count as scheduled (matches UnscheduledAccepted).
-      const scheduledQuoteIds = new Set(jobs.filter(j => j.quote_id && j.status !== 'cancelled').map(j => j.quote_id))
-      const acceptedUnscheduled = quotes.filter(q => q.status === 'accepted' && !scheduledQuoteIds.has(q.id))
-      const acceptedTotal = acceptedUnscheduled.reduce((s, q) => s + Number(q.total || 0), 0)
-      if (acceptedUnscheduled.length > 0) {
-        next.push({
-          key: 'unscheduled', icon: CalendarPlus, tone: 'text-amber-400 bg-amber-500/10 border-amber-500/20',
-          label: 'Schedule accepted jobs', detail: `${acceptedUnscheduled.length} · ${formatCurrency(acceptedTotal)}`,
-          href: '/dashboard/schedule', score: 80_000 + acceptedTotal,
-        })
-      }
-
-      // 3) Missed visits — past-date jobs still open. Un-invoiced, customers falling
-      //    behind (mirrors MissedJobs).
-      const missed = jobs.filter(j => j.scheduled_date < today && (j.status === 'scheduled' || j.status === 'in_progress'))
-      if (missed.length > 0) {
-        next.push({
-          key: 'missed', icon: AlertTriangle, tone: 'text-red-400 bg-red-500/10 border-red-500/20',
-          label: 'Resolve missed jobs', detail: `${missed.length} past due`,
-          href: '/dashboard/schedule', score: 70_000 + missed.length * 200,
-        })
-      }
+      // (Accepted-but-unscheduled and missed visits are NOT queued here — the pinned
+      // UnscheduledAccepted and MissedJobs cards directly beneath this list carry the
+      // same signals WITH their one-tap actions; listing them twice was duplication.)
 
       // 4) Draft invoices to send — the auto-invoiced recurring pipeline that silently
       //    goes unsent (mirrors the Invoices "Drafts to review" card).
@@ -171,7 +152,9 @@ export function TodaysPriorities() {
     load()
   }, [supabase])
 
-  if (loading) return null // stay quiet until ready — no skeleton noise
+  // Reserve the top slot while loading — this card always renders once ready, so
+  // returning null here made the whole page jump down when it popped in.
+  if (loading) return <SkeletonRows count={4} />
 
   return (
     <div className="rounded-card border border-border bg-bg-secondary overflow-hidden">
@@ -187,7 +170,7 @@ export function TodaysPriorities() {
         <div className="px-5 py-8 text-center">
           <CheckCircle2 className="w-6 h-6 mx-auto mb-2 text-emerald-400" />
           <p className="text-sm font-medium text-ink">You&rsquo;re all caught up</p>
-          <p className="text-xs text-ink-muted mt-0.5">No follow-ups, unsent invoices, or unscheduled work right now.</p>
+          <p className="text-xs text-ink-muted mt-0.5">No follow-ups, unsent invoices, or unread replies right now.</p>
         </div>
       ) : (
         <ol className="divide-y divide-border">

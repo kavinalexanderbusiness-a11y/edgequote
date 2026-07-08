@@ -4,10 +4,11 @@ import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from '@/lib/toast'
 import { formatCurrency } from '@/lib/utils'
-import { Invoice, BusinessSettings, PAYMENT_METHODS } from '@/types'
+import { Invoice, BusinessSettings, Payment, PAYMENT_METHODS, paymentMethodLabel } from '@/types'
 import { Button } from '@/components/ui/Button'
-import { invoiceBalance, recordPayment, applyCreditToInvoice, overpaymentToCredit, recordRefund } from '@/lib/payments/ledger'
-import { Wallet, Plus, Gift, RotateCcw, TrendingUp, X } from 'lucide-react'
+import { invoiceBalance, recordPayment, applyCreditToInvoice, overpaymentToCredit, recordRefund, receiptNumberFor } from '@/lib/payments/ledger'
+import { receiptMessageBody } from '@/lib/comms/templates'
+import { Wallet, Plus, Gift, RotateCcw, TrendingUp, X, FileDown, Mail, MessageSquare, ReceiptText } from 'lucide-react'
 
 function todayISO(): string {
   const d = new Date()
@@ -34,6 +35,9 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, onChang
   const [method, setMethod] = useState('etransfer')
   const [date, setDate] = useState(todayISO())
   const [notes, setNotes] = useState('')
+  // The just-recorded payment → drives the automatic receipt panel (PDF/email/SMS).
+  const [lastPayment, setLastPayment] = useState<Payment | null>(null)
+  const [sendingReceipt, setSendingReceipt] = useState<string | null>(null)
 
   const applyable = Math.min(credit, balance)
 
@@ -44,7 +48,52 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, onChang
     if (res.error) { toast.error('Could not record payment: ' + res.error); return }
     toast.success(`Recorded ${formatCurrency(Number(amount))} on ${invoice.invoice_number}.`)
     setOpen(false); setNotes('')
+    if (res.payment) setLastPayment(res.payment)
     onChanged()
+  }
+
+  // ── Receipt actions — generated from the ledger row, never stored ──────────────
+  // Balance AFTER this payment (component may render before the refetch lands).
+  function balanceAfter(p: Payment): number {
+    const paidNow = Math.max(paid, 0) >= Number(p.amount) ? paid : paid + Number(p.amount)
+    return Math.max(0, Math.round((total - paidNow) * 100) / 100)
+  }
+  async function downloadReceipt(p: Payment) {
+    setSendingReceipt('pdf')
+    try {
+      const [{ renderReceiptBlob }, { downloadBlob }] = await Promise.all([
+        import('@/components/payments/ReceiptPDF'), import('@/lib/portalPdf'),
+      ])
+      const inv = { ...invoice, amount_paid: total - balanceAfter(p) }
+      downloadBlob(await renderReceiptBlob(p, inv, settings), `${receiptNumberFor(p.id)}.pdf`)
+    } catch { toast.error('Could not generate the receipt PDF.') }
+    setSendingReceipt(null)
+  }
+  async function sendReceipt(p: Payment, channel: 'email' | 'sms') {
+    if (!invoice.customer_id) { toast.error('No customer on this invoice.'); return }
+    setSendingReceipt(channel)
+    try {
+      const remaining = balanceAfter(p)
+      const res = await fetch('/api/comms/send', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerId: invoice.customer_id,
+          template: 'receipt',
+          channels: [channel],
+          bodyOverride: receiptMessageBody({
+            invoiceNumber: invoice.invoice_number,
+            receiptNumber: receiptNumberFor(p.id),
+            amountPaid: formatCurrency(Number(p.amount) || 0),
+            methodLabel: paymentMethodLabel(p.method || p.provider),
+            balanceRemaining: remaining > 0.01 ? formatCurrency(remaining) : null,
+          }),
+        }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (res.ok && !d?.error) toast.success(`Receipt ${channel === 'sms' ? 'texted' : 'emailed'}.`)
+      else toast.error(`Could not send the receipt${d?.error ? `: ${d.error}` : ''}.`)
+    } catch { toast.error('Could not send the receipt.') }
+    setSendingReceipt(null)
   }
   async function run(fn: () => Promise<{ error?: string }>, ok: string) {
     setBusy(true)
@@ -146,6 +195,36 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, onChang
             <Button size="sm" onClick={save} loading={busy} disabled={!(Number(amount) > 0)}>Record {Number(amount) > 0 ? formatCurrency(Number(amount)) : 'payment'}</Button>
             <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
             {balance > 0 && Number(amount) > 0 && Number(amount) < balance && <span className="text-[10px] text-amber-400 ml-auto">Partial — {formatCurrency(balance - Number(amount))} will remain</span>}
+          </div>
+        </div>
+      )}
+
+      {/* Automatic receipt — appears the moment a payment is recorded. Generated
+          from the ledger row (never stored), delivered as PDF / email / text
+          through the existing PDF + comms engines. */}
+      {lastPayment && (
+        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/[0.06] p-2.5 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs font-semibold text-ink flex items-center gap-1.5">
+              <ReceiptText className="w-3.5 h-3.5 text-emerald-400" />
+              Receipt {receiptNumberFor(lastPayment.id)} · {formatCurrency(Number(lastPayment.amount) || 0)} {paymentMethodLabel(lastPayment.method || lastPayment.provider).toLowerCase()}
+            </p>
+            <button onClick={() => setLastPayment(null)} className="text-ink-faint hover:text-ink" aria-label="Dismiss"><X className="w-4 h-4" /></button>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="secondary" loading={sendingReceipt === 'pdf'} onClick={() => downloadReceipt(lastPayment)}>
+              <FileDown className="w-3.5 h-3.5" /> Download PDF
+            </Button>
+            {invoice.customers?.email && (
+              <Button size="sm" variant="secondary" loading={sendingReceipt === 'email'} onClick={() => sendReceipt(lastPayment, 'email')}>
+                <Mail className="w-3.5 h-3.5" /> Email receipt
+              </Button>
+            )}
+            {invoice.customers?.phone && (
+              <Button size="sm" variant="secondary" loading={sendingReceipt === 'sms'} onClick={() => sendReceipt(lastPayment, 'sms')}>
+                <MessageSquare className="w-3.5 h-3.5" /> Text receipt
+              </Button>
+            )}
           </div>
         </div>
       )}

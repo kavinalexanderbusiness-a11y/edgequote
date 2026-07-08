@@ -70,7 +70,7 @@ function portalInvoiceToInvoice(inv: PortalPdfInvoice, customerName: string, fal
 function portalBusinessToSettings(b: PortalPdfBusiness | null): BusinessSettings | null {
   if (!b) return null
   return {
-    company_name: b.company_name || 'Edge Property Services',
+    company_name: b.company_name || 'Your service provider',
     phone: b.phone,
     email_primary: b.email_primary,
     email_secondary: b.email_secondary,

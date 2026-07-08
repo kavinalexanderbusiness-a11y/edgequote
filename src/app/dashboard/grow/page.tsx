@@ -60,6 +60,10 @@ export default function GrowPage() {
     <div className="max-w-5xl space-y-8">
       <PageHeader title="Grow" description="Everything that grows Edge Property Services, in one place." />
 
+      {/* Suggestions Center — the action feed comes FIRST: "what should I do next?"
+          leads the page; the navigation cards below are reference, not action. */}
+      <SuggestionsCenter />
+
       {/* Intelligence — the owner's command center: report (BI) + act (Revenue Intel). */}
       <div className="grid sm:grid-cols-2 gap-4">
         <Link href="/dashboard/intelligence">
@@ -104,9 +108,6 @@ export default function GrowPage() {
           </div>
         </Card>
       </Link>
-
-      {/* Suggestions Center — the action feed comes first. */}
-      <SuggestionsCenter />
 
       {/* Intelligence: who's slipping / who's valuable, and why quotes are lost. */}
       <CustomerHealthPanel />
