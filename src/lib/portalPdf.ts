@@ -1,4 +1,4 @@
-import type { Quote, Invoice, BusinessSettings } from '@/types'
+import type { Quote, QuoteService, Invoice, BusinessSettings } from '@/types'
 
 // ── Portal PDF bridge ────────────────────────────────────────────────────────
 // The portal renders the SAME quote/invoice PDFs as the dashboard. We map the
@@ -8,12 +8,21 @@ import type { Quote, Invoice, BusinessSettings } from '@/types'
 // Security: get_portal_data only ever returns this token's customer's records,
 // so a customer can only ever build their own documents.
 
+// One service line on a multi-service quote (from get_portal_data's nested
+// quote_services array). Same fields the dashboard PDF consumes.
+export interface PortalQuoteService {
+  service_type: string; quantity: number; unit: string | null; unit_price: number
+  est_minutes: number | null; discount_type: 'amount' | 'percent' | null
+  discount_value: number | null; notes: string | null; sort_order: number
+}
+
 export interface PortalPdfQuote {
   quote_number: string; service_type: string; address: string; total: number
   initial_price: number | null; subtotal: number | null
   weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null
   notes: string | null; status: string; created_at: string; issued_date: string | null
   crew_size: number | null; hours: number | null; travel_fee: number | null
+  services?: PortalQuoteService[] | null
 }
 export interface PortalPdfInvoice {
   invoice_number: string; service_type: string | null; amount: number; status: string
@@ -85,7 +94,18 @@ function portalBusinessToSettings(b: PortalPdfBusiness | null): BusinessSettings
 
 export async function renderPortalQuoteBlob(q: PortalPdfQuote, customerName: string, b: PortalPdfBusiness | null): Promise<Blob> {
   const { renderQuoteBlob } = await import('@/components/quotes/QuotePDF')
-  return renderQuoteBlob(portalQuoteToQuote(q, customerName), portalBusinessToSettings(b))
+  // Multi-service breakdown flows into the SAME PDF pipeline the dashboard uses —
+  // the customer sees every service line, not a lump sum under one service name.
+  const services: QuoteService[] | undefined = q.services?.length
+    ? q.services.map((s, i) => ({
+        id: String(i), created_at: q.created_at, user_id: '', quote_id: '',
+        service_type: s.service_type, service_template_id: null,
+        quantity: num(s.quantity, 1) || 1, unit: s.unit, unit_price: num(s.unit_price),
+        est_minutes: s.est_minutes, discount_type: s.discount_type,
+        discount_value: s.discount_value, notes: s.notes, sort_order: s.sort_order,
+      }))
+    : undefined
+  return renderQuoteBlob(portalQuoteToQuote(q, customerName), portalBusinessToSettings(b), services)
 }
 export async function renderPortalInvoiceBlob(inv: PortalPdfInvoice, customerName: string, fallbackAddress: string | null, b: PortalPdfBusiness | null): Promise<Blob> {
   const { renderInvoiceBlob } = await import('@/components/quotes/InvoicePDF')
