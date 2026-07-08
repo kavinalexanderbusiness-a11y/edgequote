@@ -291,6 +291,45 @@ export default function CustomerDetailPage() {
     setPausing(null)
   }
 
+  // Heavy derivations, memoized and hoisted above the guards (Rules of Hooks) so editing
+  // the controlled Notes / Prefs inputs on this page doesn't rebuild the service plans and
+  // the full activity timeline on every keystroke — only when the underlying data changes.
+  const servicePlans = useMemo(() => {
+    const t = localToday()
+    const quotesById: Record<string, Quote> = {}
+    for (const q of quotes) quotesById[q.id] = q
+    const recsById: Record<string, JobRecurrence> = {}
+    for (const r of recurrences) recsById[r.id] = r
+    const planValueOf = (j: Job) => {
+      const q = j.quote_id ? quotesById[j.quote_id] : null
+      const rec = j.recurrence_id ? recsById[j.recurrence_id] : null
+      const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
+      return jobVisitValue(j.price, q as unknown as Record<string, unknown>, freq, j.is_initial_visit)
+    }
+    return buildServicePlans(recurrences, jobs, seasons, t, planValueOf)
+  }, [quotes, recurrences, jobs, seasons])
+
+  const events = useMemo(() => {
+    const arr: TimelineEvent[] = []
+    for (const q of quotes) {
+      arr.push({ at: q.created_at, kind: 'quote_created', title: `Quote ${q.quote_number} created`, sub: `${q.service_type} · ${formatCurrency(Number(q.total))}`, href: `/dashboard/quotes/${q.id}` })
+      if (q.sent_at) arr.push({ at: q.sent_at, kind: 'quote_sent', title: `Quote ${q.quote_number} sent`, href: `/dashboard/quotes/${q.id}` })
+      if (q.last_followed_up_at) arr.push({ at: q.last_followed_up_at, kind: 'followup', title: `Followed up on ${q.quote_number}`, sub: `${q.follow_up_count} total`, href: `/dashboard/quotes/${q.id}` })
+      if (WON.has(q.status)) arr.push({ at: q.updated_at, kind: 'quote_accepted', title: `Quote ${q.quote_number} accepted`, sub: formatCurrency(Number(q.total)), href: `/dashboard/quotes/${q.id}` })
+    }
+    for (const j of jobs) {
+      arr.push({ at: j.created_at, kind: 'job_scheduled', title: `Job scheduled — ${j.title}`, sub: `for ${formatDate(j.scheduled_date)}` })
+      if (j.status === 'completed') arr.push({ at: j.updated_at, kind: 'job_completed', title: `Job completed — ${j.title}` })
+    }
+    for (const inv of invoices) {
+      arr.push({ at: inv.created_at, kind: 'invoice_created', title: `Invoice ${inv.invoice_number} created`, sub: formatCurrency(Number(inv.amount)) })
+      if (inv.status === 'paid') arr.push({ at: inv.updated_at, kind: 'invoice_paid', title: `Invoice ${inv.invoice_number} paid`, sub: formatCurrency(Number(inv.amount)) })
+    }
+    arr.push(...extraTimeline) // messages, payments, portal requests
+    arr.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
+    return arr
+  }, [quotes, jobs, invoices, extraTimeline])
+
   if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading customer...</div>
   // Cached customer (if any) keeps showing on a revalidation blip; only when there's
   // genuinely nothing to show do we branch error-vs-not-found.
@@ -304,18 +343,6 @@ export default function CustomerDetailPage() {
   )
 
   const today = localToday()
-  // Per-visit valuation so plans can show the initial vs recurring price.
-  const quotesByIdLocal: Record<string, Quote> = {}
-  for (const q of quotes) quotesByIdLocal[q.id] = q
-  const recsByIdLocal: Record<string, JobRecurrence> = {}
-  for (const r of recurrences) recsByIdLocal[r.id] = r
-  const planValueOf = (j: Job) => {
-    const q = j.quote_id ? quotesByIdLocal[j.quote_id] : null
-    const rec = j.recurrence_id ? recsByIdLocal[j.recurrence_id] : null
-    const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
-    return jobVisitValue(j.price, q as unknown as Record<string, unknown>, freq, j.is_initial_visit)
-  }
-  const servicePlans = buildServicePlans(recurrences, jobs, seasons, today, planValueOf)
 
   // ── Revenue (three separate truths) ──
   const wonQuotes = quotes.filter(q => WON.has(q.status))
@@ -365,25 +392,6 @@ export default function CustomerDetailPage() {
     const overdue = !!inv.due_date && inv.due_date < today
     openItems.push({ key: `inv-${inv.id}`, icon: Receipt, label: `${overdue ? 'Overdue' : 'Unpaid'} invoice ${inv.invoice_number}`, sub: `${formatCurrency(Number(inv.amount))}${inv.due_date ? ` · due ${formatDate(inv.due_date)}` : ''}`, href: '/dashboard/invoices', tone: overdue ? 'text-red-400' : 'text-amber-400' })
   }
-
-  // ── Timeline ──
-  const events: TimelineEvent[] = []
-  for (const q of quotes) {
-    events.push({ at: q.created_at, kind: 'quote_created', title: `Quote ${q.quote_number} created`, sub: `${q.service_type} · ${formatCurrency(Number(q.total))}`, href: `/dashboard/quotes/${q.id}` })
-    if (q.sent_at) events.push({ at: q.sent_at, kind: 'quote_sent', title: `Quote ${q.quote_number} sent`, href: `/dashboard/quotes/${q.id}` })
-    if (q.last_followed_up_at) events.push({ at: q.last_followed_up_at, kind: 'followup', title: `Followed up on ${q.quote_number}`, sub: `${q.follow_up_count} total`, href: `/dashboard/quotes/${q.id}` })
-    if (WON.has(q.status)) events.push({ at: q.updated_at, kind: 'quote_accepted', title: `Quote ${q.quote_number} accepted`, sub: formatCurrency(Number(q.total)), href: `/dashboard/quotes/${q.id}` })
-  }
-  for (const j of jobs) {
-    events.push({ at: j.created_at, kind: 'job_scheduled', title: `Job scheduled — ${j.title}`, sub: `for ${formatDate(j.scheduled_date)}` })
-    if (j.status === 'completed') events.push({ at: j.updated_at, kind: 'job_completed', title: `Job completed — ${j.title}` })
-  }
-  for (const inv of invoices) {
-    events.push({ at: inv.created_at, kind: 'invoice_created', title: `Invoice ${inv.invoice_number} created`, sub: formatCurrency(Number(inv.amount)) })
-    if (inv.status === 'paid') events.push({ at: inv.updated_at, kind: 'invoice_paid', title: `Invoice ${inv.invoice_number} paid`, sub: formatCurrency(Number(inv.amount)) })
-  }
-  events.push(...extraTimeline) // messages, payments, portal requests
-  events.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
 
   const phone = customer.phone
   const isHighValue = bookedRevenue >= 2000

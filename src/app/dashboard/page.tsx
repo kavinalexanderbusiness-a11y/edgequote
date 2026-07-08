@@ -17,13 +17,17 @@ export default async function DashboardPage() {
   const { data: { user } } = await supabase.auth.getUser()
 
   const [{ data: quotes }, { data: invoices }, { data: jobs }, { data: settingsRow }] = await Promise.all([
-    supabase.from('quotes').select('*').eq('user_id', user!.id).order('created_at', { ascending: false }),
+    // Only the columns the stats math + RecentQuotes render — not the ~40 wide pricing/
+    // sqft/travel/line-item columns — so the landing page ships far less on every visit.
+    supabase.from('quotes').select('id, quote_number, customer_name, service_type, total, status, created_at').eq('user_id', user!.id).order('created_at', { ascending: false }),
     supabase.from('invoices').select('amount, status').eq('user_id', user!.id),
     supabase.from('jobs').select('status, scheduled_date').eq('user_id', user!.id),
     supabase.from('business_settings').select('dashboard_cards').eq('user_id', user!.id).maybeSingle(),
   ])
 
-  const allQuotes: Quote[] = quotes || []
+  // Narrowed select above returns only the rendered columns; the stats math + RecentQuotes
+  // touch only those, so treat it as Quote[] for the props type.
+  const allQuotes = (quotes as unknown as Quote[]) || []
   const allInvoices = (invoices as { amount: number; status: string }[]) || []
   const allJobs = (jobs as { status: string; scheduled_date: string }[]) || []
   const collectedRevenue = allInvoices.filter(i => i.status === 'paid').reduce((s, i) => s + Number(i.amount || 0), 0)

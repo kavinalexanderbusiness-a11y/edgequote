@@ -23,7 +23,9 @@ export function UnscheduledAccepted() {
   const [scheduling, setScheduling] = useState<string | null>(null)
 
   async function load() {
-    const { data: { user } } = await supabase.auth.getUser()
+    // Local session read — no auth round-trip before the RLS-scoped queries below.
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
     const [qRes, jRes] = await Promise.all([
       supabase.from('quotes').select('*').eq('user_id', user!.id).eq('status', 'accepted').order('created_at', { ascending: false }),
       // Cancelled jobs must NOT count as "scheduled" — an accepted quote whose

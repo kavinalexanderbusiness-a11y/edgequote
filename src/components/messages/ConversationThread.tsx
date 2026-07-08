@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { queueOrRun } from '@/lib/offline/outbox'
@@ -183,7 +183,9 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
   )
 }
 
-function Bubble({ it, customerId }: { it: Item; customerId: string }) {
+// Memoized: `it` refs are stable between reloads, so typing in the reply box no longer
+// re-renders (and re-formats the date of) every bubble in a long thread.
+const Bubble = memo(function Bubble({ it, customerId }: { it: Item; customerId: string }) {
   const time = (() => { try { return format(new Date(it.at), 'MMM d, h:mm a') } catch { return '' } })()
   if (it.kind === 'event') {
     // Badge from status (future-proof) + the TRUTHFUL skip reason from detail.
@@ -226,4 +228,4 @@ function Bubble({ it, customerId }: { it: Item; customerId: string }) {
       </p>
     </div>
   )
-}
+})

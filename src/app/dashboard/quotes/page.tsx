@@ -20,7 +20,9 @@ export default function QuotesPage() {
   const supabase = useMemo(() => createClient(), [])
 
   async function fetchQuotes() {
-    const { data: { user } } = await supabase.auth.getUser()
+    // Local session read — no auth round-trip before the list query (RLS-scoped).
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
     if (user) setUid(user.id)
     const { data } = await supabase
       .from('quotes')
@@ -31,13 +33,10 @@ export default function QuotesPage() {
     setLoading(false)
   }
 
-  // Initial load; the tab-focus refetch is a cheap belt-and-suspenders backup.
-  useEffect(() => {
-    fetchQuotes()
-    const onFocus = () => fetchQuotes()
-    window.addEventListener('focus', onFocus)
-    return () => window.removeEventListener('focus', onFocus)
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // Initial load. The tab-return refetch is handled by useRealtimeRefresh below
+  // (it self-heals on visibilitychange/online) — no separate focus listener, which
+  // only duplicated that refetch on every window refocus.
+  useEffect(() => { fetchQuotes() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Live: a quote accepted/scheduled/completed/deleted anywhere (portal, Stripe,
   // another tab) updates this list instantly — no refresh, no polling.

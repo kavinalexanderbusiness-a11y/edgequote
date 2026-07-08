@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Customer } from '@/types'
@@ -54,16 +54,23 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
       default: return true
     }
   }
-  const filtered = customers.filter(c =>
-    (c.name.toLowerCase().includes(search.toLowerCase()) ||
-      c.email?.toLowerCase().includes(search.toLowerCase()) ||
-      c.city?.toLowerCase().includes(search.toLowerCase())) && matchesConsent(c)
-  )
+  // Memoized so typing in a search box or ticking a bulk-select checkbox (which
+  // changes unrelated state) doesn't re-run these O(n) passes over every customer.
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase()
+    return customers.filter(c =>
+      (c.name.toLowerCase().includes(q) ||
+        c.email?.toLowerCase().includes(q) ||
+        c.city?.toLowerCase().includes(q)) && matchesConsent(c)
+    )
+  }, [customers, search, consentFilter]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Missing-consent report — over ALL customers, not the filtered view.
   const total = customers.length
-  const smsIn = customers.filter(c => c.sms_opt_in).length
-  const emailIn = customers.filter(c => c.email_opt_in).length
+  const { smsIn, emailIn } = useMemo(() => ({
+    smsIn: customers.filter(c => c.sms_opt_in).length,
+    emailIn: customers.filter(c => c.email_opt_in).length,
+  }), [customers])
 
   function showToast(msg: string) { setToast(msg); setTimeout(() => setToast(null), 2600) }
 

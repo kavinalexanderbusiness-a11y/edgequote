@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { hoverIntent } from '@/lib/prefetch'
@@ -35,7 +35,8 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
   const [followUpOnly, setFollowUpOnly] = useState(false)
   const [deleting, setDeleting] = useState<string | null>(null)
 
-  const followUpCount = quotes.filter(needsFollowUp).length
+  // Date math over every quote — memoized so it doesn't re-run on each search keystroke.
+  const followUpCount = useMemo(() => quotes.filter(needsFollowUp).length, [quotes])
 
   // Deep-link from the Weekly Review (and elsewhere): ?followup=1 opens straight to
   // the follow-up queue, ?status=sent to a status — one tap, no re-filtering. Read
@@ -49,15 +50,18 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
     } catch { /* ignore */ }
   }, [])
 
-  const filtered = quotes.filter(q => {
-    const matchSearch =
-      q.customer_name.toLowerCase().includes(search.toLowerCase()) ||
-      q.quote_number.toLowerCase().includes(search.toLowerCase()) ||
-      q.service_type.toLowerCase().includes(search.toLowerCase())
-    const matchStatus = statusFilter ? q.status === statusFilter : true
-    const matchFollowUp = followUpOnly ? needsFollowUp(q) : true
-    return matchSearch && matchStatus && matchFollowUp
-  })
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase()
+    return quotes.filter(quote => {
+      const matchSearch =
+        quote.customer_name.toLowerCase().includes(q) ||
+        quote.quote_number.toLowerCase().includes(q) ||
+        quote.service_type.toLowerCase().includes(q)
+      const matchStatus = statusFilter ? quote.status === statusFilter : true
+      const matchFollowUp = followUpOnly ? needsFollowUp(quote) : true
+      return matchSearch && matchStatus && matchFollowUp
+    })
+  }, [quotes, search, statusFilter, followUpOnly])
 
   async function handleDelete(id: string) {
     setDeleting(id)

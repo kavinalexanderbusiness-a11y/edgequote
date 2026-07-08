@@ -26,7 +26,9 @@ export function TodayJobs() {
 
   useEffect(() => {
     async function load() {
-      const { data: { user } } = await supabase.auth.getUser()
+      // Local session read — no auth round-trip before this RLS-scoped query.
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
       const { data } = await supabase
         .from('jobs')
         .select('id, title, start_time, customers(name, phone), properties(address)')

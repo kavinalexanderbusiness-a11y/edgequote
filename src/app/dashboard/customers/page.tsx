@@ -26,7 +26,9 @@ export default function CustomersPage() {
   const supabase = useMemo(() => createClient(), [])
 
   async function fetchCustomers() {
-    const { data: { user } } = await supabase.auth.getUser()
+    // Local session read — no auth round-trip before the RLS-scoped queries below.
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
     if (!user) { setLoading(false); return }
     setUid(user.id)
     // Active (non-archived) customers only — archived ones are preserved but hidden.
