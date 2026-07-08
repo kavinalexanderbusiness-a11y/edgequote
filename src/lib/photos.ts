@@ -82,6 +82,11 @@ export async function uploadPhoto(
     // the photo syncs hours later. Both optional → the online path is unchanged.
     uploadId?: string
     takenAt?: string
+    // Fresh online capture generates a brand-new uploadId per file, so no catalogue
+    // row can exist yet — skip the pre-upload dedup SELECT to save a round-trip. Only
+    // REPLAYS (same id, second time) need the check, so the replay handler leaves this
+    // unset. Default false → behaviour is unchanged for every existing caller.
+    skipExistingCheck?: boolean
   },
 ): Promise<JobPhotoView | null> {
   // Deterministic name from the stable uploadId (or a fresh stamp for the online path).
@@ -90,8 +95,9 @@ export async function uploadPhoto(
 
   // Idempotency (replay / multi-tab): if this exact object is already catalogued,
   // return it instead of uploading again. The path is derived from uploadId, so this
-  // dedupes on storage_path with no schema change.
-  if (opts.uploadId) {
+  // dedupes on storage_path with no schema change. Skipped on a fresh online capture
+  // (the id is new → nothing to find) so the common path is one round-trip lighter.
+  if (opts.uploadId && !opts.skipExistingCheck) {
     const { data: existing } = await supabase.from('job_photos').select('*')
       .eq('user_id', opts.userId).eq('storage_path', path).maybeSingle()
     if (existing) return { ...(existing as JobPhoto), url: publicUrl(supabase, path) }

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { queueOrRun } from '@/lib/offline/outbox'
@@ -34,6 +34,17 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
   // Guards a fast conversation switch: a slow load for an earlier customer must never
   // overwrite the thread you've since opened (the component is reused across both).
   const reqSeq = useRef(0)
+  // Coalesce reload bursts into ONE fetch. A send triggers an explicit refresh AND a
+  // realtime INSERT echo for the same row — without this that's two identical 2-query
+  // reloads (and two repaints). A latest-ref keeps the debounced call bound to the
+  // current customer's load; the mount/switch load still runs immediately.
+  const loadRef = useRef<() => void>(() => {})
+  const loadTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const scheduleLoad = useCallback(() => {
+    if (loadTimer.current) clearTimeout(loadTimer.current)
+    loadTimer.current = setTimeout(() => { loadTimer.current = null; loadRef.current() }, 160)
+  }, [])
+  useEffect(() => () => { if (loadTimer.current) clearTimeout(loadTimer.current) }, [])
 
   async function load() {
     const mySeq = ++reqSeq.current
@@ -64,6 +75,7 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
     setItems([...msgs, ...logs].sort((a, b) => a.at.localeCompare(b.at)))
     setLoading(false)
   }
+  loadRef.current = load // keep the debounced reload pointed at the current closure
   // On switch: show the skeleton and load fresh (the seq guard drops any stale load).
   useEffect(() => { setLoading(true); setErr(null); load() }, [customerId]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { endRef.current?.scrollIntoView({ block: 'end' }) }, [items.length])
@@ -81,7 +93,7 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
   useEffect(() => {
     const channel = supabase
       .channel(`thread:${customerId}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `customer_id=eq.${customerId}` }, () => load())
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `customer_id=eq.${customerId}` }, () => scheduleLoad())
       .subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [customerId]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -120,7 +132,7 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
         setItems(prev => prev.map(i => i.id === pendId ? { ...i, status: 'queued' } : i))
       } else {
         if (deliveryWarn) setErr(deliveryWarn)
-        await load() // replaces the optimistic bubble with the saved message
+        scheduleLoad() // replaces the optimistic bubble with the saved message; coalesces with the realtime echo
       }
     } catch {
       setErr('Message could not be sent. Please try again.')

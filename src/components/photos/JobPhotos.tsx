@@ -59,28 +59,51 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', cl
     setBusyKind(kind)
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { setBusyKind(null); return }
-    const added: JobPhotoView[] = []
-    for (const file of files) {
-      // Stable upload id → deterministic path → idempotent replay (never a dup upload).
-      const uploadId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-      const takenAt = new Date().toISOString()
+    // Stable upload id per file → deterministic path → idempotent replay (never a dup).
+    const picks = files.map(file => ({
+      file,
+      uploadId: (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      takenAt: new Date().toISOString(),
+    }))
+    const optimistic = (p: typeof picks[number]): JobPhotoView => ({
+      id: 'pending-' + p.uploadId, user_id: user.id, job_id: jobId ?? null, property_id: propertyId,
+      customer_id: customerId ?? null, storage_path: '', kind, caption: null, taken_at: p.takenAt,
+      url: URL.createObjectURL(p.file),
+    } as JobPhotoView)
+    // Show every picked photo INSTANTLY (local object URL) — capture feels immediate,
+    // online or off — then upload CONCURRENTLY (bounded) and reconcile each thumbnail
+    // to its saved row (or drop it on failure). Uploading N photos now takes ~one
+    // upload's time, not the sum, and the UI never waits on the network to draw.
+    setPhotos(prev => [...picks.map(optimistic), ...prev])
+    const results = await mapPool(picks, 4, async (p): Promise<UploadOutcome> => {
       let row: JobPhotoView | null = null
       try {
         // Offline → the File is persisted in the ONE outbox and uploaded on reconnect
-        // through this SAME pipeline; online → uploads now.
+        // through this SAME pipeline; online → uploads now. skipExistingCheck: the id is
+        // brand-new, so the online path skips the dedup SELECT (one less round-trip).
         const outcome = await queueOrRun(
-          { kind: 'photo.upload', payload: { uploadId, userId: user.id, propertyId, jobId: jobId ?? null, customerId: customerId ?? null, kind, caption: null, takenAt, file }, label: `Photo (${kind})` },
-          async () => { row = await uploadPhoto(supabase, { userId: user.id, file, propertyId, jobId, customerId, kind, uploadId, takenAt }); if (!row) throw new Error('upload failed') },
+          { kind: 'photo.upload', payload: { uploadId: p.uploadId, userId: user.id, propertyId, jobId: jobId ?? null, customerId: customerId ?? null, kind, caption: null, takenAt: p.takenAt, file: p.file }, label: `Photo (${kind})` },
+          async () => { row = await uploadPhoto(supabase, { userId: user.id, file: p.file, propertyId, jobId, customerId, kind, uploadId: p.uploadId, takenAt: p.takenAt, skipExistingCheck: true }); if (!row) throw new Error('upload failed') },
         )
-        if (outcome === 'ran' && row) added.push(row)
-        else if (outcome === 'queued') {
-          // Optimistic local thumbnail so capture feels instant offline; the real row
-          // replaces it after sync on the next load. Object URL is session-local.
-          added.push({ id: 'pending-' + uploadId, user_id: user.id, job_id: jobId ?? null, property_id: propertyId, customer_id: customerId ?? null, storage_path: '', kind, caption: null, taken_at: takenAt, url: URL.createObjectURL(file) } as JobPhotoView)
-        }
-      } catch { /* real (online) upload failure — skip this file */ }
-    }
-    if (added.length) setPhotos(prev => [...added, ...prev])
+        if (outcome === 'ran' && row) return { uploadId: p.uploadId, status: 'ran' as const, row }
+        if (outcome === 'queued') return { uploadId: p.uploadId, status: 'queued' as const } // keep optimistic; syncs later
+      } catch { /* real (online) upload failure */ }
+      return { uploadId: p.uploadId, status: 'failed' as const }
+    })
+    // Reconcile: swap each optimistic thumbnail for its saved row, keep queued ones as
+    // the local thumbnail, and drop failures (revoking their object URL to free memory).
+    const byPending = new Map(results.map(r => ['pending-' + r.uploadId, r] as const))
+    setPhotos(prev => {
+      const next: JobPhotoView[] = []
+      for (const ph of prev) {
+        const r = byPending.get(ph.id)
+        if (!r) { next.push(ph); continue }
+        if (r.status === 'ran' && r.row) { try { URL.revokeObjectURL(ph.url) } catch { /* ignore */ } next.push(r.row) }
+        else if (r.status === 'queued') next.push(ph)
+        else { try { URL.revokeObjectURL(ph.url) } catch { /* ignore */ } } // failed → drop
+      }
+      return next
+    })
     setBusyKind(null)
   }
 
@@ -185,6 +208,28 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', cl
       )}
     </div>
   )
+}
+
+// Per-file result of a concurrent upload: reconciled to the saved row, kept as the
+// offline optimistic thumbnail, or dropped on failure.
+type UploadOutcome =
+  | { uploadId: string; status: 'ran'; row: JobPhotoView }
+  | { uploadId: string; status: 'queued' }
+  | { uploadId: string; status: 'failed' }
+
+// Run an async fn over items with a bounded number in flight, preserving input order
+// in the output. Keeps multi-photo capture parallel without flooding a phone's uplink.
+async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length)
+  let next = 0
+  async function worker() {
+    while (next < items.length) {
+      const i = next++
+      out[i] = await fn(items[i])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return out
 }
 
 function CaptureBtn({ label, icon: Icon, busy, disabled, onClick, tone }: {
