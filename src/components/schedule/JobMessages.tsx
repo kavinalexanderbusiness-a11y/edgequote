@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { format, parseISO } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
-import { MsgType, renderMessage } from '@/lib/comms/templates'
+import { MsgType, renderMessage, toDisplayBody, fromDisplayBody } from '@/lib/comms/templates'
 import { summarizeSendOutcome as summarize, type SendOutcome as Outcome } from '@/lib/comms/sendOutcome'
 import { SmsCost } from '@/components/comms/SmsCost'
 import { localTodayISO, cn } from '@/lib/utils'
@@ -85,16 +85,20 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
     const nd = opts?.newDate ?? newDate
     const od = opts?.oldDate ?? oldDate
     const dateLabel = (type === 'rescheduled' || type === 'rain_delay') ? fmtDate(nd) : (visitDate ? fmtDate(visitDate) : undefined)
-    return renderMessage(type, custom, {
+    // Only the server knows the customer's portal token — the composer shows a
+    // friendly [Customer Portal Link] placeholder; send() converts it back to the
+    // {{portal_link}} token so the route injects the real URL.
+    return toDisplayBody(renderMessage(type, custom, {
       firstName: customerName,
       businessName: company,
       eta: e,
       reviewLink: reviewUrl || undefined,
+      portalLink: '{{portal_link}}',
       dateLabel,
       timeWindow: timeWindow,
       oldDateLabel: fmtDate(od),
       address,
-    }).sms
+    }).sms)
   }
 
   function open(type: MsgType) {
@@ -121,7 +125,7 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
       const res = await fetch('/api/comms/send', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          customerId, template: active, jobId, channels, bodyOverride: text,
+          customerId, template: active, jobId, channels, bodyOverride: fromDisplayBody(text),
           vars: { eta, dateLabel, timeWindow, oldDateLabel: fmtDate(oldDate), address },
         }),
       })
