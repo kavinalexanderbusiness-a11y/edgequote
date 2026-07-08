@@ -121,7 +121,6 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, onChang
       {/* Summary — only once money is involved (drafts/unpaid stay quiet) */}
       {(paid > 0 || balance !== total) && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-          <span className="text-ink-muted">Total <span className="font-semibold text-ink">{formatCurrency(total)}</span></span>
           <span className="text-ink-muted">Paid <span className="font-semibold text-emerald-400">{formatCurrency(paid)}</span></span>
           {overpaid > 0
             ? <span className="text-ink-muted">Overpaid <span className="font-semibold text-violet-400">{formatCurrency(overpaid)}</span></span>
