@@ -64,7 +64,8 @@ export async function listPhotosForProperties(
   supabase: SupabaseClient,
   userId: string,
   propertyIds: string[],
-  perProperty = 12,
+  perProperty = 60, // matches a standalone gallery's fetch, so the card shows the real
+                    // count + a working "Show more" instead of silently capping low
 ): Promise<Record<string, JobPhotoView[]>> {
   const out: Record<string, JobPhotoView[]> = {}
   if (!propertyIds.length) return out

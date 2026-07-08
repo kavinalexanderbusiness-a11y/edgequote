@@ -44,7 +44,9 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
   const [pending, setPending] = useState<PendingTile[]>([])
   const [kindFilter, setKindFilter] = useState<'all' | PhotoKind>('all')
   const [shown, setShown] = useState(PAGE)
-  const [lightboxIdx, setLightboxIdx] = useState<number | null>(null)
+  // Track the open photo by ID (not index) so retagging/deleting/filtering can't make
+  // the lightbox silently jump to a different photo — it stays on the same one or closes.
+  const [lightboxId, setLightboxId] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const pendingKind = useRef<PhotoKind>('after')
   const userIdRef = useRef<string | null>(null)
@@ -81,26 +83,35 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
     return c
   }, [photos])
 
-  // Lightbox navigation over the currently-filtered set.
-  const current = lightboxIdx != null ? filtered[lightboxIdx] : null
+  // If the active filter empties out (e.g. you deleted the last "Before"), fall back
+  // to All instead of showing a blank grid with a dead chip.
+  useEffect(() => { if (kindFilter !== 'all' && counts[kindFilter] === 0) setKindFilter('all') }, [kindFilter, counts])
+
+  // Lightbox navigation over the currently-filtered set, resolved by stable ID.
+  const lightboxIdx = lightboxId != null ? filtered.findIndex(p => p.id === lightboxId) : -1
+  const current = lightboxIdx >= 0 ? filtered[lightboxIdx] : null
   function step(delta: number) {
-    setLightboxIdx(i => {
-      if (i == null) return i
-      const n = i + delta
-      return n >= 0 && n < filtered.length ? n : i
+    setLightboxId(id => {
+      const idx = filtered.findIndex(p => p.id === id)
+      if (idx < 0) return id
+      const n = idx + delta
+      return n >= 0 && n < filtered.length ? filtered[n].id : id
     })
   }
   useEffect(() => {
-    if (lightboxIdx == null) return
+    if (!lightboxId) return
     function onKey(e: KeyboardEvent) {
+      // Don't hijack arrow keys while the caption input is focused (would discard typing).
+      if (e.key === 'Escape') { setLightboxId(null); return }
+      const t = e.target as HTMLElement | null
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return
       if (e.key === 'ArrowLeft') step(-1)
       else if (e.key === 'ArrowRight') step(1)
-      else if (e.key === 'Escape') setLightboxIdx(null)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lightboxIdx, filtered.length])
+  }, [lightboxId, filtered.length])
 
   function releaseTile(t: PendingTile) {
     URL.revokeObjectURL(t.url); objectUrls.current.delete(t.url)
@@ -164,8 +175,13 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
   function remove(photo: JobPhotoView) {
     const idx = photos.findIndex(p => p.id === photo.id)
     if (idx < 0) return
+    // If the deleted photo is open, advance the lightbox to a neighbor (so a crew can
+    // cull a batch without reopening); close only when it was the last one.
+    if (lightboxId === photo.id) {
+      const fIdx = filtered.findIndex(p => p.id === photo.id)
+      setLightboxId(filtered[fIdx + 1]?.id ?? filtered[fIdx - 1]?.id ?? null)
+    }
     setPhotos(prev => prev.filter(p => p.id !== photo.id))
-    setLightboxIdx(null)
     let undone = false
     toast.undo('Photo deleted.', () => { undone = true; setPhotos(prev => { const c = [...prev]; c.splice(Math.min(idx, c.length), 0, photo); return c }) })
     if (typeof window !== 'undefined') window.setTimeout(() => { if (!undone) deletePhoto(supabase, photo) }, 7000)
@@ -253,8 +269,8 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
                 )}
               </div>
             ))}
-            {visible.map((p, i) => (
-              <button key={p.id} onClick={() => setLightboxIdx(i)}
+            {visible.map(p => (
+              <button key={p.id} onClick={() => setLightboxId(p.id)}
                 className="relative aspect-square rounded-lg overflow-hidden border border-border bg-bg-tertiary group">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={thumbUrl(p.url)} alt={p.caption || PHOTO_KIND_LABELS[p.kind]} loading="lazy"
@@ -275,7 +291,7 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
 
       {/* Lightbox */}
       {current && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" onClick={() => setLightboxIdx(null)}>
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" onClick={() => setLightboxId(null)}>
           {/* Prev / next across the current (filtered) set — no open-close per photo. */}
           {filtered.length > 1 && (
             <>
@@ -290,8 +306,8 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
               <span className={`text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 border ${KIND_BADGE[current.kind]}`}>
                 {PHOTO_KIND_LABELS[current.kind]} · {formatDate(current.taken_at)}
               </span>
-              <span className="text-[11px] text-ink-faint">{(lightboxIdx ?? 0) + 1} / {filtered.length}</span>
-              <button onClick={() => setLightboxIdx(null)} className="h-7 w-7 rounded-lg hover:bg-black/20 flex items-center justify-center text-ink-muted">
+              <span className="text-[11px] text-ink-faint">{lightboxIdx + 1} / {filtered.length}</span>
+              <button onClick={() => setLightboxId(null)} className="h-7 w-7 rounded-lg hover:bg-black/20 flex items-center justify-center text-ink-muted">
                 <X className="w-4 h-4" />
               </button>
             </div>

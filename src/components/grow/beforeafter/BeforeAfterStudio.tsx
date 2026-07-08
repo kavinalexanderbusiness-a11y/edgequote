@@ -100,6 +100,7 @@ export function BeforeAfterStudio() {
 
   const [downloading, setDownloading] = useState(false)
   const [justDownloaded, setJustDownloaded] = useState(false)
+  const [batchDone, setBatchDone] = useState(false) // confirmation for the "All platforms" button
   const [batchProgress, setBatchProgress] = useState<string | null>(null)
   const [previewError, setPreviewError] = useState(false)
   // Which pair the canvas has finished drawing — drives a one-time "rendering…"
@@ -454,7 +455,8 @@ export function BeforeAfterStudio() {
 
   const triggerDownload = useCallback((blob: Blob, presetK: string) => {
     const preset = presetByKey(presetK)
-    const name = `edge-before-after-${slug(selected?.context.customerName || selected?.job.title || 'job')}-${preset.key}-${preset.w}x${preset.h}.jpg`
+    const biz = slug(brand.name || 'business')
+    const name = `${biz}-before-after-${slug(selected?.context.customerName || selected?.job.title || 'job')}-${preset.key}-${preset.w}x${preset.h}.jpg`
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -463,7 +465,7 @@ export function BeforeAfterStudio() {
     a.click()
     a.remove()
     setTimeout(() => URL.revokeObjectURL(url), 1000)
-  }, [selected])
+  }, [selected, brand])
 
   // Brief "Downloaded ✓" confirmation on the button (Canva-style feedback).
   function flashDownloaded() {
@@ -496,7 +498,7 @@ export function BeforeAfterStudio() {
         await new Promise(r => setTimeout(r, 350)) // let each download register
       }
       if (any) {
-        flashDownloaded()
+        setBatchDone(true); window.setTimeout(() => setBatchDone(false), 1800) // confirm on the All-platforms button, not the single-download one
         if (selected && resolvedBefore && resolvedAfter) await saveAsset(selected, resolvedBefore, resolvedAfter, 'used')
       }
     } finally {
@@ -823,7 +825,9 @@ export function BeforeAfterStudio() {
             {EXPORT_PRESETS.filter(p => p.group === 'Platform').map(p => (
               <Chip key={p.key} active={presetKey === p.key} onClick={() => setPresetKey(p.key)} title={`${p.w}×${p.h}${p.note ? ' · ' + p.note : ''}`}>{p.label}</Chip>
             ))}
-            {EXPORT_PRESETS.filter(p => p.group === 'Format').map(p => (
+            {/* Only Format shapes NOT already covered by a Platform preset — so we don't
+                offer two chips (e.g. Portrait vs Instagram) that export identical files. */}
+            {EXPORT_PRESETS.filter(p => p.group === 'Format' && !EXPORT_PRESETS.some(q => q.group === 'Platform' && q.w === p.w && q.h === p.h)).map(p => (
               <Chip key={p.key} active={presetKey === p.key} onClick={() => setPresetKey(p.key)} title={`${p.w}×${p.h}`} subtle>{p.label}</Chip>
             ))}
           </div>
@@ -842,8 +846,10 @@ export function BeforeAfterStudio() {
                 ? <><Check className="w-4 h-4" /> Downloaded</>
                 : <><Download className="w-4 h-4" /> Download {presetByKey(presetKey).label}</>}
             </Button>
-            <Button variant="secondary" onClick={downloadAllPlatforms} loading={downloading && !!batchProgress} className="w-full">
-              <Images className="w-4 h-4" /> {batchProgress ? `Saving ${batchProgress}…` : `All platforms (${PLATFORM_KEYS.length})`}
+            <Button variant="secondary" onClick={downloadAllPlatforms} disabled={downloading} loading={downloading && !!batchProgress} className="w-full">
+              {batchDone
+                ? <><Check className="w-4 h-4" /> Saved all {PLATFORM_KEYS.length}</>
+                : <><Images className="w-4 h-4" /> {batchProgress ? `Saving ${batchProgress}…` : `All platforms (${PLATFORM_KEYS.length})`}</>}
             </Button>
             {/* Screen-reader announcement for download progress / completion. */}
             <span className="sr-only" aria-live="polite">

@@ -104,6 +104,7 @@ export default function PropertiesPage() {
   // Photos for every property, fetched in ONE batched query (not N self-fetching
   // galleries) and handed to each card as initialPhotos.
   const [photosByProp, setPhotosByProp] = useState<Record<string, JobPhotoView[]>>({})
+  const [photosLoaded, setPhotosLoaded] = useState(false) // false → let each card self-fetch (batch failed)
   const [recalcId, setRecalcId] = useState<string | null>(null)
 
   const supabase = createClient()
@@ -189,12 +190,14 @@ export default function PropertiesPage() {
       const propIds = ((pRes.data as Property[]) || []).map(p => p.id)
       // ONE batched photo read for every property (replaces N per-card gallery
       // fetches) + AI Vision presence — in parallel.
-      const [visionMap, photoMap] = await Promise.all([
+      const [visionMap, photoRes] = await Promise.all([
         getPropertyContexts(supabase, propIds).catch(() => new Map()),
-        listPhotosForProperties(supabase, user!.id, propIds).catch(() => ({} as Record<string, JobPhotoView[]>)),
+        listPhotosForProperties(supabase, user!.id, propIds).then(m => ({ ok: true, m })).catch(() => ({ ok: false, m: {} as Record<string, JobPhotoView[]> })),
       ])
       if (visionMap.size) setHasVisionByProp(Object.fromEntries(propIds.map(id => [id, visionMap.has(id)])))
-      setPhotosByProp(photoMap)
+      // Only seed the cards from the batch if it succeeded; on failure leave photosLoaded
+      // false so each card falls back to its own fetch (no false "No photos yet").
+      if (photoRes.ok) { setPhotosByProp(photoRes.m); setPhotosLoaded(true) }
       setLoading(false)
     }
     fetchProperties()
@@ -547,7 +550,7 @@ export default function PropertiesPage() {
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted mb-2 flex items-center gap-1.5">
                     <Camera className="w-3.5 h-3.5" /> Photos
                   </p>
-                  <JobPhotos propertyId={property.id} customerId={property.customer_id} variant="gallery" initialPhotos={photosByProp[property.id] || []} />
+                  <JobPhotos propertyId={property.id} customerId={property.customer_id} variant="gallery" initialPhotos={photosLoaded ? (photosByProp[property.id] || []) : undefined} />
                 </div>
               </CardBody>
             </Card>
