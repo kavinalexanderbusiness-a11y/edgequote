@@ -43,6 +43,13 @@ function ToastRow({ t }: { t: ToastItem }) {
           <Undo2 className="w-3.5 h-3.5" /> Undo
         </button>
       )}
+      {t.action && (
+        <button
+          onClick={async () => { const run = t.action?.run; dismissToast(t.id); try { await run?.() } catch { /* best-effort follow-up */ } }}
+          className="shrink-0 inline-flex items-center gap-1 text-xs font-semibold rounded-lg px-2 py-1 border border-current/30 hover:bg-current/10 transition-colors">
+          {t.action.label}
+        </button>
+      )}
       <button onClick={() => dismissToast(t.id)} aria-label="Dismiss" className="shrink-0 text-ink-faint hover:text-ink">
         <X className="w-3.5 h-3.5" />
       </button>

@@ -43,6 +43,7 @@ export function PriceIntelligence({
 }) {
   const supabase = useMemo(() => createClient(), [])
   const [data, setData] = useState<{ model: QuotePricingModel; cfg: PricingConfig; crewCost: number } | null>(null)
+  const [loaded, setLoaded] = useState(false) // model fetch settled (even if empty)
   const [laborModel, setLaborModel] = useState<LaborModel | null>(null)
   // Route density resolved from the EXISTING engine (prospect/route-density) when the
   // caller didn't supply it — so "route density / nearby recurring" explains the price
@@ -51,7 +52,9 @@ export function PriceIntelligence({
 
   useEffect(() => {
     let active = true
-    loadQuotePricingModel(supabase).then(r => { if (active && r) setData(r) })
+    loadQuotePricingModel(supabase)
+      .then(r => { if (active && r) setData(r) })
+      .finally(() => { if (active) setLoaded(true) })
     loadLaborModel(supabase).then(r => { if (active && r) setLaborModel(r.model) })
     return () => { active = false }
   }, [supabase])
@@ -89,7 +92,19 @@ export function PriceIntelligence({
     }, data.model, data.cfg)
   }, [data, laborModel, sqft, serviceType, cadence, overgrowth, propertyId, customerId, effectiveNearby, effectiveRecurring])
 
-  if (!rec) return null
+  if (!rec) {
+    // Models still loading — hold THE primary card's slot with a skeleton so the
+    // recommended price doesn't pop in and shift the form a beat later.
+    if (!loaded && sqft > 0) {
+      return (
+        <div className="rounded-xl border border-border bg-bg-tertiary p-3 animate-pulse" aria-hidden>
+          <div className="h-3 w-36 rounded bg-border/60 mb-3" />
+          <div className="h-7 w-28 rounded bg-border/60" />
+        </div>
+      )
+    }
+    return null
+  }
   const applied = currentPrice != null && Math.abs(currentPrice - rec.price) < 0.5
 
   return (

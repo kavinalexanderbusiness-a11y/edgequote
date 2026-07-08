@@ -71,6 +71,10 @@ export default function PortalPage() {
   const [paymentsEnabled, setPaymentsEnabled] = useState(false)
   const [payingId, setPayingId] = useState<string | null>(null)
   const [justPaid, setJustPaid] = useState(false)
+  const [justAccepted, setJustAccepted] = useState(false)
+  // The Documents tab opens pre-filtered to what the customer came for (the
+  // signpost filters to quotes, the balance path to invoices).
+  const [docsCat, setDocsCat] = useState<'all' | 'quote' | 'invoice'>('all')
   // One inline error surface for portal actions (pay / accept / request) — fixed,
   // friendly copy near the top of the content, never a browser alert.
   const [actionError, setActionError] = useState<string | null>(null)
@@ -152,7 +156,12 @@ export default function PortalPage() {
     setAccepting(qid)
     setActionError(null)
     const { data: ok } = await supabase.rpc('portal_accept_quote', { p_token: token, p_quote_id: qid })
-    if (ok) setData(d => d ? { ...d, quotes: d.quotes.map(q => q.id === qid ? { ...q, status: 'accepted' } : q) } : d)
+    if (ok) {
+      setData(d => d ? { ...d, quotes: d.quotes.map(q => q.id === qid ? { ...q, status: 'accepted' } : q) } : d)
+      // Close the loop — the customer must SEE their approval registered and
+      // know what happens next (same pattern as the payment-received banner).
+      setJustAccepted(true)
+    }
     else setActionError('We couldn’t record your approval — please try again, or reply to any message from us and we’ll take care of it.')
     setAccepting(null)
   }
@@ -201,7 +210,7 @@ export default function PortalPage() {
     // Outstanding = unpaid BALANCE (total − payments recorded) across issued invoices,
     // so partial payments and discounts are reflected. Same engine as the dashboard.
     const gstPct = Number(data.business?.gst_percent) || 0
-    const outstanding = (data.invoices || []).filter(i => i.status !== 'draft').reduce((s, i) => {
+    const outstanding = (data.invoices || []).filter(i => i.status !== 'draft' && i.status !== 'cancelled').reduce((s, i) => {
       const total = invoiceTotals(i.amount, { gst_percent: gstPct }, { type: i.discount_type, value: i.discount_value }).total
       return s + Math.max(0, Math.round((total - (Number(i.amount_paid) || 0)) * 100) / 100)
     }, 0)
@@ -235,10 +244,13 @@ export default function PortalPage() {
   // Ordered by how often a customer reaches for each: Home first, then Documents
   // (their central records hub) immediately after, then the things they act on (pay
   // invoices, accept quotes, manage payments), then service history & photos, then
-  // the rest. Reordering only — every tab is preserved.
+  // the rest. Tabs whose section would be EMPTY are hidden (a fresh quote
+  // recipient sees Home/Documents/Request, not five dead ends) — each appears
+  // as soon as it has content.
   // Documents IS the quotes+invoices hub (search, filters, pay & accept on the
   // row) — no separate Invoices/Quotes tabs repeating the same records.
-  const TABS: { key: Tab; label: string; icon: typeof Home; n?: number }[] = [
+  const hasProperty = !!(data.property && (data.property.address || data.property.lawn_sqft || data.property.fence_length || data.property.neighborhood))
+  const TABS: { key: Tab; label: string; icon: typeof Home; n?: number }[] = ([
     { key: 'home', label: 'Home', icon: Home },
     { key: 'documents', label: 'Documents', icon: FolderOpen, n: data.quotes.length + data.invoices.length },
     { key: 'payments', label: 'Payments', icon: Wallet, n: data.payments.length },
@@ -247,7 +259,12 @@ export default function PortalPage() {
     { key: 'timeline', label: 'Timeline', icon: Activity },
     { key: 'property', label: 'Property', icon: MapPin },
     { key: 'request', label: 'Request', icon: MessageSquarePlus },
-  ]
+  ] as { key: Tab; label: string; icon: typeof Home; n?: number }[]).filter(t =>
+    t.key === 'payments' ? (data.payments.length > 0 || (data.invoices || []).length > 0) :
+    t.key === 'service' ? derived.completed.length > 0 :
+    t.key === 'photos' ? data.photos.length > 0 :
+    t.key === 'property' ? hasProperty :
+    true)
 
   return (
     <div className="min-h-screen bg-bg">
@@ -267,7 +284,7 @@ export default function PortalPage() {
         <div className="sticky top-0 z-10 -mx-4 px-4 py-2 bg-bg/90 backdrop-blur border-b border-border">
           <div className="flex gap-1.5 overflow-x-auto">
             {TABS.map(t => (
-              <button key={t.key} onClick={() => setTab(t.key)}
+              <button key={t.key} onClick={() => { if (t.key === 'documents') setDocsCat('all'); setTab(t.key) }}
                 className={cn('shrink-0 flex items-center gap-1.5 text-xs font-medium rounded-full px-3 py-2 border transition-colors',
                   tab === t.key ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
                 <t.icon className="w-3.5 h-3.5" /> {t.label}{t.n != null && t.n > 0 && <span className="opacity-70">{t.n}</span>}
@@ -282,6 +299,11 @@ export default function PortalPage() {
               <CheckCircle2 className="w-4 h-4" /> Payment received — thank you! Your invoice will update shortly.
             </div>
           )}
+          {justAccepted && (
+            <div className="mb-3 rounded-card border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-sm font-medium px-4 py-3 flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4" /> Quote approved — thank you! We’ll be in touch to schedule your service.
+            </div>
+          )}
           {actionError && (
             <div className="mb-3 rounded-card border border-red-500/25 bg-red-500/10 text-red-400 text-sm font-medium px-4 py-3 flex items-start justify-between gap-3">
               <span>{actionError}</span>
@@ -289,7 +311,9 @@ export default function PortalPage() {
             </div>
           )}
           {tab === 'home' && <HomeTab data={data} derived={derived} biz={biz} onRequest={() => setTab('request')}
-            paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} onOpenInvoices={() => setTab('documents')} />}
+            paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId}
+            onOpenInvoices={() => { setDocsCat('invoice'); setTab('documents') }}
+            onReviewQuotes={() => { setDocsCat('quote'); setTab('documents') }} />}
           {tab === 'home' && biz?.review_url && derived.lastCompleted && !data.customer.reviewed_at && (
             <ReviewCard reviewUrl={biz.review_url} businessName={biz.company_name} reviewed={markedReviewed} onReviewed={markReviewed} />
           )}
@@ -301,7 +325,7 @@ export default function PortalPage() {
           {tab === 'payments' && <PaymentsTab payments={data.payments} invoices={data.invoices} outstanding={derived.outstanding}
             token={token} paymentsEnabled={paymentsEnabled} card={data.payment_method ?? null} autopayEnabled={!!data.customer.autopay_enabled} onChanged={load} />}
           {tab === 'documents' && <DocumentsTab quotes={data.quotes} invoices={data.invoices} customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} business={biz} onInvoiceOpen={markInvoiceViewed}
-            paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} accept={accept} accepting={accepting} />}
+            paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} accept={accept} accepting={accepting} initialCat={docsCat} />}
           {tab === 'request' && (
             <RequestTab presets={REQUEST_PRESETS} reqMsg={reqMsg} setReqMsg={setReqMsg} request={request} reqBusy={reqBusy} reqSent={reqSent} biz={biz} />
           )}
@@ -341,14 +365,21 @@ function StatusStepper({ s }: { s: LiveStatus }) {
 }
 
 // ── Home ──
-function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId, onOpenInvoices }: {
+function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId, onOpenInvoices, onReviewQuotes }: {
   data: PortalData; derived: Derived; biz: PortalData['business']; onRequest: () => void
-  paymentsEnabled: boolean; pay: (id: string) => void; payingId: string | null; onOpenInvoices: () => void
+  paymentsEnabled: boolean; pay: (id: string) => void; payingId: string | null; onOpenInvoices: () => void; onReviewQuotes: () => void
 }) {
   const next = derived.nextService
   // A quote awaiting approval is usually WHY the customer opened this link —
   // signpost it up top instead of making them discover the Documents tab.
   const awaiting = (data.quotes || []).filter(q => q.status === 'sent')
+  // A pure prospect (quote in hand, no visits or invoices yet) came to review
+  // the quote — skip the empty "no visit scheduled" hero and $0/— stat cards
+  // that would push it down and invite the wrong action.
+  const prospect = awaiting.length > 0 && !next && derived.completed.length === 0 && (data.invoices || []).length === 0
+  // Approved but nothing on the calendar yet — reassure instead of the generic
+  // "no upcoming visit" message (they just said yes; the ball is in our court).
+  const approvedPending = !next && (data.quotes || []).some(q => q.status === 'accepted')
   // A PARTIALLY paid invoice must reach checkout too (server charges only the remaining balance).
   const owing = (data.invoices || []).filter(i => i.status === 'unpaid' || i.status === 'sent' || i.status === 'partial')
   // Tapping the balance goes straight to paying: one owing invoice + online payments
@@ -360,9 +391,9 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
   }
   return (
     <div className="space-y-3">
-      {/* Quote awaiting approval — one tap to the Documents tab (quotes live there) */}
+      {/* Quote awaiting approval — one tap to the Documents tab, pre-filtered to quotes */}
       {awaiting.length > 0 && (
-        <button type="button" onClick={onOpenInvoices}
+        <button type="button" onClick={onReviewQuotes}
           className="w-full text-left rounded-card border border-amber-500/30 bg-amber-500/10 p-4 hover:border-amber-500/50 transition-colors">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
@@ -383,7 +414,8 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
         </button>
       )}
 
-      {/* Next service hero */}
+      {/* Next service hero (hidden for a pure prospect — the quote card above is their whole visit) */}
+      {!prospect && (
       <div className="rounded-card border border-accent/20 bg-gradient-to-br from-accent/[0.08] to-transparent p-4">
         <p className="text-[11px] font-semibold uppercase tracking-wide text-accent mb-1">Next service</p>
         {next ? (
@@ -396,6 +428,13 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
             <StatusStepper s={liveStatusOf(next)} />
             {liveStatusOf(next) === 'on_my_way' && <p className="text-xs text-sky-400 mt-2 flex items-center gap-1"><Navigation className="w-3.5 h-3.5" /> Your provider is on the way!</p>}
           </>
+        ) : approvedPending ? (
+          <div>
+            <p className="text-sm font-semibold text-ink flex items-center gap-1.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" /> Your quote has been approved.
+            </p>
+            <p className="text-sm text-ink-muted mt-1">We&rsquo;re scheduling your service and will contact you shortly.</p>
+          </div>
         ) : (
           <div>
             <p className="text-sm text-ink-muted mb-3">No upcoming visit scheduled.</p>
@@ -405,8 +444,10 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
           </div>
         )}
       </div>
+      )}
 
       {/* Stat cards — the balance is tappable straight to payment when money is owed */}
+      {!prospect && (
       <div className="grid grid-cols-2 gap-3">
         {derived.outstanding > 0 ? (
           <button type="button" onClick={payOutstanding} disabled={payingId !== null}
@@ -423,6 +464,7 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
         )}
         <StatCard label="Last completed" value={derived.lastCompleted ? formatDate(derived.lastCompleted.scheduled_date) : '—'} icon={CheckCircle2} />
       </div>
+      )}
 
       {/* Active plan */}
       {derived.plans.length > 0 && (
@@ -574,13 +616,16 @@ const KIND_META: Record<DocKind, { label: string; icon: typeof FileText; tone: s
 }
 
 
-function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, business, onInvoiceOpen, paymentsEnabled, pay, payingId, accept, accepting }: {
+function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, business, onInvoiceOpen, paymentsEnabled, pay, payingId, accept, accepting, initialCat }: {
   quotes: PortalQuote[]; invoices: PortalInvoice[]; customerName: string; fallbackAddress: string | null; business: PortalData['business']
   onInvoiceOpen?: (invoiceId: string) => void
   paymentsEnabled: boolean; pay: (invoiceId: string) => void; payingId: string | null
   accept: (quoteId: string) => void; accepting: string | null
+  initialCat?: 'all' | DocKind
 }) {
-  const [cat, setCat] = useState<'all' | DocKind>('all')
+  // Pre-filtered entry (the Home signpost lands on quotes, the balance path on
+  // invoices) — the customer arrives looking at what they came for.
+  const [cat, setCat] = useState<'all' | DocKind>(initialCat ?? 'all')
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<'newest' | 'oldest'>('newest')
 
@@ -591,7 +636,7 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, busines
       // serviceLineTotals math as the builder/PDF), so the customer sees what
       // makes up the total instead of a lump sum under one service name.
       const svc = (qq.services || []).slice().sort((a, b) => a.sort_order - b.sort_order)
-      const lines = svc.length > 1
+      const svcLines = svc.length > 1
         ? [
             ...svc.map(s => ({
               label: Number(s.quantity) > 1 ? `${s.service_type} × ${Number(s.quantity)}` : s.service_type,
@@ -599,7 +644,16 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, busines
             })),
             ...(Number(qq.travel_fee) > 0 ? [{ label: 'Travel fee', amount: Number(qq.travel_fee) }] : []),
           ]
-        : undefined
+        : []
+      // Ongoing plan pricing is material to the approval — show it on the row,
+      // not only inside the PDF.
+      const planLines = [
+        Number(qq.weekly_price) > 0 ? { label: 'Weekly plan (per visit)', amount: Number(qq.weekly_price) } : null,
+        Number(qq.biweekly_price) > 0 ? { label: 'Bi-weekly plan (per visit)', amount: Number(qq.biweekly_price) } : null,
+        Number(qq.monthly_price) > 0 ? { label: 'Monthly plan', amount: Number(qq.monthly_price) } : null,
+      ].filter((l): l is { label: string; amount: number } => l !== null)
+      const allLines = [...svcLines, ...planLines]
+      const lines = allLines.length > 0 ? allLines : undefined
       return {
         id: 'q' + qq.id, rawId: qq.id, kind: 'quote' as const, number: qq.quote_number, title: qq.service_type || 'Quote',
         date: qq.issued_date || qq.created_at, status: qq.status, amount: Number(qq.total) || 0, balance: 0,
@@ -684,7 +738,7 @@ function DocRow({ d, paymentsEnabled, pay, payingId, accept, accepting }: {
   // The one action each document actually needs, right on the row: a sent quote
   // can be accepted; an invoice with a balance can be paid.
   const canAccept = d.kind === 'quote' && d.status === 'sent'
-  const canPay = d.kind === 'invoice' && paymentsEnabled && d.balance > 0 && d.status !== 'draft'
+  const canPay = d.kind === 'invoice' && paymentsEnabled && d.balance > 0 && d.status !== 'draft' && d.status !== 'cancelled'
   return (
     <div className="rounded-card border border-border bg-bg-secondary p-4">
       <div className="flex items-start justify-between gap-2">

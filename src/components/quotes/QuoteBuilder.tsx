@@ -18,6 +18,7 @@ import { Collapsible } from '@/components/ui/Collapsible'
 import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
 import { sumServiceLines, serviceLineTotals, emptyServiceLine, SERVICE_UNITS } from '@/lib/quoteServices'
 import { formatCurrency, formatDate, suggestTravelFee, cn } from '@/lib/utils'
+import { toast } from '@/lib/toast'
 import { formatServicePrice, servicePricingKind } from '@/lib/servicePricing'
 import { laborSuggestion, pricingConfigFromSettings, latestSavedRecommendation, recommendationIsStale, pricingPackage } from '@/lib/pricing'
 import { evaluatePrice, PriceGuardrail } from '@/lib/priceGuardrails'
@@ -280,10 +281,13 @@ export function QuoteBuilder({
       if (!isEdit && lawn > 0 && (Number(getValues('measured_sqft')) || 0) === 0) {
         setValue('measured_sqft', lawn)
       }
-      // Targeting a specific property → prefer its address over the customer default.
-      if (!isEdit && defaultPropertyId && row?.address) {
+      // Targeting a specific property → its address wins. Otherwise the primary
+      // property's address fills the field only when it's still EMPTY (imported
+      // customers and website leads often carry the address on the property, not
+      // the customer record — never make the owner retype data we just fetched).
+      if (!isEdit && row?.address) {
         const full = [row.address, row.city, row.province].filter(Boolean).join(', ')
-        if (full) setValue('address', full)
+        if (full && (defaultPropertyId || !getValues('address'))) setValue('address', full)
       }
     }
     load()
@@ -467,6 +471,7 @@ export function QuoteBuilder({
               <Controller name="service_template_id" control={control}
                 render={({ field }) => (<Select label="Service" options={templateOptions} {...field} />)} />
               <Input label="Service Name" placeholder="e.g. Lawn Mowing"
+                hint="Auto-fills when you pick a service above — edit to rename it on the quote."
                 error={errors.service_type?.message}
                 {...register('service_type', { required: 'Service is required' })} />
 
@@ -481,7 +486,12 @@ export function QuoteBuilder({
 
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
                 <Button type="button" variant="secondary" size="sm"
-                  onClick={() => { if (!address) { setCalcMsg('Enter an address first.'); return } setShowMeasure(true) }}>
+                  onClick={() => {
+                    // Immediate feedback where the tap happened — a message inside
+                    // the collapsed Travel section is a silent failure.
+                    if (!address) { toast.error('Enter a service address first.'); return }
+                    setShowMeasure(true)
+                  }}>
                   <Ruler className="w-3.5 h-3.5" /> Measure &amp; price from satellite
                 </Button>
                 {measuredSqft > 0 && (
@@ -572,7 +582,10 @@ export function QuoteBuilder({
                             active ? 'border-accent bg-accent/10 ring-1 ring-accent' : 'border-border bg-surface hover:border-border-strong')}>
                           <span className="flex items-center justify-between gap-1">
                             <span className="text-[11px] font-medium text-ink-muted">{opt.label}</span>
-                            {suggested.recommended === opt.c && <span className="text-[9px] font-bold uppercase tracking-wide text-accent">Rec</span>}
+                            {/* ONE recommendation on screen: when Pricing Intelligence is
+                                the primary card, the tile badge would be a second,
+                                differently-priced "Rec". */}
+                            {!(pricingKind === 'lawn_recurring' && measuredSqft > 0) && suggested.recommended === opt.c && <span className="text-[9px] font-bold uppercase tracking-wide text-accent">Rec</span>}
                           </span>
                           <span className="block text-base font-bold text-ink mt-0.5 leading-tight">
                             {formatCurrency(opt.price)}<span className="text-[10px] font-normal text-ink-faint">{opt.per}</span>
@@ -677,7 +690,7 @@ export function QuoteBuilder({
               {...register('rate', { required: 'Required', min: { value: 0, message: 'Rate cannot be negative' } })} />
           </Collapsible>
 
-          <Collapsible title="Recurring pricing" icon={Repeat} summary={recSummary || 'One-time quote'}>
+          <Collapsible title="Plan pricing" icon={Repeat} summary={recSummary || 'One-time quote'}>
             <p className="text-xs text-ink-faint">Fill any cadence you want to offer — they appear on the quote as options the customer can pick.</p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <Input label="Weekly ($/visit)" type="number" step="1" min="0" {...register('weekly_price', { min: 0 })} />
@@ -845,7 +858,7 @@ export function QuoteBuilder({
               </div>
               <div className="border-t border-border pt-3 space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-ink-muted">Initial Visit{initialManual ? ' (manual)' : ''}</span>
+                  <span className="text-sm text-ink-muted">First visit{initialManual ? ' (manual)' : ''}</span>
                   <span className="text-ink font-semibold">{formatCurrency(initialPrice)}</span>
                 </div>
                 {extras.net > 0 && (
@@ -859,13 +872,13 @@ export function QuoteBuilder({
                   <span className="text-ink font-medium">{formatCurrency(Number(travelFee))}</span>
                 </div>
                 <div className="flex items-center justify-between pt-2 border-t border-border">
-                  <span className="text-sm font-semibold text-ink">First Invoice Total</span>
+                  <span className="text-sm font-semibold text-ink">First visit total</span>
                   <span className="text-2xl font-bold text-accent">{formatCurrency(effectiveTotal)}</span>
                 </div>
               </div>
               {(weeklyPrice > 0 || biweeklyPrice > 0 || monthlyPrice > 0) && (
                 <div className="border-t border-border pt-3 space-y-1.5">
-                  <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Maintenance options</p>
+                  <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Plan options</p>
                   {weeklyPrice > 0 && <div className="flex justify-between text-sm"><span className="text-ink-muted">Weekly</span><span className="text-ink font-medium">{formatCurrency(weeklyPrice)}/visit</span></div>}
                   {biweeklyPrice > 0 && <div className="flex justify-between text-sm"><span className="text-ink-muted">Bi-Weekly</span><span className="text-ink font-medium">{formatCurrency(biweeklyPrice)}/visit</span></div>}
                   {monthlyPrice > 0 && <div className="flex justify-between text-sm"><span className="text-ink-muted">Monthly</span><span className="text-ink font-medium">{formatCurrency(monthlyPrice)}/visit</span></div>}
@@ -885,7 +898,7 @@ export function QuoteBuilder({
       {/* Mobile sticky save bar — always reachable without scrolling */}
       <div className="lg:hidden fixed bottom-0 left-0 right-0 z-30 px-4 py-2.5 bg-bg-secondary/95 backdrop-blur border-t border-border flex items-center justify-between gap-3">
         <div className="leading-tight min-w-0">
-          <p className="text-[10px] uppercase tracking-wide text-ink-faint">First invoice</p>
+          <p className="text-[10px] uppercase tracking-wide text-ink-faint">First visit total</p>
           <p className="text-xl font-bold text-accent leading-none">{formatCurrency(effectiveTotal)}</p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
