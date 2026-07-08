@@ -1,4 +1,5 @@
 import type { PricingDisplayType } from '@/types'
+import { serviceKey } from './labor'
 
 // ── Service pricing formatter ───────────────────────────────────────────────────
 // THE single place service-template prices become a display string. Every surface
@@ -66,4 +67,35 @@ export function priceInputLabel(t: PricingDisplayType): string {
 // Sensible number-input step per type (per-unit rates step in cents).
 export function priceInputStep(t: PricingDisplayType): string {
   return t === 'per_sqft' || t === 'per_linear_ft' ? '0.25' : '5'
+}
+
+// ── Service pricing KIND ────────────────────────────────────────────────────────
+// Which pricing structure a service uses — decides WHICH recommendation engine
+// speaks (the lawn cadence engine vs area-rate vs labour) and which quote fields
+// an Accept populates. The owner's template display type wins when it's explicit
+// about the structure; otherwise THE shared serviceKey() normalizer decides.
+//   lawn_recurring → sqft cadence engine (pricingPackage): One-Time/Weekly/Bi-Weekly
+//   per_area       → template $/sq ft × measured area (mulch, rock, per-sqft services)
+//   labour         → hours × crew × rate (cleanups, hedge, gutter, one-off work)
+export type ServicePricingKind = 'lawn_recurring' | 'per_area' | 'labour'
+
+const LABOUR_KEYS = new Set([
+  'snow', 'spring-cleanup', 'fall-cleanup', 'cleanup', 'sod', 'aeration',
+  'fertilizing', 'weed-control', 'hedge', 'garden-beds', 'gutter', 'pressure-wash',
+])
+
+export function servicePricingKind(
+  serviceType: string | null | undefined,
+  template?: Pick<PriceableService, 'pricing_display_type'> | null,
+): ServicePricingKind {
+  const t = template?.pricing_display_type
+  if (t === 'per_sqft') return 'per_area'
+  if (t === 'hourly' || t === 'hourly_materials' || t === 'per_linear_ft') return 'labour'
+  const key = serviceKey(serviceType || '')
+  if (key === 'mowing') return 'lawn_recurring'
+  if (key === 'mulch' || key === 'rock') return 'per_area'
+  if (LABOUR_KEYS.has(key)) return 'labour'
+  // No service named yet → the default lawn flow; a named unknown service is
+  // priced from labour (never from lawn sqft math that doesn't apply to it).
+  return serviceType?.trim() ? 'labour' : 'lawn_recurring'
 }

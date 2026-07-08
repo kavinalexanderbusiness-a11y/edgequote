@@ -53,6 +53,9 @@ export function MeasureTool({ property }: { property: Property }) {
   const activeRef = useRef<SectionKey>('front')
   const shapeId = useRef(0)
   const targetCoord = useRef<Coord | null>(null)
+  // Branded "Selected Property" pin so it's instantly obvious WHICH lot is
+  // being measured (same marker as QuoteMeasure; click-through, never blocks tracing).
+  const propertyPin = useRef<any>(null)
   const overrideRef = useRef(0)                         // auto/accepted sqft when nothing is traced
   const autoRef = useRef<AutoMeasureResult | null>(null) // the auto estimate, for recording
   const rafPending = useRef(false)
@@ -365,6 +368,7 @@ export function MeasureTool({ property }: { property: Property }) {
         await g.maps.importLibrary('geometry')
         if (cancelled || !mapEl.current) return
 
+        let precise = true // false only when we fall back to the city default
         let center = property.lat != null && property.lng != null
           ? { lat: property.lat, lng: property.lng } : null
         if (!center) {
@@ -380,7 +384,7 @@ export function MeasureTool({ property }: { property: Property }) {
             }
           } catch { /* ignore */ }
         }
-        if (!center) center = { lat: 51.0447, lng: -114.0719 }
+        if (!center) { center = { lat: 51.0447, lng: -114.0719 }; precise = false }
         targetCoord.current = center
         setCoords(center)
         // Re-check after the geocode await — the component may have unmounted.
@@ -402,6 +406,25 @@ export function MeasureTool({ property }: { property: Property }) {
         ov.onRemove = () => {}
         ov.setMap(gmap.current)
         projection.current = ov
+
+        // ── Selected-property pin — instantly obvious WHICH lot this is.
+        // Branded, click-through (clickable:false) so it never blocks tracing;
+        // amber "Approximate — verify" when we couldn't locate the address.
+        propertyPin.current?.setMap(null)
+        propertyPin.current = new g.maps.Marker({
+          position: center, map: gmap.current, clickable: false, zIndex: 900,
+          title: precise ? 'Selected Property' : 'Approximate location',
+          label: {
+            text: precise ? 'Selected Property' : 'Approximate — verify',
+            color: '#FFFFFF', fontSize: '11px', fontWeight: '700',
+          },
+          icon: {
+            path: g.maps.SymbolPath.CIRCLE, scale: 9,
+            fillColor: precise ? '#00C896' : '#F59E0B', fillOpacity: 1,
+            strokeColor: '#FFFFFF', strokeWeight: 2.5,
+            labelOrigin: new g.maps.Point(0, -2.6),
+          },
+        })
 
         gmap.current.addListener('click', (e: any) => {
           // In Adjust mode the map is for editing points, not adding them.
@@ -443,6 +466,7 @@ export function MeasureTool({ property }: { property: Property }) {
       shapes.current.forEach(s => s.polygon.setMap(null)); shapes.current = []
       currentOverlay.current?.setMap(null); currentOverlay.current = null
       preview.current?.setMap(null); preview.current = null
+      propertyPin.current?.setMap(null); propertyPin.current = null
       projection.current?.setMap(null); projection.current = null
       gmap.current = null
     }
