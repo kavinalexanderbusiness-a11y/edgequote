@@ -14,6 +14,8 @@ import {
 } from '@/lib/beforeafter/layouts'
 import { loadImage, averageLuminance, prefetch } from '@/lib/beforeafter/imageLoad'
 import { scorePairUrls, blendPairScore } from '@/lib/beforeafter/imageQuality'
+import { computeSmartFocus } from '@/lib/marketing/platformImage'
+import { thumbUrl } from '@/lib/photos'
 import { getPropertyContext, type PropertyIntelligence } from '@/lib/ai/propertyContext'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card } from '@/components/ui/Card'
@@ -89,6 +91,7 @@ export function BeforeAfterStudio() {
   const [aiBusy, setAiBusy] = useState(false)
   const [aiRanks, setAiRanks] = useState<Record<string, AiRank>>({})
   const [aiNote, setAiNote] = useState<string | null>(null)
+  const [aiDisabled, setAiDisabled] = useState(false) // learned from the server; hides the AI CTA once off
 
   // Marketing Studio integration: lifecycle of each pair's saved marketing_asset.
   const [assetStatus, setAssetStatus] = useState<Record<string, AssetStatus>>({})
@@ -118,31 +121,36 @@ export function BeforeAfterStudio() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) { if (alive) setLoading(false); return }
 
-      const { data: photoRows } = await supabase
-        .from('job_photos')
-        .select('id,storage_path,kind,taken_at,caption,property_id,job_id')
+      // Bounded jobs-first (mirrors lib/marketing/data.loadMaps): the newest completed
+      // jobs, then only THEIR before/after photos — so the Studio never pulls the whole
+      // photo history (which silently caps at 1000) or scores non-completed work.
+      const { data: jobRows } = await supabase
+        .from('jobs')
+        .select('id,title,service_type,scheduled_date,completed_at,customer_id,property_id')
         .eq('user_id', user.id)
-        .in('kind', ['before', 'after'])
-      const photos: PhotoLite[] = ((photoRows as Array<{ id: string; storage_path: string; kind: string; taken_at: string; caption: string | null; property_id: string | null; job_id: string | null }>) || []).map(r => ({
-        id: r.id,
-        url: publicUrl(r.storage_path),
-        kind: r.kind as PhotoLite['kind'],
-        taken_at: r.taken_at,
-        caption: r.caption,
-        property_id: r.property_id,
-        job_id: r.job_id,
-      }))
+        .eq('status', 'completed')
+        .order('completed_at', { ascending: false, nullsFirst: false })
+        .limit(200)
+      const jobs: JobLite[] = (jobRows as JobLite[]) || []
+      const jobIds = jobs.map(j => j.id)
 
-      const jobIds = Array.from(new Set(photos.map(p => p.job_id).filter((x): x is string => !!x)))
-      let jobs: JobLite[] = []
+      let photos: PhotoLite[] = []
       if (jobIds.length) {
-        const { data: jobRows } = await supabase
-          .from('jobs')
-          .select('id,title,service_type,scheduled_date,completed_at,customer_id,property_id')
+        const { data: photoRows } = await supabase
+          .from('job_photos')
+          .select('id,storage_path,kind,taken_at,caption,property_id,job_id')
           .eq('user_id', user.id)
-          .eq('status', 'completed')
-          .in('id', jobIds)
-        jobs = (jobRows as JobLite[]) || []
+          .in('kind', ['before', 'after'])
+          .in('job_id', jobIds)
+        photos = ((photoRows as Array<{ id: string; storage_path: string; kind: string; taken_at: string; caption: string | null; property_id: string | null; job_id: string | null }>) || []).map(r => ({
+          id: r.id,
+          url: publicUrl(r.storage_path),
+          kind: r.kind as PhotoLite['kind'],
+          taken_at: r.taken_at,
+          caption: r.caption,
+          property_id: r.property_id,
+          job_id: r.job_id,
+        }))
       }
 
       const custIds = Array.from(new Set(jobs.map(j => j.customer_id).filter((x): x is string => !!x)))
@@ -232,17 +240,13 @@ export function BeforeAfterStudio() {
       const ordered = [...built].sort((a, b) =>
         (restoredRanks[b.jobId]?.score ?? b.score) - (restoredRanks[a.jobId]?.score ?? a.score))
 
-      // Resolve the logo to an <img> for canvas branding (best-effort).
-      let logo: HTMLImageElement | null = null
-      if (s?.logo_url) { try { logo = await loadImage(s.logo_url) } catch { logo = null } }
-
       if (!alive) return
       setConsentSupported(consentOk)
       setBrand({
         name: s?.company_name || 'Edge Property Services',
         phone: s?.phone || null,
         website: s?.website || null,
-        logo,
+        logo: null,
         accent: BRAND_ACCENT,
       })
       setAiRanks(restoredRanks)
@@ -251,6 +255,13 @@ export function BeforeAfterStudio() {
       setPairs(ordered)
       setSelectedJobId(ordered[0]?.jobId ?? null)
       setLoading(false)
+
+      // Resolve the branding logo AFTER first paint (best-effort) — the preview
+      // re-renders from cache when it arrives (buildInput depends on brand), so the
+      // gallery doesn't wait on a logo download to become interactive.
+      if (s?.logo_url) {
+        loadImage(s.logo_url).then(logo => { if (alive) setBrand(prev => ({ ...prev, logo })) }).catch(() => {})
+      }
     }
     load()
     return () => { alive = false }
@@ -260,6 +271,7 @@ export function BeforeAfterStudio() {
   // Deterministic pixel quality per pair (0..100), computed client-side once the
   // photos load — reuses the ONE image-ranking engine (lib/beforeafter/imageQuality).
   const [pixelScores, setPixelScores] = useState<Record<string, number>>({})
+  const [stripExpanded, setStripExpanded] = useState(false) // cap the gallery strip at scale
 
   // The single blended rank: AI Vision leads when present, else pixels lead the
   // metadata floor (buildPairs.score). Manual override (before/after swap) is
@@ -278,13 +290,13 @@ export function BeforeAfterStudio() {
     if (!pairs.length) return
     let alive = true
     ;(async () => {
-      const next: Record<string, number> = {}
       for (const p of pairs.slice(0, 12)) {
         if (pixelScores[p.jobId] != null) continue
         const s = await scorePairUrls(p.before.url, p.after.url)
-        if (s) next[p.jobId] = s.score
+        // Commit each score the instant it resolves so tiles settle one by one,
+        // instead of the whole gallery re-ranking in a single jolt at the end.
+        if (alive && s) setPixelScores(prev => ({ ...prev, [p.jobId]: s.score }))
       }
-      if (alive && Object.keys(next).length) setPixelScores(prev => ({ ...prev, ...next }))
     })()
     return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -303,6 +315,22 @@ export function BeforeAfterStudio() {
     const ov = overrides[selected.jobId]?.afterId
     return (ov && selected.afterOptions.find(p => p.id === ov)) || selected.after
   }, [selected, overrides])
+
+  // Better default: auto-frame the subject (not the empty sky) whenever the pair or a
+  // swapped photo changes, reusing the smart-focus engine so the owner rarely needs the
+  // Framing sliders. Keyed on photo identity, so manual slider edits persist until the
+  // photo actually changes. loadImage is cached — the preview reuses the same bytes.
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      try {
+        if (resolvedBefore) { const b = await loadImage(resolvedBefore.url); if (alive) setBeforeFocus(computeSmartFocus(b)) }
+        if (resolvedAfter) { const a = await loadImage(resolvedAfter.url); if (alive) setAfterFocus(computeSmartFocus(a)) }
+      } catch { /* keep the centre default if a photo can't be read */ }
+    })()
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resolvedBefore?.id, resolvedAfter?.id])
 
   // ── Build a RenderInput at a given canvas size (shared by preview + export) ──
   const buildInput = useCallback(async (width: number, height: number) => {
@@ -484,6 +512,9 @@ export function BeforeAfterStudio() {
   // so the result survives a reload and feeds Marketing Studio.
   async function pickStrongest(force = false) {
     if (!pairs.length) return
+    // Only jump the composer to the winner on a deliberate pick (first run or Re-score);
+    // an incremental "Score more" must leave the owner on the pair they're composing.
+    const firstPick = Object.keys(aiRanks).length === 0
     const pool = (force ? pairs : pairs.filter(p => !aiRanks[p.jobId])).slice(0, 6)
 
     // Nothing new to analyse — reuse the saved scores and just jump to the best.
@@ -514,6 +545,7 @@ export function BeforeAfterStudio() {
       })
       const data = await res.json()
       if (data.disabled) {
+        setAiDisabled(true) // stop advertising the AI action after we learn it's off
         setAiNote('AI picks need an ANTHROPIC_API_KEY — showing the smart ranking instead.')
         return
       }
@@ -530,7 +562,7 @@ export function BeforeAfterStudio() {
       }
       setAiRanks(merged)
       if (Object.keys(newStatus).length) setAssetStatus(prev => ({ ...prev, ...newStatus }))
-      if (data.bestJobId) setSelectedJobId(data.bestJobId)
+      if (data.bestJobId && (force || firstPick)) setSelectedJobId(data.bestJobId)
       // Re-order the gallery by the best score (AI where known, else deterministic).
       setPairs(prev => [...prev].sort((a, b) => (merged[b.jobId]?.score ?? b.score) - (merged[a.jobId]?.score ?? a.score)))
     } catch {
@@ -606,11 +638,11 @@ export function BeforeAfterStudio() {
         : pairs.length
           ? `${pairs.length} ready-to-post pair${pairs.length !== 1 ? 's' : ''}`
           : 'Snap a before & after on a completed job to start'}
-      action={!loading && pairs.length ? (
+      action={!loading && pairs.length && !aiDisabled ? (
         <Button variant="secondary" onClick={() => pickStrongest(unscored === 0)} loading={aiBusy}
           title={unscored === 0 ? 'Re-run the AI on every pair' : 'Score the pairs the AI hasn’t scored yet'}>
           {unscored === 0 ? <RefreshCw className="w-4 h-4" /> : <Wand2 className="w-4 h-4" />}
-          {unscored === 0 ? 'Re-score' : aiUsed ? `Score ${unscored} more` : 'Pick strongest with AI'}
+          {unscored === 0 ? 'Re-score' : aiUsed ? 'Score more with AI' : 'Pick strongest with AI'}
         </Button>
       ) : undefined}
     />
@@ -655,7 +687,6 @@ export function BeforeAfterStudio() {
   }
 
   const consentBlocked = consentSupported && selected?.context.consent === false
-  const selectedStatus = selected ? assetStatus[selected.jobId] : undefined
   // The AI's top-scored pair (for the gallery crown).
   const bestAiJobId = aiUsed
     ? (pairs.reduce<{ id: string; s: number } | null>((acc, p) => {
@@ -678,7 +709,7 @@ export function BeforeAfterStudio() {
       {/* Gallery — only shown when there's an actual choice between pairs. */}
       {pairs.length > 1 && (
       <div ref={galleryRef} className="flex gap-3 overflow-x-auto pb-2 -mx-1 px-1">
-        {orderedPairs.map(p => {
+        {(stripExpanded ? orderedPairs : orderedPairs.slice(0, 24)).map(p => {
           const rank = aiRanks[p.jobId]
           const score = Math.round(blendOf(p))
           const isSel = p.jobId === selectedJobId
@@ -690,9 +721,9 @@ export function BeforeAfterStudio() {
               <div className="relative">
                 <div className="grid grid-cols-2 gap-px bg-border aspect-[2/1]">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={p.before.url} alt="before" loading="lazy" decoding="async" className="w-full h-full object-cover" />
+                  <img src={thumbUrl(p.before.url, 240, 240)} alt="before" loading="lazy" decoding="async" className="w-full h-full object-cover" />
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={p.after.url} alt="after" loading="lazy" decoding="async" className="w-full h-full object-cover" />
+                  <img src={thumbUrl(p.after.url, 240, 240)} alt="after" loading="lazy" decoding="async" className="w-full h-full object-cover" />
                 </div>
                 {p.jobId === bestAiJobId && (
                   <span className="absolute top-1 right-1 inline-flex items-center gap-0.5 rounded-full bg-accent text-black text-[9px] font-bold px-1.5 py-0.5 shadow">
@@ -720,6 +751,12 @@ export function BeforeAfterStudio() {
             </button>
           )
         })}
+        {!stripExpanded && orderedPairs.length > 24 && (
+          <button onClick={() => setStripExpanded(true)}
+            className={`shrink-0 w-32 rounded-xl border border-dashed border-border text-xs font-medium text-ink-muted hover:text-ink hover:border-border-strong ${FOCUS_RING}`}>
+            Show all {orderedPairs.length}
+          </button>
+        )}
       </div>
       )}
 
@@ -805,14 +842,9 @@ export function BeforeAfterStudio() {
                 ? <><Check className="w-4 h-4" /> Downloaded</>
                 : <><Download className="w-4 h-4" /> Download {presetByKey(presetKey).label}</>}
             </Button>
-            <Button variant="secondary" onClick={downloadAllPlatforms} loading={downloading} className="w-full">
+            <Button variant="secondary" onClick={downloadAllPlatforms} loading={downloading && !!batchProgress} className="w-full">
               <Images className="w-4 h-4" /> {batchProgress ? `Saving ${batchProgress}…` : `All platforms (${PLATFORM_KEYS.length})`}
             </Button>
-            {selectedStatus === 'used' && (
-              <p className="text-[10px] text-ink-faint text-center flex items-center justify-center gap-1">
-                <BookMarked className="w-3 h-3" /> Saved to Marketing Studio
-              </p>
-            )}
             {/* Screen-reader announcement for download progress / completion. */}
             <span className="sr-only" aria-live="polite">
               {justDownloaded ? 'Image downloaded.' : batchProgress ? `Saving image ${batchProgress}.` : ''}
@@ -912,11 +944,11 @@ function FocusRow({ label, focus, onChange }: { label: string; focus: Focus; onC
       <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-1">{label} framing</p>
       <div className="flex items-center gap-2">
         <span className="text-[10px] text-ink-faint w-3" aria-hidden>↔</span>
-        <input type="range" min={0} max={100} aria-label={`${label} horizontal framing`} value={Math.round(focus.x * 100)} onChange={e => onChange({ ...focus, x: Number(e.target.value) / 100 })} className={`flex-1 accent-accent h-1 ${FOCUS_RING}`} />
+        <input type="range" min={0} max={100} aria-label={`${label} horizontal framing`} value={Math.round(focus.x * 100)} onChange={e => onChange({ ...focus, x: Number(e.target.value) / 100 })} className={`flex-1 accent-accent h-2 py-2 ${FOCUS_RING}`} />
       </div>
       <div className="flex items-center gap-2 mt-1">
         <span className="text-[10px] text-ink-faint w-3" aria-hidden>↕</span>
-        <input type="range" min={0} max={100} aria-label={`${label} vertical framing`} value={Math.round(focus.y * 100)} onChange={e => onChange({ ...focus, y: Number(e.target.value) / 100 })} className={`flex-1 accent-accent h-1 ${FOCUS_RING}`} />
+        <input type="range" min={0} max={100} aria-label={`${label} vertical framing`} value={Math.round(focus.y * 100)} onChange={e => onChange({ ...focus, y: Number(e.target.value) / 100 })} className={`flex-1 accent-accent h-2 py-2 ${FOCUS_RING}`} />
       </div>
     </div>
   )
@@ -931,7 +963,7 @@ function SwapRow({ label, photos, activeId, onPick }: { label: string; photos: P
           <button key={p.id} onClick={() => onPick(p.id)} aria-label={label} aria-pressed={activeId === p.id}
             className={`shrink-0 w-12 h-12 rounded-lg overflow-hidden border-2 ${FOCUS_RING} ${activeId === p.id ? 'border-accent' : 'border-transparent opacity-70 hover:opacity-100'}`}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={p.url} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
+            <img src={thumbUrl(p.url, 120, 120)} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />
           </button>
         ))}
       </div>

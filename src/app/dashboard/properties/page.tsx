@@ -20,6 +20,7 @@ import { computePropertyHealth } from '@/lib/propertyHealth'
 import { getPropertyContexts } from '@/lib/ai/propertyContext'
 import { LocatedJob, fetchLocatedUpcomingJobs, nearbyJobCount } from '@/lib/geo'
 import { JobPhotos } from '@/components/photos/JobPhotos'
+import { listPhotosForProperties, type JobPhotoView } from '@/lib/photos'
 import { MapPin, Home, User, Ruler, History, RefreshCw, Trophy, DollarSign, CheckCircle2, Receipt, Timer, CalendarClock, AlertTriangle, Repeat, Camera, FileText, Clock, StickyNote, ShieldCheck, CalendarPlus, Lightbulb } from 'lucide-react'
 
 // Quote statuses that count as a "won" price — the accepted-price memory.
@@ -100,6 +101,9 @@ export default function PropertiesPage() {
   // Which properties already have an AI Vision analysis (fault-tolerant: empty when
   // the feature/table isn't present). Feeds the health score; never required.
   const [hasVisionByProp, setHasVisionByProp] = useState<Record<string, boolean>>({})
+  // Photos for every property, fetched in ONE batched query (not N self-fetching
+  // galleries) and handed to each card as initialPhotos.
+  const [photosByProp, setPhotosByProp] = useState<Record<string, JobPhotoView[]>>({})
   const [recalcId, setRecalcId] = useState<string | null>(null)
 
   const supabase = createClient()
@@ -183,10 +187,14 @@ export default function PropertiesPage() {
       // fault-tolerant: empty map if the table/feature isn't present). Feeds the
       // health score; nothing breaks when AI Vision hasn't been wired in yet.
       const propIds = ((pRes.data as Property[]) || []).map(p => p.id)
-      try {
-        const visionMap = await getPropertyContexts(supabase, propIds)
-        if (visionMap.size) setHasVisionByProp(Object.fromEntries(propIds.map(id => [id, visionMap.has(id)])))
-      } catch { /* AI Vision absent — health simply omits it */ }
+      // ONE batched photo read for every property (replaces N per-card gallery
+      // fetches) + AI Vision presence — in parallel.
+      const [visionMap, photoMap] = await Promise.all([
+        getPropertyContexts(supabase, propIds).catch(() => new Map()),
+        listPhotosForProperties(supabase, user!.id, propIds).catch(() => ({} as Record<string, JobPhotoView[]>)),
+      ])
+      if (visionMap.size) setHasVisionByProp(Object.fromEntries(propIds.map(id => [id, visionMap.has(id)])))
+      setPhotosByProp(photoMap)
       setLoading(false)
     }
     fetchProperties()
@@ -539,7 +547,7 @@ export default function PropertiesPage() {
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted mb-2 flex items-center gap-1.5">
                     <Camera className="w-3.5 h-3.5" /> Photos
                   </p>
-                  <JobPhotos propertyId={property.id} customerId={property.customer_id} variant="gallery" />
+                  <JobPhotos propertyId={property.id} customerId={property.customer_id} variant="gallery" initialPhotos={photosByProp[property.id] || []} />
                 </div>
               </CardBody>
             </Card>

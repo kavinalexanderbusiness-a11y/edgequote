@@ -106,10 +106,12 @@ export function PublishPanel({ piece, ch, userId, hasPhoto, onSavePhoto, beforeP
     }
   }
 
-  // Publish now. For manual we copy + open the platform synchronously (in-gesture),
-  // THEN record — so the clipboard and the new tab are never blocked.
+  // Publish now. For manual we copy + save the photo + open the platform
+  // synchronously (in-gesture), THEN record — so the clipboard, the download and
+  // the new tab are never blocked. Saving the photo matters: photo-mandatory
+  // platforms (Instagram) can't be posted from a caption alone.
   function publishNow() {
-    if (willManual) { openPlatform(); copyCaption() }
+    if (willManual) { openPlatform(); copyCaption(); if (hasPhoto && onSavePhoto) onSavePhoto() }
     void record(null)
   }
 
@@ -126,15 +128,18 @@ export function PublishPanel({ piece, ch, userId, hasPhoto, onSavePhoto, beforeP
         <button onClick={() => setHub(true)} className="text-[11px] text-ink-faint hover:text-ink inline-flex items-center gap-1"><Settings2 className="w-3 h-3" /> Accounts</button>
       </div>
 
-      {/* Account selector */}
-      <div className="flex items-center gap-1.5 flex-wrap">
-        <button onClick={() => setSelected(null)} className={cn('rounded-full px-2.5 py-1 text-xs border transition-colors', selected === null ? 'bg-accent text-black border-accent' : 'bg-surface text-ink-muted border-border hover:text-ink')}>Copy &amp; paste</button>
-        {channelConns.map(c => (
-          <button key={c.id} onClick={() => setSelected(c.id)} className={cn('rounded-full px-2.5 py-1 text-xs border transition-colors inline-flex items-center gap-1', selected === c.id ? 'bg-accent text-black border-accent' : 'bg-surface text-ink-muted border-border hover:text-ink')}>
-            <CheckCircle2 className="w-3 h-3" /> {c.account_name}
-          </button>
-        ))}
-      </div>
+      {/* Account selector — only when there's an actual choice to make. With no
+          connected account, manual is the only mode, so a lone pill is just noise. */}
+      {channelConns.length > 0 && (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <button onClick={() => setSelected(null)} className={cn('rounded-full px-2.5 py-1 text-xs border transition-colors', selected === null ? 'bg-accent text-black border-accent' : 'bg-surface text-ink-muted border-border hover:text-ink')}>Copy &amp; paste</button>
+          {channelConns.map(c => (
+            <button key={c.id} onClick={() => setSelected(c.id)} className={cn('rounded-full px-2.5 py-1 text-xs border transition-colors inline-flex items-center gap-1', selected === c.id ? 'bg-accent text-black border-accent' : 'bg-surface text-ink-muted border-border hover:text-ink')}>
+              <CheckCircle2 className="w-3 h-3" /> {c.account_name}
+            </button>
+          ))}
+        </div>
+      )}
 
       {currentJob && (
         <p className="text-[11px] text-ink-faint inline-flex items-center gap-1.5 flex-wrap">
@@ -166,7 +171,8 @@ export function PublishPanel({ piece, ch, userId, hasPhoto, onSavePhoto, beforeP
           {scheduleOpen && (
             <>
               <input type="date" value={scheduleDate} onChange={e => setScheduleDate(e.target.value)} className="bg-bg-tertiary border border-border rounded-lg px-2 py-1 text-xs text-ink" />
-              <Button size="sm" onClick={() => record(`${scheduleDate}T09:00:00.000Z`)} loading={busy === 'schedule'}>Set</Button>
+              {/* 9am in the owner's LOCAL timezone (a bare Z would land at 1–4am here). */}
+              <Button size="sm" onClick={() => record(new Date(`${scheduleDate}T09:00:00`).toISOString())} loading={busy === 'schedule'}>Set</Button>
             </>
           )}
           {hasPhoto && onSavePhoto && (

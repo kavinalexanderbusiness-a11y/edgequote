@@ -17,7 +17,13 @@ export function idempotencyKey(pieceId: string, connectionId: string | null): st
 }
 
 export function captionFor(piece: Pick<ContentPiece, 'body' | 'hashtags'>): string {
-  return [piece.body?.trim(), (piece.hashtags || []).map(h => `#${h.replace(/^#/, '')}`).join(' ')].filter(Boolean).join('\n\n')
+  return [piece.body?.trim(), (piece.hashtags || []).map(h => `#${h.replace(/^#+/, '')}`).join(' ')].filter(Boolean).join('\n\n')
+}
+
+// The ONE hashtag-field normalizer: split on whitespace/commas, strip leading #(s),
+// de-dupe, cap. Shared so the editor, Posts, and previews can't drift (e.g. "##tag").
+export function parseHashtags(text: string, max = 8): string[] {
+  return Array.from(new Set(text.split(/[\s,]+/).map(t => t.replace(/^#+/, '').trim()).filter(Boolean))).slice(0, max)
 }
 
 // ── Reads ──

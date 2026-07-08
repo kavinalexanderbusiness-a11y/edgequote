@@ -1,11 +1,14 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { PhotoKind, PHOTO_KIND_LABELS } from '@/types'
-import { JobPhotoView, listPhotos, uploadPhoto, deletePhoto, updatePhoto } from '@/lib/photos'
+import { JobPhotoView, listPhotos, uploadPhotos, deletePhoto, updatePhoto, thumbUrl } from '@/lib/photos'
+import { toast } from '@/lib/toast'
 import { formatDate } from '@/lib/utils'
-import { Camera, ImagePlus, Trash2, X, Loader2, Check } from 'lucide-react'
+import { Skeleton } from '@/components/ui/Skeleton'
+import { InlineEmpty } from '@/components/ui/EmptyState'
+import { Camera, ImagePlus, Trash2, X, Loader2, Check, ChevronLeft, ChevronRight } from 'lucide-react'
 
 interface Props {
   propertyId: string | null
@@ -14,6 +17,10 @@ interface Props {
   // 'visit' = capture surface on a job (Before/After buttons up front, Day Ops).
   // 'gallery' = a property's full visual history (also offers a plain Photo).
   variant?: 'visit' | 'gallery'
+  // When provided (e.g. a list page that batch-fetched photos), the component
+  // seeds from these and skips its own list query — so N galleries on one page
+  // don't each fire a round-trip.
+  initialPhotos?: JobPhotoView[]
   className?: string
 }
 
@@ -23,27 +30,81 @@ const KIND_BADGE: Record<PhotoKind, string> = {
   general: 'bg-bg-tertiary text-ink-muted border-border',
 }
 
-export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', className }: Props) {
+// Bound the gallery pull so a property with a huge history doesn't fetch it all.
+const GALLERY_FETCH_LIMIT = 60
+const PAGE = 12 // tiles shown before "Show more"
+
+// An in-flight upload rendered instantly from a local blob URL (no wait for the network).
+interface PendingTile { tempId: string; url: string; kind: PhotoKind; status: 'uploading' | 'error'; file: File }
+
+export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', initialPhotos, className }: Props) {
   const supabase = createClient()
-  const [photos, setPhotos] = useState<JobPhotoView[]>([])
-  const [loading, setLoading] = useState(true)
-  const [busyKind, setBusyKind] = useState<PhotoKind | null>(null)
-  const [lightbox, setLightbox] = useState<JobPhotoView | null>(null)
+  const [photos, setPhotos] = useState<JobPhotoView[]>(initialPhotos ?? [])
+  const [loading, setLoading] = useState(!initialPhotos)
+  const [pending, setPending] = useState<PendingTile[]>([])
+  const [kindFilter, setKindFilter] = useState<'all' | PhotoKind>('all')
+  const [shown, setShown] = useState(PAGE)
+  const [lightboxIdx, setLightboxIdx] = useState<number | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const pendingKind = useRef<PhotoKind>('after')
+  const userIdRef = useRef<string | null>(null)
+  const objectUrls = useRef<Set<string>>(new Set())
+  const seq = useRef(0)
 
   useEffect(() => {
     let alive = true
     async function load() {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) { if (alive) setLoading(false); return }
-      const rows = await listPhotos(supabase, user.id, { jobId, propertyId })
+      // getSession is a LOCAL read (no network) — so N galleries on a page don't
+      // each fire a GoTrue round-trip just to learn who the user is.
+      const { data: { session } } = await supabase.auth.getSession()
+      const uid = session?.user?.id ?? null
+      userIdRef.current = uid
+      if (!uid) { if (alive) setLoading(false); return }
+      if (initialPhotos) return // seeded by the parent — no child fetch needed
+      const rows = await listPhotos(supabase, uid, { jobId, propertyId, limit: variant === 'gallery' ? GALLERY_FETCH_LIMIT : undefined })
       if (alive) { setPhotos(rows); setLoading(false) }
     }
     load()
     return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId, propertyId])
+
+  // Free any preview blob URLs on unmount so a big session doesn't leak memory.
+  useEffect(() => () => { for (const u of objectUrls.current) URL.revokeObjectURL(u) }, [])
+
+  // Filtered + paged view over the loaded photos (client-side; no extra query).
+  const filtered = useMemo(() => kindFilter === 'all' ? photos : photos.filter(p => p.kind === kindFilter), [photos, kindFilter])
+  const visible = filtered.slice(0, shown)
+  const counts = useMemo(() => {
+    const c = { before: 0, after: 0, general: 0 } as Record<PhotoKind, number>
+    for (const p of photos) c[p.kind]++
+    return c
+  }, [photos])
+
+  // Lightbox navigation over the currently-filtered set.
+  const current = lightboxIdx != null ? filtered[lightboxIdx] : null
+  function step(delta: number) {
+    setLightboxIdx(i => {
+      if (i == null) return i
+      const n = i + delta
+      return n >= 0 && n < filtered.length ? n : i
+    })
+  }
+  useEffect(() => {
+    if (lightboxIdx == null) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'ArrowLeft') step(-1)
+      else if (e.key === 'ArrowRight') step(1)
+      else if (e.key === 'Escape') setLightboxIdx(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lightboxIdx, filtered.length])
+
+  function releaseTile(t: PendingTile) {
+    URL.revokeObjectURL(t.url); objectUrls.current.delete(t.url)
+  }
 
   function pick(kind: PhotoKind) {
     pendingKind.current = kind
@@ -55,107 +116,206 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', cl
     e.target.value = '' // allow re-picking the same file
     if (!files.length) return
     const kind = pendingKind.current
-    setBusyKind(kind)
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) { setBusyKind(null); return }
-    const added: JobPhotoView[] = []
-    for (const file of files) {
-      const row = await uploadPhoto(supabase, { userId: user.id, file, propertyId, jobId, customerId, kind })
-      if (row) added.push(row)
-    }
-    if (added.length) setPhotos(prev => [...added, ...prev])
-    setBusyKind(null)
+    // Optimistic tiles appear INSTANTLY (before any compression / auth / upload),
+    // each rendered from a local blob URL with an uploading overlay — so the grid
+    // fills the moment you pick, and nothing ever looks frozen.
+    const tiles: PendingTile[] = files.map(f => {
+      const url = URL.createObjectURL(f)
+      objectUrls.current.add(url)
+      return { tempId: `t${seq.current++}`, url, kind, status: 'uploading', file: f }
+    })
+    setPending(prev => [...tiles, ...prev])
+
+    let uid = userIdRef.current
+    if (!uid) { const { data: { session } } = await supabase.auth.getSession(); uid = session?.user?.id ?? null; userIdRef.current = uid }
+    if (!uid) { setPending(prev => prev.filter(t => !tiles.some(x => x.tempId === t.tempId))); tiles.forEach(releaseTile); return }
+
+    await uploadPhotos(supabase, files, { userId: uid, propertyId, jobId, customerId, kind }, {
+      concurrency: 3,
+      onUploaded: (row, i) => {
+        const t = tiles[i]
+        setPhotos(prev => [row, ...prev])
+        setPending(prev => prev.filter(x => x.tempId !== t.tempId))
+        releaseTile(t)
+      },
+      onError: (_f, i) => {
+        const id = tiles[i].tempId
+        setPending(prev => prev.map(x => x.tempId === id ? { ...x, status: 'error' } : x))
+      },
+    })
   }
 
-  async function remove(photo: JobPhotoView) {
-    if (!confirm('Delete this photo? This cannot be undone.')) return
+  async function retryTile(t: PendingTile) {
+    const uid = userIdRef.current
+    if (!uid) return
+    setPending(prev => prev.map(x => x.tempId === t.tempId ? { ...x, status: 'uploading' } : x))
+    await uploadPhotos(supabase, [t.file], { userId: uid, propertyId, jobId, customerId, kind: t.kind }, {
+      onUploaded: row => { setPhotos(prev => [row, ...prev]); setPending(prev => prev.filter(x => x.tempId !== t.tempId)); releaseTile(t) },
+      onError: () => setPending(prev => prev.map(x => x.tempId === t.tempId ? { ...x, status: 'error' } : x)),
+    })
+  }
+
+  function dismissTile(t: PendingTile) {
+    setPending(prev => prev.filter(x => x.tempId !== t.tempId)); releaseTile(t)
+  }
+
+  // Delete the app way: remove now, offer Undo, commit only after the undo window
+  // (matches every other destructive action — no blocking confirm dialog).
+  function remove(photo: JobPhotoView) {
+    const idx = photos.findIndex(p => p.id === photo.id)
+    if (idx < 0) return
     setPhotos(prev => prev.filter(p => p.id !== photo.id))
-    setLightbox(null)
-    await deletePhoto(supabase, photo)
+    setLightboxIdx(null)
+    let undone = false
+    toast.undo('Photo deleted.', () => { undone = true; setPhotos(prev => { const c = [...prev]; c.splice(Math.min(idx, c.length), 0, photo); return c }) })
+    if (typeof window !== 'undefined') window.setTimeout(() => { if (!undone) deletePhoto(supabase, photo) }, 7000)
   }
 
   async function retag(photo: JobPhotoView, kind: PhotoKind) {
-    setPhotos(prev => prev.map(p => p.id === photo.id ? { ...p, kind } : p))
-    setLightbox(prev => prev && prev.id === photo.id ? { ...prev, kind } : prev)
-    await updatePhoto(supabase, photo.id, { kind })
+    const prev = photo.kind
+    setPhotos(ps => ps.map(p => p.id === photo.id ? { ...p, kind } : p))
+    const ok = await updatePhoto(supabase, photo.id, { kind })
+    if (!ok) { setPhotos(ps => ps.map(p => p.id === photo.id ? { ...p, kind: prev } : p)); toast.error('Could not update the tag.') }
   }
 
   async function saveCaption(photo: JobPhotoView, caption: string) {
     const clean = caption.trim() || null
-    setPhotos(prev => prev.map(p => p.id === photo.id ? { ...p, caption: clean } : p))
-    setLightbox(prev => prev && prev.id === photo.id ? { ...prev, caption: clean } : prev)
-    await updatePhoto(supabase, photo.id, { caption: clean })
+    if (clean === (photo.caption ?? null)) return
+    const prev = photo.caption ?? null
+    setPhotos(ps => ps.map(p => p.id === photo.id ? { ...p, caption: clean } : p))
+    const ok = await updatePhoto(supabase, photo.id, { caption: clean })
+    if (ok) toast.success('Caption saved.')
+    else { setPhotos(ps => ps.map(p => p.id === photo.id ? { ...p, caption: prev } : p)); toast.error('Could not save the caption.') }
   }
 
-  const uploading = busyKind !== null
+  const uploadingCount = pending.filter(t => t.status === 'uploading').length
+  const busyOf = (k: PhotoKind) => pending.some(t => t.kind === k && t.status === 'uploading')
+  const showFilters = photos.length > 4
+
+  function setFilter(k: 'all' | PhotoKind) { setKindFilter(k); setShown(PAGE) }
 
   return (
     <div className={className}>
       <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={onFiles} />
 
-      {/* Capture buttons */}
+      {/* Capture buttons — never disabled during upload, so you can keep adding. */}
       <div className="flex items-center gap-2 flex-wrap">
-        <CaptureBtn label="Before" icon={Camera} busy={busyKind === 'before'} disabled={uploading} onClick={() => pick('before')} tone="amber" />
-        <CaptureBtn label="After" icon={Camera} busy={busyKind === 'after'} disabled={uploading} onClick={() => pick('after')} tone="emerald" />
+        <CaptureBtn label="Before" icon={Camera} busy={busyOf('before')} onClick={() => pick('before')} tone="amber" />
+        <CaptureBtn label="After" icon={Camera} busy={busyOf('after')} onClick={() => pick('after')} tone="emerald" />
         {variant === 'gallery' && (
-          <CaptureBtn label="Photo" icon={ImagePlus} busy={busyKind === 'general'} disabled={uploading} onClick={() => pick('general')} />
+          <CaptureBtn label="Photo" icon={ImagePlus} busy={busyOf('general')} onClick={() => pick('general')} />
         )}
-        {photos.length > 0 && <span className="text-[11px] text-ink-faint ml-auto">{photos.length} photo{photos.length !== 1 ? 's' : ''}</span>}
+        <span className="text-[11px] ml-auto inline-flex items-center gap-1.5">
+          {uploadingCount > 0
+            ? <span className="text-accent inline-flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Uploading {uploadingCount}…</span>
+            : photos.length > 0 ? <span className="text-ink-faint">{photos.length} photo{photos.length !== 1 ? 's' : ''}</span> : null}
+        </span>
       </div>
 
-      {/* Thumbnails */}
-      {loading ? (
-        <p className="text-xs text-ink-faint mt-2">Loading photos…</p>
-      ) : photos.length === 0 ? (
-        <p className="text-xs text-ink-faint mt-2">No photos yet — snap a before &amp; after to build this property&apos;s service history.</p>
-      ) : (
-        <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 mt-2.5">
-          {photos.map(p => (
-            <button key={p.id} onClick={() => setLightbox(p)}
-              className="relative aspect-square rounded-lg overflow-hidden border border-border bg-bg-tertiary group">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={p.url} alt={p.caption || PHOTO_KIND_LABELS[p.kind]} loading="lazy"
-                className="w-full h-full object-cover transition-transform group-hover:scale-105" />
-              <span className={`absolute top-1 left-1 text-[9px] font-semibold uppercase tracking-wide rounded px-1 py-0.5 border ${KIND_BADGE[p.kind]}`}>
-                {PHOTO_KIND_LABELS[p.kind]}
-              </span>
-            </button>
+      {/* Kind filter — only when there's enough to be worth culling. */}
+      {showFilters && (
+        <div className="flex items-center gap-1.5 flex-wrap mt-2">
+          <FilterChip active={kindFilter === 'all'} onClick={() => setFilter('all')}>All {photos.length}</FilterChip>
+          {(['before', 'after', 'general'] as PhotoKind[]).filter(k => counts[k] > 0).map(k => (
+            <FilterChip key={k} active={kindFilter === k} onClick={() => setFilter(k)}>{PHOTO_KIND_LABELS[k]} {counts[k]}</FilterChip>
           ))}
         </div>
       )}
 
+      {/* Thumbnails */}
+      {loading ? (
+        <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 mt-2.5">
+          {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="aspect-square rounded-lg" />)}
+        </div>
+      ) : photos.length === 0 && pending.length === 0 ? (
+        <InlineEmpty icon={Camera}>No photos yet — snap a before &amp; after to build this property&apos;s service history.</InlineEmpty>
+      ) : (
+        <>
+          <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 mt-2.5">
+            {/* Optimistic upload tiles first — visible instantly, with progress / retry. */}
+            {pending.map(t => (
+              <div key={t.tempId} className="relative aspect-square rounded-lg overflow-hidden border border-border bg-bg-tertiary">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={t.url} alt="" className={`w-full h-full object-cover ${t.status === 'error' ? 'opacity-40' : 'opacity-70'}`} />
+                <span className={`absolute top-1 left-1 text-[9px] font-semibold uppercase tracking-wide rounded px-1 py-0.5 border ${KIND_BADGE[t.kind]}`}>
+                  {PHOTO_KIND_LABELS[t.kind]}
+                </span>
+                {t.status === 'uploading' ? (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/25"><Loader2 className="w-5 h-5 text-white animate-spin" /></div>
+                ) : (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-black/45">
+                    <span className="text-[10px] font-medium text-white">Upload failed</span>
+                    <div className="flex items-center gap-1.5">
+                      <button onClick={() => retryTile(t)} className="text-[10px] font-semibold text-white bg-white/20 hover:bg-white/30 rounded px-2 py-0.5">Retry</button>
+                      <button onClick={() => dismissTile(t)} className="text-white/80 hover:text-white" title="Dismiss"><X className="w-3.5 h-3.5" /></button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+            {visible.map((p, i) => (
+              <button key={p.id} onClick={() => setLightboxIdx(i)}
+                className="relative aspect-square rounded-lg overflow-hidden border border-border bg-bg-tertiary group">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={thumbUrl(p.url)} alt={p.caption || PHOTO_KIND_LABELS[p.kind]} loading="lazy"
+                  className="w-full h-full object-cover transition-transform group-hover:scale-105" />
+                <span className={`absolute top-1 left-1 text-[9px] font-semibold uppercase tracking-wide rounded px-1 py-0.5 border ${KIND_BADGE[p.kind]}`}>
+                  {PHOTO_KIND_LABELS[p.kind]}
+                </span>
+              </button>
+            ))}
+          </div>
+          {filtered.length > shown && (
+            <button onClick={() => setShown(s => s + 24)} className="mt-2 w-full text-xs font-medium text-accent hover:underline py-1.5">
+              Show {Math.min(24, filtered.length - shown)} more ({filtered.length - shown} hidden)
+            </button>
+          )}
+        </>
+      )}
+
       {/* Lightbox */}
-      {lightbox && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" onClick={() => setLightbox(null)}>
+      {current && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" onClick={() => setLightboxIdx(null)}>
+          {/* Prev / next across the current (filtered) set — no open-close per photo. */}
+          {filtered.length > 1 && (
+            <>
+              <button onClick={e => { e.stopPropagation(); step(-1) }} disabled={lightboxIdx === 0} aria-label="Previous photo"
+                className="absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 h-10 w-10 rounded-full bg-black/40 hover:bg-black/60 text-white flex items-center justify-center disabled:opacity-30"><ChevronLeft className="w-5 h-5" /></button>
+              <button onClick={e => { e.stopPropagation(); step(1) }} disabled={lightboxIdx === filtered.length - 1} aria-label="Next photo"
+                className="absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 h-10 w-10 rounded-full bg-black/40 hover:bg-black/60 text-white flex items-center justify-center disabled:opacity-30"><ChevronRight className="w-5 h-5" /></button>
+            </>
+          )}
           <div className="bg-bg-secondary border border-border rounded-card max-w-2xl w-full max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-4 py-2.5 border-b border-border">
-              <span className={`text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 border ${KIND_BADGE[lightbox.kind]}`}>
-                {PHOTO_KIND_LABELS[lightbox.kind]} · {formatDate(lightbox.taken_at)}
+              <span className={`text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 border ${KIND_BADGE[current.kind]}`}>
+                {PHOTO_KIND_LABELS[current.kind]} · {formatDate(current.taken_at)}
               </span>
-              <button onClick={() => setLightbox(null)} className="h-7 w-7 rounded-lg hover:bg-black/20 flex items-center justify-center text-ink-muted">
+              <span className="text-[11px] text-ink-faint">{(lightboxIdx ?? 0) + 1} / {filtered.length}</span>
+              <button onClick={() => setLightboxIdx(null)} className="h-7 w-7 rounded-lg hover:bg-black/20 flex items-center justify-center text-ink-muted">
                 <X className="w-4 h-4" />
               </button>
             </div>
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={lightbox.url} alt={lightbox.caption || ''} className="w-full max-h-[55vh] object-contain bg-black" />
+            <img src={current.url} alt={current.caption || ''} className="w-full max-h-[55vh] object-contain bg-black" />
             <div className="p-4 space-y-3">
               <div className="flex items-center gap-2">
                 <span className="text-[11px] text-ink-faint uppercase tracking-wide">Tag</span>
                 {(['before', 'after', 'general'] as PhotoKind[]).map(k => (
-                  <button key={k} onClick={() => retag(lightbox, k)}
-                    className={`text-xs font-medium rounded-lg px-2.5 py-1 border transition-colors ${lightbox.kind === k ? KIND_BADGE[k] : 'border-border text-ink-muted hover:text-ink'}`}>
-                    {lightbox.kind === k && <Check className="w-3 h-3 inline mr-1" />}{PHOTO_KIND_LABELS[k]}
+                  <button key={k} onClick={() => retag(current, k)}
+                    className={`text-xs font-medium rounded-lg px-2.5 py-1 border transition-colors ${current.kind === k ? KIND_BADGE[k] : 'border-border text-ink-muted hover:text-ink'}`}>
+                    {current.kind === k && <Check className="w-3 h-3 inline mr-1" />}{PHOTO_KIND_LABELS[k]}
                   </button>
                 ))}
               </div>
               <input
-                defaultValue={lightbox.caption || ''}
+                key={current.id}
+                defaultValue={current.caption || ''}
                 placeholder="Add a caption (optional)…"
-                onBlur={e => { if ((e.target.value.trim() || null) !== lightbox.caption) saveCaption(lightbox, e.target.value) }}
+                onBlur={e => saveCaption(current, e.target.value)}
                 className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent" />
               <div className="flex items-center justify-between">
-                <a href={lightbox.url} target="_blank" rel="noopener noreferrer" className="text-xs text-accent hover:underline">Open full size</a>
-                <button onClick={() => remove(lightbox)} className="text-xs font-medium text-red-400 flex items-center gap-1 hover:text-red-300">
+                <a href={current.url} target="_blank" rel="noopener noreferrer" className="text-xs text-accent hover:underline">Open full size</a>
+                <button onClick={() => remove(current)} className="text-xs font-medium text-red-400 flex items-center gap-1 hover:text-red-300">
                   <Trash2 className="w-3.5 h-3.5" /> Delete
                 </button>
               </div>
@@ -167,8 +327,17 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', cl
   )
 }
 
+function FilterChip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button onClick={onClick}
+      className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium border transition-colors ${active ? 'bg-accent text-black border-accent' : 'bg-surface text-ink-muted border-border hover:text-ink'}`}>
+      {children}
+    </button>
+  )
+}
+
 function CaptureBtn({ label, icon: Icon, busy, disabled, onClick, tone }: {
-  label: string; icon: typeof Camera; busy: boolean; disabled: boolean; onClick: () => void; tone?: 'amber' | 'emerald'
+  label: string; icon: typeof Camera; busy: boolean; disabled?: boolean; onClick: () => void; tone?: 'amber' | 'emerald'
 }) {
   return (
     <button onClick={onClick} disabled={disabled}

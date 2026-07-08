@@ -52,6 +52,7 @@ export function MarketingCalendar({ userId, aiEnabled, openPlan }: { userId: str
   const [dragId, setDragId] = useState<string | null>(null)
   const [planOpen, setPlanOpen] = useState(!!openPlan)
   const [hubOpen, setHubOpen] = useState(false)
+  const detailRef = useRef<HTMLDivElement>(null)
 
   const todayKey = key(new Date())
 
@@ -64,8 +65,8 @@ export function MarketingCalendar({ userId, aiEnabled, openPlan }: { userId: str
     return { from: gridStart, to: addDays(gridStart, 41) }
   }, [view, cursor])
 
-  const load = useCallback(async () => {
-    setLoading(true)
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true)
     const fromISO = `${key(range.from)}T00:00:00.000Z`
     const toISO = `${key(range.to)}T23:59:59.999Z`
     const [scheduled, tray] = await Promise.all([
@@ -80,13 +81,19 @@ export function MarketingCalendar({ userId, aiEnabled, openPlan }: { userId: str
   useEffect(() => { load() }, [load])
 
   // Process this owner's due scheduled posts once when the calendar opens, then refresh
-  // (no paid cron required). Idempotent — safe even if the daily backstop also runs.
+  // IN PLACE (silent) — no paid cron required, and no jarring skeleton flash. Idempotent.
   const processedRef = useRef(false)
   useEffect(() => {
     if (processedRef.current) return
     processedRef.current = true
-    fetch('/api/marketing/publish/process', { method: 'POST' }).then(() => load()).catch(() => {})
+    fetch('/api/marketing/publish/process', { method: 'POST' }).then(() => load(true)).catch(() => {})
   }, [load])
+
+  // On mobile the detail panel stacks below the grid — bring it into view when a chip
+  // is tapped so the tap gives a visible response instead of silently changing off-screen.
+  useEffect(() => {
+    if (selected) detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }, [selected?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Bucket pieces by day.
   const byDay = useMemo(() => {
@@ -119,7 +126,7 @@ export function MarketingCalendar({ userId, aiEnabled, openPlan }: { userId: str
     if (!id) return
     // optimistic
     const moving = pieces.find(p => p.id === id) || drafts.find(p => p.id === id)
-    const scheduledFor = `${dayKey}T09:00:00.000Z`
+    const scheduledFor = new Date(`${dayKey}T09:00:00`).toISOString() // 9am LOCAL, not UTC
     setDrafts(prev => prev.filter(p => p.id !== id))
     setPieces(prev => {
       const without = prev.filter(p => p.id !== id)
@@ -136,7 +143,7 @@ export function MarketingCalendar({ userId, aiEnabled, openPlan }: { userId: str
   }
   // Tap-based scheduling (works on touch where drag-and-drop doesn't).
   async function scheduleOn(p: ContentPiece, dayKey: string) {
-    const scheduledFor = `${dayKey}T09:00:00.000Z`
+    const scheduledFor = new Date(`${dayKey}T09:00:00`).toISOString() // 9am LOCAL, not UTC
     const saved = await setSchedule(supabase, p.id, scheduledFor)
     if (saved) {
       setDrafts(prev => prev.filter(x => x.id !== p.id))
@@ -164,9 +171,9 @@ export function MarketingCalendar({ userId, aiEnabled, openPlan }: { userId: str
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-1.5">
-          <button onClick={() => step(-1)} className="p-2 rounded-lg hover:bg-surface text-ink-muted"><ChevronLeft className="w-4 h-4" /></button>
+          <button onClick={() => step(-1)} aria-label={`Previous ${view}`} title={`Previous ${view}`} className="p-2 rounded-lg hover:bg-surface text-ink-muted"><ChevronLeft className="w-4 h-4" /></button>
           <span className="text-sm font-bold text-ink min-w-[160px] text-center">{title}</span>
-          <button onClick={() => step(1)} className="p-2 rounded-lg hover:bg-surface text-ink-muted"><ChevronRight className="w-4 h-4" /></button>
+          <button onClick={() => step(1)} aria-label={`Next ${view}`} title={`Next ${view}`} className="p-2 rounded-lg hover:bg-surface text-ink-muted"><ChevronRight className="w-4 h-4" /></button>
           <Button variant="ghost" size="sm" onClick={() => setCursor(new Date())}>Today</Button>
         </div>
         <div className="flex items-center gap-1.5">
@@ -190,23 +197,26 @@ export function MarketingCalendar({ userId, aiEnabled, openPlan }: { userId: str
             </div>
           ) : view === 'month' ? (
             <MonthGrid cursor={cursor} byDay={byDay} markers={markers} todayKey={todayKey}
-              onDropDay={drop} onDragOverDay={() => {}} setDragId={setDragId} onSelect={setSelected} />
+              onDropDay={drop} onDragOverDay={() => {}} setDragId={setDragId} onSelect={setSelected}
+              onOpenDay={d => { setCursor(d); setView('day') }} />
           ) : view === 'week' ? (
             <WeekColumns from={startOfWeek(cursor)} byDay={byDay} markers={markers} todayKey={todayKey}
               onDropDay={drop} setDragId={setDragId} onSelect={setSelected} />
           ) : (
-            <DayAgenda day={cursor} pieces={byDay.get(key(cursor)) || []} markers={markers.get(key(cursor)) || []} onSelect={setSelected} />
+            <DayAgenda day={cursor} pieces={byDay.get(key(cursor)) || []} markers={markers.get(key(cursor)) || []} onSelect={setSelected} onDropDay={drop} />
           )}
         </Card>
 
-        {/* Draft tray — drag onto a day to schedule */}
+        {/* Draft tray — drag onto a day, or tap a draft to open + schedule */}
         <div className="space-y-3">
           {selected && (
-            <PieceDetail piece={selected} onClose={() => setSelected(null)} onUnschedule={() => unschedule(selected)} onPublish={() => publish(selected)} onFail={() => fail(selected)} onSchedule={dayKey => scheduleOn(selected, dayKey)} />
+            <div ref={detailRef}>
+              <PieceDetail piece={selected} onClose={() => setSelected(null)} onUnschedule={() => unschedule(selected)} onPublish={() => publish(selected)} onFail={() => fail(selected)} onSchedule={dayKey => scheduleOn(selected, dayKey)} />
+            </div>
           )}
           <Card className="p-3 space-y-2">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Unscheduled drafts · {drafts.length}</p>
-            <p className="text-[11px] text-ink-faint">Drag a draft onto a day to schedule it.</p>
+            <p className="text-[11px] text-ink-faint">Drag a draft onto a day — or tap it to open and schedule.</p>
             <div className="space-y-1.5 max-h-[50vh] overflow-y-auto">
               {drafts.length === 0 && <p className="text-xs text-ink-faint py-3 text-center">No unscheduled drafts.</p>}
               {drafts.map(p => <DraftChip key={p.id} piece={p} setDragId={setDragId} onSelect={setSelected} />)}
@@ -219,7 +229,7 @@ export function MarketingCalendar({ userId, aiEnabled, openPlan }: { userId: str
 }
 
 // ── Month grid ──
-function MonthGrid({ cursor, byDay, markers, todayKey, onDropDay, setDragId, onSelect }: {
+function MonthGrid({ cursor, byDay, markers, todayKey, onDropDay, setDragId, onSelect, onOpenDay }: {
   cursor: Date
   byDay: Map<string, ContentPiece[]>
   markers: Map<string, string[]>
@@ -228,6 +238,7 @@ function MonthGrid({ cursor, byDay, markers, todayKey, onDropDay, setDragId, onS
   onDragOverDay: () => void
   setDragId: (id: string | null) => void
   onSelect: (p: ContentPiece) => void
+  onOpenDay: (d: Date) => void
 }) {
   const first = new Date(cursor.getFullYear(), cursor.getMonth(), 1)
   const gridStart = startOfWeek(first)
@@ -254,7 +265,11 @@ function MonthGrid({ cursor, byDay, markers, todayKey, onDropDay, setDragId, onS
               </div>
               {mk.slice(0, 1).map(m => <span key={m} className="text-[9px] text-amber-300/90 truncate" title={m}>★ {m}</span>)}
               {dayPieces.slice(0, 3).map(p => <CalChip key={p.id} piece={p} setDragId={setDragId} onSelect={onSelect} />)}
-              {dayPieces.length > 3 && <span className="text-[9px] text-ink-faint">+{dayPieces.length - 3} more</span>}
+              {dayPieces.length > 3 && (
+                <button onClick={() => onOpenDay(d)} className="text-[9px] text-ink-faint hover:text-accent text-left" title="See all posts this day">
+                  +{dayPieces.length - 3} more
+                </button>
+              )}
             </div>
           )
         })}
@@ -297,12 +312,13 @@ function WeekColumns({ from, byDay, markers, todayKey, onDropDay, setDragId, onS
 }
 
 // ── Day agenda ──
-function DayAgenda({ day, pieces, markers, onSelect }: { day: Date; pieces: ContentPiece[]; markers: string[]; onSelect: (p: ContentPiece) => void }) {
+function DayAgenda({ day, pieces, markers, onSelect, onDropDay }: { day: Date; pieces: ContentPiece[]; markers: string[]; onSelect: (p: ContentPiece) => void; onDropDay: (k: string) => void }) {
   return (
-    <div className="space-y-2 min-h-[50vh]">
+    // A real drop target so the empty-state "drag a draft here" actually works.
+    <div className="space-y-2 min-h-[50vh]" onDragOver={e => e.preventDefault()} onDrop={() => onDropDay(key(day))}>
       {markers.map(m => <Banner key={m} tone="warn">★ {m}</Banner>)}
       {pieces.length === 0 ? (
-        <EmptyState icon={CalendarDays} title="Nothing scheduled" description="Drag a draft here, or plan a month of content." />
+        <EmptyState icon={CalendarDays} title="Nothing scheduled" description="Drag a draft here — or tap a draft in the tray to schedule it." />
       ) : pieces.map(p => (
         <button key={p.id} onClick={() => onSelect(p)} className="w-full text-left">
           <Card className="p-3 hover:border-accent/40 transition-colors">
@@ -393,7 +409,7 @@ function PieceDetail({ piece, onClose, onUnschedule, onPublish, onFail, onSchedu
       <div className="flex flex-wrap gap-1.5 pt-1">
         <Button size="sm" onClick={copy}>{copied ? <><Check className="w-3.5 h-3.5" /> Copied</> : <><Copy className="w-3.5 h-3.5" /> Copy</>}</Button>
         <Button size="sm" variant="secondary" onClick={() => window.open(def.openUrl, '_blank')}><ExternalLink className="w-3.5 h-3.5" /> Open</Button>
-        {piece.status !== 'published' && <Button size="sm" variant="secondary" onClick={onPublish}><CircleCheck className="w-3.5 h-3.5" /> Mark posted</Button>}
+        {piece.status !== 'published' && <Button size="sm" variant="secondary" onClick={onPublish}><CircleCheck className="w-3.5 h-3.5" /> Mark as posted</Button>}
         {piece.status !== 'published' && <Button size="sm" variant="secondary" onClick={() => setPickDate(o => !o)}><CalendarPlus className="w-3.5 h-3.5" /> {piece.scheduled_for ? 'Reschedule' : 'Schedule'}</Button>}
         {piece.scheduled_for && piece.status !== 'published' && <Button size="sm" variant="ghost" onClick={onUnschedule}><Clock className="w-3.5 h-3.5" /> Unschedule</Button>}
         {piece.status === 'scheduled' && <Button size="sm" variant="ghost" onClick={onFail}><TriangleAlert className="w-3.5 h-3.5" /> Mark failed</Button>}

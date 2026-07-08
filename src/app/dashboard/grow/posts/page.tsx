@@ -1,6 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
 import { PageHeader } from '@/components/layout/PageHeader'
-import { MarketingSubnav } from '@/components/grow/marketing/MarketingSubnav'
 import { PostsManager } from '@/components/grow/marketing/PostsManager'
 import { listPieces, listCampaigns } from '@/lib/marketing/library'
 
@@ -19,8 +18,7 @@ export default async function PostsPage({ searchParams }: { searchParams: Promis
 
   return (
     <div className="space-y-5">
-      <MarketingSubnav />
-      <PageHeader title="All Posts" description="Your full content history — search, filter by platform, campaign or season, favorite, duplicate and archive." />
+      <PageHeader title="All Posts" description="Your full content history — search and filter to reuse anything." />
       <PostsManager
         userId={user.id}
         initialPieces={pieces}

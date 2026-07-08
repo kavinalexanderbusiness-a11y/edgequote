@@ -2,12 +2,13 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Sprout, Sparkles, Images, Megaphone, Star, Gift, BarChart3, Bot, Inbox, type LucideIcon } from 'lucide-react'
+import { Sprout, Sparkles, Images, Megaphone, CalendarDays, LayoutGrid, Lightbulb, ArrowLeftRight, Bot, type LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 // ── Grow section rail ───────────────────────────────────────────────────────────
-// The Marketing spine above every Grow surface. Built pages link; the rest show as
-// muted "Soon" so the owner sees the roadmap without dead links. Horizontal +
+// The ONE Marketing spine above every Grow surface. Every entry is a built page —
+// this replaced the old two-rail setup (this rail + a separate Studio sub-nav that
+// duplicated Studio/Campaigns and showed five dead "Soon" pills). Horizontal +
 // scrollable on mobile, matching the app's Tabs/FilterPill look.
 
 interface RailItem { label: string; href?: string; icon: LucideIcon; soon?: boolean }
@@ -15,13 +16,13 @@ interface RailItem { label: string; href?: string; icon: LucideIcon; soon?: bool
 const ITEMS: RailItem[] = [
   { label: 'Overview', href: '/dashboard/grow', icon: Sprout },
   { label: 'Studio', href: '/dashboard/grow/studio', icon: Sparkles },
+  { label: 'Calendar', href: '/dashboard/grow/calendar', icon: CalendarDays },
+  { label: 'Posts', href: '/dashboard/grow/posts', icon: LayoutGrid },
   { label: 'Library', href: '/dashboard/grow/library', icon: Images },
+  { label: 'Before & after', href: '/dashboard/grow/before-after', icon: ArrowLeftRight },
   { label: 'Campaigns', href: '/dashboard/grow/campaigns', icon: Megaphone },
-  { label: 'Reviews', icon: Star, soon: true },
-  { label: 'Referrals', icon: Gift, soon: true },
-  { label: 'Analytics', icon: BarChart3, soon: true },
-  { label: 'Coach', icon: Bot, soon: true },
-  { label: 'Pipeline', icon: Inbox, soon: true },
+  { label: 'Ideas', href: '/dashboard/grow/ideas', icon: Lightbulb },
+  { label: 'Automations', href: '/dashboard/grow/crm', icon: Bot },
 ]
 
 export function GrowNav() {

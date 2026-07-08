@@ -1,7 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { aiEnabled } from '@/lib/ai/studioGateway'
 import { PageHeader } from '@/components/layout/PageHeader'
-import { MarketingSubnav } from '@/components/grow/marketing/MarketingSubnav'
 import { CampaignBuilder } from '@/components/grow/marketing/CampaignBuilder'
 import { listCampaigns } from '@/lib/marketing/library'
 import { isCampaignKind } from '@/lib/marketing/campaigns'
@@ -18,8 +17,7 @@ export default async function CampaignsPage({ searchParams }: { searchParams: Pr
 
   return (
     <div className="space-y-5">
-      <MarketingSubnav />
-      <PageHeader title="Campaign Builder" description="Pick a theme — Spring Cleanup, Snow & Ice, Reviews, Win-back — and generate a post for every platform at once." />
+      <PageHeader title="Campaign Builder" description="Pick a theme and generate a post for every platform at once." />
       <CampaignBuilder
         userId={user.id}
         aiEnabled={aiEnabled()}

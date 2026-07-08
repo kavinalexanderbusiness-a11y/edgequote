@@ -10,6 +10,8 @@ import { PublishPanel } from './PublishPanel'
 import { downloadForPlatform } from '@/lib/marketing/platformImage'
 import { channel as channelDef } from '@/lib/marketing/channels'
 import { lengthChars } from '@/lib/marketing/prompt'
+import { parseHashtags } from '@/lib/marketing/publishQueue'
+import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import { Sparkles, RefreshCw, ImageOff, Lock, Loader2, Gauge, Pencil, Eye } from 'lucide-react'
 import { DEFAULT_POST_OPTIONS, type ContentPiece, type MarketingCandidate, type MarketingChannel, type PostOptions, type PostText, type QualityScore, type RewriteAction, type RewriteResponse } from '@/lib/marketing/types'
@@ -25,13 +27,6 @@ function scoreTone(total: number): string {
   if (total >= 72) return 'text-accent'
   return 'text-amber-400'
 }
-
-function parseHashtags(text: string): string[] {
-  return Array.from(new Set(
-    text.split(/[\s,]+/).map(t => t.replace(/^#/, '').trim()).filter(Boolean),
-  )).slice(0, 8)
-}
-
 
 export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName, logoUrl, userId, options = DEFAULT_POST_OPTIONS, onDraftChange, onGrantConsent }: {
   candidate: MarketingCandidate
@@ -100,6 +95,9 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
 
   // Stream the post in live (the "watch it write" path).
   async function runGenerate() {
+    // Regenerating over hand-edited text would wipe it — snapshot first and offer a
+    // one-tap Undo (the app's confirm→undo convention) once the new draft lands.
+    const prior = body.trim() ? { title, body, hashtagsText } : null
     setGenError(null); setStreaming(true); setPolishing(false)
     setTitle(''); setBody(''); setHashtagsText('')
     try {
@@ -144,6 +142,10 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
       if (!await fallbackGenerate()) setGenError('Could not reach the generator. Try again.')
     } finally {
       setStreaming(false); setPolishing(false)
+      if (prior) toast.undo('Replaced your caption.', () => {
+        setTitle(prior.title); setBody(prior.body); setHashtagsText(prior.hashtagsText)
+        persist({ title: prior.title.trim() || null, body: prior.body.trim(), hashtags: parseHashtags(prior.hashtagsText) })
+      })
     }
   }
 

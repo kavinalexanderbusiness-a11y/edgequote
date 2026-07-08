@@ -5,10 +5,11 @@ import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/Button'
 import { InlineEmpty } from '@/components/ui/EmptyState'
 import { channel as channelDef } from '@/lib/marketing/channels'
-import { listJobs, cancelJob, clearHistory, markManualPublished, captionFor } from '@/lib/marketing/publishQueue'
+import { listJobs, cancelJob, retryJob, clearHistory, markManualPublished, captionFor } from '@/lib/marketing/publishQueue'
 import { listConnections } from '@/lib/marketing/connections'
+import { toast } from '@/lib/toast'
 import { cn, formatDate } from '@/lib/utils'
-import { Loader2, RotateCcw, X, ExternalLink, ListChecks, Trash2, Copy, CheckCircle2, Search } from 'lucide-react'
+import { Loader2, RotateCcw, X, ExternalLink, ListChecks, Trash2, Copy, CheckCircle2, Search, Play } from 'lucide-react'
 import type { MarketingChannel, PublishJob, PublishJobStatus, SocialConnection } from '@/lib/marketing/types'
 
 const STATUS: Record<PublishJobStatus, { label: string; chip: string }> = {
@@ -42,9 +43,8 @@ export function PublishingQueue({ userId }: { userId: string }) {
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'published' | 'failed'>('all')
   const [platformFilter, setPlatformFilter] = useState<'all' | MarketingChannel>('all')
 
-  const load = useCallback(async () => {
-    // Process this owner's due jobs first (no cron needed), then show the result.
-    await fetch('/api/marketing/publish/process', { method: 'POST' }).catch(() => {})
+  // Fetch + render jobs immediately (no blocking server round-trip first).
+  const fetchJobs = useCallback(async () => {
     const [j, c] = await Promise.all([listJobs(supabase, userId, { limit: 100 }), listConnections(supabase, userId)])
     setJobs(j); setConns(c)
     // Caption + hashtags for every job's post — the rich history + copy-to-post.
@@ -55,9 +55,11 @@ export function PublishingQueue({ userId }: { userId: string }) {
       for (const p of (data as { id: string; body: string; hashtags: string[] }[] | null) || []) m[p.id] = { caption: captionFor(p), hashtags: p.hashtags || [] }
       setPieceByJob(m)
     }
-    setLoading(false)
   }, [supabase, userId])
-  useEffect(() => { load() }, [load])
+  useEffect(() => { fetchJobs().finally(() => setLoading(false)) }, [fetchJobs])
+  // Process this owner's due jobs in the BACKGROUND (no cron needed), then refresh
+  // in place — the queue paints first instead of waiting behind the round-trip.
+  useEffect(() => { fetch('/api/marketing/publish/process', { method: 'POST' }).then(() => fetchJobs()).catch(() => {}) }, [fetchJobs])
 
   const connName = useMemo(() => {
     const m = new Map(conns.map(c => [c.id, c.account_name]))
@@ -70,15 +72,19 @@ export function PublishingQueue({ userId }: { userId: string }) {
       const res = await fetch('/api/marketing/publish/retry', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jobId: j.id }) })
       const data = await res.json()
       if (data?.job) setJobs(prev => prev.map(x => x.id === j.id ? data.job : x))
-    } catch { /* ignore */ } finally { setRetrying(null); load() }
+    } catch { /* ignore */ } finally { setRetrying(null); fetchJobs() }
   }
   async function cancel(j: PublishJob) {
     const updated = await cancelJob(supabase, j.id)
     if (updated) setJobs(prev => prev.map(x => x.id === j.id ? updated : x))
+    toast.undo('Post canceled.', async () => {
+      const back = await retryJob(supabase, j.id) // → back to 'ready to post'
+      if (back) setJobs(prev => prev.map(x => x.id === j.id ? back : x))
+    })
   }
   function copyCaption(j: PublishJob) {
     const cap = pieceByJob[j.content_piece_id]?.caption
-    if (cap) { try { navigator.clipboard?.writeText(cap) } catch { /* still visible to copy by hand */ } }
+    if (cap) { try { navigator.clipboard?.writeText(cap); toast.success('Caption copied.') } catch { /* still visible to copy by hand */ } }
   }
   async function markPosted(j: PublishJob) {
     const updated = await markManualPublished(supabase, j)
@@ -89,12 +95,19 @@ export function PublishingQueue({ userId }: { userId: string }) {
   async function publishAll() {
     setPublishingAll(true)
     try { await fetch('/api/marketing/publish/process', { method: 'POST' }) } catch { /* ignore */ }
-    await load()
+    await fetchJobs()
     setPublishingAll(false)
   }
-  async function clear() {
-    await clearHistory(supabase, userId)
+  // Clear history the app way: hide now, offer Undo, and only commit the delete once
+  // the undo window passes — so one stray click can never wipe the whole history.
+  function clear() {
+    const snapshot = jobs
+    const clearedCount = jobs.filter(j => ['published', 'failed', 'canceled'].includes(j.status)).length
+    if (!clearedCount) return
     setJobs(prev => prev.filter(j => !['published', 'failed', 'canceled'].includes(j.status)))
+    let undone = false
+    toast.undo(`Cleared ${clearedCount} item${clearedCount !== 1 ? 's' : ''} from history.`, () => { undone = true; setJobs(snapshot) })
+    if (typeof window !== 'undefined') window.setTimeout(() => { if (!undone) clearHistory(supabase, userId) }, 7000)
   }
 
   // Search + filter across everything, then split into the two sections.
@@ -112,7 +125,10 @@ export function PublishingQueue({ userId }: { userId: string }) {
   })
   const active = filtered.filter(j => ['scheduled', 'queued', 'publishing'].includes(j.status))
   const history = filtered.filter(j => ['published', 'failed', 'canceled'].includes(j.status))
-  const readyCount = jobs.filter(j => j.status === 'queued' || j.status === 'scheduled' || j.status === 'publishing').length
+  // Only count what "Process" can actually advance: any scheduled job comes due, and
+  // API-mode queued jobs publish. A manual queued post waits on the owner to paste it,
+  // so counting it here would make the button look like it did nothing.
+  const readyCount = jobs.filter(j => j.status === 'scheduled' || (j.status === 'queued' && j.mode === 'api')).length
 
   if (loading) return <div className="h-32 flex items-center justify-center text-ink-faint"><Loader2 className="w-5 h-5 animate-spin" /></div>
   if (!jobs.length) return <InlineEmpty icon={ListChecks}>No publishes yet. Schedule or publish a post and it’ll show up here.</InlineEmpty>
@@ -144,9 +160,9 @@ export function PublishingQueue({ userId }: { userId: string }) {
         <div className="flex items-center gap-1.5 pl-6">
           {j.mode === 'manual' && j.status === 'queued' && (
             <>
-              <button onClick={() => copyCaption(j)} className="text-ink-faint hover:text-ink inline-flex items-center gap-1 text-[11px]" title="Copy caption"><Copy className="w-3.5 h-3.5" /> Copy</button>
+              <button onClick={() => copyCaption(j)} className="text-ink-faint hover:text-ink inline-flex items-center gap-1 text-[11px]" title="Copy caption"><Copy className="w-3.5 h-3.5" /> Copy caption</button>
               <a href={def.openUrl} target="_blank" rel="noreferrer" className="text-ink-faint hover:text-ink inline-flex items-center gap-1 text-[11px]" title={`Open ${def.label}`}><ExternalLink className="w-3.5 h-3.5" /> Open</a>
-              <Button size="sm" variant="ghost" onClick={() => markPosted(j)}><CheckCircle2 className="w-3.5 h-3.5" /> Mark posted</Button>
+              <Button size="sm" variant="ghost" onClick={() => markPosted(j)}><CheckCircle2 className="w-3.5 h-3.5" /> Mark as posted</Button>
             </>
           )}
           {j.status === 'failed' && <Button size="sm" variant="ghost" loading={retrying === j.id} onClick={() => retry(j)}><RotateCcw className="w-3.5 h-3.5" /> Retry</Button>}
@@ -182,7 +198,7 @@ export function PublishingQueue({ userId }: { userId: string }) {
         </select>
         {readyCount > 0 && (
           <Button size="sm" variant="secondary" loading={publishingAll} onClick={publishAll} title="Process all scheduled & ready posts">
-            <RotateCcw className="w-3.5 h-3.5" /> Process ready ({readyCount})
+            <Play className="w-3.5 h-3.5" /> Process ready ({readyCount})
           </Button>
         )}
       </div>
