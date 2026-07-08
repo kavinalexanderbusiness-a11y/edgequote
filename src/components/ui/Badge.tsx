@@ -45,8 +45,8 @@ export const quoteStatusTone: Record<QuoteStatus, Tone> = {
   completed: 'success', paid: 'success', declined: 'danger',
 }
 export const invoiceStatusTone: Record<InvoiceDisplayStatus, Tone> = {
-  draft: 'neutral', unpaid: 'warn', sent: 'info', partial: 'info',
-  paid: 'success', overpaid: 'accent', overdue: 'danger',
+  draft: 'neutral', unpaid: 'warn', sent: 'info', viewed: 'info', partial: 'info',
+  paid: 'success', overpaid: 'accent', overdue: 'danger', cancelled: 'neutral',
 }
 export const jobStatusTone: Record<JobStatus, Tone> = {
   scheduled: 'info', in_progress: 'warn', completed: 'success', cancelled: 'neutral',

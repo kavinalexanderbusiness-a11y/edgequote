@@ -345,3 +345,63 @@ export function renderMessage(type: MsgType, custom: Partial<Record<MsgType, str
   const subject = SUBJECTS[type] || `A message from ${vars.businessName || 'your service provider'}`
   return renderBody(tpl, vars, subject)
 }
+
+// A payment-receipt body with the REAL numbers (invoice #, receipt #, method,
+// amount, balance remaining) — sent as a bodyOverride through the ONE comms
+// pipeline, so a partial payment never claims "paid in full". {{first_name}},
+// {{business_name}} and {{portal_link}} stay as placeholders for the server.
+export function receiptMessageBody(p: {
+  invoiceNumber: string; receiptNumber: string; amountPaid: string; methodLabel: string; balanceRemaining: string | null
+}): string {
+  const balanceLine = p.balanceRemaining
+    ? `Your remaining balance is **${p.balanceRemaining}**.`
+    : 'This invoice is now **paid in full**.'
+  return `Hi {{first_name}},
+
+Thank you — we've received your payment of **${p.amountPaid}** (${p.methodLabel}) on invoice ${p.invoiceNumber}.
+
+Receipt ${p.receiptNumber}. ${balanceLine}
+
+View your invoices and payment history anytime:
+
+{{portal_link}}
+
+We appreciate your business!
+
+— {{business_name}}`
+}
+
+// ── Message categories (granular consent) ─────────────────────────────────────
+// The customer-facing grouping every template falls into. Customers opt in/out
+// per CATEGORY (customers.message_prefs jsonb) on the website funnel + portal;
+// the ONE dispatch engine (lib/comms/dispatch) enforces it. A missing key means
+// "inherit the channel opt-in" — so existing customers behave exactly as before.
+export type MsgCategory = 'reminders' | 'invoices' | 'estimates' | 'marketing' | 'seasonal'
+export type MessagePrefs = Partial<Record<MsgCategory, boolean>>
+
+export const MSG_CATEGORY_LABELS: Record<MsgCategory, string> = {
+  reminders: 'Appointment & service updates',
+  invoices: 'Invoices & payments',
+  estimates: 'Estimates & quotes',
+  marketing: 'Offers & news',
+  seasonal: 'Seasonal reminders',
+}
+
+export function msgCategory(t: MsgType): MsgCategory | null {
+  switch (t) {
+    case 'invoice': case 'payment_reminder': case 'receipt': return 'invoices'
+    case 'quote': case 'estimate_reminder': case 'estimate_followup': return 'estimates'
+    case 'marketing': case 'introduction': case 'win_back': return 'marketing'
+    case 'birthday': case 'anniversary': return 'seasonal'
+    case 'custom': return null // owner-composed one-offs are always deliverable
+    default: return 'reminders' // every service-timing message (reminder, on_my_way, eta, …)
+  }
+}
+
+// Does this customer's preference set allow this template? Unknown templates and
+// null prefs always pass (backward compatible; channel opt-in still gates).
+export function prefAllows(prefs: MessagePrefs | null | undefined, template: string): boolean {
+  if (!prefs || !(template in MSG_LABELS)) return true
+  const cat = msgCategory(template as MsgType)
+  return !cat || prefs[cat] !== false
+}

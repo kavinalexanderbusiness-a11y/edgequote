@@ -1,5 +1,6 @@
 'use client'
 
+import { confirm as confirmDialog } from '@/lib/confirm'
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { PhotoKind, PHOTO_KIND_LABELS } from '@/types'

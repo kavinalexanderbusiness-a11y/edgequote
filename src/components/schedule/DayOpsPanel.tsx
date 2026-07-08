@@ -6,7 +6,7 @@ import { confirm } from '@/lib/confirm'
 import { createClient } from '@/lib/supabase/client'
 import { Job, JobStatus, JobRecurrence, JobLineItem, RecurrenceScope, PRICE_REASONS, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
 import { Coord } from '@/lib/geo'
-import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, nearestNeighborRoute, sequenceRoute, roundTripMapsUrl, routeStats, directionsUrl, computeDayEtas, roughFinishEstimate, dayLoad, minutesToTime12, timeToMinutes, DEFAULT_JOB_MIN } from '@/lib/route'
+import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, nearestNeighborRoute, sequenceRoute, roundTripMapsUrl, MAX_MAPS_WAYPOINTS, routeStats, directionsUrl, computeDayEtas, roughFinishEstimate, dayLoad, minutesToTime12, timeToMinutes, DEFAULT_JOB_MIN } from '@/lib/route'
 import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
 import { buildRoadDistance } from '@/lib/distance'
 import { jobVisitValue, effectiveFreq, quoteVisitAmount } from '@/lib/invoicing'
@@ -302,7 +302,13 @@ export function DayOpsPanel({
     : null
   const effOrdered: OrderedRouteStop[] = manualRoute ? manualRoute.ordered : route?.ordered ?? []
   const effTotalKm = manualRoute ? manualRoute.totalKm : route?.totalKm ?? 0
-  const effMapsUrl = manualRoute && baseCoord ? roundTripMapsUrl(baseCoord, manualRoute.ordered) : route?.mapsUrl ?? null
+  // Navigation link: the REMAINING stops in the current (manual or optimized)
+  // order — completed stops don't need directions, and Google caps the URL at
+  // MAX_MAPS_WAYPOINTS anyway, so mid-day re-opens always cover what's next.
+  const doneIds = new Set(active.filter(j => j.status === 'completed').map(j => j.id))
+  const navStops = effOrdered.filter(s => !doneIds.has(s.jobId))
+  const effMapsUrl = baseCoord && navStops.length ? roundTripMapsUrl(baseCoord, navStops) : null
+  const mapsCapped = navStops.length > MAX_MAPS_WAYPOINTS
 
   const orderByJobId = new Map(effOrdered.map(s => [s.jobId, s.order]))
   const sortedJobs = [...active].sort((a, b) => {
@@ -314,10 +320,50 @@ export function DayOpsPanel({
   const stats = (manualRoute || route) && totalStops > 0 ? routeStats(locatedCoords, effTotalKm, travel) : null
 
   // Reorder: swap instantly (optimistic), then persist the whole day's sequence.
+  // Writes are CHAINED so two quick drags can't interleave their per-row updates
+  // (last full sequence wins), and failures surface instead of silently reverting
+  // on the next refresh.
+  const orderWrite = useRef<Promise<void>>(Promise.resolve())
+  // How many route_order writes are still in flight, and which props version the
+  // last write settled at — together they tell the release effect below when the
+  // props are FRESH (refetched after our writes), so it can safely hand authority
+  // back to the DB without flickering through a stale in-between state.
+  const pendingOrderWrites = useRef(0)
+  const propsVersion = useRef(0)
+  const settledAtVersion = useRef(0)
+  useEffect(() => { propsVersion.current++ }, [jobs])
   async function applyOrder(seq: string[]) {
     setLocalSeq(seq)
-    await Promise.all(seq.map((id, i) => supabase.from('jobs').update({ route_order: i + 1 }).eq('id', id)))
+    pendingOrderWrites.current++
+    orderWrite.current = orderWrite.current.then(async () => {
+      try {
+        const results = await Promise.all(seq.map((id, i) => supabase.from('jobs').update({ route_order: i + 1 }).eq('id', id)))
+        if (results.some(r => r.error)) {
+          // Reconcile, don't diverge: drop the optimistic order and fall back to
+          // the last persisted sequence from props (realtime refetch confirms it).
+          setLocalSeq(null)
+          toast.error('Could not save the new stop order — showing the last saved one.')
+        }
+      } finally {
+        pendingOrderWrites.current--
+        if (pendingOrderWrites.current === 0) settledAtVersion.current = propsVersion.current
+      }
+    })
+    await orderWrite.current
   }
+  // Release the optimistic override once the DB is the right authority again:
+  // • props MATCH the optimistic order (our write round-tripped) → release;
+  // • props are FRESH (refetched after our writes settled) and still differ →
+  //   another tab/device won the write — adopt the persisted truth (release)
+  //   instead of shadowing it forever.
+  const savedKey = savedSeq ? savedSeq.join('|') : ''
+  useEffect(() => {
+    if (localSeq === null || pendingOrderWrites.current > 0) return
+    const fresh = propsVersion.current > settledAtVersion.current
+    if (localSeq === 'auto') { if (!savedKey || fresh) setLocalSeq(null); return }
+    if (savedKey === localSeq.join('|') || fresh) setLocalSeq(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [localSeq, savedKey, jobs])
   function moveStop(id: string, dir: -1 | 1) {
     const seq = (manualSeq ?? sortedJobs.map(j => j.id)).slice()
     const i = seq.indexOf(id)
@@ -359,8 +405,17 @@ export function DayOpsPanel({
     }
     setOptimizing(true)
     setLocalSeq('auto')
-    await supabase.from('jobs').update({ route_order: null }).in('id', active.map(j => j.id))
+    pendingOrderWrites.current++
+    const { error } = await supabase.from('jobs').update({ route_order: null }).in('id', active.map(j => j.id))
+    pendingOrderWrites.current--
+    if (pendingOrderWrites.current === 0) settledAtVersion.current = propsVersion.current
     setOptimizing(false)
+    if (error) {
+      // Write failed → put the display back and say so (no fake success/undo).
+      setLocalSeq(prevSeq)
+      toast.error('Could not re-optimize: ' + error.message)
+      return
+    }
     if (prevSeq) {
       toast.undo('Route re-optimized — manual order cleared.', () => applyOrder(prevSeq))
     } else {
@@ -517,8 +572,10 @@ export function DayOpsPanel({
                   </button>
                 )}
                 {effMapsUrl && (
-                  <a href={effMapsUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-accent font-medium flex items-center gap-1 hover:underline">
-                    <ExternalLink className="w-3 h-3" /> Open in Maps
+                  <a href={effMapsUrl} target="_blank" rel="noopener noreferrer"
+                    title={mapsCapped ? `Google Maps caps directions at ${MAX_MAPS_WAYPOINTS} stops — this opens your next ${MAX_MAPS_WAYPOINTS}; reopen as you complete stops for the rest.` : 'Directions for the remaining stops, in order'}
+                    className="text-xs text-accent font-medium flex items-center gap-1 hover:underline">
+                    <ExternalLink className="w-3 h-3" /> {mapsCapped ? `Open in Maps (next ${MAX_MAPS_WAYPOINTS})` : 'Open in Maps'}
                   </a>
                 )}
               </span>

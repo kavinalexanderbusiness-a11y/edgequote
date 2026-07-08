@@ -1,5 +1,6 @@
 'use client'
 
+import { confirm as confirmDialog } from '@/lib/confirm'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'

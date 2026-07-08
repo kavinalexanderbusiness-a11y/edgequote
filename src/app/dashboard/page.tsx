@@ -7,6 +7,7 @@ import { AcquisitionInsights } from '@/components/dashboard/AcquisitionInsights'
 import { DashboardTopSuggestions } from '@/components/dashboard/DashboardTopSuggestions'
 import { TodaysPriorities } from '@/components/dashboard/TodaysPriorities'
 import { UnscheduledAccepted } from '@/components/dashboard/UnscheduledAccepted'
+import { MissedJobs } from '@/components/dashboard/MissedJobs'
 import { TodayJobs } from '@/components/dashboard/TodayJobs'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { DashboardStats, Quote } from '@/types'
@@ -95,6 +96,7 @@ export default async function DashboardPage() {
             3. Today's Jobs — the day's route with one-tap call / open-in-Maps. */}
       <TodaysPriorities />
       <UnscheduledAccepted />
+      <MissedJobs />
       <TodayJobs />
       <DashboardSections
         initialPrefs={(settingsRow as { dashboard_cards: { order: string[]; hidden: string[] } | null } | null)?.dashboard_cards ?? null}

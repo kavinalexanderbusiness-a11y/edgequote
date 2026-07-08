@@ -6,10 +6,11 @@ import Link from 'next/link'
 import { hoverIntent } from '@/lib/prefetch'
 import { Quote, QuoteStatus } from '@/types'
 import { formatCurrency, formatDate, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
-import { needsFollowUp, daysSince } from '@/lib/followup'
+import { needsFollowUp, daysSince, compareFollowUp } from '@/lib/followup'
 import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { EmptyState } from '@/components/ui/EmptyState'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from '@/lib/toast'
 import { useBulkSelect } from '@/hooks/useBulkSelect'
@@ -55,7 +56,7 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
     } catch { /* ignore */ }
   }, [])
 
-  const filtered = quotes.filter(q => {
+  const matched = quotes.filter(q => {
     const matchSearch =
       q.customer_name.toLowerCase().includes(search.toLowerCase()) ||
       q.quote_number.toLowerCase().includes(search.toLowerCase()) ||
@@ -64,6 +65,9 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
     const matchFollowUp = followUpOnly ? needsFollowUp(q) : true
     return matchSearch && matchStatus && matchFollowUp
   })
+  // The follow-up queue orders by URGENCY (the shared comparator), not created-at —
+  // the quote that's been waiting longest is the one to chase first.
+  const filtered = followUpOnly ? [...matched].sort(compareFollowUp) : matched
 
   async function handleDelete(id: string) {
     setDeleting(id)
@@ -250,9 +254,16 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
 
       {/* Table */}
       {filtered.length === 0 ? (
-        <Card className="py-14 text-center text-sm text-ink-muted">
-          No quotes found.
-        </Card>
+        quotes.length === 0 ? (
+          // Truly empty (not just a filter miss) → lead to the next action.
+          <Card>
+            <EmptyState icon={FileText} title="No quotes yet"
+              description="Create your first quote — measure the lawn, pick a service, and send it in minutes."
+              action={{ label: 'New Quote', onClick: () => router.push('/dashboard/quotes/new') }} />
+          </Card>
+        ) : (
+          <Card className="py-14 text-center text-sm text-ink-muted">No quotes match your filters.</Card>
+        )
       ) : (
         <Card className="overflow-hidden">
           <div className="overflow-x-auto">
@@ -319,7 +330,6 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
           </div>
         </Card>
       )}
-      <p className="text-xs text-ink-faint text-right">{filtered.length} quote{filtered.length !== 1 ? 's' : ''}</p>
     </div>
   )
 }

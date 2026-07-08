@@ -124,7 +124,7 @@ export default function WeeklyReviewPage() {
   if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Building your weekly review…</div>
 
   return (
-    <div className="max-w-3xl space-y-5">
+    <div className="max-w-3xl space-y-6">
       <PageHeader
         title="Weekly Review"
         description={`${formatDate(m.weekStart)} – ${formatDate(m.today)} · how the week went, and next week's moves`}

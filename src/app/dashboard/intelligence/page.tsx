@@ -108,10 +108,11 @@ export default function IntelligencePage() {
 
       {/* ── OPERATIONS ── */}
       <Section title="Operations" icon={Activity}>
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+          {/* "Estimate accuracy" lives ONCE — in the Labour section below (the two
+              engines' numbers could disagree, so only the learned one is shown). */}
           <Stat label="Capacity used (4 wk)" value={bi.operations.capacityUtilizationPct != null ? `${bi.operations.capacityUtilizationPct}%` : '—'} sub="of workday capacity" />
           <Stat label="Booked next 2 wk" value={bi.operations.bookedUtilizationPct != null ? `${bi.operations.bookedUtilizationPct}%` : '—'} sub="of capacity" />
-          <Stat label="Labor estimate accuracy" value={bi.operations.laborAccuracyPct != null ? `${bi.operations.laborAccuracyPct}%` : '—'} sub={`${bi.operations.timedJobs} timed jobs`} />
           <Stat label="Avg route density" value={`${bi.operations.avgRouteDensity}/100`} sub="how clustered you are" />
         </div>
       </Section>

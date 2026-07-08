@@ -82,7 +82,7 @@ export async function POST(req: NextRequest) {
           stripe_payment_intent: typeof s.payment_intent === 'string' ? s.payment_intent : null,
           status: 'paid',
           paid_at: now(),
-        }, { onConflict: 'stripe_session_id', ignoreDuplicates: true })
+        }, { onConflict: 'stripe_session_id', ignoreDuplicates: true }).select('id')
         // A DB write must NOT be reported as handled — return 500 so Stripe RETRIES
         // (both writes are idempotent: the upsert dedupes on stripe_session_id and
         // the invoice flip is guarded by .neq('paid'), so a retry can't double-count
@@ -99,6 +99,17 @@ export async function POST(req: NextRequest) {
         if (invRes.error) {
           console.error('[stripe] invoice update failed:', invRes.error.message)
           return NextResponse.json({ error: 'db write failed' }, { status: 500 })
+        }
+        // Receipt for ONE-TIME online payments too (AutoPay already sends one).
+        // Gated on THIS delivery inserting the payment row (a Stripe re-delivery
+        // ignores the duplicate → no second receipt); best-effort + time-boxed so
+        // a slow provider never stalls the webhook 200.
+        const receiptCustomer = s.metadata?.customer_id ?? null
+        if ((payRes.data?.length ?? 0) > 0 && receiptCustomer) {
+          await Promise.race([
+            sendPaymentReceipt(sb, { userId, customerId: receiptCustomer, amount: (s.amount_total ?? 0) / 100, origin }),
+            new Promise<void>(resolve => setTimeout(resolve, 6000)),
+          ])
         }
       }
     }

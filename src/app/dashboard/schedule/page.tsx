@@ -34,7 +34,7 @@ import { analyzeScheduleHealth } from '@/lib/scheduleHealth'
 import type { HealthIssue, HealthJob } from '@/lib/scheduleHealth'
 import { ScheduleHealthCard } from '@/components/schedule/ScheduleHealthCard'
 import { DayStatusMenu } from '@/components/schedule/DayStatusMenu'
-import { buildDayStatusMap, buildCapacityForDate, dayStartTime, loadDayStatuses, setDayStatus, setDayCapacity, clearDayStatus, DAY_STATUS_META, DAY_STATUS_SELECT, type DayStatusMap, type DayStatusRow, type DayStatus } from '@/lib/dayStatus'
+import { buildDayStatusMap, buildCapacityForDate, dayStartTime, isDayBlocked, loadDayStatuses, setDayStatus, setDayCapacity, clearDayStatus, DAY_STATUS_META, DAY_STATUS_SELECT, type DayStatusMap, type DayStatusRow, type DayStatus } from '@/lib/dayStatus'
 import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { DaySettingsBar } from '@/components/schedule/DaySettingsBar'
@@ -364,12 +364,14 @@ export default function SchedulePage() {
     if (issue.removableJobIds.length === 0) return
     setHealthBusyKey(issue.key)
     const rows = jobs.filter(j => issue.removableJobIds.includes(j.id)).map(jobInsertRow)
+    const addons = addonInsertRows(issue.removableJobIds)
     const { error } = await supabase.from('jobs').delete().in('id', issue.removableJobIds)
     if (error) { setBanner('Could not remove the duplicate: ' + error.message); setHealthBusyKey(null); return }
     await fetchJobs()
     setHealthBusyKey(null)
     offerUndo(`Removed ${rows.length} ${issue.isMow ? 'mowing ' : ''}visit${rows.length !== 1 ? 's' : ''}`, async () => {
       if (rows.length) await supabase.from('jobs').insert(rows)
+      if (addons.length) await supabase.from('job_line_items').insert(addons)
     })
   }
 
@@ -385,6 +387,7 @@ export default function SchedulePage() {
     const futureJobs = jobs.filter(j => j.recurrence_id && otherSet.has(j.recurrence_id)
       && j.scheduled_date >= today && (j.status === 'scheduled' || j.status === 'in_progress') && !invoicedJobIds.has(j.id))
     const futureRows = futureJobs.map(jobInsertRow)
+    const futureAddons = addonInsertRows(futureJobs.map(j => j.id))
     const futureIds = new Set(futureJobs.map(j => j.id))
     const pastReattach = jobs.filter(j => j.recurrence_id && otherSet.has(j.recurrence_id) && !futureIds.has(j.id))
       .map(j => ({ id: j.id, recurrence_id: j.recurrence_id as string }))
@@ -400,6 +403,7 @@ export default function SchedulePage() {
     offerUndo(`Merged ${others.length + 1} ${issue.isMow ? 'mowing ' : ''}plans into one`, async () => {
       if (recRows.length) await supabase.from('job_recurrences').insert(recRows)
       if (futureRows.length) await supabase.from('jobs').insert(futureRows)
+      if (futureAddons.length) await supabase.from('job_line_items').insert(futureAddons)
       for (const p of pastReattach) await supabase.from('jobs').update({ recurrence_id: p.recurrence_id }).eq('id', p.id)
     })
   }
@@ -483,6 +487,11 @@ export default function SchedulePage() {
     if (user) setDayStatusMap(buildDayStatusMap(await loadDayStatuses(supabase, user.id)))
   }, [supabase])
   useRealtimeRefresh('day_statuses', uid ? `user_id=eq.${uid}` : null, reloadDayStatuses)
+  // Jobs too: any write (this tab's optimistic mutations, another device, the
+  // route_order trigger, Weather Ops) reconciles the UI to the DB — debounced —
+  // and the hook refetches on reconnect/visibility, so optimistic state can
+  // never silently diverge from what was actually persisted.
+  useRealtimeRefresh('jobs', uid ? `user_id=eq.${uid}` : null, fetchJobs)
 
   // Open the day menu — if the day is part of a multi-selection, target them all.
   function openDayMenu(dateISO: string, pos: { x: number; y: number }) {
@@ -985,19 +994,27 @@ export default function SchedulePage() {
   async function applyMove(job: Job, newDate: string, scope: RecurrenceScope) {
     const delta = dayDelta(job.scheduled_date, newDate)
     const targets = jobsInScope(job, jobs, scope)
-    const prev = targets.map(t => ({ id: t.id, scheduled_date: t.scheduled_date }))
+    const prev = targets.map(t => ({ id: t.id, scheduled_date: t.scheduled_date, route_order: t.route_order ?? null }))
     await Promise.all(targets.map(t =>
       supabase.from('jobs').update({ scheduled_date: shiftDate(t.scheduled_date, delta) }).eq('id', t.id)
     ))
     await fetchJobs()
     offerUndo(`Moved ${targets.length} visit${targets.length !== 1 ? 's' : ''}`, async () => {
-      await Promise.all(prev.map(p => supabase.from('jobs').update({ scheduled_date: p.scheduled_date }).eq('id', p.id)))
+      // Restore dates AND manual route positions (the trigger nulled them on the
+      // way out; it keeps an explicitly-set route_order in the same update).
+      await Promise.all(prev.map(p => supabase.from('jobs').update({ scheduled_date: p.scheduled_date, route_order: p.route_order }).eq('id', p.id)))
     })
   }
 
   async function applyDelete(job: Job, scope: RecurrenceScope) {
     const targets = jobsInScope(job, jobs, scope)
     const snapshot = targets.map(jobInsertRow)
+    const addons = addonInsertRows(targets.map(t => t.id))
+    // Snapshot invoice links (FK sets job_id NULL on delete) so undo re-stamps them.
+    const invTargets = targets.filter(t => invoicedJobIds.has(t.id)).map(t => t.id)
+    const linkedInv = invTargets.length
+      ? (((await supabase.from('invoices').select('id, job_id').in('job_id', invTargets)).data as { id: string; job_id: string }[] | null) ?? [])
+      : []
     const r = (scope === 'all' && job.recurrence_id) ? recurrences[job.recurrence_id] : null
     const recRow = r ? {
       id: r.id, user_id: r.user_id, freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count,
@@ -1010,6 +1027,8 @@ export default function SchedulePage() {
     offerUndo(`Deleted ${targets.length} visit${targets.length !== 1 ? 's' : ''}`, async () => {
       if (recRow) await supabase.from('job_recurrences').insert(recRow)
       if (snapshot.length) await supabase.from('jobs').insert(snapshot)
+      if (addons.length) await supabase.from('job_line_items').insert(addons)
+      for (const inv of linkedInv) await supabase.from('invoices').update({ job_id: inv.job_id }).eq('id', inv.id)
     })
   }
 
@@ -1042,10 +1061,20 @@ export default function SchedulePage() {
       return
     }
     const row = jobInsertRow(job)
+    const addons = addonInsertRows([job.id])
+    // Deleting sets invoices.job_id NULL (FK) — snapshot the links so undo can
+    // re-stamp them, or the visit stops counting as invoiced (double-invoice risk).
+    const linkedInvoices = invoicedJobIds.has(job.id)
+      ? (((await supabase.from('invoices').select('id').eq('job_id', job.id)).data as { id: string }[] | null) ?? [])
+      : []
     await supabase.from('jobs').delete().eq('id', job.id)
     await fetchJobs()
     setEditing(prev => (prev?.id === job.id ? null : prev))
-    offerUndo('Job deleted', async () => { await supabase.from('jobs').insert(row) })
+    offerUndo('Job deleted', async () => {
+      await supabase.from('jobs').insert(row) // job first — FKs point at it
+      if (addons.length) await supabase.from('job_line_items').insert(addons)
+      if (linkedInvoices.length) await supabase.from('invoices').update({ job_id: job.id }).in('id', linkedInvoices.map(i => i.id))
+    })
   }
 
   async function handleDelete() {
@@ -1260,16 +1289,22 @@ export default function SchedulePage() {
     setUndoAction(null)
     if (a) { await a.run(); await fetchJobs() }
   }
-  // Insertable job row (strips joined customers/properties) for delete-undo.
+  // Insertable job row for delete-undo: the FULL row minus the two joined
+  // relations. A hand-maintained column allowlist here silently amputated
+  // resurrected jobs (lost started_at/completed_at/on_my_way_at/route_order and
+  // would lose every future column); rest-spread can never drift because
+  // fetchJobs selects '*' plus exactly these two joins.
   function jobInsertRow(j: Job) {
-    return {
-      id: j.id, user_id: j.user_id, customer_id: j.customer_id, property_id: j.property_id,
-      quote_id: j.quote_id, recurrence_id: j.recurrence_id, title: j.title, service_type: j.service_type,
-      scheduled_date: j.scheduled_date, start_time: j.start_time, end_time: j.end_time,
-      duration_minutes: j.duration_minutes, crew_size: j.crew_size, status: j.status, notes: j.notes,
-      price: j.price, actual_minutes: j.actual_minutes, suggested_date: j.suggested_date, suggested_nearby_count: j.suggested_nearby_count,
-      is_initial_visit: j.is_initial_visit,
-    }
+    const { customers, properties, ...row } = j
+    void customers; void properties
+    return row
+  }
+
+  // Insertable add-on rows for these visits, snapshotted from the already-loaded
+  // cache (the ONE listLineItemsByJob engine) — job deletion CASCADE-deletes
+  // job_line_items, so delete-undo must restore them or priced extras vanish.
+  function addonInsertRows(ids: string[]): JobLineItem[] {
+    return ids.flatMap(id => addonsByJobId[id] || [])
   }
 
   // Apply a batch of date moves (optimizer or rain delay): grouped by target
@@ -1283,21 +1318,27 @@ export default function SchedulePage() {
       if (error) { setBanner('Optimization partially applied — ' + error.message); break }
     }
     await fetchJobs()
+    // Capture each moved job's manual route position so undo restores it (the
+    // date-move trigger nulls route_order on the way out).
+    const prevOrder = new Map(moves.map(m => [m.jobId, jobs.find(j => j.id === m.jobId)?.route_order ?? null]))
     const byFrom: Record<string, string[]> = {}
     for (const m of moves) (byFrom[m.from] ||= []).push(m.jobId)
     offerUndo(`${moves.length} job${moves.length !== 1 ? 's' : ''} moved`, async () => {
       for (const [from, ids] of Object.entries(byFrom)) {
-        await supabase.from('jobs').update({ scheduled_date: from }).in('id', ids)
+        await Promise.all(ids.map(id => supabase.from('jobs').update({ scheduled_date: from, route_order: prevOrder.get(id) ?? null }).eq('id', id)))
       }
     })
   }
 
-  // Next date on/after `fromISO`+1 whose weekday is a preferred work day.
+  // Next date on/after `fromISO`+1 whose weekday is a preferred work day AND
+  // that isn't blocked (rain/holiday/vacation…) — a rain delay must never bump
+  // the day's jobs onto another day that's already marked unavailable.
   function nextWorkday(fromISO: string): string {
     const pref = preferredWorkDays.length ? new Set(preferredWorkDays) : null
     let d = addDays(parseISO(fromISO), 1)
     for (let i = 0; i < 21; i++) {
-      if (!pref || pref.has(getDay(d))) return format(d, 'yyyy-MM-dd')
+      const iso = format(d, 'yyyy-MM-dd')
+      if ((!pref || pref.has(getDay(d))) && !isDayBlocked(dayStatusMap, iso)) return iso
       d = addDays(d, 1)
     }
     return format(addDays(parseISO(fromISO), 1), 'yyyy-MM-dd')
@@ -1310,12 +1351,16 @@ export default function SchedulePage() {
     if (!dayJobs.length) { setBanner('No jobs to bump on this day.'); return }
     const to = nextWorkday(dateISO)
     const ids = dayJobs.map(j => j.id)
+    const prevOrders = dayJobs.map(j => ({ id: j.id, route_order: j.route_order ?? null }))
     const { error } = await supabase.from('jobs').update({ scheduled_date: to }).in('id', ids)
     if (error) { setBanner('Could not bump the day: ' + error.message); return }
     await fetchJobs()
     setCursor(parseISO(to + 'T00:00:00'))
     offerUndo(`Rain delay — bumped ${ids.length} job${ids.length !== 1 ? 's' : ''} to ${format(parseISO(to + 'T00:00:00'), 'EEE, MMM d')}`,
-      async () => { await supabase.from('jobs').update({ scheduled_date: dateISO }).in('id', ids) })
+      async () => {
+        // Per-job so each visit gets back its own manual route position.
+        await Promise.all(prevOrders.map(p => supabase.from('jobs').update({ scheduled_date: dateISO, route_order: p.route_order }).eq('id', p.id)))
+      })
   }
 
   async function moveJobToDate(job: Job, date: Date) {
@@ -1334,10 +1379,20 @@ export default function SchedulePage() {
       return
     }
     const prevDate = job.scheduled_date
-    setJobs(prev => prev.map(j => j.id === job.id ? { ...j, scheduled_date: newDate } : j))
-    await supabase.from('jobs').update({ scheduled_date: newDate }).eq('id', job.id)
+    const prevOrder = job.route_order ?? null
+    // Optimistic patch mirrors the DB trigger: a date move clears the manual
+    // route position, so the target day's order is correct without a refetch.
+    setJobs(prev => prev.map(j => j.id === job.id ? { ...j, scheduled_date: newDate, route_order: null } : j))
+    const { error } = await supabase.from('jobs').update({ scheduled_date: newDate }).eq('id', job.id)
+    if (error) {
+      setJobs(prev => prev.map(j => j.id === job.id ? { ...j, scheduled_date: prevDate, route_order: prevOrder } : j))
+      setBanner('Could not move the job: ' + error.message)
+      return
+    }
     offerUndo('Job moved', async () => {
-      await supabase.from('jobs').update({ scheduled_date: prevDate }).eq('id', job.id)
+      // Restore the date AND the manual route position (the trigger keeps an
+      // explicitly-set route_order when it changes in the same update).
+      await supabase.from('jobs').update({ scheduled_date: prevDate, route_order: prevOrder }).eq('id', job.id)
     })
   }
 
@@ -1424,7 +1479,7 @@ export default function SchedulePage() {
           <span>{banner}</span>
           <div className="flex items-center gap-3 shrink-0">
             <button onClick={() => router.push('/dashboard/invoices')} className="underline font-medium">Invoices</button>
-            <button onClick={() => setBanner(null)} className="text-ink-faint hover:text-ink">✕</button>
+            <button onClick={() => setBanner(null)} className="text-ink-faint hover:text-ink"><X className="w-4 h-4" /></button>
           </div>
         </div>
       )}
@@ -1435,7 +1490,7 @@ export default function SchedulePage() {
           <span className="font-medium">{undoAction.label}</span>
           <div className="flex items-center gap-3 shrink-0">
             <button onClick={runUndo} className="font-bold underline">Undo</button>
-            <button onClick={() => setUndoAction(null)} className="opacity-60 hover:opacity-100">✕</button>
+            <button onClick={() => setUndoAction(null)} className="opacity-60 hover:opacity-100"><X className="w-4 h-4" /></button>
           </div>
         </div>
       )}

@@ -171,14 +171,23 @@ export interface SetDayStatusInput {
   createdBy?: string | null
 }
 
-// Set (or change) a day's status — upsert on (user, date).
+// Set (or change) a day's status — upsert on (user, date). Fields the caller
+// doesn't specify are PRESERVED from the existing row (setting a day to "Rain"
+// must not wipe a crew/hours override saved via Day Settings — they're
+// independent facts about the same day).
 export async function setDayStatus(supabase: SupabaseClient, userId: string, date: string, input: SetDayStatusInput) {
   const blocks = input.blocks ?? dayStatusMeta(input.status).defaultBlocks
+  const { data } = await supabase.from('day_statuses')
+    .select('label, notes, starts_at, ends_at, crew_size')
+    .eq('user_id', userId).eq('date', date).maybeSingle()
+  const cur = data as Pick<DayStatusRow, 'label' | 'notes' | 'starts_at' | 'ends_at' | 'crew_size'> | null
   return supabase.from('day_statuses').upsert({
     user_id: userId, date, status: input.status, blocks,
-    label: input.label ?? null, notes: input.notes ?? null,
-    starts_at: input.startsAt ?? null, ends_at: input.endsAt ?? null,
-    crew_size: input.crewSize ?? null,
+    label: input.label !== undefined ? input.label : (cur?.label ?? null),
+    notes: input.notes !== undefined ? input.notes : (cur?.notes ?? null),
+    starts_at: input.startsAt !== undefined ? input.startsAt : (cur?.starts_at ?? null),
+    ends_at: input.endsAt !== undefined ? input.endsAt : (cur?.ends_at ?? null),
+    crew_size: input.crewSize !== undefined ? input.crewSize : (cur?.crew_size ?? null),
     created_by: input.createdBy ?? null, updated_at: new Date().toISOString(),
   }, { onConflict: 'user_id,date' })
 }

@@ -151,7 +151,10 @@ export default function ServiceTemplatesPage() {
             <Card>
               <div className="divide-y divide-border">
                 {grouped[category].map(t => (
-                  <div key={t.id} className="flex items-center gap-4 px-5 py-3.5">
+                  // The whole row opens the editor (the pencil was the only way in);
+                  // the inline controls stop the click from bubbling.
+                  <div key={t.id} onClick={() => openEdit(t)}
+                    className="flex items-center gap-4 px-5 py-3.5 cursor-pointer hover:bg-surface/40 transition-colors">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className={`text-sm font-medium ${t.is_active ? 'text-ink' : 'text-ink-faint line-through'}`}>{t.name}</span>
@@ -160,9 +163,9 @@ export default function ServiceTemplatesPage() {
                       {t.default_description && <p className="text-xs text-ink-muted truncate mt-0.5">{t.default_description}</p>}
                     </div>
                     <span className="text-sm font-semibold text-accent shrink-0">{formatServicePrice(t)}</span>
-                    <Toggle checked={t.is_active} onChange={() => toggleActive(t)} />
-                    <Button variant="ghost" size="sm" onClick={() => openEdit(t)}><Edit2 className="w-4 h-4" /></Button>
-                    <Button variant="ghost" size="sm" onClick={() => remove(t)} className="hover:text-red-400"><Trash2 className="w-4 h-4" /></Button>
+                    <span onClick={e => e.stopPropagation()}><Toggle checked={t.is_active} onChange={() => toggleActive(t)} /></span>
+                    <Button variant="ghost" size="sm" onClick={e => { e.stopPropagation(); openEdit(t) }}><Edit2 className="w-4 h-4" /></Button>
+                    <Button variant="ghost" size="sm" onClick={e => { e.stopPropagation(); remove(t) }} className="hover:text-red-400"><Trash2 className="w-4 h-4" /></Button>
                   </div>
                 ))}
               </div>

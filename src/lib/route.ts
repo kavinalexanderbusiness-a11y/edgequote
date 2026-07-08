@@ -192,12 +192,18 @@ function stopLocator(s: { lat: number | null; lng: number | null; address?: stri
   return null
 }
 
+// Google Maps' api=1 directions URL supports at most 9 waypoints — beyond that
+// the link silently fails, exactly when a big dispatch day needs it most. Cap at
+// the limit; callers should pass stops in visit order (and prefer the REMAINING
+// stops) so the link always covers what's next.
+export const MAX_MAPS_WAYPOINTS = 9
+
 // Round-trip Google Maps directions URL (base → stops → base). Shared so the
 // cached-road path can build the same "Open in Maps" link optimizeRoute does.
 // Waypoints use each stop's street address when available.
 export function roundTripMapsUrl(base: Coord, ordered: { lat: number | null; lng: number | null; address?: string | null }[]): string {
   const baseParam = `${base.lat},${base.lng}`
-  const waypoints = ordered.map(stopLocator).filter((x): x is string => !!x).join('|')
+  const waypoints = ordered.map(stopLocator).filter((x): x is string => !!x).slice(0, MAX_MAPS_WAYPOINTS).join('|')
   const u = new URL('https://www.google.com/maps/dir/')
   u.searchParams.set('api', '1')
   u.searchParams.set('origin', baseParam)
@@ -462,8 +468,10 @@ export function roughFinishEstimate(startHHmm: string | null | undefined, totalL
 }
 
 // Soft load signal vs the owner's daily capacity. spareMin >= 60 → room for more.
+// An EXPLICIT 0 means a blocked day (zero labour available) and must not fall
+// back to the 8h default — booked work on a blocked day is genuinely over.
 export function dayLoad(totalWorkMin: number, capacityHours: number | null | undefined): { state: 'overloaded' | 'full' | 'room'; spareMin: number } {
-  const cap = (capacityHours && capacityHours > 0 ? capacityHours : 8) * 60
+  const cap = (capacityHours == null || capacityHours < 0 ? 8 : capacityHours) * 60
   const spare = Math.round(cap - totalWorkMin)
   return { state: spare < 0 ? 'overloaded' : spare >= 60 ? 'room' : 'full', spareMin: spare }
 }

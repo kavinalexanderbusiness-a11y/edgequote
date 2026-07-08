@@ -13,10 +13,14 @@ alter table public.jobs add column if not exists route_order int;
 -- calendar drag — any path), its manual sequence position is meaningless on the
 -- new day. Clear it AT THE SOURCE so no app path can forget to: the job simply
 -- appends to the target day's order (or rejoins the optimizer's order).
+-- An update that EXPLICITLY sets route_order alongside the date keeps its value
+-- (that's how Undo restores a job's manual position when moving it back); only a
+-- plain date move — route_order untouched — gets cleared.
 create or replace function public.clear_route_order_on_move() returns trigger
 language plpgsql as $$
 begin
-  if new.scheduled_date is distinct from old.scheduled_date then
+  if new.scheduled_date is distinct from old.scheduled_date
+     and new.route_order is not distinct from old.route_order then
     new.route_order := null;
   end if;
   return new;

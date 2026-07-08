@@ -5,12 +5,14 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { formatDistanceToNow } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
+import { confirm as confirmDialog } from '@/lib/confirm'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { ConversationThread } from '@/components/messages/ConversationThread'
 import { ConversationInfo } from '@/components/messages/ConversationInfo'
 import { LeadCard } from '@/components/messages/LeadCard'
 import { Button } from '@/components/ui/Button'
 import { Skeleton } from '@/components/ui/Skeleton'
+import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import {
   Loader2, Inbox, User, ArrowLeft, MessageSquare, FileText, Search, X,
@@ -249,14 +251,28 @@ export default function MessagesPage() {
   }
 
   const actions = {
-    archive: async (c: Convo) => { const now = new Date().toISOString(); mutate(c, { archived_at: now }); await supabase.from('conversations').update({ archived_at: now }).eq('id', c.id) },
+    // Archive acts instantly but is fully reversible — the shared Undo toast restores
+    // it in one tap (recovering from the Archived filter costs 4+ clicks otherwise).
+    archive: async (c: Convo) => {
+      const now = new Date().toISOString(); mutate(c, { archived_at: now })
+      await supabase.from('conversations').update({ archived_at: now }).eq('id', c.id)
+      toast.undo(`Archived conversation with ${nameOf(c)}`, async () => {
+        await supabase.from('conversations').update({ archived_at: null }).eq('id', c.id)
+        if (uid) loadPage(uid, filterRef.current, true)
+      })
+    },
     unarchive: async (c: Convo) => { mutate(c, { archived_at: null }); await supabase.from('conversations').update({ archived_at: null }).eq('id', c.id) },
     pin: async (c: Convo) => { const now = new Date().toISOString(); mutate(c, { pinned_at: now }); await supabase.from('conversations').update({ pinned_at: now }).eq('id', c.id) },
     unpin: async (c: Convo) => { mutate(c, { pinned_at: null }); await supabase.from('conversations').update({ pinned_at: null }).eq('id', c.id) },
     markUnread: async (c: Convo) => { const u = Math.max(c.unread, 1); patch(c.id, { unread: u }); if (uid) loadCounts(uid); await supabase.from('conversations').update({ unread: u }).eq('id', c.id) },
     toggleMute: async (c: Convo) => { patch(c.id, { muted: !c.muted }); await supabase.from('conversations').update({ muted: !c.muted }).eq('id', c.id) },
     del: async (c: Convo) => {
-      if (!confirm(`Permanently delete this conversation with ${nameOf(c)}?\n\nThis erases the entire message history and CANNOT be undone. Archiving keeps everything instead.`)) return
+      const ok = await confirmDialog({
+        title: `Delete conversation with ${nameOf(c)}?`,
+        message: 'This erases the entire message history and cannot be undone. Archiving keeps everything instead.',
+        confirmLabel: 'Delete permanently', destructive: true,
+      })
+      if (!ok) return
       removeLocal(c.id)
       await supabase.from('conversations').delete().eq('id', c.id)
     },
@@ -272,7 +288,12 @@ export default function MessagesPage() {
     const ids = [...selectedIds]
     if (!ids.length) return
     if (op === 'delete') {
-      if (!confirm(`Permanently delete ${ids.length} conversation${ids.length !== 1 ? 's' : ''}? This erases their message history and cannot be undone.`)) return
+      const ok = await confirmDialog({
+        title: `Delete ${ids.length} conversation${ids.length !== 1 ? 's' : ''}?`,
+        message: 'This erases their message history and cannot be undone.',
+        confirmLabel: 'Delete permanently', destructive: true,
+      })
+      if (!ok) return
       setRows(cs => cs.filter(c => !selectedIds.has(c.id)))
       setSearchResults(rs => rs ? rs.filter(c => !selectedIds.has(c.id)) : rs)
       await supabase.from('conversations').delete().in('id', ids)
@@ -366,14 +387,16 @@ export default function MessagesPage() {
       {selectMode && (
         <div className="flex items-center gap-1.5 flex-wrap rounded-xl border border-accent/30 bg-accent/[0.06] px-3 py-2 animate-[popIn_0.12s_ease-out]">
           <span className="text-xs font-semibold text-ink mr-1">{selectedIds.size} selected</span>
-          <BulkBtn icon={Archive} label="Archive" onClick={() => bulk('archive')} />
-          <BulkBtn icon={ArchiveRestore} label="Unarchive" onClick={() => bulk('unarchive')} />
+          {/* Context-gated: only actions that can DO something here are offered —
+              Archive outside Archived, Unarchive inside it, Mute/Unmute per what's
+              actually selected, permanent Delete only inside Archived. */}
+          {filter !== 'archived' && <BulkBtn icon={Archive} label="Archive" onClick={() => bulk('archive')} />}
+          {filter === 'archived' && <BulkBtn icon={ArchiveRestore} label="Unarchive" onClick={() => bulk('unarchive')} />}
           <BulkBtn icon={MailOpen} label="Read" onClick={() => bulk('read')} />
           <BulkBtn icon={MessageSquare} label="Unread" onClick={() => bulk('unread')} />
           <BulkBtn icon={Pin} label="Pin" onClick={() => bulk('pin')} />
-          <BulkBtn icon={BellOff} label="Mute" onClick={() => bulk('mute')} />
-          <BulkBtn icon={Bell} label="Unmute" onClick={() => bulk('unmute')} />
-          {/* Permanent delete only inside Archived — archive is the safe default elsewhere. */}
+          {(searchResults ?? rows).some(c => selectedIds.has(c.id) && !c.muted) && <BulkBtn icon={BellOff} label="Mute" onClick={() => bulk('mute')} />}
+          {(searchResults ?? rows).some(c => selectedIds.has(c.id) && c.muted) && <BulkBtn icon={Bell} label="Unmute" onClick={() => bulk('unmute')} />}
           {filter === 'archived' && <BulkBtn icon={Trash2} label="Delete" onClick={() => bulk('delete')} danger />}
         </div>
       )}

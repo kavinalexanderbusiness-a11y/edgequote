@@ -161,7 +161,7 @@ export function QuoteBuilder({
   const effectiveTotal = initialPrice + extras.net + Number(travelFee || 0)
 
   // Live suggested prices straight from the measured lawn — the compact one-tap
-  // pricing. Same engine as everywhere else; we just surface the top three.
+  // pricing. Same engine as everywhere else; we just surface the options.
   const suggested = useMemo(() => {
     if (measuredSqft <= 0) return null
     const cfg = pricingConfigFromSettings(settings)
@@ -170,18 +170,25 @@ export function QuoteBuilder({
       one_time: pkg.oneTime,
       weekly: pkg.options.find(o => o.cadence === 'weekly')?.price ?? 0,
       biweekly: pkg.options.find(o => o.cadence === 'biweekly')?.price ?? 0,
+      monthly: pkg.options.find(o => o.cadence === 'monthly')?.price ?? 0,
       recommended: pkg.recommended.cadence,
     }
   }, [measuredSqft, overgrowth, settings])
 
-  // Tap a suggestion → fill the first-visit price + the chosen cadence (and clear the
-  // others), marking it as "suggested" (not a manual override).
+  // Monthly is off the standard lawn-care menu (a month of growth is a rough cut) —
+  // it stays blank unless the owner explicitly enables it. Editing loads it as
+  // enabled when the quote already has a monthly price.
+  const [includeMonthly, setIncludeMonthly] = useState<boolean>((defaultValues?.monthly_price ?? 0) > 0)
+
+  // Tap a suggestion → fill One-Time + Weekly + Bi-Weekly TOGETHER (the customer
+  // sees every option, no re-typing); the tapped cadence is just the one you'd
+  // pitch. Monthly fills only when enabled. All fields stay editable after.
   function applySuggested(c: 'one_time' | 'weekly' | 'biweekly') {
     if (!suggested) return
     setValue('initial_price', suggested.one_time)
-    setValue('weekly_price', c === 'weekly' ? suggested.weekly : 0)
-    setValue('biweekly_price', c === 'biweekly' ? suggested.biweekly : 0)
-    setValue('monthly_price', 0)
+    setValue('weekly_price', suggested.weekly)
+    setValue('biweekly_price', suggested.biweekly)
+    setValue('monthly_price', includeMonthly ? suggested.monthly : 0)
     setValue('suggested_price', suggested.one_time)
     setInitialManual(false)
     setPickedCadence(c)
@@ -462,7 +469,20 @@ export function QuoteBuilder({
                       )
                     })}
                   </div>
-                  <p className="text-[10px] text-ink-faint mt-1.5">Tap a price to use it. Editing a price below overrides it until you tap a suggestion again.</p>
+                  <div className="flex items-center justify-between gap-2 mt-1.5">
+                    <p className="text-[10px] text-ink-faint">One tap fills One-Time + Weekly + Bi-Weekly together — every field stays editable below.</p>
+                    <button type="button"
+                      onClick={() => {
+                        const next = !includeMonthly
+                        setIncludeMonthly(next)
+                        // Toggling applies immediately when suggestions already filled the fields.
+                        if (suggested && !initialManual) setValue('monthly_price', next ? suggested.monthly : 0)
+                      }}
+                      className={cn('shrink-0 text-[10px] font-semibold rounded-full px-2 py-0.5 border transition-colors',
+                        includeMonthly ? 'text-accent border-accent/40 bg-accent/10' : 'text-ink-faint border-border hover:text-ink')}>
+                      {includeMonthly ? 'Monthly: on' : '+ Monthly'}
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -801,12 +821,17 @@ export function QuoteBuilder({
           onServiceChange={(n) => setValue('service_type', n)}
           onClose={() => setShowMeasure(false)}
           onApply={(sel) => {
-            // Fill the selected pricing STRUCTURE — first visit always at the
-            // one-time price, plus the chosen cadence's recurring price field.
+            // Fill the WHOLE pricing structure in one apply — first visit at the
+            // one-time price plus every recurring option, so the customer sees all
+            // choices with zero re-typing. Monthly stays blank unless enabled (or
+            // the measure flow explicitly recommended monthly).
             setValue('initial_price', sel.oneTime)
-            if (sel.cadence === 'weekly') setValue('weekly_price', sel.weekly)
-            else if (sel.cadence === 'biweekly') setValue('biweekly_price', sel.biweekly)
-            else if (sel.cadence === 'monthly') setValue('monthly_price', sel.monthly)
+            setValue('weekly_price', sel.weekly)
+            setValue('biweekly_price', sel.biweekly)
+            if (includeMonthly || sel.cadence === 'monthly') {
+              setValue('monthly_price', sel.monthly)
+              if (sel.cadence === 'monthly') setIncludeMonthly(true)
+            }
             setValue('measured_sqft', sel.totalSqft)
             setValue('suggested_price', sel.suggested)
             setInitialManual(true); setShowMeasure(false)
