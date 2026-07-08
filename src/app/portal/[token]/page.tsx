@@ -8,6 +8,7 @@ import { confirm as confirmDialog } from '@/lib/confirm'
 import { ConfirmHost } from '@/components/ui/ConfirmHost'
 import { recurrenceLabel } from '@/lib/recurrence'
 import { invoiceTotals } from '@/lib/invoiceTotals'
+import { serviceLineTotals } from '@/lib/quoteServices'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
 import { renderPortalQuoteBlob, renderPortalInvoiceBlob, downloadBlob, viewBlob, printBlob } from '@/lib/portalPdf'
@@ -22,7 +23,8 @@ import {
 // service-app experience: a Home overview, live job status, a per-visit timeline
 // with photos & invoices, a before/after gallery, and quick service requests.
 
-interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null }
+interface PortalQuoteService { service_type: string; quantity: number; unit: string | null; unit_price: number; est_minutes: number | null; discount_type: 'amount' | 'percent' | null; discount_value: number | null; notes: string | null; sort_order: number }
+interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null }
 interface PortalInvoice { id: string; invoice_number: string; service_type: string | null; amount: number; status: string; issued_date: string | null; due_date: string | null; notes: string | null; address: string | null; line_items: { description: string; amount: number; kind: string }[] | null; job_id: string | null; created_at: string; discount_type?: 'amount' | 'percent' | null; discount_value?: number | null; amount_paid?: number | null }
 interface PortalJob { id: string; recurrence_id: string | null; service_type: string | null; title: string; scheduled_date: string; status: string; on_my_way_at: string | null; started_at: string | null; completed_at: string | null; notes: string | null }
 interface PortalRec { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null; end_date: string | null }
@@ -256,7 +258,8 @@ export default function PortalPage() {
           {biz?.logo_url ? <img src={biz.logo_url} alt="" className="h-10 w-auto object-contain" /> : <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center"><Leaf className="w-5 h-5 text-accent" /></div>}
           <div className="min-w-0">
             <p className="text-base font-bold text-ink truncate">{biz?.company_name || 'Your Service Provider'}</p>
-            <p className="text-xs text-ink-muted">Welcome back, {first}</p>
+            {/* Plain "Welcome" — a first-time quote recipient has never been here. */}
+            <p className="text-xs text-ink-muted">Welcome, {first}</p>
           </div>
         </div>
 
@@ -292,7 +295,7 @@ export default function PortalPage() {
           )}
           {tab === 'home' && consent && <ConsentCard token={token} consent={consent} onSave={saveConsent} />}
           {tab === 'timeline' && <TimelineTab data={data} photosByJob={photosByJob} />}
-          {tab === 'service' && <ServiceTab completed={derived.completed} photosByJob={photosByJob} invoiceByJob={invoiceByJob} photoUrl={photoUrl} />}
+          {tab === 'service' && <ServiceTab completed={derived.completed} photosByJob={photosByJob} invoiceByJob={invoiceByJob} photoUrl={photoUrl} gstPct={Number(data.business?.gst_percent) || 0} />}
           {tab === 'photos' && <GalleryTab photosByJob={photosByJob} jobs={data.jobs} photoUrl={photoUrl} />}
           {tab === 'property' && <PropertyTab property={data.property} />}
           {tab === 'payments' && <PaymentsTab payments={data.payments} invoices={data.invoices} outstanding={derived.outstanding}
@@ -343,6 +346,9 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
   paymentsEnabled: boolean; pay: (id: string) => void; payingId: string | null; onOpenInvoices: () => void
 }) {
   const next = derived.nextService
+  // A quote awaiting approval is usually WHY the customer opened this link —
+  // signpost it up top instead of making them discover the Documents tab.
+  const awaiting = (data.quotes || []).filter(q => q.status === 'sent')
   // A PARTIALLY paid invoice must reach checkout too (server charges only the remaining balance).
   const owing = (data.invoices || []).filter(i => i.status === 'unpaid' || i.status === 'sent' || i.status === 'partial')
   // Tapping the balance goes straight to paying: one owing invoice + online payments
@@ -354,6 +360,29 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
   }
   return (
     <div className="space-y-3">
+      {/* Quote awaiting approval — one tap to the Documents tab (quotes live there) */}
+      {awaiting.length > 0 && (
+        <button type="button" onClick={onOpenInvoices}
+          className="w-full text-left rounded-card border border-amber-500/30 bg-amber-500/10 p-4 hover:border-amber-500/50 transition-colors">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-9 h-9 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-400 flex items-center justify-center shrink-0"><FileText className="w-4 h-4" /></div>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-ink truncate">
+                  {awaiting.length === 1
+                    ? (awaiting[0].service_type ? `Your ${awaiting[0].service_type} quote is ready` : 'Your quote is ready')
+                    : `${awaiting.length} quotes are ready for your review`}
+                </p>
+                <p className="text-xs text-ink-muted">
+                  {awaiting.length === 1 ? `${formatCurrency(Number(awaiting[0].total) || 0)} — review and approve when you're ready` : `Review and approve when you're ready`}
+                </p>
+              </div>
+            </div>
+            <span className="text-xs font-semibold text-amber-400 shrink-0">Review →</span>
+          </div>
+        </button>
+      )}
+
       {/* Next service hero */}
       <div className="rounded-card border border-accent/20 bg-gradient-to-br from-accent/[0.08] to-transparent p-4">
         <p className="text-[11px] font-semibold uppercase tracking-wide text-accent mb-1">Next service</p>
@@ -445,7 +474,7 @@ function StatCard({ label, value, tone, icon: Icon }: { label: string; value: st
 }
 
 // ── Service timeline (grouped by visit) ──
-function ServiceTab({ completed, photosByJob, invoiceByJob, photoUrl }: { completed: PortalJob[]; photosByJob: Map<string, PortalPhoto[]>; invoiceByJob: Map<string, PortalInvoice>; photoUrl: (p: string) => string }) {
+function ServiceTab({ completed, photosByJob, invoiceByJob, photoUrl, gstPct }: { completed: PortalJob[]; photosByJob: Map<string, PortalPhoto[]>; invoiceByJob: Map<string, PortalInvoice>; photoUrl: (p: string) => string; gstPct: number }) {
   if (completed.length === 0) return <Empty text="No completed visits yet." />
   return (
     <div className="space-y-3">
@@ -472,7 +501,7 @@ function ServiceTab({ completed, photosByJob, invoiceByJob, photoUrl }: { comple
             {inv && (
               <div className="flex items-center justify-between mt-3 pt-2.5 border-t border-border text-xs">
                 <span className="text-ink-muted flex items-center gap-1"><Receipt className="w-3.5 h-3.5" /> {inv.invoice_number}</span>
-                <span className="flex items-center gap-2"><span className="font-semibold text-ink">{formatCurrency(Number(inv.amount))}</span><InvoiceStatusPill status={inv.status} /></span>
+                <span className="flex items-center gap-2"><span className="font-semibold text-ink">{formatCurrency(invoiceTotals(inv.amount, { gst_percent: gstPct }, { type: inv.discount_type, value: inv.discount_value }).total)}</span><InvoiceStatusPill status={inv.status} /></span>
               </div>
             )}
           </div>
@@ -538,7 +567,7 @@ function Thumb({ p, photoUrl, wide }: { p: PortalPhoto; photoUrl: (s: string) =>
 type DocKind = 'quote' | 'invoice'
 // rawId/balance power the row's actions — Documents is THE records hub, so paying
 // an invoice or accepting a quote happens right on the row (no separate tabs).
-interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; amount: number; balance: number; filename: string; getBlob: () => Promise<Blob> }
+interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; amount: number; balance: number; filename: string; getBlob: () => Promise<Blob>; lines?: { label: string; amount: number }[] }
 const KIND_META: Record<DocKind, { label: string; icon: typeof FileText; tone: string }> = {
   quote: { label: 'Quote', icon: FileText, tone: 'text-accent border-accent/25 bg-accent/10' },
   invoice: { label: 'Invoice', icon: Receipt, tone: 'text-sky-400 border-sky-500/25 bg-sky-500/10' },
@@ -557,18 +586,33 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, busines
 
   const gstPct = Number(business?.gst_percent) || 0
   const docs = useMemo<DocItem[]>(() => {
-    const q: DocItem[] = quotes.map(qq => ({
-      id: 'q' + qq.id, rawId: qq.id, kind: 'quote', number: qq.quote_number, title: qq.service_type || 'Quote',
-      date: qq.issued_date || qq.created_at, status: qq.status, amount: Number(qq.total) || 0, balance: 0,
-      filename: `${qq.quote_number}.pdf`, getBlob: () => renderPortalQuoteBlob(qq, customerName, business),
-    }))
+    const q: DocItem[] = quotes.map(qq => {
+      // Multi-service quotes get a per-service breakdown on the row (same
+      // serviceLineTotals math as the builder/PDF), so the customer sees what
+      // makes up the total instead of a lump sum under one service name.
+      const svc = (qq.services || []).slice().sort((a, b) => a.sort_order - b.sort_order)
+      const lines = svc.length > 1
+        ? [
+            ...svc.map(s => ({
+              label: Number(s.quantity) > 1 ? `${s.service_type} × ${Number(s.quantity)}` : s.service_type,
+              amount: serviceLineTotals(s).net,
+            })),
+            ...(Number(qq.travel_fee) > 0 ? [{ label: 'Travel fee', amount: Number(qq.travel_fee) }] : []),
+          ]
+        : undefined
+      return {
+        id: 'q' + qq.id, rawId: qq.id, kind: 'quote' as const, number: qq.quote_number, title: qq.service_type || 'Quote',
+        date: qq.issued_date || qq.created_at, status: qq.status, amount: Number(qq.total) || 0, balance: 0,
+        filename: `${qq.quote_number}.pdf`, getBlob: () => renderPortalQuoteBlob(qq, customerName, business), lines,
+      }
+    })
     const inv: DocItem[] = invoices.map(ii => {
       // Same balance math as the dashboard: discounted+GST total − payments recorded.
       const total = invoiceTotals(ii.amount, { gst_percent: gstPct }, { type: ii.discount_type, value: ii.discount_value }).total
       const balance = Math.max(0, Math.round((total - (Number(ii.amount_paid) || 0)) * 100) / 100)
       return {
         id: 'i' + ii.id, rawId: ii.id, kind: 'invoice' as const, number: ii.invoice_number, title: ii.service_type || 'Invoice',
-        date: ii.issued_date || ii.created_at, status: ii.status, amount: Number(ii.amount) || 0, balance,
+        date: ii.issued_date || ii.created_at, status: ii.status, amount: total, balance,
         filename: `${ii.invoice_number}.pdf`, getBlob: () => { onInvoiceOpen?.(ii.id); return renderPortalInvoiceBlob(ii, customerName, fallbackAddress, business) },
       }
     })
@@ -656,6 +700,16 @@ function DocRow({ d, paymentsEnabled, pay, payingId, accept, accepting }: {
           {d.kind === 'quote' ? <QuoteStatusPill status={d.status} /> : <InvoiceStatusPill status={d.status} />}
         </div>
       </div>
+      {d.lines && d.lines.length > 0 && (
+        <div className="mt-3 pt-2.5 border-t border-border/60 space-y-1">
+          {d.lines.map((l, i) => (
+            <div key={i} className="flex items-center justify-between gap-3 text-xs">
+              <span className="text-ink-muted truncate">{l.label}</span>
+              <span className="text-ink shrink-0 tabular-nums">{formatCurrency(l.amount)}</span>
+            </div>
+          ))}
+        </div>
+      )}
       {(canAccept || canPay) && (
         <div className="mt-3">
           {canAccept && (
@@ -685,7 +739,7 @@ function TimelineTab({ data, photosByJob }: { data: PortalData; photosByJob: Map
       if (j.completed_at || j.status === 'completed') ev.push({ id: 'jc' + j.id, at: j.completed_at || j.scheduled_date, icon: CheckCircle2, tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10', title: `${j.service_type || j.title} completed`, sub: null })
       else ev.push({ id: 'js' + j.id, at: j.scheduled_date, icon: CalendarClock, tone: 'text-sky-400 border-sky-500/30 bg-sky-500/10', title: `${j.service_type || j.title} scheduled`, sub: null })
     }
-    for (const i of data.invoices) ev.push({ id: 'i' + i.id, at: i.issued_date || i.created_at, icon: Receipt, tone: 'text-ink-muted border-border bg-bg-tertiary', title: `Invoice ${i.invoice_number}`, sub: formatCurrency(Number(i.amount)) })
+    for (const i of data.invoices) ev.push({ id: 'i' + i.id, at: i.issued_date || i.created_at, icon: Receipt, tone: 'text-ink-muted border-border bg-bg-tertiary', title: `Invoice ${i.invoice_number}`, sub: formatCurrency(invoiceTotals(i.amount, { gst_percent: Number(data.business?.gst_percent) || 0 }, { type: i.discount_type, value: i.discount_value }).total) })
     for (const p of data.payments) ev.push({ id: 'p' + p.id, at: p.paid_at || p.created_at, icon: CreditCard, tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10', title: 'Payment received', sub: formatCurrency(Number(p.amount)) })
     for (const [jid, ps] of photosByJob) { if (jid !== 'none' && ps.length) ev.push({ id: 'ph' + jid, at: ps[0]?.taken_at || '', icon: ImageIcon, tone: 'text-violet-400 border-violet-500/30 bg-violet-500/10', title: `${ps.length} photo${ps.length === 1 ? '' : 's'} added`, sub: null }) }
     return ev.filter(e => e.at).sort((a, b) => b.at.localeCompare(a.at))
