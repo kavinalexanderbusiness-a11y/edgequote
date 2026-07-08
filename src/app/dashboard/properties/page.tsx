@@ -17,6 +17,7 @@ import { formatDate, formatCurrency, localTodayISO } from '@/lib/utils'
 import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes, latestSavedRecommendation, recommendationIsStale } from '@/lib/pricing'
 import { LocatedJob, fetchLocatedUpcomingJobs, nearbyJobCount } from '@/lib/geo'
 import { JobPhotos } from '@/components/photos/JobPhotos'
+import { listPhotosByUser, JobPhotoView } from '@/lib/photos'
 import { MapPin, Home, User, Ruler, History, RefreshCw, Trophy, DollarSign, CheckCircle2, Receipt, Timer, CalendarClock, AlertTriangle, Repeat, Camera, FileText } from 'lucide-react'
 
 // Per-property performance, aggregated from completed jobs + invoices. Reuses
@@ -82,6 +83,7 @@ export default function PropertiesPage() {
   const [lastQuoteByProp, setLastQuoteByProp] = useState<Record<string, LastQuote>>({})
   const [lastInvoiceByProp, setLastInvoiceByProp] = useState<Record<string, LastInvoice>>({})
   const [plansByProp, setPlansByProp] = useState<Record<string, ServicePlan[]>>({})
+  const [photosByProp, setPhotosByProp] = useState<Record<string, JobPhotoView[]>>({})
   const [recalcId, setRecalcId] = useState<string | null>(null)
 
   const supabase = createClient()
@@ -91,7 +93,7 @@ export default function PropertiesPage() {
       // Local session read — no auth round-trip before the 8-query batch below.
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
-      const [pRes, sRes, located, jRes, iRes, rRes, qRes] = await Promise.all([
+      const [pRes, sRes, located, jRes, iRes, rRes, qRes, allPhotos] = await Promise.all([
         supabase
           .from('properties')
           .select('*, customers(id, name, email, phone)')
@@ -106,7 +108,13 @@ export default function PropertiesPage() {
         supabase.from('job_recurrences').select('*').eq('user_id', user!.id),
         // Last quote per property (most recent non-draft).
         supabase.from('quotes').select('id, property_id, quote_number, total, status, created_at').eq('user_id', user!.id).neq('status', 'draft'),
+        // ONE photo read for the whole page → each gallery row gets its slice (initialPhotos)
+        // instead of every row mounting its own job_photos query (the N-query storm).
+        listPhotosByUser(supabase, user!.id),
       ])
+      const photoGroups: Record<string, JobPhotoView[]> = {}
+      for (const ph of allPhotos) if (ph.property_id) (photoGroups[ph.property_id] ||= []).push(ph)
+      setPhotosByProp(photoGroups)
       const settingsRow = sRes.data as BusinessSettings | null
       setProperties((pRes.data as Property[]) || [])
       setSettings(settingsRow)
@@ -352,7 +360,7 @@ export default function PropertiesPage() {
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted mb-2 flex items-center gap-1.5">
                     <Camera className="w-3.5 h-3.5" /> Photos
                   </p>
-                  <JobPhotos propertyId={property.id} customerId={property.customer_id} variant="gallery" />
+                  <JobPhotos propertyId={property.id} customerId={property.customer_id} variant="gallery" initialPhotos={photosByProp[property.id] || []} />
                 </div>
               </CardBody>
             </Card>

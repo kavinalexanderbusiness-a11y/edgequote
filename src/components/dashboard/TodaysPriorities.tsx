@@ -51,8 +51,9 @@ export function TodaysPriorities() {
       const today = localTodayISO()
 
       const [qRes, iRes, jRes, rRes, cRes] = await Promise.all([
-        // Quotes drive follow-ups + accepted-not-scheduled (reuse those exact signals).
-        supabase.from('quotes').select('*').eq('user_id', user.id),
+        // Quotes drive follow-ups + accepted-not-scheduled — only these columns are read
+        // (needsFollowUp: status/sent_at/last_followed_up_at; accepted signal: id/status/total).
+        supabase.from('quotes').select('id, status, total, sent_at, last_followed_up_at').eq('user_id', user.id),
         supabase.from('invoices').select('amount, status').eq('user_id', user.id),
         supabase.from('jobs').select('quote_id, customer_id, status, scheduled_date, recurrence_id, price').eq('user_id', user.id),
         supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user.id),

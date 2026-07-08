@@ -16,6 +16,10 @@ interface Props {
   // 'gallery' = a property's full visual history (also offers a plain Photo).
   variant?: 'visit' | 'gallery'
   className?: string
+  // When a LIST page has already batch-fetched every photo (one query for the whole
+  // page), it passes this row's slice so the gallery skips its own per-row query —
+  // avoids the N-queries-for-N-rows storm. Uploads/edits still mutate local state.
+  initialPhotos?: JobPhotoView[]
 }
 
 const KIND_BADGE: Record<PhotoKind, string> = {
@@ -24,16 +28,17 @@ const KIND_BADGE: Record<PhotoKind, string> = {
   general: 'bg-bg-tertiary text-ink-muted border-border',
 }
 
-export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', className }: Props) {
+export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', className, initialPhotos }: Props) {
   const supabase = createClient()
-  const [photos, setPhotos] = useState<JobPhotoView[]>([])
-  const [loading, setLoading] = useState(true)
+  const [photos, setPhotos] = useState<JobPhotoView[]>(initialPhotos ?? [])
+  const [loading, setLoading] = useState(initialPhotos == null)
   const [busyKind, setBusyKind] = useState<PhotoKind | null>(null)
   const [lightbox, setLightbox] = useState<JobPhotoView | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const pendingKind = useRef<PhotoKind>('after')
 
   useEffect(() => {
+    if (initialPhotos != null) return // parent batch-fetched — no per-row query
     let alive = true
     async function load() {
       const { data: { session } } = await supabase.auth.getSession()

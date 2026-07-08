@@ -41,6 +41,15 @@ export async function listPhotos(
   return withUrl(supabase, (data as JobPhoto[]) || [])
 }
 
+// Batch: every photo for a user (newest first) with resolved URLs, so a LIST page can
+// fetch once and hand each row its slice — instead of mounting one gallery per row that
+// each fires its own query (N properties → N round-trips). Group the result by
+// property_id / job_id at the call site.
+export async function listPhotosByUser(supabase: SupabaseClient, userId: string): Promise<JobPhotoView[]> {
+  const { data } = await supabase.from('job_photos').select('*').eq('user_id', userId).order('taken_at', { ascending: false })
+  return withUrl(supabase, (data as JobPhoto[]) || [])
+}
+
 // Downscale a phone photo before upload so the gallery loads fast and storage
 // stays small. Falls back to the original file on any failure (unsupported
 // format, no canvas, etc.) — never blocks an upload over a resize hiccup.

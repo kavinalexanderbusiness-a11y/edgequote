@@ -220,15 +220,18 @@ export default function InvoicesPage() {
     setDeletingId(null)
   }
 
-  const drafts = invoices.filter(i => i.status === 'draft')
-  const draftsTotal = drafts.reduce((sum, i) => sum + Number(i.amount || 0), 0)
-  const outstanding = invoices
-    .filter(i => i.status === 'unpaid' || i.status === 'sent')
-    .reduce((sum, i) => sum + Number(i.amount || 0), 0)
-  const paidTotal = invoices
-    .filter(i => i.status === 'paid')
-    .reduce((sum, i) => sum + Number(i.amount || 0), 0)
-  const visible = filter ? invoices.filter(i => i.status === filter) : invoices
+  // Memoized: these 5 passes over the (unbounded, billing-day-heavy) invoice list ran on
+  // every render — including each mark-paid/status tap and realtime tick.
+  const { drafts, draftsTotal, outstanding, paidTotal } = useMemo(() => {
+    const dr = invoices.filter(i => i.status === 'draft')
+    return {
+      drafts: dr,
+      draftsTotal: dr.reduce((sum, i) => sum + Number(i.amount || 0), 0),
+      outstanding: invoices.filter(i => i.status === 'unpaid' || i.status === 'sent').reduce((sum, i) => sum + Number(i.amount || 0), 0),
+      paidTotal: invoices.filter(i => i.status === 'paid').reduce((sum, i) => sum + Number(i.amount || 0), 0),
+    }
+  }, [invoices])
+  const visible = useMemo(() => filter ? invoices.filter(i => i.status === filter) : invoices, [invoices, filter])
 
   return (
     <div className="max-w-4xl space-y-6">
