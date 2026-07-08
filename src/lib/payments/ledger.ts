@@ -63,10 +63,10 @@ export async function reactivateInvoice(sb: Supa, invoiceId: string): Promise<{ 
 }
 
 // Receipt number for a ledger payment — deterministic from the payment row (no
-// counter table): RCT- + the row id's first 8 hex, uppercase. Unique per payment,
-// stable across re-renders/re-sends.
+// counter table): RCT- + the row id's first 12 hex (48 bits — collision odds are
+// negligible at any realistic volume), uppercase. Stable across re-sends.
 export function receiptNumberFor(paymentId: string): string {
-  return `RCT-${paymentId.replace(/-/g, '').slice(0, 8).toUpperCase()}`
+  return `RCT-${paymentId.replace(/-/g, '').slice(0, 12).toUpperCase()}`
 }
 
 // Local-noon ISO for a yyyy-MM-dd so an evening entry can't stamp the next UTC day.

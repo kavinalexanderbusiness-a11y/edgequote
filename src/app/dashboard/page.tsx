@@ -23,7 +23,7 @@ export default async function DashboardPage() {
     supabase.from('quotes').select('*').eq('user_id', user!.id).order('created_at', { ascending: false }),
     supabase.from('invoices').select('amount, status, amount_paid').eq('user_id', user!.id),
     supabase.from('jobs').select('status, scheduled_date').eq('user_id', user!.id),
-    supabase.from('business_settings').select('dashboard_cards').eq('user_id', user!.id).maybeSingle(),
+    supabase.from('business_settings').select('dashboard_cards, gst_percent').eq('user_id', user!.id).maybeSingle(),
   ])
 
   const allQuotes: Quote[] = quotes || []
@@ -32,7 +32,12 @@ export default async function DashboardPage() {
   // Ledger-aware: Collected = money actually received (amount_paid, incl. partial
   // payments); Outstanding = remaining balance across issued invoices.
   const collectedRevenue = allInvoices.reduce((s, i) => s + (Number(i.amount_paid) || 0), 0)
-  const outstandingRevenue = allInvoices.filter(i => i.status !== 'draft').reduce((s, i) => s + Math.max(0, Number(i.amount || 0) - (Number(i.amount_paid) || 0)), 0)
+  // GST-inclusive + cancelled excluded, so this agrees with the Invoices page and
+  // the portal (amount is the NET subtotal; the customer owes net × (1 + GST)).
+  const gstMult = 1 + (Number(settingsRow?.gst_percent) || 0) / 100
+  const outstandingRevenue = allInvoices
+    .filter(i => i.status !== 'draft' && i.status !== 'cancelled')
+    .reduce((s, i) => s + Math.max(0, Math.round((Number(i.amount || 0) * gstMult - (Number(i.amount_paid) || 0)) * 100) / 100), 0)
 
   // Monthly revenue = total of quotes created this calendar month
   const now = new Date()
@@ -79,7 +84,7 @@ export default async function DashboardPage() {
     <div className="max-w-6xl space-y-6">
       <PageHeader
         title={greeting}
-        description="Here's what's happening with Edge Property Services today."
+        description="Here's what's happening with your business today."
         action={
           <Link href="/dashboard/quotes/new">
             <Button>

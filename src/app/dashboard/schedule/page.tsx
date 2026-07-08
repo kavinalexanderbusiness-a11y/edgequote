@@ -869,6 +869,7 @@ export default function SchedulePage() {
       const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed' })
       if (res.created) setBanner(`Draft invoice ${res.invoiceNumber} created from the completed job — review it in Invoices.`)
       else if (res.reason === 'exists') setBanner('That job already has an invoice.')
+      else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
     }
   }
 
@@ -1131,6 +1132,7 @@ export default function SchedulePage() {
     if (patch.status === 'completed' && job.status !== 'completed') {
       const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed' })
       if (res.created) setBanner(`Saved — draft invoice ${res.invoiceNumber} created.`)
+      else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
     }
     // If the inline edit changed the price, keep its draft invoice in sync.
     if (Number(patch.price) !== Number(job.price)) await syncDraftInvoiceAmounts(supabase, [job.id])

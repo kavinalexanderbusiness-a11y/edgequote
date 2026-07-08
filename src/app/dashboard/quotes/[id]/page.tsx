@@ -317,6 +317,8 @@ export default function QuoteDetailPage() {
 
   async function handleConvertToInvoice() {
     if (!quote) return
+    // A $0 invoice can never be paid — it would sit stuck until cancelled.
+    if (!(Number(quote.total) > 0)) { setConvertMsg('Set a price on this quote before invoicing it.'); return }
     setConverting(true)
     setConvertMsg(null)
     try {

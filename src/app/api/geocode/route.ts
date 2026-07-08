@@ -71,6 +71,9 @@ export async function POST(req: NextRequest) {
       lng: loc.lng,
       formatted: result.formatted_address || address,
       neighborhood,
+      // Precision signal so the UI can say "approximate" instead of silently
+      // dropping a pin on the wrong lot. ROOFTOP/RANGE_INTERPOLATED = lot-accurate.
+      precise: (result?.geometry?.location_type === 'ROOFTOP' || result?.geometry?.location_type === 'RANGE_INTERPOLATED') && !result?.partial_match,
     })
   } catch {
     return NextResponse.json({ error: 'Geocoding failed (server error).' }, { status: 500 })

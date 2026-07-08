@@ -156,10 +156,36 @@ export function InvoiceDocument({ invoice, settings }: InvoicePDFProps) {
 
         {(() => {
           const t = invoiceTotals(invoice.amount, settings, { type: invoice.discount_type, value: invoice.discount_value })
-          if (!t.hasGst && !t.hasDiscount) return (
+          // Money already received MUST show on the document (an accountant's
+          // partial-payment invoice that still says the full total invites a
+          // double payment). Balance = the one ledger definition.
+          const paidToDate = Number(invoice.amount_paid) || 0
+          const balanceDue = Math.max(0, Math.round((t.total - paidToDate) * 100) / 100)
+          const paidRows = paidToDate > 0.005 ? (
+            <View>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginLeft: 'auto', width: '50%', marginTop: 2 }}>
+                <Text style={styles.bodyText}>Paid to date</Text>
+                <Text style={styles.bodyText}>-{money(paidToDate)}</Text>
+              </View>
+              <View style={styles.grandRow}>
+                <Text style={styles.grandLabel}>Balance Due</Text>
+                <Text style={styles.grandValue}>{money(balanceDue)}</Text>
+              </View>
+            </View>
+          ) : null
+          if (!t.hasGst && !t.hasDiscount && !paidRows) return (
             <View style={styles.grandRow}>
               <Text style={styles.grandLabel}>Amount Due</Text>
               <Text style={styles.grandValue}>{money(t.total)}</Text>
+            </View>
+          )
+          if (!t.hasGst && !t.hasDiscount) return (
+            <View>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 12, marginLeft: 'auto', width: '50%' }}>
+                <Text style={styles.bodyText}>Invoice Total</Text>
+                <Text style={styles.bodyText}>{money(t.total)}</Text>
+              </View>
+              {paidRows}
             </View>
           )
           return (

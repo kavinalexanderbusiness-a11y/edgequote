@@ -27,6 +27,7 @@ const FILTERS: { value: '' | InvoiceDisplayStatus; label: string }[] = [
   { value: 'overdue', label: 'Overdue' },
   { value: 'partial', label: 'Partial' },
   { value: 'paid', label: 'Paid' },
+  { value: 'overpaid', label: 'Overpaid' },
   { value: 'cancelled', label: 'Cancelled' },
 ]
 
@@ -291,6 +292,13 @@ export default function InvoicesPage() {
             </button>
           ))}
         </div>
+      )}
+      {/* One-line status legend — 'Unpaid' vs 'Sent' is invisible tribal knowledge
+          otherwise (tap the status pill on a row to flip between them). */}
+      {!loading && !loadError && (filter === 'unpaid' || filter === 'sent') && (
+        <p className="text-[11px] text-ink-faint -mt-3">
+          Unpaid = issued but not yet sent to the customer · Sent = delivered, awaiting payment. Tap an invoice&apos;s status pill to switch.
+        </p>
       )}
 
       {loading ? (

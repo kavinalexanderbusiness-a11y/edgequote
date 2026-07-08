@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'next/navigation'
 import { format } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
+import { confirm as confirmDialog } from '@/lib/confirm'
+import { ConfirmHost } from '@/components/ui/ConfirmHost'
 import { recurrenceLabel } from '@/lib/recurrence'
 import { invoiceTotals } from '@/lib/invoiceTotals'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
@@ -12,7 +14,7 @@ import { renderPortalQuoteBlob, renderPortalInvoiceBlob, downloadBlob, viewBlob,
 import {
   Home, History, Image as ImageIcon, FileText, Receipt, MessageSquarePlus, Check, Loader2,
   Phone, Globe, Mail, Leaf, CheckCircle2, Navigation, Play, CalendarClock, Repeat, MapPin, Ruler, Sparkles, CreditCard, MessageSquare,
-  Eye, Download, Printer, FolderOpen, Search, ArrowUpDown, Activity, Wallet, Star, Zap, ShieldCheck, Trash2,
+  Eye, Download, Printer, FolderOpen, Search, ArrowUpDown, Activity, Wallet, Star, Zap, ShieldCheck, Trash2, X,
 } from 'lucide-react'
 
 // ── Premium Customer Portal ─────────────────────────────────────────────────────
@@ -67,6 +69,9 @@ export default function PortalPage() {
   const [paymentsEnabled, setPaymentsEnabled] = useState(false)
   const [payingId, setPayingId] = useState<string | null>(null)
   const [justPaid, setJustPaid] = useState(false)
+  // One inline error surface for portal actions (pay / accept / request) — fixed,
+  // friendly copy near the top of the content, never a browser alert.
+  const [actionError, setActionError] = useState<string | null>(null)
   const [consent, setConsentState] = useState<{ sms: boolean; email: boolean } | null>(null)
   const [markedReviewed, setMarkedReviewed] = useState(false)
 
@@ -98,16 +103,22 @@ export default function PortalPage() {
   // `prefs` carries the per-category choices (reminders / invoices / estimates /
   // marketing / seasonal); omitted = leave stored categories unchanged.
   async function saveConsent(next: { sms: boolean; email: boolean }, prefs?: Record<string, boolean>) {
+    const prev = consent
     setConsentState(next)
-    await supabase.rpc('portal_set_consent', { p_token: token, p_sms_opt_in: next.sms, p_email_opt_in: next.email, p_prefs: prefs ?? null })
+    const { data: ok, error } = await supabase.rpc('portal_set_consent', { p_token: token, p_sms_opt_in: next.sms, p_email_opt_in: next.email, p_prefs: prefs ?? null })
+    if (error || !ok) {
+      setConsentState(prev)                    // roll back — never show a state the server didn't save
+      setActionError('We couldn’t save your message preferences — please try again.')
+    }
   }
 
   // Customer confirms they left a review → records it (notifies the owner, stops
-  // future review-request messages). Optimistic; token-scoped RPC.
+  // future review-request messages). Optimistic with rollback; token-scoped RPC.
   async function markReviewed() {
     if (markedReviewed) return                 // double-click guard (already confirmed)
     setMarkedReviewed(true)
-    await supabase.rpc('portal_mark_reviewed', { p_token: token })
+    const { data: ok, error } = await supabase.rpc('portal_mark_reviewed', { p_token: token })
+    if (error || !ok) setMarkedReviewed(false)
   }
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -137,16 +148,20 @@ export default function PortalPage() {
   async function accept(qid: string) {
     if (accepting) return                      // double-click guard
     setAccepting(qid)
+    setActionError(null)
     const { data: ok } = await supabase.rpc('portal_accept_quote', { p_token: token, p_quote_id: qid })
     if (ok) setData(d => d ? { ...d, quotes: d.quotes.map(q => q.id === qid ? { ...q, status: 'accepted' } : q) } : d)
+    else setActionError('We couldn’t record your approval — please try again, or reply to any message from us and we’ll take care of it.')
     setAccepting(null)
   }
   async function request(message: string, key: string) {
     if (!message.trim()) return
     setReqBusy(key)
+    setActionError(null)
     const { data: ok } = await supabase.rpc('portal_request_service', { p_token: token, p_message: message.trim() })
     setReqBusy(null)
     if (ok) { setReqSent(key); if (key === 'custom') setReqMsg(''); setTimeout(() => setReqSent(null), 4000) }
+    else setActionError('Your request didn’t go through — please try again, or call us directly.')
   }
   // The customer opened this invoice (PDF or pay) — stamp viewed_at once so the
   // owner's list shows 'Viewed'. Fire-and-forget; idempotent server-side.
@@ -165,9 +180,9 @@ export default function PortalPage() {
       const d = await res.json().catch(() => ({}))
       if (res.ok && d.url) { window.location.href = d.url; return }   // redirecting to Stripe — stay disabled
       // Public portal: show a FIXED message — never render a server-provided string.
-      alert('Could not start payment. Please try again.')
+      setActionError('We couldn’t start the payment — please try again in a moment, or contact us and we’ll sort it out.')
     } catch {
-      alert('Could not start payment. Please try again.')
+      setActionError('We couldn’t start the payment — please try again in a moment, or contact us and we’ll sort it out.')
     }
     setPayingId(null)   // only reached on failure — a successful redirect already left the page
   }
@@ -264,6 +279,12 @@ export default function PortalPage() {
               <CheckCircle2 className="w-4 h-4" /> Payment received — thank you! Your invoice will update shortly.
             </div>
           )}
+          {actionError && (
+            <div className="mb-3 rounded-card border border-red-500/25 bg-red-500/10 text-red-400 text-sm font-medium px-4 py-3 flex items-start justify-between gap-3">
+              <span>{actionError}</span>
+              <button onClick={() => setActionError(null)} aria-label="Dismiss" className="shrink-0 opacity-70 hover:opacity-100"><X className="w-4 h-4" /></button>
+            </div>
+          )}
           {tab === 'home' && <HomeTab data={data} derived={derived} biz={biz} onRequest={() => setTab('request')}
             paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} onOpenInvoices={() => setTab('documents')} />}
           {tab === 'home' && biz?.review_url && derived.lastCompleted && !data.customer.reviewed_at && (
@@ -285,6 +306,8 @@ export default function PortalPage() {
 
         <p className="text-center text-[10px] text-ink-faint mt-10">Powered by EdgeQuote</p>
       </div>
+      {/* Styled confirmation dialogs (card removal, etc.) — same experience as the app. */}
+      <ConfirmHost />
     </div>
   )
 }
@@ -320,7 +343,8 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
   paymentsEnabled: boolean; pay: (id: string) => void; payingId: string | null; onOpenInvoices: () => void
 }) {
   const next = derived.nextService
-  const owing = (data.invoices || []).filter(i => i.status === 'unpaid' || i.status === 'sent')
+  // A PARTIALLY paid invoice must reach checkout too (server charges only the remaining balance).
+  const owing = (data.invoices || []).filter(i => i.status === 'unpaid' || i.status === 'sent' || i.status === 'partial')
   // Tapping the balance goes straight to paying: one owing invoice + online payments
   // on → open its checkout directly; otherwise jump to the Invoices tab to pick one.
   function payOutstanding() {
@@ -347,7 +371,7 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
           <div>
             <p className="text-sm text-ink-muted mb-3">No upcoming visit scheduled.</p>
             <Button onClick={onRequest} className="w-full sm:w-auto">
-              <MessageSquarePlus className="w-4 h-4" /> Request Service
+              <MessageSquarePlus className="w-4 h-4" /> Request a service
             </Button>
           </div>
         )}
@@ -394,7 +418,7 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
           {data.property.address && <p className="text-sm text-ink flex items-center gap-1.5"><MapPin className="w-3.5 h-3.5 text-ink-faint" /> {data.property.address}{data.property.city ? `, ${data.property.city}` : ''}</p>}
           <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1.5 text-xs text-ink-muted">
             {data.property.neighborhood && <span>{data.property.neighborhood}</span>}
-            {data.property.lawn_sqft ? <span className="flex items-center gap-1"><Ruler className="w-3 h-3" /> {Number(data.property.lawn_sqft).toLocaleString()} ft² lawn</span> : null}
+            {data.property.lawn_sqft ? <span className="flex items-center gap-1"><Ruler className="w-3 h-3" /> {Number(data.property.lawn_sqft).toLocaleString()} sq ft lawn</span> : null}
             {data.property.fence_length ? <span>{data.property.fence_length} ft fence</span> : null}
           </div>
         </div>
@@ -699,7 +723,7 @@ function PropertyTab({ property }: { property: PortalData['property'] }) {
           <p className="text-sm text-ink flex items-start gap-1.5"><MapPin className="w-4 h-4 text-ink-faint shrink-0 mt-0.5" /> <span>{property.address}{property.city ? `, ${property.city}` : ''}{property.province ? `, ${property.province}` : ''}</span></p>
         )}
         <div className="grid grid-cols-2 gap-3 mt-3">
-          {property.lawn_sqft ? <StatCard label="Lawn size" value={`${Number(property.lawn_sqft).toLocaleString()} ft²`} icon={Ruler} /> : null}
+          {property.lawn_sqft ? <StatCard label="Lawn size" value={`${Number(property.lawn_sqft).toLocaleString()} sq ft`} icon={Ruler} /> : null}
           {property.fence_length ? <StatCard label="Fence length" value={`${Number(property.fence_length).toLocaleString()} ft`} icon={Ruler} /> : null}
           {property.neighborhood ? <StatCard label="Neighborhood" value={property.neighborhood} icon={MapPin} /> : null}
         </div>
@@ -760,13 +784,13 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
         return (
           <div key={p.id} className="rounded-card border border-border bg-bg-secondary p-4 flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-9 h-9 rounded-lg border border-emerald-500/25 bg-emerald-500/10 flex items-center justify-center shrink-0"><CheckCircle2 className="w-4 h-4 text-emerald-400" /></div>
+              <div className={cn('w-9 h-9 rounded-lg border flex items-center justify-center shrink-0', Number(p.amount) < 0 ? 'border-red-500/25 bg-red-500/10' : 'border-emerald-500/25 bg-emerald-500/10')}><CheckCircle2 className={cn('w-4 h-4', Number(p.amount) < 0 ? 'text-red-400' : 'text-emerald-400')} /></div>
               <div className="min-w-0">
-                <p className="text-sm font-semibold text-ink">{formatCurrency(Number(p.amount))}</p>
-                <p className="text-xs text-ink-muted truncate">{p.paid_at ? formatDate(p.paid_at) : formatDate(p.created_at)}{inv ? ` · ${inv.invoice_number}` : ''} · {paymentMethodLabel(p.provider)}</p>
+                <p className="text-sm font-semibold text-ink">{Number(p.amount) < 0 ? '−' : ''}{formatCurrency(Math.abs(Number(p.amount)))}</p>
+                <p className="text-xs text-ink-muted truncate">{p.paid_at ? formatDate(p.paid_at) : formatDate(p.created_at)}{inv ? ` · ${inv.invoice_number}` : ''} · {Number(p.amount) < 0 ? 'Refund' : paymentMethodLabel(p.provider)}</p>
               </div>
             </div>
-            <span className="text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border text-emerald-400 border-emerald-500/30 bg-emerald-500/10 shrink-0">Paid</span>
+            <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border shrink-0', Number(p.amount) < 0 ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10')}>{Number(p.amount) < 0 ? 'Refunded' : 'Paid'}</span>
           </div>
         )
       })}
@@ -794,7 +818,8 @@ function AutoPayCard({ token, card, autopayEnabled, onChanged }: {
     setBusy(null)
   }
   async function removeCard() {
-    if (!confirm('Remove your saved card? AutoPay will be turned off.')) return
+    const ok = await confirmDialog({ title: 'Remove your saved card?', message: 'AutoPay will be turned off. You can add a card again anytime.', confirmLabel: 'Remove card', destructive: true })
+    if (!ok) return
     setBusy('remove'); setErr(null)
     try {
       const res = await fetch('/api/portal/remove-card', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) })
@@ -977,23 +1002,27 @@ function PrefRow({ label, icon: Icon, on, onChange }: { label: string; icon: typ
 // ── Document actions (View / Download / Print) — same PDF the dashboard makes ──
 function DocActions({ getBlob, filename }: { getBlob: () => Promise<Blob>; filename: string }) {
   const [busy, setBusy] = useState<'view' | 'download' | 'print' | null>(null)
+  const [err, setErr] = useState<string | null>(null)
   async function run(kind: 'view' | 'download' | 'print') {
     if (busy) return
-    setBusy(kind)
+    setBusy(kind); setErr(null)
     try {
       const blob = await getBlob()
       if (kind === 'download') downloadBlob(blob, filename)
       else if (kind === 'print') printBlob(blob)
       else viewBlob(blob)
     } catch {
-      alert('Could not generate the PDF. Please try again.')
+      setErr('Could not generate the PDF — please try again.')
     } finally { setBusy(null) }
   }
   return (
-    <div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-border">
-      <DocBtn icon={Eye} label="View" loading={busy === 'view'} disabled={busy !== null} onClick={() => run('view')} />
-      <DocBtn icon={Download} label="Download PDF" loading={busy === 'download'} disabled={busy !== null} onClick={() => run('download')} primary />
-      <DocBtn icon={Printer} label="Print" loading={busy === 'print'} disabled={busy !== null} onClick={() => run('print')} />
+    <div className="mt-3 pt-3 border-t border-border">
+      <div className="flex flex-wrap items-center gap-2">
+        <DocBtn icon={Eye} label="View" loading={busy === 'view'} disabled={busy !== null} onClick={() => run('view')} />
+        <DocBtn icon={Download} label="Download PDF" loading={busy === 'download'} disabled={busy !== null} onClick={() => run('download')} primary />
+        <DocBtn icon={Printer} label="Print" loading={busy === 'print'} disabled={busy !== null} onClick={() => run('print')} />
+      </div>
+      {err && <p className="text-xs text-red-400 mt-2">{err}</p>}
     </div>
   )
 }
@@ -1013,8 +1042,17 @@ function PriceChip({ label, v }: { label: string; v: number }) {
   return <span className="text-xs rounded-lg border border-border bg-bg-tertiary px-2 py-1"><span className="text-ink-faint">{label}</span> <span className="font-semibold text-ink">{formatCurrency(Number(v))}</span></span>
 }
 function QuoteStatusPill({ status }: { status: string }) {
-  const tone = status === 'accepted' ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : status === 'declined' ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-amber-400 border-amber-500/30 bg-amber-500/10'
-  return <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', tone)}>{status}</span>
+  // Homeowner-friendly labels — never leak raw internal statuses into the portal.
+  const map: Record<string, { label: string; tone: string }> = {
+    accepted:  { label: 'Approved',               tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' },
+    scheduled: { label: 'Scheduled',              tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' },
+    completed: { label: 'Completed',              tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' },
+    paid:      { label: 'Completed',              tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' },
+    declined:  { label: 'Declined',               tone: 'text-red-400 border-red-500/30 bg-red-500/10' },
+    sent:      { label: 'Awaiting your approval', tone: 'text-amber-400 border-amber-500/30 bg-amber-500/10' },
+  }
+  const m = map[status] ?? { label: 'Quote', tone: 'text-ink-muted border-border bg-bg-tertiary' }
+  return <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', m.tone)}>{m.label}</span>
 }
 function InvoiceStatusPill({ status }: { status: string }) {
   const map: Record<string, { label: string; tone: string }> = {
