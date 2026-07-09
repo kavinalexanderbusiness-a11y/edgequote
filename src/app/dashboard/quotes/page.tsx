@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
+import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { Quote } from '@/types'
 import { QuoteList } from '@/components/quotes/QuoteList'
 import { SkeletonRows } from '@/components/ui/Skeleton'
@@ -30,13 +31,21 @@ export default function QuotesPage() {
       .eq('user_id', user!.id)
       .order('created_at', { ascending: false })
     setQuotes(data || [])
+    // Cache only the first screenful — enough for an instant revisit paint, without
+    // JSON-serializing thousands of rows into sessionStorage on every fetch. The full
+    // list arrives a beat later from the query above; realtime keeps it live.
+    writeCache('quotes-list', (data || []).slice(0, 100))
     setLoading(false)
   }
 
-  // Initial load. The tab-return refetch is handled by useRealtimeRefresh below
-  // (it self-heals on visibilitychange/online) — no separate focus listener, which
-  // only duplicated that refetch on every window refocus.
-  useEffect(() => { fetchQuotes() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // Instant revisit: paint the cached list immediately (no skeleton), then revalidate in
+  // the background — realtime (below) keeps it live. Reuses the shared clientCache SWR
+  // module. The tab-return refetch is handled by useRealtimeRefresh (visibilitychange/online).
+  useEffect(() => {
+    const cached = readCache<Quote[]>('quotes-list', CACHE_TTL.short)
+    if (cached) { setQuotes(cached); setLoading(false) }
+    fetchQuotes()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Live: a quote accepted/scheduled/completed/deleted anywhere (portal, Stripe,
   // another tab) updates this list instantly — no refresh, no polling.

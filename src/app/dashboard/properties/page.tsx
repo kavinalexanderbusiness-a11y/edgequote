@@ -17,7 +17,7 @@ import { formatDate, formatCurrency, localTodayISO } from '@/lib/utils'
 import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes, latestSavedRecommendation, recommendationIsStale } from '@/lib/pricing'
 import { LocatedJob, fetchLocatedUpcomingJobs, nearbyJobCount } from '@/lib/geo'
 import { JobPhotos } from '@/components/photos/JobPhotos'
-import { listPhotosByUser, JobPhotoView } from '@/lib/photos'
+import { listPhotosByUser, PROPERTY_PHOTO_BATCH_LIMIT, JobPhotoView } from '@/lib/photos'
 import { MapPin, Home, User, Ruler, History, RefreshCw, Trophy, DollarSign, CheckCircle2, Receipt, Timer, CalendarClock, AlertTriangle, Repeat, Camera, FileText } from 'lucide-react'
 
 // Per-property performance, aggregated from completed jobs + invoices. Reuses
@@ -84,6 +84,9 @@ export default function PropertiesPage() {
   const [lastInvoiceByProp, setLastInvoiceByProp] = useState<Record<string, LastInvoice>>({})
   const [plansByProp, setPlansByProp] = useState<Record<string, ServicePlan[]>>({})
   const [photosByProp, setPhotosByProp] = useState<Record<string, JobPhotoView[]>>({})
+  // True when the photo batch hit its cap → some properties' photos are outside the
+  // window, so those rows must lazy-load their own instead of showing an empty gallery.
+  const [photosCapped, setPhotosCapped] = useState(false)
   const [recalcId, setRecalcId] = useState<string | null>(null)
 
   const supabase = createClient()
@@ -115,6 +118,7 @@ export default function PropertiesPage() {
       const photoGroups: Record<string, JobPhotoView[]> = {}
       for (const ph of allPhotos) if (ph.property_id) (photoGroups[ph.property_id] ||= []).push(ph)
       setPhotosByProp(photoGroups)
+      setPhotosCapped(allPhotos.length >= PROPERTY_PHOTO_BATCH_LIMIT)
       const settingsRow = sRes.data as BusinessSettings | null
       setProperties((pRes.data as Property[]) || [])
       setSettings(settingsRow)
@@ -360,7 +364,9 @@ export default function PropertiesPage() {
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted mb-2 flex items-center gap-1.5">
                     <Camera className="w-3.5 h-3.5" /> Photos
                   </p>
-                  <JobPhotos propertyId={property.id} customerId={property.customer_id} variant="gallery" initialPhotos={photosByProp[property.id] || []} />
+                  {/* Seed from the batch; if the batch was capped and this row wasn't in it,
+                      pass undefined so the gallery lazy-loads its own (avoids a false empty). */}
+                  <JobPhotos propertyId={property.id} customerId={property.customer_id} variant="gallery" initialPhotos={photosByProp[property.id] ?? (photosCapped ? undefined : [])} />
                 </div>
               </CardBody>
             </Card>

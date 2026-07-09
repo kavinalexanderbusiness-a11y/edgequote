@@ -26,8 +26,15 @@ function withUrl(supabase: SupabaseClient, rows: JobPhoto[]): JobPhotoView[] {
   return rows.map(r => ({ ...r, url: publicUrl(supabase, r.storage_path) }))
 }
 
+// A single gallery never needs a property's/job's ENTIRE history — cap it so a
+// property with hundreds of visits can't pull thousands of rows into one gallery.
+const GALLERY_LIMIT = 300
+// The per-page batch cap: enough to seed every row's preview gallery on a normal
+// account, bounded so a 120k-photo account can't ship its whole catalogue at once.
+export const PROPERTY_PHOTO_BATCH_LIMIT = 2000
+
 // List photos for a single visit (when jobId is given) or for the whole
-// property (its full visual service history). Newest first.
+// property (its full visual service history). Newest first, bounded.
 export async function listPhotos(
   supabase: SupabaseClient,
   userId: string,
@@ -37,16 +44,17 @@ export async function listPhotos(
   if (scope.jobId) q = q.eq('job_id', scope.jobId)
   else if (scope.propertyId) q = q.eq('property_id', scope.propertyId)
   else return []
-  const { data } = await q.order('taken_at', { ascending: false })
+  const { data } = await q.order('taken_at', { ascending: false }).limit(GALLERY_LIMIT)
   return withUrl(supabase, (data as JobPhoto[]) || [])
 }
 
-// Batch: every photo for a user (newest first) with resolved URLs, so a LIST page can
+// Batch: the most-recent photos for a user (with resolved URLs), so a LIST page can
 // fetch once and hand each row its slice — instead of mounting one gallery per row that
-// each fires its own query (N properties → N round-trips). Group the result by
-// property_id / job_id at the call site.
+// each fires its own query (N properties → N round-trips). BOUNDED — an account with
+// 120k photos would otherwise ship its entire catalogue on one page load. Rows whose
+// photos fall outside this window get no slice and lazy-load their own (see the caller).
 export async function listPhotosByUser(supabase: SupabaseClient, userId: string): Promise<JobPhotoView[]> {
-  const { data } = await supabase.from('job_photos').select('*').eq('user_id', userId).order('taken_at', { ascending: false })
+  const { data } = await supabase.from('job_photos').select('*').eq('user_id', userId).order('taken_at', { ascending: false }).limit(PROPERTY_PHOTO_BATCH_LIMIT)
   return withUrl(supabase, (data as JobPhoto[]) || [])
 }
 
