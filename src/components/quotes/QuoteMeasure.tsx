@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { loadGoogleMaps, addPropertyPin, flashRing, type PropertyPinHandle } from '@/lib/googleMaps'
 import { pricingPackage, estimateVisitMinutes, PricingConfig, CadenceKey } from '@/lib/pricing'
 import { Coord } from '@/lib/geo'
-import { ProspectContext, loadProspectContext, assessProspect } from '@/lib/prospect'
+import { ProspectContext, loadProspectContext, gradedProspectPricing } from '@/lib/prospect'
 import { PricePackagePanel, CadenceSelection } from '@/components/pricing/PricePackagePanel'
 import { DecisionSummary } from '@/components/pricing/DecisionSummary'
 import { AutoMeasureBanner } from '@/components/measure/AutoMeasureBanner'
@@ -257,20 +257,21 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
 
   // The complete recommendation package — same engine the property MeasureTool
   // and travel-density discount use; nearby = located upcoming jobs within range.
-  // Pass 1: base package → Pass 2: grade-adjusted recurring pricing, so recurring
-  // prices reflect the customer's business value (route grade), not just lawn size.
+  // ONE composed result (lib/prospect.gradedProspectPricing): the assessment is
+  // re-run against the grade-adjusted package, so the hero recommendation, CTA,
+  // Pricing Details, Pricing Guidance and "Use recommended" all show the SAME
+  // number — never a $65 hero over $70 details.
   const nearby = prospect?.nearbyJobs ?? 0
-  const basePkg = totalSqft > 0 ? pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount: nearby, neighborhoodName: hoodName }) : null
-  const assessment = basePkg && prospect
-    ? assessProspect(basePkg, prospect, {
+  const graded = totalSqft > 0 && prospect
+    ? gradedProspectPricing(totalSqft, cfg, { overgrowth, nearbyCount: nearby, neighborhoodName: hoodName }, prospect, {
         distanceKm: null, travelFee: Number(travelFee) || 0, neighborhoodName: hoodName,
         estimatedMinutes: estimateVisitMinutes(totalSqft, prospect.observedMinPer1000),
         timedJobs: prospect.timedJobs, crewCostPerHour: crewCost,
       })
     : null
-  const pkg = totalSqft > 0
-    ? pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount: nearby, neighborhoodName: hoodName, valueGrade: assessment?.score ?? null })
-    : null
+  const assessment = graded?.assessment ?? null
+  const pkg = graded?.pkg
+    ?? (totalSqft > 0 ? pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount: nearby, neighborhoodName: hoodName }) : null)
 
   // Record auto vs accepted so the estimate self-calibrates (best-effort).
   function recordMeasure() {

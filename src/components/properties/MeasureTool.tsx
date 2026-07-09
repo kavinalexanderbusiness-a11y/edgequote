@@ -7,7 +7,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Property, BusinessSettings, MeasurementSnapshot, LawnSections, LawnPolygon, PricingConfidence, CONFIDENCE_LABELS, CONFIDENCE_COLORS } from '@/types'
 import { priceTiers, routeDensityTravel, pricingConfidence, travelFeeForDistance, pricingConfigFromSettings, PricingConfig, DEFAULT_PRICING, PriceTier, pricingPackage, estimateVisitMinutes, buildSavedRecommendation } from '@/lib/pricing'
 import { PricePackagePanel, CadenceSelection } from '@/components/pricing/PricePackagePanel'
-import { ProspectContext, loadProspectContext, assessProspect } from '@/lib/prospect'
+import { ProspectContext, loadProspectContext, gradedProspectPricing } from '@/lib/prospect'
 import { DecisionSummary } from '@/components/pricing/DecisionSummary'
 import { AutoMeasureBanner } from '@/components/measure/AutoMeasureBanner'
 import { recordMeasurement, neighborhoodOf, AutoMeasureResult } from '@/lib/autoMeasure'
@@ -544,13 +544,15 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
     const sections = currentSections()
     const sectionsTotal = Math.round(Object.values(sections).reduce((a, b) => a + b, 0))
     const total = sectionsTotal > 0 ? sectionsTotal : Math.round(overrideRef.current || 0)
-    const baseSave = pricingPackage(total, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood })
     const estMin = estimateVisitMinutes(total, prospect?.observedMinPer1000)
-    const scoreSave = prospect
-      ? assessProspect(baseSave, prospect, { distanceKm, travelFee: effectiveTravel, neighborhoodName: property.neighborhood, estimatedMinutes: estMin, timedJobs: prospect.timedJobs }).score
+    // ONE composed result (gradedProspectPricing) — the saved recurring prices and
+    // the saved score come from the SAME grade-adjusted package.
+    const gradedSave = prospect
+      ? gradedProspectPricing(total, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood }, prospect,
+          { distanceKm, travelFee: effectiveTravel, neighborhoodName: property.neighborhood, estimatedMinutes: estMin, timedJobs: prospect.timedJobs })
       : null
-    // Save the grade-adjusted package so stored recurring prices reflect value.
-    const pkgSave = pricingPackage(total, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood, valueGrade: scoreSave })
+    const scoreSave = gradedSave?.assessment.score ?? null
+    const pkgSave = gradedSave?.pkg ?? pricingPackage(total, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood })
     // Permanent boundary + how the area was captured (traced shapes win; else the
     // accepted auto estimate; else a typed figure).
     const polygon = currentPolygon()
@@ -801,16 +803,18 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
       {/* Pricing recommendation package — cadence prices, season value, verdict.
           "Use X" creates the quote with that structure in one tap. */}
       {totalSqft > 0 && (() => {
-        const basePkg = pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood })
-        const assessment = prospect
-          ? assessProspect(basePkg, prospect, {
+        // ONE composed result (gradedProspectPricing): the assessment is re-run
+        // against the grade-adjusted package, so the hero price, CTA, Pricing
+        // Details and Guidance all display the same recommended value.
+        const graded = prospect
+          ? gradedProspectPricing(totalSqft, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood }, prospect, {
               distanceKm, travelFee: effectiveTravel, neighborhoodName: property.neighborhood,
               estimatedMinutes: estimateVisitMinutes(totalSqft, prospect.observedMinPer1000),
               timedJobs: prospect.timedJobs, crewCostPerHour: crewCost,
             })
           : null
-        // Grade-adjusted recurring pricing (business value, not just size).
-        const pkg = pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood, valueGrade: assessment?.score ?? null })
+        const assessment = graded?.assessment ?? null
+        const pkg = graded?.pkg ?? pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood })
         return (
           <div className="bg-bg-secondary border border-border rounded-xl px-4 py-3 space-y-3">
             <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Pricing recommendation</span>
