@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { formatCurrency } from '@/lib/utils'
 import { needsFollowUp } from '@/lib/followup'
 import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
+import { invoiceBalance } from '@/lib/payments/ledger'
 import type { Quote } from '@/types'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import {
@@ -35,7 +36,7 @@ function localTodayISO(): string {
 }
 
 interface JobLite { quote_id: string | null; customer_id: string | null; status: string; scheduled_date: string; recurrence_id: string | null; price: number | null }
-interface InvoiceLite { amount: number | null; status: string; amount_paid: number | null }
+interface InvoiceLite { amount: number; status: string; amount_paid?: number; discount_type: 'amount' | 'percent' | null; discount_value: number | null }
 
 export function TodaysPriorities() {
   const supabase = useMemo(() => createClient(), [])
@@ -48,14 +49,17 @@ export function TodaysPriorities() {
       if (!user) { setLoading(false); return }
       const today = localTodayISO()
 
-      const [qRes, iRes, jRes, rRes, cRes] = await Promise.all([
+      const [qRes, iRes, jRes, rRes, cRes, sRes] = await Promise.all([
         // Quotes drive follow-ups + accepted-not-scheduled (reuse those exact signals).
         supabase.from('quotes').select('*').eq('user_id', user.id),
-        supabase.from('invoices').select('amount, status, amount_paid').eq('user_id', user.id),
+        supabase.from('invoices').select('amount, status, amount_paid, discount_type, discount_value').eq('user_id', user.id),
         supabase.from('jobs').select('quote_id, customer_id, status, scheduled_date, recurrence_id, price').eq('user_id', user.id),
         supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user.id),
         // Unread conversations — same source as the Messages inbox.
         supabase.from('conversations').select('unread').eq('user_id', user.id).is('archived_at', null).gt('unread', 0),
+        // GST — so the owed figure below agrees with the Invoices page and the
+        // Outstanding stat (both are ledger-derived, GST-inclusive).
+        supabase.from('business_settings').select('gst_percent').eq('user_id', user.id).maybeSingle(),
       ])
 
       const quotes = (qRes.data as Quote[]) || []
@@ -64,14 +68,17 @@ export function TodaysPriorities() {
       const recById: Record<string, { freq: string | null; interval_unit: string | null; interval_count: number | null }> = {}
       for (const r of (rRes.data as { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null }[]) || []) recById[r.id] = r
       const conversations = (cRes.data as { unread: number }[]) || []
+      const feeSettings = sRes.data as { gst_percent: number | null } | null
 
       const next: Priority[] = []
 
       // 1) Money already owed — invoices sent/unpaid. The single most valuable thing
       //    to chase: work done, just not collected.
-      // Owed = remaining BALANCE across issued invoices (partial payments count).
-      const owed = invoices.filter(i => i.status !== 'draft' && (Number(i.amount || 0) - (Number(i.amount_paid) || 0)) > 0.01)
-      const owedTotal = owed.reduce((s, i) => s + Math.max(0, Number(i.amount || 0) - (Number(i.amount_paid) || 0)), 0)
+      // Owed = remaining GST-inclusive BALANCE across issued invoices (partial
+      // payments count, cancelled paper doesn't) via THE ledger engine, so this
+      // dollar figure matches Outstanding below and the Invoices page it links to.
+      const owed = invoices.filter(i => i.status !== 'draft' && i.status !== 'cancelled' && invoiceBalance(i, feeSettings).balance > 0.01)
+      const owedTotal = owed.reduce((s, i) => s + invoiceBalance(i, feeSettings).balance, 0)
       if (owed.length > 0) {
         next.push({
           key: 'unpaid', icon: DollarSign, tone: 'text-red-400 bg-red-500/10 border-red-500/20',
@@ -97,7 +104,7 @@ export function TodaysPriorities() {
       }
 
       // 5) Quotes needing follow-up — gone quiet, most recoverable new revenue
-      //    (reuse needsFollowUp so the count matches FollowUpQuotes exactly).
+      //    (reuse needsFollowUp so the count matches the Quotes follow-up queue exactly).
       const followups = quotes.filter(needsFollowUp)
       const followupTotal = followups.reduce((s, q) => s + Number(q.total || 0), 0)
       if (followups.length > 0) {

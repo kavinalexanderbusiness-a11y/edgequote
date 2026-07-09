@@ -49,7 +49,7 @@ export default function RevenueIntelligencePage() {
   if (loading && !report) {
     return (
       <div className="max-w-5xl space-y-6">
-        <PageHeader title="Revenue Intelligence" description="The highest-value moves to grow the business — ranked." />
+        <PageHeader title="Revenue Intelligence" description="Every customer scored for the moves that grow revenue — ranked by expected impact." />
         <SkeletonTiles count={4} />
         <Skeleton className="h-20 w-full rounded-card" />
         <SkeletonRows count={5} />

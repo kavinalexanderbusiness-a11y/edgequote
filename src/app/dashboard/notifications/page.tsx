@@ -66,7 +66,7 @@ export default function NotificationsPage() {
 
   return (
     <div className="max-w-3xl space-y-4">
-      <PageHeader title="Notifications" description="Quote accepted and invoice paid alerts."
+      <PageHeader title="Notifications" description="Alerts for quotes, payments, website leads and reviews."
         action={unread > 0 ? <Button variant="secondary" size="sm" onClick={() => markRead(items.filter(n => !n.read).map(n => n.id))}><Check className="w-3.5 h-3.5" /> Mark all read</Button> : undefined} />
 
       {loadError && (

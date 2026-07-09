@@ -58,7 +58,7 @@ const GROUPS: { title: string; tools: Tool[] }[] = [
 export default function GrowPage() {
   return (
     <div className="max-w-5xl space-y-8">
-      <PageHeader title="Grow" description="Everything that grows Edge Property Services, in one place." />
+      <PageHeader title="Grow" description="Everything that grows your business, in one place." />
 
       {/* Suggestions Center — the action feed comes FIRST: "what should I do next?"
           leads the page; the navigation cards below are reference, not action. */}
