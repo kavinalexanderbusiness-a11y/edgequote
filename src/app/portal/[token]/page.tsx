@@ -913,9 +913,9 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', Number(p.amount) < 0 ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10')}>{Number(p.amount) < 0 ? 'Refunded' : 'Paid'}</span>
-              {Number(p.amount) > 0 && inv && (
+              {inv && (
                 <button onClick={() => downloadReceipt(p, inv)} disabled={receiptBusy === p.id}
-                  className="text-ink-faint hover:text-accent transition-colors p-1.5 -m-1" aria-label="Download receipt" title="Download receipt (PDF)">
+                  className="text-ink-faint hover:text-accent transition-colors p-1.5 -m-1" aria-label={Number(p.amount) < 0 ? 'Download refund receipt' : 'Download receipt'} title={Number(p.amount) < 0 ? 'Download refund receipt (PDF)' : 'Download receipt (PDF)'}>
                   {receiptBusy === p.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
                 </button>
               )}

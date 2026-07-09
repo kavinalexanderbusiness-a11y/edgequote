@@ -79,6 +79,8 @@ export function ReceiptDocument({ payment, invoice, settings }: ReceiptPDFProps)
   const { balance } = invoiceBalance(invoice, settings)
   const owing = Math.max(0, balance)
   const receiptNo = receiptNumberFor(payment.id)
+  // A negative ledger row is a refund — same document, refund vocabulary.
+  const isRefund = Number(payment.amount) < 0
 
   return (
     <Document>
@@ -106,7 +108,7 @@ export function ReceiptDocument({ payment, invoice, settings }: ReceiptPDFProps)
           </View>
         </View>
 
-        <Text style={styles.title}>Payment Receipt</Text>
+        <Text style={styles.title}>{isRefund ? 'Refund Receipt' : 'Payment Receipt'}</Text>
 
         <View style={styles.bar}>
           <View>
@@ -124,13 +126,13 @@ export function ReceiptDocument({ payment, invoice, settings }: ReceiptPDFProps)
         </View>
 
         <View style={styles.paidBox}>
-          <Text style={styles.paidAmount}>{money(Number(payment.amount) || 0)}</Text>
-          <Text style={styles.paidLabel}>Payment received — {paymentMethodLabel(payment.method || payment.provider)}</Text>
+          <Text style={{ ...styles.paidAmount, ...(isRefund ? { color: '#B4232F' } : {}) }}>{isRefund ? '−' : ''}{money(Math.abs(Number(payment.amount) || 0))}</Text>
+          <Text style={styles.paidLabel}>{isRefund ? 'Refund issued' : `Payment received — ${paymentMethodLabel(payment.method || payment.provider)}`}</Text>
         </View>
 
         <View style={styles.twoCol}>
           <View style={styles.col}>
-            <Text style={styles.sectionTitle}>Received From</Text>
+            <Text style={styles.sectionTitle}>{isRefund ? 'Refunded To' : 'Received From'}</Text>
             <Text style={[styles.bodyText, { fontFamily: 'Helvetica-Bold' }]}>{invoice.customer_name}</Text>
             {invoice.address ? <Text style={styles.muted}>{invoice.address}</Text> : null}
           </View>
