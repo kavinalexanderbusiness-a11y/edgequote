@@ -60,10 +60,7 @@ export default async function DashboardPage() {
   const jobsDoneThisMonth = doneJobs.filter(j => j.scheduled_date >= monthStartISO).length
 
   const stats: DashboardStats = {
-    totalQuotes: allQuotes.length,
-    revenueQuoted: allQuotes.reduce((sum, q) => sum + Number(q.total), 0),
     acceptedJobs: acceptedCount,
-    pendingQuotes: allQuotes.filter(q => q.status === 'draft' || q.status === 'sent').length,
     acceptedRevenue: allQuotes
       .filter(q => q.status === 'accepted')
       .reduce((sum, q) => sum + Number(q.total), 0),

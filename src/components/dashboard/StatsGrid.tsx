@@ -1,4 +1,4 @@
-import { FileText, DollarSign, Clock, TrendingUp, Percent, Wallet, AlertCircle, CalendarCheck } from 'lucide-react'
+import { DollarSign, TrendingUp, Percent, Wallet, AlertCircle, CalendarCheck } from 'lucide-react'
 import { DashboardStats } from '@/types'
 import { formatCurrency } from '@/lib/utils'
 import { Card } from '@/components/ui/Card'
@@ -9,14 +9,6 @@ interface StatsGridProps {
 
 export function StatsGrid({ stats }: StatsGridProps) {
   const cards = [
-    {
-      label: 'Total Quotes',
-      value: stats.totalQuotes.toString(),
-      sub: 'All time',
-      icon: FileText,
-      color: 'text-blue-400',
-      bg: 'bg-blue-500/10',
-    },
     {
       // One card for accepted work — the count lives in the sub so the same dollar
       // figure isn't rendered twice in the grid (it also appeared under "Accepted Jobs").
@@ -50,14 +42,6 @@ export function StatsGrid({ stats }: StatsGridProps) {
       icon: CalendarCheck,
       color: 'text-emerald-400',
       bg: 'bg-emerald-500/10',
-    },
-    {
-      label: 'Pending Quotes',
-      value: stats.pendingQuotes.toString(),
-      sub: 'Draft or sent',
-      icon: Clock,
-      color: 'text-amber-400',
-      bg: 'bg-amber-500/10',
     },
     {
       label: 'This Month',
