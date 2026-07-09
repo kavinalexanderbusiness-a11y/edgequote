@@ -11,7 +11,8 @@ import { invoiceTotals } from '@/lib/invoiceTotals'
 import { serviceLineTotals } from '@/lib/quoteServices'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
-import { renderPortalQuoteBlob, renderPortalInvoiceBlob, downloadBlob, viewBlob, printBlob } from '@/lib/portalPdf'
+import { renderPortalQuoteBlob, renderPortalInvoiceBlob, renderPortalReceiptBlob, downloadBlob, viewBlob, printBlob } from '@/lib/portalPdf'
+import { receiptNumberFor } from '@/lib/payments/ledger'
 import {
   Home, History, Image as ImageIcon, FileText, Receipt, MessageSquarePlus, Check, Loader2,
   Phone, Globe, Mail, Leaf, CheckCircle2, Navigation, Play, CalendarClock, Repeat, MapPin, Ruler, Sparkles, CreditCard, MessageSquare,
@@ -310,7 +311,7 @@ export default function PortalPage() {
               <button onClick={() => setActionError(null)} aria-label="Dismiss" className="shrink-0 opacity-70 hover:opacity-100"><X className="w-4 h-4" /></button>
             </div>
           )}
-          {tab === 'home' && <HomeTab data={data} derived={derived} biz={biz} onRequest={() => setTab('request')}
+          {tab === 'home' && <HomeTab suppressApproved={justAccepted} data={data} derived={derived} biz={biz} onRequest={() => setTab('request')}
             paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId}
             onOpenInvoices={() => { setDocsCat('invoice'); setTab('documents') }}
             onReviewQuotes={() => { setDocsCat('quote'); setTab('documents') }} />}
@@ -322,7 +323,7 @@ export default function PortalPage() {
           {tab === 'service' && <ServiceTab completed={derived.completed} photosByJob={photosByJob} invoiceByJob={invoiceByJob} photoUrl={photoUrl} gstPct={Number(data.business?.gst_percent) || 0} />}
           {tab === 'photos' && <GalleryTab photosByJob={photosByJob} jobs={data.jobs} photoUrl={photoUrl} />}
           {tab === 'property' && <PropertyTab property={data.property} />}
-          {tab === 'payments' && <PaymentsTab payments={data.payments} invoices={data.invoices} outstanding={derived.outstanding}
+          {tab === 'payments' && <PaymentsTab customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} business={biz} payments={data.payments} invoices={data.invoices} outstanding={derived.outstanding}
             token={token} paymentsEnabled={paymentsEnabled} card={data.payment_method ?? null} autopayEnabled={!!data.customer.autopay_enabled} onChanged={load} />}
           {tab === 'documents' && <DocumentsTab quotes={data.quotes} invoices={data.invoices} customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} business={biz} onInvoiceOpen={markInvoiceViewed}
             paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} accept={accept} accepting={accepting} initialCat={docsCat} />}
@@ -365,9 +366,10 @@ function StatusStepper({ s }: { s: LiveStatus }) {
 }
 
 // ── Home ──
-function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId, onOpenInvoices, onReviewQuotes }: {
+function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId, onOpenInvoices, onReviewQuotes, suppressApproved }: {
   data: PortalData; derived: Derived; biz: PortalData['business']; onRequest: () => void
   paymentsEnabled: boolean; pay: (id: string) => void; payingId: string | null; onOpenInvoices: () => void; onReviewQuotes: () => void
+  suppressApproved?: boolean
 }) {
   const next = derived.nextService
   // A quote awaiting approval is usually WHY the customer opened this link —
@@ -379,7 +381,7 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
   const prospect = awaiting.length > 0 && !next && derived.completed.length === 0 && (data.invoices || []).length === 0
   // Approved but nothing on the calendar yet — reassure instead of the generic
   // "no upcoming visit" message (they just said yes; the ball is in our court).
-  const approvedPending = !next && (data.quotes || []).some(q => q.status === 'accepted')
+  const approvedPending = !next && !suppressApproved && (data.quotes || []).some(q => q.status === 'accepted')
   // A PARTIALLY paid invoice must reach checkout too (server charges only the remaining balance).
   const owing = (data.invoices || []).filter(i => i.status === 'unpaid' || i.status === 'sent' || i.status === 'partial')
   // Tapping the balance goes straight to paying: one owing invoice + online payments
@@ -856,10 +858,21 @@ function paymentMethodLabel(provider: string): string {
     default: return provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : 'Payment'
   }
 }
-function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, card, autopayEnabled, onChanged }: {
+function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, card, autopayEnabled, onChanged, customerName, fallbackAddress, business }: {
   payments: PortalPayment[]; invoices: PortalInvoice[]; outstanding: number
   token: string; paymentsEnabled: boolean; card: PortalCard | null; autopayEnabled: boolean; onChanged: () => void
+  customerName: string; fallbackAddress: string | null; business: PortalData['business']
 }) {
+  // Receipt download — re-rendered from the ledger row on demand, so every receipt
+  // stays PERMANENTLY available (nothing stored, nothing to lose).
+  const [receiptBusy, setReceiptBusy] = useState<string | null>(null)
+  async function downloadReceipt(p: PortalPayment, inv: PortalInvoice) {
+    setReceiptBusy(p.id)
+    try {
+      downloadBlob(await renderPortalReceiptBlob(p, inv, customerName, fallbackAddress, business), `${receiptNumberFor(p.id)}.pdf`)
+    } catch { /* transient render failure — button stays available to retry */ }
+    setReceiptBusy(null)
+  }
   const invById = new Map(invoices.map(i => [i.id, i]))
   // Receipts (money movements) vs the customer-credit ledger — kept apart so totals
   // and history stay honest.
@@ -898,7 +911,15 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
                 <p className="text-xs text-ink-muted truncate">{p.paid_at ? formatDate(p.paid_at) : formatDate(p.created_at)}{inv ? ` · ${inv.invoice_number}` : ''} · {Number(p.amount) < 0 ? 'Refund' : paymentMethodLabel(p.provider)}</p>
               </div>
             </div>
-            <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border shrink-0', Number(p.amount) < 0 ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10')}>{Number(p.amount) < 0 ? 'Refunded' : 'Paid'}</span>
+            <div className="flex items-center gap-2 shrink-0">
+              <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', Number(p.amount) < 0 ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10')}>{Number(p.amount) < 0 ? 'Refunded' : 'Paid'}</span>
+              {inv && (
+                <button onClick={() => downloadReceipt(p, inv)} disabled={receiptBusy === p.id}
+                  className="text-ink-faint hover:text-accent transition-colors p-1.5 -m-1" aria-label={Number(p.amount) < 0 ? 'Download refund receipt' : 'Download receipt'} title={Number(p.amount) < 0 ? 'Download refund receipt (PDF)' : 'Download receipt (PDF)'}>
+                  {receiptBusy === p.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                </button>
+              )}
+            </div>
           </div>
         )
       })}
@@ -1167,10 +1188,14 @@ function InvoiceStatusPill({ status }: { status: string }) {
     paid:     { label: 'Paid',           tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' },
     overpaid: { label: 'Overpaid',       tone: 'text-violet-400 border-violet-500/30 bg-violet-500/10' },
     partial:  { label: 'Partially Paid', tone: 'text-sky-400 border-sky-500/30 bg-sky-500/10' },
-    sent:     { label: 'Sent',           tone: 'text-blue-400 border-blue-500/30 bg-blue-500/10' },
+    // Customer language: an issued invoice is simply "Due" — 'sent'/'unpaid' are
+    // owner-side workflow states that mean nothing to the payer.
+    sent:     { label: 'Due',            tone: 'text-amber-400 border-amber-500/30 bg-amber-500/10' },
+    unpaid:   { label: 'Due',            tone: 'text-amber-400 border-amber-500/30 bg-amber-500/10' },
+    cancelled:{ label: 'Cancelled',      tone: 'text-ink-muted border-border bg-bg-tertiary' },
     draft:    { label: 'Draft',          tone: 'text-ink-muted border-border bg-bg-tertiary' },
   }
-  const m = map[status] || { label: status === 'unpaid' ? 'Unpaid' : status, tone: 'text-amber-400 border-amber-500/30 bg-amber-500/10' }
+  const m = map[status] || { label: 'Due', tone: 'text-amber-400 border-amber-500/30 bg-amber-500/10' }
   return <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', m.tone)}>{m.label}</span>
 }
 

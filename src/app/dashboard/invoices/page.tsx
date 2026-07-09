@@ -45,7 +45,17 @@ export default function InvoicesPage() {
   const [openingId, setOpeningId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [cancellingId, setCancellingId] = useState<string | null>(null)
+  const [statusMenuId, setStatusMenuId] = useState<string | null>(null)
   const [filter, setFilter] = useState<'' | InvoiceDisplayStatus>('')
+  // Deep-link focus: /dashboard/invoices?invoice=INV-0042 or ?job=<job id> shows
+  // exactly that invoice (from a Convert toast or a completed job's Invoice link).
+  const [focus, setFocus] = useState<{ invoice?: string; job?: string } | null>(() => {
+    if (typeof window === 'undefined') return null
+    const p = new URLSearchParams(window.location.search)
+    const invoice = p.get('invoice') || undefined
+    const job = p.get('job') || undefined
+    return invoice || job ? { invoice, job } : null
+  })
   // The ONE shared Send Message dialog, opened for a specific invoice's customer.
   const [msgInvoice, setMsgInvoice] = useState<Invoice | null>(null)
   const [paymentsEnabled, setPaymentsEnabled] = useState(false)
@@ -238,7 +248,10 @@ export default function InvoicesPage() {
   const today = todayISO()
   // Filter on the DISPLAY status so the lifecycle states (Overdue, Viewed) are
   // filterable even though they're derived, not stored. Cancelled hides from All.
-  const visible = filter
+  const focused = focus
+    ? invoices.filter(i => (focus.invoice && i.invoice_number === focus.invoice) || (focus.job && i.job_id === focus.job))
+    : null
+  const visible = focused && focused.length > 0 ? focused : filter
     ? invoices.filter(i => displayInvoiceStatus(i, settings, today) === filter || (filter !== 'cancelled' && i.status === filter))
     : invoices.filter(i => i.status !== 'cancelled')
 
@@ -294,6 +307,16 @@ export default function InvoicesPage() {
           ))}
         </div>
       )}
+      {/* Deep-link focus (from a Convert toast / completed-job Invoice link) —
+          always show the way back to the full list. */}
+      {focus && (
+        <div className="flex items-center gap-2 text-xs text-ink-muted">
+          <span>Showing {focus.invoice ? `invoice ${focus.invoice}` : 'the invoice for that job'}</span>
+          <button onClick={() => { setFocus(null); if (typeof window !== 'undefined') window.history.replaceState({}, '', '/dashboard/invoices') }}
+            className="font-semibold text-accent hover:underline">Show all</button>
+        </div>
+      )}
+
       {/* One-line status legend — 'Unpaid' vs 'Sent' is invisible tribal knowledge
           otherwise (tap the status pill on a row to flip between them). */}
       {!loading && !loadError && (filter === 'unpaid' || filter === 'sent') && (
@@ -371,17 +394,58 @@ export default function InvoicesPage() {
                     )}
                     {(() => {
                       const ds = displayInvoiceStatus(inv, settings, today)
-                      const clickable = inv.status === 'unpaid' || inv.status === 'sent'
+                      // The pill is THE lifecycle control: Draft/Unpaid → Sent → back,
+                      // and Cancel/Reactivate — one obvious place. Money states stay
+                      // locked (partial/paid/overpaid belong to the payments ledger).
+                      const clickable = inv.status === 'draft' || inv.status === 'unpaid' || inv.status === 'sent' || inv.status === 'cancelled'
+                      const setStatus = async (status: InvoiceStatus, msg: string) => {
+                        setStatusMenuId(null)
+                        const { error } = await supabase.from('invoices').update({ status }).eq('id', inv.id)
+                        if (error) { notify.error('Could not update the status: ' + error.message); return }
+                        fetchInvoices()
+                        notify.success(msg)
+                      }
+                      const doCancel = async () => {
+                        setStatusMenuId(null)
+                        const res = await cancelInvoice(supabase, inv)
+                        if (res.error) { notify.error(res.error); return }
+                        fetchInvoices()
+                        notify.undo(`${inv.invoice_number} cancelled.`, async () => { await reactivateInvoice(supabase, inv.id); fetchInvoices() })
+                      }
                       return (
-                        <button
-                          onClick={() => cycleStatus(inv)}
-                          disabled={!clickable}
-                          title={clickable ? 'Toggle sent / unpaid' : undefined}
-                          className={`text-[10px] px-2.5 rounded-full border uppercase tracking-wide font-semibold flex items-center gap-1 ${clickable ? 'py-2 min-h-[36px] transition-opacity hover:opacity-80' : 'py-1 cursor-default'} ${INVOICE_STATUS_COLORS[ds]}`}
-                        >
-                          {ds === 'paid' && <Check className="w-3 h-3" />}
-                          {INVOICE_STATUS_LABELS[ds]}
-                        </button>
+                        <div className="relative">
+                          <button
+                            onClick={() => clickable && setStatusMenuId(statusMenuId === inv.id ? null : inv.id)}
+                            disabled={!clickable}
+                            title={clickable ? 'Change status' : 'Status is set by payments'}
+                            aria-haspopup={clickable ? 'menu' : undefined}
+                            className={`text-[10px] px-2.5 rounded-full border uppercase tracking-wide font-semibold flex items-center gap-1 ${clickable ? 'py-2 min-h-[36px] transition-opacity hover:opacity-80' : 'py-1 cursor-default'} ${INVOICE_STATUS_COLORS[ds]}`}
+                          >
+                            {ds === 'paid' && <Check className="w-3 h-3" />}
+                            {INVOICE_STATUS_LABELS[ds]}
+                            {clickable && <span aria-hidden className="opacity-60">▾</span>}
+                          </button>
+                          {statusMenuId === inv.id && (<>
+                            <button aria-hidden className="fixed inset-0 z-10 cursor-default" onClick={() => setStatusMenuId(null)} tabIndex={-1} />
+                            <div className="absolute z-20 mt-1 left-0 min-w-[170px] rounded-lg border border-border bg-bg-secondary shadow-lg overflow-hidden" role="menu">
+                              {(inv.status === 'draft' || inv.status === 'unpaid') && (
+                                <MenuItem onClick={() => setStatus('sent', `${inv.invoice_number} marked sent.`)}>Mark sent</MenuItem>
+                              )}
+                              {inv.status === 'sent' && (
+                                <MenuItem onClick={() => setStatus('unpaid', `${inv.invoice_number} back to unpaid.`)}>Mark not sent</MenuItem>
+                              )}
+                              {inv.status === 'draft' && (
+                                <MenuItem onClick={() => setStatus('unpaid', `${inv.invoice_number} approved — ready to send.`)}>Approve draft</MenuItem>
+                              )}
+                              {inv.status !== 'cancelled' && (Number(inv.amount_paid) || 0) <= 0.01 && (
+                                <MenuItem tone="danger" onClick={doCancel}>Cancel invoice</MenuItem>
+                              )}
+                              {inv.status === 'cancelled' && (
+                                <MenuItem onClick={() => setStatus('unpaid', `${inv.invoice_number} reactivated.`)}>Reactivate</MenuItem>
+                              )}
+                            </div>
+                          </>)}
+                        </div>
                       )
                     })()}
                     {/* AutoPay held this invoice for review (amount differs from usual). */}
@@ -408,33 +472,6 @@ export default function InvoicesPage() {
                     {inv.customer_id && inv.status !== 'cancelled' && (
                       <Button variant="secondary" size="sm" onClick={() => setMsgInvoice(inv)} title="Send this invoice to the customer">
                         <MessageSquare className="w-3.5 h-3.5" /> Send
-                      </Button>
-                    )}
-                    {/* Cancel (issued, nothing received) — terminal but undoable; drafts keep Delete. */}
-                    {inv.status !== 'draft' && inv.status !== 'cancelled' && (Number(inv.amount_paid) || 0) <= 0.01 && (
-                      <Button variant="ghost" size="sm" title="Cancel this invoice" loading={cancellingId === inv.id}
-                        onClick={async () => {
-                          if (cancellingId) return
-                          setCancellingId(inv.id)
-                          const res = await cancelInvoice(supabase, inv)
-                          setCancellingId(null)
-                          if (res.error) { notify.error(res.error); return }
-                          fetchInvoices()
-                          notify.undo(`${inv.invoice_number} cancelled.`, async () => { await reactivateInvoice(supabase, inv.id); fetchInvoices() })
-                        }}>
-                        <X className="w-3.5 h-3.5" /> Cancel
-                      </Button>
-                    )}
-                    {inv.status === 'cancelled' && (
-                      <Button variant="ghost" size="sm" title="Reactivate this invoice" loading={cancellingId === inv.id}
-                        onClick={async () => {
-                          if (cancellingId) return
-                          setCancellingId(inv.id)
-                          await reactivateInvoice(supabase, inv.id)
-                          setCancellingId(null)
-                          fetchInvoices(); notify.success(`${inv.invoice_number} reactivated.`)
-                        }}>
-                        Reactivate
                       </Button>
                     )}
                     {inv.status === 'draft' && (
@@ -475,7 +512,7 @@ export default function InvoicesPage() {
       {msgInvoice?.customer_id && (
         <SendMessageDialog open onClose={() => setMsgInvoice(null)}
           customerId={msgInvoice.customer_id} customerName={msgInvoice.customer_name}
-          defaultTemplate="invoice" vars={{ amount: formatCurrency(Number(msgInvoice.amount)) }}
+          defaultTemplate="invoice" vars={{ amount: formatCurrency(invoiceTotals(msgInvoice.amount, settings, { type: msgInvoice.discount_type, value: msgInvoice.discount_value }).total) }}
           onSent={() => markSent(msgInvoice)} />
       )}
     </div>
@@ -507,9 +544,16 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
   const [base, setBase] = useState(String(Math.round(itemized ? liSum : initial.subtotal)))
   const [dType, setDType] = useState<'' | DiscountType>(inv.discount_type ?? '')
   const [dValue, setDValue] = useState(inv.discount_value != null ? String(inv.discount_value) : '')
+  // Editable line items — a draft's breakdown belongs to the owner, not just the
+  // job add-on flow. Amounts are gross; the discount applies to the sum below.
+  const [items, setItems] = useState<{ description: string; amount: string; kind: string }[]>(
+    (inv.line_items || []).map(li => ({ description: li.description, amount: String(Number(li.amount) || 0), kind: (li as { kind?: string }).kind || 'service' })),
+  )
   const [saving, setSaving] = useState(false)
 
-  const grossNum = Math.round(itemized ? liSum : (Number(base) || 0))
+  const editItems = items.length > 0
+  const itemsSum = items.reduce((s, li) => s + (Number(li.amount) || 0), 0)
+  const grossNum = Math.round(editItems ? itemsSum : (Number(base) || 0))
   const discount = dType && Number(dValue) > 0 ? { type: dType, value: Number(dValue) } : null
   const { net } = applyDiscount(grossNum, discount)
   const t = invoiceTotals(net, settings, discount)
@@ -526,10 +570,12 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
       discount_type: hasD ? dType : null,
       discount_value: hasD ? Number(dValue) : null,
     }
-    // Keep a single (non-itemized) line item in step with an edited base so the PDF
-    // total never diverges; itemized invoices keep their breakdown untouched.
-    if (!itemized && (inv.line_items?.length ?? 0) === 1) {
-      patch.line_items = [{ ...inv.line_items![0], amount: grossNum }]
+    // Persist the breakdown the owner sees: edited rows when itemized, or the
+    // single line kept in step with the base so the PDF total never diverges.
+    if (editItems) {
+      patch.line_items = items
+        .filter(li => li.description.trim())
+        .map(li => ({ description: li.description.trim(), amount: Math.round(Number(li.amount) || 0), kind: li.kind }))
     }
     const { error } = await supabase.from('invoices').update(patch).eq('id', inv.id)
     setSaving(false)
@@ -550,15 +596,43 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Input label="Due date" type="date" value={due} onChange={e => setDue(e.target.value)} />
-        {itemized ? (
-          <div>
-            <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Subtotal (from services)</label>
-            <div className="mt-1.5 px-3.5 py-3 rounded-xl bg-bg-tertiary border border-border text-sm text-ink-muted">{formatCurrency(liSum)} · edit services on the schedule</div>
-          </div>
-        ) : (
+        {!editItems && (
           <Input label="Amount (before discount)" type="number" min="0" step="1" value={base} onChange={e => setBase(e.target.value)} />
         )}
       </div>
+
+      {/* Line items — fully editable on a draft (description + price, add/remove).
+          Note: a later job price/add-on edit re-syncs this draft from the job. */}
+      {editItems && (
+        <div>
+          <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Line items</label>
+          <div className="mt-1.5 space-y-1.5">
+            {items.map((li, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <input value={li.description} placeholder="Description"
+                  onChange={e => setItems(prev => prev.map((x, j) => j === i ? { ...x, description: e.target.value } : x))}
+                  className="flex-1 bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent" />
+                <div className="relative w-28">
+                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-faint text-sm">$</span>
+                  <input type="number" min="0" step="1" value={li.amount}
+                    onChange={e => setItems(prev => prev.map((x, j) => j === i ? { ...x, amount: e.target.value } : x))}
+                    className="w-full bg-bg-tertiary border border-border-strong rounded-lg pl-6 pr-2 py-2 text-sm text-ink outline-none focus:border-accent" />
+                </div>
+                <button onClick={() => setItems(prev => prev.filter((_, j) => j !== i))} disabled={items.length <= 1}
+                  className="text-ink-faint hover:text-red-400 disabled:opacity-30" aria-label="Remove line" title="Remove line">
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <button onClick={() => setItems(prev => prev.length
+          ? [...prev, { description: '', amount: '0', kind: 'addon' }]
+          : [{ description: service.trim() || inv.service_type || 'Service', amount: base || '0', kind: 'service' }, { description: '', amount: '0', kind: 'addon' }])}
+        className="text-xs font-semibold text-accent hover:underline">
+        + Add line item
+      </button>
 
       {/* Discount — none / fixed $ / percentage */}
       <div>
@@ -590,7 +664,7 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
         <Row label="Subtotal" value={formatCurrency(t.subtotal)} />
         {t.hasDiscount && <Row label={`Discount${t.discountLabel ? ` (${t.discountLabel})` : ''}`} value={`−${formatCurrency(t.discountAmount)}`} tone="text-emerald-400" />}
         {t.hasDiscount && <Row label="After discount" value={formatCurrency(t.discountedSubtotal)} muted />}
-        {t.hasGst && <Row label={`GST (${t.gstPercent}%)`} value={formatCurrency(t.gstAmount)} muted />}
+        {t.hasGst && <Row label={`GST (${t.gstPercent}% — set in Settings)`} value={formatCurrency(t.gstAmount)} muted />}
         <div className="flex justify-between pt-1.5 border-t border-border"><span className="font-semibold text-ink">Total</span><span className="font-bold text-accent">{formatCurrency(t.total)}</span></div>
       </div>
 
@@ -599,6 +673,15 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
         <Button size="sm" variant="ghost" onClick={onCancel}>Cancel</Button>
       </div>
     </div>
+  )
+}
+
+function MenuItem({ children, onClick, tone }: { children: React.ReactNode; onClick: () => void; tone?: 'danger' }) {
+  return (
+    <button role="menuitem" onClick={onClick}
+      className={`w-full text-left px-3 py-2 text-xs font-medium hover:bg-bg-tertiary ${tone === 'danger' ? 'text-red-400' : 'text-ink'}`}>
+      {children}
+    </button>
   )
 }
 

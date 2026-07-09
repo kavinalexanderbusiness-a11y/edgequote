@@ -10,12 +10,15 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { ConversationThread } from '@/components/messages/ConversationThread'
 import { ConversationInfo } from '@/components/messages/ConversationInfo'
 import { LeadCard } from '@/components/messages/LeadCard'
+import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
+import { CustomerPicker } from '@/components/ui/CustomerPicker'
+import type { Customer } from '@/types'
 import { Button } from '@/components/ui/Button'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import {
-  Loader2, Inbox, User, ArrowLeft, MessageSquare, FileText, Search, X,
+  Loader2, Inbox, User, ArrowLeft, MessageSquare, FileText, Search, X, Plus,
   Archive, ArchiveRestore, Pin, PinOff, BellOff, Bell, MailOpen, Trash2, MoreVertical, Reply,
   MapPin, Wrench, Receipt, Globe, Sparkles,
 } from 'lucide-react'
@@ -279,6 +282,18 @@ export default function MessagesPage() {
     select: (c: Convo) => { setSel(c); if (c.unread > 0) { patch(c.id, { unread: 0 }); if (uid) loadCounts(uid) } },
   }
 
+  // ── New message (compose without leaving the inbox) ──
+  const [composeOpen, setComposeOpen] = useState(false)
+  const [composeCustomers, setComposeCustomers] = useState<Customer[]>([])
+  const [composeTo, setComposeTo] = useState<{ id: string; name: string } | null>(null)
+  async function openCompose() {
+    setComposeOpen(true)
+    if (composeCustomers.length === 0) {
+      const { data } = await supabase.from('customers').select('*').is('archived_at', null).order('name')
+      setComposeCustomers((data as Customer[]) || [])
+    }
+  }
+
   // ── Bulk actions ──
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
@@ -353,7 +368,32 @@ export default function MessagesPage() {
 
   return (
     <div className="max-w-5xl space-y-4">
-      <PageHeader title="Messages" description="Two-way SMS + portal conversations — archived chats stay in CRM history forever." />
+      <PageHeader title="Messages" description="Two-way SMS + portal conversations — archived chats stay in CRM history forever."
+        action={
+          <Button variant="secondary" onClick={openCompose}>
+            <Plus className="w-4 h-4" /> New message
+          </Button>
+        } />
+
+      {/* Start a conversation without leaving the inbox: pick a customer → THE shared
+          Send-Message dialog (same engine; the sent message threads into this list). */}
+      {composeOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center p-4 pt-24" onClick={() => setComposeOpen(false)}>
+          <div className="bg-bg-secondary border border-border-strong rounded-card max-w-md w-full p-5 space-y-3" onClick={e => e.stopPropagation()}>
+            <p className="text-sm font-bold text-ink">Who do you want to message?</p>
+            <CustomerPicker customers={composeCustomers} value={''} allowManual={false}
+              onChange={id => {
+                const c = composeCustomers.find(x => x.id === id)
+                if (c) { setComposeOpen(false); setComposeTo({ id: c.id, name: c.name }) }
+              }} />
+            <button onClick={() => setComposeOpen(false)} className="text-xs text-ink-faint hover:text-ink">Cancel</button>
+          </div>
+        </div>
+      )}
+      {composeTo && (
+        <SendMessageDialog open onClose={() => { setComposeTo(null); if (uid) loadPage(uid, filterRef.current, true) }}
+          customerId={composeTo.id} customerName={composeTo.name} />
+      )}
 
       {/* Spotlight search */}
       <div className="relative">
@@ -425,8 +465,20 @@ export default function MessagesPage() {
           ) : list.length === 0 ? (
             <div className="py-16 text-center px-4">
               <Inbox className="w-9 h-9 text-ink-faint mx-auto mb-2" />
-              <p className="text-sm font-medium text-ink">{searchResults ? 'No matches' : filter === 'archived' ? 'No archived chats' : 'Nothing here'}</p>
-              <p className="text-xs text-ink-muted mt-1">{searchResults ? 'Try a name, address, service, or quote/invoice #.' : 'Inbound texts and portal requests appear here.'}</p>
+              <p className="text-sm font-medium text-ink">
+                {searchResults ? 'No matches'
+                  : filter === 'archived' ? 'No archived chats'
+                  : filter === 'website_lead' ? 'No new website leads'
+                  : filter === 'portal' ? 'No portal messages yet'
+                  : filter === 'sms' ? 'No text conversations yet'
+                  : 'No conversations yet'}
+              </p>
+              <p className="text-xs text-ink-muted mt-1">
+                {searchResults ? 'Try a name, address, service, or quote/invoice #.'
+                  : filter === 'website_lead' ? 'Leads land here the moment your website form is submitted.'
+                  : filter === 'portal' ? 'Requests customers send from their portal show up here.'
+                  : 'Inbound texts, portal requests and website leads all land here — replies go out from your business number.'}
+              </p>
             </div>
           ) : (
             <div ref={scrollRef} onScroll={onScroll} className="overflow-y-auto" style={{ maxHeight: '72vh' }}>

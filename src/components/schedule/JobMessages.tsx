@@ -187,7 +187,7 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
           )}
 
           {/* Editable message */}
-          <textarea value={text} onChange={e => setText(e.target.value)} rows={4}
+          <textarea value={text} onChange={e => { setText(e.target.value); setOutcome(null) }} rows={4}
             className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent resize-none" />
           {ch.sms ? <SmsCost text={text} className="mt-0.5" /> : <p className="text-[10px] text-ink-faint">{text.length} characters · edit freely before sending</p>}
           {active === 'review_request' && !reviewUrl && (
@@ -202,17 +202,26 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
               className="h-7 px-2 rounded-lg border border-dashed border-border text-[11px] font-medium text-ink-faint flex items-center gap-1 opacity-60 cursor-not-allowed">
               <Smartphone className="w-3 h-3" /> Push · soon
             </span>
-            <button onClick={send} disabled={busy}
-              className="ml-auto h-8 px-3 rounded-lg bg-accent text-black text-xs font-semibold flex items-center gap-1.5 active:scale-95 transition-transform disabled:opacity-50">
-              {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />} Send
-            </button>
+            {/* After a successful send the action becomes Done (collapses the
+                panel) — no accidental double-send, clear next step. */}
+            {outcome?.ok ? (
+              <button onClick={() => setActive(null)}
+                className="ml-auto h-8 px-3 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-semibold flex items-center gap-1.5 active:scale-95 transition-transform">
+                <Check className="w-3.5 h-3.5" /> Done
+              </button>
+            ) : (
+              <button onClick={send} disabled={busy}
+                className="ml-auto h-8 px-3 rounded-lg bg-accent text-black text-xs font-semibold flex items-center gap-1.5 active:scale-95 transition-transform disabled:opacity-50">
+                {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />} Send
+              </button>
+            )}
           </div>
 
           {outcome && (
             <div className={cn('flex items-start gap-1.5 text-[11px] rounded-lg px-2.5 py-1.5 border',
               outcome.ok ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : 'text-amber-400 border-amber-500/30 bg-amber-500/10')}>
               {outcome.ok ? <Check className="w-3.5 h-3.5 shrink-0 mt-px" /> : <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />}
-              <span>{outcome.text}</span>
+              <span>{outcome.text}{outcome.ok ? ' Logged in the customer’s conversation.' : ''}</span>
             </div>
           )}
         </div>

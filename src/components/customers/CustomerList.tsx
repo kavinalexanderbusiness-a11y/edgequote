@@ -17,7 +17,8 @@ import type { MsgType } from '@/lib/comms/templates'
 import { exportRowsToCsv } from '@/lib/csv'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
-import { Edit2, Trash2, Phone, Mail, FileText, Search, Link2, Check, MessageSquare, ShieldAlert, Archive, Download, Send } from 'lucide-react'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { Edit2, Trash2, Phone, Mail, FileText, Search, Link2, Check, MessageSquare, ShieldAlert, Archive, Download, Send, Users } from 'lucide-react'
 
 type ConsentFilter = '' | 'sms_in' | 'sms_out' | 'email_in' | 'email_out' | 'both' | 'neither'
 const CONSENT_FILTERS: { value: ConsentFilter; label: string }[] = [
@@ -35,15 +36,16 @@ interface CustomerListProps {
   onEdit: (customer: Customer) => void
   onDelete: (id: string) => Promise<void>
   onRefresh: () => void | Promise<void>
+  /** Opens the page's Add-Customer form — powers the empty state's action. */
+  onAdd?: () => void
 }
 
-export function CustomerList({ customers, onEdit, onDelete, onRefresh }: CustomerListProps) {
+export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: CustomerListProps) {
   const router = useRouter()
   const [search, setSearch] = useState('')
   const [consentFilter, setConsentFilter] = useState<ConsentFilter>('')
   const [deleting, setDeleting] = useState<string | null>(null)
   const [portalBusy, setPortalBusy] = useState<string | null>(null)
-  const [toast, setToast] = useState<string | null>(null)
   const [smsConfirm, setSmsConfirm] = useState(false)
   // Which template the Send-Message dialog opens on (null = closed; 'choose' = let the
   // owner pick). Lets "Send introduction" / "Review request" be one-tap entries into
@@ -73,8 +75,6 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
   const smsIn = customers.filter(c => c.sms_opt_in).length
   const emailIn = customers.filter(c => c.email_opt_in).length
 
-  function showToast(msg: string) { setToast(msg); setTimeout(() => setToast(null), 2600) }
-
   // Shared multi-select — same behavior as every other list.
   const sel = useBulkSelect(filtered)
 
@@ -87,8 +87,8 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
     setBusyKey(channel === 'sms' ? 'sms-on' : 'email-on')
     const res = await applyConsent(supabase, { targets, channel, value, userId: user.id, changedBy: user.email || user.id, source: 'bulk' })
     setBusyKey(null)
-    if (res.error) { showToast('Could not update consent. Please try again.'); return }
-    showToast(`${channel === 'sms' ? 'SMS' : 'Email'} consent ${value ? 'enabled' : 'disabled'} for ${res.changed} customer${res.changed !== 1 ? 's' : ''}.`)
+    if (res.error) { notify.error('Could not update consent. Please try again.'); return }
+    notify.success(`${channel === 'sms' ? 'SMS' : 'Email'} consent ${value ? 'enabled' : 'disabled'} for ${res.changed} customer${res.changed !== 1 ? 's' : ''}.`)
     sel.clear()
     await onRefresh()
   }
@@ -129,7 +129,7 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
       { label: 'Source', value: c => c.acquisition_source },
       { label: 'Added', value: c => c.created_at },
     ])
-    showToast(`Exported ${rows.length} customer${rows.length !== 1 ? 's' : ''} to CSV.`)
+    notify.success(`Exported ${rows.length} customer${rows.length !== 1 ? 's' : ''} to CSV.`)
   }
 
   const bulkActions: BulkAction[] = [
@@ -161,10 +161,10 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
     setPortalBusy(customerId)
     try {
       const token = await getToken(customerId)
-      if (!token) { showToast('Could not create the portal link — run the customer-portal migration first.'); return }
+      if (!token) { notify.error('Could not create the portal link — run the customer-portal migration first.'); return }
       const url = portalUrl(token)
       try { await navigator.clipboard.writeText(url) } catch { notify('Portal link (copy manually): ' + url, { duration: 20000 }) }
-      showToast('Portal link copied to clipboard')
+      notify.success('Portal link copied to clipboard')
     } finally { setPortalBusy(null) }
   }
 
@@ -201,9 +201,16 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
 
       {/* List */}
       {filtered.length === 0 ? (
-        <Card className="py-14 text-center text-sm text-ink-muted">
-          {search || consentFilter ? 'No customers match your filters.' : 'No customers yet.'}
-        </Card>
+        customers.length === 0 ? (
+          // Truly empty → lead to the next action, don't dead-end.
+          <Card>
+            <EmptyState icon={Users} title="No customers yet"
+              description="Add your first customer, or import your existing list from a CSV in one step."
+              action={onAdd ? { label: 'Add Customer', onClick: onAdd } : { label: 'Import customers', onClick: () => router.push('/dashboard/customers/import') }} />
+          </Card>
+        ) : (
+          <Card className="py-14 text-center text-sm text-ink-muted">No customers match your filters.</Card>
+        )
       ) : (
         <div className="grid gap-3">
           {filtered.map(c => (
@@ -272,12 +279,6 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
         <ReportStat label="Email opted in" value={emailIn} tone="text-emerald-400" />
         <ReportStat label="Email opted out" value={total - emailIn} />
       </div>
-
-      {toast && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-bg-secondary border border-border-strong rounded-full px-4 py-2 text-sm text-ink shadow-lg flex items-center gap-2">
-          <Check className="w-4 h-4 text-emerald-400 shrink-0" /> {toast}
-        </div>
-      )}
 
       {/* THE shared multi-recipient Send-Message dialog — 'choose' opens on the default
           template list; a specific value ("introduction"/"review_request") preselects it. */}

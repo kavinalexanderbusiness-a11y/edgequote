@@ -28,6 +28,7 @@ export interface PortalPdfInvoice {
   invoice_number: string; service_type: string | null; amount: number; status: string
   issued_date: string | null; due_date: string | null; notes: string | null; address: string | null
   line_items: { description: string; amount: number; kind: string }[] | null; created_at: string
+  amount_paid?: number | null; discount_type?: 'amount' | 'percent' | null; discount_value?: number | null
 }
 export interface PortalPdfBusiness {
   company_name: string | null; phone: string | null; email_primary: string | null
@@ -67,6 +68,11 @@ function portalInvoiceToInvoice(inv: PortalPdfInvoice, customerName: string, fal
     address: inv.address || fallbackAddress,
     service_type: inv.service_type,
     amount: num(inv.amount),
+    // Paid-to-date + discount must survive the mapping — the customer's PDF has to
+    // show the same Balance Due the owner's InvoicePDF and the portal balance show.
+    amount_paid: num(inv.amount_paid ?? 0),
+    discount_type: inv.discount_type ?? null,
+    discount_value: inv.discount_value ?? null,
     status: inv.status,
     issued_date: inv.issued_date,
     due_date: inv.due_date,
@@ -107,6 +113,25 @@ export async function renderPortalQuoteBlob(q: PortalPdfQuote, customerName: str
     : undefined
   return renderQuoteBlob(portalQuoteToQuote(q, customerName), portalBusinessToSettings(b), services)
 }
+// A payment row as the portal sees it — enough for the receipt document.
+export interface PortalPdfPayment {
+  id: string; amount: number; provider: string; method?: string | null
+  paid_at: string | null; created_at: string; notes?: string | null
+  kind?: string; currency?: string; status?: string
+}
+
+// Customer-side receipt: the SAME ReceiptPDF the owner uses, fed through the
+// portal→Invoice/Settings mappers — one receipt engine, permanently re-renderable
+// from the ledger row (receipts are never stored, so they can't drift).
+export async function renderPortalReceiptBlob(payment: PortalPdfPayment, inv: PortalPdfInvoice, customerName: string, fallbackAddress: string | null, b: PortalPdfBusiness | null): Promise<Blob> {
+  const { renderReceiptBlob } = await import('@/components/payments/ReceiptPDF')
+  return renderReceiptBlob(
+    payment as unknown as import('@/types').Payment,
+    portalInvoiceToInvoice(inv, customerName, fallbackAddress),
+    portalBusinessToSettings(b),
+  )
+}
+
 export async function renderPortalInvoiceBlob(inv: PortalPdfInvoice, customerName: string, fallbackAddress: string | null, b: PortalPdfBusiness | null): Promise<Blob> {
   const { renderInvoiceBlob } = await import('@/components/quotes/InvoicePDF')
   return renderInvoiceBlob(portalInvoiceToInvoice(inv, customerName, fallbackAddress), portalBusinessToSettings(b))

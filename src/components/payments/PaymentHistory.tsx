@@ -48,7 +48,8 @@ export function PaymentHistory({ settings }: { settings?: BusinessSettings | nul
 
   if (!loaded || rows.length === 0) return null
   const paidRows = rows.filter(r => r.kind === 'payment' && Number(r.amount) > 0)
-  const total = paidRows.reduce((s, r) => s + Number(r.amount || 0), 0)
+  // Net of refunds (negative payment rows) — matches the ledger's amount_paid.
+  const total = rows.filter(r => r.kind === 'payment').reduce((s, r) => s + Number(r.amount || 0), 0)
 
   return (
     <Card>
@@ -76,9 +77,9 @@ export function PaymentHistory({ settings }: { settings?: BusinessSettings | nul
                   <span className={`text-sm font-bold ${negative ? 'text-red-400' : isCredit ? 'text-violet-400' : 'text-emerald-400'}`}>
                     {negative ? '−' : ''}{formatCurrency(Math.abs(Number(r.amount)))}
                   </span>
-                  {r.kind === 'payment' && Number(r.amount) > 0 && r.invoices && (
+                  {r.kind === 'payment' && r.invoices && (
                     <button onClick={() => downloadReceipt(r)} disabled={receiptId === r.id}
-                      className="text-ink-faint hover:text-accent transition-colors" title={`Download receipt ${receiptNumberFor(r.id)}`}>
+                      className="text-ink-faint hover:text-accent transition-colors" title={`Download ${Number(r.amount) < 0 ? 'refund receipt' : 'receipt'} ${receiptNumberFor(r.id)}`}>
                       {receiptId === r.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileDown className="w-3.5 h-3.5" />}
                     </button>
                   )}

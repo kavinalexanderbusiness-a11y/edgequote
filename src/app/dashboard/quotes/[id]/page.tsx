@@ -273,6 +273,17 @@ export default function QuoteDetailPage() {
     // A $0 invoice can never be paid — it would sit stuck until cancelled.
     if (!(Number(quote.total) > 0)) { toast.error('Set a price on this quote before invoicing it.'); return }
     setConverting(true)
+    // One invoice per quote — the completed-job auto-draft stamps quote_id too, so
+    // this catches BOTH a prior manual convert and an auto-draft. Without it,
+    // Convert after job completion double-billed the same work.
+    {
+      const { data: dup } = await supabase.from('invoices').select('invoice_number').eq('quote_id', quote.id).limit(1)
+      if (dup && dup.length > 0) {
+        toast.error(`This quote is already invoiced (${(dup[0] as { invoice_number: string }).invoice_number}) — edit that invoice instead of creating a duplicate.`)
+        setConverting(false)
+        return
+      }
+    }
     try {
       const { data: { user } } = await supabase.auth.getUser()
 
@@ -333,7 +344,10 @@ export default function QuoteDetailPage() {
       if (error) {
         toast.error('Could not create invoice: ' + error.message)
       } else {
-        toast.success(`Invoice ${invoiceNumber} created — review it in Invoices.`)
+        toast(`Invoice ${invoiceNumber} created.`, {
+          tone: 'success',
+          action: { label: 'View invoice', run: () => router.push(`/dashboard/invoices?invoice=${encodeURIComponent(invoiceNumber)}`) },
+        })
       }
     } catch {
       toast.error('Could not create invoice. Please try again.')

@@ -308,7 +308,10 @@ export default function CustomerDetailPage() {
       <button onClick={reload} className="mt-2 underline font-medium text-accent">Retry</button>
     </div>
   ) : (
-    <div className="text-center py-16 text-sm text-red-400">Customer not found.</div>
+    <div className="text-center py-16 text-sm">
+      <p className="text-red-400">Customer not found — they may have been deleted.</p>
+      <Link href="/dashboard/customers" className="mt-2 inline-block underline font-medium text-accent">Back to Customers</Link>
+    </div>
   )
 
   const today = localToday()
@@ -377,7 +380,7 @@ export default function CustomerDetailPage() {
   }
   for (const inv of invoices.filter(i => OPEN_INVOICE.has(i.status))) {
     const overdue = !!inv.due_date && inv.due_date < today
-    openItems.push({ key: `inv-${inv.id}`, icon: Receipt, label: `${overdue ? 'Overdue' : 'Unpaid'} invoice ${inv.invoice_number}`, sub: `${formatCurrency(Number(inv.amount))}${inv.due_date ? ` · due ${formatDate(inv.due_date)}` : ''}`, href: '/dashboard/invoices', tone: overdue ? 'text-red-400' : 'text-amber-400' })
+    openItems.push({ key: `inv-${inv.id}`, icon: Receipt, label: `${overdue ? 'Overdue' : 'Unpaid'} invoice ${inv.invoice_number}`, sub: `${formatCurrency(Math.round(Number(inv.amount) * custGstMult * 100) / 100)}${inv.due_date ? ` · due ${formatDate(inv.due_date)}` : ''}`, href: '/dashboard/invoices', tone: overdue ? 'text-red-400' : 'text-amber-400' })
   }
 
   // ── Timeline ──
@@ -393,8 +396,8 @@ export default function CustomerDetailPage() {
     if (j.status === 'completed') events.push({ at: j.updated_at, kind: 'job_completed', title: `Job completed — ${j.title}` })
   }
   for (const inv of invoices) {
-    events.push({ at: inv.created_at, kind: 'invoice_created', title: `Invoice ${inv.invoice_number} created`, sub: formatCurrency(Number(inv.amount)) })
-    if (inv.status === 'paid') events.push({ at: inv.updated_at, kind: 'invoice_paid', title: `Invoice ${inv.invoice_number} paid`, sub: formatCurrency(Number(inv.amount)) })
+    events.push({ at: inv.created_at, kind: 'invoice_created', title: `Invoice ${inv.invoice_number} created`, sub: formatCurrency(Math.round(Number(inv.amount) * custGstMult * 100) / 100) })
+    if (inv.status === 'paid') events.push({ at: inv.updated_at, kind: 'invoice_paid', title: `Invoice ${inv.invoice_number} paid`, sub: formatCurrency(Math.round(Number(inv.amount) * custGstMult * 100) / 100) })
   }
   events.push(...extraTimeline) // messages, payments, portal requests
   events.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())

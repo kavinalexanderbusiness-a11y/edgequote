@@ -225,6 +225,7 @@ export default function CustomersPage() {
           onEdit={c => { setEditing(c); setShowForm(false) }}
           onDelete={handleDelete}
           onRefresh={fetchCustomers}
+          onAdd={() => { setShowForm(true); setEditing(null) }}
         />
       )}
 

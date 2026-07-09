@@ -465,6 +465,7 @@ export const PAYMENT_METHODS: { value: string; label: string }[] = [
   { value: 'etransfer', label: 'E-transfer' },
   { value: 'cheque', label: 'Cheque' },
   { value: 'card', label: 'Credit card' },
+  { value: 'debit', label: 'Debit' },
   { value: 'credit', label: 'Customer credit' },
   { value: 'other', label: 'Other' },
 ]
@@ -669,10 +670,7 @@ export const ACQUISITION_SOURCES = [
 ] as const
 
 export interface DashboardStats {
-  totalQuotes: number
-  revenueQuoted: number
   acceptedJobs: number
-  pendingQuotes: number
   acceptedRevenue: number
   monthlyRevenue: number
   conversionRate: number

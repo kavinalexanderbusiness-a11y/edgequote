@@ -89,9 +89,20 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, onChang
           }),
         }),
       })
-      const d = await res.json().catch(() => ({}))
-      if (res.ok && !d?.error) toast.success(`Receipt ${channel === 'sms' ? 'texted' : 'emailed'}.`)
-      else toast.error(`Could not send the receipt${d?.error ? `: ${d.error}` : ''}.`)
+      const d = await res.json().catch(() => ({})) as { error?: string; results?: Record<string, { sent?: boolean; reason?: string }> }
+      // The route returns 200 even when a send is skipped (no opt-in, no contact,
+      // comms disabled) — only claim success when something actually went out.
+      const delivered = Object.values(d.results || {}).some(r => r?.sent)
+      if (res.ok && !d?.error && delivered) {
+        toast.success(`Receipt ${channel === 'sms' ? 'texted' : 'emailed'} — logged in the customer's conversation.`)
+      } else if (res.ok && !d?.error) {
+        const reasons = Object.values(d.results || {}).map(r => r?.reason)
+        if (reasons.includes('no-optin')) toast.error('Not sent — the customer hasn’t opted in to this channel. You can change that on their profile.')
+        else if (reasons.includes('disabled')) toast.error('Not sent — messaging is off. Add Twilio/Resend keys in Settings to enable it.')
+        else toast.error(`Not sent — no ${channel === 'sms' ? 'phone number' : 'email address'} on file for this customer.`)
+      } else {
+        toast.error(`Could not send the receipt${d?.error ? `: ${d.error}` : ''}.`)
+      }
     } catch { toast.error('Could not send the receipt.') }
     setSendingReceipt(null)
   }
