@@ -2,6 +2,7 @@
 
 import { Card } from '@/components/ui/Card'
 import { cn, formatDate } from '@/lib/utils'
+import { thumbUrl } from '@/lib/photos'
 import { Image as ImageIcon, Star, ArrowLeftRight } from 'lucide-react'
 import { toneSoft, type Tone } from '@/lib/tone'
 import type { MarketingCandidate } from '@/lib/marketing/types'
@@ -30,7 +31,7 @@ export function AssetCard({ candidate, selected, onClick }: {
         <div className="w-14 h-14 rounded-lg overflow-hidden bg-bg-tertiary border border-border shrink-0 flex items-center justify-center">
           {thumb ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={thumb} alt="" className="w-full h-full object-cover" />
+            <img src={thumbUrl(thumb, 160, 160)} alt="" loading="lazy" className="w-full h-full object-cover" />
           ) : (
             <ImageIcon className="w-5 h-5 text-ink-faint" />
           )}
@@ -40,12 +41,12 @@ export function AssetCard({ candidate, selected, onClick }: {
             <p className="text-sm font-semibold text-ink truncate">
               {candidate.serviceType || 'Completed job'}
             </p>
-            <span className={cn('shrink-0 text-[10px] font-bold rounded-full px-1.5 py-0.5 border', toneSoft[scoreTone(candidate.score)])}>
+            <span title="Post potential score (0–100)" className={cn('shrink-0 text-[10px] font-bold rounded-full px-1.5 py-0.5 border', toneSoft[scoreTone(candidate.score)])}>
               {candidate.score}
             </span>
           </div>
           <p className="text-xs text-ink-muted truncate">
-            {candidate.neighborhood || candidate.city || candidate.customerName || 'Unknown area'}
+            {candidate.neighborhood || candidate.city || 'Unknown area'}
             {candidate.date ? ` · ${formatDate(candidate.date)}` : ''}
           </p>
           <div className="flex items-center gap-1.5 mt-1">

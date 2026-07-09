@@ -7,18 +7,23 @@ import { Banner } from '@/components/ui/Banner'
 import { PublishingHub } from './PublishingHub'
 import { channel as channelDef } from '@/lib/marketing/channels'
 import { listConnections } from '@/lib/marketing/connections'
-import { listJobsForPiece, markManualPublished } from '@/lib/marketing/publishQueue'
+import { listJobsForPiece, markManualPublished, captionFor } from '@/lib/marketing/publishQueue'
+import { effectiveMode } from '@/lib/marketing/providers'
 import { cn } from '@/lib/utils'
 import { Send, CalendarPlus, Settings2, CheckCircle2, ExternalLink, Copy, Download } from 'lucide-react'
 import type { ContentPiece, MarketingChannel, PublishJob, PublishJobStatus, PublishResponse, SocialConnection } from '@/lib/marketing/types'
 
 const STATUS_LABEL: Record<PublishJobStatus, string> = {
-  draft: 'Draft', scheduled: 'Scheduled', queued: 'Queued', publishing: 'Publishing', published: 'Published', failed: 'Failed', canceled: 'Canceled',
+  draft: 'Draft', scheduled: 'Scheduled', queued: 'Ready to post', publishing: 'Publishing', published: 'Published', failed: 'Failed', canceled: 'Canceled',
 }
 
-// The composer's publishing workflow: pick a connected account (or manual), then
-// Publish now or Schedule. Reflects the live job status. Manual mode copies the caption
-// + opens the platform, then the owner confirms with "Mark as posted".
+// The composer's publishing workflow: pick a connected account (or copy & paste),
+// then Publish now or Schedule. Manual is the live path for every platform today
+// (no provider auto-posts yet), so manual must be ROCK-SOLID:
+//   • the clipboard copy + opening the platform happen INSIDE the click gesture
+//     (never after an await) so the browser can't silently block them;
+//   • a manual post that's queued (incl. a scheduled one that came due) is always
+//     completable — Copy / Open / Mark as posted — even after a reload.
 export function PublishPanel({ piece, ch, userId, hasPhoto, onSavePhoto, beforePublish, onPieceUpdate }: {
   piece: ContentPiece
   ch: MarketingChannel
@@ -36,7 +41,6 @@ export function PublishPanel({ piece, ch, userId, hasPhoto, onSavePhoto, beforeP
   const [busy, setBusy] = useState<'now' | 'schedule' | null>(null)
   const [scheduleOpen, setScheduleOpen] = useState(false)
   const [scheduleDate, setScheduleDate] = useState(() => new Date().toISOString().slice(0, 10))
-  const [manualPending, setManualPending] = useState<PublishJob | null>(null)
   const [msg, setMsg] = useState<{ tone: 'success' | 'info' | 'danger'; text: string } | null>(null)
   const [hub, setHub] = useState(false)
 
@@ -54,14 +58,29 @@ export function PublishPanel({ piece, ch, userId, hasPhoto, onSavePhoto, beforeP
     return () => { active = false }
   }, [supabase, userId, piece.id, ch])
 
+  const selectedConn = useMemo(() => channelConns.find(c => c.id === selected) || null, [channelConns, selected])
   const currentJob = useMemo(() => jobs.find(j => (j.connection_id ?? null) === selected) || null, [jobs, selected])
+  // Manual is the path unless a live API provider backs the chosen account.
+  const willManual = effectiveMode(ch, selectedConn?.mode) === 'manual'
+  // A manual post is "ready to post" once it's queued (publish-now or a scheduled
+  // one that came due). This is what makes scheduled posts completable + resumable.
+  const manualReady = willManual && !!currentJob && currentJob.status === 'queued'
+  const published = currentJob?.status === 'published'
 
   function applyJob(job: PublishJob) {
     setJobs(prev => { const rest = prev.filter(j => j.id !== job.id); return [job, ...rest] })
   }
 
-  async function send(scheduledFor: string | null) {
-    setBusy(scheduledFor ? 'schedule' : 'now'); setMsg(null); setManualPending(null)
+  // Gesture-safe manual actions — called DIRECTLY from a click, never after await.
+  function copyCaption() {
+    try { navigator.clipboard?.writeText(captionFor(piece)) } catch { /* clipboard blocked — the caption is still on screen to copy by hand */ }
+  }
+  function openPlatform() { window.open(def.openUrl, '_blank') }
+
+  // Record the publish/schedule on the server (idempotent). For manual this just
+  // moves the job to "ready to post"; the copy/open already happened in-gesture.
+  async function record(scheduledFor: string | null) {
+    setBusy(scheduledFor ? 'schedule' : 'now'); setMsg(null)
     try {
       await beforePublish()
       const res = await fetch('/api/marketing/publish', {
@@ -71,15 +90,11 @@ export function PublishPanel({ piece, ch, userId, hasPhoto, onSavePhoto, beforeP
       const data = await res.json() as PublishResponse
       if (data.job) applyJob(data.job)
       if (!data.ok && !data.manual) { setMsg({ tone: 'danger', text: data.error || 'Could not publish.' }); return }
-      if (data.manual && data.job) {
-        // Manual mode: copy + open, then the owner confirms.
-        try { await navigator.clipboard?.writeText(data.manual.caption) } catch { /* ignore */ }
-        window.open(data.manual.openUrl, '_blank')
-        setManualPending(data.job)
-        setMsg({ tone: 'info', text: `Caption copied and ${def.label} opened — paste it, then mark it posted.` })
-      } else if (scheduledFor) {
-        setMsg({ tone: 'success', text: `Scheduled for ${scheduleDate}.` })
+      if (scheduledFor) {
+        setMsg({ tone: 'success', text: willManual ? `Scheduled — ready to post on ${scheduleDate}.` : `Scheduled for ${scheduleDate}.` })
         onPieceUpdate?.({ ...piece, status: 'scheduled', scheduled_for: scheduledFor })
+      } else if (data.manual) {
+        setMsg({ tone: 'info', text: `Caption copied — paste it in ${def.label}, then tap “Mark as posted”.` })
       } else if (data.job?.status === 'published') {
         setMsg({ tone: 'success', text: 'Published.' })
         onPieceUpdate?.({ ...piece, status: 'published' })
@@ -91,10 +106,19 @@ export function PublishPanel({ piece, ch, userId, hasPhoto, onSavePhoto, beforeP
     }
   }
 
+  // Publish now. For manual we copy + save the photo + open the platform
+  // synchronously (in-gesture), THEN record — so the clipboard, the download and
+  // the new tab are never blocked. Saving the photo matters: photo-mandatory
+  // platforms (Instagram) can't be posted from a caption alone.
+  function publishNow() {
+    if (willManual) { openPlatform(); copyCaption(); if (hasPhoto && onSavePhoto) onSavePhoto() }
+    void record(null)
+  }
+
   async function confirmManual() {
-    if (!manualPending) return
-    const updated = await markManualPublished(supabase, manualPending)
-    if (updated) { applyJob(updated); setManualPending(null); setMsg({ tone: 'success', text: 'Marked as posted.' }); onPieceUpdate?.({ ...piece, status: 'published' }) }
+    if (!currentJob) return
+    const updated = await markManualPublished(supabase, currentJob)
+    if (updated) { applyJob(updated); setMsg({ tone: 'success', text: 'Marked as posted.' }); onPieceUpdate?.({ ...piece, status: 'published' }) }
   }
 
   return (
@@ -104,39 +128,51 @@ export function PublishPanel({ piece, ch, userId, hasPhoto, onSavePhoto, beforeP
         <button onClick={() => setHub(true)} className="text-[11px] text-ink-faint hover:text-ink inline-flex items-center gap-1"><Settings2 className="w-3 h-3" /> Accounts</button>
       </div>
 
-      {/* Account selector */}
-      <div className="flex items-center gap-1.5 flex-wrap">
-        <button onClick={() => setSelected(null)} className={cn('rounded-full px-2.5 py-1 text-xs border transition-colors', selected === null ? 'bg-accent text-black border-accent' : 'bg-surface text-ink-muted border-border hover:text-ink')}>Copy &amp; paste</button>
-        {channelConns.map(c => (
-          <button key={c.id} onClick={() => setSelected(c.id)} className={cn('rounded-full px-2.5 py-1 text-xs border transition-colors inline-flex items-center gap-1', selected === c.id ? 'bg-accent text-black border-accent' : 'bg-surface text-ink-muted border-border hover:text-ink')}>
-            <CheckCircle2 className="w-3 h-3" /> {c.account_name}
-          </button>
-        ))}
-      </div>
+      {/* Account selector — only when there's an actual choice to make. With no
+          connected account, manual is the only mode, so a lone pill is just noise. */}
+      {channelConns.length > 0 && (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <button onClick={() => setSelected(null)} className={cn('rounded-full px-2.5 py-1 text-xs border transition-colors', selected === null ? 'bg-accent text-black border-accent' : 'bg-surface text-ink-muted border-border hover:text-ink')}>Copy &amp; paste</button>
+          {channelConns.map(c => (
+            <button key={c.id} onClick={() => setSelected(c.id)} className={cn('rounded-full px-2.5 py-1 text-xs border transition-colors inline-flex items-center gap-1', selected === c.id ? 'bg-accent text-black border-accent' : 'bg-surface text-ink-muted border-border hover:text-ink')}>
+              <CheckCircle2 className="w-3 h-3" /> {c.account_name}
+            </button>
+          ))}
+        </div>
+      )}
 
       {currentJob && (
-        <p className="text-[11px] text-ink-faint inline-flex items-center gap-1.5">
+        <p className="text-[11px] text-ink-faint inline-flex items-center gap-1.5 flex-wrap">
           Status: <span className="text-ink-muted">{STATUS_LABEL[currentJob.status]}</span>
           {currentJob.external_url && <a href={currentJob.external_url} target="_blank" rel="noreferrer" className="text-accent inline-flex items-center gap-0.5">view <ExternalLink className="w-3 h-3" /></a>}
           {currentJob.error && <span className="text-red-400">· {currentJob.error}</span>}
         </p>
       )}
 
-      {manualPending ? (
-        <div className="flex items-center gap-2 flex-wrap">
-          <Button size="sm" onClick={confirmManual}><CheckCircle2 className="w-3.5 h-3.5" /> Mark as posted</Button>
-          <Button size="sm" variant="ghost" onClick={() => { navigator.clipboard?.writeText(''); window.open(def.openUrl, '_blank') }}><ExternalLink className="w-3.5 h-3.5" /> Open {def.label} again</Button>
+      {published ? (
+        <p className="text-xs text-emerald-400 inline-flex items-center gap-1.5"><CheckCircle2 className="w-3.5 h-3.5" /> Posted.</p>
+      ) : manualReady ? (
+        // A queued manual post (incl. a scheduled one that came due) — always completable.
+        <div className="space-y-2">
+          <p className="text-[11px] text-ink-muted">Ready to post. Copy the caption{hasPhoto ? ', save the photo' : ''}, open {def.label}, paste &amp; post, then mark it done.</p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button size="sm" variant="secondary" onClick={() => { copyCaption(); setMsg({ tone: 'success', text: 'Caption copied.' }) }}><Copy className="w-3.5 h-3.5" /> Copy caption</Button>
+            {hasPhoto && onSavePhoto && <Button size="sm" variant="secondary" onClick={onSavePhoto}><Download className="w-3.5 h-3.5" /> Save photo</Button>}
+            <Button size="sm" variant="secondary" onClick={openPlatform}><ExternalLink className="w-3.5 h-3.5" /> Open {def.label}</Button>
+            <Button size="sm" onClick={confirmManual}><CheckCircle2 className="w-3.5 h-3.5" /> Mark as posted</Button>
+          </div>
         </div>
       ) : (
         <div className="flex items-center gap-2 flex-wrap">
-          <Button size="sm" onClick={() => send(null)} loading={busy === 'now'}>
-            {selected === null ? <><Copy className="w-3.5 h-3.5" /> Copy &amp; open</> : <><Send className="w-3.5 h-3.5" /> Publish now</>}
+          <Button size="sm" onClick={publishNow} loading={busy === 'now'}>
+            {willManual ? <><Copy className="w-3.5 h-3.5" /> Copy &amp; open {def.label}</> : <><Send className="w-3.5 h-3.5" /> Publish now</>}
           </Button>
           <Button size="sm" variant="secondary" onClick={() => setScheduleOpen(o => !o)}><CalendarPlus className="w-3.5 h-3.5" /> Schedule</Button>
           {scheduleOpen && (
             <>
               <input type="date" value={scheduleDate} onChange={e => setScheduleDate(e.target.value)} className="bg-bg-tertiary border border-border rounded-lg px-2 py-1 text-xs text-ink" />
-              <Button size="sm" onClick={() => send(`${scheduleDate}T09:00:00.000Z`)} loading={busy === 'schedule'}>Set</Button>
+              {/* 9am in the owner's LOCAL timezone (a bare Z would land at 1–4am here). */}
+              <Button size="sm" onClick={() => record(new Date(`${scheduleDate}T09:00:00`).toISOString())} loading={busy === 'schedule'}>Set</Button>
             </>
           )}
           {hasPhoto && onSavePhoto && (

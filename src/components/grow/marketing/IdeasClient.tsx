@@ -6,12 +6,11 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
-import { Banner } from '@/components/ui/Banner'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { channel as channelDef } from '@/lib/marketing/channels'
 import { buildReuseSuggestions, type ReuseSuggestion } from '@/lib/marketing/reuse'
-import { cn } from '@/lib/utils'
-import { Lightbulb, ArrowRight, Star, CalendarClock, PartyPopper, CloudRain, Repeat2, Sparkles, Scissors, RefreshCw, Copy as CopyIcon } from 'lucide-react'
+import { toast } from '@/lib/toast'
+import { Lightbulb, ArrowRight, Star, CalendarClock, PartyPopper, CloudRain, Repeat2, Sparkles, Scissors, RefreshCw, Copy as CopyIcon, Check } from 'lucide-react'
 import type { ContentPiece } from '@/lib/marketing/types'
 import type { MarketingIdea, IdeaKind } from '@/lib/marketing/ideas'
 
@@ -28,24 +27,25 @@ export function IdeasClient({ ideas, pieces }: { ideas: MarketingIdea[]; pieces:
   const reuse = useMemo(() => buildReuseSuggestions(pieces), [pieces])
   const byId = useMemo(() => new Map(pieces.map(p => [p.id, p])), [pieces])
   const [busyId, setBusyId] = useState<string | null>(null)
-  const [msg, setMsg] = useState<string | null>(null)
+  const [done, setDone] = useState<Set<string>>(new Set())
 
   // Cross-post / shorten reuse a job's candidate through the existing generate route.
   async function actOnReuse(s: ReuseSuggestion) {
     const src = byId.get(s.sourcePieceId)
     if (!src) return
     if ((s.kind === 'cross_post' || s.kind === 'shorten') && s.targetChannel) {
-      if (!src.job_id) { setMsg('This post isn’t linked to a job, so it can’t be auto-cross-posted. Open it in Posts to duplicate it.'); return }
-      setBusyId(s.id); setMsg(null)
+      if (done.has(s.id) || busyId === s.id) return // don't create duplicates
+      if (!src.job_id) { toast.error('This post isn’t linked to a job, so it can’t be reused automatically. Open it in Posts to duplicate it.'); return }
+      setBusyId(s.id)
       try {
         const res = await fetch('/api/marketing/generate', {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ jobId: src.job_id, channel: s.targetChannel, options: s.kind === 'shorten' ? { length: 'short' } : undefined }),
         })
         const j = await res.json()
-        if (j?.ok && j.piece) { setMsg(`Created a ${channelDef(s.targetChannel).label} version. Find it in Posts or the calendar.`) }
-        else setMsg(j?.error || 'Could not create that post.')
-      } catch { setMsg('Could not reach the generator.') }
+        if (j?.ok && j.piece) { setDone(prev => new Set(prev).add(s.id)); toast.success(`Created a ${channelDef(s.targetChannel).label} version — find it in Posts.`) }
+        else toast.error(j?.error || 'Could not create that post.')
+      } catch { toast.error('Could not reach the generator.') }
       finally { setBusyId(null) }
     } else {
       // fresh caption / similar → open the job in the composer to regenerate
@@ -56,8 +56,6 @@ export function IdeasClient({ ideas, pieces }: { ideas: MarketingIdea[]; pieces:
 
   return (
     <div className="space-y-5">
-      {msg && <Banner tone="info" onDismiss={() => setMsg(null)}>{msg}</Banner>}
-
       {/* Suggestions */}
       <div>
         <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-2 inline-flex items-center gap-1.5"><Lightbulb className="w-3.5 h-3.5 text-accent" /> Suggestions for you</p>
@@ -106,11 +104,20 @@ export function IdeasClient({ ideas, pieces }: { ideas: MarketingIdea[]; pieces:
                       {src && <p className="text-[10px] text-ink-faint mt-1 line-clamp-1">“{src.body.slice(0, 70)}…”</p>}
                     </div>
                   </div>
-                  <Button size="sm" variant="secondary" className="self-start" loading={busyId === s.id} onClick={() => actOnReuse(s)}>
-                    {s.kind === 'cross_post' ? <><Repeat2 className="w-3.5 h-3.5" /> Create it</>
-                      : s.kind === 'shorten' ? <><Scissors className="w-3.5 h-3.5" /> Make short version</>
-                      : <><RefreshCw className="w-3.5 h-3.5" /> Refresh</>}
-                  </Button>
+                  {s.kind === 'cross_post' || s.kind === 'shorten' ? (
+                    done.has(s.id) ? (
+                      <span className="self-start text-xs font-semibold text-emerald-400 inline-flex items-center gap-1"><Check className="w-3.5 h-3.5" /> Created — in Posts</span>
+                    ) : (
+                      <Button size="sm" variant="secondary" className="self-start" loading={busyId === s.id} onClick={() => actOnReuse(s)}>
+                        {s.kind === 'cross_post' ? <><Repeat2 className="w-3.5 h-3.5" /> Create it</> : <><Scissors className="w-3.5 h-3.5" /> Make short version</>}
+                      </Button>
+                    )
+                  ) : (
+                    // Navigate-only reuse → a text link, matching the Suggestions above.
+                    <button onClick={() => actOnReuse(s)} className="self-start text-xs font-semibold text-accent inline-flex items-center gap-1 hover:underline">
+                      {s.kind === 'similar' ? 'Rewrite for variety' : 'Fresh caption'} <ArrowRight className="w-3 h-3" />
+                    </button>
+                  )}
                 </Card>
               )
             })}

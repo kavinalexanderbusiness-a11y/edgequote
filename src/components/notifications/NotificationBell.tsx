@@ -21,8 +21,13 @@ export interface AppNotification {
   body: string | null
   href: string | null
   read: boolean
-  entity_type: string | null
-  entity_id: string | null
+  // For one-click actions on the alert itself (e.g. quote_accepted → Schedule now).
+  entity_type?: string | null
+  entity_id?: string | null
+  // Optional management fields (present once RUN-2026-06-27-notification-manage.sql
+  // is applied; undefined before that — callers degrade gracefully).
+  snoozed_until?: string | null
+  archived_at?: string | null
 }
 
 const ICON: Record<string, typeof FileText> = {
@@ -54,10 +59,22 @@ export function NotificationBell() {
   useEffect(() => { setMounted(true) }, [])
 
   async function load(userId: string) {
-    const { data } = await supabase.from('notifications')
-      .select('id, created_at, type, title, body, href, read, entity_type, entity_id')
-      .eq('user_id', userId).order('created_at', { ascending: false }).limit(20)
-    setItems((data as AppNotification[]) || [])
+    // Active feed only — hide archived/snoozed so the bell matches the page. Falls
+    // back to the legacy columns if the manage migration hasn't run yet. Both
+    // selects carry entity_type/entity_id for the one-click Schedule-now action.
+    const managed = await supabase.from('notifications')
+      .select('id, created_at, type, title, body, href, read, entity_type, entity_id, snoozed_until, archived_at')
+      .eq('user_id', userId).is('archived_at', null).order('created_at', { ascending: false }).limit(30)
+    let data = managed.data as AppNotification[] | null
+    if (managed.error && /archived_at|snoozed_until|column/i.test(managed.error.message)) {
+      const legacy = await supabase.from('notifications')
+        .select('id, created_at, type, title, body, href, read, entity_type, entity_id')
+        .eq('user_id', userId).order('created_at', { ascending: false }).limit(30)
+      data = legacy.data as AppNotification[] | null
+    }
+    const now = Date.now()
+    const rows = (data || []).filter(n => !n.snoozed_until || new Date(n.snoozed_until).getTime() <= now).slice(0, 20)
+    setItems(rows)
   }
 
   useEffect(() => {
