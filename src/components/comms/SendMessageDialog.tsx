@@ -221,7 +221,7 @@ export function SendMessageDialog({
         {/* Editable message — starts from the owner's template, edit freely. */}
         <div>
           {bulk && <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-1">Preview · as {sampleName.split(' ')[0]} will see it</p>}
-          <textarea value={text} onChange={e => { setText(e.target.value); setEdited(true) }} rows={6} aria-label="Message"
+          <textarea value={text} onChange={e => { setText(e.target.value); setEdited(true); setOutcome(null) }} rows={6} aria-label="Message"
             placeholder="Write your message…"
             className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink outline-none focus:border-accent resize-none" />
           {ch.sms
@@ -241,7 +241,8 @@ export function SendMessageDialog({
           )}
         </div>
 
-        {/* Channels + send */}
+        {/* Channels + send. After a successful send the primary action becomes
+            Done (closes) — no accidental double-send, no dead end. */}
         <div className="flex items-center gap-1.5 flex-wrap">
           <FilterPill active={ch.sms} onClick={() => setCh(c => ({ ...c, sms: !c.sms }))}>
             <MessageSquare className="w-3 h-3" /> SMS
@@ -249,17 +250,21 @@ export function SendMessageDialog({
           <FilterPill active={ch.email} onClick={() => setCh(c => ({ ...c, email: !c.email }))}>
             <Mail className="w-3 h-3" /> Email
           </FilterPill>
-          <p className="text-[11px] text-ink-faint">Opt-in gated · no phone/email is skipped.</p>
-          <Button onClick={send} loading={busy} disabled={!chosen.length} className="ml-auto">
-            <Send className="w-4 h-4" /> {busy && bulk ? `Sending ${progress}/${chosen.length}…` : bulk ? `Send to ${chosen.length}` : 'Send'}
-          </Button>
+          <p className="text-[11px] text-ink-faint">Customers without consent or contact info are skipped automatically.</p>
+          {outcome?.ok ? (
+            <Button onClick={() => onClose(1)} className="ml-auto"><Check className="w-4 h-4" /> Done</Button>
+          ) : (
+            <Button onClick={send} loading={busy} disabled={!chosen.length} className="ml-auto">
+              <Send className="w-4 h-4" /> {busy && bulk ? `Sending ${progress}/${chosen.length}…` : bulk ? `Send to ${chosen.length}` : 'Send'}
+            </Button>
+          )}
         </div>
 
         {outcome && (
           <div className={cn('flex items-start gap-1.5 text-xs rounded-lg px-3 py-2 border',
             outcome.ok ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : 'text-amber-400 border-amber-500/30 bg-amber-500/10')}>
             {outcome.ok ? <Check className="w-3.5 h-3.5 shrink-0 mt-px" /> : <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />}
-            <span>{outcome.text}</span>
+            <span>{outcome.text}{outcome.ok ? ' It’s logged in the customer’s conversation.' : ''}</span>
           </div>
         )}
       </div>
