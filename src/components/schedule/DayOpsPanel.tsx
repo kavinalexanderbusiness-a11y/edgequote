@@ -19,7 +19,7 @@ import { JobMessages } from '@/components/schedule/JobMessages'
 import { SendMessageDialog, type MessageRecipient } from '@/components/comms/SendMessageDialog'
 import {
   DollarSign, Clock, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
-  MapPin, Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, Trash2, CloudRain, Play, Timer, Camera, PlusCircle, MessageSquare, Send,
+  Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, CloudRain, Play, Timer, Camera, PlusCircle, MessageSquare, Send, Receipt,
   ChevronUp, ChevronDown, Wand2,
 } from 'lucide-react'
 
@@ -71,7 +71,7 @@ export interface QuickPatch {
 
 export function DayOpsPanel({
   date, dateLabel, jobs, quotesById, recurrences, baseCoord,
-  onOpenJob, onStartJob, onMarkDone, onMove, onDeleteJob, onSetPrice, workStartTime, capacityHours, onRainDelay, onAddJob, onQuickSave,
+  onOpenJob, onStartJob, onMarkDone, onMove, onSetPrice, workStartTime, capacityHours, onRainDelay, onAddJob, onQuickSave,
   addonsByJobId, onAddLineItem, onDeleteLineItem, getPreviousAddons, onCopyPreviousAddons,
 }: Props) {
   const supabase = createClient()
@@ -97,6 +97,10 @@ export function DayOpsPanel({
   const [showDayMsg, setShowDayMsg] = useState(false)
   // Job currently sending a one-tap "On my way" (locks the button against double-tap).
   const [sendingEta, setSendingEta] = useState<string | null>(null)
+  // Drag feedback (desktop reorder): dim the dragged card, ring the drop target —
+  // same drag language as the calendar's cross-day move.
+  const [draggingId, setDraggingId] = useState<string | null>(null)
+  const [dragOverId, setDragOverId] = useState<string | null>(null)
 
   // One-tap "On my way" — no composer, no typing. Sends the owner's on_my_way
   // template with the default ETA through the SAME pipeline as the editable
@@ -224,15 +228,12 @@ export function DayOpsPanel({
     return out
   })()
   const totalMin = active.reduce((s, j) => s + (j.duration_minutes || 0), 0)
-  const estHours = Math.round((totalMin / 60) * 10) / 10
   const totalRevenue = active.reduce((s, j) => s + jobTotal(j), 0)
   const revenueCompleted = completed.reduce((s, j) => s + jobTotal(j), 0)
   const revenueRemaining = remaining.reduce((s, j) => s + jobTotal(j), 0)
   const locatedCoords = active
     .filter(j => j.properties?.lat != null && j.properties?.lng != null)
     .map(j => ({ lat: j.properties!.lat as number, lng: j.properties!.lng as number }))
-  const totalStops = locatedCoords.length
-  const completionPct = active.length ? Math.round((completed.length / active.length) * 100) : 0
 
   // Optimize the day's route via the shared engine. Re-runs only when the set of
   // active jobs (or the base) changes — not when a status flips — so marking Done
@@ -317,7 +318,7 @@ export function DayOpsPanel({
     if (oa !== ob) return oa - ob
     return (a.start_time || '').localeCompare(b.start_time || '')
   })
-  const stats = (manualRoute || route) && totalStops > 0 ? routeStats(locatedCoords, effTotalKm, travel) : null
+  const stats = (manualRoute || route) && locatedCoords.length > 0 ? routeStats(locatedCoords, effTotalKm, travel) : null
 
   // Reorder: swap instantly (optimistic), then persist the whole day's sequence.
   // Writes are CHAINED so two quick drags can't interleave their per-row updates
@@ -439,7 +440,11 @@ export function DayOpsPanel({
     if (startMin != null) windowByJob[j.id] = `${minutesToTime12(startMin)}–${minutesToTime12(startMin + 120)}`
   }
   const laborTotalMin = active.reduce((s, j) => s + (j.duration_minutes || DEFAULT_JOB_MIN), 0)
-  const load = dayLoad(laborTotalMin + (stats ? stats.driveMinutes : active.length * 10), capacityHours)
+  const usedMin = laborTotalMin + (stats ? stats.driveMinutes : active.length * 10)
+  const load = dayLoad(usedMin, capacityHours)
+  // Capacity % for the always-visible header badge (used ÷ day capacity).
+  const dayCapMin = usedMin + load.spareMin
+  const loadPct = dayCapMin > 0 ? Math.round((usedMin / dayCapMin) * 100) : null
 
   // ── Live day tracking (check-in/check-out data) ──
   const isToday = date === localTodayISO()
@@ -493,6 +498,7 @@ export function DayOpsPanel({
               {load.state === 'overloaded' ? `Over by ${Math.round(-load.spareMin / 6) / 10}h`
                 : load.state === 'room' ? `Room for ~${Math.round(load.spareMin / 6) / 10}h`
                 : 'Full day'}
+              {loadPct != null && ` · ${loadPct}%`}
             </span>
           )}
         </div>
@@ -516,7 +522,7 @@ export function DayOpsPanel({
         <Metric icon={DollarSign} label="Planned" value={formatCurrency(totalRevenue)} tone="text-accent" />
         <Metric icon={Wallet} label="Completed" value={formatCurrency(revenueCompleted)} tone="text-emerald-400" />
         <Metric icon={DollarSign} label="Remaining" value={formatCurrency(revenueRemaining)} tone="text-amber-400" />
-        <Metric icon={ListChecks} label="Jobs left" value={String(remaining.length)} />
+        <Metric icon={ListChecks} label="Stops left" value={String(remaining.length)} />
         <Metric icon={Hourglass} label="Est. finish" value={estFinish} />
       </div>
 
@@ -530,9 +536,8 @@ export function DayOpsPanel({
               {inProgress.started_at && <span className="text-sky-300"> · {elapsedMin(inProgress.started_at)}m</span>}
             </span>
           )}
-          <span className="text-ink-muted">Done <span className="text-ink font-medium">{completed.length}/{active.length}</span></span>
+          {/* Done-count and finish live in the metric strip directly above — no repeats. */}
           <span className="text-ink-muted">Worked <span className="text-ink font-medium">{Math.floor(workedMin / 60)}h {workedMin % 60}m</span></span>
-          <span className="text-ink-muted">Finish <span className="text-ink font-medium">~{estFinish}</span></span>
         </div>
       )}
 
@@ -542,15 +547,8 @@ export function DayOpsPanel({
         </button>
       ) : (
         <div className="p-4 space-y-4">
-          {/* Day operations breakdown */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-            <Stat label="Jobs done" value={`${completed.length} / ${active.length}`} />
-            <Stat label="Completion" value={`${completionPct}%`} tone={completionPct === 100 && active.length > 0 ? 'text-emerald-400' : undefined} />
-            <Stat label="Est. hours" value={totalMin > 0 ? `${estHours}h` : '—'} />
-            <Stat label="Stops" value={String(totalStops)} />
-          </div>
-
-          {/* Route intelligence */}
+          {/* Route intelligence — the dispatcher board. (The old 4-stat "day
+              operations" grid repeated the metric strip and settings bar — gone.) */}
           <div className="rounded-xl border border-border bg-bg-tertiary px-3 py-2.5">
             <div className="flex items-center justify-between gap-2">
               <span className="flex items-center gap-1.5 text-xs font-semibold text-ink-muted uppercase tracking-wide">
@@ -589,8 +587,7 @@ export function DayOpsPanel({
                 <span className="flex items-center gap-1"><Navigation className="w-3 h-3" /> ~{effTotalKm} km</span>
                 {!manualRoute && route?.usedRoad && <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-400 border border-emerald-500/30 bg-emerald-500/10 rounded px-1.5 py-0.5">Real-road</span>}
                 <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> ~{stats.driveMinutes} min driving</span>
-                <span className="flex items-center gap-1"><MapPin className="w-3 h-3" /> {stats.clusters} cluster{stats.clusters !== 1 ? 's' : ''}</span>
-                <span>{stats.avgLegKm} km avg between stops</span>
+                {totalMin > 0 && <span className="flex items-center gap-1"><Hourglass className="w-3 h-3" /> ~{Math.round(totalMin / 6) / 10}h work</span>}
               </div>
             ) : (
               <p className="text-xs text-ink-faint mt-1.5">No locatable stops yet.</p>
@@ -610,10 +607,20 @@ export function DayOpsPanel({
               return (
                 <div key={job.id}
                   draggable={sortedJobs.length > 1}
-                  onDragStart={() => { dragId.current = job.id }}
-                  onDragOver={e => e.preventDefault()}
-                  onDrop={() => dropOn(job.id)}
-                  className={cn('rounded-xl border px-3 py-2.5', JOB_STATUS_COLORS[job.status], sortedJobs.length > 1 && 'cursor-grab active:cursor-grabbing')}>
+                  onDragStart={() => { dragId.current = job.id; setDraggingId(job.id) }}
+                  onDragEnd={() => { setDraggingId(null); setDragOverId(null) }}
+                  onDragOver={e => { e.preventDefault(); if (dragOverId !== job.id) setDragOverId(job.id) }}
+                  onDragLeave={() => { if (dragOverId === job.id) setDragOverId(null) }}
+                  onDrop={() => { dropOn(job.id); setDraggingId(null); setDragOverId(null) }}
+                  className={cn('rounded-xl border px-3 py-2.5 transition-colors',
+                    // Done cards RECEDE (neutral + faded); the live stop is sky end-to-end
+                    // (badge, timer, live bar and card all agree); scheduled keeps the token.
+                    done ? 'border-border bg-bg-tertiary/60 text-ink-muted opacity-60'
+                      : job.status === 'in_progress' ? 'bg-sky-400/10 text-sky-300 border-sky-400/30'
+                      : JOB_STATUS_COLORS[job.status],
+                    sortedJobs.length > 1 && 'cursor-grab active:cursor-grabbing',
+                    draggingId === job.id && 'opacity-50',
+                    draggingId && draggingId !== job.id && dragOverId === job.id && 'ring-2 ring-accent')}>
                   <div className="flex items-start gap-2.5">
                     <div className="flex flex-col items-center gap-0.5 shrink-0">
                       <div className={cn(
@@ -624,16 +631,17 @@ export function DayOpsPanel({
                       )}>
                         {done ? <Check className="w-4 h-4" /> : job.status === 'in_progress' ? <Play className="w-3.5 h-3.5 fill-current" /> : (order ?? '–')}
                       </div>
-                      {/* Touch-friendly reorder (drag works on desktop) */}
+                      {/* Touch-friendly reorder (drag works on desktop) — padded hit areas
+                          so a thumb never grabs the card when it meant the chevron. */}
                       {sortedJobs.length > 1 && (
                         <div className="flex flex-col">
                           <button onClick={e => { e.stopPropagation(); moveStop(job.id, -1) }} disabled={idx === 0}
-                            aria-label="Move up" className="text-ink-faint hover:text-ink disabled:opacity-25 leading-none">
-                            <ChevronUp className="w-3.5 h-3.5" />
+                            aria-label="Move up" className="p-1.5 -mx-1 text-ink-faint hover:text-ink disabled:opacity-25 leading-none">
+                            <ChevronUp className="w-4 h-4" />
                           </button>
                           <button onClick={e => { e.stopPropagation(); moveStop(job.id, 1) }} disabled={idx === sortedJobs.length - 1}
-                            aria-label="Move down" className="text-ink-faint hover:text-ink disabled:opacity-25 leading-none">
-                            <ChevronDown className="w-3.5 h-3.5" />
+                            aria-label="Move down" className="p-1.5 -mx-1 text-ink-faint hover:text-ink disabled:opacity-25 leading-none">
+                            <ChevronDown className="w-4 h-4" />
                           </button>
                         </div>
                       )}
@@ -656,13 +664,8 @@ export function DayOpsPanel({
                                 className="text-[10px] font-semibold uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5 flex items-center gap-1 hover:bg-amber-500/20">
                                 <AlertTriangle className="w-3 h-3" /> Set price
                               </button>}
-                          <button
-                            onClick={e => { e.stopPropagation(); onDeleteJob(job) }}
-                            title="Delete job" aria-label="Delete job"
-                            className="h-7 w-7 rounded-lg border border-red-500/30 bg-red-500/15 text-red-400 hover:bg-red-500/25 flex items-center justify-center active:scale-95 transition-transform"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          {/* Delete lives in the job form (Open → trash) — a 28px
+                              destructive button beside the price invited mis-taps. */}
                         </div>
                       </div>
 
@@ -768,31 +771,58 @@ export function DayOpsPanel({
                             +{addons.length <= 2 ? addons.map(a => a.description).join(' + ') : `${addons.length} services`}
                           </button>
                         )}
-                        <span className="px-1.5 py-0.5 rounded border border-current/30 text-[10px] font-semibold uppercase tracking-wide">{JOB_STATUS_LABELS[job.status]}</span>
+                        {/* No status chip — the order badge, card tone, ETA/timer and
+                            strikethrough already say the status (it was a 4th repeat). */}
                       </div>
 
-                      {/* One-tap actions */}
+                      {/* One-tap actions — ONE primary per stage (On my way → Start →
+                          Complete), field actions first, edit actions after. Completed
+                          cards collapse to the three that still matter. */}
+                      {done ? (
+                        <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                          <a href="/dashboard/invoices"
+                            className="h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border border-current/30 text-xs font-medium flex items-center gap-1 hover:bg-black/10">
+                            <Receipt className="w-3.5 h-3.5" /> Invoice
+                          </a>
+                          <ActionBtn onClick={() => onOpenJob(job)} icon={Pencil} label="Open" />
+                          <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setAddonsId(null); setMessageId(null); setPhotoId(photoId === job.id ? null : job.id) }} icon={Camera} label="Photos" />
+                        </div>
+                      ) : (
                       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-                        {job.status === 'scheduled' && <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onStartJob(job) } finally { setActing(null) } }} icon={Play} label="Start" tone="sky" />}
-                        {/* One-tap Done — complete a scheduled visit without a check-in (no time tracked); completeJob handles the missing started_at and offers Undo. */}
-                        {job.status === 'scheduled' && <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onMarkDone(job) } finally { setActing(null) } }} icon={CheckCircle2} label="Done" tone="emerald" />}
-                        {job.status === 'in_progress' && <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onMarkDone(job) } finally { setActing(null) } }} icon={CheckCircle2} label="Complete" tone="emerald" />}
-                        {/* One-tap "On my way" — sends the default-ETA text with a single click (no composer). */}
-                        {job.status === 'scheduled' && <ActionBtn disabled={sendingEta !== null} onClick={() => sendOnMyWay(job)} icon={Send} label={sendingEta === job.id ? 'Sending…' : 'On my way'} tone="sky" />}
-                        <ActionBtn onClick={() => (quickId === job.id ? setQuickId(null) : openQuick(job))} icon={SlidersHorizontal} label="Quick" />
-                        <ActionBtn onClick={() => onOpenJob(job)} icon={Pencil} label="Open" />
-                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setAddonsId(null); setMessageId(messageId === job.id ? null : job.id) }} icon={MessageSquare} label="Message" />
-                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setAddonsId(null); setMessageId(null); setPhotoId(photoId === job.id ? null : job.id) }} icon={Camera} label="Photos" />
-                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setMessageId(null); setAddonsId(addonsId === job.id ? null : job.id) }} icon={PlusCircle} label={addons.length ? `Services (${addons.length})` : 'Services'} />
-                        <ActionBtn onClick={() => setMoveId(moveId === job.id ? null : job.id)} icon={Move} label="Move" />
+                        {/* Stage primary. on_my_way_at stamps when the text sends, so the
+                            primary advances On my way → Start on its own. */}
+                        {job.status === 'scheduled' && !job.on_my_way_at && (
+                          <ActionBtn disabled={sendingEta !== null} onClick={() => sendOnMyWay(job)} icon={Send} label={sendingEta === job.id ? 'Sending…' : 'On my way'} tone="primary" />
+                        )}
+                        {job.status === 'scheduled' && (
+                          <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onStartJob(job) } finally { setActing(null) } }} icon={Play} label="Start" tone={job.on_my_way_at ? 'primary' : undefined} />
+                        )}
+                        {job.status === 'in_progress' && (
+                          <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onMarkDone(job) } finally { setActing(null) } }} icon={CheckCircle2} label="Complete" tone="complete" />
+                        )}
                         <a
                           href={directionsUrl({ lat: job.properties?.lat ?? null, lng: job.properties?.lng ?? null, address: job.properties?.address }, baseCoord)}
                           target="_blank" rel="noopener noreferrer"
-                          className="h-8 px-2.5 rounded-lg border border-current/30 text-xs font-medium flex items-center gap-1 hover:bg-black/10"
+                          className="h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border border-current/30 text-xs font-medium flex items-center gap-1 hover:bg-black/10"
                         >
                           <Navigation className="w-3.5 h-3.5" /> Route to
                         </a>
+                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setAddonsId(null); setMessageId(messageId === job.id ? null : job.id) }} icon={MessageSquare} label="Message" />
+                        {job.status === 'scheduled' && job.on_my_way_at && (
+                          <ActionBtn disabled={sendingEta !== null} onClick={() => sendOnMyWay(job)} icon={Send} label={sendingEta === job.id ? 'Sending…' : 'On my way'} />
+                        )}
+                        {/* Complete a scheduled visit without a check-in (no time tracked);
+                            completeJob handles the missing started_at and offers Undo. */}
+                        {job.status === 'scheduled' && (
+                          <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onMarkDone(job) } finally { setActing(null) } }} icon={CheckCircle2} label="Complete" />
+                        )}
+                        <ActionBtn onClick={() => (quickId === job.id ? setQuickId(null) : openQuick(job))} icon={SlidersHorizontal} label="Quick" />
+                        <ActionBtn onClick={() => onOpenJob(job)} icon={Pencil} label="Open" />
+                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setAddonsId(null); setMessageId(null); setPhotoId(photoId === job.id ? null : job.id) }} icon={Camera} label="Photos" />
+                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setMessageId(null); setAddonsId(addonsId === job.id ? null : job.id) }} icon={PlusCircle} label={addons.length ? `Services (${addons.length})` : 'Services'} />
+                        <ActionBtn onClick={() => setMoveId(moveId === job.id ? null : job.id)} icon={Move} label="Move" />
                       </div>
+                      )}
 
                       {/* Move to another day — drag isn't available within a single day */}
                       {moveId === job.id && (
@@ -898,27 +928,24 @@ function Metric({ icon: Icon, label, value, tone }: { icon: typeof DollarSign; l
   )
 }
 
-function Stat({ label, value, tone }: { label: string; value: string; tone?: string }) {
-  return (
-    <div className="rounded-lg border border-border bg-bg-tertiary px-3 py-2">
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className={cn('text-sm font-bold mt-0.5', tone || 'text-ink')}>{value}</p>
-    </div>
-  )
-}
-
-function ActionBtn({ onClick, icon: Icon, label, tone, disabled }: { onClick: () => void; icon: typeof Pencil; label: string; tone?: 'emerald' | 'sky'; disabled?: boolean }) {
+// h-10 on touch screens (one-thumb, in a driveway), compact h-8 on desktop.
+// 'primary' = THE next action for the stage; 'complete' = the finish action.
+function ActionBtn({ onClick, icon: Icon, label, tone, disabled }: { onClick: () => void; icon: typeof Pencil; label: string; tone?: 'emerald' | 'sky' | 'primary' | 'complete'; disabled?: boolean }) {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        'h-8 px-2.5 rounded-lg border text-xs font-medium flex items-center gap-1 active:scale-95 transition-transform disabled:opacity-50 disabled:pointer-events-none',
-        tone === 'emerald'
-          ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25'
-          : tone === 'sky'
-            ? 'bg-sky-400/15 border-sky-400/30 text-sky-300 hover:bg-sky-400/25'
-            : 'border-current/30 hover:bg-black/10'
+        'h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border text-xs font-medium flex items-center gap-1 active:scale-95 transition-transform disabled:opacity-50 disabled:pointer-events-none',
+        tone === 'primary'
+          ? 'bg-accent border-accent text-black font-semibold hover:opacity-90'
+          : tone === 'complete'
+            ? 'bg-emerald-500 border-emerald-500 text-black font-semibold hover:opacity-90'
+            : tone === 'emerald'
+              ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25'
+              : tone === 'sky'
+                ? 'bg-sky-400/15 border-sky-400/30 text-sky-300 hover:bg-sky-400/25'
+                : 'border-current/30 hover:bg-black/10'
       )}
     >
       <Icon className="w-3.5 h-3.5" /> {label}

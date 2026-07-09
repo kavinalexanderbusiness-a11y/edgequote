@@ -5,12 +5,12 @@ import {
   startOfMonth, endOfMonth, startOfWeek, endOfWeek, eachDayOfInterval,
   format, isSameMonth, isSameDay, addDays,
 } from 'date-fns'
-import { Job, JOB_STATUS_COLORS, JOB_STATUS_LABELS } from '@/types'
+import { Job, JOB_STATUS_COLORS } from '@/types'
 import { ScheduleItem, ITEM_META } from '@/lib/scheduleItems'
 import { cn } from '@/lib/utils'
 import { DayStatusMap, dayStatusMeta, dayStatusLabel, isDayBlocked } from '@/lib/dayStatus'
 import { toast } from '@/lib/toast'
-import { Repeat, Check, CheckCircle2, Plus } from 'lucide-react'
+import { Repeat, Check } from 'lucide-react'
 
 export type CalendarView = 'month' | 'week' | 'day'
 
@@ -64,14 +64,17 @@ function JobChip({ job, onSelect, onDragStart, recurLabel, value, addonCount, on
         className={cn(
           'w-full text-left px-1.5 py-0.5 rounded text-[11px] font-medium border truncate transition-opacity hover:opacity-80',
           canComplete && 'pr-6',
-          JOB_STATUS_COLORS[job.status]
+          JOB_STATUS_COLORS[job.status],
+          job.status === 'completed' && 'opacity-60' // done work recedes; active work commands attention
         )}
-        title={recurLabel ? `${job.title} · ${recurLabel} (recurring)` : job.title}
+        title={recurLabel ? `${job.customers?.name || job.title} · ${recurLabel} (recurring)` : (job.customers?.name || job.title)}
       >
         <span className="flex items-center gap-0.5">
           {job.status === 'completed' && <Check className="w-2.5 h-2.5 shrink-0" />}
           {job.recurrence_id && <Repeat className="w-2.5 h-2.5 shrink-0 opacity-70" />}
-          <span className={cn('truncate', job.status === 'completed' && 'line-through opacity-80')}>{job.start_time ? job.start_time.slice(0, 5) + ' ' : ''}{job.title}</span>
+          {/* Customer name, matching the day board — the same visit must read the
+              same in every view. */}
+          <span className={cn('truncate', job.status === 'completed' && 'line-through opacity-80')}>{job.start_time ? job.start_time.slice(0, 5) + ' ' : ''}{job.customers?.name || job.title}</span>
           {addonCount != null && addonCount > 0 && (
             <span className="shrink-0 text-[9px] font-bold text-accent" title={`${addonCount} add-on service${addonCount !== 1 ? 's' : ''}`}>+{addonCount}</span>
           )}
@@ -85,9 +88,9 @@ function JobChip({ job, onSelect, onDragStart, recurLabel, value, addonCount, on
           onPointerDown={(e) => e.stopPropagation()}
           title="Mark done"
           aria-label={`Mark ${job.title} done`}
-          className="absolute top-1/2 -translate-y-1/2 right-0.5 w-4 h-4 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500 hover:text-black flex items-center justify-center transition-colors"
+          className="absolute top-1/2 -translate-y-1/2 right-0 w-5 h-5 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500 hover:text-black flex items-center justify-center transition-colors"
         >
-          <Check className="w-2.5 h-2.5" />
+          <Check className="w-3 h-3" />
         </button>
       )}
     </div>
@@ -290,12 +293,16 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
             const statusRow = dayStatusMap?.byDate[dateISO]
             const selected = !!selectedDays?.has(dateISO)
             return (
-              <button
+              // div[role=button], not <button> — the cell CONTAINS chip/Done
+              // buttons, and nested buttons are invalid markup that breaks AT.
+              <div
                 key={i}
+                role="button"
+                tabIndex={0}
                 data-date={dateISO}
                 {...dayHandlers(dateISO, day)}
                 className={cn(
-                  'min-h-[108px] border-b border-r border-border p-1.5 text-left align-top transition-colors hover:bg-surface rounded-sm relative',
+                  'min-h-[108px] border-b border-r border-border p-1.5 text-left align-top transition-colors hover:bg-surface rounded-sm relative cursor-pointer',
                   !inMonth && 'bg-bg-secondary/40',
                   statusRow && dayStatusMeta(statusRow.status).shade,
                   selected && 'ring-2 ring-accent ring-inset z-10',
@@ -327,7 +334,7 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
                     <span className="block text-[10px] font-medium text-ink-faint px-1 pt-0.5">+{overflow} more</span>
                   )}
                 </div>
-              </button>
+              </div>
             )
           })}
         </div>
@@ -348,12 +355,15 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
             const statusRow = dayStatusMap?.byDate[dateISO]
             const selected = !!selectedDays?.has(dateISO)
             return (
-              <button
+              // div[role=button] — the cell contains chip/Done buttons (see month grid).
+              <div
                 key={i}
+                role="button"
+                tabIndex={0}
                 data-date={dateISO}
                 {...dayHandlers(dateISO, day)}
                 className={cn(
-                  'min-h-[320px] border-r border-border p-2 text-left align-top transition-colors hover:bg-surface',
+                  'min-h-[320px] border-r border-border p-2 text-left align-top transition-colors hover:bg-surface cursor-pointer',
                   statusRow && dayStatusMeta(statusRow.status).shade,
                   selected && 'ring-2 ring-accent ring-inset z-10',
                   i === 6 && 'border-r-0'
@@ -382,7 +392,7 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
                     <ItemChip key={item.id} item={item} onSelect={selectItem} onDragStart={itemDragStart ? (e) => itemDragStart(e, item) : undefined} />
                   ))}
                 </div>
-              </button>
+              </div>
             )
           })}
         </div>
@@ -391,80 +401,7 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
     )
   }
 
-  // Day view (used as a fallback; the schedule page uses DayOpsPanel for 'day').
-  const dayJobs = dayJobsFor(cursor)
-  const totalMin = dayJobs.reduce((s, j) => s + (j.duration_minutes || 0), 0)
-  const estHours = Math.round((totalMin / 60) * 10) / 10
-  const doneCount = dayJobs.filter(j => j.status === 'completed').length
-  const locatedCount = dayJobs.filter(j => j.properties?.lat != null && j.properties?.lng != null).length
-  return (
-    <div className="rounded-card border border-border p-4">
-      <div className="mb-3 flex items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-bold text-ink">{format(cursor, 'EEEE, MMMM d, yyyy')}</p>
-          {/* Daily operations summary — plan the day at a glance */}
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs text-ink-muted">
-            <span className="font-semibold text-ink">{dayJobs.length} job{dayJobs.length !== 1 ? 's' : ''}</span>
-            {doneCount > 0 && <span className="text-emerald-400">{doneCount} done</span>}
-            {totalMin > 0 && <span>~{estHours}h on site</span>}
-            {locatedCount > 0 && <span>{locatedCount} mapped stop{locatedCount !== 1 ? 's' : ''}</span>}
-          </div>
-        </div>
-        <button
-          onClick={() => onSelectDay(cursor)}
-          className="shrink-0 h-9 px-3 rounded-lg bg-accent text-black text-xs font-semibold flex items-center gap-1 hover:opacity-90 active:scale-95 transition-transform"
-        >
-          <Plus className="w-4 h-4" /> Add job
-        </button>
-      </div>
-      {dayJobs.length === 0 ? (
-        <button
-          onClick={() => onSelectDay(cursor)}
-          className="w-full text-center py-12 text-sm text-ink-muted hover:text-ink transition-colors"
-        >
-          No jobs scheduled. Click to add one.
-        </button>
-      ) : (
-        <div className="space-y-2">
-          {dayJobs.map(job => (
-            <div
-              key={job.id}
-              onClick={() => onSelectJob(job)}
-              className={cn(
-                'w-full text-left px-3 py-2.5 rounded-xl border transition-opacity hover:opacity-90 cursor-pointer',
-                JOB_STATUS_COLORS[job.status]
-              )}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="flex items-center gap-1.5 text-sm font-semibold min-w-0">
-                  {job.status === 'completed' && <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />}
-                  {job.recurrence_id && <Repeat className="w-3 h-3 shrink-0 opacity-70" />}
-                  <span className={cn('truncate', job.status === 'completed' && 'line-through opacity-80')}>{job.title}</span>
-                </span>
-                {job.start_time && (
-                  <span className="text-xs shrink-0">{job.start_time.slice(0, 5)}{job.end_time ? `–${job.end_time.slice(0, 5)}` : ''}</span>
-                )}
-              </div>
-              <div className="flex items-center justify-between gap-2 mt-1">
-                <div className="flex items-center gap-1.5 text-xs opacity-80 min-w-0 flex-wrap">
-                  {job.customers?.name && <span className="truncate">{job.customers.name}</span>}
-                  {job.service_type && <span className="truncate">· {job.service_type}</span>}
-                  <span className="px-1.5 py-0.5 rounded border border-current/30 text-[10px] font-semibold uppercase tracking-wide">{JOB_STATUS_LABELS[job.status]}</span>
-                  {recurLabelFor(job) && <span className="text-[10px]">· {recurLabelFor(job)}</span>}
-                </div>
-                {onMarkDone && job.status !== 'completed' && job.status !== 'cancelled' && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onMarkDone(job) }}
-                    className="shrink-0 h-9 px-3 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-semibold flex items-center gap-1 hover:bg-emerald-500/25 active:scale-95 transition-transform"
-                  >
-                    <Check className="w-4 h-4" /> Done
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
+  // 'day' is rendered by DayOpsPanel (the schedule page never mounts Calendar for
+  // it) — the old divergent fallback day view here is gone, ONE day surface.
+  return null
 }
