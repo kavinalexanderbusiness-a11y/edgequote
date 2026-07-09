@@ -122,6 +122,12 @@ export function computeWeatherImpact(
   for (const f of forecast) {
     if (f.date < today) continue
     if (!f.rainy) continue
+    // Higher-priority schedule state wins: a day the owner already marked
+    // unavailable (manually disabled / vacation / holiday / sick / equipment /
+    // no-crew block) is suppressed here so weather NEVER adds a contradictory
+    // "delay/monitor" suggestion on top. It's still surfaced — with its real
+    // reason — in `blockedDays` below, so the owner sees why it isn't recommended.
+    if (dayStatus.blockedDates.has(f.date)) continue
     const dayJobs = jobsByDate[f.date] || []
     if (!dayJobs.length) continue
     const laborHours = round1(hoursByDate[f.date] || 0)

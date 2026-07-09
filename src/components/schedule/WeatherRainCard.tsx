@@ -74,10 +74,12 @@ export function WeatherRainCard(props: Props) {
   }
 
   return (
-    <div className="rounded-card border border-blue-500/30 bg-blue-500/[0.06] p-4 mb-4">
+    // Amber — this is a delay-severity WARNING; a calm blue card contradicted the
+    // red/amber vocabulary the weather page uses for the same event.
+    <div className="rounded-card border border-amber-500/30 bg-amber-500/[0.06] p-4 mb-4">
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-2.5 min-w-0">
-          <span className="w-8 h-8 rounded-lg bg-blue-500/15 border border-blue-400/30 text-blue-300 flex items-center justify-center shrink-0">
+          <span className="w-8 h-8 rounded-lg bg-amber-500/15 border border-amber-400/30 text-amber-300 flex items-center justify-center shrink-0">
             <CloudRain className="w-4.5 h-4.5" />
           </span>
           <div className="min-w-0">

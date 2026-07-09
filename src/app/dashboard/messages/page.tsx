@@ -5,15 +5,20 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { formatDistanceToNow } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
+import { confirm as confirmDialog } from '@/lib/confirm'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { ConversationThread } from '@/components/messages/ConversationThread'
 import { ConversationInfo } from '@/components/messages/ConversationInfo'
 import { LeadCard } from '@/components/messages/LeadCard'
+import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
+import { CustomerPicker } from '@/components/ui/CustomerPicker'
+import type { Customer } from '@/types'
 import { Button } from '@/components/ui/Button'
 import { Skeleton } from '@/components/ui/Skeleton'
+import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import {
-  Loader2, Inbox, User, ArrowLeft, MessageSquare, FileText, Search, X,
+  Loader2, Inbox, User, ArrowLeft, MessageSquare, FileText, Search, X, Plus,
   Archive, ArchiveRestore, Pin, PinOff, BellOff, Bell, MailOpen, Trash2, MoreVertical, Reply,
   MapPin, Wrench, Receipt, Globe, Sparkles,
 } from 'lucide-react'
@@ -249,18 +254,44 @@ export default function MessagesPage() {
   }
 
   const actions = {
-    archive: async (c: Convo) => { const now = new Date().toISOString(); mutate(c, { archived_at: now }); await supabase.from('conversations').update({ archived_at: now }).eq('id', c.id) },
+    // Archive acts instantly but is fully reversible — the shared Undo toast restores
+    // it in one tap (recovering from the Archived filter costs 4+ clicks otherwise).
+    archive: async (c: Convo) => {
+      const now = new Date().toISOString(); mutate(c, { archived_at: now })
+      await supabase.from('conversations').update({ archived_at: now }).eq('id', c.id)
+      toast.undo(`Archived conversation with ${nameOf(c)}`, async () => {
+        await supabase.from('conversations').update({ archived_at: null }).eq('id', c.id)
+        if (uid) loadPage(uid, filterRef.current, true)
+      })
+    },
     unarchive: async (c: Convo) => { mutate(c, { archived_at: null }); await supabase.from('conversations').update({ archived_at: null }).eq('id', c.id) },
     pin: async (c: Convo) => { const now = new Date().toISOString(); mutate(c, { pinned_at: now }); await supabase.from('conversations').update({ pinned_at: now }).eq('id', c.id) },
     unpin: async (c: Convo) => { mutate(c, { pinned_at: null }); await supabase.from('conversations').update({ pinned_at: null }).eq('id', c.id) },
     markUnread: async (c: Convo) => { const u = Math.max(c.unread, 1); patch(c.id, { unread: u }); if (uid) loadCounts(uid); await supabase.from('conversations').update({ unread: u }).eq('id', c.id) },
     toggleMute: async (c: Convo) => { patch(c.id, { muted: !c.muted }); await supabase.from('conversations').update({ muted: !c.muted }).eq('id', c.id) },
     del: async (c: Convo) => {
-      if (!confirm(`Permanently delete this conversation with ${nameOf(c)}?\n\nThis erases the entire message history and CANNOT be undone. Archiving keeps everything instead.`)) return
+      const ok = await confirmDialog({
+        title: `Delete conversation with ${nameOf(c)}?`,
+        message: 'This erases the entire message history and cannot be undone. Archiving keeps everything instead.',
+        confirmLabel: 'Delete permanently', destructive: true,
+      })
+      if (!ok) return
       removeLocal(c.id)
       await supabase.from('conversations').delete().eq('id', c.id)
     },
     select: (c: Convo) => { setSel(c); if (c.unread > 0) { patch(c.id, { unread: 0 }); if (uid) loadCounts(uid) } },
+  }
+
+  // ── New message (compose without leaving the inbox) ──
+  const [composeOpen, setComposeOpen] = useState(false)
+  const [composeCustomers, setComposeCustomers] = useState<Customer[]>([])
+  const [composeTo, setComposeTo] = useState<{ id: string; name: string } | null>(null)
+  async function openCompose() {
+    setComposeOpen(true)
+    if (composeCustomers.length === 0) {
+      const { data } = await supabase.from('customers').select('*').is('archived_at', null).order('name')
+      setComposeCustomers((data as Customer[]) || [])
+    }
   }
 
   // ── Bulk actions ──
@@ -272,7 +303,12 @@ export default function MessagesPage() {
     const ids = [...selectedIds]
     if (!ids.length) return
     if (op === 'delete') {
-      if (!confirm(`Permanently delete ${ids.length} conversation${ids.length !== 1 ? 's' : ''}? This erases their message history and cannot be undone.`)) return
+      const ok = await confirmDialog({
+        title: `Delete ${ids.length} conversation${ids.length !== 1 ? 's' : ''}?`,
+        message: 'This erases their message history and cannot be undone.',
+        confirmLabel: 'Delete permanently', destructive: true,
+      })
+      if (!ok) return
       setRows(cs => cs.filter(c => !selectedIds.has(c.id)))
       setSearchResults(rs => rs ? rs.filter(c => !selectedIds.has(c.id)) : rs)
       await supabase.from('conversations').delete().in('id', ids)
@@ -332,7 +368,32 @@ export default function MessagesPage() {
 
   return (
     <div className="max-w-5xl space-y-4">
-      <PageHeader title="Messages" description="Two-way SMS + portal conversations — archived chats stay in CRM history forever." />
+      <PageHeader title="Messages" description="Two-way SMS + portal conversations — archived chats stay in CRM history forever."
+        action={
+          <Button variant="secondary" onClick={openCompose}>
+            <Plus className="w-4 h-4" /> New message
+          </Button>
+        } />
+
+      {/* Start a conversation without leaving the inbox: pick a customer → THE shared
+          Send-Message dialog (same engine; the sent message threads into this list). */}
+      {composeOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center p-4 pt-24" onClick={() => setComposeOpen(false)}>
+          <div className="bg-bg-secondary border border-border-strong rounded-card max-w-md w-full p-5 space-y-3" onClick={e => e.stopPropagation()}>
+            <p className="text-sm font-bold text-ink">Who do you want to message?</p>
+            <CustomerPicker customers={composeCustomers} value={''} allowManual={false}
+              onChange={id => {
+                const c = composeCustomers.find(x => x.id === id)
+                if (c) { setComposeOpen(false); setComposeTo({ id: c.id, name: c.name }) }
+              }} />
+            <button onClick={() => setComposeOpen(false)} className="text-xs text-ink-faint hover:text-ink">Cancel</button>
+          </div>
+        </div>
+      )}
+      {composeTo && (
+        <SendMessageDialog open onClose={() => { setComposeTo(null); if (uid) loadPage(uid, filterRef.current, true) }}
+          customerId={composeTo.id} customerName={composeTo.name} />
+      )}
 
       {/* Spotlight search */}
       <div className="relative">
@@ -366,14 +427,17 @@ export default function MessagesPage() {
       {selectMode && (
         <div className="flex items-center gap-1.5 flex-wrap rounded-xl border border-accent/30 bg-accent/[0.06] px-3 py-2 animate-[popIn_0.12s_ease-out]">
           <span className="text-xs font-semibold text-ink mr-1">{selectedIds.size} selected</span>
-          <BulkBtn icon={Archive} label="Archive" onClick={() => bulk('archive')} />
-          <BulkBtn icon={ArchiveRestore} label="Unarchive" onClick={() => bulk('unarchive')} />
+          {/* Context-gated: only actions that can DO something here are offered —
+              Archive outside Archived, Unarchive inside it, Mute/Unmute per what's
+              actually selected, permanent Delete only inside Archived. */}
+          {filter !== 'archived' && <BulkBtn icon={Archive} label="Archive" onClick={() => bulk('archive')} />}
+          {filter === 'archived' && <BulkBtn icon={ArchiveRestore} label="Unarchive" onClick={() => bulk('unarchive')} />}
           <BulkBtn icon={MailOpen} label="Read" onClick={() => bulk('read')} />
           <BulkBtn icon={MessageSquare} label="Unread" onClick={() => bulk('unread')} />
           <BulkBtn icon={Pin} label="Pin" onClick={() => bulk('pin')} />
-          <BulkBtn icon={BellOff} label="Mute" onClick={() => bulk('mute')} />
-          <BulkBtn icon={Bell} label="Unmute" onClick={() => bulk('unmute')} />
-          <BulkBtn icon={Trash2} label="Delete" onClick={() => bulk('delete')} danger />
+          {(searchResults ?? rows).some(c => selectedIds.has(c.id) && !c.muted) && <BulkBtn icon={BellOff} label="Mute" onClick={() => bulk('mute')} />}
+          {(searchResults ?? rows).some(c => selectedIds.has(c.id) && c.muted) && <BulkBtn icon={Bell} label="Unmute" onClick={() => bulk('unmute')} />}
+          {filter === 'archived' && <BulkBtn icon={Trash2} label="Delete" onClick={() => bulk('delete')} danger />}
         </div>
       )}
 
@@ -401,8 +465,20 @@ export default function MessagesPage() {
           ) : list.length === 0 ? (
             <div className="py-16 text-center px-4">
               <Inbox className="w-9 h-9 text-ink-faint mx-auto mb-2" />
-              <p className="text-sm font-medium text-ink">{searchResults ? 'No matches' : filter === 'archived' ? 'No archived chats' : 'Nothing here'}</p>
-              <p className="text-xs text-ink-muted mt-1">{searchResults ? 'Try a name, address, service, or quote/invoice #.' : 'Inbound texts and portal requests appear here.'}</p>
+              <p className="text-sm font-medium text-ink">
+                {searchResults ? 'No matches'
+                  : filter === 'archived' ? 'No archived chats'
+                  : filter === 'website_lead' ? 'No new website leads'
+                  : filter === 'portal' ? 'No portal messages yet'
+                  : filter === 'sms' ? 'No text conversations yet'
+                  : 'No conversations yet'}
+              </p>
+              <p className="text-xs text-ink-muted mt-1">
+                {searchResults ? 'Try a name, address, service, or quote/invoice #.'
+                  : filter === 'website_lead' ? 'Leads land here the moment your website form is submitted.'
+                  : filter === 'portal' ? 'Requests customers send from their portal show up here.'
+                  : 'Inbound texts, portal requests and website leads all land here — replies go out from your business number.'}
+              </p>
             </div>
           ) : (
             <div ref={scrollRef} onScroll={onScroll} className="overflow-y-auto" style={{ maxHeight: '72vh' }}>
@@ -600,8 +676,13 @@ function ConversationRow({ c, selected, actions, query, selectMode, checked, onT
           <Item icon={MailOpen} label="Mark unread" onClick={() => actions.markUnread(c)} />
           <Item icon={c.muted ? Bell : BellOff} label={c.muted ? 'Unmute' : 'Mute notifications'} onClick={() => actions.toggleMute(c)} />
           <Item icon={User} label="View customer" onClick={() => router.push(`/dashboard/customers/${c.customer_id}`)} />
-          <div className="border-t border-border my-1" />
-          <Item icon={Trash2} label="Delete permanently" onClick={() => actions.del(c)} danger />
+          {/* Permanent delete only for ARCHIVED conversations — archive is the safe default. */}
+          {c.archived_at && (
+            <>
+              <div className="border-t border-border my-1" />
+              <Item icon={Trash2} label="Delete permanently" onClick={() => actions.del(c)} danger />
+            </>
+          )}
         </div>
       )}
     </div>

@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { loadAnalyticsCore } from '@/lib/analyticsData'
+import { loadTravelModel } from '@/lib/travelLearning'
 import { Coord, geocodeAddress } from '@/lib/geo'
 import {
   ProfitJob, ProfitQuote, ProfitContext, RecInfo, RouteProfit, Grade, GRADE_COLORS,
@@ -55,19 +57,18 @@ export default function ProfitabilityPage() {
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
       if (!user) { setLoadError('Session expired — sign in again.'); return }
-      const [jRes, qRes, rRes, sRes] = await Promise.all([
-        supabase.from('jobs').select('id, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, properties(lat, lng, city, postal_code, neighborhood)').eq('user_id', user!.id),
-        supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
-        supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user!.id),
+      const [core, sRes, travel] = await Promise.all([
+        loadAnalyticsCore(supabase),
         supabase.from('business_settings').select('base_lat, base_lng, base_address').eq('user_id', user!.id).maybeSingle(),
+        loadTravelModel(supabase),
       ])
 
       const quotesById: Record<string, ProfitQuote> = {}
-      for (const q of (qRes.data as (ProfitQuote & { id: string })[]) || []) quotesById[q.id] = q
+      for (const q of (core?.quotes as unknown as (ProfitQuote & { id: string })[]) || []) quotesById[q.id] = q
       const recById: Record<string, RecInfo> = {}
-      for (const r of (rRes.data as (RecInfo & { id: string })[]) || []) recById[r.id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count }
+      for (const r of (core?.recurrences as unknown as (RecInfo & { id: string })[]) || []) recById[r.id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count }
 
-      const rows = ((jRes.data as unknown as Array<Omit<ProfitJob, 'lat' | 'lng' | 'city' | 'postal_code' | 'neighborhood'> & { properties?: { lat: number | null; lng: number | null; city: string | null; postal_code: string | null; neighborhood: string | null } | null }>) || [])
+      const rows = ((core?.jobs as unknown as Array<Omit<ProfitJob, 'lat' | 'lng' | 'city' | 'postal_code' | 'neighborhood'> & { properties?: { lat: number | null; lng: number | null; city: string | null; postal_code: string | null; neighborhood: string | null } | null }>) || [])
         .map(j => ({
           id: j.id, scheduled_date: j.scheduled_date, status: j.status, service_type: j.service_type,
           quote_id: j.quote_id, recurrence_id: j.recurrence_id, duration_minutes: j.duration_minutes,
@@ -84,7 +85,7 @@ export default function ProfitabilityPage() {
         const c = await geocodeAddress(s.base_address)
         if (c) { base = c; await supabase.from('business_settings').update({ base_lat: c.lat, base_lng: c.lng }).eq('user_id', user!.id) }
       }
-      setCtx({ quotesById, recById, base, today: format(new Date(), 'yyyy-MM-dd') })
+      setCtx({ quotesById, recById, base, today: format(new Date(), 'yyyy-MM-dd'), speed: travel })
       } catch (e) {
         setLoadError(e instanceof Error ? e.message : 'Could not load profitability data.')
       } finally {

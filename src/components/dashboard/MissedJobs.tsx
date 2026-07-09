@@ -73,8 +73,15 @@ export function MissedJobs() {
 
   async function markDone(row: MissedRow) {
     setBusy(row.id)
-    await supabase.from('jobs').update({ status: 'completed', completed_at: new Date().toISOString() }).eq('id', row.id)
-    if (row.job.recurrence_id) await createDraftInvoiceForCompletedJob(supabase, { ...row.job, status: 'completed' })
+    // Never fake success: keep the row (and show why) unless the write landed.
+    const { error } = await supabase.from('jobs').update({ status: 'completed', completed_at: new Date().toISOString() }).eq('id', row.id)
+    if (error) { toast.error('Could not mark done: ' + error.message); setBusy(null); return }
+    // Same one-click invoice flow as the scheduler: auto-draft (recurring jobs
+    // populate from the service plan) and SAY what happened.
+    const res = await createDraftInvoiceForCompletedJob(supabase, { ...row.job, status: 'completed' })
+    if (res.created) toast.success(`Job done — draft invoice ${res.invoiceNumber} created. Review it on Invoices.`)
+    else if (res.reason === 'no-amount') toast('Job done — no invoice drafted (no price on this job). Set a price to bill it.', { tone: 'warning' })
+    else toast.success('Job marked done.')
     setRows(prev => prev.filter(r => r.id !== row.id))
     setBusy(null)
   }

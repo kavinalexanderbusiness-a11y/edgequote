@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { Collapsible } from '@/components/ui/Collapsible'
 import { Input } from '@/components/ui/Input'
 import { MSG_LABELS, MsgType, DEFAULT_TEMPLATES, MSG_VARIABLES } from '@/lib/comms/templates'
 import { SmsCost } from '@/components/comms/SmsCost'
@@ -77,23 +78,29 @@ export function MessageTemplateEditor() {
               </div>
             </div>
 
-            <div className="space-y-3">
+            {/* One collapsed row per template — 17 always-open 6-row textareas were a
+                wall that buried everything below. The closed row still says whether
+                it's customised and previews the first line. */}
+            <div className="space-y-2">
               {TYPES.map(t => {
                 const val = templates[t] ?? ''
                 const usingDefault = !val.trim()
                 return (
-                  <div key={t}>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="text-xs font-semibold text-ink">{MSG_LABELS[t]}{usingDefault && <span className="text-ink-faint font-normal"> · using default</span>}</label>
+                  <Collapsible key={t} title={MSG_LABELS[t]}
+                    badge={!usingDefault ? <span className="text-[9px] font-semibold uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5">Customised</span> : undefined}
+                    summary={usingDefault ? 'Using default' : (val.split('\n').find(l => l.trim()) || '').slice(0, 60)}>
+                    <div>
                       {!usingDefault && (
-                        <button onClick={() => setTemplates(prev => ({ ...prev, [t]: '' }))} className="text-[11px] text-ink-faint hover:text-ink flex items-center gap-1"><RotateCcw className="w-3 h-3" /> Reset</button>
+                        <div className="flex justify-end mb-1">
+                          <button onClick={() => setTemplates(prev => ({ ...prev, [t]: '' }))} className="text-[11px] text-ink-faint hover:text-ink flex items-center gap-1"><RotateCcw className="w-3 h-3" /> Reset to default</button>
+                        </div>
                       )}
+                      <textarea rows={6} value={val} placeholder={DEFAULT_TEMPLATES[t]}
+                        onChange={e => setTemplates(prev => ({ ...prev, [t]: e.target.value }))}
+                        className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent placeholder:text-ink-faint resize-y leading-relaxed" />
+                      <SmsCost text={val || DEFAULT_TEMPLATES[t]} className="mt-1.5" />
                     </div>
-                    <textarea rows={6} value={val} placeholder={DEFAULT_TEMPLATES[t]}
-                      onChange={e => setTemplates(prev => ({ ...prev, [t]: e.target.value }))}
-                      className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent placeholder:text-ink-faint resize-y leading-relaxed" />
-                    <SmsCost text={val || DEFAULT_TEMPLATES[t]} className="mt-1.5" />
-                  </div>
+                  </Collapsible>
                 )
               })}
             </div>

@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { Suggestion, CATEGORY_META, applyPriceRaise, dismissSuggestion, undismissSuggestion } from '@/lib/suggestions'
 import { loadSuggestions } from '@/lib/suggestionsLoad'
+import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { formatCurrency } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
 import { Sparkles, Check, ArrowRight, X, Undo2 } from 'lucide-react'
@@ -12,16 +13,18 @@ import { Sparkles, Check, ArrowRight, X, Undo2 } from 'lucide-react'
 // The advisor's top 3, on the home page. Tap into Grow for the full feed.
 export function DashboardTopSuggestions() {
   const supabase = useMemo(() => createClient(), [])
-  const [items, setItems] = useState<Suggestion[]>([])
-  const [loading, setLoading] = useState(true)
+  // Share the SAME cached advisor result as the Grow Suggestions Center — a
+  // Dashboard↔Grow hop (or a revisit) paints instantly and skips re-running the
+  // heavy ~11-query advisor; the load() below still revalidates in the background.
+  const [items, setItems] = useState<Suggestion[]>(() => readCache<Suggestion[]>('suggestions', CACHE_TTL.short) || [])
+  const [loading, setLoading] = useState<boolean>(() => !readCache<Suggestion[]>('suggestions', CACHE_TTL.short))
   const [applyingId, setApplyingId] = useState<string | null>(null)
   const [appliedId, setAppliedId] = useState<string | null>(null)
   const [undo, setUndo] = useState<{ key: string; label: string } | null>(null)
 
   async function load() {
-    setLoading(true)
     setUndo(null)
-    try { setItems(await loadSuggestions(supabase)) } finally { setLoading(false) }
+    try { const next = await loadSuggestions(supabase); setItems(next); writeCache('suggestions', next) } finally { setLoading(false) }
   }
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -48,8 +51,12 @@ export function DashboardTopSuggestions() {
   }
 
   // Home page shows only confident, ranked actions — speculative low-confidence
-  // ideas live in the full Grow feed.
-  const top = items.filter(s => s.confidence !== 'low').slice(0, 3)
+  // ideas live in the full Grow feed. Suggestions that restate a Today's Priorities
+  // row (quote follow-ups, lapsed recurring → Reactivation) are excluded here too:
+  // the queue at the top of the page already carries those exact signals, so
+  // showing them twice on one screen was pure duplication.
+  const inPriorities = new Set(['retention-followup', 'retention-lapsed'])
+  const top = items.filter(s => s.confidence !== 'low' && !inPriorities.has(s.id)).slice(0, 3)
   if (loading) return null                       // stay quiet until ready — no skeleton noise
   if (top.length === 0 && !undo) return null     // nothing pressing → don't take up space
 

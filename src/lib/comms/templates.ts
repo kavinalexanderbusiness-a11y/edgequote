@@ -16,6 +16,10 @@ export type MsgType =
   | 'receipt'
   // CRM growth campaigns (lib/crm/campaigns — driven by /api/cron/campaigns).
   | 'birthday' | 'anniversary' | 'win_back' | 'marketing'
+  // Standard business announcement — introduction / new phone number.
+  | 'introduction'
+  // Free-form one-off message (the shared Send Message dialog's blank slate).
+  | 'custom'
 
 export const MSG_LABELS: Record<MsgType, string> = {
   on_my_way: 'On my way',
@@ -40,6 +44,8 @@ export const MSG_LABELS: Record<MsgType, string> = {
   anniversary: 'Anniversary greeting',
   win_back: 'Win-back / re-engagement',
   marketing: 'Marketing check-in',
+  introduction: 'Introduction / new number',
+  custom: 'Custom message',
 }
 
 // The variables a template may reference, with a short hint for the editor.
@@ -75,6 +81,14 @@ This is a friendly reminder that {{business_name}} is scheduled to service your 
 If anything changes before then, simply reply to this message.
 
 We look forward to seeing you tomorrow!`,
+
+  introduction: `Hi {{first_name}},
+
+This is {{business_name}} — please save our new number so you can always reach us here.
+
+We truly appreciate your business and are always a text away if you need anything or want to book a service.
+
+Thank you!`,
 
   eta: `Hi {{first_name}},
 
@@ -257,6 +271,10 @@ Just checking in from {{business_name}}.
 If there's anything we can help with around your property this season, simply reply to this message and we'll take care of it.
 
 Thank you for being a valued customer!`,
+
+  custom: `Hi {{first_name}},
+
+`,
 }
 
 const SUBJECTS: Record<MsgType, string> = {
@@ -268,6 +286,8 @@ const SUBJECTS: Record<MsgType, string> = {
   estimate_reminder: 'Your upcoming estimate', payment_reminder: 'Invoice reminder', estimate_followup: 'Following up on your quote',
   receipt: 'Payment received — thank you',
   birthday: 'Happy birthday!', anniversary: 'Thank you', win_back: 'We’d love to see you again', marketing: 'A quick hello',
+  introduction: 'Our new number — please save it',
+  custom: '', // falsy → renderMessage falls back to "A message from {business}"
 }
 
 export interface MsgVars {
@@ -324,4 +344,77 @@ export function renderMessage(type: MsgType, custom: Partial<Record<MsgType, str
   const tpl = (custom && custom[type] && custom[type]!.trim()) ? custom[type]! : DEFAULT_TEMPLATES[type]
   const subject = SUBJECTS[type] || `A message from ${vars.businessName || 'your service provider'}`
   return renderBody(tpl, vars, subject)
+}
+
+// A payment-receipt body with the REAL numbers (invoice #, receipt #, method,
+// amount, balance remaining) — sent as a bodyOverride through the ONE comms
+// pipeline, so a partial payment never claims "paid in full". {{first_name}},
+// {{business_name}} and {{portal_link}} stay as placeholders for the server.
+export function receiptMessageBody(p: {
+  invoiceNumber: string; receiptNumber: string; amountPaid: string; methodLabel: string; balanceRemaining: string | null
+}): string {
+  const balanceLine = p.balanceRemaining
+    ? `Your remaining balance is **${p.balanceRemaining}**.`
+    : 'This invoice is now **paid in full**.'
+  return `Hi {{first_name}},
+
+Thank you — we've received your payment of **${p.amountPaid}** (${p.methodLabel}) on invoice ${p.invoiceNumber}.
+
+Receipt ${p.receiptNumber}. ${balanceLine}
+
+View your invoices and payment history anytime:
+
+{{portal_link}}
+
+We appreciate your business!
+
+— {{business_name}}`
+}
+
+// ── Message categories (granular consent) ─────────────────────────────────────
+// The customer-facing grouping every template falls into. Customers opt in/out
+// per CATEGORY (customers.message_prefs jsonb) on the website funnel + portal;
+// the ONE dispatch engine (lib/comms/dispatch) enforces it. A missing key means
+// "inherit the channel opt-in" — so existing customers behave exactly as before.
+export type MsgCategory = 'reminders' | 'invoices' | 'estimates' | 'marketing' | 'seasonal'
+export type MessagePrefs = Partial<Record<MsgCategory, boolean>>
+
+export const MSG_CATEGORY_LABELS: Record<MsgCategory, string> = {
+  reminders: 'Appointment & service updates',
+  invoices: 'Invoices & payments',
+  estimates: 'Estimates & quotes',
+  marketing: 'Offers & news',
+  seasonal: 'Seasonal reminders',
+}
+
+export function msgCategory(t: MsgType): MsgCategory | null {
+  switch (t) {
+    case 'invoice': case 'payment_reminder': case 'receipt': return 'invoices'
+    case 'quote': case 'estimate_reminder': case 'estimate_followup': return 'estimates'
+    case 'marketing': case 'introduction': case 'win_back': return 'marketing'
+    case 'birthday': case 'anniversary': return 'seasonal'
+    case 'custom': return null // owner-composed one-offs are always deliverable
+    default: return 'reminders' // every service-timing message (reminder, on_my_way, eta, …)
+  }
+}
+
+// Does this customer's preference set allow this template? Unknown templates and
+// null prefs always pass (backward compatible; channel opt-in still gates).
+export function prefAllows(prefs: MessagePrefs | null | undefined, template: string): boolean {
+  if (!prefs || !(template in MSG_LABELS)) return true
+  const cat = msgCategory(template as MsgType)
+  return !cat || prefs[cat] !== false
+}
+
+// ── Composer display transform for the portal-link token ─────────────────────
+// The editable composers show a FRIENDLY placeholder instead of the raw
+// {{portal_link}} token; on send it converts back so the server (the only place
+// that knows the customer's token) injects the real URL. One pair, both
+// composers — never a second rendering engine.
+export const PORTAL_LINK_DISPLAY = '[Customer Portal Link]'
+export function toDisplayBody(s: string): string {
+  return s.replace(/\{\{\s*portal_link\s*\}\}/g, PORTAL_LINK_DISPLAY)
+}
+export function fromDisplayBody(s: string): string {
+  return s.split(PORTAL_LINK_DISPLAY).join('{{portal_link}}')
 }

@@ -5,8 +5,9 @@ import { parseISO, format } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { Coord, SchedJob, geocodeAddress, fetchUpcomingSchedulingJobs, todayLocalISO } from '@/lib/geo'
 import { recommendScheduleDays, DayPlan } from '@/lib/route'
+import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
 import { formatCurrency } from '@/lib/utils'
-import { Trophy, Scale, DollarSign } from 'lucide-react'
+import { Trophy, Scale, DollarSign, Loader2 } from 'lucide-react'
 
 const DEFAULT_WORK_DAYS = [5, 6, 0] // Fri/Sat/Sun
 
@@ -32,6 +33,7 @@ export function WeeklyScheduler({ coord, address, excludeJobId, targetHours, tar
   const [jobs, setJobs] = useState<SchedJob[]>([])
   const [base, setBase] = useState<Coord | null>(null)
   const [workDays, setWorkDays] = useState<number[]>(DEFAULT_WORK_DAYS)
+  const [travel, setTravel] = useState<TravelModel>(DEFAULT_TRAVEL_MODEL)
   const [loading, setLoading] = useState(true)
   const [geocoding, setGeocoding] = useState(false)
   const lastGeocoded = useRef<string | null>(null)
@@ -50,11 +52,13 @@ export function WeeklyScheduler({ coord, address, excludeJobId, targetHours, tar
     let active = true
     async function load() {
       const { data: { user } } = await supabase.auth.getUser()
-      const [rows, sRes] = await Promise.all([
+      const [rows, sRes, travelM] = await Promise.all([
         fetchUpcomingSchedulingJobs(supabase, user!.id),
         supabase.from('business_settings').select('base_lat, base_lng, base_address, preferred_work_days').eq('user_id', user!.id).maybeSingle(),
+        loadTravelModel(supabase),
       ])
       if (!active) return
+      setTravel(travelM)
       setJobs(rows.filter(r => r.id !== excludeJobId))
       const s = sRes.data as { base_lat: number | null; base_lng: number | null; base_address: string | null; preferred_work_days: number[] | null } | null
       let b: Coord | null = s?.base_lat != null && s?.base_lng != null ? { lat: s.base_lat, lng: s.base_lng } : null
@@ -68,7 +72,7 @@ export function WeeklyScheduler({ coord, address, excludeJobId, targetHours, tar
     return () => { active = false }
   }, [supabase, excludeJobId])
 
-  if (loading || geocoding) return <p className="text-xs text-ink-faint">Planning your work week…</p>
+  if (loading || geocoding) return <p className="text-xs text-ink-faint flex items-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Planning your work week…</p>
   if (!target) return <p className="text-xs text-ink-faint">Add a located address to plan the best day across your week.</p>
 
   const modes = recommendScheduleDays(target, jobs, {
@@ -79,13 +83,16 @@ export function WeeklyScheduler({ coord, address, excludeJobId, targetHours, tar
     targetValue,
     customerPreferredDays,
     customerAvoidDays,
+    speed: travel,
   })
   if (!modes.days.length) return <p className="text-xs text-ink-faint">No upcoming work days in range — set your Preferred Work Days in Settings.</p>
 
   const cards: { key: string; Icon: typeof Trophy; accent: string; title: string; plan: DayPlan | null; stat: (p: DayPlan) => string }[] = [
-    { key: 'density', Icon: Trophy, accent: 'text-amber-400', title: 'Best Density', plan: modes.density, stat: p => `${p.nearbyCount} nearby job${p.nearbyCount !== 1 ? 's' : ''} · +${p.addedDriveMin} min driving` },
-    { key: 'balanced', Icon: Scale, accent: 'text-sky-400', title: 'Balanced Schedule', plan: modes.balanced, stat: p => `${p.jobCount} job${p.jobCount !== 1 ? 's' : ''} · ${p.plannedHours} planned hours` },
-    { key: 'revenue', Icon: DollarSign, accent: 'text-emerald-400', title: 'Revenue Optimized', plan: modes.revenue, stat: p => `${formatCurrency(p.scheduledRevenue)} scheduled revenue` },
+    // Same lens vocabulary as the schedule optimizer (Max Density / Balanced
+    // Workload / Max Profit) — one concept, one name, everywhere.
+    { key: 'density', Icon: Trophy, accent: 'text-amber-400', title: 'Max Density', plan: modes.density, stat: p => `${p.nearbyCount} nearby job${p.nearbyCount !== 1 ? 's' : ''} · +${p.addedDriveMin} min driving` },
+    { key: 'balanced', Icon: Scale, accent: 'text-sky-400', title: 'Balanced Workload', plan: modes.balanced, stat: p => `${p.jobCount} job${p.jobCount !== 1 ? 's' : ''} · ${p.plannedHours} planned hours` },
+    { key: 'revenue', Icon: DollarSign, accent: 'text-emerald-400', title: 'Max Profit', plan: modes.revenue, stat: p => `${formatCurrency(p.scheduledRevenue)} scheduled revenue` },
   ]
 
   return (

@@ -38,7 +38,7 @@ export function WeekendOutlook() {
       const [jRes, qRes, rRes, sRes] = await Promise.all([
         supabase.from('jobs')
           .select('id, scheduled_date, status, start_time, service_type, duration_minutes, price, quote_id, recurrence_id, customers(name, phone), properties(address)')
-          .eq('user_id', user!.id).gte('scheduled_date', todayLocalISO())
+          .eq('user_id', user!.id).gte('scheduled_date', format(addDays(parseISO(todayLocalISO()), 1), 'yyyy-MM-dd'))
           // The scan window below maxes out at 21 days — don't download a whole
           // season of materialized recurring visits just to keep 3 dates.
           .lte('scheduled_date', format(addDays(parseISO(todayLocalISO()), 21), 'yyyy-MM-dd'))
@@ -58,9 +58,11 @@ export function WeekendOutlook() {
       const workStart = sRow?.work_start_time || '08:00'
       const capacity = sRow?.daily_capacity_hours && sRow.daily_capacity_hours > 0 ? sRow.daily_capacity_hours : 8
 
-      // The next DAYS_TO_SHOW preferred work days from today.
+      // The next DAYS_TO_SHOW preferred work days starting TOMORROW — the pinned
+      // TodayJobs card owns today; repeating today's stop list here duplicated it
+      // (rows, call buttons and all) every working morning.
       const wantDates: string[] = []
-      let d = parseISO(todayLocalISO())
+      let d = addDays(parseISO(todayLocalISO()), 1)
       for (let i = 0; i < 21 && wantDates.length < DAYS_TO_SHOW; i++) {
         if (prefSet.has(getDay(d))) wantDates.push(format(d, 'yyyy-MM-dd'))
         d = addDays(d, 1)

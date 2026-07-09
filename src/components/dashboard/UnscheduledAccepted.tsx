@@ -2,70 +2,64 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Quote } from '@/types'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { formatCurrency } from '@/lib/utils'
+import { scheduleQuoteAsJob } from '@/lib/scheduleQuote'
+import { toast } from '@/lib/toast'
 import { CalendarPlus, AlertCircle } from 'lucide-react'
-
-function localToday(): string {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
 
 // Accepted quotes that have no job on the calendar yet — the things most at
 // risk of falling through the cracks. One tap drops them on today's schedule.
-export function UnscheduledAccepted() {
+// Preferred: fed by the dashboard's server load via `quotes` (no second client
+// round-trip, no pop-in layout shift). Without the prop it self-fetches.
+export function UnscheduledAccepted({ quotes: initialQuotes }: { quotes?: Quote[] }) {
   const supabase = createClient()
-  const [quotes, setQuotes] = useState<Quote[]>([])
-  const [loading, setLoading] = useState(true)
+  const router = useRouter()
+  const [quotes, setQuotes] = useState<Quote[]>(initialQuotes ?? [])
+  const [loading, setLoading] = useState(!initialQuotes)
   const [scheduling, setScheduling] = useState<string | null>(null)
 
-  async function load() {
-    // Local session read — no auth round-trip before the RLS-scoped queries below.
-    const { data: { session } } = await supabase.auth.getSession()
-    const user = session?.user
-    const [qRes, jRes] = await Promise.all([
-      supabase.from('quotes').select('*').eq('user_id', user!.id).eq('status', 'accepted').order('created_at', { ascending: false }),
-      // Cancelled jobs must NOT count as "scheduled" — an accepted quote whose
-      // only job was cancelled would otherwise vanish from this safety net.
-      supabase.from('jobs').select('quote_id').eq('user_id', user!.id).not('quote_id', 'is', null).neq('status', 'cancelled'),
-    ])
-    const scheduled = new Set((jRes.data || []).map((j: { quote_id: string | null }) => j.quote_id))
-    setQuotes(((qRes.data as Quote[]) || []).filter(q => !scheduled.has(q.id)))
-    setLoading(false)
-  }
-
-  useEffect(() => { load() }, [])
+  // Dashboard passes `initialQuotes` (fetch-once) → skip the client fetch; otherwise
+  // self-fetch. Local session read (getSession) — no auth round-trip.
+  useEffect(() => {
+    if (initialQuotes) return
+    ;(async () => {
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
+      const [qRes, jRes] = await Promise.all([
+        supabase.from('quotes').select('*').eq('user_id', user!.id).eq('status', 'accepted').order('created_at', { ascending: false }),
+        // Cancelled jobs must NOT count as "scheduled" — an accepted quote whose
+        // only job was cancelled would otherwise vanish from this safety net.
+        supabase.from('jobs').select('quote_id').eq('user_id', user!.id).not('quote_id', 'is', null).neq('status', 'cancelled'),
+      ])
+      const scheduled = new Set((jRes.data || []).map((j: { quote_id: string | null }) => j.quote_id))
+      setQuotes(((qRes.data as Quote[]) || []).filter(q => !scheduled.has(q.id)))
+      setLoading(false)
+    })()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function quickSchedule(q: Quote) {
     setScheduling(q.id)
     const { data: { user } } = await supabase.auth.getUser()
-    let propertyId: string | null = q.property_id
-    if (!propertyId && q.customer_id) {
-      const { data: props } = await supabase
-        .from('properties').select('id').eq('customer_id', q.customer_id)
-        .order('is_primary', { ascending: false }).limit(1)
-      if (props && props.length > 0) propertyId = props[0].id
+    // THE quote→job engine (lib/scheduleQuote) — it fetches quote_services, so a
+    // multi-service quote scheduled from this card keeps its add-ons, duration
+    // and price, identical to scheduling from the quote page.
+    const { error } = await scheduleQuoteAsJob(supabase, user!.id, q)
+    if (error) {
+      toast.error('Could not create job: ' + error)
+    } else {
+      setQuotes(prev => prev.filter(x => x.id !== q.id))
+      // Dispatchers usually want to adjust crew/notes/time right away — one tap
+      // to today's schedule, where the new job just landed.
+      toast('Job added to today’s schedule.', {
+        tone: 'success',
+        action: { label: 'View job', run: () => router.push('/dashboard/schedule') },
+      })
     }
-    const { error: jobErr } = await supabase.from('jobs').insert({
-      user_id: user!.id,
-      customer_id: q.customer_id,
-      property_id: propertyId,
-      quote_id: q.id,
-      title: `${q.service_type} — ${q.customer_name}`,
-      service_type: q.service_type,
-      scheduled_date: localToday(),
-      duration_minutes: Math.round(Number(q.hours) * 60),
-      crew_size: q.crew_size,
-      status: 'scheduled',
-      notes: q.notes,
-    })
-    // If the job wasn't created, DON'T drop the at-risk quote from the safety-net list.
-    if (jobErr) { setScheduling(null); return }
-    await supabase.from('quotes').update({ status: 'scheduled' }).eq('id', q.id)
-    setQuotes(prev => prev.filter(x => x.id !== q.id))
     setScheduling(null)
   }
 

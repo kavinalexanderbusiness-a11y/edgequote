@@ -18,18 +18,24 @@ interface TabsProps {
 
 /**
  * Pill / segmented tab bar matching the app's filter-chip style
- * (rounded-full, accent for active). Wraps and scrolls on small screens.
+ * (rounded-full, accent for active). Stays on ONE line and scrolls horizontally
+ * when it overflows — `overflow-x-auto` + `flex-wrap` are mutually exclusive, so
+ * wrap is dropped (it would have forced multi-line and disabled scrolling).
+ * Exposes proper tablist/tab semantics with `aria-selected`.
  */
 export function Tabs({ tabs, active, onChange, className }: TabsProps) {
   return (
-    <div className={cn('flex gap-1.5 overflow-x-auto flex-wrap', className)}>
+    <div role="tablist" className={cn('flex gap-1.5 overflow-x-auto', className)}>
       {tabs.map(t => (
         <button
           key={t.key}
           type="button"
+          role="tab"
+          aria-selected={active === t.key}
           onClick={() => onChange(t.key)}
           className={cn(
             'shrink-0 flex items-center gap-1.5 text-xs font-medium rounded-full px-3.5 py-2 border transition-colors',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
             active === t.key
               ? 'bg-accent text-black border-accent'
               : 'border-border text-ink-muted hover:text-ink'

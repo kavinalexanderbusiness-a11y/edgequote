@@ -138,6 +138,50 @@ export async function processJobNow(
   }
 }
 
+// ── Due-job processing (Hobby-friendly: no required cron) ──
+// Drives every due job forward. Works with EITHER an authed user client (RLS scopes it
+// to that owner — used by the on-demand /publish/process route that fires when the Studio
+// loads or on a publish action) OR a service-role client (the OPTIONAL daily cron that
+// sweeps all owners). Manual scheduled jobs that come due flip to 'queued' (ready to
+// post); api jobs publish through their provider. Bounded + idempotent, so running it
+// often (on every load) is safe and never double-posts.
+export async function processDueJobs(supabase: SupabaseClient): Promise<{ processed: number; published: number; ready: number; failed: number }> {
+  const now = new Date().toISOString()
+  let jobs: PublishJob[] = []
+  try {
+    const { data } = await supabase.from('publish_jobs').select('*')
+      .in('status', ['scheduled', 'queued'])
+      .or(`scheduled_for.is.null,scheduled_for.lte.${now}`)
+      .order('scheduled_for', { ascending: true })
+      .limit(50)
+    jobs = (data as PublishJob[] | null) || []
+  } catch {
+    return { processed: 0, published: 0, ready: 0, failed: 0 }
+  }
+
+  let published = 0, ready = 0, failed = 0
+  for (const job of jobs) {
+    if (job.mode !== 'api') {
+      // Manual can't auto-post — when its schedule arrives, surface it as ready.
+      if (job.status === 'scheduled') { await patchJob(supabase, job.id, { status: 'queued' }); ready++ }
+      continue
+    }
+    if (job.attempts >= job.max_attempts) continue
+    const { data: pieceRow } = await supabase.from('content_pieces').select('*').eq('id', job.content_piece_id).maybeSingle()
+    const piece = pieceRow as ContentPiece | null
+    if (!piece) continue
+    let connection: SocialConnection | null = null
+    if (job.connection_id) {
+      const { data: c } = await supabase.from('social_connections').select('*').eq('id', job.connection_id).maybeSingle()
+      connection = c as SocialConnection | null
+    }
+    const out = await processJobNow(supabase, job.user_id, { job, piece, connection })
+    if (out.job.status === 'published') published++
+    else if (out.job.status === 'failed') failed++
+  }
+  return { processed: jobs.length, published, ready, failed }
+}
+
 // ── Owner actions (client-safe, RLS-scoped) ──
 export async function retryJob(supabase: SupabaseClient, id: string): Promise<PublishJob | null> {
   return patchJob(supabase, id, { status: 'queued', error: null })

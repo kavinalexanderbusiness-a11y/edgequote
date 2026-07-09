@@ -5,13 +5,15 @@
 // dashboard layout). Destructive actions use toast.undo(msg, revert) — act now,
 // offer a few seconds to undo — instead of an up-front blocking confirm.
 
-export type ToastTone = 'info' | 'success' | 'error'
+export type ToastTone = 'info' | 'success' | 'error' | 'warning' | 'loading'
 
 export interface ToastItem {
   id: number
   message: string
   tone: ToastTone
   undo?: () => void | Promise<void>
+  /** Generic follow-up button (e.g. "View job") — undo is the destructive-revert special case. */
+  action?: { label: string; run: () => void | Promise<void> }
   duration: number
 }
 
@@ -29,12 +31,23 @@ export function dismissToast(id: number) {
   emit()
 }
 
-interface ToastOpts { tone?: ToastTone; undo?: () => void | Promise<void>; duration?: number }
+// Mutate a live toast in place — drives loading→success/error and progress
+// updates (e.g. "Saving 3/5…") without stacking new toasts.
+export function updateToast(id: number, patch: Partial<Pick<ToastItem, 'message' | 'tone' | 'undo' | 'action' | 'duration'>>) {
+  if (!items.some(t => t.id === id)) return
+  items = items.map(t => (t.id === id ? { ...t, ...patch } : t))
+  emit()
+  if (patch.duration && patch.duration > 0 && typeof window !== 'undefined') {
+    window.setTimeout(() => dismissToast(id), patch.duration)
+  }
+}
+
+interface ToastOpts { tone?: ToastTone; undo?: () => void | Promise<void>; action?: { label: string; run: () => void | Promise<void> }; duration?: number }
 
 function push(message: string, opts: ToastOpts = {}): number {
   const id = ++seq
-  const duration = opts.duration ?? (opts.undo ? 7000 : opts.tone === 'error' ? 6000 : 4000)
-  items = [...items, { id, message, tone: opts.tone ?? 'info', undo: opts.undo, duration }]
+  const duration = opts.duration ?? (opts.undo || opts.action ? 7000 : opts.tone === 'error' ? 6000 : 4000)
+  items = [...items, { id, message, tone: opts.tone ?? 'info', undo: opts.undo, action: opts.action, duration }]
   emit()
   if (duration > 0 && typeof window !== 'undefined') {
     window.setTimeout(() => dismissToast(id), duration)
@@ -49,7 +62,25 @@ export const toast = Object.assign(
   {
     info: (m: string) => push(m, { tone: 'info' }),
     success: (m: string) => push(m, { tone: 'success' }),
+    warning: (m: string) => push(m, { tone: 'warning' }),
     error: (m: string) => push(m, { tone: 'error' }),
     undo: (m: string, onUndo: () => void | Promise<void>) => push(m, { tone: 'info', undo: onUndo }),
+    // A sticky spinner toast; returns its id. Update it (progress) or resolve it
+    // with toast.update(id, …) / toast.dismiss(id), or use toast.promise.
+    loading: (m: string) => push(m, { tone: 'loading', duration: 0 }),
+    update: updateToast,
+    dismiss: dismissToast,
+    // Drive a whole async action's feedback from one toast: spinner → success/error.
+    promise: async <T>(p: Promise<T>, msgs: { loading: string; success: string | ((v: T) => string); error: string | ((e: unknown) => string) }): Promise<T> => {
+      const id = push(msgs.loading, { tone: 'loading', duration: 0 })
+      try {
+        const v = await p
+        updateToast(id, { tone: 'success', message: typeof msgs.success === 'function' ? msgs.success(v) : msgs.success, duration: 4000 })
+        return v
+      } catch (e) {
+        updateToast(id, { tone: 'error', message: typeof msgs.error === 'function' ? msgs.error(e) : msgs.error, duration: 6000 })
+        throw e
+      }
+    },
   },
 )

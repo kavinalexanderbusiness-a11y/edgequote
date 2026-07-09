@@ -1,10 +1,13 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { useForm, Controller } from 'react-hook-form'
+import { useForm, useFieldArray, Controller } from 'react-hook-form'
 import { useRouter } from 'next/navigation'
 import { Input } from '@/components/ui/Input'
 import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
+import { CustomerPicker } from '@/components/ui/CustomerPicker'
+import { useAutosave } from '@/hooks/useAutosave'
+import { AutosaveStatus, DraftRestoreBanner } from '@/components/ui/Autosave'
 import { QuoteMeasure } from '@/components/quotes/QuoteMeasure'
 import { Select } from '@/components/ui/Select'
 import { Textarea } from '@/components/ui/Textarea'
@@ -13,8 +16,10 @@ import { Toggle } from '@/components/ui/Toggle'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Collapsible } from '@/components/ui/Collapsible'
 import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
+import { sumServiceLines, serviceLineTotals, emptyServiceLine, SERVICE_UNITS } from '@/lib/quoteServices'
 import { formatCurrency, formatDate, suggestTravelFee, cn } from '@/lib/utils'
-import { formatServicePrice } from '@/lib/servicePricing'
+import { toast } from '@/lib/toast'
+import { formatServicePrice, servicePricingKind } from '@/lib/servicePricing'
 import { laborSuggestion, pricingConfigFromSettings, latestSavedRecommendation, recommendationIsStale, pricingPackage } from '@/lib/pricing'
 import { evaluatePrice, PriceGuardrail } from '@/lib/priceGuardrails'
 import { PriceGuardrailNote } from '@/components/pricing/PriceGuardrailNote'
@@ -23,7 +28,8 @@ import { createClient } from '@/lib/supabase/client'
 import type { MeasurementSnapshot, SavedRecommendation } from '@/types'
 import { BestDaySuggestions } from '@/components/schedule/BestDaySuggestions'
 import { SmartLaborField } from '@/components/labor/SmartLaborField'
-import { Clock, DollarSign, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, SlidersHorizontal, CheckCircle2, Users } from 'lucide-react'
+import { PriceIntelligence } from '@/components/pricing/PriceIntelligence'
+import { Clock, DollarSign, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, SlidersHorizontal, CheckCircle2, Users, Layers, Plus, Trash2 } from 'lucide-react'
 
 interface QuoteBuilderProps {
   customers: Customer[]
@@ -37,15 +43,20 @@ interface QuoteBuilderProps {
   defaultValues?: Partial<QuoteFormValues>
   onSubmit: (values: QuoteFormValues) => Promise<void>
   isEdit?: boolean
+  /** Autosave key — defaults per new/edit; pass a precise one (e.g. `quote:${id}`). */
+  autosaveKey?: string
+  /** Server record's updated_at — drafts older than this are never offered. */
+  autosaveBaselineUpdatedAt?: string | null
 }
 
 const DEFAULT_RATE = 50
 
 export function QuoteBuilder({
   customers, templates, tiers, settings, defaultCustomerId, defaultPropertyId, defaultValues, onSubmit, isEdit,
+  autosaveKey, autosaveBaselineUpdatedAt,
 }: QuoteBuilderProps) {
   const router = useRouter()
-  const { register, handleSubmit, watch, setValue, getValues, control, formState: { errors, isSubmitting } } =
+  const { register, handleSubmit, watch, setValue, getValues, reset, control, formState: { errors, isSubmitting } } =
     useForm<QuoteFormValues>({
       defaultValues: {
         customer_id: defaultCustomerId || '',
@@ -69,9 +80,23 @@ export function QuoteBuilder({
         travel_fee: 0,
         notes: '',
         status: 'draft',
+        services: [],
         ...defaultValues,
       },
     })
+
+  // Additional service lines beyond the primary one (multi-service quotes).
+  const serviceLines = useFieldArray({ control, name: 'services' })
+
+  // Autosave the whole quote — survives refresh / crash / accidental close (shared engine).
+  const formValues = watch()
+  const autosave = useAutosave<QuoteFormValues>({
+    key: autosaveKey || (isEdit ? 'quote:edit' : 'quote:new'),
+    value: formValues,
+    baselineUpdatedAt: autosaveBaselineUpdatedAt ?? null,
+    isEmpty: v => !v.customer_id && !v.customer_name?.trim() && !v.address?.trim() && !v.service_type?.trim() && !(Number(v.initial_price) > 0),
+  })
+  const submit = handleSubmit(async v => { await onSubmit(v); autosave.clear() })
 
   const [calcLoading, setCalcLoading] = useState(false)
   const [calcMsg, setCalcMsg] = useState<string | null>(null)
@@ -130,30 +155,83 @@ export function QuoteBuilder({
     [isManualEntry, customers, manualName, manualPhone, manualEmail, address],
   )
   const suggestedInitial = laborSuggestion(Number(hours), Number(crewSize), Number(rate), overgrowth || 1)
-  const effectiveTotal = initialPrice + Number(travelFee || 0)
+  // Additional service lines — summed by the ONE quote-services engine (same
+  // discount semantics as invoices). The first-visit total = primary + extras + travel.
+  const watchedServices = watch('services')
+  const extras = useMemo(() => sumServiceLines(watchedServices), [watchedServices])
+  const effectiveTotal = initialPrice + extras.net + Number(travelFee || 0)
+
+  // Which pricing STRUCTURE this service uses — the one seam that decides which
+  // engine recommends and which fields an Accept fills (lawn cadences vs area
+  // rate vs labour). Template display type wins; else the serviceKey normalizer.
+  const svcTemplate = templates.find(t => t.id === templateId) ?? null
+  const pricingKind = servicePricingKind(watch('service_type'), svcTemplate)
 
   // Live suggested prices straight from the measured lawn — the compact one-tap
-  // pricing. Same engine as everywhere else; we just surface the top three.
+  // pricing. Same engine as everywhere else; ONLY for lawn-cadence services (a
+  // hedge job or mulch install must never be priced as that many ft² of grass).
   const suggested = useMemo(() => {
-    if (measuredSqft <= 0) return null
+    if (pricingKind !== 'lawn_recurring' || measuredSqft <= 0) return null
     const cfg = pricingConfigFromSettings(settings)
     const pkg = pricingPackage(measuredSqft, cfg, { overgrowth: overgrowth || 1, nearbyCount: 0 })
     return {
       one_time: pkg.oneTime,
       weekly: pkg.options.find(o => o.cadence === 'weekly')?.price ?? 0,
       biweekly: pkg.options.find(o => o.cadence === 'biweekly')?.price ?? 0,
+      monthly: pkg.options.find(o => o.cadence === 'monthly')?.price ?? 0,
       recommended: pkg.recommended.cadence,
     }
-  }, [measuredSqft, overgrowth, settings])
+  }, [pricingKind, measuredSqft, overgrowth, settings])
 
-  // Tap a suggestion → fill the first-visit price + the chosen cadence (and clear the
-  // others), marking it as "suggested" (not a manual override).
+  // The service-appropriate single recommendation for NON-lawn kinds.
+  //   per_area → the template's $/sq ft × the measured area (+ materials note)
+  //   labour   → hours × crew × rate (the existing labour engine)
+  const areaRate = svcTemplate && svcTemplate.pricing_display_type === 'per_sqft' ? Number(svcTemplate.default_rate) || 0 : 0
+  const serviceRec = useMemo(() => {
+    if (pricingKind === 'per_area' && areaRate > 0 && measuredSqft > 0) {
+      return {
+        price: Math.round(areaRate * measuredSqft),
+        basis: `${formatCurrency(areaRate)}/sq ft × ${Math.round(measuredSqft).toLocaleString()} sq ft`,
+        materials: svcTemplate?.pricing_display_type?.includes('materials') ?? false,
+      }
+    }
+    if (pricingKind === 'labour' || pricingKind === 'per_area') {
+      return {
+        price: suggestedInitial,
+        basis: `${Number(hours) || 0} hr × ${crewSize} crew × ${formatCurrency(Number(rate))}/hr`,
+        materials: (svcTemplate?.pricing_display_type || '').includes('materials'),
+      }
+    }
+    return null
+  }, [pricingKind, areaRate, measuredSqft, suggestedInitial, hours, crewSize, rate, svcTemplate])
+
+  // Accept for one-off services: fill the one price that makes sense and CLEAR
+  // the lawn cadence fields (weekly mulch makes no sense on a quote).
+  function applyServiceRec() {
+    if (!serviceRec) return
+    setValue('initial_price', serviceRec.price)
+    setValue('weekly_price', 0)
+    setValue('biweekly_price', 0)
+    setValue('monthly_price', 0)
+    setValue('suggested_price', serviceRec.price)
+    setInitialManual(true)
+    setPickedCadence(null)
+  }
+
+  // Monthly is off the standard lawn-care menu (a month of growth is a rough cut) —
+  // it stays blank unless the owner explicitly enables it. Editing loads it as
+  // enabled when the quote already has a monthly price.
+  const [includeMonthly, setIncludeMonthly] = useState<boolean>((defaultValues?.monthly_price ?? 0) > 0)
+
+  // Tap a suggestion → fill One-Time + Weekly + Bi-Weekly TOGETHER (the customer
+  // sees every option, no re-typing); the tapped cadence is just the one you'd
+  // pitch. Monthly fills only when enabled. All fields stay editable after.
   function applySuggested(c: 'one_time' | 'weekly' | 'biweekly') {
     if (!suggested) return
     setValue('initial_price', suggested.one_time)
-    setValue('weekly_price', c === 'weekly' ? suggested.weekly : 0)
-    setValue('biweekly_price', c === 'biweekly' ? suggested.biweekly : 0)
-    setValue('monthly_price', 0)
+    setValue('weekly_price', suggested.weekly)
+    setValue('biweekly_price', suggested.biweekly)
+    setValue('monthly_price', includeMonthly ? suggested.monthly : 0)
     setValue('suggested_price', suggested.one_time)
     setInitialManual(false)
     setPickedCadence(c)
@@ -203,10 +281,13 @@ export function QuoteBuilder({
       if (!isEdit && lawn > 0 && (Number(getValues('measured_sqft')) || 0) === 0) {
         setValue('measured_sqft', lawn)
       }
-      // Targeting a specific property → prefer its address over the customer default.
-      if (!isEdit && defaultPropertyId && row?.address) {
+      // Targeting a specific property → its address wins. Otherwise the primary
+      // property's address fills the field only when it's still EMPTY (imported
+      // customers and website leads often carry the address on the property, not
+      // the customer record — never make the owner retype data we just fetched).
+      if (!isEdit && row?.address) {
         const full = [row.address, row.city, row.province].filter(Boolean).join(', ')
-        if (full) setValue('address', full)
+        if (full && (defaultPropertyId || !getValues('address'))) setValue('address', full)
       }
     }
     load()
@@ -218,14 +299,20 @@ export function QuoteBuilder({
     const t = templates.find(s => s.id === templateId)
     if (t) {
       setValue('service_type', t.name)
-      setValue('rate', t.default_rate)
+      // Only an HOURLY template's rate is a labour rate — a per-sqft or
+      // starting-from figure is a PRICE and must never become $/man-hour.
+      if (t.pricing_display_type === 'hourly' || t.pricing_display_type === 'hourly_materials') {
+        setValue('rate', t.default_rate)
+      }
       if (!isEdit && t.default_description) setValue('notes', t.default_description)
     }
   }, [templateId, templates, setValue, isEdit])
 
   useEffect(() => {
-    if (!initialManual) setValue('initial_price', suggestedInitial)
-  }, [suggestedInitial, initialManual, setValue])
+    // Labour keeps the price live ONLY while nothing was accepted or typed —
+    // an accepted suggestion (pickedCadence) must never be silently overwritten.
+    if (!initialManual && !pickedCadence) setValue('initial_price', suggestedInitial)
+  }, [suggestedInitial, initialManual, pickedCadence, setValue])
 
   const travelSuggestion = distanceKm > 0 ? suggestTravelFee(distanceKm, tiers) : null
 
@@ -304,21 +391,36 @@ export function QuoteBuilder({
   const showManualName = !customerId || customerId === '__manual'
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="pb-24 lg:pb-0">
+    <form onSubmit={submit} className="pb-24 lg:pb-0">
+      {autosave.draft && (
+        <div className="mb-4">
+          <DraftRestoreBanner
+            savedAt={autosave.savedAt}
+            label="unsaved quote"
+            onRestore={() => { const v = autosave.restore(); if (v) reset(v) }}
+            onDiscard={autosave.discard}
+          />
+        </div>
+      )}
       <div className="grid lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-4">
           {/* ── FAST PATH — Customer → Property → Service → Price → Save ── */}
           <Card>
-            <CardHeader className="flex items-center justify-between">
+            <CardHeader className="flex items-center justify-between gap-2">
               <h2 className="text-sm font-semibold text-ink">{isEdit ? 'Quote details' : 'New quote'}</h2>
-              {initialManual && (
-                <span className="text-[10px] uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5">Manual price</span>
-              )}
+              <div className="flex items-center gap-2">
+                <AutosaveStatus status={autosave.status} savedAt={autosave.savedAt} />
+                {initialManual && (
+                  <span className="text-[10px] uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5">Manual price</span>
+                )}
+              </div>
             </CardHeader>
             <CardBody className="space-y-4">
-              {/* Customer */}
+              {/* Customer — type-to-search picker (scales past a giant <select>) */}
               <Controller name="customer_id" control={control}
-                render={({ field }) => (<Select label="Customer" options={customerOptions} {...field} />)} />
+                render={({ field }) => (
+                  <CustomerPicker label="Customer" customers={customers} value={field.value || ''} onChange={field.onChange} />
+                )} />
               {showManualName && (
                 <div className="space-y-3 rounded-xl border border-accent/20 bg-accent/5 p-3">
                   <p className="text-[11px] text-ink-muted flex items-center gap-1.5">
@@ -371,6 +473,16 @@ export function QuoteBuilder({
                   />
                 )} />
 
+              {/* Service FIRST (owner directive) — measurement, suggested pricing,
+                  intelligence, duration and profitability below are all specific to
+                  the selected service. */}
+              <Controller name="service_template_id" control={control}
+                render={({ field }) => (<Select label="Service" options={templateOptions} {...field} />)} />
+              <Input label="Service Name" placeholder="e.g. Lawn Mowing"
+                hint="Auto-fills when you pick a service above — edit to rename it on the quote."
+                error={errors.service_type?.message}
+                {...register('service_type', { required: 'Service is required' })} />
+
               {/* Lawn size — a CORE property attribute (powers pricing, labour & future
                   analytics). Auto-filled from a website/satellite measurement or the
                   property's saved size; always editable, and synced back to the property
@@ -382,7 +494,12 @@ export function QuoteBuilder({
 
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
                 <Button type="button" variant="secondary" size="sm"
-                  onClick={() => { if (!address) { setCalcMsg('Enter an address first.'); return } setShowMeasure(true) }}>
+                  onClick={() => {
+                    // Immediate feedback where the tap happened — a message inside
+                    // the collapsed Travel section is a silent failure.
+                    if (!address) { toast.error('Enter a service address first.'); return }
+                    setShowMeasure(true)
+                  }}>
                   <Ruler className="w-3.5 h-3.5" /> Measure &amp; price from satellite
                 </Button>
                 {measuredSqft > 0 && (
@@ -392,10 +509,74 @@ export function QuoteBuilder({
                 )}
               </div>
 
-              {/* Compact Suggested Pricing — one tap fills the quote price + frequency. */}
+              {/* ── THE recommended price ─────────────────────────────────────
+                  ONE primary recommendation per service kind; everything below
+                  it supports that number instead of competing with it.
+                  • Lawn cadence services → Pricing Intelligence (engine anchor +
+                    win-history + minimum floor) is the primary; the cadence
+                    tiles below are the supporting structure it fills.
+                  • Everything else (mulch, cleanups, hedges…) → one card from
+                    the service-appropriate engine (area rate or labour). */}
+              {pricingKind === 'lawn_recurring' && measuredSqft > 0 && (
+                <PriceIntelligence
+                  sqft={measuredSqft}
+                  serviceType={watch('service_type')}
+                  cadence={suggested?.recommended ?? 'one_time'}
+                  overgrowth={overgrowth}
+                  propertyId={defaultPropertyId}
+                  customerId={customerId && customerId !== '__manual' ? customerId : undefined}
+                  currentPrice={(suggested?.recommended ?? 'one_time') === 'one_time' ? initialPrice
+                    : (suggested?.recommended === 'weekly' ? weeklyPrice
+                      : suggested?.recommended === 'biweekly' ? biweeklyPrice : monthlyPrice)}
+                  onApply={(price) => {
+                    // Accept = fill the FULL lawn structure in one tap: the learned
+                    // price takes the recommended cadence's slot, the engine fills
+                    // the rest (monthly only when enabled). Everything stays editable.
+                    if (!suggested) {
+                      setValue('initial_price', price); setValue('suggested_price', price); setInitialManual(true)
+                      return
+                    }
+                    const c = suggested.recommended
+                    setValue('initial_price', c === 'one_time' ? price : suggested.one_time)
+                    setValue('weekly_price', c === 'weekly' ? price : suggested.weekly)
+                    setValue('biweekly_price', c === 'biweekly' ? price : suggested.biweekly)
+                    setValue('monthly_price', includeMonthly ? (c === 'monthly' ? price : suggested.monthly) : 0)
+                    setValue('suggested_price', suggested.one_time)
+                    setInitialManual(false)
+                    setPickedCadence(c === 'monthly' ? null : c)
+                  }}
+                />
+              )}
+
+              {/* One-off / area services: the single service-appropriate price. */}
+              {pricingKind !== 'lawn_recurring' && serviceRec && (
+                <div className="rounded-xl border border-accent/30 bg-accent/[0.06] p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Recommended price</p>
+                      <p className="text-xl font-bold text-ink leading-tight mt-0.5">{formatCurrency(serviceRec.price)}</p>
+                      <p className="text-[11px] text-ink-muted mt-0.5">
+                        {serviceRec.basis}{serviceRec.materials ? ' · plus materials' : ''}
+                      </p>
+                    </div>
+                    <Button type="button" size="sm" onClick={applyServiceRec} className="shrink-0">
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Accept
+                    </Button>
+                  </div>
+                  <p className="text-[10px] text-ink-faint mt-1.5">
+                    {pricingKind === 'per_area'
+                      ? 'One-time job — Accept fills the price; recurring fields stay empty.'
+                      : 'Priced from labour — fine-tune hours & crew in Advanced Pricing below.'}
+                    {serviceRec.materials ? ' Add materials as Additional services or into the price.' : ''}
+                  </p>
+                </div>
+              )}
+
+              {/* Supporting cadence structure (lawn services) — Accept above fills
+                  these together; tap one to lead with a different frequency. */}
               {suggested && (
                 <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-1.5">Suggested Pricing</p>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-1.5">Plan options — one tap fills all</p>
                   <div className="grid grid-cols-3 gap-2">
                     {([
                       { c: 'weekly', label: 'Weekly', price: suggested.weekly, per: '/visit' },
@@ -409,7 +590,10 @@ export function QuoteBuilder({
                             active ? 'border-accent bg-accent/10 ring-1 ring-accent' : 'border-border bg-surface hover:border-border-strong')}>
                           <span className="flex items-center justify-between gap-1">
                             <span className="text-[11px] font-medium text-ink-muted">{opt.label}</span>
-                            {suggested.recommended === opt.c && <span className="text-[9px] font-bold uppercase tracking-wide text-accent">Rec</span>}
+                            {/* ONE recommendation on screen: when Pricing Intelligence is
+                                the primary card, the tile badge would be a second,
+                                differently-priced "Rec". */}
+                            {!(pricingKind === 'lawn_recurring' && measuredSqft > 0) && suggested.recommended === opt.c && <span className="text-[9px] font-bold uppercase tracking-wide text-accent">Rec</span>}
                           </span>
                           <span className="block text-base font-bold text-ink mt-0.5 leading-tight">
                             {formatCurrency(opt.price)}<span className="text-[10px] font-normal text-ink-faint">{opt.per}</span>
@@ -418,23 +602,32 @@ export function QuoteBuilder({
                       )
                     })}
                   </div>
-                  <p className="text-[10px] text-ink-faint mt-1.5">Tap a price to use it. Editing a price below overrides it until you tap a suggestion again.</p>
+                  <div className="flex items-center justify-between gap-2 mt-1.5">
+                    <p className="text-[10px] text-ink-faint">One tap fills One-Time + Weekly + Bi-Weekly together — every field stays editable below.</p>
+                    <button type="button"
+                      onClick={() => {
+                        const next = !includeMonthly
+                        setIncludeMonthly(next)
+                        // Toggling applies immediately when suggestions already filled the fields.
+                        if (suggested && !initialManual) setValue('monthly_price', next ? suggested.monthly : 0)
+                      }}
+                      className={cn('shrink-0 text-[10px] font-semibold rounded-full px-2 py-0.5 border transition-colors',
+                        includeMonthly ? 'text-accent border-accent/40 bg-accent/10' : 'text-ink-faint border-border hover:text-ink')}>
+                      {includeMonthly ? 'Monthly: on' : '+ Monthly'}
+                    </button>
+                  </div>
                 </div>
               )}
 
-              {/* Service */}
-              <Controller name="service_template_id" control={control}
-                render={({ field }) => (<Select label="Service" options={templateOptions} {...field} />)} />
-              <Input label="Service Name" placeholder="e.g. Lawn Mowing"
-                error={errors.service_type?.message}
-                {...register('service_type', { required: 'Service is required' })} />
             </CardBody>
           </Card>
 
           {/* ── Advanced Pricing — exact price + the full engine, collapsed until needed ── */}
           <Collapsible title="Advanced Pricing" icon={SlidersHorizontal} summary="Exact price · labour · recurring · travel — full control">
-          {/* Saved measurement — the pricing source of truth for this property */}
-          {savedRec && (
+          {/* Saved measurement — the pricing source of truth for this property.
+              Shown ONLY when there's no LIVE suggestion (same numbers, same
+              engine — never two copies of the price list on screen). */}
+          {savedRec && !suggested && (
             <div className="rounded-xl border border-accent/30 bg-accent/5 p-3 space-y-2">
               <p className="text-[11px] font-semibold text-accent uppercase tracking-wide">
                 Measured property · {savedRec.sqft.toLocaleString()} ft² · {formatCurrency(savedRec.rec[savedRec.rec.cadence === 'one_time' ? 'one_time' : savedRec.rec.cadence])}/{savedRec.rec.cadence === 'one_time' ? 'visit' : savedRec.rec.cadence} recommended
@@ -505,7 +698,7 @@ export function QuoteBuilder({
               {...register('rate', { required: 'Required', min: { value: 0, message: 'Rate cannot be negative' } })} />
           </Collapsible>
 
-          <Collapsible title="Recurring pricing" icon={Repeat} summary={recSummary || 'One-time quote'}>
+          <Collapsible title="Plan pricing" icon={Repeat} summary={recSummary || 'One-time quote'}>
             <p className="text-xs text-ink-faint">Fill any cadence you want to offer — they appear on the quote as options the customer can pick.</p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <Input label="Weekly ($/visit)" type="number" step="1" min="0" {...register('weekly_price', { min: 0 })} />
@@ -557,6 +750,83 @@ export function QuoteBuilder({
             </div>
           </Collapsible>
           </Collapsible>
+          {/* ── Additional services — a quote can hold one OR many services. Sits
+              right after Advanced Pricing so the primary flow reads Address →
+              Measure → Recommended price → Accept → fine-tune → extras. Each line
+              has qty × unit price − discount; totals sum via the one
+              quote-services engine. The primary service above stays untouched. ── */}
+          <Collapsible title="Additional services" icon={Layers}
+            summary={serviceLines.fields.length ? `${serviceLines.fields.length} line${serviceLines.fields.length !== 1 ? 's' : ''} · ${formatCurrency(extras.net)}` : 'One-service quote — add mulch, cleanup, hedges…'}>
+            <div className="space-y-3">
+              {serviceLines.fields.map((f, i) => {
+                const line = watchedServices?.[i]
+                const net = line ? serviceLineTotals(line).net : 0
+                return (
+                  <div key={f.id} className="rounded-xl border border-border bg-bg-secondary p-3 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Service {i + 2}</p>
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-semibold text-ink tabular-nums">{formatCurrency(net)}</span>
+                        <button type="button" onClick={() => serviceLines.remove(i)} aria-label="Remove service"
+                          className="text-ink-faint hover:text-red-400 transition-colors">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3">
+                      <Input label="Service" placeholder="e.g. Hedge Trimming"
+                        {...register(`services.${i}.service_type` as const, { required: true })} />
+                      {templates.length > 0 && (
+                        <Select label="From template" placeholder="Pick…"
+                          options={templates.map(t => ({ value: t.id, label: t.name }))}
+                          value={watch(`services.${i}.service_template_id`) || ''}
+                          onChange={e => {
+                            const t = templates.find(x => x.id === e.target.value)
+                            setValue(`services.${i}.service_template_id`, e.target.value)
+                            if (t) {
+                              setValue(`services.${i}.service_type`, t.name)
+                              if (Number(t.default_rate) > 0) setValue(`services.${i}.unit_price`, Number(t.default_rate))
+                              const d = (t.pricing_display_type || '').toLowerCase()
+                              setValue(`services.${i}.unit`, d.includes('hour') ? 'hour' : d.includes('linear') ? 'linear_ft' : d.includes('sq') ? 'sqft' : 'each')
+                            }
+                          }} />
+                      )}
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <Input label="Qty" type="number" step="0.5" min="0"
+                        {...register(`services.${i}.quantity` as const, { min: 0 })} />
+                      <Select label="Unit" options={SERVICE_UNITS.map(u => ({ value: u.value, label: u.label }))}
+                        {...register(`services.${i}.unit` as const)} />
+                      <Input label="Unit price ($)" type="number" step="1" min="0"
+                        {...register(`services.${i}.unit_price` as const, { min: 0 })} />
+                      <Input label="Duration (min)" type="number" step="5" min="0"
+                        {...register(`services.${i}.est_minutes` as const, { min: 0 })} />
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-[auto_auto_1fr] gap-3 items-end">
+                      <Select label="Discount" placeholder="None"
+                        options={[{ value: 'amount', label: '$ off' }, { value: 'percent', label: '% off' }]}
+                        {...register(`services.${i}.discount_type` as const)} />
+                      <Input label="Value" type="number" step="1" min="0"
+                        {...register(`services.${i}.discount_value` as const, { min: 0 })} />
+                      <Input label="Notes" placeholder="Optional"
+                        {...register(`services.${i}.notes` as const)} />
+                    </div>
+                  </div>
+                )
+              })}
+              <Button type="button" variant="secondary" size="sm" onClick={() => serviceLines.append(emptyServiceLine())}>
+                <Plus className="w-3.5 h-3.5" /> Add service
+              </Button>
+              {extras.net > 0 && (
+                <p className="text-xs text-ink-muted">
+                  Additional services total <span className="font-semibold text-ink">{formatCurrency(extras.net)}</span>
+                  {extras.discountAmount > 0 && <> (after {formatCurrency(extras.discountAmount)} discounts)</>}
+                  {extras.minutes > 0 && <> · ≈{extras.minutes} min</>}
+                </p>
+              )}
+            </div>
+          </Collapsible>
+
 
           <Collapsible title="Notes" icon={FileText} summary={notes ? String(notes).slice(0, 40) : 'None'}>
             <Textarea label="Notes" placeholder="Job-specific details, access instructions, gate codes..."
@@ -594,27 +864,29 @@ export function QuoteBuilder({
                 <span className="flex items-center gap-2 text-ink-muted"><Clock className="w-3.5 h-3.5" /> Hours</span>
                 <span className="text-ink font-medium">{Number(hours).toFixed(1)} hrs · {crewSize} crew</span>
               </div>
-              <div className="flex items-center justify-between text-sm">
-                <span className="flex items-center gap-2 text-ink-muted"><DollarSign className="w-3.5 h-3.5" /> Labour suggests</span>
-                <span className="text-ink-muted">{formatCurrency(suggestedInitial)}</span>
-              </div>
               <div className="border-t border-border pt-3 space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-ink-muted">Initial Visit{initialManual ? ' (manual)' : ''}</span>
+                  <span className="text-sm text-ink-muted">First visit{initialManual ? ' (manual)' : ''}</span>
                   <span className="text-ink font-semibold">{formatCurrency(initialPrice)}</span>
                 </div>
+                {extras.net > 0 && (
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="flex items-center gap-2 text-ink-muted"><Layers className="w-3.5 h-3.5" /> Additional services ({serviceLines.fields.length})</span>
+                    <span className="text-ink font-medium">{formatCurrency(extras.net)}</span>
+                  </div>
+                )}
                 <div className="flex items-center justify-between text-sm">
                   <span className="flex items-center gap-2 text-ink-muted"><Car className="w-3.5 h-3.5" /> Travel{showTravelSeparately ? ' (shown)' : ''}</span>
                   <span className="text-ink font-medium">{formatCurrency(Number(travelFee))}</span>
                 </div>
                 <div className="flex items-center justify-between pt-2 border-t border-border">
-                  <span className="text-sm font-semibold text-ink">First Invoice Total</span>
+                  <span className="text-sm font-semibold text-ink">First visit total</span>
                   <span className="text-2xl font-bold text-accent">{formatCurrency(effectiveTotal)}</span>
                 </div>
               </div>
               {(weeklyPrice > 0 || biweeklyPrice > 0 || monthlyPrice > 0) && (
                 <div className="border-t border-border pt-3 space-y-1.5">
-                  <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Maintenance options</p>
+                  <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Plan options</p>
                   {weeklyPrice > 0 && <div className="flex justify-between text-sm"><span className="text-ink-muted">Weekly</span><span className="text-ink font-medium">{formatCurrency(weeklyPrice)}/visit</span></div>}
                   {biweeklyPrice > 0 && <div className="flex justify-between text-sm"><span className="text-ink-muted">Bi-Weekly</span><span className="text-ink font-medium">{formatCurrency(biweeklyPrice)}/visit</span></div>}
                   {monthlyPrice > 0 && <div className="flex justify-between text-sm"><span className="text-ink-muted">Monthly</span><span className="text-ink font-medium">{formatCurrency(monthlyPrice)}/visit</span></div>}
@@ -634,7 +906,7 @@ export function QuoteBuilder({
       {/* Mobile sticky save bar — always reachable without scrolling */}
       <div className="lg:hidden fixed bottom-0 left-0 right-0 z-30 px-4 py-2.5 bg-bg-secondary/95 backdrop-blur border-t border-border flex items-center justify-between gap-3">
         <div className="leading-tight min-w-0">
-          <p className="text-[10px] uppercase tracking-wide text-ink-faint">First invoice</p>
+          <p className="text-[10px] uppercase tracking-wide text-ink-faint">First visit total</p>
           <p className="text-xl font-bold text-accent leading-none">{formatCurrency(effectiveTotal)}</p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -648,14 +920,24 @@ export function QuoteBuilder({
           address={address}
           travelFee={Number(travelFee) || 0}
           cfg={pricingConfigFromSettings(settings)}
+          serviceType={watch('service_type')}
+          propertyId={defaultPropertyId}
+          customerId={customerId && customerId !== '__manual' ? customerId : undefined}
+          services={templates.map(t => t.name).filter((n): n is string => !!n)}
+          onServiceChange={(n) => setValue('service_type', n)}
           onClose={() => setShowMeasure(false)}
           onApply={(sel) => {
-            // Fill the selected pricing STRUCTURE — first visit always at the
-            // one-time price, plus the chosen cadence's recurring price field.
+            // Fill the WHOLE pricing structure in one apply — first visit at the
+            // one-time price plus every recurring option, so the customer sees all
+            // choices with zero re-typing. Monthly stays blank unless enabled (or
+            // the measure flow explicitly recommended monthly).
             setValue('initial_price', sel.oneTime)
-            if (sel.cadence === 'weekly') setValue('weekly_price', sel.weekly)
-            else if (sel.cadence === 'biweekly') setValue('biweekly_price', sel.biweekly)
-            else if (sel.cadence === 'monthly') setValue('monthly_price', sel.monthly)
+            setValue('weekly_price', sel.weekly)
+            setValue('biweekly_price', sel.biweekly)
+            if (includeMonthly || sel.cadence === 'monthly') {
+              setValue('monthly_price', sel.monthly)
+              if (sel.cadence === 'monthly') setIncludeMonthly(true)
+            }
             setValue('measured_sqft', sel.totalSqft)
             setValue('suggested_price', sel.suggested)
             setInitialManual(true); setShowMeasure(false)

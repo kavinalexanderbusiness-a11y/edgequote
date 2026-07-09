@@ -1,5 +1,6 @@
 'use client'
 
+import { confirm as confirmDialog } from '@/lib/confirm'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
@@ -65,7 +66,8 @@ export function PaymentMethodCard({ customer, onCustomerChange }: {
   }
 
   async function removeCard() {
-    if (!confirm('Remove this saved card? AutoPay will be turned off until a new card is added.')) return
+    const ok = await confirmDialog({ title: 'Remove this saved card?', message: 'AutoPay will be turned off until a new card is added.', confirmLabel: 'Remove card', destructive: true })
+    if (!ok) return
     setBusy('remove'); setError(null)
     try {
       const res = await fetch('/api/payments/remove-card', {

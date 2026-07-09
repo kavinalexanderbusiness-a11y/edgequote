@@ -29,9 +29,6 @@ function withUrl(supabase: SupabaseClient, rows: JobPhoto[]): JobPhotoView[] {
 // A single gallery never needs a property's/job's ENTIRE history — cap it so a
 // property with hundreds of visits can't pull thousands of rows into one gallery.
 const GALLERY_LIMIT = 300
-// The per-page batch cap: enough to seed every row's preview gallery on a normal
-// account, bounded so a 120k-photo account can't ship its whole catalogue at once.
-export const PROPERTY_PHOTO_BATCH_LIMIT = 2000
 
 // List photos for a single visit (when jobId is given) or for the whole
 // property (its full visual service history). Newest first, bounded.
@@ -45,16 +42,6 @@ export async function listPhotos(
   else if (scope.propertyId) q = q.eq('property_id', scope.propertyId)
   else return []
   const { data } = await q.order('taken_at', { ascending: false }).limit(GALLERY_LIMIT)
-  return withUrl(supabase, (data as JobPhoto[]) || [])
-}
-
-// Batch: the most-recent photos for a user (with resolved URLs), so a LIST page can
-// fetch once and hand each row its slice — instead of mounting one gallery per row that
-// each fires its own query (N properties → N round-trips). BOUNDED — an account with
-// 120k photos would otherwise ship its entire catalogue on one page load. Rows whose
-// photos fall outside this window get no slice and lazy-load their own (see the caller).
-export async function listPhotosByUser(supabase: SupabaseClient, userId: string): Promise<JobPhotoView[]> {
-  const { data } = await supabase.from('job_photos').select('*').eq('user_id', userId).order('taken_at', { ascending: false }).limit(PROPERTY_PHOTO_BATCH_LIMIT)
   return withUrl(supabase, (data as JobPhoto[]) || [])
 }
 
@@ -83,28 +70,26 @@ async function downscale(file: File, maxDim = 1600, quality = 0.82): Promise<Blo
 
 // Upload one photo: resize → store in the bucket → catalogue row. Returns the
 // new row (with URL) so the caller can prepend it optimistically.
+export interface UploadPhotoOpts {
+  userId: string
+  file: File
+  propertyId: string | null
+  jobId?: string | null
+  customerId?: string | null
+  kind: PhotoKind
+  caption?: string | null
+  takenAt?: string | null      // ISO capture time (from EXIF) — drives before/after ordering
+  contentHash?: string | null  // visual hash (lib/dedup) — durable duplicate detection
+  // Offline replay support: a STABLE client-generated id makes the storage path
+  // deterministic, so replaying a queued upload can't create a second file/row.
+  uploadId?: string
+  // Fresh online capture (brand-new uploadId) → skip the pre-upload dedup SELECT.
+  skipExistingCheck?: boolean
+}
+
 export async function uploadPhoto(
   supabase: SupabaseClient,
-  opts: {
-    userId: string
-    file: File
-    propertyId: string | null
-    jobId?: string | null
-    customerId?: string | null
-    kind: PhotoKind
-    caption?: string | null
-    // Offline support: a STABLE client-generated id makes the storage path
-    // deterministic, so replaying a queued upload can never create a second file
-    // or catalogue row (idempotent). `takenAt` preserves the capture time even when
-    // the photo syncs hours later. Both optional → the online path is unchanged.
-    uploadId?: string
-    takenAt?: string
-    // Fresh online capture generates a brand-new uploadId per file, so no catalogue
-    // row can exist yet — skip the pre-upload dedup SELECT to save a round-trip. Only
-    // REPLAYS (same id, second time) need the check, so the replay handler leaves this
-    // unset. Default false → behaviour is unchanged for every existing caller.
-    skipExistingCheck?: boolean
-  },
+  opts: UploadPhotoOpts,
 ): Promise<JobPhotoView | null> {
   // Deterministic name from the stable uploadId (or a fresh stamp for the online path).
   const key = opts.uploadId || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -126,7 +111,7 @@ export async function uploadPhoto(
     .upload(path, blob, { upsert: !!opts.uploadId, contentType: 'image/jpeg' })
   if (upErr) return null
 
-  const row = {
+  const row: Record<string, unknown> = {
     user_id: opts.userId,
     job_id: opts.jobId ?? null,
     property_id: opts.propertyId,
@@ -136,13 +121,33 @@ export async function uploadPhoto(
     caption: opts.caption ?? null,
     ...(opts.takenAt ? { taken_at: opts.takenAt } : {}),
   }
-  const { data, error } = await supabase.from('job_photos').insert(row).select('*').single()
+  // Stamp the real capture time so the Studio's "earliest before / latest after"
+  // ordering is honest (defaults to now() when EXIF is absent).
+  if (opts.takenAt) row.taken_at = opts.takenAt
+  if (opts.contentHash) row.content_hash = opts.contentHash
+  let { data, error } = await supabase.from('job_photos').insert(row).select('*').single()
+  // content_hash is from the 2026-07-02 migration — retry without it when the
+  // column doesn't exist yet (dedup degrades to session-only, upload still works).
+  if (error && opts.contentHash && /content_hash/i.test(error.message || '')) {
+    delete row.content_hash
+    ;({ data, error } = await supabase.from('job_photos').insert(row).select('*').single())
+  }
   if (error || !data) {
     // Roll back the orphaned file so storage never drifts from the catalogue.
     await supabase.storage.from(PHOTO_BUCKET).remove([path])
     return null
   }
   return { ...(data as JobPhoto), url: publicUrl(supabase, path) }
+}
+
+// Upload many photos AT ONCE (parallel) — each compresses + catalogues independently
+// via uploadPhoto, so one slow/failed file never blocks the others. Returns the rows
+// that succeeded (nulls dropped), preserving input order for the successes.
+export async function uploadPhotos(
+  supabase: SupabaseClient,
+  items: UploadPhotoOpts[],
+): Promise<(JobPhotoView | null)[]> {
+  return Promise.all(items.map(it => uploadPhoto(supabase, it)))
 }
 
 // Update a photo's caption or before/after tag. Returns whether the write landed so

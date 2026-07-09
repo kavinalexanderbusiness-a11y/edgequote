@@ -19,7 +19,7 @@ import { Button } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
 import {
   CloudRain, X, ArrowRight, Check, Clock, AlertTriangle, Repeat, Users, DollarSign,
-  MessageSquare, Mail, Send, CalendarClock, ShieldCheck,
+  MessageSquare, Mail, Send, CalendarClock, ShieldCheck, Loader2,
 } from 'lucide-react'
 
 interface Props {
@@ -252,7 +252,8 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
       <div className="min-h-full flex items-start justify-center p-4 sm:p-6">
         <Card className="w-full max-w-2xl my-2 shadow-2xl" onClick={e => e.stopPropagation()}>
           <div className="px-5 py-4 border-b border-border flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><CloudRain className="w-4 h-4 text-sky-400" /> Weather Operations</h2>
+            {/* "Weather Ops" — the exact name every button that opens this uses. */}
+            <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><CloudRain className="w-4 h-4 text-sky-400" /> Weather Ops</h2>
             <button onClick={onClose} className="w-9 h-9 -mr-2 flex items-center justify-center text-ink-faint hover:text-ink"><X className="w-4 h-4" /></button>
           </div>
           <CardBody className="space-y-4">
@@ -336,7 +337,7 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
               </div>
             </div>
 
-            {invoicedIds === null && <p className="text-xs text-ink-faint text-center py-2">Checking billed jobs…</p>}
+            {invoicedIds === null && <p className="text-xs text-ink-faint text-center py-2 flex items-center justify-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Checking billed jobs…</p>}
 
             {invoicedIds !== null && dayJobs.length === 0 && (
               <p className="text-sm text-ink-muted text-center py-6">Nothing scheduled on {fmtLong(selectedDay)} — no move needed.</p>

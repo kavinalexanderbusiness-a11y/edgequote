@@ -8,7 +8,7 @@ import { formatCurrency, cn, localTodayISO } from '@/lib/utils'
 import { Skeleton } from '@/components/ui/Skeleton'
 import {
   ChevronDown, MapPin, Receipt, CalendarClock, DollarSign,
-  MessageSquare, Mail, Phone, Plus, Loader2, Check,
+  MessageSquare, Mail, Plus, Loader2, Check,
 } from 'lucide-react'
 
 // The CRM cockpit at the top of a conversation: an auto-generated activity timeline
@@ -125,18 +125,6 @@ export function ConversationInfo({ customerId }: Props) {
 
   return (
     <div className="border-b border-border pb-2 mb-2 space-y-2">
-      {/* Auto activity timeline (from existing records) */}
-      {derived.timeline.length > 0 && (
-        <div className="flex items-center gap-2 overflow-x-auto pb-1 -mb-1">
-          {derived.timeline.map((e, i) => (
-            <span key={i} className="shrink-0 inline-flex items-center gap-1 text-[11px] rounded-full border border-border bg-bg-tertiary px-2 py-0.5 text-ink-muted" title={e.label}>
-              <span>{e.emoji}</span> <span className="font-medium text-ink">{e.label}</span>
-              <span className="text-ink-faint">{(() => { try { return format(parseISO(e.at.slice(0, 10) + 'T00:00:00'), 'MMM d') } catch { return '' } })()}</span>
-            </span>
-          ))}
-        </div>
-      )}
-
       {/* Quick row: follow-up + key facts + expand */}
       <div className="flex items-center gap-2 flex-wrap text-[11px]">
         <div className="relative">
@@ -163,24 +151,35 @@ export function ConversationInfo({ customerId }: Props) {
         </button>
       </div>
 
-      {/* Expandable info panel */}
+      {/* Expandable info panel — only what ISN'T already on screen (the quick row
+          shows lifetime/next/owing; the thread header carries name/phone/profile).
+          Deep-dive links go to THIS customer's profile, not the global lists. */}
       {open && (
-        <div className="rounded-xl border border-border bg-bg-tertiary p-3 grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-[11px]">
-          <Cell label="Customer"><Link href={`/dashboard/customers/${c?.id}`} className="text-accent hover:underline font-medium">{c?.name}</Link></Cell>
-          {info.property?.address && <Cell label="Property"><span className="flex items-center gap-1 text-ink"><MapPin className="w-3 h-3 text-ink-faint" /> {info.property.address}</span></Cell>}
-          <Cell label="Consent">
-            <span className="flex items-center gap-2">
-              <span className={cn('flex items-center gap-0.5', c?.sms_opt_in ? 'text-emerald-400' : 'text-ink-faint')}><MessageSquare className="w-3 h-3" /> SMS</span>
-              <span className={cn('flex items-center gap-0.5', c?.email_opt_in ? 'text-emerald-400' : 'text-ink-faint')}><Mail className="w-3 h-3" /> Email</span>
-            </span>
-          </Cell>
-          <Cell label="Active quotes">{derived.activeQuotes.length ? <Link href={`/dashboard/quotes`} className="text-accent hover:underline">{derived.activeQuotes.length} open</Link> : <span className="text-ink-faint">None</span>}</Cell>
-          <Cell label="Open jobs">{derived.openJobs ? <span className="text-ink">{derived.openJobs}</span> : <span className="text-ink-faint">None</span>}</Cell>
-          <Cell label="Invoices owing">{derived.unpaid.length ? <Link href="/dashboard/invoices" className="text-amber-400 hover:underline">{formatCurrency(derived.unpaidTotal)}</Link> : <span className="text-ink-faint">Paid up</span>}</Cell>
-          <Cell label="Last service">{derived.lastService ? <span className="text-ink">{derived.lastService.service_type || 'Service'} · {format(parseISO((derived.lastService.completed_at || derived.lastService.scheduled_date).slice(0, 10) + 'T00:00:00'), 'MMM d')}</span> : <span className="text-ink-faint">—</span>}</Cell>
-          <Cell label="Next visit">{derived.nextVisit ? <span className="text-ink">{format(parseISO(derived.nextVisit.scheduled_date + 'T00:00:00'), 'EEE, MMM d')}</span> : <span className="text-ink-faint">Not scheduled</span>}</Cell>
-          <Cell label="Lifetime revenue"><span className="text-ink font-semibold">{formatCurrency(derived.lifetime)}</span></Cell>
-          {c?.phone && <Cell label="Phone"><a href={`tel:${c.phone}`} className="text-ink flex items-center gap-1"><Phone className="w-3 h-3 text-ink-faint" /> {c.phone}</a></Cell>}
+        <div className="rounded-xl border border-border bg-bg-tertiary p-3 space-y-2.5">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-[11px]">
+            {info.property?.address && <Cell label="Property"><span className="flex items-center gap-1 text-ink"><MapPin className="w-3 h-3 text-ink-faint" /> {info.property.address}</span></Cell>}
+            <Cell label="Consent">
+              <span className="flex items-center gap-2">
+                <span className={cn('flex items-center gap-0.5', c?.sms_opt_in ? 'text-emerald-400' : 'text-ink-faint')}><MessageSquare className="w-3 h-3" /> SMS</span>
+                <span className={cn('flex items-center gap-0.5', c?.email_opt_in ? 'text-emerald-400' : 'text-ink-faint')}><Mail className="w-3 h-3" /> Email</span>
+              </span>
+            </Cell>
+            <Cell label="Active quotes">{derived.activeQuotes.length ? <Link href={`/dashboard/customers/${c?.id}`} className="text-accent hover:underline">{derived.activeQuotes.length} open</Link> : <span className="text-ink-faint">None</span>}</Cell>
+            <Cell label="Open jobs">{derived.openJobs ? <span className="text-ink">{derived.openJobs}</span> : <span className="text-ink-faint">None</span>}</Cell>
+            <Cell label="Invoices owing">{derived.unpaid.length ? <Link href={`/dashboard/customers/${c?.id}`} className="text-amber-400 hover:underline">{formatCurrency(derived.unpaidTotal)}</Link> : <span className="text-ink-faint">Paid up</span>}</Cell>
+            <Cell label="Last service">{derived.lastService ? <span className="text-ink">{derived.lastService.service_type || 'Service'} · {format(parseISO((derived.lastService.completed_at || derived.lastService.scheduled_date).slice(0, 10) + 'T00:00:00'), 'MMM d')}</span> : <span className="text-ink-faint">—</span>}</Cell>
+          </div>
+          {/* Activity timeline — reference info, tucked in here instead of topping every thread */}
+          {derived.timeline.length > 0 && (
+            <div className="flex items-center gap-2 overflow-x-auto pt-2 border-t border-border">
+              {derived.timeline.map((e, i) => (
+                <span key={i} className="shrink-0 inline-flex items-center gap-1 text-[11px] rounded-full border border-border bg-bg-secondary px-2 py-0.5 text-ink-muted" title={e.label}>
+                  <span>{e.emoji}</span> <span className="font-medium text-ink">{e.label}</span>
+                  <span className="text-ink-faint">{(() => { try { return format(parseISO(e.at.slice(0, 10) + 'T00:00:00'), 'MMM d') } catch { return '' } })()}</span>
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

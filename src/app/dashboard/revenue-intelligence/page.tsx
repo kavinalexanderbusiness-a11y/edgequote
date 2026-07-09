@@ -9,6 +9,7 @@ import {
 } from '@/lib/revenueIntelligence'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
+import { StatTile } from '@/components/ui/StatTile'
 import { Skeleton, SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { formatCurrency, cn } from '@/lib/utils'
@@ -48,7 +49,7 @@ export default function RevenueIntelligencePage() {
   if (loading && !report) {
     return (
       <div className="max-w-5xl space-y-6">
-        <PageHeader title="Revenue Intelligence" description="The highest-value moves to grow the business — ranked." />
+        <PageHeader title="Revenue Intelligence" description="Every customer scored for the moves that grow revenue — ranked by expected impact." />
         <SkeletonTiles count={4} />
         <Skeleton className="h-20 w-full rounded-card" />
         <SkeletonRows count={5} />
@@ -75,20 +76,32 @@ export default function RevenueIntelligencePage() {
         description="Every customer scored for the moves that grow revenue — ranked by expected impact."
         action={<Link href="/dashboard/intelligence"><Button variant="secondary" size="sm">View BI dashboard <ArrowRight className="w-3.5 h-3.5" /></Button></Link>} />
 
-      {/* Summary */}
+      {/* Summary — upside on the left, risk on the right (the two numbers that matter) */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <Tile label="Recurring opportunity" value={formatCurrency(summary.totalOpportunity)} sub="/yr if all won" accent />
         <Tile label="One-time opportunity" value={formatCurrency(summary.totalOneTime)} />
-        <Tile label="Open opportunities" value={String(live.length)} sub={`${actedCount} acted · ${wonCount} won`} />
-        <Tile label="Revenue from acted" value={formatCurrency(wonValue)} sub="tracked wins" />
+        <Tile label="Revenue from acted" value={formatCurrency(wonValue)} sub={`${actedCount} acted · ${wonCount} won`} />
+        {(() => {
+          const atRisk = ltvForecast.reduce((s, f) => s + (Number(f.churnRiskImpact) || 0), 0)
+          // Tappable — opens + scrolls to the LTV forecast where the at-risk names live.
+          return (
+            <StatTile label="Revenue at churn risk" value={formatCurrency(atRisk)} sub="/yr — tap to see who" tone={atRisk > 0 ? 'danger' : undefined} tonedSurface={atRisk > 0}
+              onClick={() => { setShowForecast(true); setTimeout(() => document.getElementById('ltv-forecast')?.scrollIntoView({ behavior: 'smooth' }), 50) }} />
+          )
+        })()}
       </div>
 
-      {/* Top action */}
+      {/* Top action — actionable, not just a headline (same act-tracking as the cards) */}
       {summary.topAction && (
-        <div className="rounded-card border border-accent/30 bg-gradient-to-br from-accent/[0.08] to-transparent p-4">
-          <p className="text-[11px] uppercase tracking-wide text-ink-faint flex items-center gap-1.5"><Trophy className="w-3.5 h-3.5 text-accent" /> Top move right now</p>
-          <p className="text-sm font-bold text-ink mt-1">{OPP_META[summary.topAction.kind].emoji} {summary.topAction.action} — {summary.topAction.customerName}</p>
-          <p className="text-xs text-ink-muted mt-0.5">+{formatCurrency(summary.topAction.expectedValue)}{summary.topAction.oneTime ? ' one-time' : '/yr'} · {summary.topAction.score}/100 likelihood</p>
+        <div className="rounded-card border border-accent/30 bg-gradient-to-br from-accent/[0.08] to-transparent p-4 flex flex-wrap items-center gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] uppercase tracking-wide text-ink-faint flex items-center gap-1.5"><Trophy className="w-3.5 h-3.5 text-accent" /> Top move right now</p>
+            <p className="text-sm font-bold text-ink mt-1">{OPP_META[summary.topAction.kind].emoji} {summary.topAction.action} — {summary.topAction.customerName}</p>
+            <p className="text-xs text-ink-muted mt-0.5">+{formatCurrency(summary.topAction.expectedValue)}{summary.topAction.oneTime ? ' one-time' : '/yr'} · {summary.topAction.score}/100 likelihood</p>
+          </div>
+          <Link href={summary.topAction.actionHref} onClick={() => act(summary.topAction!, 'acted')} className="shrink-0">
+            <Button size="sm">Take action <ArrowRight className="w-3.5 h-3.5" /></Button>
+          </Link>
         </div>
       )}
 
@@ -118,7 +131,7 @@ export default function RevenueIntelligencePage() {
       </div>
 
       {/* LTV Forecast */}
-      <div className="rounded-card border border-border bg-bg-secondary overflow-hidden">
+      <div id="ltv-forecast" className="rounded-card border border-border bg-bg-secondary overflow-hidden scroll-mt-4">
         <button onClick={() => setShowForecast(s => !s)} className="w-full px-5 py-3.5 flex items-center justify-between text-left">
           <span className="text-sm font-bold text-ink flex items-center gap-2"><Sparkles className="w-4 h-4 text-accent" /> Lifetime Value Forecast</span>
           <span className="text-xs text-ink-muted">{showForecast ? 'Hide' : `Show top ${Math.min(12, ltvForecast.length)}`}</span>
@@ -149,14 +162,9 @@ export default function RevenueIntelligencePage() {
   )
 }
 
-function Tile({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: boolean }) {
-  return (
-    <div className={cn('rounded-card border p-3.5', accent ? 'border-accent/30 bg-accent/[0.05]' : 'border-border bg-bg-secondary')}>
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className={cn('text-xl font-black mt-1', accent ? 'text-accent' : 'text-ink')}>{value}</p>
-      {sub && <p className="text-[11px] text-ink-muted mt-0.5">{sub}</p>}
-    </div>
-  )
+// Thin adapter over the ONE shared KPI tile (no local tile styles to drift).
+function Tile({ label, value, sub, accent, danger }: { label: string; value: string; sub?: string; accent?: boolean; danger?: boolean }) {
+  return <StatTile label={label} value={value} sub={sub} accent={accent} tone={danger ? 'danger' : undefined} tonedSurface={danger} />
 }
 
 function OppCard({ o, status, busy, onAct }: { o: Opportunity; status?: string; busy: boolean; onAct: (o: Opportunity, s: 'acted' | 'dismissed' | 'won') => void }) {

@@ -6,10 +6,12 @@ import { createClient } from '@/lib/supabase/client'
 import { Customer, QuoteFormValues, ServiceTemplate, TravelFeeTier, BusinessSettings, LawnSections, PricingConfidence } from '@/types'
 import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
 import { PageHeader } from '@/components/layout/PageHeader'
+import { SkeletonRows } from '@/components/ui/Skeleton'
 import { applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
 import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes } from '@/lib/pricing'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { applyFeeRecovery } from '@/lib/invoiceTotals'
+import { sumServiceLines } from '@/lib/quoteServices'
 import { LeadPrefillPayload, LEAD_PREFILL_KEY } from '@/lib/leads'
 import { toast } from '@/lib/toast'
 
@@ -123,6 +125,16 @@ export default function NewQuotePage() {
     const mult = Number(values.overgrowth_multiplier) || 1
     const finalRate = applyOvergrowth(Number(values.rate), mult)
 
+    // Multi-service: fee-recover each additional line's unit price (same one-time
+    // bake-in as initial_price), then store initial_price = primary + Σ line nets
+    // so the GENERATED quotes.total — and every consumer of it — stays correct.
+    const recoveredPrimary = applyFeeRecovery(Number(values.initial_price) > 0 ? Number(values.initial_price) : null, settings)
+    const extraLines = (values.services || [])
+      .filter(s => s.service_type.trim())
+      .map(s => ({ ...s, unit_price: applyFeeRecovery(Number(s.unit_price) || 0, settings) ?? 0 }))
+    const extrasNet = sumServiceLines(extraLines).net
+    const initialWithExtras = (recoveredPrimary ?? 0) + extrasNet
+
     const { data, error } = await supabase.from('quotes').insert({
       quote_number,
       customer_id: customerId,
@@ -134,7 +146,7 @@ export default function NewQuotePage() {
       // facing prices ONCE, here at generation. Jobs + invoices + Stripe inherit
       // these, so there's no double-application. suggested_price stays at the raw
       // engine value, so the quote page still shows "suggested → quoted".
-      initial_price: applyFeeRecovery(Number(values.initial_price) > 0 ? Number(values.initial_price) : null, settings),
+      initial_price: initialWithExtras > 0 ? initialWithExtras : null,
       weekly_price: applyFeeRecovery(Number(values.weekly_price) > 0 ? Number(values.weekly_price) : null, settings),
       biweekly_price: applyFeeRecovery(Number(values.biweekly_price) > 0 ? Number(values.biweekly_price) : null, settings),
       monthly_price: applyFeeRecovery(Number(values.monthly_price) > 0 ? Number(values.monthly_price) : null, settings),
@@ -163,6 +175,29 @@ export default function NewQuotePage() {
     }).select().single()
 
     if (!error && data) {
+      // Persist the service breakdown (only for multi-service quotes; single-service
+      // quotes stay legacy with no child rows — identical behavior to before).
+      // Row 0 = the primary service, rows 1+ = the additional lines.
+      if (extraLines.length) {
+        await supabase.from('quote_services').insert([
+          {
+            user_id: user!.id, quote_id: data.id, sort_order: 0,
+            service_type: values.service_type, service_template_id: values.service_template_id || null,
+            quantity: 1, unit: 'each', unit_price: recoveredPrimary ?? 0,
+            est_minutes: Math.round(Number(values.hours) * 60) || null,
+          },
+          ...extraLines.map((s, i) => ({
+            user_id: user!.id, quote_id: data.id, sort_order: i + 1,
+            service_type: s.service_type.trim(), service_template_id: s.service_template_id || null,
+            quantity: Number(s.quantity) > 0 ? Number(s.quantity) : 1,
+            unit: s.unit || 'each', unit_price: s.unit_price,
+            est_minutes: Number(s.est_minutes) > 0 ? Math.round(Number(s.est_minutes)) : null,
+            discount_type: s.discount_type || null,
+            discount_value: s.discount_type && Number(s.discount_value) > 0 ? Number(s.discount_value) : null,
+            notes: s.notes?.trim() || null,
+          })),
+        ])
+      }
       // A measurement taken inside the builder previously lived ONLY on the quote —
       // the property stayed "unmeasured" and sqft-based pricing suggestions never
       // fired for it. Persist it back to the property (newest measurement wins),
@@ -223,7 +258,7 @@ export default function NewQuotePage() {
     }
   }
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading...</div>
+  if (loading) return <SkeletonRows count={6} />
 
   return (
     <div className="max-w-5xl space-y-6">

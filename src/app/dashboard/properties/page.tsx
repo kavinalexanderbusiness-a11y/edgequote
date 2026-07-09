@@ -12,12 +12,12 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { Button } from '@/components/ui/Button'
+import { Collapsible } from '@/components/ui/Collapsible'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { formatDate, formatCurrency, localTodayISO } from '@/lib/utils'
 import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes, latestSavedRecommendation, recommendationIsStale } from '@/lib/pricing'
 import { LocatedJob, fetchLocatedUpcomingJobs, nearbyJobCount } from '@/lib/geo'
 import { JobPhotos } from '@/components/photos/JobPhotos'
-import { listPhotosByUser, PROPERTY_PHOTO_BATCH_LIMIT, JobPhotoView } from '@/lib/photos'
 import { MapPin, Home, User, Ruler, History, RefreshCw, Trophy, DollarSign, CheckCircle2, Receipt, Timer, CalendarClock, AlertTriangle, Repeat, Camera, FileText } from 'lucide-react'
 
 // Per-property performance, aggregated from completed jobs + invoices. Reuses
@@ -83,10 +83,6 @@ export default function PropertiesPage() {
   const [lastQuoteByProp, setLastQuoteByProp] = useState<Record<string, LastQuote>>({})
   const [lastInvoiceByProp, setLastInvoiceByProp] = useState<Record<string, LastInvoice>>({})
   const [plansByProp, setPlansByProp] = useState<Record<string, ServicePlan[]>>({})
-  const [photosByProp, setPhotosByProp] = useState<Record<string, JobPhotoView[]>>({})
-  // True when the photo batch hit its cap → some properties' photos are outside the
-  // window, so those rows must lazy-load their own instead of showing an empty gallery.
-  const [photosCapped, setPhotosCapped] = useState(false)
   const [recalcId, setRecalcId] = useState<string | null>(null)
 
   const supabase = createClient()
@@ -96,7 +92,7 @@ export default function PropertiesPage() {
       // Local session read — no auth round-trip before the 8-query batch below.
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
-      const [pRes, sRes, located, jRes, iRes, rRes, qRes, allPhotos] = await Promise.all([
+      const [pRes, sRes, located, jRes, iRes, rRes, qRes] = await Promise.all([
         supabase
           .from('properties')
           .select('*, customers(id, name, email, phone)')
@@ -111,14 +107,10 @@ export default function PropertiesPage() {
         supabase.from('job_recurrences').select('*').eq('user_id', user!.id),
         // Last quote per property (most recent non-draft).
         supabase.from('quotes').select('id, property_id, quote_number, total, status, created_at').eq('user_id', user!.id).neq('status', 'draft'),
-        // ONE photo read for the whole page → each gallery row gets its slice (initialPhotos)
-        // instead of every row mounting its own job_photos query (the N-query storm).
-        listPhotosByUser(supabase, user!.id),
       ])
-      const photoGroups: Record<string, JobPhotoView[]> = {}
-      for (const ph of allPhotos) if (ph.property_id) (photoGroups[ph.property_id] ||= []).push(ph)
-      setPhotosByProp(photoGroups)
-      setPhotosCapped(allPhotos.length >= PROPERTY_PHOTO_BATCH_LIMIT)
+      // Photos are no longer batch-fetched here — each gallery is a Collapsible (main's fix)
+      // that lazy-loads its own bounded slice only when expanded, so the page issues zero
+      // photo queries on load.
       const settingsRow = sRes.data as BusinessSettings | null
       setProperties((pRes.data as Property[]) || [])
       setSettings(settingsRow)
@@ -231,10 +223,12 @@ export default function PropertiesPage() {
                         </p>
                       )}
                       {property.customers && (
-                        <p className="text-xs text-ink-faint flex items-center gap-1">
+                        // Live link — reaching the owner used to cost a customer-list search.
+                        <Link href={`/dashboard/customers/${property.customers.id}`}
+                          className="text-xs text-ink-faint hover:text-accent hover:underline flex items-center gap-1 w-fit">
                           <User className="w-3 h-3" />
                           {property.customers.name}
-                        </p>
+                        </Link>
                       )}
                       {property.lawn_sqft ? (
                         <p className="text-xs text-ink-muted flex items-center gap-1.5">
@@ -245,7 +239,9 @@ export default function PropertiesPage() {
                       ) : property.fence_length ? (
                         <p className="text-xs text-ink-faint flex items-center gap-1.5"><Ruler className="w-3 h-3 shrink-0" /> {property.fence_length} ft fence</p>
                       ) : null}
-                      {last && (
+                      {/* Only when there's no Latest-measurement box below — that box
+                          already shows the date + staleness (was the same info twice). */}
+                      {last && !saved && (
                         <p className="text-xs text-ink-faint flex items-center gap-1">
                           <History className="w-3 h-3 shrink-0" />
                           Measured {formatDate(last.date)}
@@ -262,7 +258,7 @@ export default function PropertiesPage() {
                       </Button>
                     </Link>
                     {property.lat && property.lng ? (
-                      <p className="text-xs text-accent font-medium">📍 Located</p>
+                      <p className="text-xs text-accent font-medium flex items-center gap-1"><MapPin className="w-3 h-3" /> Located</p>
                     ) : (
                       <p className="text-xs text-ink-faint">No coords yet</p>
                     )}
@@ -294,6 +290,41 @@ export default function PropertiesPage() {
                         )}
                       </div>
                     ))}
+                  </div>
+                )}
+
+                {/* Latest measurement — the saved pricing source of truth. Sits ABOVE
+                    the reference stats: its stale warning + Recalculate + New-quote are
+                    the card's actionable part ("what do I do with this property now"). */}
+                {saved && (
+                  <div className="mt-3 rounded-xl border border-accent/20 bg-accent/5 px-3 py-2.5">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-accent">
+                        Latest measurement · {saved.sqft.toLocaleString()} ft² · Calculated {formatDate(saved.date)}
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <Link href={`/dashboard/quotes/new?property=${property.id}`}>
+                          <Button variant="secondary" size="sm" title="Start a quote pre-filled from this property"><FileText className="w-3.5 h-3.5" /> New quote</Button>
+                        </Link>
+                        <Button variant="ghost" size="sm" loading={recalcId === property.id} onClick={() => recalculate(property)} title="Re-run pricing with today's rates and route context">
+                          <RefreshCw className="w-3.5 h-3.5" /> Recalculate
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-1.5">
+                      {([['One-Time', saved.rec.one_time, 'one_time'], ['Weekly', saved.rec.weekly, 'weekly'], ['Bi-Weekly', saved.rec.biweekly, 'biweekly'], ['Monthly', saved.rec.monthly, 'monthly']] as const).map(([label, price, key]) => (
+                        <div key={label} className={`rounded-lg border px-2 py-1.5 ${saved.rec.cadence === key ? 'border-accent/50 bg-accent/10' : 'border-border bg-bg-tertiary'}`}>
+                          <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1">{label}{saved.rec.cadence === key && <Trophy className="w-2.5 h-2.5 text-accent" />}</p>
+                          <p className="text-sm font-bold text-ink">${price}</p>
+                        </div>
+                      ))}
+                    </div>
+                    {stale && (
+                      <p className="mt-2 text-xs text-amber-400 flex items-center gap-1.5">
+                        <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                        Pricing recommendations may be outdated. Consider recalculating.
+                      </p>
+                    )}
                   </div>
                 )}
 
@@ -359,14 +390,13 @@ export default function PropertiesPage() {
                   </div>
                 )}
 
-                {/* Photos — visual service history (before/after, proof of work) */}
-                <div className="mt-3 rounded-xl border border-border bg-bg-tertiary px-3 py-2.5">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted mb-2 flex items-center gap-1.5">
-                    <Camera className="w-3.5 h-3.5" /> Photos
-                  </p>
-                  {/* Seed from the batch; if the batch was capped and this row wasn't in it,
-                      pass undefined so the gallery lazy-loads its own (avoids a false empty). */}
-                  <JobPhotos propertyId={property.id} customerId={property.customer_id} variant="gallery" initialPhotos={photosByProp[property.id] ?? (photosCapped ? undefined : [])} />
+                {/* Photos — collapsed by default (main's fix): Collapsible only mounts children
+                    when opened, so the list never eagerly fetches every property's gallery.
+                    JobPhotos self-fetches via the bounded listPhotos (.limit) when expanded. */}
+                <div className="mt-3">
+                  <Collapsible title="Photos" icon={Camera}>
+                    <JobPhotos propertyId={property.id} customerId={property.customer_id} variant="gallery" />
+                  </Collapsible>
                 </div>
               </CardBody>
             </Card>

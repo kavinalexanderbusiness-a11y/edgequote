@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
+import { loadTravelModel } from '@/lib/travelLearning'
 import { Quote } from '@/types'
 import { format, subDays, parseISO } from 'date-fns'
 import { Coord, geocodeAddress } from '@/lib/geo'
@@ -37,11 +38,12 @@ export default function WeeklyReviewPage() {
         const { data: { session } } = await supabase.auth.getSession()
         const user = session?.user
         if (!user) { setLoadError('Session expired — sign in again.'); return }
-        const [jRes, qRes, rRes, sRes] = await Promise.all([
+        const [jRes, qRes, rRes, sRes, travel] = await Promise.all([
           supabase.from('jobs').select('id, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, properties(lat, lng, city, postal_code, neighborhood)').eq('user_id', user.id),
           supabase.from('quotes').select('*').eq('user_id', user.id),
           supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user.id),
           supabase.from('business_settings').select('base_lat, base_lng, base_address').eq('user_id', user.id).maybeSingle(),
+          loadTravelModel(supabase),
         ])
         const quotesById: Record<string, ProfitQuote> = {}
         for (const q of (qRes.data as (ProfitQuote & { id: string })[]) || []) quotesById[q.id] = q
@@ -74,7 +76,7 @@ export default function WeeklyReviewPage() {
         const s = sRes.data as { base_lat: number | null; base_lng: number | null; base_address: string | null } | null
         let base: Coord | null = s?.base_lat != null && s?.base_lng != null ? { lat: s.base_lat, lng: s.base_lng } : null
         if (!base && s?.base_address) base = await geocodeAddress(s.base_address)
-        setCtx({ quotesById, recById, base, today })
+        setCtx({ quotesById, recById, base, today, speed: travel })
       } catch (e) {
         setLoadError(e instanceof Error ? e.message : 'Could not load the review.')
       } finally {
@@ -123,7 +125,7 @@ export default function WeeklyReviewPage() {
   if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Building your weekly review…</div>
 
   return (
-    <div className="max-w-3xl space-y-5">
+    <div className="max-w-3xl space-y-6">
       <PageHeader
         title="Weekly Review"
         description={`${formatDate(m.weekStart)} – ${formatDate(m.today)} · how the week went, and next week's moves`}

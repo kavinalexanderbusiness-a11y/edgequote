@@ -1,10 +1,13 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { toast } from '@/lib/toast'
+import { confirm } from '@/lib/confirm'
 import { createClient } from '@/lib/supabase/client'
 import { Job, JobStatus, JobRecurrence, JobLineItem, RecurrenceScope, PRICE_REASONS, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
 import { Coord } from '@/lib/geo'
-import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, nearestNeighborRoute, roundTripMapsUrl, routeStats, directionsUrl, computeDayEtas, roughFinishEstimate, dayLoad, minutesToTime12, timeToMinutes, DEFAULT_JOB_MIN } from '@/lib/route'
+import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, nearestNeighborRoute, sequenceRoute, roundTripMapsUrl, MAX_MAPS_WAYPOINTS, routeStats, directionsUrl, computeDayEtas, roughFinishEstimate, dayLoad, minutesToTime12, timeToMinutes, DEFAULT_JOB_MIN } from '@/lib/route'
+import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
 import { buildRoadDistance } from '@/lib/distance'
 import { jobVisitValue, effectiveFreq, quoteVisitAmount } from '@/lib/invoicing'
 import { addonsTotal } from '@/lib/jobPricing'
@@ -13,9 +16,11 @@ import { Button } from '@/components/ui/Button'
 import { JobPhotos } from '@/components/photos/JobPhotos'
 import { JobAddons } from '@/components/schedule/JobAddons'
 import { JobMessages } from '@/components/schedule/JobMessages'
+import { SendMessageDialog, type MessageRecipient } from '@/components/comms/SendMessageDialog'
 import {
   DollarSign, Clock, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
-  MapPin, Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, Trash2, CloudRain, Play, Timer, Camera, PlusCircle, MessageSquare,
+  Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, CloudRain, Play, Timer, Camera, PlusCircle, MessageSquare, Send, Receipt,
+  ChevronUp, ChevronDown, Wand2,
 } from 'lucide-react'
 
 export interface QuoteLite {
@@ -66,7 +71,7 @@ export interface QuickPatch {
 
 export function DayOpsPanel({
   date, dateLabel, jobs, quotesById, recurrences, baseCoord,
-  onOpenJob, onStartJob, onMarkDone, onMove, onDeleteJob, onSetPrice, workStartTime, capacityHours, onRainDelay, onAddJob, onQuickSave,
+  onOpenJob, onStartJob, onMarkDone, onMove, onSetPrice, workStartTime, capacityHours, onRainDelay, onAddJob, onQuickSave,
   addonsByJobId, onAddLineItem, onDeleteLineItem, getPreviousAddons, onCopyPreviousAddons,
 }: Props) {
   const supabase = createClient()
@@ -88,6 +93,47 @@ export function DayOpsPanel({
   const [addonsId, setAddonsId] = useState<string | null>(null)
   // Which job's one-tap messaging panel is open.
   const [messageId, setMessageId] = useState<string | null>(null)
+  // "Message today's customers" dialog (day-level bulk send).
+  const [showDayMsg, setShowDayMsg] = useState(false)
+  // Job currently sending a one-tap "On my way" (locks the button against double-tap).
+  const [sendingEta, setSendingEta] = useState<string | null>(null)
+  // Drag feedback (desktop reorder): dim the dragged card, ring the drop target —
+  // same drag language as the calendar's cross-day move.
+  const [draggingId, setDraggingId] = useState<string | null>(null)
+  const [dragOverId, setDragOverId] = useState<string | null>(null)
+
+  // One-tap "On my way" — no composer, no typing. Sends the owner's on_my_way
+  // template with the default ETA through the SAME pipeline as the editable
+  // composer (/api/comms/send: opt-in-gated, logged, threaded, and it stamps
+  // on_my_way_at so the customer portal shows a live status). The "Message" panel
+  // remains for a custom ETA or wording.
+  async function sendOnMyWay(job: Job) {
+    if (sendingEta) return
+    if (!job.customer_id) { toast.error('Link a customer to this job to send updates.'); return }
+    setSendingEta(job.id)
+    try {
+      const res = await fetch('/api/comms/send', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerId: job.customer_id, template: 'on_my_way', jobId: job.id,
+          channels: ['sms', 'email'],
+          vars: { eta: '15', address: job.properties?.address ?? undefined },
+        }),
+      })
+      const data = (await res.json().catch(() => ({}))) as { results?: Record<string, { sent?: boolean; reason?: string }> }
+      const results = data.results || {}
+      const sent = Object.entries(results).filter(([, v]) => v.sent).map(([ch]) => ch)
+      if (sent.length) { toast.success(`“On my way” sent by ${sent.join(' & ')}.`); return }
+      const reasons = Object.values(results).map(v => v.reason)
+      if (reasons.includes('no-optin')) toast.error('Customer hasn’t opted in — turn on SMS/email on their profile.')
+      else if (reasons.includes('disabled')) toast.error('Messaging is off — add Twilio/Resend keys in Settings.')
+      else toast.error('Nothing sent — no phone or email on file for this customer.')
+    } catch {
+      toast.error('Could not reach the server. Please try again.')
+    } finally {
+      setSendingEta(null)
+    }
+  }
 
   function openPrice(job: Job) {
     setQuickId(null); setMoveId(null); setPhotoId(null); setAddonsId(null)
@@ -149,6 +195,10 @@ export function DayOpsPanel({
   }
   const [route, setRoute] = useState<{ ordered: OrderedRouteStop[]; totalKm: number; mapsUrl: string | null; usedGoogle: boolean; usedRoad: boolean } | null>(null)
   const [routing, setRouting] = useState(false)
+  // Learned drive speed + load/unload overhead from completed routes — sharpens the
+  // route's drive minutes and per-stop ETAs over time (falls back to 2 min/km).
+  const [travel, setTravel] = useState<TravelModel>(DEFAULT_TRAVEL_MODEL)
+  useEffect(() => { let alive = true; loadTravelModel(supabase).then(m => { if (alive) setTravel(m) }); return () => { alive = false } }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const lastKey = useRef<string>('')
 
   // The BASE value of one visit, from its quote/price (cadence-aware). One engine.
@@ -166,16 +216,24 @@ export function DayOpsPanel({
   const active = jobs.filter(j => j.status !== 'cancelled')
   const completed = active.filter(j => j.status === 'completed')
   const remaining = active.filter(j => j.status !== 'completed')
+  // Recipients for "Message today's customers" — one per customer scheduled today.
+  const dayRecipients: MessageRecipient[] = (() => {
+    const seen = new Set<string>()
+    const out: MessageRecipient[] = []
+    for (const j of active) {
+      if (!j.customer_id || seen.has(j.customer_id)) continue
+      seen.add(j.customer_id)
+      out.push({ customerId: j.customer_id, name: j.customers?.name || j.title, phone: j.customers?.phone ?? null, service: j.service_type })
+    }
+    return out
+  })()
   const totalMin = active.reduce((s, j) => s + (j.duration_minutes || 0), 0)
-  const estHours = Math.round((totalMin / 60) * 10) / 10
   const totalRevenue = active.reduce((s, j) => s + jobTotal(j), 0)
   const revenueCompleted = completed.reduce((s, j) => s + jobTotal(j), 0)
   const revenueRemaining = remaining.reduce((s, j) => s + jobTotal(j), 0)
   const locatedCoords = active
     .filter(j => j.properties?.lat != null && j.properties?.lng != null)
     .map(j => ({ lat: j.properties!.lat as number, lng: j.properties!.lng as number }))
-  const totalStops = locatedCoords.length
-  const completionPct = active.length ? Math.round((completed.length / active.length) * 100) : 0
 
   // Optimize the day's route via the shared engine. Re-runs only when the set of
   // active jobs (or the base) changes — not when a status flips — so marking Done
@@ -219,20 +277,158 @@ export function DayOpsPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date, baseCoord?.lat, baseCoord?.lng, active.map(j => j.id).join(',')])
 
-  const orderByJobId = new Map(route?.ordered.map(s => [s.jobId, s.order]) ?? [])
+  // ── Manual route order (drag-and-drop) ──
+  // jobs.route_order is the saved manual sequence; localSeq is the optimistic
+  // override while a reorder persists ('auto' = owner just reset to optimizer).
+  const [localSeq, setLocalSeq] = useState<string[] | 'auto' | null>(null)
+  useEffect(() => { setLocalSeq(null) }, [date])
+  const savedSeq = active.some(j => j.route_order != null)
+    ? [...active].sort((a, b) => (a.route_order ?? 999) - (b.route_order ?? 999)).map(j => j.id)
+    : null
+  const manualSeq = localSeq === 'auto' ? null : (localSeq ?? savedSeq)
+
+  // The EFFECTIVE route: the owner's manual sequence when set (via the same
+  // sequenceRoute engine → same OrderedRouteStop shape), else the optimizer's.
+  // ETAs, stats, Open-in-Maps and the list order all read from this ONE value,
+  // so a reorder re-flows everything instantly with no special cases.
+  const manualRoute = manualSeq && baseCoord
+    ? sequenceRoute(baseCoord, active.map(job => ({
+        jobId: job.id,
+        title: job.customers?.name || job.title,
+        address: job.properties?.address || job.title,
+        propertyId: job.properties?.id ?? null,
+        lat: job.properties?.lat ?? null,
+        lng: job.properties?.lng ?? null,
+      })), manualSeq)
+    : null
+  const effOrdered: OrderedRouteStop[] = manualRoute ? manualRoute.ordered : route?.ordered ?? []
+  const effTotalKm = manualRoute ? manualRoute.totalKm : route?.totalKm ?? 0
+  // Navigation link: the REMAINING stops in the current (manual or optimized)
+  // order — completed stops don't need directions, and Google caps the URL at
+  // MAX_MAPS_WAYPOINTS anyway, so mid-day re-opens always cover what's next.
+  const doneIds = new Set(active.filter(j => j.status === 'completed').map(j => j.id))
+  const navStops = effOrdered.filter(s => !doneIds.has(s.jobId))
+  const effMapsUrl = baseCoord && navStops.length ? roundTripMapsUrl(baseCoord, navStops) : null
+  const mapsCapped = navStops.length > MAX_MAPS_WAYPOINTS
+
+  const orderByJobId = new Map(effOrdered.map(s => [s.jobId, s.order]))
   const sortedJobs = [...active].sort((a, b) => {
     const oa = orderByJobId.get(a.id) ?? 999
     const ob = orderByJobId.get(b.id) ?? 999
     if (oa !== ob) return oa - ob
     return (a.start_time || '').localeCompare(b.start_time || '')
   })
-  const stats = route && totalStops > 0 ? routeStats(locatedCoords, route.totalKm) : null
+  const stats = (manualRoute || route) && locatedCoords.length > 0 ? routeStats(locatedCoords, effTotalKm, travel) : null
+
+  // Reorder: swap instantly (optimistic), then persist the whole day's sequence.
+  // Writes are CHAINED so two quick drags can't interleave their per-row updates
+  // (last full sequence wins), and failures surface instead of silently reverting
+  // on the next refresh.
+  const orderWrite = useRef<Promise<void>>(Promise.resolve())
+  // How many route_order writes are still in flight, and which props version the
+  // last write settled at — together they tell the release effect below when the
+  // props are FRESH (refetched after our writes), so it can safely hand authority
+  // back to the DB without flickering through a stale in-between state.
+  const pendingOrderWrites = useRef(0)
+  const propsVersion = useRef(0)
+  const settledAtVersion = useRef(0)
+  useEffect(() => { propsVersion.current++ }, [jobs])
+  async function applyOrder(seq: string[]) {
+    setLocalSeq(seq)
+    pendingOrderWrites.current++
+    orderWrite.current = orderWrite.current.then(async () => {
+      try {
+        const results = await Promise.all(seq.map((id, i) => supabase.from('jobs').update({ route_order: i + 1 }).eq('id', id)))
+        if (results.some(r => r.error)) {
+          // Reconcile, don't diverge: drop the optimistic order and fall back to
+          // the last persisted sequence from props (realtime refetch confirms it).
+          setLocalSeq(null)
+          toast.error('Could not save the new stop order — showing the last saved one.')
+        }
+      } finally {
+        pendingOrderWrites.current--
+        if (pendingOrderWrites.current === 0) settledAtVersion.current = propsVersion.current
+      }
+    })
+    await orderWrite.current
+  }
+  // Release the optimistic override once the DB is the right authority again:
+  // • props MATCH the optimistic order (our write round-tripped) → release;
+  // • props are FRESH (refetched after our writes settled) and still differ →
+  //   another tab/device won the write — adopt the persisted truth (release)
+  //   instead of shadowing it forever.
+  const savedKey = savedSeq ? savedSeq.join('|') : ''
+  useEffect(() => {
+    if (localSeq === null || pendingOrderWrites.current > 0) return
+    const fresh = propsVersion.current > settledAtVersion.current
+    if (localSeq === 'auto') { if (!savedKey || fresh) setLocalSeq(null); return }
+    if (savedKey === localSeq.join('|') || fresh) setLocalSeq(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [localSeq, savedKey, jobs])
+  function moveStop(id: string, dir: -1 | 1) {
+    const seq = (manualSeq ?? sortedJobs.map(j => j.id)).slice()
+    const i = seq.indexOf(id)
+    const j = i + dir
+    if (i < 0 || j < 0 || j >= seq.length) return
+    ;[seq[i], seq[j]] = [seq[j], seq[i]]
+    applyOrder(seq)
+  }
+  const dragId = useRef<string | null>(null)
+  function dropOn(targetId: string) {
+    const from = dragId.current
+    dragId.current = null
+    if (!from || from === targetId) return
+    const seq = (manualSeq ?? sortedJobs.map(j => j.id)).slice()
+    const fi = seq.indexOf(from)
+    const ti = seq.indexOf(targetId)
+    if (fi < 0 || ti < 0) return
+    seq.splice(fi, 1)
+    seq.splice(ti, 0, from)
+    applyOrder(seq)
+  }
+  // "Reset to best route": clear any manual order so the day snaps back to the
+  // continuously-computed optimized route (the SAME engine output in `route` —
+  // nothing is recomputed twice). ETAs, drive time, finish and Open-in-Maps all
+  // re-flow because effOrdered switches source. Confirms only when a manual
+  // order actually exists; offers Undo to restore the exact previous sequence.
+  const [optimizing, setOptimizing] = useState(false)
+  async function optimizeRouteNow() {
+    if (optimizing) return
+    const prevSeq = manualSeq // snapshot of the DISPLAYED order (undo target)
+    if (prevSeq) {
+      const ok = await confirm({
+        title: 'Re-optimize this day’s route?',
+        message: 'Your manual stop order will be replaced with the optimized route. You can undo right after.',
+        confirmLabel: 'Optimize',
+        icon: Wand2,
+      })
+      if (!ok) return
+    }
+    setOptimizing(true)
+    setLocalSeq('auto')
+    pendingOrderWrites.current++
+    const { error } = await supabase.from('jobs').update({ route_order: null }).in('id', active.map(j => j.id))
+    pendingOrderWrites.current--
+    if (pendingOrderWrites.current === 0) settledAtVersion.current = propsVersion.current
+    setOptimizing(false)
+    if (error) {
+      // Write failed → put the display back and say so (no fake success/undo).
+      setLocalSeq(prevSeq)
+      toast.error('Could not re-optimize: ' + error.message)
+      return
+    }
+    if (prevSeq) {
+      toast.undo('Route re-optimized — manual order cleared.', () => applyOrder(prevSeq))
+    } else {
+      toast.success('Route is optimized.')
+    }
+  }
 
   // Real-world timing: work start + route order + drive legs + job durations →
   // an arrival time per stop and the day's estimated finish (ONE engine, lib/route).
   const durByJob: Record<string, number> = {}
   for (const j of active) durByJob[j.id] = j.duration_minutes || DEFAULT_JOB_MIN
-  const etas = route && route.ordered.length > 0 ? computeDayEtas(workStartTime, route.ordered, durByJob) : null
+  const etas = effOrdered.length > 0 ? computeDayEtas(workStartTime, effOrdered, durByJob, travel) : null
   const etaByJob: Record<string, string> = {}
   const arrivalMinByJob: Record<string, number> = {}
   if (etas) for (const s of etas.stops) { etaByJob[s.jobId] = s.arrival; arrivalMinByJob[s.jobId] = s.arrivalMin }
@@ -244,7 +440,11 @@ export function DayOpsPanel({
     if (startMin != null) windowByJob[j.id] = `${minutesToTime12(startMin)}–${minutesToTime12(startMin + 120)}`
   }
   const laborTotalMin = active.reduce((s, j) => s + (j.duration_minutes || DEFAULT_JOB_MIN), 0)
-  const load = dayLoad(laborTotalMin + (stats ? stats.driveMinutes : active.length * 10), capacityHours)
+  const usedMin = laborTotalMin + (stats ? stats.driveMinutes : active.length * 10)
+  const load = dayLoad(usedMin, capacityHours)
+  // Capacity % for the always-visible header badge (used ÷ day capacity).
+  const dayCapMin = usedMin + load.spareMin
+  const loadPct = dayCapMin > 0 ? Math.round((usedMin / dayCapMin) * 100) : null
 
   // ── Live day tracking (check-in/check-out data) ──
   const isToday = date === localTodayISO()
@@ -280,6 +480,10 @@ export function DayOpsPanel({
 
   return (
     <div className="rounded-card border border-border bg-bg-secondary overflow-hidden">
+      {/* Message today's customers — the shared Send-Message dialog, prefilled with the day's recipients */}
+      {showDayMsg && (
+        <SendMessageDialog open recipients={dayRecipients} title="Message today's customers" onClose={() => setShowDayMsg(false)} />
+      )}
       {/* Header: date + add */}
       <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-3 bg-gradient-to-r from-accent/5 to-transparent">
         <div className="min-w-0 flex items-center gap-2">
@@ -294,10 +498,16 @@ export function DayOpsPanel({
               {load.state === 'overloaded' ? `Over by ${Math.round(-load.spareMin / 6) / 10}h`
                 : load.state === 'room' ? `Room for ~${Math.round(load.spareMin / 6) / 10}h`
                 : 'Full day'}
+              {loadPct != null && ` · ${loadPct}%`}
             </span>
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {dayRecipients.length > 0 && (
+            <Button size="sm" variant="secondary" onClick={() => setShowDayMsg(true)} title="Message everyone scheduled today">
+              <MessageSquare className="w-4 h-4" /> Message all
+            </Button>
+          )}
           {remaining.length > 0 && (
             <Button size="sm" variant="secondary" onClick={onRainDelay} title="Bump all remaining jobs to your next work day">
               <CloudRain className="w-4 h-4" /> Rain delay
@@ -312,7 +522,7 @@ export function DayOpsPanel({
         <Metric icon={DollarSign} label="Planned" value={formatCurrency(totalRevenue)} tone="text-accent" />
         <Metric icon={Wallet} label="Completed" value={formatCurrency(revenueCompleted)} tone="text-emerald-400" />
         <Metric icon={DollarSign} label="Remaining" value={formatCurrency(revenueRemaining)} tone="text-amber-400" />
-        <Metric icon={ListChecks} label="Jobs left" value={String(remaining.length)} />
+        <Metric icon={ListChecks} label="Stops left" value={String(remaining.length)} />
         <Metric icon={Hourglass} label="Est. finish" value={estFinish} />
       </div>
 
@@ -326,9 +536,8 @@ export function DayOpsPanel({
               {inProgress.started_at && <span className="text-sky-300"> · {elapsedMin(inProgress.started_at)}m</span>}
             </span>
           )}
-          <span className="text-ink-muted">Done <span className="text-ink font-medium">{completed.length}/{active.length}</span></span>
+          {/* Done-count and finish live in the metric strip directly above — no repeats. */}
           <span className="text-ink-muted">Worked <span className="text-ink font-medium">{Math.floor(workedMin / 60)}h {workedMin % 60}m</span></span>
-          <span className="text-ink-muted">Finish <span className="text-ink font-medium">~{estFinish}</span></span>
         </div>
       )}
 
@@ -338,37 +547,47 @@ export function DayOpsPanel({
         </button>
       ) : (
         <div className="p-4 space-y-4">
-          {/* Day operations breakdown */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-            <Stat label="Jobs done" value={`${completed.length} / ${active.length}`} />
-            <Stat label="Completion" value={`${completionPct}%`} tone={completionPct === 100 && active.length > 0 ? 'text-emerald-400' : undefined} />
-            <Stat label="Est. hours" value={totalMin > 0 ? `${estHours}h` : '—'} />
-            <Stat label="Stops" value={String(totalStops)} />
-          </div>
-
-          {/* Route intelligence */}
+          {/* Route intelligence — the dispatcher board. (The old 4-stat "day
+              operations" grid repeated the metric strip and settings bar — gone.) */}
           <div className="rounded-xl border border-border bg-bg-tertiary px-3 py-2.5">
             <div className="flex items-center justify-between gap-2">
               <span className="flex items-center gap-1.5 text-xs font-semibold text-ink-muted uppercase tracking-wide">
                 <RouteIcon className="w-3.5 h-3.5 text-accent" /> Route
+                {manualSeq && (
+                  <span className="normal-case tracking-normal text-[10px] font-semibold text-amber-300 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5">
+                    Custom order
+                  </span>
+                )}
               </span>
-              {route?.mapsUrl && (
-                <a href={route.mapsUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-accent font-medium flex items-center gap-1 hover:underline">
-                  <ExternalLink className="w-3 h-3" /> Open in Maps
-                </a>
-              )}
+              <span className="flex items-center gap-3 shrink-0">
+                {/* Persistent "reset to best route" — reuses the continuously-computed
+                    optimized order; confirms only when a manual order would be lost. */}
+                {active.length > 1 && baseCoord && (
+                  <button onClick={optimizeRouteNow} disabled={optimizing}
+                    title="Recalculate the best stop order (clears manual reordering)"
+                    className="text-xs text-accent font-medium flex items-center gap-1 hover:underline disabled:opacity-50">
+                    <Wand2 className="w-3 h-3" /> Optimize route
+                  </button>
+                )}
+                {effMapsUrl && (
+                  <a href={effMapsUrl} target="_blank" rel="noopener noreferrer"
+                    title={mapsCapped ? `Google Maps caps directions at ${MAX_MAPS_WAYPOINTS} stops — this opens your next ${MAX_MAPS_WAYPOINTS}; reopen as you complete stops for the rest.` : 'Directions for the remaining stops, in order'}
+                    className="text-xs text-accent font-medium flex items-center gap-1 hover:underline">
+                    <ExternalLink className="w-3 h-3" /> {mapsCapped ? `Open in Maps (next ${MAX_MAPS_WAYPOINTS})` : 'Open in Maps'}
+                  </a>
+                )}
+              </span>
             </div>
             {!baseCoord ? (
               <p className="text-xs text-amber-400 mt-1.5">Set your base address in Settings to optimize the route.</p>
-            ) : routing ? (
+            ) : routing && !manualRoute ? (
               <p className="text-xs text-ink-faint mt-1.5">Optimizing route…</p>
-            ) : route && stats ? (
+            ) : (manualRoute || route) && stats ? (
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1.5 text-xs text-ink-muted">
-                <span className="flex items-center gap-1"><Navigation className="w-3 h-3" /> ~{route.totalKm} km</span>
-                {route.usedRoad && <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-400 border border-emerald-500/30 bg-emerald-500/10 rounded px-1.5 py-0.5">Real-road</span>}
+                <span className="flex items-center gap-1"><Navigation className="w-3 h-3" /> ~{effTotalKm} km</span>
+                {!manualRoute && route?.usedRoad && <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-400 border border-emerald-500/30 bg-emerald-500/10 rounded px-1.5 py-0.5">Real-road</span>}
                 <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> ~{stats.driveMinutes} min driving</span>
-                <span className="flex items-center gap-1"><MapPin className="w-3 h-3" /> {stats.clusters} cluster{stats.clusters !== 1 ? 's' : ''}</span>
-                <span>{stats.avgLegKm} km avg between stops</span>
+                {totalMin > 0 && <span className="flex items-center gap-1"><Hourglass className="w-3 h-3" /> ~{Math.round(totalMin / 6) / 10}h work</span>}
               </div>
             ) : (
               <p className="text-xs text-ink-faint mt-1.5">No locatable stops yet.</p>
@@ -384,16 +603,48 @@ export function DayOpsPanel({
               const addons = addonsFor(job)
               const total = value + addonsTotal(addons)  // base + add-ons (billed amount)
               const qVal = quoteValueFor(job)
+              const idx = sortedJobs.findIndex(j => j.id === job.id)
               return (
-                <div key={job.id} className={cn('rounded-xl border px-3 py-2.5', JOB_STATUS_COLORS[job.status])}>
+                <div key={job.id}
+                  draggable={sortedJobs.length > 1}
+                  onDragStart={() => { dragId.current = job.id; setDraggingId(job.id) }}
+                  onDragEnd={() => { setDraggingId(null); setDragOverId(null) }}
+                  onDragOver={e => { e.preventDefault(); if (dragOverId !== job.id) setDragOverId(job.id) }}
+                  onDragLeave={() => { if (dragOverId === job.id) setDragOverId(null) }}
+                  onDrop={() => { dropOn(job.id); setDraggingId(null); setDragOverId(null) }}
+                  className={cn('rounded-xl border px-3 py-2.5 transition-colors',
+                    // Done cards RECEDE (neutral + faded); the live stop is sky end-to-end
+                    // (badge, timer, live bar and card all agree); scheduled keeps the token.
+                    done ? 'border-border bg-bg-tertiary/60 text-ink-muted opacity-60'
+                      : job.status === 'in_progress' ? 'bg-sky-400/10 text-sky-300 border-sky-400/30'
+                      : JOB_STATUS_COLORS[job.status],
+                    sortedJobs.length > 1 && 'cursor-grab active:cursor-grabbing',
+                    draggingId === job.id && 'opacity-50',
+                    draggingId && draggingId !== job.id && dragOverId === job.id && 'ring-2 ring-accent')}>
                   <div className="flex items-start gap-2.5">
-                    <div className={cn(
-                      'w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5',
-                      done ? 'bg-emerald-500/20 text-emerald-300'
-                        : job.status === 'in_progress' ? 'bg-sky-400 text-black animate-pulse'
-                        : 'bg-accent text-black'
-                    )}>
-                      {done ? <Check className="w-4 h-4" /> : job.status === 'in_progress' ? <Play className="w-3.5 h-3.5 fill-current" /> : (order ?? '–')}
+                    <div className="flex flex-col items-center gap-0.5 shrink-0">
+                      <div className={cn(
+                        'w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold mt-0.5',
+                        done ? 'bg-emerald-500/20 text-emerald-300'
+                          : job.status === 'in_progress' ? 'bg-sky-400 text-black animate-pulse'
+                          : 'bg-accent text-black'
+                      )}>
+                        {done ? <Check className="w-4 h-4" /> : job.status === 'in_progress' ? <Play className="w-3.5 h-3.5 fill-current" /> : (order ?? '–')}
+                      </div>
+                      {/* Touch-friendly reorder (drag works on desktop) — padded hit areas
+                          so a thumb never grabs the card when it meant the chevron. */}
+                      {sortedJobs.length > 1 && (
+                        <div className="flex flex-col">
+                          <button onClick={e => { e.stopPropagation(); moveStop(job.id, -1) }} disabled={idx === 0}
+                            aria-label="Move up" className="p-1.5 -mx-1 text-ink-faint hover:text-ink disabled:opacity-25 leading-none">
+                            <ChevronUp className="w-4 h-4" />
+                          </button>
+                          <button onClick={e => { e.stopPropagation(); moveStop(job.id, 1) }} disabled={idx === sortedJobs.length - 1}
+                            aria-label="Move down" className="p-1.5 -mx-1 text-ink-faint hover:text-ink disabled:opacity-25 leading-none">
+                            <ChevronDown className="w-4 h-4" />
+                          </button>
+                        </div>
+                      )}
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">
@@ -413,13 +664,8 @@ export function DayOpsPanel({
                                 className="text-[10px] font-semibold uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5 flex items-center gap-1 hover:bg-amber-500/20">
                                 <AlertTriangle className="w-3 h-3" /> Set price
                               </button>}
-                          <button
-                            onClick={e => { e.stopPropagation(); onDeleteJob(job) }}
-                            title="Delete job" aria-label="Delete job"
-                            className="h-7 w-7 rounded-lg border border-red-500/30 bg-red-500/15 text-red-400 hover:bg-red-500/25 flex items-center justify-center active:scale-95 transition-transform"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          {/* Delete lives in the job form (Open → trash) — a 28px
+                              destructive button beside the price invited mis-taps. */}
                         </div>
                       </div>
 
@@ -525,29 +771,58 @@ export function DayOpsPanel({
                             +{addons.length <= 2 ? addons.map(a => a.description).join(' + ') : `${addons.length} services`}
                           </button>
                         )}
-                        <span className="px-1.5 py-0.5 rounded border border-current/30 text-[10px] font-semibold uppercase tracking-wide">{JOB_STATUS_LABELS[job.status]}</span>
+                        {/* No status chip — the order badge, card tone, ETA/timer and
+                            strikethrough already say the status (it was a 4th repeat). */}
                       </div>
 
-                      {/* One-tap actions */}
+                      {/* One-tap actions — ONE primary per stage (On my way → Start →
+                          Complete), field actions first, edit actions after. Completed
+                          cards collapse to the three that still matter. */}
+                      {done ? (
+                        <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                          <a href={`/dashboard/invoices?job=${job.id}`}
+                            className="h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border border-current/30 text-xs font-medium flex items-center gap-1 hover:bg-black/10">
+                            <Receipt className="w-3.5 h-3.5" /> Invoice
+                          </a>
+                          <ActionBtn onClick={() => onOpenJob(job)} icon={Pencil} label="Open" />
+                          <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setAddonsId(null); setMessageId(null); setPhotoId(photoId === job.id ? null : job.id) }} icon={Camera} label="Photos" />
+                        </div>
+                      ) : (
                       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-                        {job.status === 'scheduled' && <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onStartJob(job) } finally { setActing(null) } }} icon={Play} label="Start" tone="sky" />}
-                        {/* One-tap Done — complete a scheduled visit without a check-in (no time tracked); completeJob handles the missing started_at and offers Undo. */}
-                        {job.status === 'scheduled' && <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onMarkDone(job) } finally { setActing(null) } }} icon={CheckCircle2} label="Done" tone="emerald" />}
-                        {job.status === 'in_progress' && <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onMarkDone(job) } finally { setActing(null) } }} icon={CheckCircle2} label="Complete" tone="emerald" />}
-                        <ActionBtn onClick={() => (quickId === job.id ? setQuickId(null) : openQuick(job))} icon={SlidersHorizontal} label="Quick" />
-                        <ActionBtn onClick={() => onOpenJob(job)} icon={Pencil} label="Open" />
-                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setAddonsId(null); setMessageId(messageId === job.id ? null : job.id) }} icon={MessageSquare} label="Message" />
-                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setAddonsId(null); setMessageId(null); setPhotoId(photoId === job.id ? null : job.id) }} icon={Camera} label="Photos" />
-                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setMessageId(null); setAddonsId(addonsId === job.id ? null : job.id) }} icon={PlusCircle} label={addons.length ? `Services (${addons.length})` : 'Services'} />
-                        <ActionBtn onClick={() => setMoveId(moveId === job.id ? null : job.id)} icon={Move} label="Move" />
+                        {/* Stage primary. on_my_way_at stamps when the text sends, so the
+                            primary advances On my way → Start on its own. */}
+                        {job.status === 'scheduled' && !job.on_my_way_at && (
+                          <ActionBtn disabled={sendingEta !== null} onClick={() => sendOnMyWay(job)} icon={Send} label={sendingEta === job.id ? 'Sending…' : 'On my way'} tone="primary" />
+                        )}
+                        {job.status === 'scheduled' && (
+                          <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onStartJob(job) } finally { setActing(null) } }} icon={Play} label="Start" tone={job.on_my_way_at ? 'primary' : undefined} />
+                        )}
+                        {job.status === 'in_progress' && (
+                          <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onMarkDone(job) } finally { setActing(null) } }} icon={CheckCircle2} label="Complete" tone="complete" />
+                        )}
                         <a
                           href={directionsUrl({ lat: job.properties?.lat ?? null, lng: job.properties?.lng ?? null, address: job.properties?.address }, baseCoord)}
                           target="_blank" rel="noopener noreferrer"
-                          className="h-8 px-2.5 rounded-lg border border-current/30 text-xs font-medium flex items-center gap-1 hover:bg-black/10"
+                          className="h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border border-current/30 text-xs font-medium flex items-center gap-1 hover:bg-black/10"
                         >
                           <Navigation className="w-3.5 h-3.5" /> Route to
                         </a>
+                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setAddonsId(null); setMessageId(messageId === job.id ? null : job.id) }} icon={MessageSquare} label="Message" />
+                        {job.status === 'scheduled' && job.on_my_way_at && (
+                          <ActionBtn disabled={sendingEta !== null} onClick={() => sendOnMyWay(job)} icon={Send} label={sendingEta === job.id ? 'Sending…' : 'On my way'} />
+                        )}
+                        {/* Complete a scheduled visit without a check-in (no time tracked);
+                            completeJob handles the missing started_at and offers Undo. */}
+                        {job.status === 'scheduled' && (
+                          <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onMarkDone(job) } finally { setActing(null) } }} icon={CheckCircle2} label="Complete" />
+                        )}
+                        <ActionBtn onClick={() => (quickId === job.id ? setQuickId(null) : openQuick(job))} icon={SlidersHorizontal} label="Quick" />
+                        <ActionBtn onClick={() => onOpenJob(job)} icon={Pencil} label="Open" />
+                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setAddonsId(null); setMessageId(null); setPhotoId(photoId === job.id ? null : job.id) }} icon={Camera} label="Photos" />
+                        <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setMessageId(null); setAddonsId(addonsId === job.id ? null : job.id) }} icon={PlusCircle} label={addons.length ? `Services (${addons.length})` : 'Services'} />
+                        <ActionBtn onClick={() => setMoveId(moveId === job.id ? null : job.id)} icon={Move} label="Move" />
                       </div>
+                      )}
 
                       {/* Move to another day — drag isn't available within a single day */}
                       {moveId === job.id && (
@@ -653,27 +928,24 @@ function Metric({ icon: Icon, label, value, tone }: { icon: typeof DollarSign; l
   )
 }
 
-function Stat({ label, value, tone }: { label: string; value: string; tone?: string }) {
-  return (
-    <div className="rounded-lg border border-border bg-bg-tertiary px-3 py-2">
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className={cn('text-sm font-bold mt-0.5', tone || 'text-ink')}>{value}</p>
-    </div>
-  )
-}
-
-function ActionBtn({ onClick, icon: Icon, label, tone, disabled }: { onClick: () => void; icon: typeof Pencil; label: string; tone?: 'emerald' | 'sky'; disabled?: boolean }) {
+// h-10 on touch screens (one-thumb, in a driveway), compact h-8 on desktop.
+// 'primary' = THE next action for the stage; 'complete' = the finish action.
+function ActionBtn({ onClick, icon: Icon, label, tone, disabled }: { onClick: () => void; icon: typeof Pencil; label: string; tone?: 'emerald' | 'sky' | 'primary' | 'complete'; disabled?: boolean }) {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        'h-8 px-2.5 rounded-lg border text-xs font-medium flex items-center gap-1 active:scale-95 transition-transform disabled:opacity-50 disabled:pointer-events-none',
-        tone === 'emerald'
-          ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25'
-          : tone === 'sky'
-            ? 'bg-sky-400/15 border-sky-400/30 text-sky-300 hover:bg-sky-400/25'
-            : 'border-current/30 hover:bg-black/10'
+        'h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border text-xs font-medium flex items-center gap-1 active:scale-95 transition-transform disabled:opacity-50 disabled:pointer-events-none',
+        tone === 'primary'
+          ? 'bg-accent border-accent text-black font-semibold hover:opacity-90'
+          : tone === 'complete'
+            ? 'bg-emerald-500 border-emerald-500 text-black font-semibold hover:opacity-90'
+            : tone === 'emerald'
+              ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25'
+              : tone === 'sky'
+                ? 'bg-sky-400/15 border-sky-400/30 text-sky-300 hover:bg-sky-400/25'
+                : 'border-current/30 hover:bg-black/10'
       )}
     >
       <Icon className="w-3.5 h-3.5" /> {label}

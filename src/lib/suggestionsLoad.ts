@@ -5,6 +5,7 @@ import { pricingConfigFromSettings } from '@/lib/pricing'
 import { crewCostPerHour } from '@/lib/economics'
 import { settingsToSeasons } from '@/lib/seasons'
 import { buildSuggestions, SuggestionContext, Suggestion } from '@/lib/suggestions'
+import { loadTravelModel } from '@/lib/travelLearning'
 
 // Load EVERYTHING the advisor composes, in one parallel fetch, and return the
 // ranked suggestions. Shared by the Grow page Suggestions Center and the
@@ -20,7 +21,7 @@ export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggest
   // user_id directly (not by the jobs' ids) so they no longer serialize AFTER the
   // jobs query — every read fires at once. Dismissals load here too.
   const today = localTodayISO()
-  const [jRes, qRes, rRes, pRes, cRes, iRes, nRes, sRes, liRes, dRes, woRes] = await Promise.all([
+  const [jRes, qRes, rRes, pRes, cRes, iRes, nRes, sRes, liRes, dRes, woRes, travelM] = await Promise.all([
     supabase.from('jobs')
       .select('*, customers(id, name, phone, preferred_days, avoid_days, pref_time_start, pref_time_end), properties(id, address, lat, lng, neighborhood, preferred_days, avoid_days, pref_time_start, pref_time_end)')
       .eq('user_id', uid),
@@ -36,6 +37,7 @@ export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggest
     supabase.from('job_line_items').select('*').eq('user_id', uid).order('created_at', { ascending: true }),
     supabase.from('suggestion_dismissals').select('suggestion_key, snooze_until').eq('user_id', uid),
     supabase.from('quote_outcomes').select('quote_id, reason, detail, competitor_price').eq('user_id', uid),
+    loadTravelModel(supabase),
   ])
 
   const jobs = (jRes.data as Job[]) || []
@@ -71,6 +73,7 @@ export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggest
     preferredDays: (settings?.preferred_work_days as number[] | null)?.length ? (settings!.preferred_work_days as number[]) : [5, 6, 0],
     capacityHours: Number(settings?.daily_capacity_hours) > 0 ? Number(settings!.daily_capacity_hours) : 8,
     workStart: (settings?.work_start_time as string | null) || '08:00',
+    speed: travelM,
     jobs,
     quotes: (qRes.data as Quote[]) || [],
     recurrences,

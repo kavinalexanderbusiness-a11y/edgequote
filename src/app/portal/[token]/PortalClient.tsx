@@ -3,16 +3,19 @@
 import { useEffect, useMemo, useState } from 'react'
 import { format } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
-import { PortalData, PortalQuote, PortalInvoice, PortalJob, PortalPhoto, PortalPayment, PortalCard, normalizePortalData } from './portalData'
+import { confirm as confirmDialog } from '@/lib/confirm'
+import { ConfirmHost } from '@/components/ui/ConfirmHost'
 import { recurrenceLabel } from '@/lib/recurrence'
 import { invoiceTotals } from '@/lib/invoiceTotals'
+import { serviceLineTotals } from '@/lib/quoteServices'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
-import { renderPortalQuoteBlob, renderPortalInvoiceBlob, downloadBlob, viewBlob, printBlob } from '@/lib/portalPdf'
+import { renderPortalQuoteBlob, renderPortalInvoiceBlob, renderPortalReceiptBlob, downloadBlob, viewBlob, printBlob } from '@/lib/portalPdf'
+import { receiptNumberFor } from '@/lib/payments/ledger'
 import {
   Home, History, Image as ImageIcon, FileText, Receipt, MessageSquarePlus, Check, Loader2,
   Phone, Globe, Mail, Leaf, CheckCircle2, Navigation, Play, CalendarClock, Repeat, MapPin, Ruler, Sparkles, CreditCard, MessageSquare,
-  Eye, Download, Printer, FolderOpen, Search, ArrowUpDown, Activity, Wallet, Star, Zap, ShieldCheck, Trash2,
+  Eye, Download, Printer, FolderOpen, Search, ArrowUpDown, Activity, Wallet, Star, Zap, ShieldCheck, Trash2, X,
 } from 'lucide-react'
 
 // ── Premium Customer Portal ─────────────────────────────────────────────────────
@@ -20,7 +23,23 @@ import {
 // service-app experience: a Home overview, live job status, a per-visit timeline
 // with photos & invoices, a before/after gallery, and quick service requests.
 
-type Tab = 'home' | 'timeline' | 'service' | 'photos' | 'property' | 'documents' | 'quotes' | 'invoices' | 'payments' | 'request'
+interface PortalQuoteService { service_type: string; quantity: number; unit: string | null; unit_price: number; est_minutes: number | null; discount_type: 'amount' | 'percent' | null; discount_value: number | null; notes: string | null; sort_order: number }
+interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null }
+interface PortalInvoice { id: string; invoice_number: string; service_type: string | null; amount: number; status: string; issued_date: string | null; due_date: string | null; notes: string | null; address: string | null; line_items: { description: string; amount: number; kind: string }[] | null; job_id: string | null; created_at: string; discount_type?: 'amount' | 'percent' | null; discount_value?: number | null; amount_paid?: number | null }
+interface PortalJob { id: string; recurrence_id: string | null; service_type: string | null; title: string; scheduled_date: string; status: string; on_my_way_at: string | null; started_at: string | null; completed_at: string | null; notes: string | null }
+interface PortalRec { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null; end_date: string | null }
+interface PortalPhoto { id: string; job_id: string | null; storage_path: string; kind: string; caption: string | null; taken_at: string }
+interface PortalPayment { id: string; amount: number; status: string; paid_at: string | null; provider: string; invoice_id: string | null; created_at: string; kind?: string }
+interface PortalCard { brand: string | null; last4: string | null; exp_month: number | null; exp_year: number | null }
+interface PortalData {
+  customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null; city: string | null; sms_opt_in?: boolean | null; email_opt_in?: boolean | null; reviewed_at?: string | null; autopay_enabled?: boolean | null }
+  business: { company_name: string | null; owner_name: string | null; phone: string | null; email_primary: string | null; email_secondary: string | null; website: string | null; logo_url: string | null; logo_scale: number | null; base_address: string | null; terms_text: string | null; review_url?: string | null; gst_percent?: number | null } | null
+  property: { address: string | null; city: string | null; province: string | null; lawn_sqft: number | null; fence_length: number | null; neighborhood: string | null; notes: string | null } | null
+  quotes: PortalQuote[]; invoices: PortalInvoice[]; jobs: PortalJob[]; recurrences: PortalRec[]; photos: PortalPhoto[]; payments: PortalPayment[]
+  payment_method?: PortalCard | null
+}
+
+type Tab = 'home' | 'timeline' | 'service' | 'photos' | 'property' | 'documents' | 'payments' | 'request'
 type LiveStatus = 'scheduled' | 'on_my_way' | 'in_progress' | 'completed'
 
 interface Derived {
@@ -38,11 +57,32 @@ function liveStatusOf(j: PortalJob): LiveStatus {
   return 'scheduled'
 }
 
-export function PortalClient({ token, initialData }: { token: string; initialData: PortalData | null }) {
+// Defensive normalize: an OLDER get_portal_data — or a customer with no rows in a section —
+// can return null/undefined for a collection (Postgres json_agg is null, not []). Coerce
+// EVERY array so the portal can never white-screen. Shared by the server fetch (initialData)
+// and the client revalidation below.
+function normalizePortal(d: unknown): PortalData | null {
+  const raw = (d ?? null) as Partial<PortalData> | null
+  if (!raw) return null
+  return {
+    customer: raw.customer ?? { id: '', name: 'Customer', email: null, phone: null, address: null, city: null },
+    business: raw.business ?? null,
+    property: raw.property ?? null,
+    quotes: Array.isArray(raw.quotes) ? raw.quotes : [],
+    invoices: Array.isArray(raw.invoices) ? raw.invoices : [],
+    jobs: Array.isArray(raw.jobs) ? raw.jobs : [],
+    recurrences: Array.isArray(raw.recurrences) ? raw.recurrences : [],
+    photos: Array.isArray(raw.photos) ? raw.photos : [],
+    payments: Array.isArray(raw.payments) ? raw.payments : [],
+    payment_method: raw.payment_method ?? null,
+  }
+}
+
+export function PortalClient({ token, initialData }: { token: string; initialData: unknown }) {
   const supabase = useMemo(() => createClient(), [])
-  // Seeded from the server fetch → the page paints real content on first render (no
-  // spinner). load() below only runs client-side as a fallback / for post-payment revalidation.
-  const [data, setData] = useState<PortalData | null>(initialData)
+  // Seeded from the server fetch → real content on first paint (no spinner). load() below
+  // only runs as a fallback / for post-payment revalidation.
+  const [data, setData] = useState<PortalData | null>(() => normalizePortal(initialData))
   const [loading, setLoading] = useState(initialData == null)
   const [tab, setTab] = useState<Tab>('home')
   const [accepting, setAccepting] = useState<string | null>(null)
@@ -52,31 +92,47 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   const [paymentsEnabled, setPaymentsEnabled] = useState(false)
   const [payingId, setPayingId] = useState<string | null>(null)
   const [justPaid, setJustPaid] = useState(false)
-  const [consent, setConsentState] = useState<{ sms: boolean; email: boolean } | null>(
-    initialData ? { sms: !!initialData.customer?.sms_opt_in, email: !!initialData.customer?.email_opt_in } : null
-  )
+  const [justAccepted, setJustAccepted] = useState(false)
+  // The Documents tab opens pre-filtered to what the customer came for (the
+  // signpost filters to quotes, the balance path to invoices).
+  const [docsCat, setDocsCat] = useState<'all' | 'quote' | 'invoice'>('all')
+  // One inline error surface for portal actions (pay / accept / request) — fixed,
+  // friendly copy near the top of the content, never a browser alert.
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [consent, setConsentState] = useState<{ sms: boolean; email: boolean } | null>(() => {
+    const pd = normalizePortal(initialData)
+    return pd ? { sms: !!pd.customer?.sms_opt_in, email: !!pd.customer?.email_opt_in } : null
+  })
   const [markedReviewed, setMarkedReviewed] = useState(false)
 
   async function load() {
     const { data: d } = await supabase.rpc('get_portal_data', { p_token: token })
-    const pd = normalizePortalData(d)
+    const pd = normalizePortal(d)
     setData(pd)
     if (pd) setConsentState({ sms: !!pd.customer?.sms_opt_in, email: !!pd.customer?.email_opt_in })
     setLoading(false)
   }
 
   // Self-serve consent — updates the customer record immediately (token-scoped RPC).
-  async function saveConsent(next: { sms: boolean; email: boolean }) {
+  // `prefs` carries the per-category choices (reminders / invoices / estimates /
+  // marketing / seasonal); omitted = leave stored categories unchanged.
+  async function saveConsent(next: { sms: boolean; email: boolean }, prefs?: Record<string, boolean>) {
+    const prev = consent
     setConsentState(next)
-    await supabase.rpc('portal_set_consent', { p_token: token, p_sms_opt_in: next.sms, p_email_opt_in: next.email })
+    const { data: ok, error } = await supabase.rpc('portal_set_consent', { p_token: token, p_sms_opt_in: next.sms, p_email_opt_in: next.email, p_prefs: prefs ?? null })
+    if (error || !ok) {
+      setConsentState(prev)                    // roll back — never show a state the server didn't save
+      setActionError('We couldn’t save your message preferences — please try again.')
+    }
   }
 
   // Customer confirms they left a review → records it (notifies the owner, stops
-  // future review-request messages). Optimistic; token-scoped RPC.
+  // future review-request messages). Optimistic with rollback; token-scoped RPC.
   async function markReviewed() {
     if (markedReviewed) return                 // double-click guard (already confirmed)
     setMarkedReviewed(true)
-    await supabase.rpc('portal_mark_reviewed', { p_token: token })
+    const { data: ok, error } = await supabase.rpc('portal_mark_reviewed', { p_token: token })
+    if (error || !ok) setMarkedReviewed(false)
   }
   // Server already provided initialData → no client fetch on first paint. Only fetch here
   // as a fallback (e.g. a direct client navigation where the server skipped it).
@@ -108,20 +164,35 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   async function accept(qid: string) {
     if (accepting) return                      // double-click guard
     setAccepting(qid)
+    setActionError(null)
     const { data: ok } = await supabase.rpc('portal_accept_quote', { p_token: token, p_quote_id: qid })
-    if (ok) setData(d => d ? { ...d, quotes: d.quotes.map(q => q.id === qid ? { ...q, status: 'accepted' } : q) } : d)
+    if (ok) {
+      setData(d => d ? { ...d, quotes: d.quotes.map(q => q.id === qid ? { ...q, status: 'accepted' } : q) } : d)
+      // Close the loop — the customer must SEE their approval registered and
+      // know what happens next (same pattern as the payment-received banner).
+      setJustAccepted(true)
+    }
+    else setActionError('We couldn’t record your approval — please try again, or reply to any message from us and we’ll take care of it.')
     setAccepting(null)
   }
   async function request(message: string, key: string) {
     if (!message.trim()) return
     setReqBusy(key)
+    setActionError(null)
     const { data: ok } = await supabase.rpc('portal_request_service', { p_token: token, p_message: message.trim() })
     setReqBusy(null)
     if (ok) { setReqSent(key); if (key === 'custom') setReqMsg(''); setTimeout(() => setReqSent(null), 4000) }
+    else setActionError('Your request didn’t go through — please try again, or call us directly.')
+  }
+  // The customer opened this invoice (PDF or pay) — stamp viewed_at once so the
+  // owner's list shows 'Viewed'. Fire-and-forget; idempotent server-side.
+  function markInvoiceViewed(invoiceId: string) {
+    supabase.rpc('portal_mark_invoice_viewed', { p_token: token, p_invoice_id: invoiceId }).then(() => {}, () => {})
   }
   async function pay(invoiceId: string) {
     if (payingId) return                       // re-entry guard — never start two checkout sessions
     setPayingId(invoiceId)
+    markInvoiceViewed(invoiceId)
     try {
       const res = await fetch('/api/portal/pay', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -130,9 +201,9 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
       const d = await res.json().catch(() => ({}))
       if (res.ok && d.url) { window.location.href = d.url; return }   // redirecting to Stripe — stay disabled
       // Public portal: show a FIXED message — never render a server-provided string.
-      alert('Could not start payment. Please try again.')
+      setActionError('We couldn’t start the payment — please try again in a moment, or contact us and we’ll sort it out.')
     } catch {
-      alert('Could not start payment. Please try again.')
+      setActionError('We couldn’t start the payment — please try again in a moment, or contact us and we’ll sort it out.')
     }
     setPayingId(null)   // only reached on failure — a successful redirect already left the page
   }
@@ -146,7 +217,13 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     const completed = jobs.filter(j => j.status === 'completed').sort((a, b) => b.scheduled_date.localeCompare(a.scheduled_date))
     const nextService = upcoming[0] || null
     const lastCompleted = completed[0] || null
-    const outstanding = (data.invoices || []).filter(i => i.status === 'unpaid' || i.status === 'sent').reduce((s, i) => s + Number(i.amount || 0), 0)
+    // Outstanding = unpaid BALANCE (total − payments recorded) across issued invoices,
+    // so partial payments and discounts are reflected. Same engine as the dashboard.
+    const gstPct = Number(data.business?.gst_percent) || 0
+    const outstanding = (data.invoices || []).filter(i => i.status !== 'draft' && i.status !== 'cancelled').reduce((s, i) => {
+      const total = invoiceTotals(i.amount, { gst_percent: gstPct }, { type: i.discount_type, value: i.discount_value }).total
+      return s + Math.max(0, Math.round((total - (Number(i.amount_paid) || 0)) * 100) / 100)
+    }, 0)
     // Active plans: recurrences that still have an upcoming visit.
     const recById = new Map(data.recurrences.map(r => [r.id, r]))
     const activeRecIds = [...new Set(upcoming.map(j => j.recurrence_id).filter(Boolean) as string[])]
@@ -174,18 +251,30 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   const photosByJob = groupPhotos(data.photos)
   const invoiceByJob = new Map((data.invoices || []).filter(i => i.job_id).map(i => [i.job_id as string, i]))
 
-  const TABS: { key: Tab; label: string; icon: typeof Home; n?: number }[] = [
+  // Ordered by how often a customer reaches for each: Home first, then Documents
+  // (their central records hub) immediately after, then the things they act on (pay
+  // invoices, accept quotes, manage payments), then service history & photos, then
+  // the rest. Tabs whose section would be EMPTY are hidden (a fresh quote
+  // recipient sees Home/Documents/Request, not five dead ends) — each appears
+  // as soon as it has content.
+  // Documents IS the quotes+invoices hub (search, filters, pay & accept on the
+  // row) — no separate Invoices/Quotes tabs repeating the same records.
+  const hasProperty = !!(data.property && (data.property.address || data.property.lawn_sqft || data.property.fence_length || data.property.neighborhood))
+  const TABS: { key: Tab; label: string; icon: typeof Home; n?: number }[] = ([
     { key: 'home', label: 'Home', icon: Home },
-    { key: 'timeline', label: 'Timeline', icon: Activity },
+    { key: 'documents', label: 'Documents', icon: FolderOpen, n: data.quotes.length + data.invoices.length },
+    { key: 'payments', label: 'Payments', icon: Wallet, n: data.payments.length },
     { key: 'service', label: 'Service', icon: History, n: derived.completed.length },
     { key: 'photos', label: 'Photos', icon: ImageIcon, n: data.photos.length },
+    { key: 'timeline', label: 'Timeline', icon: Activity },
     { key: 'property', label: 'Property', icon: MapPin },
-    { key: 'documents', label: 'Documents', icon: FolderOpen, n: data.quotes.length + data.invoices.length },
-    { key: 'quotes', label: 'Quotes', icon: FileText, n: data.quotes.length },
-    { key: 'invoices', label: 'Invoices', icon: Receipt, n: data.invoices.length },
-    { key: 'payments', label: 'Payments', icon: Wallet, n: data.payments.length },
     { key: 'request', label: 'Request', icon: MessageSquarePlus },
-  ]
+  ] as { key: Tab; label: string; icon: typeof Home; n?: number }[]).filter(t =>
+    t.key === 'payments' ? (data.payments.length > 0 || (data.invoices || []).length > 0) :
+    t.key === 'service' ? derived.completed.length > 0 :
+    t.key === 'photos' ? data.photos.length > 0 :
+    t.key === 'property' ? hasProperty :
+    true)
 
   return (
     <div className="min-h-screen bg-bg">
@@ -196,7 +285,8 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
           {biz?.logo_url ? <img src={biz.logo_url} alt="" className="h-10 w-auto object-contain" /> : <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center"><Leaf className="w-5 h-5 text-accent" /></div>}
           <div className="min-w-0">
             <p className="text-base font-bold text-ink truncate">{biz?.company_name || 'Your Service Provider'}</p>
-            <p className="text-xs text-ink-muted">Welcome back, {first}</p>
+            {/* Plain "Welcome" — a first-time quote recipient has never been here. */}
+            <p className="text-xs text-ink-muted">Welcome, {first}</p>
           </div>
         </div>
 
@@ -204,7 +294,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
         <div className="sticky top-0 z-10 -mx-4 px-4 py-2 bg-bg/90 backdrop-blur border-b border-border">
           <div className="flex gap-1.5 overflow-x-auto">
             {TABS.map(t => (
-              <button key={t.key} onClick={() => setTab(t.key)}
+              <button key={t.key} onClick={() => { if (t.key === 'documents') setDocsCat('all'); setTab(t.key) }}
                 className={cn('shrink-0 flex items-center gap-1.5 text-xs font-medium rounded-full px-3 py-2 border transition-colors',
                   tab === t.key ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
                 <t.icon className="w-3.5 h-3.5" /> {t.label}{t.n != null && t.n > 0 && <span className="opacity-70">{t.n}</span>}
@@ -219,20 +309,33 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
               <CheckCircle2 className="w-4 h-4" /> Payment received — thank you! Your invoice will update shortly.
             </div>
           )}
-          {tab === 'home' && <HomeTab data={data} derived={derived} biz={biz} onRequest={() => setTab('request')} />}
+          {justAccepted && (
+            <div className="mb-3 rounded-card border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-sm font-medium px-4 py-3 flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4" /> Quote approved — thank you! We’ll be in touch to schedule your service.
+            </div>
+          )}
+          {actionError && (
+            <div className="mb-3 rounded-card border border-red-500/25 bg-red-500/10 text-red-400 text-sm font-medium px-4 py-3 flex items-start justify-between gap-3">
+              <span>{actionError}</span>
+              <button onClick={() => setActionError(null)} aria-label="Dismiss" className="shrink-0 opacity-70 hover:opacity-100"><X className="w-4 h-4" /></button>
+            </div>
+          )}
+          {tab === 'home' && <HomeTab suppressApproved={justAccepted} data={data} derived={derived} biz={biz} onRequest={() => setTab('request')}
+            paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId}
+            onOpenInvoices={() => { setDocsCat('invoice'); setTab('documents') }}
+            onReviewQuotes={() => { setDocsCat('quote'); setTab('documents') }} />}
           {tab === 'home' && biz?.review_url && derived.lastCompleted && !data.customer.reviewed_at && (
             <ReviewCard reviewUrl={biz.review_url} businessName={biz.company_name} reviewed={markedReviewed} onReviewed={markReviewed} />
           )}
-          {tab === 'home' && consent && <ConsentCard consent={consent} onSave={saveConsent} />}
+          {tab === 'home' && consent && <ConsentCard token={token} consent={consent} onSave={saveConsent} />}
           {tab === 'timeline' && <TimelineTab data={data} photosByJob={photosByJob} />}
-          {tab === 'service' && <ServiceTab completed={derived.completed} photosByJob={photosByJob} invoiceByJob={invoiceByJob} photoUrl={photoUrl} />}
+          {tab === 'service' && <ServiceTab completed={derived.completed} photosByJob={photosByJob} invoiceByJob={invoiceByJob} photoUrl={photoUrl} gstPct={Number(data.business?.gst_percent) || 0} />}
           {tab === 'photos' && <GalleryTab photosByJob={photosByJob} jobs={data.jobs} photoUrl={photoUrl} />}
           {tab === 'property' && <PropertyTab property={data.property} />}
-          {tab === 'payments' && <PaymentsTab payments={data.payments} invoices={data.invoices} outstanding={derived.outstanding}
+          {tab === 'payments' && <PaymentsTab customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} business={biz} payments={data.payments} invoices={data.invoices} outstanding={derived.outstanding}
             token={token} paymentsEnabled={paymentsEnabled} card={data.payment_method ?? null} autopayEnabled={!!data.customer.autopay_enabled} onChanged={load} />}
-          {tab === 'documents' && <DocumentsTab quotes={data.quotes} invoices={data.invoices} customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} business={biz} />}
-          {tab === 'quotes' && <QuotesTab quotes={data.quotes} accept={accept} accepting={accepting} customerName={data.customer.name} business={biz} />}
-          {tab === 'invoices' && <InvoicesTab invoices={data.invoices} paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} gstPercent={Number(data.business?.gst_percent) || 0} customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} business={biz} />}
+          {tab === 'documents' && <DocumentsTab quotes={data.quotes} invoices={data.invoices} customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} business={biz} onInvoiceOpen={markInvoiceViewed}
+            paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} accept={accept} accepting={accepting} initialCat={docsCat} />}
           {tab === 'request' && (
             <RequestTab presets={REQUEST_PRESETS} reqMsg={reqMsg} setReqMsg={setReqMsg} request={request} reqBusy={reqBusy} reqSent={reqSent} biz={biz} />
           )}
@@ -240,6 +343,8 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
 
         <p className="text-center text-[10px] text-ink-faint mt-10">Powered by EdgeQuote</p>
       </div>
+      {/* Styled confirmation dialogs (card removal, etc.) — same experience as the app. */}
+      <ConfirmHost />
     </div>
   )
 }
@@ -270,11 +375,58 @@ function StatusStepper({ s }: { s: LiveStatus }) {
 }
 
 // ── Home ──
-function HomeTab({ data, derived, biz, onRequest }: { data: PortalData; derived: Derived; biz: PortalData['business']; onRequest: () => void }) {
+function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId, onOpenInvoices, onReviewQuotes, suppressApproved }: {
+  data: PortalData; derived: Derived; biz: PortalData['business']; onRequest: () => void
+  paymentsEnabled: boolean; pay: (id: string) => void; payingId: string | null; onOpenInvoices: () => void; onReviewQuotes: () => void
+  suppressApproved?: boolean
+}) {
   const next = derived.nextService
+  // A quote awaiting approval is usually WHY the customer opened this link —
+  // signpost it up top instead of making them discover the Documents tab.
+  const awaiting = (data.quotes || []).filter(q => q.status === 'sent')
+  // A pure prospect (quote in hand, no visits or invoices yet) came to review
+  // the quote — skip the empty "no visit scheduled" hero and $0/— stat cards
+  // that would push it down and invite the wrong action.
+  const prospect = awaiting.length > 0 && !next && derived.completed.length === 0 && (data.invoices || []).length === 0
+  // Approved but nothing on the calendar yet — reassure instead of the generic
+  // "no upcoming visit" message (they just said yes; the ball is in our court).
+  const approvedPending = !next && !suppressApproved && (data.quotes || []).some(q => q.status === 'accepted')
+  // A PARTIALLY paid invoice must reach checkout too (server charges only the remaining balance).
+  const owing = (data.invoices || []).filter(i => i.status === 'unpaid' || i.status === 'sent' || i.status === 'partial')
+  // Tapping the balance goes straight to paying: one owing invoice + online payments
+  // on → open its checkout directly; otherwise jump to the Invoices tab to pick one.
+  function payOutstanding() {
+    if (payingId) return
+    if (paymentsEnabled && owing.length === 1) pay(owing[0].id)
+    else onOpenInvoices()
+  }
   return (
     <div className="space-y-3">
-      {/* Next service hero */}
+      {/* Quote awaiting approval — one tap to the Documents tab, pre-filtered to quotes */}
+      {awaiting.length > 0 && (
+        <button type="button" onClick={onReviewQuotes}
+          className="w-full text-left rounded-card border border-amber-500/30 bg-amber-500/10 p-4 hover:border-amber-500/50 transition-colors">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-9 h-9 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-400 flex items-center justify-center shrink-0"><FileText className="w-4 h-4" /></div>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-ink truncate">
+                  {awaiting.length === 1
+                    ? (awaiting[0].service_type ? `Your ${awaiting[0].service_type} quote is ready` : 'Your quote is ready')
+                    : `${awaiting.length} quotes are ready for your review`}
+                </p>
+                <p className="text-xs text-ink-muted">
+                  {awaiting.length === 1 ? `${formatCurrency(Number(awaiting[0].total) || 0)} — review and approve when you're ready` : `Review and approve when you're ready`}
+                </p>
+              </div>
+            </div>
+            <span className="text-xs font-semibold text-amber-400 shrink-0">Review →</span>
+          </div>
+        </button>
+      )}
+
+      {/* Next service hero (hidden for a pure prospect — the quote card above is their whole visit) */}
+      {!prospect && (
       <div className="rounded-card border border-accent/20 bg-gradient-to-br from-accent/[0.08] to-transparent p-4">
         <p className="text-[11px] font-semibold uppercase tracking-wide text-accent mb-1">Next service</p>
         {next ? (
@@ -287,21 +439,43 @@ function HomeTab({ data, derived, biz, onRequest }: { data: PortalData; derived:
             <StatusStepper s={liveStatusOf(next)} />
             {liveStatusOf(next) === 'on_my_way' && <p className="text-xs text-sky-400 mt-2 flex items-center gap-1"><Navigation className="w-3.5 h-3.5" /> Your provider is on the way!</p>}
           </>
+        ) : approvedPending ? (
+          <div>
+            <p className="text-sm font-semibold text-ink flex items-center gap-1.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" /> Your quote has been approved.
+            </p>
+            <p className="text-sm text-ink-muted mt-1">We&rsquo;re scheduling your service and will contact you shortly.</p>
+          </div>
         ) : (
           <div>
             <p className="text-sm text-ink-muted mb-3">No upcoming visit scheduled.</p>
             <Button onClick={onRequest} className="w-full sm:w-auto">
-              <MessageSquarePlus className="w-4 h-4" /> Request Service
+              <MessageSquarePlus className="w-4 h-4" /> Request a service
             </Button>
           </div>
         )}
       </div>
+      )}
 
-      {/* Stat cards */}
+      {/* Stat cards — the balance is tappable straight to payment when money is owed */}
+      {!prospect && (
       <div className="grid grid-cols-2 gap-3">
-        <StatCard label="Outstanding balance" value={formatCurrency(derived.outstanding)} tone={derived.outstanding > 0 ? 'text-amber-400' : 'text-emerald-400'} icon={Receipt} />
+        {derived.outstanding > 0 ? (
+          <button type="button" onClick={payOutstanding} disabled={payingId !== null}
+            className="text-left rounded-card border border-amber-500/30 bg-amber-500/[0.06] p-3.5 transition-colors hover:border-amber-500/50 active:scale-[0.99] disabled:opacity-60">
+            <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1"><Receipt className="w-3 h-3" /> Outstanding balance</p>
+            <p className="text-lg font-bold mt-1 text-amber-400">{formatCurrency(derived.outstanding)}</p>
+            <span className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-accent">
+              {payingId ? <Loader2 className="w-3 h-3 animate-spin" /> : <CreditCard className="w-3 h-3" />}
+              {paymentsEnabled ? (owing.length === 1 ? 'Pay now' : 'View & pay') : 'View invoices'}
+            </span>
+          </button>
+        ) : (
+          <StatCard label="Outstanding balance" value={formatCurrency(0)} tone="text-emerald-400" icon={Receipt} />
+        )}
         <StatCard label="Last completed" value={derived.lastCompleted ? formatDate(derived.lastCompleted.scheduled_date) : '—'} icon={CheckCircle2} />
       </div>
+      )}
 
       {/* Active plan */}
       {derived.plans.length > 0 && (
@@ -326,7 +500,7 @@ function HomeTab({ data, derived, biz, onRequest }: { data: PortalData; derived:
           {data.property.address && <p className="text-sm text-ink flex items-center gap-1.5"><MapPin className="w-3.5 h-3.5 text-ink-faint" /> {data.property.address}{data.property.city ? `, ${data.property.city}` : ''}</p>}
           <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1.5 text-xs text-ink-muted">
             {data.property.neighborhood && <span>{data.property.neighborhood}</span>}
-            {data.property.lawn_sqft ? <span className="flex items-center gap-1"><Ruler className="w-3 h-3" /> {Number(data.property.lawn_sqft).toLocaleString()} ft² lawn</span> : null}
+            {data.property.lawn_sqft ? <span className="flex items-center gap-1"><Ruler className="w-3 h-3" /> {Number(data.property.lawn_sqft).toLocaleString()} sq ft lawn</span> : null}
             {data.property.fence_length ? <span>{data.property.fence_length} ft fence</span> : null}
           </div>
         </div>
@@ -353,7 +527,7 @@ function StatCard({ label, value, tone, icon: Icon }: { label: string; value: st
 }
 
 // ── Service timeline (grouped by visit) ──
-function ServiceTab({ completed, photosByJob, invoiceByJob, photoUrl }: { completed: PortalJob[]; photosByJob: Map<string, PortalPhoto[]>; invoiceByJob: Map<string, PortalInvoice>; photoUrl: (p: string) => string }) {
+function ServiceTab({ completed, photosByJob, invoiceByJob, photoUrl, gstPct }: { completed: PortalJob[]; photosByJob: Map<string, PortalPhoto[]>; invoiceByJob: Map<string, PortalInvoice>; photoUrl: (p: string) => string; gstPct: number }) {
   if (completed.length === 0) return <Empty text="No completed visits yet." />
   return (
     <div className="space-y-3">
@@ -380,7 +554,7 @@ function ServiceTab({ completed, photosByJob, invoiceByJob, photoUrl }: { comple
             {inv && (
               <div className="flex items-center justify-between mt-3 pt-2.5 border-t border-border text-xs">
                 <span className="text-ink-muted flex items-center gap-1"><Receipt className="w-3.5 h-3.5" /> {inv.invoice_number}</span>
-                <span className="flex items-center gap-2"><span className="font-semibold text-ink">{formatCurrency(Number(inv.amount))}</span><InvoiceStatusPill status={inv.status} /></span>
+                <span className="flex items-center gap-2"><span className="font-semibold text-ink">{formatCurrency(invoiceTotals(inv.amount, { gst_percent: gstPct }, { type: inv.discount_type, value: inv.discount_value }).total)}</span><InvoiceStatusPill status={inv.status} /></span>
               </div>
             )}
           </div>
@@ -441,106 +615,74 @@ function Thumb({ p, photoUrl, wide }: { p: PortalPhoto; photoUrl: (s: string) =>
   )
 }
 
-// ── Quotes ──
-function QuotesTab({ quotes, accept, accepting, customerName, business }: { quotes: PortalQuote[]; accept: (id: string) => void; accepting: string | null; customerName: string; business: PortalData['business'] }) {
-  if (quotes.length === 0) return <Empty text="No quotes yet." />
-  return (
-    <div className="space-y-3">
-      {quotes.map(q => (
-        <div key={q.id} className="rounded-card border border-border bg-bg-secondary p-4">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0"><p className="text-sm font-semibold text-ink">{q.service_type}</p><p className="text-xs text-ink-muted">{q.quote_number} · {formatDate(q.created_at)}</p></div>
-            <QuoteStatusPill status={q.status} />
-          </div>
-          <div className="flex flex-wrap gap-2 mt-2">
-            {q.weekly_price ? <PriceChip label="Weekly" v={q.weekly_price} /> : null}
-            {q.biweekly_price ? <PriceChip label="Bi-weekly" v={q.biweekly_price} /> : null}
-            {q.monthly_price ? <PriceChip label="Monthly" v={q.monthly_price} /> : null}
-            {!q.weekly_price && !q.biweekly_price && !q.monthly_price ? <PriceChip label="Total" v={q.total} /> : null}
-          </div>
-          {q.notes && <p className="text-xs text-ink-muted mt-2 whitespace-pre-wrap">{q.notes}</p>}
-          <DocActions filename={`${q.quote_number}.pdf`} getBlob={() => renderPortalQuoteBlob(q, customerName, business)} />
-          {q.status === 'sent' && <div className="mt-3"><Button size="sm" onClick={() => accept(q.id)} loading={accepting === q.id}><Check className="w-4 h-4" /> Accept this quote</Button></div>}
-          {q.status === 'accepted' && <p className="mt-3 inline-flex items-center gap-1.5 text-sm font-semibold text-emerald-400"><CheckCircle2 className="w-4 h-4" /> Accepted — thank you!</p>}
-        </div>
-      ))}
-    </div>
-  )
-}
-
-// ── Invoices ──
-function InvoicesTab({ invoices, paymentsEnabled, pay, payingId, gstPercent, customerName, fallbackAddress, business }: {
-  invoices: PortalInvoice[]; paymentsEnabled: boolean; pay: (id: string) => void; payingId: string | null; gstPercent: number
-  customerName: string; fallbackAddress: string | null; business: PortalData['business']
-}) {
-  if (invoices.length === 0) return <Empty text="No invoices yet." />
-  return (
-    <div className="space-y-3">
-      {invoices.map(inv => {
-        const owing = inv.status === 'unpaid' || inv.status === 'sent'
-        const t = invoiceTotals(inv.amount, { gst_percent: gstPercent })
-        return (
-        <div key={inv.id} className="rounded-card border border-border bg-bg-secondary p-4">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0"><p className="text-sm font-semibold text-ink">{inv.service_type || 'Services'}</p><p className="text-xs text-ink-muted">{inv.invoice_number} · {inv.issued_date ? formatDate(inv.issued_date) : formatDate(inv.created_at)}{inv.due_date ? ` · due ${formatDate(inv.due_date)}` : ''}</p></div>
-            <div className="text-right"><p className="text-base font-bold text-ink">{formatCurrency(t.total)}</p><InvoiceStatusPill status={inv.status} /></div>
-          </div>
-          {inv.line_items && inv.line_items.length > 1 && (
-            <div className="mt-2 space-y-0.5">
-              {inv.line_items.map((li, i) => <p key={i} className="text-xs flex justify-between gap-3"><span className="text-ink-faint">{li.description}</span><span className="text-ink-muted">{formatCurrency(Number(li.amount))}</span></p>)}
-            </div>
-          )}
-          {t.hasGst && (
-            <div className="mt-2 space-y-0.5 text-xs border-t border-border pt-2">
-              <p className="flex justify-between gap-3"><span className="text-ink-faint">Subtotal</span><span className="text-ink-muted">{formatCurrency(t.subtotal)}</span></p>
-              <p className="flex justify-between gap-3"><span className="text-ink-faint">GST ({t.gstPercent}%)</span><span className="text-ink-muted">{formatCurrency(t.gstAmount)}</span></p>
-              <p className="flex justify-between gap-3 font-semibold"><span className="text-ink">Total</span><span className="text-ink">{formatCurrency(t.total)}</span></p>
-            </div>
-          )}
-          <DocActions filename={`${inv.invoice_number}.pdf`} getBlob={() => renderPortalInvoiceBlob(inv, customerName, fallbackAddress, business)} />
-          {paymentsEnabled && owing && (
-            <div className="mt-3">
-              <Button size="sm" onClick={() => pay(inv.id)} loading={payingId === inv.id}>
-                <CreditCard className="w-4 h-4" /> Pay {formatCurrency(t.total)}
-              </Button>
-            </div>
-          )}
-        </div>
-        )
-      })}
-    </div>
-  )
-}
 
 // ── Documents (central home for all customer records) ──────────────────────
 type DocKind = 'quote' | 'invoice'
-interface DocItem { id: string; kind: DocKind; number: string; title: string; date: string; status: string; amount: number; filename: string; getBlob: () => Promise<Blob> }
+// rawId/balance power the row's actions — Documents is THE records hub, so paying
+// an invoice or accepting a quote happens right on the row (no separate tabs).
+interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; amount: number; balance: number; filename: string; getBlob: () => Promise<Blob>; lines?: { label: string; amount: number }[] }
 const KIND_META: Record<DocKind, { label: string; icon: typeof FileText; tone: string }> = {
   quote: { label: 'Quote', icon: FileText, tone: 'text-accent border-accent/25 bg-accent/10' },
   invoice: { label: 'Invoice', icon: Receipt, tone: 'text-sky-400 border-sky-500/25 bg-sky-500/10' },
 }
-const FUTURE_DOCS = ['Receipts', 'Service reports', 'Photos']
 
-function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, business }: {
+
+function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, business, onInvoiceOpen, paymentsEnabled, pay, payingId, accept, accepting, initialCat }: {
   quotes: PortalQuote[]; invoices: PortalInvoice[]; customerName: string; fallbackAddress: string | null; business: PortalData['business']
+  onInvoiceOpen?: (invoiceId: string) => void
+  paymentsEnabled: boolean; pay: (invoiceId: string) => void; payingId: string | null
+  accept: (quoteId: string) => void; accepting: string | null
+  initialCat?: 'all' | DocKind
 }) {
-  const [cat, setCat] = useState<'all' | DocKind>('all')
+  // Pre-filtered entry (the Home signpost lands on quotes, the balance path on
+  // invoices) — the customer arrives looking at what they came for.
+  const [cat, setCat] = useState<'all' | DocKind>(initialCat ?? 'all')
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<'newest' | 'oldest'>('newest')
 
+  const gstPct = Number(business?.gst_percent) || 0
   const docs = useMemo<DocItem[]>(() => {
-    const q: DocItem[] = quotes.map(qq => ({
-      id: 'q' + qq.id, kind: 'quote', number: qq.quote_number, title: qq.service_type || 'Quote',
-      date: qq.issued_date || qq.created_at, status: qq.status, amount: Number(qq.total) || 0,
-      filename: `${qq.quote_number}.pdf`, getBlob: () => renderPortalQuoteBlob(qq, customerName, business),
-    }))
-    const inv: DocItem[] = invoices.map(ii => ({
-      id: 'i' + ii.id, kind: 'invoice', number: ii.invoice_number, title: ii.service_type || 'Invoice',
-      date: ii.issued_date || ii.created_at, status: ii.status, amount: Number(ii.amount) || 0,
-      filename: `${ii.invoice_number}.pdf`, getBlob: () => renderPortalInvoiceBlob(ii, customerName, fallbackAddress, business),
-    }))
+    const q: DocItem[] = quotes.map(qq => {
+      // Multi-service quotes get a per-service breakdown on the row (same
+      // serviceLineTotals math as the builder/PDF), so the customer sees what
+      // makes up the total instead of a lump sum under one service name.
+      const svc = (qq.services || []).slice().sort((a, b) => a.sort_order - b.sort_order)
+      const svcLines = svc.length > 1
+        ? [
+            ...svc.map(s => ({
+              label: Number(s.quantity) > 1 ? `${s.service_type} × ${Number(s.quantity)}` : s.service_type,
+              amount: serviceLineTotals(s).net,
+            })),
+            ...(Number(qq.travel_fee) > 0 ? [{ label: 'Travel fee', amount: Number(qq.travel_fee) }] : []),
+          ]
+        : []
+      // Ongoing plan pricing is material to the approval — show it on the row,
+      // not only inside the PDF.
+      const planLines = [
+        Number(qq.weekly_price) > 0 ? { label: 'Weekly plan (per visit)', amount: Number(qq.weekly_price) } : null,
+        Number(qq.biweekly_price) > 0 ? { label: 'Bi-weekly plan (per visit)', amount: Number(qq.biweekly_price) } : null,
+        Number(qq.monthly_price) > 0 ? { label: 'Monthly plan', amount: Number(qq.monthly_price) } : null,
+      ].filter((l): l is { label: string; amount: number } => l !== null)
+      const allLines = [...svcLines, ...planLines]
+      const lines = allLines.length > 0 ? allLines : undefined
+      return {
+        id: 'q' + qq.id, rawId: qq.id, kind: 'quote' as const, number: qq.quote_number, title: qq.service_type || 'Quote',
+        date: qq.issued_date || qq.created_at, status: qq.status, amount: Number(qq.total) || 0, balance: 0,
+        filename: `${qq.quote_number}.pdf`, getBlob: () => renderPortalQuoteBlob(qq, customerName, business), lines,
+      }
+    })
+    const inv: DocItem[] = invoices.map(ii => {
+      // Same balance math as the dashboard: discounted+GST total − payments recorded.
+      const total = invoiceTotals(ii.amount, { gst_percent: gstPct }, { type: ii.discount_type, value: ii.discount_value }).total
+      const balance = Math.max(0, Math.round((total - (Number(ii.amount_paid) || 0)) * 100) / 100)
+      return {
+        id: 'i' + ii.id, rawId: ii.id, kind: 'invoice' as const, number: ii.invoice_number, title: ii.service_type || 'Invoice',
+        date: ii.issued_date || ii.created_at, status: ii.status, amount: total, balance,
+        filename: `${ii.invoice_number}.pdf`, getBlob: () => { onInvoiceOpen?.(ii.id); return renderPortalInvoiceBlob(ii, customerName, fallbackAddress, business) },
+      }
+    })
     return [...q, ...inv]
-  }, [quotes, invoices, customerName, fallbackAddress, business])
+  }, [quotes, invoices, customerName, fallbackAddress, business, onInvoiceOpen, gstPct])
 
   const counts = { all: docs.length, quote: docs.filter(d => d.kind === 'quote').length, invoice: docs.filter(d => d.kind === 'invoice').length }
 
@@ -574,11 +716,6 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, busines
             {c.label}{c.n > 0 && <span className="opacity-70"> {c.n}</span>}
           </button>
         ))}
-        {FUTURE_DOCS.map(f => (
-          <span key={f} className="text-xs font-medium rounded-full px-3 py-1.5 border border-dashed border-border text-ink-faint inline-flex items-center gap-1">
-            {f} <span className="text-[9px] uppercase tracking-wide opacity-80">Soon</span>
-          </span>
-        ))}
       </div>
 
       {/* Search + sort */}
@@ -598,13 +735,21 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, busines
       {filtered.length === 0 ? (
         <Empty text={docs.length === 0 ? 'No documents yet. Your quotes and invoices will appear here.' : 'No documents match your search.'} />
       ) : (
-        <div className="space-y-3">{filtered.map(d => <DocRow key={d.id} d={d} />)}</div>
+        <div className="space-y-3">{filtered.map(d => <DocRow key={d.id} d={d} paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} accept={accept} accepting={accepting} />)}</div>
       )}
     </div>
   )
 }
-function DocRow({ d }: { d: DocItem }) {
+function DocRow({ d, paymentsEnabled, pay, payingId, accept, accepting }: {
+  d: DocItem
+  paymentsEnabled: boolean; pay: (invoiceId: string) => void; payingId: string | null
+  accept: (quoteId: string) => void; accepting: string | null
+}) {
   const m = KIND_META[d.kind]
+  // The one action each document actually needs, right on the row: a sent quote
+  // can be accepted; an invoice with a balance can be paid.
+  const canAccept = d.kind === 'quote' && d.status === 'sent'
+  const canPay = d.kind === 'invoice' && paymentsEnabled && d.balance > 0 && d.status !== 'draft' && d.status !== 'cancelled'
   return (
     <div className="rounded-card border border-border bg-bg-secondary p-4">
       <div className="flex items-start justify-between gap-2">
@@ -620,6 +765,26 @@ function DocRow({ d }: { d: DocItem }) {
           {d.kind === 'quote' ? <QuoteStatusPill status={d.status} /> : <InvoiceStatusPill status={d.status} />}
         </div>
       </div>
+      {d.lines && d.lines.length > 0 && (
+        <div className="mt-3 pt-2.5 border-t border-border/60 space-y-1">
+          {d.lines.map((l, i) => (
+            <div key={i} className="flex items-center justify-between gap-3 text-xs">
+              <span className="text-ink-muted truncate">{l.label}</span>
+              <span className="text-ink shrink-0 tabular-nums">{formatCurrency(l.amount)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {(canAccept || canPay) && (
+        <div className="mt-3">
+          {canAccept && (
+            <Button size="sm" onClick={() => accept(d.rawId)} loading={accepting === d.rawId}><Check className="w-4 h-4" /> Accept this quote</Button>
+          )}
+          {canPay && (
+            <Button size="sm" onClick={() => pay(d.rawId)} loading={payingId === d.rawId}><CreditCard className="w-4 h-4" /> Pay {formatCurrency(d.balance)}</Button>
+          )}
+        </div>
+      )}
       <DocActions filename={d.filename} getBlob={d.getBlob} />
     </div>
   )
@@ -639,7 +804,7 @@ function TimelineTab({ data, photosByJob }: { data: PortalData; photosByJob: Map
       if (j.completed_at || j.status === 'completed') ev.push({ id: 'jc' + j.id, at: j.completed_at || j.scheduled_date, icon: CheckCircle2, tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10', title: `${j.service_type || j.title} completed`, sub: null })
       else ev.push({ id: 'js' + j.id, at: j.scheduled_date, icon: CalendarClock, tone: 'text-sky-400 border-sky-500/30 bg-sky-500/10', title: `${j.service_type || j.title} scheduled`, sub: null })
     }
-    for (const i of data.invoices) ev.push({ id: 'i' + i.id, at: i.issued_date || i.created_at, icon: Receipt, tone: 'text-ink-muted border-border bg-bg-tertiary', title: `Invoice ${i.invoice_number}`, sub: formatCurrency(Number(i.amount)) })
+    for (const i of data.invoices) ev.push({ id: 'i' + i.id, at: i.issued_date || i.created_at, icon: Receipt, tone: 'text-ink-muted border-border bg-bg-tertiary', title: `Invoice ${i.invoice_number}`, sub: formatCurrency(invoiceTotals(i.amount, { gst_percent: Number(data.business?.gst_percent) || 0 }, { type: i.discount_type, value: i.discount_value }).total) })
     for (const p of data.payments) ev.push({ id: 'p' + p.id, at: p.paid_at || p.created_at, icon: CreditCard, tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10', title: 'Payment received', sub: formatCurrency(Number(p.amount)) })
     for (const [jid, ps] of photosByJob) { if (jid !== 'none' && ps.length) ev.push({ id: 'ph' + jid, at: ps[0]?.taken_at || '', icon: ImageIcon, tone: 'text-violet-400 border-violet-500/30 bg-violet-500/10', title: `${ps.length} photo${ps.length === 1 ? '' : 's'} added`, sub: null }) }
     return ev.filter(e => e.at).sort((a, b) => b.at.localeCompare(a.at))
@@ -677,7 +842,7 @@ function PropertyTab({ property }: { property: PortalData['property'] }) {
           <p className="text-sm text-ink flex items-start gap-1.5"><MapPin className="w-4 h-4 text-ink-faint shrink-0 mt-0.5" /> <span>{property.address}{property.city ? `, ${property.city}` : ''}{property.province ? `, ${property.province}` : ''}</span></p>
         )}
         <div className="grid grid-cols-2 gap-3 mt-3">
-          {property.lawn_sqft ? <StatCard label="Lawn size" value={`${Number(property.lawn_sqft).toLocaleString()} ft²`} icon={Ruler} /> : null}
+          {property.lawn_sqft ? <StatCard label="Lawn size" value={`${Number(property.lawn_sqft).toLocaleString()} sq ft`} icon={Ruler} /> : null}
           {property.fence_length ? <StatCard label="Fence length" value={`${Number(property.fence_length).toLocaleString()} ft`} icon={Ruler} /> : null}
           {property.neighborhood ? <StatCard label="Neighborhood" value={property.neighborhood} icon={MapPin} /> : null}
         </div>
@@ -702,15 +867,36 @@ function paymentMethodLabel(provider: string): string {
     default: return provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : 'Payment'
   }
 }
-function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, card, autopayEnabled, onChanged }: {
+function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, card, autopayEnabled, onChanged, customerName, fallbackAddress, business }: {
   payments: PortalPayment[]; invoices: PortalInvoice[]; outstanding: number
   token: string; paymentsEnabled: boolean; card: PortalCard | null; autopayEnabled: boolean; onChanged: () => void
+  customerName: string; fallbackAddress: string | null; business: PortalData['business']
 }) {
+  // Receipt download — re-rendered from the ledger row on demand, so every receipt
+  // stays PERMANENTLY available (nothing stored, nothing to lose).
+  const [receiptBusy, setReceiptBusy] = useState<string | null>(null)
+  async function downloadReceipt(p: PortalPayment, inv: PortalInvoice) {
+    setReceiptBusy(p.id)
+    try {
+      downloadBlob(await renderPortalReceiptBlob(p, inv, customerName, fallbackAddress, business), `${receiptNumberFor(p.id)}.pdf`)
+    } catch { /* transient render failure — button stays available to retry */ }
+    setReceiptBusy(null)
+  }
   const invById = new Map(invoices.map(i => [i.id, i]))
-  const totalPaid = payments.reduce((s, p) => s + Number(p.amount || 0), 0)
+  // Receipts (money movements) vs the customer-credit ledger — kept apart so totals
+  // and history stay honest.
+  const receipts = payments.filter(p => p.kind !== 'credit')
+  const totalPaid = receipts.reduce((s, p) => s + Number(p.amount || 0), 0)
+  const availableCredit = Math.round(payments.filter(p => p.kind === 'credit').reduce((s, p) => s + Number(p.amount || 0), 0) * 100) / 100
   return (
     <div className="space-y-3">
       {paymentsEnabled && <AutoPayCard token={token} card={card} autopayEnabled={autopayEnabled} onChanged={onChanged} />}
+      {availableCredit > 0 && (
+        <div className="rounded-card border border-accent/25 bg-accent/[0.06] p-3.5 flex items-center justify-between gap-3">
+          <p className="text-[10px] uppercase tracking-wide text-accent font-semibold flex items-center gap-1"><Wallet className="w-3 h-3" /> Available credit</p>
+          <p className="text-lg font-bold text-accent">{formatCurrency(availableCredit)}</p>
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-3">
         <div className="rounded-card border border-emerald-500/20 bg-emerald-500/[0.06] p-3.5">
           <p className="text-[10px] uppercase tracking-wide text-emerald-400 font-semibold flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Total paid</p>
@@ -721,20 +907,28 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
           <p className={cn('text-lg font-bold mt-1', outstanding > 0 ? 'text-amber-400' : 'text-emerald-400')}>{formatCurrency(outstanding)}</p>
         </div>
       </div>
-      {payments.length === 0 ? (
-        <Empty text="No payments yet. Your paid invoices will appear here." />
-      ) : payments.map(p => {
+      {receipts.length === 0 ? (
+        <Empty text="No payments yet. Your payments will appear here." />
+      ) : receipts.map(p => {
         const inv = p.invoice_id ? invById.get(p.invoice_id) : null
         return (
           <div key={p.id} className="rounded-card border border-border bg-bg-secondary p-4 flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-9 h-9 rounded-lg border border-emerald-500/25 bg-emerald-500/10 flex items-center justify-center shrink-0"><CheckCircle2 className="w-4 h-4 text-emerald-400" /></div>
+              <div className={cn('w-9 h-9 rounded-lg border flex items-center justify-center shrink-0', Number(p.amount) < 0 ? 'border-red-500/25 bg-red-500/10' : 'border-emerald-500/25 bg-emerald-500/10')}><CheckCircle2 className={cn('w-4 h-4', Number(p.amount) < 0 ? 'text-red-400' : 'text-emerald-400')} /></div>
               <div className="min-w-0">
-                <p className="text-sm font-semibold text-ink">{formatCurrency(Number(p.amount))}</p>
-                <p className="text-xs text-ink-muted truncate">{p.paid_at ? formatDate(p.paid_at) : formatDate(p.created_at)}{inv ? ` · ${inv.invoice_number}` : ''} · {paymentMethodLabel(p.provider)}</p>
+                <p className="text-sm font-semibold text-ink">{Number(p.amount) < 0 ? '−' : ''}{formatCurrency(Math.abs(Number(p.amount)))}</p>
+                <p className="text-xs text-ink-muted truncate">{p.paid_at ? formatDate(p.paid_at) : formatDate(p.created_at)}{inv ? ` · ${inv.invoice_number}` : ''} · {Number(p.amount) < 0 ? 'Refund' : paymentMethodLabel(p.provider)}</p>
               </div>
             </div>
-            <span className="text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border text-emerald-400 border-emerald-500/30 bg-emerald-500/10 shrink-0">Paid</span>
+            <div className="flex items-center gap-2 shrink-0">
+              <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', Number(p.amount) < 0 ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10')}>{Number(p.amount) < 0 ? 'Refunded' : 'Paid'}</span>
+              {inv && (
+                <button onClick={() => downloadReceipt(p, inv)} disabled={receiptBusy === p.id}
+                  className="text-ink-faint hover:text-accent transition-colors p-1.5 -m-1" aria-label={Number(p.amount) < 0 ? 'Download refund receipt' : 'Download receipt'} title={Number(p.amount) < 0 ? 'Download refund receipt (PDF)' : 'Download receipt (PDF)'}>
+                  {receiptBusy === p.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                </button>
+              )}
+            </div>
           </div>
         )
       })}
@@ -762,7 +956,8 @@ function AutoPayCard({ token, card, autopayEnabled, onChanged }: {
     setBusy(null)
   }
   async function removeCard() {
-    if (!confirm('Remove your saved card? AutoPay will be turned off.')) return
+    const ok = await confirmDialog({ title: 'Remove your saved card?', message: 'AutoPay will be turned off. You can add a card again anytime.', confirmLabel: 'Remove card', destructive: true })
+    if (!ok) return
     setBusy('remove'); setErr(null)
     try {
       const res = await fetch('/api/portal/remove-card', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) })
@@ -886,7 +1081,31 @@ function ReviewCard({ reviewUrl, businessName, reviewed, onReviewed }: { reviewU
 }
 
 // ── Message preferences (self-serve consent) ──
-function ConsentCard({ consent, onSave }: { consent: { sms: boolean; email: boolean }; onSave: (c: { sms: boolean; email: boolean }) => void }) {
+function ConsentCard({ token, consent, onSave }: { token: string; consent: { sms: boolean; email: boolean }; onSave: (c: { sms: boolean; email: boolean }, prefs?: Record<string, boolean>) => void }) {
+  // Per-category preferences (customers.message_prefs) — loaded lazily so
+  // get_portal_data stays untouched; a missing key means "yes" (inherit).
+  const supabase = useMemo(() => createClient(), [])
+  const [prefs, setPrefs] = useState<Record<string, boolean> | null>(null)
+  useEffect(() => {
+    let alive = true
+    supabase.rpc('portal_get_prefs', { p_token: token })
+      .then(({ data }) => { if (alive) setPrefs((data as Record<string, boolean>) || {}) }, () => { if (alive) setPrefs({}) })
+    return () => { alive = false }
+  }, [token, supabase])
+
+  const CATS: [string, string][] = [
+    ['reminders', 'Appointment reminders & updates'],
+    ['estimates', 'Estimates & quotes'],
+    ['invoices', 'Invoices & receipts'],
+    ['seasonal', 'Seasonal reminders'],
+    ['marketing', 'Offers & news'],
+  ]
+  function toggleCat(k: string) {
+    const next = { ...(prefs || {}), [k]: !(prefs?.[k] !== false) }
+    setPrefs(next)
+    onSave(consent, next)
+  }
+
   return (
     <div className="rounded-card border border-border bg-bg-secondary p-4 mt-3">
       <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><MessageSquare className="w-4 h-4 text-accent" /> Message preferences</p>
@@ -895,6 +1114,14 @@ function ConsentCard({ consent, onSave }: { consent: { sms: boolean; email: bool
         <PrefRow label="Text messages (SMS)" icon={MessageSquare} on={consent.sms} onChange={v => onSave({ ...consent, sms: v })} />
         <PrefRow label="Email" icon={Mail} on={consent.email} onChange={v => onSave({ ...consent, email: v })} />
       </div>
+      {prefs !== null && (consent.sms || consent.email) && (
+        <div className="mt-3 pt-3 border-t border-border space-y-2">
+          <p className="text-[10px] uppercase tracking-wide text-ink-faint">What we message you about</p>
+          {CATS.map(([k, label]) => (
+            <PrefRow key={k} label={label} icon={MessageSquare} on={prefs[k] !== false} onChange={() => toggleCat(k)} />
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -913,23 +1140,27 @@ function PrefRow({ label, icon: Icon, on, onChange }: { label: string; icon: typ
 // ── Document actions (View / Download / Print) — same PDF the dashboard makes ──
 function DocActions({ getBlob, filename }: { getBlob: () => Promise<Blob>; filename: string }) {
   const [busy, setBusy] = useState<'view' | 'download' | 'print' | null>(null)
+  const [err, setErr] = useState<string | null>(null)
   async function run(kind: 'view' | 'download' | 'print') {
     if (busy) return
-    setBusy(kind)
+    setBusy(kind); setErr(null)
     try {
       const blob = await getBlob()
       if (kind === 'download') downloadBlob(blob, filename)
       else if (kind === 'print') printBlob(blob)
       else viewBlob(blob)
     } catch {
-      alert('Could not generate the PDF. Please try again.')
+      setErr('Could not generate the PDF — please try again.')
     } finally { setBusy(null) }
   }
   return (
-    <div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-border">
-      <DocBtn icon={Eye} label="View" loading={busy === 'view'} disabled={busy !== null} onClick={() => run('view')} />
-      <DocBtn icon={Download} label="Download PDF" loading={busy === 'download'} disabled={busy !== null} onClick={() => run('download')} primary />
-      <DocBtn icon={Printer} label="Print" loading={busy === 'print'} disabled={busy !== null} onClick={() => run('print')} />
+    <div className="mt-3 pt-3 border-t border-border">
+      <div className="flex flex-wrap items-center gap-2">
+        <DocBtn icon={Eye} label="View" loading={busy === 'view'} disabled={busy !== null} onClick={() => run('view')} />
+        <DocBtn icon={Download} label="Download PDF" loading={busy === 'download'} disabled={busy !== null} onClick={() => run('download')} primary />
+        <DocBtn icon={Printer} label="Print" loading={busy === 'print'} disabled={busy !== null} onClick={() => run('print')} />
+      </div>
+      {err && <p className="text-xs text-red-400 mt-2">{err}</p>}
     </div>
   )
 }
@@ -949,12 +1180,32 @@ function PriceChip({ label, v }: { label: string; v: number }) {
   return <span className="text-xs rounded-lg border border-border bg-bg-tertiary px-2 py-1"><span className="text-ink-faint">{label}</span> <span className="font-semibold text-ink">{formatCurrency(Number(v))}</span></span>
 }
 function QuoteStatusPill({ status }: { status: string }) {
-  const tone = status === 'accepted' ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : status === 'declined' ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-amber-400 border-amber-500/30 bg-amber-500/10'
-  return <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', tone)}>{status}</span>
+  // Homeowner-friendly labels — never leak raw internal statuses into the portal.
+  const map: Record<string, { label: string; tone: string }> = {
+    accepted:  { label: 'Approved',               tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' },
+    scheduled: { label: 'Scheduled',              tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' },
+    completed: { label: 'Completed',              tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' },
+    paid:      { label: 'Completed',              tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' },
+    declined:  { label: 'Declined',               tone: 'text-red-400 border-red-500/30 bg-red-500/10' },
+    sent:      { label: 'Awaiting your approval', tone: 'text-amber-400 border-amber-500/30 bg-amber-500/10' },
+  }
+  const m = map[status] ?? { label: 'Quote', tone: 'text-ink-muted border-border bg-bg-tertiary' }
+  return <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', m.tone)}>{m.label}</span>
 }
 function InvoiceStatusPill({ status }: { status: string }) {
-  const tone = status === 'paid' ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : 'text-amber-400 border-amber-500/30 bg-amber-500/10'
-  return <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', tone)}>{status}</span>
+  const map: Record<string, { label: string; tone: string }> = {
+    paid:     { label: 'Paid',           tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' },
+    overpaid: { label: 'Overpaid',       tone: 'text-violet-400 border-violet-500/30 bg-violet-500/10' },
+    partial:  { label: 'Partially Paid', tone: 'text-sky-400 border-sky-500/30 bg-sky-500/10' },
+    // Customer language: an issued invoice is simply "Due" — 'sent'/'unpaid' are
+    // owner-side workflow states that mean nothing to the payer.
+    sent:     { label: 'Due',            tone: 'text-amber-400 border-amber-500/30 bg-amber-500/10' },
+    unpaid:   { label: 'Due',            tone: 'text-amber-400 border-amber-500/30 bg-amber-500/10' },
+    cancelled:{ label: 'Cancelled',      tone: 'text-ink-muted border-border bg-bg-tertiary' },
+    draft:    { label: 'Draft',          tone: 'text-ink-muted border-border bg-bg-tertiary' },
+  }
+  const m = map[status] || { label: 'Due', tone: 'text-amber-400 border-amber-500/30 bg-amber-500/10' }
+  return <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', m.tone)}>{m.label}</span>
 }
 
 function groupPhotos(photos: PortalPhoto[]): Map<string, PortalPhoto[]> {

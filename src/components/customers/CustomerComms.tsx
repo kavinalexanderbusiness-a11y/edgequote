@@ -1,5 +1,6 @@
 'use client'
 
+import { confirm as confirmDialog } from '@/lib/confirm'
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
@@ -36,7 +37,10 @@ export function CustomerComms({ customerId, smsOptIn, emailOptIn }: { customerId
 
   async function toggle(channel: 'sms' | 'email', value: boolean) {
     // Enabling SMS requires explicit confirmation (carrier/Twilio/CASL).
-    if (channel === 'sms' && value && !confirm(`${SMS_CONSENT_WARNING}\n\nEnable SMS for this customer?`)) return
+    if (channel === 'sms' && value) {
+      const ok = await confirmDialog({ title: 'Enable SMS for this customer?', message: SMS_CONSENT_WARNING, confirmLabel: 'Enable SMS' })
+      if (!ok) return
+    }
     const prevSms = sms, prevEmail = email
     if (channel === 'sms') setSms(value); else setEmail(value)
     const { data: { user } } = await supabase.auth.getUser()

@@ -1,10 +1,14 @@
 'use client'
 
+import { confirm as confirmDialog } from '@/lib/confirm'
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { queueOrRun } from '@/lib/offline/outbox'
 import { PhotoKind, PHOTO_KIND_LABELS } from '@/types'
 import { JobPhotoView, listPhotos, uploadPhoto, deletePhoto, updatePhoto } from '@/lib/photos'
+import { captureStampFor } from '@/lib/exif'
+import { visualHash, findPhotoMatch } from '@/lib/dedup'
+import { toast } from '@/lib/toast'
 import { formatDate } from '@/lib/utils'
 import { Camera, ImagePlus, Trash2, X, Loader2, Check } from 'lucide-react'
 
@@ -65,31 +69,41 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', cl
     setBusyKind(kind)
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { setBusyKind(null); return }
-    // Stable upload id per file → deterministic path → idempotent replay (never a dup).
-    const picks = files.map(file => ({
-      file,
-      uploadId: (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      takenAt: new Date().toISOString(),
+    // Enrich each file with EXIF capture time + a visual hash (main's ONE dedup engine),
+    // drop any already-uploaded shot (confident match), then upload the survivors
+    // CONCURRENTLY + optimistically through the offline-capable pipeline (website work).
+    const enriched = await Promise.all(files.map(async file => {
+      const [stamp, hash] = await Promise.all([captureStampFor(file), visualHash(file)])
+      return {
+        file, stamp, contentHash: hash,
+        uploadId: (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        takenAt: stamp.exact ? new Date(stamp.ms).toISOString() : new Date().toISOString(),
+      }
     }))
+    let skippedDups = 0
+    const picks = enriched.filter(e => {
+      const match = findPhotoMatch(photos, { contentHash: e.contentHash, takenAtMs: e.stamp.ms, exactTime: e.stamp.exact })
+      if (match && match.confident) { skippedDups++; return false }
+      return true
+    })
     const optimistic = (p: typeof picks[number]): JobPhotoView => ({
       id: 'pending-' + p.uploadId, user_id: user.id, job_id: jobId ?? null, property_id: propertyId,
       customer_id: customerId ?? null, storage_path: '', kind, caption: null, taken_at: p.takenAt,
       url: URL.createObjectURL(p.file),
     } as JobPhotoView)
-    // Show every picked photo INSTANTLY (local object URL) — capture feels immediate,
-    // online or off — then upload CONCURRENTLY (bounded) and reconcile each thumbnail
-    // to its saved row (or drop it on failure). Uploading N photos now takes ~one
-    // upload's time, not the sum, and the UI never waits on the network to draw.
-    setPhotos(prev => [...picks.map(optimistic), ...prev])
+    // Show every kept photo INSTANTLY (local object URL) — capture feels immediate, online
+    // or off — then upload CONCURRENTLY (bounded) and reconcile each thumbnail to its saved
+    // row (or drop it on failure). N photos take ~one upload's time, not the sum.
+    if (picks.length) setPhotos(prev => [...picks.map(optimistic), ...prev])
     const results = await mapPool(picks, 4, async (p): Promise<UploadOutcome> => {
       let row: JobPhotoView | null = null
       try {
         // Offline → the File is persisted in the ONE outbox and uploaded on reconnect
         // through this SAME pipeline; online → uploads now. skipExistingCheck: the id is
-        // brand-new, so the online path skips the dedup SELECT (one less round-trip).
+        // brand-new, so the online path skips the storage_path dedup SELECT.
         const outcome = await queueOrRun(
-          { kind: 'photo.upload', payload: { uploadId: p.uploadId, userId: user.id, propertyId, jobId: jobId ?? null, customerId: customerId ?? null, kind, caption: null, takenAt: p.takenAt, file: p.file }, label: `Photo (${kind})` },
-          async () => { row = await uploadPhoto(supabase, { userId: user.id, file: p.file, propertyId, jobId, customerId, kind, uploadId: p.uploadId, takenAt: p.takenAt, skipExistingCheck: true }); if (!row) throw new Error('upload failed') },
+          { kind: 'photo.upload', payload: { uploadId: p.uploadId, userId: user.id, propertyId, jobId: jobId ?? null, customerId: customerId ?? null, kind, caption: null, takenAt: p.takenAt, contentHash: p.contentHash, file: p.file }, label: `Photo (${kind})` },
+          async () => { row = await uploadPhoto(supabase, { userId: user.id, file: p.file, propertyId, jobId, customerId, kind, uploadId: p.uploadId, takenAt: p.takenAt, contentHash: p.contentHash, skipExistingCheck: true }); if (!row) throw new Error('upload failed') },
         )
         if (outcome === 'ran' && row) return { uploadId: p.uploadId, status: 'ran' as const, row }
         if (outcome === 'queued') return { uploadId: p.uploadId, status: 'queued' as const } // keep optimistic; syncs later
@@ -110,11 +124,13 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', cl
       }
       return next
     })
+    if (skippedDups) toast(`${skippedDups} photo${skippedDups !== 1 ? 's were' : ' was'} already uploaded — skipped`, { tone: 'info' })
     setBusyKind(null)
   }
 
   async function remove(photo: JobPhotoView) {
-    if (!confirm('Delete this photo? This cannot be undone.')) return
+    const ok = await confirmDialog({ title: 'Delete this photo?', message: 'This cannot be undone.', confirmLabel: 'Delete photo', destructive: true })
+    if (!ok) return
     const snapshot = photos
     setPhotos(prev => prev.filter(p => p.id !== photo.id))
     setLightbox(null)

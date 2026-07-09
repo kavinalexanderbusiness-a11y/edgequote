@@ -70,13 +70,13 @@ export function registerOfflineHandlers(): void {
   registerHandler('photo.upload', async (payload) => {
     const p = payload as {
       uploadId: string; userId: string; propertyId: string | null; jobId: string | null
-      customerId: string | null; kind: PhotoKind; caption: string | null; takenAt: string; file: File | Blob
+      customerId: string | null; kind: PhotoKind; caption: string | null; takenAt: string; contentHash?: string | null; file: File | Blob
     }
     const supabase = createClient()
     const file = p.file instanceof File ? p.file : new File([p.file], `${p.uploadId}.jpg`, { type: (p.file as Blob).type || 'image/jpeg' })
     const row = await uploadPhoto(supabase, {
       userId: p.userId, file, propertyId: p.propertyId, jobId: p.jobId, customerId: p.customerId,
-      kind: p.kind, caption: p.caption, uploadId: p.uploadId, takenAt: p.takenAt,
+      kind: p.kind, caption: p.caption, uploadId: p.uploadId, takenAt: p.takenAt, contentHash: p.contentHash ?? null,
     })
     if (!row) throw new Error('photo.upload replay failed')
   })

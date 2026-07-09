@@ -1,5 +1,6 @@
 'use client'
 import { toast } from '@/lib/toast'
+import { confirm as confirmDialog } from '@/lib/confirm'
 
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
@@ -16,9 +17,11 @@ import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
 import { settingsToSeasons, DEFAULT_SEASONS, ServiceSeasons } from '@/lib/seasons'
 import { resolvePrefs, prefSummary, hasAnyPref } from '@/lib/preferences'
 import { SchedulePrefsFields, PrefsDraft, EMPTY_DRAFT, toDraft, draftToRow } from '@/components/customers/SchedulePrefsFields'
+import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
 import { formatCurrency, formatDate, getInitials } from '@/lib/utils'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { CustomerComms } from '@/components/customers/CustomerComms'
@@ -35,7 +38,7 @@ import {
 } from 'lucide-react'
 
 const WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
-const OPEN_INVOICE = new Set(['unpaid', 'sent'])
+const OPEN_INVOICE = new Set(['unpaid', 'sent', 'partial'])
 
 function localToday(): string {
   const d = new Date()
@@ -91,11 +94,13 @@ export default function CustomerDetailPage() {
   const [recurrences, setRecurrences] = useState<JobRecurrence[]>([])
   const [extraTimeline, setExtraTimeline] = useState<TimelineEvent[]>([])
   const [seasons, setSeasons] = useState<ServiceSeasons>(DEFAULT_SEASONS)
+  const [gstPercent, setGstPercent] = useState(0)
   const [pausing, setPausing] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [portalBusy, setPortalBusy] = useState(false)
   const [portalCopied, setPortalCopied] = useState(false)
+  const [showMessage, setShowMessage] = useState(false)
 
   async function copyPortalLink() {
     if (!customer) return
@@ -157,10 +162,11 @@ export default function CustomerDetailPage() {
         supabase.from('customers').select('id, name').eq('referred_by_customer_id', id),
         supabase.from('job_recurrences').select('*').eq('customer_id', id),
         // Unified timeline sources — degrade gracefully if a table isn't present yet.
+        // Payments carry kind/method/notes so credit/refund movements label correctly.
         supabase.from('messages').select('direction, channel, body, created_at').eq('customer_id', id).order('created_at', { ascending: false }).limit(50),
-        supabase.from('payments').select('amount, status, created_at').eq('customer_id', id),
+        supabase.from('payments').select('amount, status, kind, method, notes, created_at').eq('customer_id', id),
         supabase.from('service_requests').select('message, created_at').eq('customer_id', id),
-        supabase.from('business_settings').select('service_seasons').eq('user_id', user!.id).maybeSingle(),
+        supabase.from('business_settings').select('service_seasons, gst_percent').eq('user_id', user!.id).maybeSingle(),
       ])
       // A transient/network error must NOT render as "Customer not found." Only a
       // genuine no-rows result (.single() → PGRST116) means the customer is truly gone.
@@ -181,6 +187,7 @@ export default function CustomerDetailPage() {
 
       if (recRes.data) setRecurrences(recRes.data as JobRecurrence[])
       setSeasons(settingsToSeasons((setRes.data as { service_seasons: unknown } | null)?.service_seasons))
+      setGstPercent(Number((setRes.data as { gst_percent?: number | null } | null)?.gst_percent) || 0)
 
       const extra: TimelineEvent[] = []
       for (const m of (mRes.data as { direction: string; channel: string; body: string | null; created_at: string }[]) || []) {
@@ -189,8 +196,18 @@ export default function CustomerDetailPage() {
         const chan = m.channel === 'email' ? 'email' : m.channel === 'portal' ? 'portal message' : 'SMS'
         extra.push({ at: m.created_at, kind: inbound ? 'message_in' : 'message_out', title: `${inbound ? 'Received' : 'Sent'} ${chan}`, sub: (m.body || '').slice(0, 90), href: '/dashboard/messages' })
       }
-      for (const p of (payRes.data as { amount: number; status: string; created_at: string }[]) || []) {
-        if (p.status === 'paid') extra.push({ at: p.created_at, kind: 'payment', title: 'Payment received', sub: formatCurrency(Number(p.amount)) })
+      // The ledger holds payments AND customer-credit movements (kind='credit') AND
+      // reversals (negative payments) — label each correctly instead of "Payment received".
+      for (const p of (payRes.data as { amount: number; status: string; kind: string; method: string | null; notes: string | null; created_at: string }[]) || []) {
+        if (p.status !== 'paid') continue
+        const amt = Number(p.amount) || 0
+        if (p.kind === 'credit') {
+          extra.push({ at: p.created_at, kind: 'payment', title: amt >= 0 ? `Credit added · ${formatCurrency(Math.abs(amt))}` : `Credit applied · ${formatCurrency(Math.abs(amt))}`, sub: p.notes || undefined })
+        } else if (amt < 0) {
+          extra.push({ at: p.created_at, kind: 'payment', title: `Refund · ${formatCurrency(Math.abs(amt))}`, sub: p.notes || undefined })
+        } else {
+          extra.push({ at: p.created_at, kind: 'payment', title: 'Payment received', sub: `${formatCurrency(amt)}${p.method && p.method !== 'stripe' ? ` · ${p.method}` : ''}` })
+        }
       }
       for (const sr of (srRes.data as { message: string; created_at: string }[]) || []) {
         extra.push({ at: sr.created_at, kind: 'portal_request', title: 'Portal service request', sub: (sr.message || '').slice(0, 90), href: '/dashboard/messages' })
@@ -292,7 +309,12 @@ export default function CustomerDetailPage() {
       .filter(j => j.recurrence_id === plan.recurrenceId && j.scheduled_date >= todayISO && (j.status === 'scheduled' || j.status === 'in_progress'))
       .map(j => j.id)
     if (futureIds.length === 0) return
-    if (!confirm(`Pause ${plan.serviceName}? This cancels ${futureIds.length} upcoming visit${futureIds.length !== 1 ? 's' : ''}. Past visits are kept, and you can schedule it again anytime.`)) return
+    const ok = await confirmDialog({
+      title: `Pause ${plan.serviceName}?`,
+      message: `This cancels ${futureIds.length} upcoming visit${futureIds.length !== 1 ? 's' : ''}. Past visits are kept, and you can schedule it again anytime.`,
+      confirmLabel: 'Pause plan',
+    })
+    if (!ok) return
     setPausing(plan.recurrenceId)
     const { error } = await supabase.from('jobs').update({ status: 'cancelled' }).in('id', futureIds)
     if (error) toast.error('Could not pause: ' + error.message)
@@ -319,6 +341,8 @@ export default function CustomerDetailPage() {
   }, [quotes, recurrences, jobs, seasons])
 
   const events = useMemo(() => {
+    // GST-inclusive invoice amounts, so the timeline agrees with the Invoices page + portal.
+    const gstMult = 1 + (Number(gstPercent) || 0) / 100
     const arr: TimelineEvent[] = []
     for (const q of quotes) {
       arr.push({ at: q.created_at, kind: 'quote_created', title: `Quote ${q.quote_number} created`, sub: `${q.service_type} · ${formatCurrency(Number(q.total))}`, href: `/dashboard/quotes/${q.id}` })
@@ -331,15 +355,15 @@ export default function CustomerDetailPage() {
       if (j.status === 'completed') arr.push({ at: j.updated_at, kind: 'job_completed', title: `Job completed — ${j.title}` })
     }
     for (const inv of invoices) {
-      arr.push({ at: inv.created_at, kind: 'invoice_created', title: `Invoice ${inv.invoice_number} created`, sub: formatCurrency(Number(inv.amount)) })
-      if (inv.status === 'paid') arr.push({ at: inv.updated_at, kind: 'invoice_paid', title: `Invoice ${inv.invoice_number} paid`, sub: formatCurrency(Number(inv.amount)) })
+      arr.push({ at: inv.created_at, kind: 'invoice_created', title: `Invoice ${inv.invoice_number} created`, sub: formatCurrency(Math.round(Number(inv.amount) * gstMult * 100) / 100) })
+      if (inv.status === 'paid') arr.push({ at: inv.updated_at, kind: 'invoice_paid', title: `Invoice ${inv.invoice_number} paid`, sub: formatCurrency(Math.round(Number(inv.amount) * gstMult * 100) / 100) })
     }
     arr.push(...extraTimeline) // messages, payments, portal requests
     arr.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
     return arr
-  }, [quotes, jobs, invoices, extraTimeline])
+  }, [quotes, jobs, invoices, extraTimeline, gstPercent])
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading customer...</div>
+  if (loading) return <div className="max-w-5xl space-y-6"><SkeletonTiles count={4} /><SkeletonRows count={5} /></div>
   // Cached customer (if any) keeps showing on a revalidation blip; only when there's
   // genuinely nothing to show do we branch error-vs-not-found.
   if (!customer) return loadError ? (
@@ -348,7 +372,10 @@ export default function CustomerDetailPage() {
       <button onClick={reload} className="mt-2 underline font-medium text-accent">Retry</button>
     </div>
   ) : (
-    <div className="text-center py-16 text-sm text-red-400">Customer not found.</div>
+    <div className="text-center py-16 text-sm">
+      <p className="text-red-400">Customer not found — they may have been deleted.</p>
+      <Link href="/dashboard/customers" className="mt-2 inline-block underline font-medium text-accent">Back to Customers</Link>
+    </div>
   )
 
   const today = localToday()
@@ -356,8 +383,14 @@ export default function CustomerDetailPage() {
   // ── Revenue (three separate truths) ──
   const wonQuotes = quotes.filter(q => WON.has(q.status))
   const bookedRevenue = wonQuotes.reduce((s, q) => s + Number(q.total || 0), 0)
-  const collectedRevenue = invoices.filter(i => i.status === 'paid').reduce((s, i) => s + Number(i.amount || 0), 0)
-  const outstandingRevenue = invoices.filter(i => OPEN_INVOICE.has(i.status)).reduce((s, i) => s + Number(i.amount || 0), 0)
+  // Collected = money actually received (ledger amount_paid, incl. partial payments);
+  // Outstanding = remaining balance across issued invoices.
+  const collectedRevenue = invoices.reduce((s, i) => s + (Number(i.amount_paid) || 0), 0)
+  // GST-inclusive + cancelled excluded — agrees with the Invoices page ledger math.
+  const custGstMult = 1 + (Number(gstPercent) || 0) / 100
+  const outstandingRevenue = invoices
+    .filter(i => i.status !== 'draft' && i.status !== 'cancelled')
+    .reduce((s, i) => s + Math.max(0, Math.round((Number(i.amount || 0) * custGstMult - (Number(i.amount_paid) || 0)) * 100) / 100), 0)
   const avgJobValue = wonQuotes.length > 0 ? bookedRevenue / wonQuotes.length : 0
 
   // ── Upcoming + retention ──
@@ -399,7 +432,7 @@ export default function CustomerDetailPage() {
   }
   for (const inv of invoices.filter(i => OPEN_INVOICE.has(i.status))) {
     const overdue = !!inv.due_date && inv.due_date < today
-    openItems.push({ key: `inv-${inv.id}`, icon: Receipt, label: `${overdue ? 'Overdue' : 'Unpaid'} invoice ${inv.invoice_number}`, sub: `${formatCurrency(Number(inv.amount))}${inv.due_date ? ` · due ${formatDate(inv.due_date)}` : ''}`, href: '/dashboard/invoices', tone: overdue ? 'text-red-400' : 'text-amber-400' })
+    openItems.push({ key: `inv-${inv.id}`, icon: Receipt, label: `${overdue ? 'Overdue' : 'Unpaid'} invoice ${inv.invoice_number}`, sub: `${formatCurrency(Math.round(Number(inv.amount) * custGstMult * 100) / 100)}${inv.due_date ? ` · due ${formatDate(inv.due_date)}` : ''}`, href: '/dashboard/invoices', tone: overdue ? 'text-red-400' : 'text-amber-400' })
   }
 
   const phone = customer.phone
@@ -502,10 +535,45 @@ export default function CustomerDetailPage() {
             <a href={phone ? `tel:${phone}` : undefined} aria-disabled={!phone} className={`h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border transition-colors ${phone ? 'bg-surface border-border text-ink hover:border-border-strong' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}>
               <Phone className="w-4 h-4" /> Call
             </a>
-            <a href={phone ? `sms:${phone}` : undefined} aria-disabled={!phone} className={`h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border transition-colors ${phone ? 'bg-surface border-border text-ink hover:border-border-strong' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}>
-              <MessageSquare className="w-4 h-4" /> Text
-            </a>
+            {/* Opens the ONE shared Send Message dialog (templates + editable body,
+                logged to the thread) — not a device-only sms: deep link. */}
+            <button onClick={() => setShowMessage(true)}
+              className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border bg-surface border-border text-ink hover:border-border-strong transition-colors">
+              <MessageSquare className="w-4 h-4" /> Message
+            </button>
           </div>
+          <SendMessageDialog open={showMessage} onClose={() => setShowMessage(false)}
+            customerId={customer.id} customerName={customer.name} />
+        </CardBody>
+      </Card>
+
+      {/* Open items — "what needs action for this customer" comes FIRST, right under
+          the identity card (it was buried five cards deep). */}
+      <Card className={openItems.length > 0 ? 'border-amber-500/30' : ''}>
+        <CardHeader className="flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 text-amber-400" />
+          <h2 className="text-sm font-semibold text-ink">Open Items</h2>
+          {openItems.length > 0 && <span className="ml-auto text-xs font-semibold text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-full px-2 py-0.5">{openItems.length}</span>}
+        </CardHeader>
+        <CardBody className="p-0">
+          {openItems.length === 0 ? (
+            <p className="px-5 py-6 text-center text-sm text-ink-muted">Nothing needs action right now. 🎉</p>
+          ) : (
+            <div className="divide-y divide-border">
+              {openItems.map(item => {
+                const Icon = item.icon
+                return (
+                  <Link key={item.key} href={item.href} className="flex items-center gap-3 px-5 py-3 hover:bg-surface-raised transition-colors">
+                    <Icon className={`w-4 h-4 shrink-0 ${item.tone}`} />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-ink truncate">{item.label}</p>
+                      <p className="text-xs text-ink-muted truncate">{item.sub}</p>
+                    </div>
+                  </Link>
+                )
+              })}
+            </div>
+          )}
         </CardBody>
       </Card>
 
@@ -597,35 +665,6 @@ export default function CustomerDetailPage() {
       {/* Payment method + AutoPay (card-on-file for recurring customers) */}
       <PaymentMethodCard customer={customer} onCustomerChange={patch => setCustomer({ ...customer, ...patch })} />
 
-      {/* Open items — what needs action */}
-      <Card className={openItems.length > 0 ? 'border-amber-500/30' : ''}>
-        <CardHeader className="flex items-center gap-2">
-          <AlertTriangle className="w-4 h-4 text-amber-400" />
-          <h2 className="text-sm font-semibold text-ink">Open Items</h2>
-          {openItems.length > 0 && <span className="ml-auto text-xs font-semibold text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-full px-2 py-0.5">{openItems.length}</span>}
-        </CardHeader>
-        <CardBody className="p-0">
-          {openItems.length === 0 ? (
-            <p className="px-5 py-6 text-center text-sm text-ink-muted">Nothing needs action right now. 🎉</p>
-          ) : (
-            <div className="divide-y divide-border">
-              {openItems.map(item => {
-                const Icon = item.icon
-                return (
-                  <Link key={item.key} href={item.href} className="flex items-center gap-3 px-5 py-3 hover:bg-surface-raised transition-colors">
-                    <Icon className={`w-4 h-4 shrink-0 ${item.tone}`} />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-ink truncate">{item.label}</p>
-                      <p className="text-xs text-ink-muted truncate">{item.sub}</p>
-                    </div>
-                  </Link>
-                )
-              })}
-            </div>
-          )}
-        </CardBody>
-      </Card>
-
       {/* Revenue + service history */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {revenueCards.map(c => {
@@ -692,7 +731,12 @@ export default function CustomerDetailPage() {
             </div>
           )}
           {upcoming.length === 0 ? (
-            <p className="text-sm text-ink-muted">No upcoming visits scheduled.</p>
+            // Empty state leads to the fix, not just the fact (the warning banner
+            // above already states it).
+            <p className="text-sm text-ink-muted">
+              No upcoming visits scheduled.{' '}
+              <Link href={`/dashboard/schedule?customer=${customer.id}`} className="text-accent font-medium hover:underline">Schedule a visit →</Link>
+            </p>
           ) : (
             <div className="divide-y divide-border -mx-2">
               {upcoming.map(j => (

@@ -113,3 +113,10 @@ body { min-height: 100dvh; overscroll-behavior-y: none; }
   from { opacity: 0; }
   to   { opacity: 1; }
 }
+
+/* Google Maps property-pin label: readable on any satellite imagery. */
+.eq-map-pin-label {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 6px rgba(0, 0, 0, 0.5);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}

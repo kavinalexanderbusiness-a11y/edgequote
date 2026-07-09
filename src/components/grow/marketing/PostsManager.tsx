@@ -6,10 +6,11 @@ import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { FilterPill } from '@/components/ui/FilterPill'
 import { EmptyState } from '@/components/ui/EmptyState'
+import { Skeleton } from '@/components/ui/Skeleton'
 import { CHANNELS, channel as channelDef } from '@/lib/marketing/channels'
 import { listPieces, toggleFavorite, duplicatePiece, setArchived } from '@/lib/marketing/library'
 import { cn } from '@/lib/utils'
-import { Search, Star, Copy, Check, ExternalLink, CopyPlus, Archive, ArchiveRestore, Pencil, LayoutGrid, Loader2, X } from 'lucide-react'
+import { Search, Star, Copy, Check, ExternalLink, CopyPlus, Archive, ArchiveRestore, Pencil, LayoutGrid, X } from 'lucide-react'
 import type { ContentPiece, ContentStatus, MarketingCampaign, MarketingChannel, PostFilters, Season } from '@/lib/marketing/types'
 
 const STATUSES: ContentStatus[] = ['draft', 'scheduled', 'published', 'failed']
@@ -106,7 +107,16 @@ export function PostsManager({ userId, initialPieces, initialHasMore, campaigns,
       </div>
 
       {loading && pieces.length === 0 ? (
-        <div className="h-40 flex items-center justify-center text-ink-faint"><Loader2 className="w-5 h-5 animate-spin" /></div>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="rounded-card border border-border bg-bg-secondary p-3 space-y-2">
+              <Skeleton className="h-3 w-24" />
+              <Skeleton className="h-3 w-full" />
+              <Skeleton className="h-3 w-5/6" />
+              <Skeleton className="h-3 w-2/3" />
+            </div>
+          ))}
+        </div>
       ) : pieces.length === 0 ? (
         <EmptyState icon={LayoutGrid} title="No posts found" description="Adjust the filters, or generate posts in Compose, Campaigns, or the calendar." />
       ) : (

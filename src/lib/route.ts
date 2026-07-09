@@ -156,6 +156,32 @@ export function routeKmEstimate(base: Coord, located: { lat: number; lng: number
   return located.length ? nnOrder(base, located, dist).totalKm : 0
 }
 
+// Route for a FIXED visit sequence (the owner's drag-and-drop order). Emits the
+// SAME OrderedRouteStop shape the optimizer does, so ETAs / Open-in-Maps / stats
+// consume a manual order with zero special-casing. Un-located stops keep a null
+// legKm (the ETA engine applies its fallback leg). Round-trip km for parity.
+export function sequenceRoute(base: Coord, stops: RouteStop[], seq: string[], dist: DistFn = haversineKm): { ordered: OrderedRouteStop[]; totalKm: number } {
+  const byId = new Map(stops.map(s => [s.jobId, s]))
+  const ordered: OrderedRouteStop[] = []
+  let prev: Coord = base
+  let total = 0
+  for (const id of seq) {
+    const s = byId.get(id)
+    if (!s) continue
+    let legKm: number | null = null
+    if (s.lat != null && s.lng != null) {
+      const cur = { lat: s.lat, lng: s.lng }
+      const d = dist(prev, cur)
+      legKm = Math.round(d * 10) / 10
+      total += d
+      prev = cur
+    }
+    ordered.push({ ...s, order: ordered.length + 1, legKm })
+  }
+  // One-way total (base → …stops), matching nnOrder/nearestNeighborRoute parity.
+  return { ordered, totalKm: Math.round(total * 10) / 10 }
+}
+
 // A stop's Maps locator: the real street ADDRESS when we have it (so Google
 // shows the named place, not a "dropped pin" at bare coordinates), else the
 // lat/lng. Returns null for a stop with neither.
@@ -166,12 +192,18 @@ function stopLocator(s: { lat: number | null; lng: number | null; address?: stri
   return null
 }
 
+// Google Maps' api=1 directions URL supports at most 9 waypoints — beyond that
+// the link silently fails, exactly when a big dispatch day needs it most. Cap at
+// the limit; callers should pass stops in visit order (and prefer the REMAINING
+// stops) so the link always covers what's next.
+export const MAX_MAPS_WAYPOINTS = 9
+
 // Round-trip Google Maps directions URL (base → stops → base). Shared so the
 // cached-road path can build the same "Open in Maps" link optimizeRoute does.
 // Waypoints use each stop's street address when available.
 export function roundTripMapsUrl(base: Coord, ordered: { lat: number | null; lng: number | null; address?: string | null }[]): string {
   const baseParam = `${base.lat},${base.lng}`
-  const waypoints = ordered.map(stopLocator).filter((x): x is string => !!x).join('|')
+  const waypoints = ordered.map(stopLocator).filter((x): x is string => !!x).slice(0, MAX_MAPS_WAYPOINTS).join('|')
   const u = new URL('https://www.google.com/maps/dir/')
   u.searchParams.set('api', '1')
   u.searchParams.set('origin', baseParam)
@@ -234,16 +266,30 @@ export async function optimizeRoute(base: Coord, stops: RouteStop[]): Promise<Ro
   return { ordered, totalKm: total, usedGoogle, missing, mapsUrl }
 }
 
-export const AVG_SPEED_KM_PER_MIN = 0.5 // ~30 km/h urban
+export const AVG_SPEED_KM_PER_MIN = 0.5 // ~30 km/h urban (fallback when nothing learned)
+
+// A learned/overridable speed model. Defaults reproduce the legacy constant exactly
+// (2 min/km, no per-stop overhead), so any caller that doesn't pass one is unchanged.
+// lib/travelLearning supplies a learned { minPerKm, overheadMin } from completed routes.
+export interface SpeedModel { minPerKm?: number; overheadMin?: number }
+const DEFAULT_MIN_PER_KM = 1 / AVG_SPEED_KM_PER_MIN // = 2
+
+// THE one place a leg's distance becomes drive minutes (load/unload overhead + drive).
+export function legMinutes(km: number, speed?: SpeedModel): number {
+  const mpk = speed?.minPerKm ?? DEFAULT_MIN_PER_KM
+  const oh = speed?.overheadMin ?? 0
+  return Math.round(oh + Math.max(0, km) * mpk)
+}
 
 // Density stats for a set of located stops + the optimized total distance.
 export function routeStats(
   located: { lat: number; lng: number }[],
   totalKm: number,
+  speed?: SpeedModel,
 ): { avgLegKm: number; driveMinutes: number; clusters: number } {
   const n = located.length
   const avgLegKm = n > 0 ? Math.round((totalKm / n) * 10) / 10 : 0
-  const driveMinutes = Math.round(totalKm / AVG_SPEED_KM_PER_MIN)
+  const driveMinutes = Math.round(totalKm * (speed?.minPerKm ?? DEFAULT_MIN_PER_KM))
   // Connected components: stops within 1 km link into the same cluster.
   const CLUSTER_KM = 1
   const parent = located.map((_, i) => i)
@@ -296,6 +342,7 @@ export function recommendScheduleDays(
     radiusKm?: number
     customerPreferredDays?: number[] // the customer's preferred weekdays (boost)
     customerAvoidDays?: number[]     // the customer's avoid weekdays (excluded)
+    speed?: SpeedModel               // learned travel speed (else legacy 2 min/km)
   },
 ): ScheduleModes {
   const horizon = opts.horizonDays ?? 28
@@ -329,16 +376,16 @@ export function recommendScheduleDays(
     if (base && located.length) {
       const without = routeKmEstimate(base, located)
       const withT = routeKmEstimate(base, [...located, { lat: target.lat, lng: target.lng }])
-      addedDriveMin = Math.round(Math.max(0, withT - without) / AVG_SPEED_KM_PER_MIN)
+      addedDriveMin = legMinutes(Math.max(0, withT - without), opts.speed)
     } else if (base) {
-      addedDriveMin = Math.round(routeKmEstimate(base, [{ lat: target.lat, lng: target.lng }]) / AVG_SPEED_KM_PER_MIN)
+      addedDriveMin = legMinutes(routeKmEstimate(base, [{ lat: target.lat, lng: target.lng }]), opts.speed)
     } else if (located.length) {
-      addedDriveMin = Math.round((Math.min(...located.map(p => haversineKm(target, p))) * 2) / AVG_SPEED_KM_PER_MIN)
+      addedDriveMin = legMinutes(Math.min(...located.map(p => haversineKm(target, p))) * 2, opts.speed)
     } else {
       // No base AND an empty day: opening a brand-new isolated trip. Charge the
       // worst-case in-radius detour so revenue mode can't prefer it over joining
       // an existing nearby cluster (0 here would invert the driving signal).
-      addedDriveMin = Math.round((radius * 2) / AVG_SPEED_KM_PER_MIN)
+      addedDriveMin = legMinutes(radius * 2, opts.speed)
     }
 
     days.push({
@@ -400,12 +447,13 @@ export function computeDayEtas(
   startHHmm: string | null | undefined,
   ordered: { jobId: string; legKm: number | null }[],
   durationMinByJob: Record<string, number>,
+  speed?: SpeedModel,   // learned travel speed + load/unload overhead (else legacy 2 min/km)
 ): DayEtas {
   const startMin = timeToMinutes(startHHmm || DEFAULT_WORK_START)
   let t = startMin
   const stops: EtaStop[] = []
   for (const s of ordered) {
-    t += s.legKm != null ? Math.round(s.legKm / AVG_SPEED_KM_PER_MIN) : FALLBACK_LEG_MIN
+    t += s.legKm != null ? legMinutes(s.legKm, speed) : FALLBACK_LEG_MIN
     stops.push({ jobId: s.jobId, arrivalMin: t, arrival: minutesToTime12(t) })
     t += durationMinByJob[s.jobId] ?? DEFAULT_JOB_MIN
   }
@@ -420,8 +468,10 @@ export function roughFinishEstimate(startHHmm: string | null | undefined, totalL
 }
 
 // Soft load signal vs the owner's daily capacity. spareMin >= 60 → room for more.
+// An EXPLICIT 0 means a blocked day (zero labour available) and must not fall
+// back to the 8h default — booked work on a blocked day is genuinely over.
 export function dayLoad(totalWorkMin: number, capacityHours: number | null | undefined): { state: 'overloaded' | 'full' | 'room'; spareMin: number } {
-  const cap = (capacityHours && capacityHours > 0 ? capacityHours : 8) * 60
+  const cap = (capacityHours == null || capacityHours < 0 ? 8 : capacityHours) * 60
   const spare = Math.round(cap - totalWorkMin)
   return { state: spare < 0 ? 'overloaded' : spare >= 60 ? 'room' : 'full', spareMin: spare }
 }

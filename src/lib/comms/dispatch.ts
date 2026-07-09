@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { sendSms, sendEmail } from './send'
 import { getOrCreateConversation } from './conversation'
 import { SKIP_REASON } from './skipReasons'
+import { prefAllows, type MessagePrefs } from './templates'
 
 // ── Shared customer dispatch ─────────────────────────────────────────────────
 // Sends an already-rendered message to ONE customer over the requested channels,
@@ -17,6 +18,9 @@ export interface DispatchCustomer {
   email: string | null
   sms_opt_in: boolean
   email_opt_in: boolean
+  // Granular per-category preference (customers.message_prefs). Optional so
+  // existing callers keep working; missing/null = channel opt-in only.
+  message_prefs?: MessagePrefs | null
 }
 
 export interface DispatchInput {
@@ -38,6 +42,13 @@ export interface DispatchResult { attempts: DispatchAttempt[]; messageId: string
 export async function dispatchToCustomer(sb: SupabaseClient, inp: DispatchInput): Promise<DispatchResult> {
   const c = inp.customer
   const attempts: DispatchAttempt[] = []
+
+  // Granular consent: the customer declined this CATEGORY of message (e.g. opted
+  // into invoices but out of marketing). One check, every sender inherits it.
+  if (!prefAllows(c.message_prefs, inp.template)) {
+    for (const ch of inp.channels) attempts.push({ channel: ch, status: 'skipped', detail: SKIP_REASON.UNSUBSCRIBED, sent: false })
+    return { attempts, messageId: null, sentChannels: [] }
+  }
 
   if (inp.channels.includes('sms')) {
     if (!c.sms_opt_in) attempts.push({ channel: 'sms', status: 'skipped', detail: SKIP_REASON.NO_OPT_IN, sent: false })

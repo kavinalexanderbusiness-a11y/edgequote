@@ -6,7 +6,11 @@ import { RecentQuotes } from '@/components/dashboard/RecentQuotes'
 import { AcquisitionInsights } from '@/components/dashboard/AcquisitionInsights'
 import { DashboardTopSuggestions } from '@/components/dashboard/DashboardTopSuggestions'
 import { TodaysPriorities } from '@/components/dashboard/TodaysPriorities'
+import { UnscheduledAccepted } from '@/components/dashboard/UnscheduledAccepted'
+import { MissedJobs } from '@/components/dashboard/MissedJobs'
+import { TodayJobs } from '@/components/dashboard/TodayJobs'
 import { PageHeader } from '@/components/layout/PageHeader'
+import { invoiceBalance } from '@/lib/payments/ledger'
 import { DashboardStats, Quote } from '@/types'
 import Link from 'next/link'
 import { Button } from '@/components/ui/Button'
@@ -17,21 +21,28 @@ export default async function DashboardPage() {
   const { data: { user } } = await supabase.auth.getUser()
 
   const [{ data: quotes }, { data: invoices }, { data: jobs }, { data: settingsRow }] = await Promise.all([
-    // Only the columns the stats math + RecentQuotes render — not the ~40 wide pricing/
-    // sqft/travel/line-item columns — so the landing page ships far less on every visit.
-    supabase.from('quotes').select('id, quote_number, customer_name, service_type, total, status, created_at').eq('user_id', user!.id).order('created_at', { ascending: false }),
-    supabase.from('invoices').select('amount, status').eq('user_id', user!.id),
-    supabase.from('jobs').select('status, scheduled_date').eq('user_id', user!.id),
-    supabase.from('business_settings').select('dashboard_cards').eq('user_id', user!.id).maybeSingle(),
+    supabase.from('quotes').select('*').eq('user_id', user!.id).order('created_at', { ascending: false }),
+    supabase.from('invoices').select('amount, status, amount_paid, discount_type, discount_value').eq('user_id', user!.id),
+    supabase.from('jobs').select('status, scheduled_date, quote_id').eq('user_id', user!.id),
+    supabase.from('business_settings').select('dashboard_cards, gst_percent').eq('user_id', user!.id).maybeSingle(),
   ])
 
-  // Narrowed select above returns only the rendered columns; the stats math + RecentQuotes
-  // touch only those, so treat it as Quote[] for the props type.
-  const allQuotes = (quotes as unknown as Quote[]) || []
-  const allInvoices = (invoices as { amount: number; status: string }[]) || []
-  const allJobs = (jobs as { status: string; scheduled_date: string }[]) || []
-  const collectedRevenue = allInvoices.filter(i => i.status === 'paid').reduce((s, i) => s + Number(i.amount || 0), 0)
-  const outstandingRevenue = allInvoices.filter(i => i.status === 'unpaid' || i.status === 'sent').reduce((s, i) => s + Number(i.amount || 0), 0)
+  const allQuotes: Quote[] = quotes || []
+  const allInvoices = (invoices as { amount: number; status: string; amount_paid?: number; discount_type: 'amount' | 'percent' | null; discount_value: number | null }[]) || []
+  const allJobs = (jobs as { status: string; scheduled_date: string; quote_id: string | null }[]) || []
+  // Accepted quotes with no live job — feeds the "not yet scheduled" safety net
+  // below without a second client fetch. Cancelled jobs must NOT count as
+  // "scheduled": an accepted quote whose only job was cancelled would otherwise
+  // vanish from that card.
+  const scheduledQuoteIds = new Set(allJobs.filter(j => j.quote_id && j.status !== 'cancelled').map(j => j.quote_id))
+  const unscheduledAccepted = allQuotes.filter(q => q.status === 'accepted' && !scheduledQuoteIds.has(q.id))
+  // Ledger-aware: Collected = money actually received (amount_paid, incl. partial
+  // payments); Outstanding = remaining GST-inclusive balance across issued invoices
+  // via THE ledger engine, so it agrees with the Invoices page and the portal.
+  const collectedRevenue = allInvoices.reduce((s, i) => s + (Number(i.amount_paid) || 0), 0)
+  const outstandingRevenue = allInvoices
+    .filter(i => i.status !== 'draft' && i.status !== 'cancelled')
+    .reduce((s, i) => s + Math.max(0, invoiceBalance(i, settingsRow).balance), 0)
 
   // Monthly revenue = total of quotes created this calendar month
   const now = new Date()
@@ -54,10 +65,7 @@ export default async function DashboardPage() {
   const jobsDoneThisMonth = doneJobs.filter(j => j.scheduled_date >= monthStartISO).length
 
   const stats: DashboardStats = {
-    totalQuotes: allQuotes.length,
-    revenueQuoted: allQuotes.reduce((sum, q) => sum + Number(q.total), 0),
     acceptedJobs: acceptedCount,
-    pendingQuotes: allQuotes.filter(q => q.status === 'draft' || q.status === 'sent').length,
     acceptedRevenue: allQuotes
       .filter(q => q.status === 'accepted')
       .reduce((sum, q) => sum + Number(q.total), 0),
@@ -69,7 +77,8 @@ export default async function DashboardPage() {
     jobsDoneThisMonth,
   }
 
-  const recent = allQuotes.slice(0, 8)
+  // 5 is enough for a glance — the full list is one tap away ("View all").
+  const recent = allQuotes.slice(0, 5)
 
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
@@ -78,7 +87,7 @@ export default async function DashboardPage() {
     <div className="max-w-6xl space-y-6">
       <PageHeader
         title={greeting}
-        description="Here's what's happening with Edge Property Services today."
+        description="Here's what's happening with your business today."
         action={
           <Link href="/dashboard/quotes/new">
             <Button>
@@ -87,10 +96,17 @@ export default async function DashboardPage() {
           </Link>
         }
       />
-      {/* Ranked action queue — leads the page so the most valuable next moves are
-          one short list, not a scan across every card below. Rendered above the
-          customizable sections so it always stays on top. */}
+      {/* Operational block — what to work on RIGHT NOW, fixed above the customizable
+          business-overview sections so it always leads the page:
+            1. Today's Priorities — the ranked triage queue (money owed, risk, replies).
+            2. Accepted — not yet scheduled — committed revenue at risk, one-tap to book.
+            3. Missed jobs — past-date visits still open, one-tap Done / move-to-today.
+               (2 and 3 render null when there's nothing slipping — silent on a clean day.)
+            4. Today's Jobs — the day's route with one-tap call / open-in-Maps. */}
       <TodaysPriorities />
+      <UnscheduledAccepted quotes={unscheduledAccepted} />
+      <MissedJobs />
+      <TodayJobs />
       <DashboardSections
         initialPrefs={(settingsRow as { dashboard_cards: { order: string[]; hidden: string[] } | null } | null)?.dashboard_cards ?? null}
         sections={{

@@ -5,7 +5,7 @@
 // (per-visit value) — never re-implements routing or pricing.
 
 import { Coord } from '@/lib/geo'
-import { routeKmEstimate, routeStats } from '@/lib/route'
+import { routeKmEstimate, routeStats, type SpeedModel } from '@/lib/route'
 import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
 
 export interface ProfitJob {
@@ -46,6 +46,7 @@ export interface ProfitContext {
   recById: Record<string, RecInfo>
   base: Coord | null
   today: string // yyyy-MM-dd — so completion counts only past-due jobs
+  speed?: SpeedModel // learned drive speed (lib/travelLearning); else legacy 2 min/km
 }
 
 // One visit's billable value — reuses the ONE valuation engine, resolving the
@@ -94,7 +95,7 @@ export function dayProfitability(date: string, dayJobs: ProfitJob[], ctx: Profit
   const revenue = Math.round(active.reduce((s, j) => s + jobValue(j, ctx), 0))
   const laborMinutes = active.reduce((s, j) => s + (j.actual_minutes ?? j.duration_minutes ?? DEFAULT_LABOR_MIN), 0)
   const driveKm = ctx.base ? routeKmEstimate(ctx.base, located) : 0
-  const stats = routeStats(located, driveKm)
+  const stats = routeStats(located, driveKm, ctx.speed)
   const hasDriveData = driveKm > 0
   const driveMinutes = hasDriveData ? stats.driveMinutes : 0
   const totalMinutes = laborMinutes + driveMinutes
