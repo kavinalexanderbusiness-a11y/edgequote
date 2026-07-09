@@ -88,9 +88,11 @@ export function PaymentMethodCard({ customer, onCustomerChange }: {
   }
 
   async function changeMode(next: Mode) {
-    setMode(next)
+    const prev = mode
+    setMode(next); setError(null)   // optimistic
     const value = next === 'inherit' ? null : next
-    await supabase.from('customers').update({ autopay_charge_mode: value }).eq('id', customer.id)
+    const { error } = await supabase.from('customers').update({ autopay_charge_mode: value }).eq('id', customer.id)
+    if (error) { setMode(prev); setError('Could not update charge timing.'); return }   // revert — never leave autopay charging against intent
     onCustomerChange?.({ autopay_charge_mode: value })
   }
 

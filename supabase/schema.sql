@@ -1482,6 +1482,30 @@ drop policy if exists "messages: insert own" on public.messages;
 create policy "messages: insert own" on public.messages for insert with check (auth.uid() = user_id);
 create index if not exists messages_convo_idx on public.messages(conversation_id, created_at);
 
+-- Message-send idempotency guard (see RUN-2026-07-07-message-idempotency.sql).
+-- One reservation per LOGICAL send, keyed by a client-generated client_message_id
+-- reused across every retry / offline replay / concurrent tab. The composite PK is
+-- the atomic at-most-once guard the comms routes claim before dispatching SMS/email;
+-- nothing is sent from here (not a second messaging system).
+create table if not exists public.message_sends (
+  user_id           uuid not null references auth.users(id) on delete cascade,
+  client_message_id text not null,
+  created_at        timestamptz not null default now(),
+  channel           text,
+  status            text,
+  primary key (user_id, client_message_id)
+);
+alter table public.message_sends enable row level security;
+do $$ begin
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='message_sends' and policyname='message_sends: select own') then
+    create policy "message_sends: select own" on public.message_sends for select using (auth.uid() = user_id); end if;
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='message_sends' and policyname='message_sends: insert own') then
+    create policy "message_sends: insert own" on public.message_sends for insert with check (auth.uid() = user_id); end if;
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='message_sends' and policyname='message_sends: update own') then
+    create policy "message_sends: update own" on public.message_sends for update using (auth.uid() = user_id); end if;
+end $$;
+create index if not exists message_sends_age_idx on public.message_sends(created_at);
+
 -- Keep the conversation summary + owner unread in sync on every message.
 create or replace function public.bump_conversation() returns trigger language plpgsql security definer set search_path = public as $$
 begin

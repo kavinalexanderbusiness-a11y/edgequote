@@ -37,7 +37,8 @@ export function MessagingUsage() {
       setProvider(p.provider || '')
     })()
     ;(async () => {
-      const { data: { user } } = await supabase.auth.getUser()
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
       if (!user) { if (active) setRows([]); return }
       const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0)
       const { data } = await supabase.from('messages')

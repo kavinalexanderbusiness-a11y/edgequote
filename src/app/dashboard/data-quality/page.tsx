@@ -42,7 +42,8 @@ export default function DataQualityPage() {
   const [ctx, setCtx] = useState<ProfitContext>(EMPTY_CTX)
 
   const load = useCallback(async () => {
-    const { data: { user } } = await supabase.auth.getUser()
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
     const [cRes, qRes, jRes, rRes, pRes] = await Promise.all([
       supabase.from('customers').select('*').eq('user_id', user!.id).order('name'),
       supabase.from('quotes').select('id, quote_number, customer_id, customer_name, address, property_id, status, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),

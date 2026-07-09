@@ -54,7 +54,8 @@ export default function ProfitabilityPage() {
   useEffect(() => {
     async function load() {
       try {
-      const { data: { user } } = await supabase.auth.getUser()
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
       if (!user) { setLoadError('Session expired — sign in again.'); return }
       const [core, sRes, travel] = await Promise.all([
         loadAnalyticsCore(supabase),

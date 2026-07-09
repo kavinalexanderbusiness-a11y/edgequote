@@ -40,7 +40,8 @@ export function PushNotificationSettings() {
       const s = await getPushState()
       if (!active) return
       setState(s)
-      const { data: { user } } = await supabase.auth.getUser()
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
       if (user) {
         const { data } = await supabase.from('business_settings').select('notif_prefs').eq('user_id', user.id).maybeSingle()
         if (active) setPrefs(((data as { notif_prefs?: Record<string, boolean> } | null)?.notif_prefs) || {})
@@ -64,10 +65,13 @@ export function PushNotificationSettings() {
   }
 
   async function setPref(key: string, value: boolean) {
+    const prev = prefs
     const next = { ...prefs, [key]: value }
     setPrefs(next)   // optimistic
     const { data: { user } } = await supabase.auth.getUser()
-    if (user) await supabase.from('business_settings').update({ notif_prefs: next }).eq('user_id', user.id)
+    if (!user) { setPrefs(prev); return }
+    const { error } = await supabase.from('business_settings').update({ notif_prefs: next }).eq('user_id', user.id)
+    if (error) setPrefs(prev)   // revert on a failed write
   }
 
   const iosNeedsInstall = isIos() && !isStandalone()

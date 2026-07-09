@@ -124,13 +124,16 @@ export async function syncDraftInvoiceAmounts(
   const quoteIds = [...new Set(Object.values(jobsById).map(j => j.quote_id).filter((x): x is string => !!x))]
   const recIds = [...new Set(Object.values(jobsById).map(j => j.recurrence_id).filter((x): x is string => !!x))]
   const quotesById: Record<string, Record<string, unknown>> = {}
-  if (quoteIds.length) { const { data } = await supabase.from('quotes').select('*').in('id', quoteIds); for (const q of (data as Record<string, unknown>[]) || []) quotesById[q.id as string] = q }
   const recById: Record<string, { freq: string | null; interval_unit: string | null; interval_count: number | null }> = {}
-  if (recIds.length) { const { data } = await supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').in('id', recIds); for (const r of (data as { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null }[]) || []) recById[r.id] = r }
   // Add-ons on these visits feed both the amount and the breakdown.
   const addonsByJob: Record<string, Pick<JobLineItem, 'description' | 'amount'>[]> = {}
-  { const { data } = await supabase.from('job_line_items').select('job_id, description, amount').in('job_id', jobIdsWithInv)
-    for (const a of (data as { job_id: string; description: string; amount: number }[]) || []) (addonsByJob[a.job_id] ||= []).push({ description: a.description, amount: a.amount }) }
+  // These three reads all derive from the already-resolved jobs (independent of each
+  // other) — run them together instead of three serial round-trips on every price edit.
+  await Promise.all([
+    (async () => { if (!quoteIds.length) return; const { data } = await supabase.from('quotes').select('*').in('id', quoteIds); for (const q of (data as Record<string, unknown>[]) || []) quotesById[q.id as string] = q })(),
+    (async () => { if (!recIds.length) return; const { data } = await supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').in('id', recIds); for (const r of (data as { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null }[]) || []) recById[r.id] = r })(),
+    (async () => { const { data } = await supabase.from('job_line_items').select('job_id, description, amount').in('job_id', jobIdsWithInv); for (const a of (data as { job_id: string; description: string; amount: number }[]) || []) (addonsByJob[a.job_id] ||= []).push({ description: a.description, amount: a.amount }) })(),
+  ])
 
   let changed = 0
   for (const inv of invoices) {

@@ -61,10 +61,12 @@ export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel
     { value: '', label: 'How did they find you?' },
     ...ACQUISITION_SOURCES.map(s => ({ value: s, label: s })),
   ]
-  const referrerOptions = [
+  // Memoized: at 8k customers this array (and the form's watch()-driven re-renders)
+  // would otherwise rebuild the whole option list on every keystroke/field change.
+  const referrerOptions = useMemo(() => [
     { value: '', label: 'Select referring customer...' },
     ...customers.map(c => ({ value: c.id, label: c.name })),
-  ]
+  ], [customers])
 
   return (
     <form onSubmit={submit} className="space-y-5">

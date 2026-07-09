@@ -23,10 +23,13 @@ export function UnscheduledAccepted({ quotes: initialQuotes }: { quotes?: Quote[
   const [loading, setLoading] = useState(!initialQuotes)
   const [scheduling, setScheduling] = useState<string | null>(null)
 
+  // Dashboard passes `initialQuotes` (fetch-once) → skip the client fetch; otherwise
+  // self-fetch. Local session read (getSession) — no auth round-trip.
   useEffect(() => {
     if (initialQuotes) return
     ;(async () => {
-      const { data: { user } } = await supabase.auth.getUser()
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
       const [qRes, jRes] = await Promise.all([
         supabase.from('quotes').select('*').eq('user_id', user!.id).eq('status', 'accepted').order('created_at', { ascending: false }),
         // Cancelled jobs must NOT count as "scheduled" — an accepted quote whose

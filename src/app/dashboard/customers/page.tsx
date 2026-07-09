@@ -5,6 +5,7 @@ import { confirm as confirmDialog } from '@/lib/confirm'
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
+import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { Customer, CustomerFormValues } from '@/types'
 import { CustomerList } from '@/components/customers/CustomerList'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
@@ -31,7 +32,9 @@ export default function CustomersPage() {
   const supabase = useMemo(() => createClient(), [])
 
   async function fetchCustomers() {
-    const { data: { user } } = await supabase.auth.getUser()
+    // Local session read — no auth round-trip before the RLS-scoped queries below.
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
     if (!user) { setLoading(false); return }
     setUid(user.id)
     // Active (non-archived) customers only — archived ones are preserved but hidden.
@@ -41,10 +44,19 @@ export default function CustomersPage() {
     ])
     setCustomers(activeRes.data || [])
     setArchived(archRes.data || [])
+    // Cache only the first screenful for an instant revisit paint — never serialize
+    // thousands of customer rows into sessionStorage. The full list follows immediately.
+    writeCache('customers-list', (activeRes.data || []).slice(0, 100))
     setLoading(false)
   }
 
-  useEffect(() => { fetchCustomers() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // Instant revisit: paint the cached active list immediately (no skeleton), then
+  // revalidate in the background — realtime keeps it live. Reuses the shared clientCache.
+  useEffect(() => {
+    const cached = readCache<Customer[]>('customers-list', CACHE_TTL.short)
+    if (cached) { setCustomers(cached); setLoading(false) }
+    fetchCustomers()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Command-palette "New Customer" deep-links here with ?new=1 → open the form.
   useEffect(() => {
@@ -104,7 +116,8 @@ export default function CustomersPage() {
 
   async function handleEdit(values: CustomerFormValues) {
     if (!editing) return
-    await supabase.from('customers').update(normalize(values)).eq('id', editing.id)
+    const { error } = await supabase.from('customers').update(normalize(values)).eq('id', editing.id)
+    if (error) { toast.error('Could not save the customer: ' + error.message); return }   // keep the form open to retry
 
     // If address changed, update the primary property address too
     if (values.address) {

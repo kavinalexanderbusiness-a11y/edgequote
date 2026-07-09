@@ -37,7 +37,9 @@ export function MissedJobs() {
   const [busy, setBusy] = useState<string | null>(null)
 
   async function load() {
-    const { data: { user } } = await supabase.auth.getUser()
+    // Local session read — no auth round-trip before the RLS-scoped queries below.
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
     const today = localToday()
     const [jRes, qRes, rRes] = await Promise.all([
       supabase.from('jobs')

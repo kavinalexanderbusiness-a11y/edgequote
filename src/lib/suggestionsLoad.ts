@@ -11,7 +11,9 @@ import { loadTravelModel } from '@/lib/travelLearning'
 // ranked suggestions. Shared by the Grow page Suggestions Center and the
 // dashboard top-3 widget so they never diverge.
 export async function loadSuggestions(supabase: SupabaseClient): Promise<Suggestion[]> {
-  const { data: { user } } = await supabase.auth.getUser()
+  // Local session read — no auth round-trip before the parallel advisor fetch below.
+  const { data: { session } } = await supabase.auth.getSession()
+  const user = session?.user
   if (!user) return []
   const uid = user.id
 

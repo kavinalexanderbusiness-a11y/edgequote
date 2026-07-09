@@ -1,5 +1,6 @@
 import { format, parseISO } from 'date-fns'
 import { DisruptionReason, DISRUPTION_META } from '@/lib/disruption'
+import { newClientMessageId } from '@/lib/comms/idempotency'
 
 // ── Reschedule notification (foundation) ─────────────────────────────────────────
 // When jobs are moved — rain delay, equipment, absence, holiday or emergency —
@@ -31,6 +32,7 @@ export async function notifyReschedule(n: RescheduleNotice): Promise<NotifyResul
         customerId: n.customerId, template, jobId: n.jobId ?? null,
         channels: n.channels ?? ['sms', 'email'],
         vars: { dateLabel: fmt(n.toDate), oldDateLabel: n.fromDate ? fmt(n.fromDate) : undefined },
+        clientMessageId: newClientMessageId(), // one id per notice → a re-fire can't double-send
       }),
     })
     const json = await res.json().catch(() => ({}))

@@ -44,7 +44,8 @@ export default function PricingRecoveryPage() {
   const [edits, setEdits] = useState<Record<string, number>>({}) // per-series price overrides
 
   async function load() {
-    const { data: { user } } = await supabase.auth.getUser()
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
     const [jRes, qRes, rRes, sRes] = await Promise.all([
       supabase.from('jobs').select('id, customer_id, property_id, quote_id, recurrence_id, service_type, status, scheduled_date, price, customers(name), properties(lawn_sqft, address)').eq('user_id', user!.id),
       supabase.from('quotes').select('id, quote_number, customer_id, property_id, service_type, total, initial_price, weekly_price, biweekly_price, monthly_price, measured_sqft').eq('user_id', user!.id),
