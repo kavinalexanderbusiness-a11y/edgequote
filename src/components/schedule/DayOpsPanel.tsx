@@ -780,7 +780,7 @@ export function DayOpsPanel({
                           cards collapse to the three that still matter. */}
                       {done ? (
                         <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-                          <a href="/dashboard/invoices"
+                          <a href={`/dashboard/invoices?job=${job.id}`}
                             className="h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border border-current/30 text-xs font-medium flex items-center gap-1 hover:bg-black/10">
                             <Receipt className="w-3.5 h-3.5" /> Invoice
                           </a>

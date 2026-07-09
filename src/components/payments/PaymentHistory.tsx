@@ -48,7 +48,8 @@ export function PaymentHistory({ settings }: { settings?: BusinessSettings | nul
 
   if (!loaded || rows.length === 0) return null
   const paidRows = rows.filter(r => r.kind === 'payment' && Number(r.amount) > 0)
-  const total = paidRows.reduce((s, r) => s + Number(r.amount || 0), 0)
+  // Net of refunds (negative payment rows) — matches the ledger's amount_paid.
+  const total = rows.filter(r => r.kind === 'payment').reduce((s, r) => s + Number(r.amount || 0), 0)
 
   return (
     <Card>

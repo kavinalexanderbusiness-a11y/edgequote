@@ -46,6 +46,15 @@ export default function InvoicesPage() {
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [cancellingId, setCancellingId] = useState<string | null>(null)
   const [filter, setFilter] = useState<'' | InvoiceDisplayStatus>('')
+  // Deep-link focus: /dashboard/invoices?invoice=INV-0042 or ?job=<job id> shows
+  // exactly that invoice (from a Convert toast or a completed job's Invoice link).
+  const [focus, setFocus] = useState<{ invoice?: string; job?: string } | null>(() => {
+    if (typeof window === 'undefined') return null
+    const p = new URLSearchParams(window.location.search)
+    const invoice = p.get('invoice') || undefined
+    const job = p.get('job') || undefined
+    return invoice || job ? { invoice, job } : null
+  })
   // The ONE shared Send Message dialog, opened for a specific invoice's customer.
   const [msgInvoice, setMsgInvoice] = useState<Invoice | null>(null)
   const [paymentsEnabled, setPaymentsEnabled] = useState(false)
@@ -238,7 +247,10 @@ export default function InvoicesPage() {
   const today = todayISO()
   // Filter on the DISPLAY status so the lifecycle states (Overdue, Viewed) are
   // filterable even though they're derived, not stored. Cancelled hides from All.
-  const visible = filter
+  const focused = focus
+    ? invoices.filter(i => (focus.invoice && i.invoice_number === focus.invoice) || (focus.job && i.job_id === focus.job))
+    : null
+  const visible = focused && focused.length > 0 ? focused : filter
     ? invoices.filter(i => displayInvoiceStatus(i, settings, today) === filter || (filter !== 'cancelled' && i.status === filter))
     : invoices.filter(i => i.status !== 'cancelled')
 
@@ -294,6 +306,16 @@ export default function InvoicesPage() {
           ))}
         </div>
       )}
+      {/* Deep-link focus (from a Convert toast / completed-job Invoice link) —
+          always show the way back to the full list. */}
+      {focus && (
+        <div className="flex items-center gap-2 text-xs text-ink-muted">
+          <span>Showing {focus.invoice ? `invoice ${focus.invoice}` : 'the invoice for that job'}</span>
+          <button onClick={() => { setFocus(null); if (typeof window !== 'undefined') window.history.replaceState({}, '', '/dashboard/invoices') }}
+            className="font-semibold text-accent hover:underline">Show all</button>
+        </div>
+      )}
+
       {/* One-line status legend — 'Unpaid' vs 'Sent' is invisible tribal knowledge
           otherwise (tap the status pill on a row to flip between them). */}
       {!loading && !loadError && (filter === 'unpaid' || filter === 'sent') && (
@@ -475,7 +497,7 @@ export default function InvoicesPage() {
       {msgInvoice?.customer_id && (
         <SendMessageDialog open onClose={() => setMsgInvoice(null)}
           customerId={msgInvoice.customer_id} customerName={msgInvoice.customer_name}
-          defaultTemplate="invoice" vars={{ amount: formatCurrency(Number(msgInvoice.amount)) }}
+          defaultTemplate="invoice" vars={{ amount: formatCurrency(invoiceTotals(msgInvoice.amount, settings, { type: msgInvoice.discount_type, value: msgInvoice.discount_value }).total) }}
           onSent={() => markSent(msgInvoice)} />
       )}
     </div>
