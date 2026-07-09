@@ -27,14 +27,10 @@ export default async function DashboardPage() {
   const allInvoices = (invoices as { amount: number; status: string }[]) || []
   const allJobs = (jobs as { status: string; scheduled_date: string }[]) || []
   const collectedRevenue = allInvoices.filter(i => i.status === 'paid').reduce((s, i) => s + Number(i.amount || 0), 0)
-  const outstandingRevenue = allInvoices.filter(i => i.status === 'unpaid' || i.status === 'sent').reduce((s, i) => s + Number(i.amount || 0), 0)
 
-  // Monthly revenue = total of quotes created this calendar month
+  // Month boundary — only needed for the "this month" jobs count below.
   const now = new Date()
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
-  const monthlyRevenue = allQuotes
-    .filter(q => new Date(q.created_at) >= monthStart)
-    .reduce((sum, q) => sum + Number(q.total), 0)
 
   // Conversion rate = accepted / (everything except draft)
   const acceptedCount = allQuotes.filter(q => q.status === 'accepted').length
@@ -50,19 +46,13 @@ export default async function DashboardPage() {
   const jobsDoneThisMonth = doneJobs.filter(j => j.scheduled_date >= monthStartISO).length
 
   const stats: DashboardStats = {
-    totalQuotes: allQuotes.length,
-    revenueQuoted: allQuotes.reduce((sum, q) => sum + Number(q.total), 0),
-    acceptedJobs: acceptedCount,
-    pendingQuotes: allQuotes.filter(q => q.status === 'draft' || q.status === 'sent').length,
+    collectedRevenue,
     acceptedRevenue: allQuotes
       .filter(q => q.status === 'accepted')
       .reduce((sum, q) => sum + Number(q.total), 0),
-    monthlyRevenue,
-    conversionRate,
-    collectedRevenue,
-    outstandingRevenue,
     jobsDone,
     jobsDoneThisMonth,
+    conversionRate,
   }
 
   const recent = allQuotes.slice(0, 8)

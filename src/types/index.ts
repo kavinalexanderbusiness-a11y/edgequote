@@ -575,18 +575,16 @@ export const ACQUISITION_SOURCES = [
   'Other',
 ] as const
 
+// The four business-health numbers the dashboard StatsGrid renders (Jobs Done shows
+// both the total and the this-month count). Trimmed to match the decluttered grid —
+// vanity/duplicate stats (totalQuotes, revenueQuoted, pendingQuotes, monthlyRevenue,
+// outstandingRevenue, acceptedJobs) were removed and must NOT be reintroduced.
 export interface DashboardStats {
-  totalQuotes: number
-  revenueQuoted: number
-  acceptedJobs: number
-  pendingQuotes: number
-  acceptedRevenue: number
-  monthlyRevenue: number
-  conversionRate: number
   collectedRevenue: number
-  outstandingRevenue: number
+  acceptedRevenue: number
   jobsDone: number
   jobsDoneThisMonth: number
+  conversionRate: number
 }
 
 export interface BusinessSettings {
