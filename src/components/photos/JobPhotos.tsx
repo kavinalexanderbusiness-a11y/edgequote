@@ -83,7 +83,8 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', cl
   }
 
   async function remove(photo: JobPhotoView) {
-    if (!confirm('Delete this photo? This cannot be undone.')) return
+    const ok = await confirmDialog({ title: 'Delete this photo?', message: 'This cannot be undone.', confirmLabel: 'Delete photo', destructive: true })
+    if (!ok) return
     setPhotos(prev => prev.filter(p => p.id !== photo.id))
     setLightbox(null)
     await deletePhoto(supabase, photo)

@@ -163,10 +163,20 @@ export default function NeighborsPage() {
   }
 
   // Conversion is the ONLY moment a customer record is created — through the one
-  // find-or-create engine, linked back via converted_customer_id.
+  // find-or-create engine, linked back via converted_customer_id. The name is
+  // captured inline on the card (no browser prompt): first click opens the field,
+  // Enter/Convert confirms.
+  const [converting, setConverting] = useState<{ leadId: string; thenQuote: boolean } | null>(null)
+  const [convertName, setConvertName] = useState('')
   async function convertLead(lead: Lead, thenQuote: boolean) {
-    const name = prompt(`Customer name for ${lead.address}?`)
-    if (!name?.trim()) return
+    if (converting?.leadId !== lead.id) {
+      setConverting({ leadId: lead.id, thenQuote })
+      setConvertName('')
+      return
+    }
+    const name = convertName
+    if (!name.trim()) return
+    setConverting(null)
     setWorking(lead.id)
     try {
       const { data: { user } } = await supabase.auth.getUser()
@@ -294,6 +304,19 @@ export default function NeighborsPage() {
                     </span>
                   </div>
 
+                  {/* Inline name capture for conversion — no browser prompt */}
+                  {converting?.leadId === l.id && (
+                    <div className="flex items-center gap-2 mb-2">
+                      <input
+                        value={convertName} onChange={e => setConvertName(e.target.value)} autoFocus
+                        placeholder={`Customer name for ${l.address}`}
+                        onKeyDown={e => { if (e.key === 'Enter' && convertName.trim()) convertLead(l, converting.thenQuote); if (e.key === 'Escape') setConverting(null) }}
+                        className="flex-1 bg-bg-tertiary border border-border-strong rounded-lg px-3 py-1.5 text-sm text-ink outline-none focus:border-accent"
+                      />
+                      <Button size="sm" disabled={!convertName.trim()} onClick={() => convertLead(l, converting.thenQuote)}><Check className="w-3.5 h-3.5" /> Convert</Button>
+                      <Button size="sm" variant="ghost" onClick={() => setConverting(null)}>Cancel</Button>
+                    </div>
+                  )}
                   <div className="flex items-center gap-1.5 flex-wrap">
                     {l.status === 'prospect' && (
                       <Button size="sm" variant="secondary" disabled={busy} onClick={() => setStatus(l, 'contacted')}>

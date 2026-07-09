@@ -41,7 +41,7 @@ export default function WeatherPage() {
   if (loading) {
     return (
       <div className="max-w-5xl">
-        <PageHeader title="Weather" description="Rain risk to your booked work — jobs, hours, and revenue at stake." />
+        <PageHeader title="Weather" description="Rain risk to your booked work — and the best dry days to move it." />
         <div className="py-20 text-center text-sm text-ink-muted flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Checking the forecast…</div>
       </div>
     )
@@ -51,7 +51,7 @@ export default function WeatherPage() {
   if (!r.hasBase) {
     return (
       <div className="max-w-5xl">
-        <PageHeader title="Weather" description="Rain risk to your booked work." />
+        <PageHeader title="Weather" description="Rain risk to your booked work — and the best dry days to move it." />
         <div className="rounded-card border border-border bg-bg-secondary p-8 text-center">
           <MapPin className="w-10 h-10 text-ink-faint mx-auto mb-3" />
           <p className="text-sm font-medium text-ink">Set your base location first</p>
@@ -64,7 +64,7 @@ export default function WeatherPage() {
   if (r.forecast.length === 0) {
     return (
       <div className="max-w-5xl">
-        <PageHeader title="Weather" description="Rain risk to your booked work." />
+        <PageHeader title="Weather" description="Rain risk to your booked work — and the best dry days to move it." />
         <div className="py-16 text-center text-sm text-ink-muted">Couldn’t reach the forecast service right now. Try again shortly.</div>
       </div>
     )

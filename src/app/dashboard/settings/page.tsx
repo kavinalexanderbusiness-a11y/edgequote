@@ -238,7 +238,7 @@ export default function SettingsPage() {
                 <input type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} disabled={uploading} />
               </label>
               <p className="text-xs text-ink-faint mt-2 max-w-xs">
-                Upload your official Edge Property Services logo. Used in the sidebar, on the login screen and on PDF quotes &amp; invoices.
+                Upload your company logo. Used in the sidebar, on the login screen and on PDF quotes &amp; invoices.
               </p>
             </div>
           </div>
@@ -352,7 +352,7 @@ export default function SettingsPage() {
                 className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all">
                 <option value="global_price_increase">Global price increase (recommended)</option>
                 <option value="absorb">Absorb the fee (no change)</option>
-                <option value="etransfer_discount">E-transfer discount (coming soon)</option>
+                <option value="etransfer_discount" disabled>E-transfer discount (coming soon)</option>
               </select>
               <p className="text-xs text-ink-faint">“Global price increase” adds the % below to every NEW quote so card fees are covered. Existing quotes are never changed.</p>
             </div>
@@ -364,9 +364,6 @@ export default function SettingsPage() {
                 hint="Alberta GST is 5%. Leave 0 if you're not GST-registered — no GST line will be shown."
                 {...register('gst_percent')} />
             </div>
-            <Input label="E-transfer discount % (future — leave 0)" type="number" step="0.5" min="0" max="10"
-              hint="Reserved for a future cash/e-transfer discount. Not active yet."
-              {...register('etransfer_discount_percent')} />
 
             {/* ── Recurring AutoPay ── */}
             <div className="pt-4 mt-2 border-t border-border">

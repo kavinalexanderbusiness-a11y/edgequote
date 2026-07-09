@@ -308,13 +308,13 @@ export default function BookPage() {
               <div className="space-y-3">
                 <p className="text-sm text-amber-400">{mapErr}</p>
                 <label className="text-xs text-ink-muted">Approximate lawn size (sq ft)</label>
-                <input type="number" value={manualSqft} onChange={e => { setManualSqft(e.target.value); setSqft(Number(e.target.value) || 0) }}
+                <input type="number" autoFocus value={manualSqft} onChange={e => { setManualSqft(e.target.value); setSqft(Number(e.target.value) || 0) }}
                   placeholder="e.g. 3000" className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent" />
               </div>
             ) : mapErr === 'manual' ? (
               <div className="space-y-3">
                 <label className="text-xs text-ink-muted">Approximate lawn size (sq ft)</label>
-                <input type="number" value={manualSqft} onChange={e => { setManualSqft(e.target.value); setSqft(Number(e.target.value) || 0) }}
+                <input type="number" autoFocus value={manualSqft} onChange={e => { setManualSqft(e.target.value); setSqft(Number(e.target.value) || 0) }}
                   placeholder="e.g. 3000" className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent" />
               </div>
             ) : (
@@ -370,7 +370,7 @@ export default function BookPage() {
         {step === 'contact' && (
           <Section title="Almost done" sub={`Book your ${plan?.label.toLowerCase()} service. ${biz.company_name || 'We'}'ll confirm and schedule your first visit.`}>
             <div className="space-y-3">
-              <Field label="Your name" value={name} onChange={setName} placeholder="Jane Doe" />
+              <Field label="Your name" value={name} onChange={setName} placeholder="Jane Doe" autoFocus />
               <Field label="Email" value={email} onChange={setEmail} placeholder="jane@example.com" type="email" />
               <Field label="Phone" value={phone} onChange={setPhone} placeholder="(403) 555-0100" type="tel" />
               <div className="flex flex-col gap-1.5">
@@ -462,19 +462,19 @@ function Section({ title, sub, children }: { title: string; sub?: string; childr
   )
 }
 function ConfidenceBadge({ confidence }: { confidence?: string }) {
-  const map: Record<string, string> = {
-    high: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
-    medium: 'text-amber-400 border-amber-500/30 bg-amber-500/10',
-    low: 'text-ink-muted border-border bg-bg-tertiary',
+  // Customer-facing: never tell a prospect their estimate is "low confidence" at
+  // the conversion moment. High reads as verified; anything else reads as an
+  // editable estimate (which it is — the field right beside it).
+  if (confidence === 'high') {
+    return <span className="text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border text-emerald-400 border-emerald-500/30 bg-emerald-500/10">Verified estimate</span>
   }
-  const c = confidence || 'low'
-  return <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', map[c] || map.low)}>{c} confidence</span>
+  return <span className="text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border text-ink-muted border-border bg-bg-tertiary">Estimated</span>
 }
-function Field({ label, value, onChange, placeholder, type }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string }) {
+function Field({ label, value, onChange, placeholder, type, autoFocus }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string; autoFocus?: boolean }) {
   return (
     <div className="flex flex-col gap-1.5">
       <label className="text-xs font-semibold text-ink-muted">{label}</label>
-      <input type={type || 'text'} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
+      <input type={type || 'text'} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} autoFocus={autoFocus}
         className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent" />
     </div>
   )

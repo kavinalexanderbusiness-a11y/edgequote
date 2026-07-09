@@ -3,7 +3,8 @@ import { Quote } from '@/types'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
-import { ArrowRight } from 'lucide-react'
+import { InlineEmpty } from '@/components/ui/EmptyState'
+import { ArrowRight, FileText } from 'lucide-react'
 
 interface RecentQuotesProps {
   quotes: Quote[]
@@ -20,7 +21,7 @@ export function RecentQuotes({ quotes }: RecentQuotesProps) {
       </CardHeader>
       <CardBody className="p-0">
         {quotes.length === 0 ? (
-          <div className="py-12 text-center text-sm text-ink-muted">No quotes yet</div>
+          <InlineEmpty icon={FileText}>No quotes yet.</InlineEmpty>
         ) : (
           <div className="divide-y divide-border">
             {quotes.map((q) => (

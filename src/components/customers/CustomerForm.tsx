@@ -77,7 +77,7 @@ export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel
         />
       )}
       <Input
-        label="Full Name"
+        label="Full Name" autoFocus
         placeholder="Jane Smith"
         error={errors.name?.message}
         {...register('name', { required: 'Name is required' })}

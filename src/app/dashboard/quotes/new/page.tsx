@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Customer, QuoteFormValues, ServiceTemplate, TravelFeeTier, BusinessSettings, LawnSections, PricingConfidence } from '@/types'
 import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
 import { PageHeader } from '@/components/layout/PageHeader'
+import { SkeletonRows } from '@/components/ui/Skeleton'
 import { applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
 import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes } from '@/lib/pricing'
 import { ensureCustomerAndProperty } from '@/lib/customers'
@@ -255,7 +256,7 @@ export default function NewQuotePage() {
     }
   }
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading...</div>
+  if (loading) return <SkeletonRows count={6} />
 
   return (
     <div className="max-w-5xl space-y-6">

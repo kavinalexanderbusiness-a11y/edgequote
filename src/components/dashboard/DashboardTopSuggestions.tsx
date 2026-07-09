@@ -51,8 +51,12 @@ export function DashboardTopSuggestions() {
   }
 
   // Home page shows only confident, ranked actions — speculative low-confidence
-  // ideas live in the full Grow feed.
-  const top = items.filter(s => s.confidence !== 'low').slice(0, 3)
+  // ideas live in the full Grow feed. Suggestions that restate a Today's Priorities
+  // row (quote follow-ups, lapsed recurring → Reactivation) are excluded here too:
+  // the queue at the top of the page already carries those exact signals, so
+  // showing them twice on one screen was pure duplication.
+  const inPriorities = new Set(['retention-followup', 'retention-lapsed'])
+  const top = items.filter(s => s.confidence !== 'low' && !inPriorities.has(s.id)).slice(0, 3)
   if (loading) return null                       // stay quiet until ready — no skeleton noise
   if (top.length === 0 && !undo) return null     // nothing pressing → don't take up space
 

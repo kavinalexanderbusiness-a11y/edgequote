@@ -1,5 +1,6 @@
 'use client'
 
+import { SkeletonRows } from '@/components/ui/Skeleton'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
@@ -33,13 +34,13 @@ export default function MeasurePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading...</div>
+  if (loading) return <SkeletonRows count={4} />
   if (!property) return <div className="text-center py-16 text-sm text-red-400">Property not found.</div>
 
   return (
     <div className="max-w-4xl space-y-6">
       <div className="flex items-center gap-3">
-        <button onClick={() => router.back()} className="text-ink-muted hover:text-ink transition-colors">
+        <button onClick={() => router.back()} aria-label="Go back" className="text-ink-muted hover:text-ink transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
           <ArrowLeft className="w-4 h-4" />
         </button>
         <PageHeader title="Measure Property" description={property.address} />

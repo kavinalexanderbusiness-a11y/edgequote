@@ -116,7 +116,7 @@ export default function ServiceTemplatesPage() {
           </CardHeader>
           <CardBody>
             <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-              <Input label="Service Name" {...register('name', { required: true })} />
+              <Input label="Service Name" autoFocus {...register('name', { required: true })} />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <Select label="Category" options={categoryOptions} {...register('category')} />
                 <Select label="Pricing Display Type" options={pricingTypeOptions} {...register('pricing_display_type')} />

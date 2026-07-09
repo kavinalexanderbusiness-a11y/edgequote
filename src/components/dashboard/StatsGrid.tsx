@@ -8,6 +8,10 @@ interface StatsGridProps {
 }
 
 export function StatsGrid({ stats }: StatsGridProps) {
+  // Six tiles, one story: money (booked → collected → outstanding), work done,
+  // momentum, close rate. All-time vanity counts ("Total Quotes") and raw pending
+  // counts were dropped — the actionable version of pending work already sits in
+  // Today's Priorities with a dollar figure attached.
   const cards = [
     {
       // One card for accepted work — the count lives in the sub so the same dollar
