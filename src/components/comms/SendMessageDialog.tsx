@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { MsgType, MSG_LABELS, renderMessage } from '@/lib/comms/templates'
+import { MsgType, MSG_LABELS, renderMessage, toDisplayBody, fromDisplayBody } from '@/lib/comms/templates'
 import { summarizeSendOutcome, type SendOutcome } from '@/lib/comms/sendOutcome'
 import { SmsCost } from '@/components/comms/SmsCost'
 import { Modal } from '@/components/ui/Modal'
@@ -106,16 +106,20 @@ export function SendMessageDialog({
   const sampleName = chosen[0]?.name || all[0]?.name || 'there'
 
   function compose(type: MsgType, opts?: { eta?: string }): string {
-    return renderMessage(type, custom, {
+    // Only the server knows each customer's portal token — the composer shows a
+    // friendly [Customer Portal Link] placeholder; send() converts it back to the
+    // {{portal_link}} token so the route injects the real URL.
+    return toDisplayBody(renderMessage(type, custom, {
       firstName: sampleName,
       businessName: company,
       eta: opts?.eta ?? eta,
       reviewLink: reviewUrl || undefined,
+      portalLink: '{{portal_link}}',
       dateLabel: vars?.dateLabel,
       timeWindow: vars?.timeWindow,
       address: vars?.address,
       amount: vars?.amount,
-    }).sms
+    }).sms)
   }
 
   // (Re)compose whenever the dialog opens or the template/overrides change —
@@ -136,9 +140,10 @@ export function SendMessageDialog({
     if (!chosen.length) { setOutcome({ ok: false, text: 'Select at least one recipient.' }); return }
     if (!text.trim()) { setOutcome({ ok: false, text: 'Write a message first.' }); return }
     setBusy(true); setOutcome(null); setProgress(0)
-    // Untouched template + many recipients → let the server render per customer
-    // (each gets their own name/links). Edited text → send exactly as written.
-    const sendBodyOverride = !bulk || edited
+    // Untouched template → let the server render per customer (each gets their
+    // own name + REAL portal link). Edited text → send as written; any remaining
+    // {{tokens}} (e.g. {{portal_link}}) still resolve server-side.
+    const sendBodyOverride = edited
     let sent = 0, skipped = 0
     let single: SendOutcome | null = null
     for (let i = 0; i < chosen.length; i++) {
@@ -147,7 +152,7 @@ export function SendMessageDialog({
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             customerId: chosen[i].customerId, template: active, jobId: jobId ?? undefined, channels,
-            ...(sendBodyOverride ? { bodyOverride: text } : {}),
+            ...(sendBodyOverride ? { bodyOverride: fromDisplayBody(text) } : {}),
             vars: { eta, dateLabel: vars?.dateLabel, timeWindow: vars?.timeWindow, address: vars?.address, amount: vars?.amount },
           }),
         })
@@ -227,6 +232,11 @@ export function SendMessageDialog({
               {edited
                 ? `Edited — this exact text goes to all ${chosen.length} (names aren't swapped).`
                 : 'Each customer receives their own personalized version.'}
+            </p>
+          )}
+          {text.includes('{{') && (
+            <p className="text-[10px] text-ink-faint mt-1">
+              {'{{portal_link}}'} becomes {bulk ? 'each customer’s' : 'the customer’s'} secure link when sent.
             </p>
           )}
         </div>

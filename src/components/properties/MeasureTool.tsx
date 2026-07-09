@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { loadGoogleMaps } from '@/lib/googleMaps'
+import { loadGoogleMaps, addPropertyPin, flashRing, type PropertyPinHandle } from '@/lib/googleMaps'
 import { createClient } from '@/lib/supabase/client'
 import { Property, BusinessSettings, MeasurementSnapshot, LawnSections, PricingConfidence, CONFIDENCE_LABELS, CONFIDENCE_COLORS } from '@/types'
 import { priceTiers, routeDensityTravel, pricingConfidence, travelFeeForDistance, pricingConfigFromSettings, PricingConfig, DEFAULT_PRICING, PriceTier, pricingPackage, estimateVisitMinutes, buildSavedRecommendation } from '@/lib/pricing'
@@ -53,9 +53,9 @@ export function MeasureTool({ property }: { property: Property }) {
   const activeRef = useRef<SectionKey>('front')
   const shapeId = useRef(0)
   const targetCoord = useRef<Coord | null>(null)
-  // Branded "Selected Property" pin so it's instantly obvious WHICH lot is
-  // being measured (same marker as QuoteMeasure; click-through, never blocks tracing).
-  const propertyPin = useRef<any>(null)
+  // THE branded property pin (shared engine with QuoteMeasure) so it's instantly
+  // obvious WHICH lot is being quoted — click-through, never blocks tracing.
+  const propertyPin = useRef<PropertyPinHandle | null>(null)
   const overrideRef = useRef(0)                         // auto/accepted sqft when nothing is traced
   const autoRef = useRef<AutoMeasureResult | null>(null) // the auto estimate, for recording
   const rafPending = useRef(false)
@@ -70,6 +70,9 @@ export function MeasureTool({ property }: { property: Property }) {
 
   const [ready, setReady] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // Geocoding honesty: 'approx' = pin may not be the exact lot; 'failed' = no
+  // fix at all (city fallback, NO pin) — never silently measure the wrong lot.
+  const [geoFix, setGeoFix] = useState<'located' | 'approx' | 'failed'>('located')
   const [active, setActive] = useState<SectionKey>('front')
   const [mode, setMode] = useState<'draw' | 'adjust'>('draw')
   const [breakdown, setBreakdown] = useState<Record<SectionKey, number>>({ front: 0, back: 0, left: 0, right: 0, boulevard: 0, other: 0 })
@@ -195,28 +198,7 @@ export function MeasureTool({ property }: { property: Property }) {
   // Instant "click registered" confirmation — a quick pulse at the exact spot,
   // zoom-independent, purely cosmetic and never clickable.
   function flashClick(latLng: any) {
-    const g = window.google
-    if (!gmap.current) return
-    const color = sectionDef(activeRef.current).color
-    const pulse = new g.maps.Marker({
-      position: latLng, map: gmap.current, clickable: false, zIndex: 3000,
-      icon: { path: g.maps.SymbolPath.CIRCLE, scale: 7, fillColor: color, fillOpacity: 0.45, strokeColor: '#FFFFFF', strokeWeight: 2 },
-    })
-    let frame = 0
-    const FRAMES = 18
-    const tick = () => {
-      frame++
-      const t = frame / FRAMES
-      pulse.setIcon({
-        path: g.maps.SymbolPath.CIRCLE,
-        scale: 7 + t * 18,
-        fillColor: color, fillOpacity: 0.4 * (1 - t),
-        strokeColor: '#FFFFFF', strokeOpacity: 1 - t, strokeWeight: 2,
-      })
-      if (frame < FRAMES) requestAnimationFrame(tick)
-      else pulse.setMap(null)
-    }
-    requestAnimationFrame(tick)
+    if (gmap.current) flashRing(gmap.current, latLng, sectionDef(activeRef.current).color)
   }
 
   function updatePreview(cursor: any) {
@@ -368,7 +350,7 @@ export function MeasureTool({ property }: { property: Property }) {
         await g.maps.importLibrary('geometry')
         if (cancelled || !mapEl.current) return
 
-        let precise = true // false only when we fall back to the city default
+        let precise = true
         let center = property.lat != null && property.lng != null
           ? { lat: property.lat, lng: property.lng } : null
         if (!center) {
@@ -380,10 +362,13 @@ export function MeasureTool({ property }: { property: Property }) {
             const data = await res.json()
             if (res.ok && typeof data.lat === 'number') {
               center = { lat: data.lat, lng: data.lng }
+              precise = data.precise !== false // rooftop vs interpolated/area match
               supabase.from('properties').update({ lat: data.lat, lng: data.lng }).eq('id', property.id)
             }
           } catch { /* ignore */ }
         }
+        const hadFix = !!center // pin only where we actually located the property
+        setGeoFix(center ? (precise ? 'located' : 'approx') : 'failed')
         if (!center) { center = { lat: 51.0447, lng: -114.0719 }; precise = false }
         targetCoord.current = center
         setCoords(center)
@@ -407,24 +392,12 @@ export function MeasureTool({ property }: { property: Property }) {
         ov.setMap(gmap.current)
         projection.current = ov
 
-        // ── Selected-property pin — instantly obvious WHICH lot this is.
-        // Branded, click-through (clickable:false) so it never blocks tracing;
-        // amber "Approximate — verify" when we couldn't locate the address.
-        propertyPin.current?.setMap(null)
-        propertyPin.current = new g.maps.Marker({
-          position: center, map: gmap.current, clickable: false, zIndex: 900,
-          title: precise ? 'Selected Property' : 'Approximate location',
-          label: {
-            text: precise ? 'Selected Property' : 'Approximate — verify',
-            color: '#FFFFFF', fontSize: '11px', fontWeight: '700',
-          },
-          icon: {
-            path: g.maps.SymbolPath.CIRCLE, scale: 9,
-            fillColor: precise ? '#00C896' : '#F59E0B', fillOpacity: 1,
-            strokeColor: '#FFFFFF', strokeWeight: 2.5,
-            labelOrigin: new g.maps.Point(0, -2.6),
-          },
-        })
+        // ── THE branded property pin (shared engine with QuoteMeasure) — pulses
+        // on open so the eye lands on the right lot; skipped when we had no fix
+        // (a city-center pin would masquerade as the property).
+        propertyPin.current?.remove()
+        propertyPin.current = hadFix ? addPropertyPin(gmap.current, center, precise) : null
+        propertyPin.current?.pulse()
 
         gmap.current.addListener('click', (e: any) => {
           // In Adjust mode the map is for editing points, not adding them.
@@ -466,7 +439,7 @@ export function MeasureTool({ property }: { property: Property }) {
       shapes.current.forEach(s => s.polygon.setMap(null)); shapes.current = []
       currentOverlay.current?.setMap(null); currentOverlay.current = null
       preview.current?.setMap(null); preview.current = null
-      propertyPin.current?.setMap(null); propertyPin.current = null
+      propertyPin.current?.remove(); propertyPin.current = null
       projection.current?.setMap(null); projection.current = null
       gmap.current = null
     }
@@ -645,6 +618,18 @@ export function MeasureTool({ property }: { property: Property }) {
         ))}
       </div>
 
+      {/* Geocoding honesty — same vocabulary as the QuoteMeasure banner. */}
+      {ready && geoFix === 'approx' && (
+        <p className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-3 py-2">
+          Approximate location — the amber pin may not be the exact lot. Verify before quoting.
+        </p>
+      )}
+      {ready && geoFix === 'failed' && (
+        <p className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-3 py-2">
+          Couldn&apos;t locate this address — showing the general area with no property pin. Check the address before quoting.
+        </p>
+      )}
+
       {/* Map with overlaid zoom controls */}
       <div className="relative rounded-card overflow-hidden border border-border">
         <div ref={mapEl} className="w-full h-[55vh] min-h-[340px] bg-bg-secondary" style={{ cursor: 'crosshair' }} />
@@ -722,7 +707,8 @@ export function MeasureTool({ property }: { property: Property }) {
       <div className="bg-bg-secondary border border-border rounded-xl px-4 py-3 space-y-3">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Suggested job price</span>
-          <label className="flex items-center gap-1.5 text-xs text-ink-muted">Condition
+          <label className="flex items-center gap-1.5 text-xs text-ink-muted" title="Lawn condition multiplier — 0.75 easy, 1.0 standard, 1.25 overgrown">
+            <span>Condition<span className="block text-[10px] text-ink-faint">1.0 standard · 1.25 overgrown</span></span>
             <input type="number" min="0" step="0.05" value={overgrowthRaw} onChange={e => setOvergrowthRaw(e.target.value)}
               className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none focus:border-accent" />
           </label>
@@ -828,8 +814,11 @@ export function MeasureTool({ property }: { property: Property }) {
               <span className="text-2xl font-bold text-accent">{formatCurrency(chosenTotal)}</span>
             </div>
           </div>
+          {/* "one-time" in the label — the recommendation card's "Use <plan>" button
+              above creates a RECURRING quote; without the word the two big
+              create-quote actions read as duplicates with different prices. */}
           <Button onClick={() => createQuote()} loading={creating} size="lg" className="w-full">
-            <FileText className="w-4 h-4" /> Create Quote — {formatCurrency(chosenTotal)}
+            <FileText className="w-4 h-4" /> Create one-time quote — {formatCurrency(chosenTotal)}
           </Button>
           <div className="flex items-center justify-center gap-3">
             <Button variant="ghost" onClick={save} loading={saving} className="h-9">

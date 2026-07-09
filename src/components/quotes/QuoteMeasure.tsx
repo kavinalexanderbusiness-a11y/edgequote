@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { loadGoogleMaps } from '@/lib/googleMaps'
+import { loadGoogleMaps, addPropertyPin, flashRing, type PropertyPinHandle } from '@/lib/googleMaps'
 import { pricingPackage, estimateVisitMinutes, PricingConfig, CadenceKey } from '@/lib/pricing'
 import { Coord } from '@/lib/geo'
 import { ProspectContext, loadProspectContext, assessProspect } from '@/lib/prospect'
@@ -79,7 +79,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
   const overrideRef = useRef(0)
   const autoRef = useRef<AutoMeasureResult | null>(null)
   // The branded "Selected Property" pin (click-through; survives the whole trace).
-  const setCenterMarker = useRef<any>(null)
+  const setCenterMarker = useRef<PropertyPinHandle | null>(null)
   // 'located' = rooftop-accurate pin · 'approx' = low-confidence geocode (amber pin
   // + warning, never silent) · 'failed' = no pin, owner must verify visually.
   const [geoStatus, setGeoStatus] = useState<'none' | 'located' | 'approx' | 'failed'>('none')
@@ -123,26 +123,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
 
   // Instant "click registered" pulse at the exact spot (zoom-independent).
   function flashClick(latLng: any) {
-    const g = window.google
-    if (!gmap.current) return
-    const pulse = new g.maps.Marker({
-      position: latLng, map: gmap.current, clickable: false, zIndex: 3000,
-      icon: { path: g.maps.SymbolPath.CIRCLE, scale: 7, fillColor: '#00C896', fillOpacity: 0.45, strokeColor: '#FFFFFF', strokeWeight: 2 },
-    })
-    let frame = 0
-    const FRAMES = 18
-    const tick = () => {
-      frame++
-      const t = frame / FRAMES
-      pulse.setIcon({
-        path: g.maps.SymbolPath.CIRCLE, scale: 7 + t * 18,
-        fillColor: '#00C896', fillOpacity: 0.4 * (1 - t),
-        strokeColor: '#FFFFFF', strokeOpacity: 1 - t, strokeWeight: 2,
-      })
-      if (frame < FRAMES) requestAnimationFrame(tick)
-      else pulse.setMap(null)
-    }
-    requestAnimationFrame(tick)
+    if (gmap.current) flashRing(gmap.current, latLng)
   }
 
   function updatePreview(cursor: any) {
@@ -195,6 +176,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
         }
         if (center) setCenter(center) // route-density context for the pricing package
         setGeoStatus(center ? (precise ? 'located' : 'approx') : (address ? 'failed' : 'none'))
+        const hadFix = !!center // pin only where the geocoder actually landed — never on the city fallback
         if (!center) center = { lat: 51.0447, lng: -114.0719 }
         // Re-check after the geocode await — the modal may have been closed.
         if (cancelled || !mapEl.current) return
@@ -207,33 +189,13 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
           disableDoubleClickZoom: true, clickableIcons: false, gestureHandling: 'greedy',
         })
 
-        // ── Selected-property marker — instantly obvious WHICH lot is being quoted.
-        // Branded pin + label, click-through (clickable:false) so tracing is never
-        // blocked; stays up for the whole session. Skipped when geocoding failed;
-        // amber + "approximate" when the address didn't resolve to a rooftop.
-        if (setCenterMarker.current) { setCenterMarker.current.setMap(null); setCenterMarker.current = null }
-        if (address && gmap.current) {
-          const brand = precise ? '#00C896' : '#F59E0B'
-          setCenterMarker.current = new g.maps.Marker({
-            position: center, map: gmap.current, clickable: false, zIndex: 900,
-            title: precise ? 'Selected Property' : 'Approximate location',
-            label: {
-              text: precise ? 'Selected Property' : 'Approximate — verify',
-              color: '#FFFFFF', fontSize: '11px', fontWeight: '700',
-            },
-            icon: {
-              path: g.maps.SymbolPath.CIRCLE, scale: 9,
-              fillColor: brand, fillOpacity: 1,
-              strokeColor: '#FFFFFF', strokeWeight: 2.5,
-              labelOrigin: new g.maps.Point(0, -2.6),
-            },
-          })
-          // Opening pulse (3 beats) so the eye lands on the lot immediately —
-          // same animation style as the click feedback.
-          const pulseAt = (delay: number) => setTimeout(() => {
-            if (!cancelled && gmap.current) flashClick(new g.maps.LatLng(center!.lat, center!.lng))
-          }, delay)
-          pulseAt(150); pulseAt(650); pulseAt(1150)
+        // ── THE branded property pin (shared engine) — instantly obvious WHICH
+        // lot is being quoted; pulses on open; skipped when geocoding failed so
+        // a meaningless city-center pin can never masquerade as the lot.
+        setCenterMarker.current?.remove(); setCenterMarker.current = null
+        if (address && hadFix && gmap.current) {
+          setCenterMarker.current = addPropertyPin(gmap.current, center, precise)
+          setCenterMarker.current?.pulse()
         }
         gmap.current.addListener('click', (e: any) => {
           flashClick(e.latLng)
@@ -255,7 +217,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
       if (g?.maps?.event && gmap.current) g.maps.event.clearInstanceListeners(gmap.current)
       committedOverlays.current.forEach(o => o.setMap(null)); committedOverlays.current = []
       currentOverlay.current?.setMap(null); currentOverlay.current = null
-      setCenterMarker.current?.setMap(null); setCenterMarker.current = null
+      setCenterMarker.current?.remove(); setCenterMarker.current = null
       preview.current?.setMap(null); preview.current = null
       gmap.current = null
     }
@@ -380,7 +342,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
                   instead of silently measuring the wrong lot. */}
               {ready && geoStatus === 'approx' && (
                 <p className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-3 py-2">
-                  The address only resolved approximately — the amber pin may not be the exact lot. Verify before tracing.
+                  Approximate location — the amber pin may not be the exact lot. Verify before quoting.
                 </p>
               )}
               {ready && geoStatus === 'failed' && (
@@ -417,14 +379,14 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
                     <span className="text-lg font-bold text-ink">{totalSqft.toLocaleString()} sq ft</span>
                     {shapes > 0 && <span className="text-xs text-ink-faint">({shapes} + current)</span>}
                   </div>
-                  <label className="flex items-center gap-1.5 text-xs text-ink-muted">
+                  <label className="flex items-center gap-1.5 text-xs text-ink-muted" title="Lawn condition multiplier — 0.75 easy, 1.0 standard, 1.25 overgrown">
                     <input
                       type="number" min="0" step="0.05"
                       value={overgrowthRaw}
                       onChange={e => setOvergrowthRaw(e.target.value)}
                       className="w-16 bg-bg border border-border-strong rounded-lg px-2.5 py-2 text-base sm:text-sm text-ink outline-none focus:border-accent"
                     />
-                    Condition
+                    <span>Condition<span className="block text-[10px] text-ink-faint">1.0 standard · 1.25 overgrown</span></span>
                   </label>
                 </div>
 

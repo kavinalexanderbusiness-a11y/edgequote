@@ -12,6 +12,8 @@ export interface ToastItem {
   message: string
   tone: ToastTone
   undo?: () => void | Promise<void>
+  /** Generic follow-up button (e.g. "View job") — undo is the destructive-revert special case. */
+  action?: { label: string; run: () => void | Promise<void> }
   duration: number
 }
 
@@ -31,7 +33,7 @@ export function dismissToast(id: number) {
 
 // Mutate a live toast in place — drives loading→success/error and progress
 // updates (e.g. "Saving 3/5…") without stacking new toasts.
-export function updateToast(id: number, patch: Partial<Pick<ToastItem, 'message' | 'tone' | 'undo' | 'duration'>>) {
+export function updateToast(id: number, patch: Partial<Pick<ToastItem, 'message' | 'tone' | 'undo' | 'action' | 'duration'>>) {
   if (!items.some(t => t.id === id)) return
   items = items.map(t => (t.id === id ? { ...t, ...patch } : t))
   emit()
@@ -40,12 +42,12 @@ export function updateToast(id: number, patch: Partial<Pick<ToastItem, 'message'
   }
 }
 
-interface ToastOpts { tone?: ToastTone; undo?: () => void | Promise<void>; duration?: number }
+interface ToastOpts { tone?: ToastTone; undo?: () => void | Promise<void>; action?: { label: string; run: () => void | Promise<void> }; duration?: number }
 
 function push(message: string, opts: ToastOpts = {}): number {
   const id = ++seq
-  const duration = opts.duration ?? (opts.undo ? 7000 : opts.tone === 'error' ? 6000 : 4000)
-  items = [...items, { id, message, tone: opts.tone ?? 'info', undo: opts.undo, duration }]
+  const duration = opts.duration ?? (opts.undo || opts.action ? 7000 : opts.tone === 'error' ? 6000 : 4000)
+  items = [...items, { id, message, tone: opts.tone ?? 'info', undo: opts.undo, action: opts.action, duration }]
   emit()
   if (duration > 0 && typeof window !== 'undefined') {
     window.setTimeout(() => dismissToast(id), duration)

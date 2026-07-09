@@ -17,7 +17,7 @@ import type { MsgType } from '@/lib/comms/templates'
 import { exportRowsToCsv } from '@/lib/csv'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
-import { Edit2, Trash2, Phone, Mail, FileText, Search, Link2, ExternalLink, Check, MessageSquare, ShieldAlert, Archive, Download, Send } from 'lucide-react'
+import { Edit2, Trash2, Phone, Mail, FileText, Search, Link2, Check, MessageSquare, ShieldAlert, Archive, Download, Send } from 'lucide-react'
 
 type ConsentFilter = '' | 'sms_in' | 'sms_out' | 'email_in' | 'email_out' | 'both' | 'neither'
 const CONSENT_FILTERS: { value: ConsentFilter; label: string }[] = [
@@ -167,26 +167,9 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
       showToast('Portal link copied to clipboard')
     } finally { setPortalBusy(null) }
   }
-  async function openPortal(customerId: string) {
-    setPortalBusy(customerId)
-    try {
-      const token = await getToken(customerId)
-      if (!token) { showToast('Could not create the portal link — run the customer-portal migration first.'); return }
-      window.open(portalUrl(token), '_blank', 'noopener')
-    } finally { setPortalBusy(null) }
-  }
 
   return (
     <div className="space-y-4">
-      {/* Missing Consent Report */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-        <ReportStat label="Customers" value={total} />
-        <ReportStat label="SMS opted in" value={smsIn} tone="text-emerald-400" />
-        <ReportStat label="SMS opted out" value={total - smsIn} />
-        <ReportStat label="Email opted in" value={emailIn} tone="text-emerald-400" />
-        <ReportStat label="Email opted out" value={total - emailIn} />
-      </div>
-
       {/* Search */}
       <div className="relative">
         <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-faint" />
@@ -257,17 +240,15 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
               </div>
               {/* Added */}
               <p className="text-xs text-ink-faint hidden md:block">{formatDate(c.created_at)}</p>
-              {/* Actions */}
+              {/* Actions — the quoting workflow's entry point is labeled and first;
+                  one Portal action (copy), no duplicate open-in-tab twin. */}
               <div className="flex items-center gap-1">
-                <Button variant="secondary" size="sm" onClick={() => copyPortal(c.id)} loading={portalBusy === c.id}
+                <Button variant="secondary" size="sm" onClick={() => router.push(`/dashboard/quotes/new?customer=${c.id}`)} title="Start a new quote for this customer">
+                  <FileText className="w-4 h-4" /> Quote
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => copyPortal(c.id)} loading={portalBusy === c.id}
                   title="Copy this customer's private portal link (quotes, invoices, history, photos)">
                   <Link2 className="w-4 h-4" /> Portal
-                </Button>
-                <Button variant="ghost" size="sm" onClick={() => openPortal(c.id)} title="Open the customer portal in a new tab">
-                  <ExternalLink className="w-4 h-4" />
-                </Button>
-                <Button variant="ghost" size="sm" onClick={() => router.push(`/dashboard/quotes/new?customer=${c.id}`)} title="New quote">
-                  <FileText className="w-4 h-4" />
                 </Button>
                 <Button variant="ghost" size="sm" onClick={() => onEdit(c)} title="Edit">
                   <Edit2 className="w-4 h-4" />
@@ -281,6 +262,16 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
         </div>
       )}
       <p className="text-xs text-ink-faint text-right">{filtered.length} customer{filtered.length !== 1 ? 's' : ''}</p>
+
+      {/* Consent overview — compliance reference, below the work surface so the
+          list (what the owner came for) is never pushed a screen down. */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+        <ReportStat label="Customers" value={total} />
+        <ReportStat label="SMS opted in" value={smsIn} tone="text-emerald-400" />
+        <ReportStat label="SMS opted out" value={total - smsIn} />
+        <ReportStat label="Email opted in" value={emailIn} tone="text-emerald-400" />
+        <ReportStat label="Email opted out" value={total - emailIn} />
+      </div>
 
       {toast && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-bg-secondary border border-border-strong rounded-full px-4 py-2 text-sm text-ink shadow-lg flex items-center gap-2">

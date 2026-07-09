@@ -18,8 +18,9 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { cn, minutesBetween } from '@/lib/utils'
+import { toast } from '@/lib/toast'
 import { format, addMonths, addWeeks, addDays, subMonths, subWeeks, subDays, parseISO, getDay } from 'date-fns'
-import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repeat, Lightbulb, Info } from 'lucide-react'
+import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repeat, Lightbulb, Info, Phone, MessageSquare, Navigation, User as UserIcon, FileText, Receipt } from 'lucide-react'
 import { OptimizeSchedule } from '@/components/schedule/OptimizeSchedule'
 import { RainDelayCenter } from '@/components/schedule/RainDelayCenter'
 import { WeatherStrip } from '@/components/weather/WeatherStrip'
@@ -35,6 +36,7 @@ import type { HealthIssue, HealthJob } from '@/lib/scheduleHealth'
 import { ScheduleHealthCard } from '@/components/schedule/ScheduleHealthCard'
 import { DayStatusMenu } from '@/components/schedule/DayStatusMenu'
 import { buildDayStatusMap, buildCapacityForDate, dayStartTime, isDayBlocked, loadDayStatuses, setDayStatus, setDayCapacity, clearDayStatus, DAY_STATUS_META, DAY_STATUS_SELECT, type DayStatusMap, type DayStatusRow, type DayStatus } from '@/lib/dayStatus'
+import { directionsUrl } from '@/lib/route'
 import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { DaySettingsBar } from '@/components/schedule/DaySettingsBar'
@@ -84,19 +86,25 @@ export default function SchedulePage() {
   const [jobs, setJobs] = useState<Job[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
   const [loading, setLoading] = useState(true)
-  const [view, setView] = useState<CalendarView>(() =>
-    typeof window !== 'undefined' && window.innerWidth < 1024 ? 'day' : 'month'
-  )
+  // Dispatcher-first: land on TODAY's day board everywhere — "where next / when
+  // finished / am I behind" lives there, not in a passive month grid.
+  const [view, setView] = useState<CalendarView>('day')
   const [cursor, setCursor] = useState(new Date())
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Job | null>(null)
   const [formDate, setFormDate] = useState<string>('')
   const [formSeq, setFormSeq] = useState(0) // bump to remount a fresh add form
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null)
-  const [banner, setBanner] = useState<string | null>(null)
-  // One-click undo for the last move/delete/done.
-  const [undoAction, setUndoAction] = useState<{ label: string; run: () => Promise<void> } | null>(null)
-  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Outcome + undo feedback flows through the ONE toast system (viewport-
+  // anchored) — the old inline banner rendered above the page header, invisible
+  // from where day-view actions actually happen. Same call shape kept so every
+  // callsite reads unchanged.
+  function setBanner(msg: string | null) {
+    if (!msg) return
+    const isError = /could not|please try again|nothing was scheduled|partially applied/i.test(msg)
+    if (isError) toast.error(msg)
+    else toast.success(msg)
+  }
   const [recurrenceLabels, setRecurrenceLabels] = useState<Record<string, string>>({})
   const [recurrences, setRecurrences] = useState<Record<string, JobRecurrence>>({})
   const [quotesById, setQuotesById] = useState<Record<string, QuoteLite>>({})
@@ -871,6 +879,14 @@ export default function SchedulePage() {
       else if (res.reason === 'exists') setBanner('That job already has an invoice.')
       else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
     }
+
+    // A price edit here must flow into the SAME linked draft invoice(s) — never a
+    // second draft, never a stale amount. Sent/paid/cancelled invoices are locked
+    // (the sync engine only touches drafts); scope-wide edits sync every visit.
+    if (Number(values.price) !== Number(job.price)) {
+      const synced = await syncDraftInvoiceAmounts(supabase, targets.map(t => t.id))
+      if (synced > 0) setBanner(`Saved — ${synced} draft invoice${synced !== 1 ? 's' : ''} updated to match the new price.`)
+    }
   }
 
   // Turn a one-time job into a recurring series — the current job stays as the
@@ -1280,16 +1296,10 @@ export default function SchedulePage() {
   }
 
   // ── Undo ────────────────────────────────────────────────────────────────────
+  // THE shared undo toast — fixed to the viewport, so it's reachable no matter
+  // how far down the day list the action happened.
   function offerUndo(label: string, run: () => Promise<void>) {
-    setUndoAction({ label, run })
-    if (undoTimer.current) clearTimeout(undoTimer.current)
-    undoTimer.current = setTimeout(() => setUndoAction(null), 8000)
-  }
-  async function runUndo() {
-    const a = undoAction
-    if (undoTimer.current) clearTimeout(undoTimer.current)
-    setUndoAction(null)
-    if (a) { await a.run(); await fetchJobs() }
+    toast.undo(label, async () => { await run(); await fetchJobs() })
   }
   // Insertable job row for delete-undo: the FULL row minus the two joined
   // relations. A hand-maintained column allowlist here silently amputated
@@ -1476,27 +1486,6 @@ export default function SchedulePage() {
         </div>
       )}
 
-      {banner && (
-        <div className="flex items-center justify-between gap-3 text-sm text-accent bg-accent/10 border border-accent/20 rounded-xl px-4 py-2.5">
-          <span>{banner}</span>
-          <div className="flex items-center gap-3 shrink-0">
-            <button onClick={() => router.push('/dashboard/invoices')} className="underline font-medium">Invoices</button>
-            <button onClick={() => setBanner(null)} className="text-ink-faint hover:text-ink"><X className="w-4 h-4" /></button>
-          </div>
-        </div>
-      )}
-
-      {/* Undo toast — restore the last move / delete / done */}
-      {undoAction && (
-        <div className="flex items-center justify-between gap-3 text-sm bg-ink text-bg border border-border-strong rounded-xl px-4 py-2.5 shadow-lg">
-          <span className="font-medium">{undoAction.label}</span>
-          <div className="flex items-center gap-3 shrink-0">
-            <button onClick={runUndo} className="font-bold underline">Undo</button>
-            <button onClick={() => setUndoAction(null)} className="opacity-60 hover:opacity-100"><X className="w-4 h-4" /></button>
-          </div>
-        </div>
-      )}
-
       {/* Controls */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-2 flex-wrap">
@@ -1624,6 +1613,21 @@ export default function SchedulePage() {
             </div>
           </CardHeader>
           <CardBody>
+            {/* Every customer action in ONE row — no hunting through the form.
+                Same link patterns as the day board (tel:/sms:/directionsUrl). */}
+            {editing && (
+              <div className="flex flex-wrap items-center gap-1.5 mb-4 pb-3 border-b border-border">
+                {editing.customers?.phone && <QuickAction href={`tel:${editing.customers.phone}`} icon={Phone} label="Call" />}
+                {editing.customers?.phone && <QuickAction href={`sms:${editing.customers.phone}`} icon={MessageSquare} label="Text" />}
+                {(editing.properties?.address || editing.properties?.lat != null) && (
+                  <QuickAction external icon={Navigation} label="Navigate"
+                    href={directionsUrl({ lat: editing.properties?.lat ?? null, lng: editing.properties?.lng ?? null, address: editing.properties?.address }, baseCoord)} />
+                )}
+                {editing.customer_id && <QuickAction href={`/dashboard/customers/${editing.customer_id}`} icon={UserIcon} label="Customer" />}
+                {editing.quote_id && <QuickAction href={`/dashboard/quotes/${editing.quote_id}`} icon={FileText} label="Quote" />}
+                {editing.status === 'completed' && <QuickAction href="/dashboard/invoices" icon={Receipt} label="Invoice" />}
+              </div>
+            )}
             <JobForm
               key={editing?.id ?? `new-${formSeq}`}
               customers={customers}
@@ -1697,9 +1701,6 @@ export default function SchedulePage() {
           onSetCapacity={(patch) => saveDayCapacity(format(cursor, 'yyyy-MM-dd'), patch)}
           onResetCapacity={() => resetDayCapacity(format(cursor, 'yyyy-MM-dd'))}
           onToggleDisable={() => toggleDisableDay(format(cursor, 'yyyy-MM-dd'))}
-          onAutoOptimize={() => launchOptimizer({ scope: 'week', mode: 'recommended', anchorDate: format(cursor, 'yyyy-MM-dd') })}
-          onWeatherOps={() => setShowRainCenter(true)}
-          onAddJob={() => openNewJob(cursor)}
         />
         <DayOpsPanel
           date={format(cursor, 'yyyy-MM-dd')}
@@ -1846,5 +1847,16 @@ export default function SchedulePage() {
         </div>
       )}
     </div>
+  )
+}
+
+// One customer/job quick-action chip — the SAME link patterns as the day board
+// (tel:, sms:, Google Maps directions, app routes), grouped in one row.
+function QuickAction({ href, icon: Icon, label, external }: { href: string; icon: typeof Phone; label: string; external?: boolean }) {
+  return (
+    <a href={href} {...(external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+      className="h-10 sm:h-8 px-3 rounded-lg border border-border bg-bg-tertiary text-xs font-medium text-ink-muted hover:text-ink hover:border-border-strong flex items-center gap-1.5 transition-colors">
+      <Icon className="w-3.5 h-3.5" /> {label}
+    </a>
   )
 }

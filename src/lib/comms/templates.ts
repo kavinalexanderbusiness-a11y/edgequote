@@ -405,3 +405,16 @@ export function prefAllows(prefs: MessagePrefs | null | undefined, template: str
   const cat = msgCategory(template as MsgType)
   return !cat || prefs[cat] !== false
 }
+
+// ── Composer display transform for the portal-link token ─────────────────────
+// The editable composers show a FRIENDLY placeholder instead of the raw
+// {{portal_link}} token; on send it converts back so the server (the only place
+// that knows the customer's token) injects the real URL. One pair, both
+// composers — never a second rendering engine.
+export const PORTAL_LINK_DISPLAY = '[Customer Portal Link]'
+export function toDisplayBody(s: string): string {
+  return s.replace(/\{\{\s*portal_link\s*\}\}/g, PORTAL_LINK_DISPLAY)
+}
+export function fromDisplayBody(s: string): string {
+  return s.split(PORTAL_LINK_DISPLAY).join('{{portal_link}}')
+}

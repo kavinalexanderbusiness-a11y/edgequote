@@ -16,7 +16,7 @@ import { formatCurrency, formatDate, applyOvergrowth, generateQuoteNumber, local
 import { toast } from '@/lib/toast'
 import { addDays, format as formatDfn, parseISO } from 'date-fns'
 import { needsFollowUp, daysSince, logFollowUpPatch, markWonPatch } from '@/lib/followup'
-import { addLineItems } from '@/lib/jobPricing'
+import { scheduleQuoteAsJob } from '@/lib/scheduleQuote'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { Edit2, ArrowLeft, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Send } from 'lucide-react'
 
@@ -247,65 +247,19 @@ export default function QuoteDetailPage() {
     setScheduling(true)
     try {
       const { data: { user } } = await supabase.auth.getUser()
-
-      // Find the property for this quote: use quote.property_id, else the customer's primary property
-      let propertyId: string | null = quote.property_id
-      if (!propertyId && quote.customer_id) {
-        const { data: props } = await supabase
-          .from('properties')
-          .select('id')
-          .eq('customer_id', quote.customer_id)
-          .order('is_primary', { ascending: false })
-          .limit(1)
-        if (props && props.length > 0) propertyId = props[0].id
-      }
-
-      // Multi-service: the visit covers every line, so the job's duration includes
-      // the additional services' estimated minutes (primary = hours×60 as before).
-      const { primary: primaryLine, extras: extraLines } = splitServices(services)
-      const extraMinutes = extraLines.reduce((m, s) => m + (Number(s.est_minutes) || 0), 0)
-      const { data: newJob, error } = await supabase.from('jobs').insert({
-        user_id: user!.id,
-        customer_id: quote.customer_id,
-        property_id: propertyId,
-        quote_id: quote.id,
-        title: `${quote.service_type} — ${quote.customer_name}`,
-        service_type: quote.service_type,
-        scheduled_date: dateOverride || localTodayISO(),
-        duration_minutes: Math.round(Number(quote.hours) * 60) + extraMinutes,
-        crew_size: quote.crew_size,
-        status: 'scheduled',
-        notes: quote.notes,
-        // Multi-service quotes: the job's base value is the PRIMARY line only; the
-        // extras become job_line_items below. quote.initial_price caches primary +
-        // extras, so leaving price null would double-count once add-ons exist.
-        ...(extraLines.length && primaryLine ? { price: serviceLineTotals(primaryLine).net } : {}),
-      }).select('id').single()
-
-      if (error || !newJob) {
-        toast.error('Could not create job: ' + (error?.message || 'unknown error'))
+      // THE quote→job engine (lib/scheduleQuote) — same job here as from the
+      // dashboard's "Accepted — not yet scheduled" card.
+      const { error } = await scheduleQuoteAsJob(supabase, user!.id, quote, { date: dateOverride, services })
+      if (error) {
+        toast.error('Could not create job: ' + error)
       } else {
-        // Extras → the EXISTING job add-on rows (one engine: lib/jobPricing
-        // addLineItems — same shape the visit add-on flow, invoice auto-draft and
-        // BI already consume). Base(primary) + add-ons(extras) = the quote total.
-        for (const s of extraLines) {
-          const qty = Number(s.quantity) > 0 ? Number(s.quantity) : 1
-          await addLineItems(supabase, {
-            userId: user!.id,
-            targetJobIds: [newJob.id],
-            description: `${s.service_type}${qty !== 1 ? ` ×${qty}` : ''}`,
-            amount: serviceLineTotals(s).net,
-            serviceType: s.service_type,
-            recurring: false,
-          })
-        }
-        // Bump quote to scheduled if it was accepted
-        if (quote.status === 'accepted') {
-          await supabase.from('quotes').update({ status: 'scheduled' }).eq('id', quote.id)
-          setQuote({ ...quote, status: 'scheduled' })
-        }
-        // Say exactly where the job landed — it's on TODAY's route until moved.
-        toast.success('Job added to today’s schedule — move it to the right day in Schedule.')
+        if (quote.status === 'accepted') setQuote({ ...quote, status: 'scheduled' })
+        // Say exactly where the job landed (TODAY's route until moved) and offer
+        // one tap to it — crew/notes/time tweaks usually happen immediately.
+        toast('Job added to today’s schedule.', {
+          tone: 'success',
+          action: { label: 'View job', run: () => router.push('/dashboard/schedule') },
+        })
       }
     } catch {
       toast.error('Could not create job. Please try again.')
@@ -625,12 +579,33 @@ export default function QuoteDetailPage() {
         </div>
       </div>
 
+      {/* Persistent reminder — stays until the job is actually scheduled (status
+          leaves "accepted"), so the next step is never lost by dismissing a prompt.
+          Rendered ABOVE the send card: once the customer approved, scheduling is
+          the next step — not re-sending the quote. */}
+      {quote.status === 'accepted' && (
+        <div className="flex items-center justify-between flex-wrap gap-3 text-sm bg-accent/10 border border-accent/20 rounded-xl px-4 py-3">
+          <span className="text-ink font-medium flex items-center gap-2">
+            <CalendarPlus className="w-4 h-4 shrink-0 text-accent" /> Accepted — this job isn’t scheduled yet.
+          </span>
+          <div className="flex items-center gap-2">
+            {/* Honest label — this books the job on TODAY's route (move it after). */}
+            <Button size="sm" onClick={() => handleScheduleJob()} loading={scheduling}>
+              <CalendarPlus className="w-3.5 h-3.5" /> Schedule for today
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => router.push(`/dashboard/schedule?quote=${quote.id}`)}>Pick a day</Button>
+          </div>
+        </div>
+      )}
+
       {/* Send this quote to the customer — the ONE shared Send Message dialog. */}
       {quote.customer_id && (
         <Card>
           <CardBody className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <p className="text-sm font-semibold text-ink">Send this quote to the customer</p>
+              <p className="text-sm font-semibold text-ink">
+                {quote.status === 'draft' || quote.status === 'sent' ? 'Send this quote to the customer' : 'Resend this quote to the customer'}
+              </p>
               <p className="text-xs text-ink-muted mt-0.5">
                 {quote.status === 'draft' || quote.status === 'sent'
                   ? <>Texts/emails a personalized message with a link to view &amp; accept it in their portal.</>
@@ -639,7 +614,7 @@ export default function QuoteDetailPage() {
             </div>
             {/* The REAL send is the primary action while the quote awaits delivery. */}
             <Button variant={quote.status === 'draft' || quote.status === 'sent' ? 'primary' : 'secondary'} onClick={() => setShowMessage(true)}>
-              <MessageSquare className="w-4 h-4" /> Send quote
+              <MessageSquare className="w-4 h-4" /> {quote.status === 'draft' || quote.status === 'sent' ? 'Send quote' : 'Resend quote'}
             </Button>
           </CardBody>
           <SendMessageDialog open={showMessage} onClose={() => setShowMessage(false)}
@@ -671,22 +646,6 @@ export default function QuoteDetailPage() {
         <div className="flex items-center justify-between gap-3 text-sm bg-accent/10 border border-accent/20 rounded-xl px-4 py-3">
           <span className="flex items-center gap-2 text-ink"><Copy className="w-4 h-4 shrink-0 text-accent" /> {dupMsg}</span>
           <button onClick={() => setDupMsg(null)} className="text-ink-faint hover:text-ink shrink-0">✕</button>
-        </div>
-      )}
-
-      {/* Persistent reminder — stays until the job is actually scheduled (status
-          leaves "accepted"), so the next step is never lost by dismissing a prompt. */}
-      {quote.status === 'accepted' && (
-        <div className="flex items-center justify-between flex-wrap gap-3 text-sm bg-accent/10 border border-accent/20 rounded-xl px-4 py-3">
-          <span className="text-ink font-medium flex items-center gap-2">
-            <CalendarPlus className="w-4 h-4 shrink-0 text-accent" /> Accepted — this job isn’t scheduled yet.
-          </span>
-          <div className="flex items-center gap-2">
-            <Button size="sm" onClick={() => handleScheduleJob()} loading={scheduling}>
-              <CalendarPlus className="w-3.5 h-3.5" /> Schedule Job
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => router.push(`/dashboard/schedule?quote=${quote.id}`)}>Open scheduler</Button>
-          </div>
         </div>
       )}
 

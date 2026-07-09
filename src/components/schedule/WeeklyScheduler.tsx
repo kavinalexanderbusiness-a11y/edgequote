@@ -7,7 +7,7 @@ import { Coord, SchedJob, geocodeAddress, fetchUpcomingSchedulingJobs, todayLoca
 import { recommendScheduleDays, DayPlan } from '@/lib/route'
 import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
 import { formatCurrency } from '@/lib/utils'
-import { Trophy, Scale, DollarSign } from 'lucide-react'
+import { Trophy, Scale, DollarSign, Loader2 } from 'lucide-react'
 
 const DEFAULT_WORK_DAYS = [5, 6, 0] // Fri/Sat/Sun
 
@@ -72,7 +72,7 @@ export function WeeklyScheduler({ coord, address, excludeJobId, targetHours, tar
     return () => { active = false }
   }, [supabase, excludeJobId])
 
-  if (loading || geocoding) return <p className="text-xs text-ink-faint">Planning your work week…</p>
+  if (loading || geocoding) return <p className="text-xs text-ink-faint flex items-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Planning your work week…</p>
   if (!target) return <p className="text-xs text-ink-faint">Add a located address to plan the best day across your week.</p>
 
   const modes = recommendScheduleDays(target, jobs, {
@@ -88,9 +88,11 @@ export function WeeklyScheduler({ coord, address, excludeJobId, targetHours, tar
   if (!modes.days.length) return <p className="text-xs text-ink-faint">No upcoming work days in range — set your Preferred Work Days in Settings.</p>
 
   const cards: { key: string; Icon: typeof Trophy; accent: string; title: string; plan: DayPlan | null; stat: (p: DayPlan) => string }[] = [
-    { key: 'density', Icon: Trophy, accent: 'text-amber-400', title: 'Best Density', plan: modes.density, stat: p => `${p.nearbyCount} nearby job${p.nearbyCount !== 1 ? 's' : ''} · +${p.addedDriveMin} min driving` },
-    { key: 'balanced', Icon: Scale, accent: 'text-sky-400', title: 'Balanced Schedule', plan: modes.balanced, stat: p => `${p.jobCount} job${p.jobCount !== 1 ? 's' : ''} · ${p.plannedHours} planned hours` },
-    { key: 'revenue', Icon: DollarSign, accent: 'text-emerald-400', title: 'Revenue Optimized', plan: modes.revenue, stat: p => `${formatCurrency(p.scheduledRevenue)} scheduled revenue` },
+    // Same lens vocabulary as the schedule optimizer (Max Density / Balanced
+    // Workload / Max Profit) — one concept, one name, everywhere.
+    { key: 'density', Icon: Trophy, accent: 'text-amber-400', title: 'Max Density', plan: modes.density, stat: p => `${p.nearbyCount} nearby job${p.nearbyCount !== 1 ? 's' : ''} · +${p.addedDriveMin} min driving` },
+    { key: 'balanced', Icon: Scale, accent: 'text-sky-400', title: 'Balanced Workload', plan: modes.balanced, stat: p => `${p.jobCount} job${p.jobCount !== 1 ? 's' : ''} · ${p.plannedHours} planned hours` },
+    { key: 'revenue', Icon: DollarSign, accent: 'text-emerald-400', title: 'Max Profit', plan: modes.revenue, stat: p => `${formatCurrency(p.scheduledRevenue)} scheduled revenue` },
   ]
 
   return (

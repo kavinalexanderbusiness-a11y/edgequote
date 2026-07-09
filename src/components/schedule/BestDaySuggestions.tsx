@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Coord, DaySuggestion, LocatedJob, geocodeAddress, suggestBestDays, fetchLocatedUpcomingJobs, todayLocalISO } from '@/lib/geo'
 import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
-import { Sparkles, MapPin, Clock, Navigation } from 'lucide-react'
+import { Sparkles, MapPin, Clock, Navigation, Loader2 } from 'lucide-react'
 
 interface Props {
   coord?: Coord | null      // resolved coordinate for the target property, if known
@@ -73,7 +73,7 @@ export function BestDaySuggestions({ coord, address, excludeJobId, onPick, onTop
   }, [suggestions[0]?.date, suggestions[0]?.nearbyCount])
 
   if (loading || geocoding) {
-    return <p className="text-xs text-ink-faint">Analyzing your schedule for nearby jobs…</p>
+    return <p className="text-xs text-ink-faint flex items-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Analyzing your schedule for nearby jobs…</p>
   }
   if (!target) {
     return <p className="text-xs text-ink-faint">Add a located address to see the best days to schedule near existing jobs.</p>

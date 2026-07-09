@@ -20,7 +20,8 @@ import { SmartLaborField } from '@/components/labor/SmartLaborField'
 import type { Cadence } from '@/lib/labor'
 import { resolvePrefs, type PrefSource } from '@/lib/preferences'
 import { findJobMatch, type JobLiteForMatch } from '@/lib/dedup'
-import { Repeat, Sparkles, Snowflake, Sun, AlertTriangle, CalendarRange } from 'lucide-react'
+import { Collapsible } from '@/components/ui/Collapsible'
+import { Repeat, Sparkles, Snowflake, Sun, AlertTriangle, CalendarRange, Clock } from 'lucide-react'
 
 // Flexible recurrence: any interval (count + unit), three end modes.
 export interface Recurrence {
@@ -485,39 +486,12 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
 
       {adv && (
       <div className="space-y-4">
+      {/* The real edit workflow: WHERE (property) → what STATE it's in → NOTES.
+          Time/crew details and recurrence are rarer — they collapse below. */}
       <Controller name="property_id" control={control}
         render={({ field }) => (
           <Select label="Property" options={propertyOptions} {...field} />
         )} />
-
-      <Input label="Job Title" placeholder="Auto-named from service + customer if blank"
-        error={errors.title?.message}
-        {...register('title')} />
-
-      <div className="grid grid-cols-2 gap-4">
-        <Input label="Duration (minutes)" type="number" step="1" min="0"
-          {...register('duration_minutes', { min: 0 })} />
-        <Input label="Crew Size" type="number" min="1"
-          {...register('crew_size', { min: { value: 1, message: 'Min 1' } })} />
-      </div>
-
-      {/* Smart Labor Calculator V2 — learns duration from history; fills the field
-          above (never overwrites a typed value, never affects price). */}
-      <SmartLaborField
-        sqft={Number(selProp?.lawn_sqft) || 0}
-        serviceType={serviceType}
-        crewSize={Number(watch('crew_size')) || 1}
-        propertyId={selectedPropertyId || null}
-        cadence={laborCadence}
-        price={Number(watch('price')) || (measuredPrice ?? 0)}
-        value={Number(watch('duration_minutes')) || null}
-        onApply={(min) => setValue('duration_minutes', min, { shouldValidate: true })}
-      />
-
-      <div className="grid grid-cols-2 gap-4">
-        <Input label="Start Time" type="time" {...register('start_time')} />
-        <Input label="End Time" type="time" {...register('end_time')} />
-      </div>
 
       <Controller name="status" control={control}
         render={({ field }) => (
@@ -530,14 +504,48 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
           {...register('actual_minutes', { min: 0 })} />
       )}
 
-      {/* Repeat — available for new AND existing jobs */}
-      <div className="border border-border-strong rounded-xl overflow-hidden">
-          <div className="bg-bg-tertiary px-4 py-3 flex items-center gap-2 border-b border-border">
-            <Repeat className="w-4 h-4 text-accent" />
-            <span className="text-sm font-semibold text-ink">Repeat</span>
-            {interval && <span className="ml-auto text-xs text-accent font-medium">{recurrenceLabel(interval.unit, interval.count)} · {endSummary}</span>}
-          </div>
-          <div className="p-4 space-y-3">
+      <Textarea label="Notes" placeholder="Access instructions, gate codes, special requests..."
+        {...register('notes')} />
+
+      {/* Time & crew — expanded while creating (the smart duration suggestion
+          matters then), a one-line summary when editing. */}
+      <Collapsible title="Time & crew" icon={Clock} defaultOpen={!isEdit}
+        summary={`${Number(watch('duration_minutes')) || 0}m · ${Number(watch('crew_size')) || 1} crew${watch('start_time') ? ` · ${watch('start_time')}` : ''}`}>
+        <Input label="Job Title" placeholder="Auto-named from service + customer if blank"
+          error={errors.title?.message}
+          {...register('title')} />
+
+        <div className="grid grid-cols-2 gap-4">
+          <Input label="Duration (minutes)" type="number" step="1" min="0"
+            {...register('duration_minutes', { min: 0 })} />
+          <Input label="Crew Size" type="number" min="1"
+            {...register('crew_size', { min: { value: 1, message: 'Min 1' } })} />
+        </div>
+
+        {/* Smart Labor Calculator V2 — learns duration from history; fills the field
+            above (never overwrites a typed value, never affects price). */}
+        <SmartLaborField
+          sqft={Number(selProp?.lawn_sqft) || 0}
+          serviceType={serviceType}
+          crewSize={Number(watch('crew_size')) || 1}
+          propertyId={selectedPropertyId || null}
+          cadence={laborCadence}
+          price={Number(watch('price')) || (measuredPrice ?? 0)}
+          value={Number(watch('duration_minutes')) || null}
+          onApply={(min) => setValue('duration_minutes', min, { shouldValidate: true })}
+        />
+
+        <div className="grid grid-cols-2 gap-4">
+          <Input label="Start Time" type="time" {...register('start_time')} />
+          <Input label="End Time" type="time" {...register('end_time')} />
+        </div>
+      </Collapsible>
+
+      {/* Repeat — available for new AND existing jobs; collapses to its cadence
+          summary when editing so it stops dominating the form. */}
+      <Collapsible title="Repeat" icon={Repeat} defaultOpen={!isEdit}
+        summary={interval ? `${recurrenceLabel(interval.unit, interval.count)} · ${endSummary}` : 'Does not repeat'}>
+          <div className="space-y-3">
             {isEdit && (
               <p className="text-xs text-ink-faint">
                 {initialRecurrence?.unit
@@ -656,10 +664,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
                   <Input label="Number of visits" type="number" min="1" value={endCount}
                     onChange={(e) => setEndCount(Math.max(1, Number(e.target.value) || 1))} />
                 )}
-                <p className="text-xs text-ink-faint">
-                  Repeats {recurrenceLabel(interval!.unit, interval!.count).toLowerCase()}, {endSummary}.
-                </p>
-                {/* Live visit-count estimate */}
+                {/* Live visit-count estimate — the ONE cadence restatement. */}
                 {visitEstimate != null && visitEstimate > 0 && (
                   <p className="text-xs font-semibold text-accent">
                     {recurrenceLabel(interval!.unit, interval!.count)} · {scheduledDate ? formatDate(scheduledDate) : '?'} → {effectiveEndDate ? formatDate(effectiveEndDate) : '?'} · ≈ {visitEstimate} visit{visitEstimate !== 1 ? 's' : ''}
@@ -668,14 +673,12 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
               </>
             )}
           </div>
-      </div>
-
-      <Textarea label="Notes" placeholder="Access instructions, gate codes, special requests..."
-        {...register('notes')} />
+      </Collapsible>
       </div>
       )}
 
-      <div className="flex items-center gap-2 pt-2 flex-wrap">
+      {/* Sticky save — reachable one-handed without scrolling past the form. */}
+      <div className="sticky bottom-0 -mx-1 px-1 pt-2 pb-1 bg-bg-secondary/95 backdrop-blur border-t border-border flex items-center gap-2 flex-wrap">
         <Button type="submit" loading={isSubmitting} onClick={() => { addAnotherRef.current = false }}>
           {isEdit ? 'Update Job' : 'Add Job'}
         </Button>

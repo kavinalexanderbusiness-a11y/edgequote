@@ -12,7 +12,7 @@ import { resolvePrefs } from '@/lib/preferences'
 import { localTodayISO, formatCurrency, cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
-import { Rocket, X, Trophy, Scale, DollarSign, Target, ArrowRight, Repeat, Check, Navigation, Clock, Gauge, CalendarDays, Lightbulb, AlertTriangle, ShieldCheck } from 'lucide-react'
+import { Rocket, X, Trophy, Scale, DollarSign, Target, ArrowRight, Repeat, Check, Navigation, Clock, Gauge, CalendarDays, Lightbulb, AlertTriangle, ShieldCheck, Loader2 } from 'lucide-react'
 
 const MODES: { key: OptimizeMode; label: string; sub: string; Icon: typeof Trophy }[] = [
   { key: 'recommended', label: 'Smart Recommended', sub: 'Best overall balance', Icon: Target },
@@ -63,7 +63,9 @@ interface Props {
 export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, preferredWorkDays, capacityHours, anchorDate, initialScope, initialMode, autoRun, invoicedIds: invoicedIdsProp, roadDist, dayStatusMap, capacityForDate, duplicateNote, onApply, onClose }: Props) {
   const supabase = createClient()
   const [mode, setMode] = useState<OptimizeMode>(initialMode ?? 'recommended')
-  const [scope, setScope] = useState<OptimizeScope>(initialScope ?? 'future')
+  // Default blast radius = THIS WEEK (same as every other door into the
+  // optimizer) — "all future" is an explicit choice, never the default.
+  const [scope, setScope] = useState<OptimizeScope>(initialScope ?? 'week')
   const [invoicedIds, setInvoicedIds] = useState<Set<string> | null>(invoicedIdsProp ?? null)
   const [running, setRunning] = useState(false)
   const [applying, setApplying] = useState(false)
@@ -191,7 +193,7 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
   // Auto-run when launched from an overload/cluster suggestion.
   useEffect(() => {
     if (autoRun && invoicedIds !== null && !result && !running) {
-      run(initialMode ?? 'recommended', initialScope ?? 'future')
+      run(initialMode ?? 'recommended', initialScope ?? 'week')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoRun, invoicedIds])
@@ -260,8 +262,8 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
               </div>
             </div>
 
-            {invoicedIds === null && <p className="text-xs text-ink-faint text-center py-2">Checking billed jobs…</p>}
-            {running && <p className="text-sm text-ink-muted text-center py-4">Optimizing {SCOPES.find(s => s.key === scope)?.label.toLowerCase()}…</p>}
+            {invoicedIds === null && <p className="text-xs text-ink-faint text-center py-2 flex items-center justify-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Checking billed jobs…</p>}
+            {running && <p className="text-sm text-ink-muted text-center py-4 flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Optimizing {SCOPES.find(s => s.key === scope)?.label.toLowerCase()}…</p>}
 
             {result && !running && (
               <div className="space-y-4">
