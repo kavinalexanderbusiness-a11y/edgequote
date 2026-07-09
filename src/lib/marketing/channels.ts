@@ -28,6 +28,9 @@ export interface ChannelDef {
   openUrl: string
   // Whether a separate headline/title is meaningful (GBP/LinkedIn) vs caption-only.
   usesTitle: boolean
+  // One-sentence "why post here" guidance — deterministic, no AI call. Shown next
+  // to the platform so the owner knows what each network is best for.
+  why: string
 }
 
 export const CHANNELS: ChannelDef[] = [
@@ -42,6 +45,7 @@ export const CHANNELS: ChannelDef[] = [
     emoji: 'sparing',
     openUrl: 'https://www.facebook.com/',
     usesTitle: false,
+    why: 'Great for community reach and neighbourly word-of-mouth.',
   },
   {
     key: 'instagram',
@@ -54,6 +58,7 @@ export const CHANNELS: ChannelDef[] = [
     emoji: 'ok',
     openUrl: 'https://www.instagram.com/',
     usesTitle: false,
+    why: 'Best for before & after — the photo does the selling.',
   },
   {
     key: 'threads',
@@ -66,6 +71,7 @@ export const CHANNELS: ChannelDef[] = [
     emoji: 'sparing',
     openUrl: 'https://www.threads.net/',
     usesTitle: false,
+    why: 'Quick, casual reach to a younger local audience.',
   },
   {
     key: 'gbp',
@@ -78,6 +84,7 @@ export const CHANNELS: ChannelDef[] = [
     emoji: 'none',
     openUrl: 'https://business.google.com/posts',
     usesTitle: true,
+    why: 'Highest local-search visibility — helps neighbours find you on Google.',
   },
   {
     key: 'nextdoor',
@@ -90,6 +97,7 @@ export const CHANNELS: ChannelDef[] = [
     emoji: 'none',
     openUrl: 'https://nextdoor.com/',
     usesTitle: false,
+    why: 'Reaches nearby neighbours who hire local — great for referrals.',
   },
   {
     key: 'linkedin',
@@ -102,6 +110,7 @@ export const CHANNELS: ChannelDef[] = [
     emoji: 'sparing',
     openUrl: 'https://www.linkedin.com/feed/',
     usesTitle: false,
+    why: 'Builds credibility and commercial/B2B referrals.',
   },
 ]
 
@@ -116,4 +125,34 @@ export function channel(key: MarketingChannel): ChannelDef {
 
 export function isChannel(v: unknown): v is MarketingChannel {
   return typeof v === 'string' && v in BY_KEY
+}
+
+export interface SuggestedChannel { channel: MarketingChannel; score: number; why: string }
+
+// Deterministic (no-AI) platform suggestion from a job's signals. Reuses each
+// channel's own `why` copy — one source of truth, no second scoring engine. Advisory
+// only (never restricts what the owner can post to); ranked desc, stable tie-break.
+export function suggestChannels(c: {
+  hasBefore?: boolean; hasAfter?: boolean; hasReview?: boolean
+  neighborhood?: string | null; serviceType?: string | null
+}): SuggestedChannel[] {
+  const beforeAfter = !!c.hasBefore && !!c.hasAfter
+  const commercial = /commercial|property manag|strata|hoa|office|retail|building/i.test(c.serviceType || '')
+  const pts: Record<MarketingChannel, number> = {
+    facebook: 6 + (c.hasReview ? 2 : 0) + (c.neighborhood ? 1 : 0),
+    instagram: 3 + (beforeAfter ? 6 : c.hasAfter ? 3 : -3),
+    gbp: 5 + (c.neighborhood ? 3 : 0) + (c.hasReview ? 2 : 0),
+    nextdoor: 2 + (c.neighborhood ? 5 : 0) + (c.hasReview ? 1 : 0),
+    threads: 2 + (c.hasAfter ? 2 : 0),
+    linkedin: 1 + (commercial ? 3 : 0),
+  }
+  const order = (k: MarketingChannel) => CHANNELS.findIndex(d => d.key === k)
+  return CHANNELS
+    .map(def => ({ channel: def.key, score: pts[def.key], why: def.why }))
+    .sort((a, b) => b.score - a.score || order(a.channel) - order(b.channel))
+}
+
+// The top N suggested channels for a job (default 3).
+export function topSuggestedChannels(c: Parameters<typeof suggestChannels>[0], n = 3): MarketingChannel[] {
+  return suggestChannels(c).slice(0, n).map(s => s.channel)
 }

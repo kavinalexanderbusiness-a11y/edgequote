@@ -106,11 +106,13 @@ export function CampaignManager() {
   }
 
   async function toggleEnabled(c: CrmCampaign) {
-    setCampaigns(prev => prev.map(x => x.id === c.id ? { ...x, enabled: !x.enabled } : x))   // optimistic
+    // This switch controls whether real customer messages send — a swallowed error
+    // that leaves the UI "on" while the save failed is dangerous. Revert + tell them.
+    setCampaigns(prev => prev.map(x => x.id === c.id ? { ...x, enabled: !x.enabled } : x))
     const { error } = await supabase.from('crm_campaigns').update({ enabled: !c.enabled }).eq('id', c.id)
     if (error) {
-      setCampaigns(prev => prev.map(x => x.id === c.id ? { ...x, enabled: c.enabled } : x))   // revert — the cron reads the DB flag
-      toast.error('Could not update campaign: ' + error.message)
+      setCampaigns(prev => prev.map(x => x.id === c.id ? { ...x, enabled: c.enabled } : x))
+      toast.error('Could not update that automation. Please try again.')
     }
   }
   async function del(c: CrmCampaign) {
@@ -139,8 +141,8 @@ export function CampaignManager() {
           <Megaphone className="w-4.5 h-4.5 text-accent" />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-base font-bold text-ink">Campaigns</p>
-          <p className="text-xs text-ink-muted">{loading ? 'Loading…' : `${campaigns.length} campaign${campaigns.length !== 1 ? 's' : ''} · ${enabledCount} active`}</p>
+          <p className="text-base font-bold text-ink">Automated messages</p>
+          <p className="text-xs text-ink-muted">{loading ? 'Loading…' : `${campaigns.length} automation${campaigns.length !== 1 ? 's' : ''} · ${enabledCount} active`}</p>
         </div>
         <Menu
           align="end"
@@ -171,7 +173,7 @@ export function CampaignManager() {
           ))}
         </div>
       ) : campaigns.length === 0 ? (
-        <InlineEmpty icon={Megaphone}>No campaigns yet. Tap <span className="text-ink font-medium">New</span> to add a birthday greeting, anniversary thank-you, win-back, or recurring check-in.</InlineEmpty>
+        <InlineEmpty icon={Megaphone}>No automated messages yet. Tap <span className="text-ink font-medium">New</span> to add a birthday greeting, anniversary thank-you, win-back, or recurring check-in.</InlineEmpty>
       ) : (
         <div className="divide-y divide-border">
           {campaigns.map(c => {

@@ -7,16 +7,17 @@ import { resolveAutomations, Automations, AUTOMATION_LABELS } from '@/lib/comms/
 import { cn } from '@/lib/utils'
 import { Zap, Loader2 } from 'lucide-react'
 
-const KEYS: (keyof Automations)[] = ['reminder', 'job_complete', 'review']
+const KEYS: (keyof Automations)[] = ['reminder', 'job_complete', 'review', 'marketing_draft']
 const HINTS: Record<keyof Automations, string> = {
   reminder: 'Texts/emails the customer the evening before their visit.',
   job_complete: 'Sends automatically when you mark a visit complete.',
   review: 'Asks for a Google review the day after a completed visit.',
+  marketing_draft: 'Prepares a marketing post draft when a job has before & after photos — you review before anything posts.',
 }
 
 export function AutomationToggles() {
   const supabase = useMemo(() => createClient(), [])
-  const [auto, setAuto] = useState<Automations>({ reminder: true, job_complete: true, review: true })
+  const [auto, setAuto] = useState<Automations>({ reminder: true, job_complete: true, review: true, marketing_draft: true })
   const [loading, setLoading] = useState(true)
 
   async function load() {

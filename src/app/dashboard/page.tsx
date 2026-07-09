@@ -10,7 +10,6 @@ import { UnscheduledAccepted } from '@/components/dashboard/UnscheduledAccepted'
 import { MissedJobs } from '@/components/dashboard/MissedJobs'
 import { TodayJobs } from '@/components/dashboard/TodayJobs'
 import { PageHeader } from '@/components/layout/PageHeader'
-import { invoiceBalance } from '@/lib/payments/ledger'
 import { DashboardStats, Quote } from '@/types'
 import Link from 'next/link'
 import { Button } from '@/components/ui/Button'
@@ -22,13 +21,13 @@ export default async function DashboardPage() {
 
   const [{ data: quotes }, { data: invoices }, { data: jobs }, { data: settingsRow }] = await Promise.all([
     supabase.from('quotes').select('*').eq('user_id', user!.id).order('created_at', { ascending: false }),
-    supabase.from('invoices').select('amount, status, amount_paid, discount_type, discount_value').eq('user_id', user!.id),
+    supabase.from('invoices').select('amount, status, amount_paid').eq('user_id', user!.id),
     supabase.from('jobs').select('status, scheduled_date, quote_id').eq('user_id', user!.id),
     supabase.from('business_settings').select('dashboard_cards, gst_percent').eq('user_id', user!.id).maybeSingle(),
   ])
 
   const allQuotes: Quote[] = quotes || []
-  const allInvoices = (invoices as { amount: number; status: string; amount_paid?: number; discount_type: 'amount' | 'percent' | null; discount_value: number | null }[]) || []
+  const allInvoices = (invoices as { amount: number; status: string; amount_paid?: number }[]) || []
   const allJobs = (jobs as { status: string; scheduled_date: string; quote_id: string | null }[]) || []
   // Accepted quotes with no live job — feeds the "not yet scheduled" safety net
   // below without a second client fetch. Cancelled jobs must NOT count as
@@ -36,20 +35,15 @@ export default async function DashboardPage() {
   // vanish from that card.
   const scheduledQuoteIds = new Set(allJobs.filter(j => j.quote_id && j.status !== 'cancelled').map(j => j.quote_id))
   const unscheduledAccepted = allQuotes.filter(q => q.status === 'accepted' && !scheduledQuoteIds.has(q.id))
-  // Ledger-aware: Collected = money actually received (amount_paid, incl. partial
-  // payments); Outstanding = remaining GST-inclusive balance across issued invoices
-  // via THE ledger engine, so it agrees with the Invoices page and the portal.
+  // Ledger-aware: Collected = money actually received (amount_paid, including
+  // partial payments) — agrees with the Invoices page and the portal.
+  // (Outstanding is NOT a stat tile: it's already an actionable row in Today's
+  // Priorities — the decluttered grid must not reintroduce it.)
   const collectedRevenue = allInvoices.reduce((s, i) => s + (Number(i.amount_paid) || 0), 0)
-  const outstandingRevenue = allInvoices
-    .filter(i => i.status !== 'draft' && i.status !== 'cancelled')
-    .reduce((s, i) => s + Math.max(0, invoiceBalance(i, settingsRow).balance), 0)
 
-  // Monthly revenue = total of quotes created this calendar month
+  // Month boundary — only needed for the "this month" jobs count below.
   const now = new Date()
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
-  const monthlyRevenue = allQuotes
-    .filter(q => new Date(q.created_at) >= monthStart)
-    .reduce((sum, q) => sum + Number(q.total), 0)
 
   // Conversion rate = accepted / (everything except draft)
   const acceptedCount = allQuotes.filter(q => q.status === 'accepted').length
@@ -65,16 +59,13 @@ export default async function DashboardPage() {
   const jobsDoneThisMonth = doneJobs.filter(j => j.scheduled_date >= monthStartISO).length
 
   const stats: DashboardStats = {
-    acceptedJobs: acceptedCount,
+    collectedRevenue,
     acceptedRevenue: allQuotes
       .filter(q => q.status === 'accepted')
       .reduce((sum, q) => sum + Number(q.total), 0),
-    monthlyRevenue,
-    conversionRate,
-    collectedRevenue,
-    outstandingRevenue,
     jobsDone,
     jobsDoneThisMonth,
+    conversionRate,
   }
 
   // 5 is enough for a glance — the full list is one tap away ("View all").

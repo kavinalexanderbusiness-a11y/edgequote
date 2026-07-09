@@ -13,6 +13,7 @@ import { PostOptionsBar } from './PostOptionsBar'
 import { CAMPAIGN_DEFS, campaignDef } from '@/lib/marketing/campaigns'
 import { archiveCampaign } from '@/lib/marketing/library'
 import { CHANNELS } from '@/lib/marketing/channels'
+import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import { Megaphone, Sparkles, ArrowRight, Archive, CalendarPlus } from 'lucide-react'
 import { DEFAULT_POST_OPTIONS, type CampaignGenerateResponse, type CampaignKind, type MarketingCampaign, type MarketingChannel, type PostOptions } from '@/lib/marketing/types'
@@ -93,8 +94,12 @@ export function CampaignBuilder({ aiEnabled, initialCampaigns, initialKind, init
   }
 
   async function archive(c: MarketingCampaign) {
-    await archiveCampaign(supabase, c.id, true)
     setCampaigns(prev => prev.filter(x => x.id !== c.id))
+    await archiveCampaign(supabase, c.id, true)
+    toast.undo(`Archived "${c.name}".`, async () => {
+      await archiveCampaign(supabase, c.id, false)
+      setCampaigns(prev => [c, ...prev.filter(x => x.id !== c.id)])
+    })
   }
 
   return (
@@ -104,7 +109,7 @@ export function CampaignBuilder({ aiEnabled, initialCampaigns, initialKind, init
       {/* Pick a campaign */}
       <div>
         <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-2">Choose a campaign</p>
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
           {CAMPAIGN_DEFS.map(c => {
             const Icon = c.icon
             const active = kind === c.kind

@@ -8,8 +8,6 @@
 // Register once on the client (from the mounted OfflineStatus). Idempotent.
 
 import { createClient } from '@/lib/supabase/client'
-import { uploadPhoto } from '@/lib/photos'
-import type { PhotoKind } from '@/types'
 import { registerHandler } from './outbox'
 
 let registered = false
@@ -60,24 +58,6 @@ export function registerOfflineHandlers(): void {
     const { error } = await supabase.from('jobs').update(p.patch).eq('id', p.id)
     if (error) throw new Error(error.message)
   })
-
-  // P6 — Photos. Replays through the SAME pipeline (lib/photos.uploadPhoto) — no
-  // second upload engine. The stable `uploadId` makes the storage path deterministic
-  // so a replay dedupes (never a second file/row). The File/Blob was persisted in the
-  // outbox (IndexedDB structured clone) so it survives reloads; EXIF, metadata, the
-  // AI-Vision job_photos rows, and marketing before/after pairing are all preserved
-  // because the exact same rows are created.
-  registerHandler('photo.upload', async (payload) => {
-    const p = payload as {
-      uploadId: string; userId: string; propertyId: string | null; jobId: string | null
-      customerId: string | null; kind: PhotoKind; caption: string | null; takenAt: string; contentHash?: string | null; file: File | Blob
-    }
-    const supabase = createClient()
-    const file = p.file instanceof File ? p.file : new File([p.file], `${p.uploadId}.jpg`, { type: (p.file as Blob).type || 'image/jpeg' })
-    const row = await uploadPhoto(supabase, {
-      userId: p.userId, file, propertyId: p.propertyId, jobId: p.jobId, customerId: p.customerId,
-      kind: p.kind, caption: p.caption, uploadId: p.uploadId, takenAt: p.takenAt, contentHash: p.contentHash ?? null,
-    })
-    if (!row) throw new Error('photo.upload replay failed')
-  })
+  // (Photo uploads are online-only again after the merge — main's photo experience
+  // handles capture/dedup/EXIF directly, so there is no photo.upload replay handler.)
 }

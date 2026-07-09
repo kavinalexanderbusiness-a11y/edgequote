@@ -55,7 +55,9 @@ async function loadMaps(supabase: SupabaseClient, userId: string, jobs: JobRow[]
       ? supabase.from('properties').select('id, neighborhood, city, lawn_sqft').eq('user_id', userId).in('id', propertyIds)
       : Promise.resolve({ data: [] as ScoreProperty[] }),
     jobIds.length
-      ? supabase.from('job_photos').select('id, job_id, kind, storage_path').eq('user_id', userId).in('job_id', jobIds).order('taken_at', { ascending: false })
+      // Newest-first, explicitly bounded: only the best before/after per job is used,
+      // so cap the pull rather than fetching (and discarding) thousands of rows.
+      ? supabase.from('job_photos').select('id, job_id, kind, storage_path').eq('user_id', userId).in('job_id', jobIds).order('taken_at', { ascending: false }).limit(1000)
       : Promise.resolve({ data: [] as PhotoRow[] }),
   ])
 
