@@ -48,7 +48,7 @@ export function GrowNav() {
           <Link
             key={item.label}
             href={item.href!}
-            className={cn(base, active ? 'bg-accent text-black border-accent' : 'bg-surface text-ink-muted border-border hover:text-ink hover:border-border-strong')}
+            className={cn(base, active ? 'bg-accent text-black border-accent font-semibold pill-glow' : 'bg-surface text-ink-muted border-border hover:text-ink hover:border-border-strong')}
           >
             <Icon className="w-3.5 h-3.5" />
             {item.label}

@@ -135,14 +135,14 @@ export function CampaignManager() {
   const enabledCount = campaigns.filter(c => c.enabled).length
 
   return (
-    <div className="rounded-card border border-border bg-bg-secondary overflow-hidden">
+    <div className="rounded-card border border-border bg-bg-secondary overflow-hidden animate-rise">
       <div className="px-5 py-4 border-b border-border flex items-start gap-3">
         <div className="w-9 h-9 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
           <Megaphone className="w-4.5 h-4.5 text-accent" />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-base font-bold text-ink">Automated messages</p>
-          <p className="text-xs text-ink-muted">{loading ? 'Loading…' : `${campaigns.length} automation${campaigns.length !== 1 ? 's' : ''} · ${enabledCount} active`}</p>
+          <p className="text-base font-bold tracking-tight text-ink">Automated messages</p>
+          <p className="text-xs text-ink-muted tabular-nums">{loading ? 'Loading…' : `${campaigns.length} automation${campaigns.length !== 1 ? 's' : ''} · ${enabledCount} active`}</p>
         </div>
         <Menu
           align="end"

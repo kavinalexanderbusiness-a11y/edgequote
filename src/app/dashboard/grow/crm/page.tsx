@@ -94,8 +94,16 @@ export default function CrmAutomationPage() {
           + review lifecycle). Only shows what actually needs action; every card is
           the action. Silent when everything is handled. */}
       {!loading && (due.unanswered + due.quiet + due.celebrations + reviews.notAsked) > 0 && (
-        <div className="rounded-card border border-accent/25 bg-gradient-to-br from-accent/[0.06] to-transparent p-4 sm:p-5">
-          <p className="text-sm font-bold text-ink flex items-center gap-2 mb-3"><Zap className="w-4 h-4 text-accent" /> Due now</p>
+        <div className="rounded-card border border-accent/25 hero-aurora p-4 sm:p-5 animate-rise">
+          <div className="flex items-center gap-2.5 mb-3">
+            <span className="w-7 h-7 rounded-lg bg-accent/15 border border-accent/25 icon-glow flex items-center justify-center shrink-0">
+              <Zap className="w-4 h-4 text-accent" />
+            </span>
+            <div>
+              <p className="text-sm font-bold tracking-tight text-ink">Due now</p>
+              <p className="text-[11px] text-ink-muted">What your customer engine says needs a human today.</p>
+            </div>
+          </div>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             {due.unanswered > 0 && (
               <Link href="/dashboard/messages" className="rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
@@ -130,11 +138,11 @@ export default function CrmAutomationPage() {
       )}
 
       {/* Pipeline rollups */}
-      <div className="grid sm:grid-cols-2 gap-3">
-        <Card className="p-5">
+      <div className="grid sm:grid-cols-2 gap-3 animate-rise stagger-2">
+        <Card className="p-5 card-lift">
           <div className="flex items-center gap-2 mb-3">
             <Star className="w-4 h-4 text-amber-400" />
-            <p className="text-sm font-bold text-ink">Reviews</p>
+            <p className="text-sm font-bold tracking-tight text-ink">Reviews</p>
             {!loading && reviews.avg > 0 && <span className="ml-auto text-xs text-ink-muted flex items-center gap-1"><Star className="w-3 h-3 text-amber-400 fill-amber-400" /> {reviews.avg.toFixed(1)} avg</span>}
           </div>
           <div className="grid grid-cols-3 gap-2">
@@ -145,10 +153,10 @@ export default function CrmAutomationPage() {
           <p className="text-[11px] text-ink-faint mt-3">Ask from any customer’s profile, or auto-ask after a completed visit (Settings → Automated messages).</p>
         </Card>
 
-        <Card className="p-5">
+        <Card className="p-5 card-lift">
           <div className="flex items-center gap-2 mb-3">
             <Gift className="w-4 h-4 text-accent" />
-            <p className="text-sm font-bold text-ink">Referrals</p>
+            <p className="text-sm font-bold tracking-tight text-ink">Referrals</p>
           </div>
           <div className="grid grid-cols-3 gap-2">
             <Stat label="Joined" value={refs.joined} tone="success" loading={loading} />

@@ -114,6 +114,46 @@ body { min-height: 100dvh; overscroll-behavior-y: none; }
   to   { opacity: 1; }
 }
 
+/* ── Premium motion & surface language (Grow flagship, reusable app-wide) ── */
+/* Entrance: content rises 8px and settles — one soft, decisive movement. The
+   stagger utilities let a feed land as a cascade instead of a block. Respects
+   prefers-reduced-motion (no animation, content just appears). */
+@keyframes riseIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .animate-rise { animation: riseIn 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
+  .stagger-1 { animation-delay: 40ms; }
+  .stagger-2 { animation-delay: 80ms; }
+  .stagger-3 { animation-delay: 120ms; }
+  .stagger-4 { animation-delay: 160ms; }
+  .stagger-5 { animation-delay: 200ms; }
+  .stagger-6 { animation-delay: 240ms; }
+}
+
+/* Hover lift: cards float 1px with a soft accent-less shadow — tactile, never loud. */
+.card-lift { transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease; }
+@media (hover: hover) {
+  .card-lift:hover { transform: translateY(-1px); box-shadow: 0 8px 24px -12px rgb(0 0 0 / 0.5); }
+  :root[data-theme='light'] .card-lift:hover { box-shadow: 0 8px 24px -14px rgb(15 23 42 / 0.35); }
+}
+
+/* Aurora hero surface: two soft accent radials over the card surface. Uses the
+   theme's accent channel so it adapts to dark/light automatically. */
+.hero-aurora {
+  background:
+    radial-gradient(120% 90% at 0% 0%, rgb(var(--c-accent) / 0.10) 0%, transparent 55%),
+    radial-gradient(90% 100% at 100% 0%, rgb(var(--c-accent) / 0.05) 0%, transparent 50%),
+    rgb(var(--c-bg-secondary));
+}
+
+/* Soft glow behind the advisor icon — the one intentional "AI" accent. */
+.icon-glow { box-shadow: 0 0 24px -4px rgb(var(--c-accent) / 0.45); }
+
+/* Active nav pill: gentle accent lift so the current surface reads instantly. */
+.pill-glow { box-shadow: 0 4px 14px -6px rgb(var(--c-accent) / 0.6); }
+
 /* Google Maps property-pin label: readable on any satellite imagery. */
 .eq-map-pin-label {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9), 0 0 6px rgba(0, 0, 0, 0.5);

@@ -34,14 +34,14 @@ export function FollowUpRadar() {
   const visible = showAll ? items : items.slice(0, 8)
 
   return (
-    <div className="rounded-card border border-border bg-bg-secondary overflow-hidden">
+    <div className="rounded-card border border-border bg-bg-secondary overflow-hidden animate-rise">
       <div className="px-5 py-4 border-b border-border flex items-start gap-3">
         <div className="w-9 h-9 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
           <Bell className="w-4.5 h-4.5 text-accent" />
         </div>
         <div className="min-w-0">
-          <p className="text-base font-bold text-ink">Follow-up radar</p>
-          <p className="text-xs text-ink-muted">
+          <p className="text-base font-bold tracking-tight text-ink">Follow-up radar</p>
+          <p className="text-xs text-ink-muted tabular-nums">
             {loading ? 'Checking…' : `${awaiting} awaiting a reply · ${quiet} gone quiet (${threshold}+ days)`}
           </p>
         </div>
@@ -52,7 +52,7 @@ export function FollowUpRadar() {
         <span className="text-[11px] text-ink-faint mr-1">Quiet for</span>
         {THRESHOLDS.map(t => (
           <button key={t} onClick={() => setThreshold(t)} aria-pressed={threshold === t} aria-label={`${t} days or more`}
-            className={`text-xs font-semibold rounded-full px-2.5 py-1 border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${threshold === t ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink'}`}>
+            className={`text-xs font-semibold rounded-full px-2.5 py-1 border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${threshold === t ? 'bg-accent text-black border-accent pill-glow' : 'border-border text-ink-muted hover:text-ink hover:border-border-strong'}`}>
             {t}d
           </button>
         ))}

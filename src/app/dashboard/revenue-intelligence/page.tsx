@@ -11,16 +11,20 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { StatTile } from '@/components/ui/StatTile'
 import { Skeleton, SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
+import { EmptyState } from '@/components/ui/EmptyState'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { formatCurrency, cn } from '@/lib/utils'
 import { TrendingUp, Check, X, Trophy, ArrowRight, Sparkles, AlertTriangle, RefreshCw } from 'lucide-react'
 
-const CONF_PILL: Record<Confidence, string> = {
-  high: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
+// Confidence is a quiet dot + label (same language as the Suggestions advisor);
+// the loud tinted pill is reserved for the churn-risk badge where alarm is the point.
+const CONF_DOT: Record<Confidence, string> = { high: 'bg-emerald-400', medium: 'bg-amber-400', low: 'bg-ink-faint' }
+const CONF_LABEL: Record<Confidence, string> = { high: 'High confidence', medium: 'Medium confidence', low: 'Worth a look' }
+const RISK_PILL: Record<Confidence, string> = {
+  high: 'text-red-400 border-red-500/30 bg-red-500/10',
   medium: 'text-amber-400 border-amber-500/30 bg-amber-500/10',
   low: 'text-ink-muted border-border bg-bg-tertiary',
 }
-const CONF_LABEL: Record<Confidence, string> = { high: 'High', medium: 'Medium', low: 'Worth a look' }
 
 export default function RevenueIntelligencePage() {
   const supabase = useMemo(() => createClient(), [])
@@ -91,13 +95,19 @@ export default function RevenueIntelligencePage() {
         })()}
       </div>
 
-      {/* Top action — actionable, not just a headline (same act-tracking as the cards) */}
+      {/* Top action — the advisor's single best play, actionable in one tap */}
       {summary.topAction && (
-        <div className="rounded-card border border-accent/30 bg-gradient-to-br from-accent/[0.08] to-transparent p-4 flex flex-wrap items-center gap-3">
+        <div className="rounded-card border border-accent/30 hero-aurora p-5 flex flex-wrap items-center gap-4 animate-rise">
+          <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 icon-glow flex items-center justify-center shrink-0">
+            <Trophy className="w-5 h-5 text-accent" />
+          </div>
           <div className="min-w-0 flex-1">
-            <p className="text-[11px] uppercase tracking-wide text-ink-faint flex items-center gap-1.5"><Trophy className="w-3.5 h-3.5 text-accent" /> Top move right now</p>
-            <p className="text-sm font-bold text-ink mt-1">{OPP_META[summary.topAction.kind].emoji} {summary.topAction.action} — {summary.topAction.customerName}</p>
-            <p className="text-xs text-ink-muted mt-0.5">+{formatCurrency(summary.topAction.expectedValue)}{summary.topAction.oneTime ? ' one-time' : '/yr'} · {summary.topAction.score}/100 likelihood</p>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">Top move right now</p>
+            <p className="text-base font-bold tracking-tight text-ink mt-0.5">{summary.topAction.action} — {summary.topAction.customerName}</p>
+            <p className="text-xs text-ink-muted mt-1 tabular-nums">
+              <span className="font-semibold text-accent">+{formatCurrency(summary.topAction.expectedValue)}{summary.topAction.oneTime ? ' one-time' : '/yr'}</span>
+              {' '}· {summary.topAction.score}% likely to land, based on this customer’s history
+            </p>
           </div>
           <Link href={summary.topAction.actionHref} onClick={() => act(summary.topAction!, 'acted')} className="shrink-0">
             <Button size="sm">Take action <ArrowRight className="w-3.5 h-3.5" /></Button>
@@ -113,8 +123,8 @@ export default function RevenueIntelligencePage() {
           return (
             <button key={k} onClick={() => setFilter(k)}
               className={cn('text-xs font-medium rounded-full px-3 py-1.5 border transition-colors',
-                filter === k ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
-              {k === 'all' ? 'All' : `${OPP_META[k as OppKind].emoji} ${OPP_META[k as OppKind].label}`} {n > 0 && <span className="opacity-70">{n}</span>}
+                filter === k ? 'bg-accent text-black border-accent font-semibold pill-glow' : 'border-border text-ink-muted hover:text-ink hover:border-border-strong')}>
+              {k === 'all' ? 'All' : OPP_META[k as OppKind].label} {n > 0 && <span className="opacity-70 tabular-nums">{n}</span>}
             </button>
           )
         })}
@@ -124,9 +134,10 @@ export default function RevenueIntelligencePage() {
       {/* Ranked opportunities — the Action Center */}
       <div className="space-y-2.5">
         {inFilter.length === 0 ? (
-          <div className="py-12 text-center text-sm text-ink-muted">No opportunities in this view yet. As you complete jobs and quotes, predictions sharpen.</div>
-        ) : inFilter.map(o => (
-          <OppCard key={o.key} o={o} status={feedback[o.key]?.status} busy={busy === o.key} onAct={act} />
+          <EmptyState icon={Sparkles} className="py-12" title="No opportunities in this view yet"
+            description="Predictions sharpen as jobs complete and quotes are decided." />
+        ) : inFilter.map((o, i) => (
+          <OppCard key={o.key} o={o} index={i} status={feedback[o.key]?.status} busy={busy === o.key} onAct={act} />
         ))}
       </div>
 
@@ -145,7 +156,7 @@ export default function RevenueIntelligencePage() {
                   <p className="text-[11px] text-ink-faint">Now {formatCurrency(f.currentLtv)} → forecast {formatCurrency(f.forecastLtv)} · {formatCurrency(f.revenueRemaining)} remaining</p>
                 </div>
                 {f.churnRiskImpact > 0 && (
-                  <span className={cn('shrink-0 text-[11px] font-semibold rounded-full px-2 py-0.5 border flex items-center gap-1', CONF_PILL[f.churnRisk])}>
+                  <span className={cn('shrink-0 text-[11px] font-semibold rounded-full px-2 py-0.5 border flex items-center gap-1 tabular-nums', RISK_PILL[f.churnRisk])}>
                     {f.churnRisk === 'high' && <AlertTriangle className="w-3 h-3" />}{formatCurrency(f.churnRiskImpact)}/yr at risk
                   </span>
                 )}
@@ -167,25 +178,38 @@ function Tile({ label, value, sub, accent, danger }: { label: string; value: str
   return <StatTile label={label} value={value} sub={sub} accent={accent} tone={danger ? 'danger' : undefined} tonedSurface={danger} />
 }
 
-function OppCard({ o, status, busy, onAct }: { o: Opportunity; status?: string; busy: boolean; onAct: (o: Opportunity, s: 'acted' | 'dismissed' | 'won') => void }) {
+function OppCard({ o, index, status, busy, onAct }: { o: Opportunity; index: number; status?: string; busy: boolean; onAct: (o: Opportunity, s: 'acted' | 'dismissed' | 'won') => void }) {
   const [showWhy, setShowWhy] = useState(false)
   const meta = OPP_META[o.kind]
   const done = status === 'acted' || status === 'won'
   return (
-    <div className={cn('rounded-card border p-3.5', status === 'won' ? 'border-emerald-500/30 bg-emerald-500/[0.04]' : done ? 'border-border bg-bg-tertiary' : 'border-border bg-bg-secondary')}>
+    <div className={cn(
+      'rounded-card border p-4 animate-rise',
+      index < 6 && `stagger-${index + 1}`,
+      status === 'won' ? 'border-emerald-500/30 bg-emerald-500/[0.04]' : done ? 'border-border bg-bg-tertiary' : 'border-border bg-bg-secondary card-lift',
+    )}>
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 border border-border text-ink-muted">{meta.emoji} {meta.label}</span>
-            <span className={cn('text-[10px] font-semibold rounded-full px-2 py-0.5 border', CONF_PILL[o.confidence])}>{CONF_LABEL[o.confidence]}</span>
-            <span className="text-[10px] text-ink-faint">{o.score}/100 likelihood</span>
+            <span className="text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 border border-border text-ink-muted">{meta.label}</span>
+            <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-ink-muted rounded-full px-2 py-0.5 border border-border bg-bg-tertiary" title="How sure the advisor is, based on how much of this customer's history backs it">
+              <span className={cn('w-1.5 h-1.5 rounded-full', CONF_DOT[o.confidence])} />
+              {CONF_LABEL[o.confidence]}
+            </span>
+            {/* Likelihood as a meter, not a fraction — read at a glance. */}
+            <span className="inline-flex items-center gap-1.5 text-[10px] text-ink-faint tabular-nums" title={`${o.score}/100 likelihood this play lands`}>
+              <span className="w-10 h-1 rounded-full bg-border overflow-hidden">
+                <span className="block h-full rounded-full bg-accent/80" style={{ width: `${Math.min(100, Math.max(4, o.score))}%` }} />
+              </span>
+              {o.score}%
+            </span>
           </div>
-          <p className="text-sm font-bold text-ink mt-1.5">{o.action} — {o.customerName}</p>
+          <p className="text-sm font-bold tracking-tight text-ink mt-1.5">{o.action} — {o.customerName}</p>
         </div>
-        <span className="shrink-0 text-sm font-bold text-accent flex items-center gap-1"><TrendingUp className="w-3.5 h-3.5" /> +{formatCurrency(o.expectedValue)}{o.oneTime ? '' : '/yr'}</span>
+        <span className="shrink-0 text-sm font-bold text-accent flex items-center gap-1 tabular-nums"><TrendingUp className="w-3.5 h-3.5" /> +{formatCurrency(o.expectedValue)}{o.oneTime ? '' : '/yr'}</span>
       </div>
 
-      <div className="mt-2.5 flex flex-wrap items-center gap-2">
+      <div className="mt-3 flex flex-wrap items-center gap-2">
         {status === 'won' ? (
           <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-emerald-400"><Trophy className="w-4 h-4" /> Won</span>
         ) : done ? (
@@ -199,7 +223,9 @@ function OppCard({ o, status, busy, onAct }: { o: Opportunity; status?: string; 
             <Button size="sm" variant="ghost" onClick={() => onAct(o, 'dismissed')} disabled={busy}><X className="w-3.5 h-3.5" /> Dismiss</Button>
           </>
         )}
-        <button onClick={() => setShowWhy(v => !v)} className="ml-auto text-[11px] font-medium text-ink-faint hover:text-ink">Why?</button>
+        <button onClick={() => setShowWhy(v => !v)} className="ml-auto text-[11px] font-medium text-ink-faint hover:text-ink transition-colors">
+          {showWhy ? 'Hide' : 'Why this?'}
+        </button>
       </div>
 
       {showWhy && (

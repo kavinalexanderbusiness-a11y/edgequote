@@ -13,20 +13,21 @@ import { Button } from '@/components/ui/Button'
 import { Sparkles, Check, ArrowRight, Clock, Navigation, TrendingUp, RefreshCw, HelpCircle, Calculator, X, BellOff, Undo2 } from 'lucide-react'
 import { addDays, format } from 'date-fns'
 
-const CONF_PILL: Record<Confidence, string> = {
-  high: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
-  medium: 'text-amber-400 border-amber-500/30 bg-amber-500/10',
-  low: 'text-ink-muted border-border bg-bg-tertiary',
+// Confidence renders as a quiet dot + label — data, not decoration.
+const CONF_DOT: Record<Confidence, string> = {
+  high: 'bg-emerald-400',
+  medium: 'bg-amber-400',
+  low: 'bg-ink-faint',
 }
-const CONF_LABEL: Record<Confidence, string> = { high: 'High confidence', medium: 'Medium', low: 'Worth a look' }
+const CONF_LABEL: Record<Confidence, string> = { high: 'High confidence', medium: 'Medium confidence', low: 'Worth a look' }
 
 const FILTERS: { key: SuggestionCategory | 'all'; label: string }[] = [
   { key: 'all', label: 'All' },
-  { key: 'profit', label: '💰 Profit' },
-  { key: 'growth', label: '📍 Growth' },
-  { key: 'route', label: '🚗 Route' },
-  { key: 'problem', label: '⚠️ Problems' },
-  { key: 'retention', label: '❤️ Keep' },
+  { key: 'profit', label: 'Profit' },
+  { key: 'growth', label: 'Growth' },
+  { key: 'route', label: 'Route' },
+  { key: 'problem', label: 'Problems' },
+  { key: 'retention', label: 'Retention' },
 ]
 
 export function SuggestionsCenter() {
@@ -108,24 +109,27 @@ export function SuggestionsCenter() {
   const totalAnnual = items.filter(s => s.category === 'profit' && !s.oneTime).reduce((sum, s) => sum + s.impact, 0)
 
   return (
-    <div className="rounded-card border border-accent/20 bg-gradient-to-br from-accent/[0.07] to-transparent overflow-hidden">
-      {/* Header — the headline question + total opportunity */}
-      <div className="px-5 py-4 border-b border-border flex items-start justify-between gap-3">
-        <div className="flex items-start gap-3 min-w-0">
-          <div className="w-9 h-9 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
-            <Sparkles className="w-4.5 h-4.5 text-accent" />
+    <div className="rounded-card border border-accent/20 hero-aurora overflow-hidden animate-rise">
+      {/* Header — the advisor moment: the question, then the opportunity it found */}
+      <div className="px-5 py-5 border-b border-border flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3.5 min-w-0">
+          <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 icon-glow flex items-center justify-center shrink-0">
+            <Sparkles className="w-5 h-5 text-accent" />
           </div>
           <div className="min-w-0">
-            <p className="text-base font-bold text-ink">What should I do next?</p>
-            <p className="text-xs text-ink-muted mt-0.5">
+            <p className="text-lg font-bold tracking-tight text-ink">What should I do next?</p>
+            <p className="text-xs text-ink-muted mt-1">
               {loading ? 'Reading your business…'
                 : items.length === 0 ? 'You’re all caught up — nothing pressing right now.'
-                : `${items.length} ranked action${items.length !== 1 ? 's' : ''}${totalAnnual > 0 ? ` · up to ${formatCurrency(totalAnnual)}/yr in pricing upside` : ''}`}
+                : <>
+                    {items.length} opportunit{items.length !== 1 ? 'ies' : 'y'} found in your data
+                    {totalAnnual > 0 && <> · worth up to <span className="font-semibold text-accent tabular-nums">{formatCurrency(totalAnnual)}/yr</span></>}
+                  </>}
             </p>
           </div>
         </div>
-        <button onClick={load} disabled={loading} title="Refresh"
-          className="h-8 w-8 rounded-lg border border-border text-ink-muted hover:text-ink flex items-center justify-center shrink-0 disabled:opacity-50">
+        <button onClick={load} disabled={loading} title="Refresh" aria-label="Refresh suggestions"
+          className="h-8 w-8 rounded-lg border border-border text-ink-muted hover:text-ink hover:border-border-strong transition-colors flex items-center justify-center shrink-0 disabled:opacity-50">
           <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} />
         </button>
       </div>
@@ -166,12 +170,20 @@ export function SuggestionsCenter() {
       <div className="p-4 space-y-3">
         {loading && items.length === 0 ? (
           <SkeletonRows count={3} />
+        ) : items.length === 0 ? (
+          <div className="py-10 text-center">
+            <div className="w-11 h-11 mx-auto rounded-full bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center mb-3">
+              <Check className="w-5 h-5 text-emerald-400" />
+            </div>
+            <p className="text-sm font-semibold text-ink">Nothing needs your attention</p>
+            <p className="text-xs text-ink-muted mt-1">Your advisor re-reads the business as jobs, quotes and payments land.</p>
+          </div>
         ) : filtered.length === 0 ? (
           <InlineEmpty icon={Sparkles}>Nothing in this category right now.</InlineEmpty>
         ) : (
           <>
-            {visible.map(s => (
-              <SuggestionCard key={s.id} s={s}
+            {visible.map((s, i) => (
+              <SuggestionCard key={s.id} s={s} index={i}
                 applying={applyingId === s.id} applied={appliedId === s.id}
                 onAction={(a) => runAction(s, a)}
                 onDismiss={(snoozeDays) => dismiss(s, snoozeDays)} />
@@ -197,7 +209,7 @@ export function SuggestionsCenter() {
   )
 }
 
-function SuggestionCard({ s, applying, applied, onAction, onDismiss }: { s: Suggestion; applying: boolean; applied: boolean; onAction: (a: SuggestionAction) => void; onDismiss: (snoozeDays?: number) => void }) {
+function SuggestionCard({ s, index, applying, applied, onAction, onDismiss }: { s: Suggestion; index: number; applying: boolean; applied: boolean; onAction: (a: SuggestionAction) => void; onDismiss: (snoozeDays?: number) => void }) {
   const cat = CATEGORY_META[s.category]
   const [showWhy, setShowWhy] = useState(false)
   const [showCalc, setShowCalc] = useState(false)
@@ -218,23 +230,24 @@ function SuggestionCard({ s, applying, applied, onAction, onDismiss }: { s: Sugg
   }
 
   return (
-    <div className="rounded-xl border border-border bg-bg-secondary p-3.5">
+    <div className={cn('rounded-xl border border-border bg-bg-secondary p-4 card-lift animate-rise', index < 6 && `stagger-${index + 1}`)}>
       <div className="flex items-start justify-between gap-2 mb-1.5">
         <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 border', cat.tone)}>
-          {cat.emoji} {cat.label}
+          {cat.label}
         </span>
-        <span className={cn('text-[10px] font-semibold rounded-full px-2 py-0.5 border', CONF_PILL[s.confidence])}>
+        <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-ink-muted rounded-full px-2 py-0.5 border border-border bg-bg-tertiary" title="How sure the advisor is, based on how much of your data backs this">
+          <span className={cn('w-1.5 h-1.5 rounded-full', CONF_DOT[s.confidence])} />
           {CONF_LABEL[s.confidence]}
         </span>
       </div>
 
       {/* Decision-first: recommendation + impact lead. */}
-      <p className="text-sm font-bold text-ink leading-snug">{s.title}</p>
+      <p className="text-sm font-bold text-ink leading-snug tracking-tight">{s.title}</p>
       {s.subtitle && <p className="text-xs text-ink-muted mt-0.5">{s.subtitle}</p>}
 
       <div className="flex flex-wrap items-center gap-2 mt-2">
         {s.impact > 0 && (
-          <span className="text-sm font-bold text-accent flex items-center gap-1">
+          <span className="text-sm font-bold text-accent flex items-center gap-1 tabular-nums">
             <TrendingUp className="w-3.5 h-3.5" /> +{formatCurrency(s.impact)}{s.oneTime ? ' one-time' : '/yr'}
           </span>
         )}
