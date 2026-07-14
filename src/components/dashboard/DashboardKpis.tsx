@@ -16,14 +16,14 @@ export interface DashboardKpiValues {
 
 export function DashboardKpis({ collected, outstanding, jobsThisMonth, conversionRate }: DashboardKpiValues) {
   const tiles = [
-    { label: 'Collected', value: formatCurrency(collected), icon: Wallet, color: 'text-emerald-400', bg: 'bg-emerald-500/10', href: '/dashboard/invoices' },
-    { label: 'Outstanding', value: formatCurrency(outstanding), icon: AlertCircle, color: 'text-amber-400', bg: 'bg-amber-500/10', href: '/dashboard/invoices' },
-    { label: 'Jobs This Month', value: String(jobsThisMonth), icon: CalendarCheck, color: 'text-accent', bg: 'bg-accent-dim', href: '/dashboard/schedule' },
-    { label: 'Conversion', value: `${conversionRate}%`, icon: Percent, color: 'text-teal-400', bg: 'bg-teal-500/10', href: '/dashboard/quotes' },
+    { label: 'Collected', value: formatCurrency(collected), sub: 'Payments received', icon: Wallet, color: 'text-emerald-400', bg: 'bg-emerald-500/10', href: '/dashboard/invoices' },
+    { label: 'Outstanding', value: formatCurrency(outstanding), sub: 'Billed, unpaid', icon: AlertCircle, color: 'text-amber-400', bg: 'bg-amber-500/10', href: '/dashboard/invoices' },
+    { label: 'Jobs This Month', value: String(jobsThisMonth), sub: 'Completed', icon: CalendarCheck, color: 'text-accent', bg: 'bg-accent-dim', href: '/dashboard/schedule' },
+    { label: 'Conversion', value: `${conversionRate}%`, sub: 'Quotes accepted', icon: Percent, color: 'text-teal-400', bg: 'bg-teal-500/10', href: '/dashboard/quotes' },
   ]
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-      {tiles.map(({ label, value, icon: Icon, color, bg, href }) => (
+      {tiles.map(({ label, value, sub, icon: Icon, color, bg, href }) => (
         <Link key={label} href={href}
           className="block rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
           <Card className="p-4 h-full card-lift">
@@ -34,6 +34,7 @@ export function DashboardKpis({ collected, outstanding, jobsThisMonth, conversio
               </div>
             </div>
             <p className="text-xl font-bold text-ink tracking-tight tabular-nums">{value}</p>
+            <p className="text-[11px] text-ink-faint mt-0.5">{sub}</p>
           </Card>
         </Link>
       ))}

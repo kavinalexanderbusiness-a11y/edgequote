@@ -725,7 +725,6 @@ export default function CustomerDetailPage() {
       <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-ink-muted -mt-2">
         <span>Accepted jobs: <span className="text-ink font-medium">{wonQuotes.length}</span> of {quotes.length}</span>
         <span>Avg job value: <span className="text-ink font-medium">{formatCurrency(avgJobValue)}</span></span>
-        <span>Invoices: <span className="text-ink font-medium">{invoices.length}</span></span>
       </div>
 
       {/* Current Service Plan — the recurring schedule at a glance */}
@@ -882,7 +881,7 @@ export default function CustomerDetailPage() {
                   <div className="mt-3 pt-3 border-t border-border">
                     {editingPropPrefs === p.id ? (
                       <div className="space-y-3">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint flex items-center gap-1.5">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint flex items-center gap-1.5">
                           <CalendarClock className="w-3.5 h-3.5 text-accent" /> Scheduling override
                         </p>
                         <SchedulePrefsFields value={propPrefsDraft} onChange={setPropPrefsDraft} />

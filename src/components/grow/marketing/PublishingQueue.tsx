@@ -187,17 +187,17 @@ export function PublishingQueue({ userId }: { userId: string }) {
         <div className="relative flex-1 min-w-[140px]">
           <Search className="w-3.5 h-3.5 text-ink-faint absolute left-2.5 top-1/2 -translate-y-1/2" />
           <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search caption or platform…"
-            className="w-full bg-bg-tertiary border border-border rounded-lg pl-8 pr-2 py-1.5 text-xs text-ink outline-none focus:border-accent" />
+            className="w-full bg-bg-tertiary border border-border rounded-lg pl-8 pr-2 py-1.5 text-xs text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
         </div>
         <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as typeof statusFilter)}
-          className="bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-ink outline-none focus:border-accent">
+          className="bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20">
           <option value="all">All statuses</option>
           <option value="active">Scheduled &amp; ready</option>
           <option value="published">Published</option>
           <option value="failed">Failed</option>
         </select>
         <select value={platformFilter} onChange={e => setPlatformFilter(e.target.value as typeof platformFilter)}
-          className="bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-ink outline-none focus:border-accent">
+          className="bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20">
           <option value="all">All platforms</option>
           {platformsPresent.map(p => <option key={p} value={p}>{channelDef(p).label}</option>)}
         </select>

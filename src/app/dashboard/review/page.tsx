@@ -131,9 +131,9 @@ export default function WeeklyReviewPage() {
       <div className="max-w-5xl mx-auto space-y-6">
         <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }}
           title="Weekly Review"
-          description="How the week went, and next week's moves" />
-        <SkeletonTiles count={3} className="lg:grid-cols-3" />
-        <SkeletonTiles count={2} className="lg:grid-cols-2" />
+          description="How the week went, and next week's moves." />
+        <SkeletonTiles count={3} className="grid-cols-3 lg:grid-cols-3" />
+        <SkeletonTiles count={2} className="grid-cols-1 sm:grid-cols-2 lg:grid-cols-2" />
       </div>
     )
   }
