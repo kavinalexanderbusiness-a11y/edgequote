@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { addDays, format, getDay, parseISO } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { Skeleton } from '@/components/ui/Skeleton'
 import { formatCurrency } from '@/lib/utils'
 import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
 import { todayLocalISO } from '@/lib/geo'
@@ -104,7 +105,24 @@ export function WeekendOutlook() {
     load()
   }, [supabase])
 
-  if (loading) return null
+  if (loading) return (
+    <Card>
+      <CardHeader className="flex items-center gap-2">
+        <Skeleton className="w-4 h-4 rounded" />
+        <Skeleton className="h-3.5 w-36" />
+      </CardHeader>
+      <CardBody className="p-0">
+        <div className="divide-y divide-border">
+          {[0, 1, 2].map(i => (
+            <div key={i} className="px-5 py-3.5 space-y-2">
+              <Skeleton className="h-3.5 w-40" />
+              <Skeleton className="h-3 w-2/3" />
+            </div>
+          ))}
+        </div>
+      </CardBody>
+    </Card>
+  )
   const totalJobs = groups.reduce((s, g) => s + g.jobs.length, 0)
   const totalHours = Math.round(groups.reduce((s, g) => s + g.hours, 0) * 10) / 10
   const totalRev = groups.reduce((s, g) => s + g.revenue, 0)
@@ -112,8 +130,8 @@ export function WeekendOutlook() {
   return (
     <Card>
       <CardHeader className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span className="flex items-center gap-2"><CalendarRange className="w-4 h-4 text-accent" /><h2 className="text-sm font-semibold text-ink">Your next work days</h2></span>
-        <span className="ml-auto flex items-center gap-3 text-xs text-ink-muted">
+        <span className="flex items-center gap-2"><CalendarRange className="w-4 h-4 text-accent" /><h2 className="text-sm font-semibold text-ink tracking-tight">Your next work days</h2></span>
+        <span className="ml-auto flex items-center gap-3 text-xs text-ink-muted tabular-nums">
           <span className="flex items-center gap-1"><DollarSign className="w-3 h-3 text-accent" />{formatCurrency(totalRev)}</span>
           <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{totalHours}h</span>
           <span>{totalJobs} job{totalJobs !== 1 ? 's' : ''}</span>
@@ -126,7 +144,7 @@ export function WeekendOutlook() {
               <div className="flex items-center justify-between gap-2 mb-1.5">
                 <p className="text-sm font-semibold text-ink">{g.weekday} <span className="text-ink-faint font-normal">{format(parseISO(g.date + 'T00:00:00'), 'MMM d')}</span></p>
                 {g.jobs.length > 0 ? (
-                  <span className="text-xs text-ink-muted flex items-center gap-1.5 flex-wrap justify-end">
+                  <span className="text-xs text-ink-muted flex items-center gap-1.5 flex-wrap justify-end tabular-nums">
                     <span>{g.jobs.length} job{g.jobs.length !== 1 ? 's' : ''} · {g.hours}h · done ~{g.finish} · <span className="text-accent font-semibold">{formatCurrency(g.revenue)}</span></span>
                     {g.loadState !== 'full' && (
                       <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 border',
@@ -142,14 +160,14 @@ export function WeekendOutlook() {
               {g.jobs.length > 0 && (
                 <div className="space-y-1">
                   {g.jobs.map(j => (
-                    <div key={j.id} className="flex items-center justify-between gap-2 text-xs">
+                    <div key={j.id} className="flex items-center justify-between gap-2 text-xs rounded-lg px-2 -mx-2 py-1 hover:bg-surface/40 transition-colors">
                       <span className="min-w-0 flex items-center gap-1.5 text-ink">
-                        {j.start_time && <span className="text-ink-faint shrink-0">{j.start_time.slice(0, 5)}</span>}
+                        {j.start_time && <span className="text-ink-faint shrink-0 tabular-nums">{j.start_time.slice(0, 5)}</span>}
                         <span className="truncate font-medium">{j.customer_name}</span>
                         {j.service_type && <span className="text-ink-faint truncate hidden sm:inline">· {j.service_type}</span>}
                       </span>
                       <span className="flex items-center gap-1 shrink-0">
-                        <span className={j.value > 0 ? 'text-ink-muted' : 'text-amber-400'}>{j.value > 0 ? formatCurrency(j.value) : '$?'}</span>
+                        <span className={cn('tabular-nums', j.value > 0 ? 'text-ink-muted' : 'text-amber-400')}>{j.value > 0 ? formatCurrency(j.value) : '$?'}</span>
                         {/* 40px hit areas — these get tapped with gloves on */}
                         {j.phone && <a href={`tel:${j.phone}`} className="text-accent hover:opacity-80 w-10 h-10 -my-2.5 flex items-center justify-center" title="Call"><Phone className="w-4 h-4" /></a>}
                         {j.address && <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(j.address)}`} target="_blank" rel="noopener noreferrer" className="text-ink-muted hover:text-ink w-10 h-10 -my-2.5 flex items-center justify-center" title="Map"><MapPin className="w-4 h-4" /></a>}

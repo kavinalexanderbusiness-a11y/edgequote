@@ -186,20 +186,22 @@ export function TodaysPriorities() {
   if (loading) return <SkeletonRows count={4} />
 
   return (
-    <div className="rounded-card border border-border bg-bg-secondary overflow-hidden">
-      <div className="px-4 sm:px-5 py-3 border-b border-border flex items-center gap-2">
+    <div className="rounded-card border border-border bg-bg-secondary overflow-hidden shadow-sm">
+      <div className="px-4 sm:px-5 py-3.5 border-b border-border flex items-center gap-2">
         <ListChecks className="w-4 h-4 text-accent" />
-        <h2 className="text-sm font-bold text-ink">Today&rsquo;s Priorities</h2>
+        <h2 className="text-sm font-semibold text-ink tracking-tight">Today&rsquo;s Priorities</h2>
         {items.length > 0 && (
-          <span className="text-xs font-semibold text-accent bg-accent/10 border border-accent/20 rounded-full px-2 py-0.5">{items.length}</span>
+          <span className="text-[11px] font-semibold text-accent bg-accent/10 border border-accent/20 rounded-full px-2 py-0.5 tabular-nums">{items.length}</span>
         )}
       </div>
 
       {items.length === 0 ? (
-        <div className="px-5 py-8 text-center">
-          <CheckCircle2 className="w-6 h-6 mx-auto mb-2 text-emerald-400" />
-          <p className="text-sm font-medium text-ink">You&rsquo;re all caught up</p>
-          <p className="text-xs text-ink-muted mt-0.5">No follow-ups, unsent invoices, or unread replies right now.</p>
+        <div className="px-5 py-10 text-center">
+          <div className="w-11 h-11 mx-auto mb-3 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
+            <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+          </div>
+          <p className="text-sm font-semibold text-ink">You&rsquo;re all caught up</p>
+          <p className="text-xs text-ink-muted mt-1 max-w-xs mx-auto leading-relaxed">No follow-ups, unsent invoices, or unread replies right now.</p>
         </div>
       ) : (
         <ol className="divide-y divide-border">
@@ -207,17 +209,17 @@ export function TodaysPriorities() {
             <li key={p.key}>
               <Link
                 href={p.href}
-                className="flex items-center gap-3 px-4 sm:px-5 py-3.5 hover:bg-surface/40 active:bg-surface/60 transition-colors"
+                className="group flex items-center gap-3 px-4 sm:px-5 py-3.5 hover:bg-surface/50 active:bg-surface/70 transition-colors"
               >
-                <span className="shrink-0 w-5 text-center text-xs font-bold text-ink-faint tabular-nums">{i + 1}</span>
-                <span className={`shrink-0 w-9 h-9 rounded-lg border flex items-center justify-center ${p.tone}`}>
+                <span className="shrink-0 w-5 text-center text-xs font-bold text-ink-faint/70 tabular-nums">{i + 1}</span>
+                <span className={`shrink-0 w-9 h-9 rounded-xl border flex items-center justify-center transition-transform duration-200 group-hover:scale-[1.06] ${p.tone}`}>
                   <p.icon className="w-4 h-4" />
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block text-sm font-semibold text-ink truncate">{p.label}</span>
-                  <span className="block text-xs text-ink-muted truncate mt-0.5">{p.detail}</span>
+                  <span className="block text-xs text-ink-muted truncate mt-0.5 tabular-nums">{p.detail}</span>
                 </span>
-                <ArrowRight className="w-4 h-4 text-ink-faint shrink-0" />
+                <ArrowRight className="w-4 h-4 text-ink-faint shrink-0 transition-all duration-200 group-hover:translate-x-0.5 group-hover:text-ink-muted" />
               </Link>
             </li>
           ))}

@@ -23,14 +23,14 @@ export function DashboardKpis({ collected, outstanding, jobsThisMonth, conversio
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
       {tiles.map(({ label, value, icon: Icon, color, bg }) => (
-        <Card key={label} className="p-4">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-[11px] font-semibold text-ink-muted uppercase tracking-wide">{label}</p>
+        <Card key={label} className="p-4 shadow-sm transition-colors hover:border-border-strong">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-[11px] font-semibold text-ink-muted uppercase tracking-wider">{label}</p>
             <div className={`w-7 h-7 rounded-lg ${bg} flex items-center justify-center`}>
               <Icon className={`w-3.5 h-3.5 ${color}`} />
             </div>
           </div>
-          <p className="text-xl font-bold text-ink tracking-tight">{value}</p>
+          <p className="text-2xl font-semibold text-ink tracking-tight tabular-nums">{value}</p>
         </Card>
       ))}
     </div>

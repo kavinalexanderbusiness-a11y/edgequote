@@ -51,23 +51,36 @@ export default async function DashboardPage() {
 
   const hour = now.getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
+  const dateLine = now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })
+
+  // A gentle staggered rise on load (motion-safe; backwards fill so nothing flashes
+  // before its delay) — the calm, premium entrance of a Linear/Stripe surface.
+  const rise = 'motion-safe:animate-[fadeInUp_.45s_cubic-bezier(0.22,1,0.36,1)_both]'
 
   return (
     <div className="max-w-6xl space-y-6">
-      <PageHeader
-        title={greeting}
-        description="Your day, and how the business is doing."
-        action={
-          <Link href="/dashboard/quotes/new">
-            <Button>
-              <Plus className="w-4 h-4" /> New Quote
-            </Button>
-          </Link>
-        }
-      />
-      <TodaysPriorities />
-      <WeekendOutlook />
-      <DashboardKpis collected={collected} outstanding={outstanding} jobsThisMonth={jobsThisMonth} conversionRate={conversionRate} />
+      <div className={rise}>
+        <PageHeader
+          title={greeting}
+          description={dateLine}
+          action={
+            <Link href="/dashboard/quotes/new">
+              <Button>
+                <Plus className="w-4 h-4" /> New Quote
+              </Button>
+            </Link>
+          }
+        />
+      </div>
+      <div className={`${rise} motion-safe:[animation-delay:70ms]`}>
+        <TodaysPriorities />
+      </div>
+      <div className={`${rise} motion-safe:[animation-delay:140ms]`}>
+        <WeekendOutlook />
+      </div>
+      <div className={`${rise} motion-safe:[animation-delay:210ms]`}>
+        <DashboardKpis collected={collected} outstanding={outstanding} jobsThisMonth={jobsThisMonth} conversionRate={conversionRate} />
+      </div>
     </div>
   )
 }

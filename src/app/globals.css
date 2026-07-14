@@ -113,6 +113,11 @@ body { min-height: 100dvh; overscroll-behavior-y: none; }
   from { opacity: 0; }
   to   { opacity: 1; }
 }
+/* Premium content entrance — a gentle rise + fade for cards/sections. */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
 
 /* Google Maps property-pin label: readable on any satellite imagery. */
 .eq-map-pin-label {
