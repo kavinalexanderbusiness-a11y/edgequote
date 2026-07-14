@@ -372,7 +372,7 @@ export default function MessagesPage() {
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
-      <PageHeader title="Messages" description="Two-way SMS + portal conversations — archived chats stay in CRM history forever."
+      <PageHeader title="Messages" description="Two-way texts and portal conversations — archiving a chat keeps its full history on the customer's profile."
         action={
           <Button variant="secondary" onClick={openCompose}>
             <Plus className="w-4 h-4" /> New message

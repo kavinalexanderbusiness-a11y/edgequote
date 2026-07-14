@@ -900,6 +900,10 @@ export default function QuoteDetailPage() {
                     <span className="text-ink-muted">Suggested price</span>
                     <span className="text-ink font-medium tabular-nums">{formatCurrency(suggestedPrice)}</span>
                   </div>
+                  {/* Provenance — a recommendation should always show where it came from. */}
+                  <p className="text-[11px] text-ink-faint leading-snug">
+                    Based on {hasMeasurement ? 'the measured lawn size' : 'the lawn size'} and your pricing rates{quote.pricing_confidence ? `, weighted by nearby quotes you've won (${CONFIDENCE_LABELS[quote.pricing_confidence]?.toLowerCase() ?? 'estimated'})` : ''}.
+                  </p>
                   {/* "Actual quote price" row removed — it just repeated the First Invoice
                       Total shown prominently above; the difference below conveys the rest. */}
                   {priceDiff != null && (
