@@ -6,6 +6,8 @@ import { createClient } from '@/lib/supabase/client'
 import { Quote, Customer, QuoteFormValues, QuoteService, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS, CONFIDENCE_COLORS } from '@/types'
 import { sumServiceLines, serviceLineTotals, splitServices } from '@/lib/quoteServices'
 import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
+import { JobPhotos } from '@/components/photos/JobPhotos'
+import { extractBookingPhotos, bookingPhotoViews } from '@/lib/bookingPhotos'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Button } from '@/components/ui/Button'
@@ -18,7 +20,7 @@ import { addDays, format as formatDfn, parseISO } from 'date-fns'
 import { needsFollowUp, daysSince, logFollowUpPatch, markWonPatch } from '@/lib/followup'
 import { scheduleQuoteAsJob } from '@/lib/scheduleQuote'
 import { ensureCustomerAndProperty } from '@/lib/customers'
-import { Edit2, ArrowLeft, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Send } from 'lucide-react'
+import { Edit2, ArrowLeft, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Send, Camera } from 'lucide-react'
 
 export default function QuoteDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -594,6 +596,24 @@ export default function QuoteDetailPage() {
           </Button>
         </div>
       </div>
+
+      {/* Photos the customer attached when booking this quote (lead_meta.photos) —
+          shown read-only through the shared gallery/lightbox so the owner reviews
+          exactly what the customer sent. */}
+      {(() => {
+        const photos = bookingPhotoViews(extractBookingPhotos((quote as { lead_meta?: unknown }).lead_meta), quote.created_at)
+        return photos.length > 0 ? (
+          <Card>
+            <CardBody className="space-y-2">
+              <p className="text-sm font-semibold text-ink flex items-center gap-2">
+                <Camera className="w-4 h-4 text-accent" /> Customer photos
+                <span className="ml-auto text-xs font-normal text-ink-faint">{photos.length} attached at booking</span>
+              </p>
+              <JobPhotos propertyId={null} variant="gallery" readOnly initialPhotos={photos} />
+            </CardBody>
+          </Card>
+        ) : null
+      })()}
 
       {/* Persistent reminder — stays until the job is actually scheduled (status
           leaves "accepted"), so the next step is never lost by dismissing a prompt.
