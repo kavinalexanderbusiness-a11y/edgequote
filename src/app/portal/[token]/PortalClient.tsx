@@ -15,7 +15,7 @@ import { receiptNumberFor } from '@/lib/payments/ledger'
 import {
   Home, History, Image as ImageIcon, FileText, Receipt, MessageSquarePlus, Check, Loader2,
   Phone, Globe, Mail, Leaf, CheckCircle2, Navigation, Play, CalendarClock, Repeat, MapPin, Ruler, Sparkles, CreditCard, MessageSquare,
-  Eye, Download, Printer, FolderOpen, Search, ArrowUpDown, Activity, Wallet, Star, Zap, ShieldCheck, Trash2, X, Copy,
+  Eye, Download, Printer, FolderOpen, Search, ArrowUpDown, Activity, Wallet, Star, Zap, ShieldCheck, Trash2, X,
 } from 'lucide-react'
 
 // ── Premium Customer Portal ─────────────────────────────────────────────────────
@@ -274,6 +274,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     t.key === 'service' ? derived.completed.length > 0 :
     t.key === 'photos' ? data.photos.length > 0 :
     t.key === 'property' ? hasProperty :
+    t.key === 'timeline' ? (data.quotes.length + data.jobs.length + data.invoices.length + data.payments.length + data.photos.length) > 0 :
     true)
 
   return (
@@ -889,16 +890,66 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
   const availableCredit = Math.round(payments.filter(p => p.kind === 'credit').reduce((s, p) => s + Number(p.amount || 0), 0) * 100) / 100
 
   // ── Ways to pay ── copy-to-clipboard for the e-transfer details. The recipient
-  // is the business-configured Interac email (Settings → Payments & Fees), falling
-  // back to the primary business email so there's almost always something to show.
+  // is ONLY the business-configured Interac email (Settings → Payments & Fees) —
+  // never a generic contact email, which may not be bank-registered for e-transfers.
   const [copied, setCopied] = useState<string | null>(null)
   async function copyText(key: string, text: string) {
     try { await navigator.clipboard.writeText(text); setCopied(key); setTimeout(() => setCopied(null), 2000) } catch { /* clipboard blocked — button just no-ops */ }
   }
-  const etransferEmail = (business?.etransfer_email || business?.email_primary || '').trim()
-  const owingNums = invoices.filter(i => ['sent', 'unpaid', 'partial', 'overdue'].includes(i.status)).map(i => i.invoice_number)
+  const etransferEmail = (business?.etransfer_email || '').trim()
+  // Which invoice(s) an e-transfer should reference — exact number when there's
+  // one owing invoice, generic guidance when several.
+  const owingNums = invoices.filter(i => i.status === 'unpaid' || i.status === 'sent' || i.status === 'partial').map(i => i.invoice_number)
   return (
     <div className="space-y-3">
+      {/* ── Ways to pay — Card / E-transfer / Cash (cheque retired). E-transfer
+          details come from Business Settings (one source of truth). ── */}
+      <div className="rounded-card border border-border bg-bg-secondary p-4 space-y-3">
+        <p className="text-[10px] uppercase tracking-wide text-ink-faint font-semibold">Ways to pay</p>
+        <div className="flex items-start gap-3">
+          <span className="text-lg leading-none" aria-hidden>💳</span>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-ink">Card</p>
+            <p className="text-xs text-ink-muted">{paymentsEnabled ? 'Pay any invoice securely online with the Pay button.' : 'Ask us for a secure card payment link.'}</p>
+          </div>
+        </div>
+        {/* Only advertise e-transfer once the business has set its address —
+            never show a customer owner-facing setup instructions. */}
+        {etransferEmail && (
+        <div className="flex items-start gap-3 border-t border-border pt-3">
+          <span className="text-lg leading-none" aria-hidden>🏦</span>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-ink">E-transfer</p>
+            <p className="text-xs text-ink-muted">Recipient: <span className="font-medium text-ink">{business?.company_name || 'Your service provider'}</span></p>
+            <p className="text-xs text-ink-muted mt-1">Send payment to:</p>
+            <p className="text-sm font-semibold text-accent break-all">{etransferEmail}</p>
+            {owingNums.length === 1 && (
+              <p className="text-xs text-ink-muted mt-1">Please include invoice number <span className="font-semibold text-ink">{owingNums[0]}</span> in the e-transfer message.</p>
+            )}
+            {owingNums.length > 1 && (
+              <p className="text-xs text-ink-muted mt-1">Please include your invoice number (e.g. <span className="font-semibold text-ink">{owingNums[0]}</span>) in the e-transfer message.</p>
+            )}
+            <div className="flex flex-wrap gap-2 mt-2">
+              <Button size="sm" variant="secondary" onClick={() => copyText('email', etransferEmail)}>
+                {copied === 'email' ? <Check className="w-3.5 h-3.5" /> : null} {copied === 'email' ? 'Copied' : 'Copy email'}
+              </Button>
+              {outstanding > 0 && (
+                <Button size="sm" variant="secondary" onClick={() => copyText('amount', outstanding.toFixed(2))}>
+                  {copied === 'amount' ? <Check className="w-3.5 h-3.5" /> : null} {copied === 'amount' ? 'Copied' : `Copy amount (${formatCurrency(outstanding)})`}
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+        )}
+        <div className="flex items-start gap-3 border-t border-border pt-3">
+          <span className="text-lg leading-none" aria-hidden>💵</span>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-ink">Cash</p>
+            <p className="text-xs text-ink-muted">Pay in person at your next visit — we&rsquo;ll record it and send your receipt.</p>
+          </div>
+        </div>
+      </div>
       {paymentsEnabled && <AutoPayCard token={token} card={card} autopayEnabled={autopayEnabled} onChanged={onChanged} />}
       {availableCredit > 0 && (
         <div className="rounded-card border border-accent/25 bg-accent/[0.06] p-3.5 flex items-center justify-between gap-3">
@@ -917,77 +968,31 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
         </div>
       </div>
 
-      {/* ── Ways to pay ── Card / E-transfer / Cash, with copy-ready e-transfer details */}
-      <div className="rounded-card border border-border bg-bg-secondary p-4 space-y-3">
-        <p className="text-sm font-semibold text-ink flex items-center gap-2"><Wallet className="w-4 h-4 text-accent" /> Ways to pay</p>
-
-        <div className="flex items-start gap-3">
-          <span className="text-lg leading-none mt-0.5" aria-hidden>💳</span>
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-ink">Card</p>
-            <p className="text-xs text-ink-muted">{paymentsEnabled ? 'Pay any invoice securely online with the Pay button above.' : 'Ask us for a secure card payment link.'}</p>
-          </div>
-        </div>
-
-        <div className="flex items-start gap-3">
-          <span className="text-lg leading-none mt-0.5" aria-hidden>🏦</span>
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium text-ink">Interac e-transfer</p>
-            {etransferEmail ? (
-              <div className="mt-1 space-y-2">
-                {business?.company_name && <p className="text-xs text-ink-muted">Recipient: <span className="text-ink">{business.company_name}</span></p>}
-                <p className="text-xs text-ink-muted">Send payment to: <span className="text-ink font-medium break-all">{etransferEmail}</span></p>
-                {owingNums.length > 0 && <p className="text-xs text-ink-faint">Please include your invoice number ({owingNums[0]}) in the message so we can match your payment.</p>}
-                <div className="flex flex-wrap gap-2 pt-0.5">
-                  <button type="button" onClick={() => copyText('email', etransferEmail)}
-                    className="inline-flex items-center gap-1.5 text-xs font-medium rounded-lg border border-border-strong bg-bg-tertiary px-2.5 py-1.5 text-ink hover:border-accent transition-colors">
-                    {copied === 'email' ? <><Check className="w-3.5 h-3.5 text-emerald-400" /> Copied</> : <><Mail className="w-3.5 h-3.5 text-ink-faint" /> Copy email</>}
-                  </button>
-                  {outstanding > 0 && (
-                    <button type="button" onClick={() => copyText('amount', outstanding.toFixed(2))}
-                      className="inline-flex items-center gap-1.5 text-xs font-medium rounded-lg border border-border-strong bg-bg-tertiary px-2.5 py-1.5 text-ink hover:border-accent transition-colors">
-                      {copied === 'amount' ? <><Check className="w-3.5 h-3.5 text-emerald-400" /> Copied</> : <><Copy className="w-3.5 h-3.5 text-ink-faint" /> Copy amount ({formatCurrency(outstanding)})</>}
-                    </button>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <p className="text-xs text-ink-muted">Contact us and we'll send you the e-transfer details.</p>
-            )}
-          </div>
-        </div>
-
-        <div className="flex items-start gap-3">
-          <span className="text-lg leading-none mt-0.5" aria-hidden>💵</span>
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-ink">Cash</p>
-            <p className="text-xs text-ink-muted">Pay in person at your next visit — we'll record it and send your receipt.</p>
-          </div>
-        </div>
-      </div>
-
       {receipts.length === 0 ? (
         <Empty text="No payments yet. Your payments will appear here." />
       ) : receipts.map(p => {
         const inv = p.invoice_id ? invById.get(p.invoice_id) : null
         return (
-          <div key={p.id} className="rounded-card border border-border bg-bg-secondary p-4 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className={cn('w-9 h-9 rounded-lg border flex items-center justify-center shrink-0', Number(p.amount) < 0 ? 'border-red-500/25 bg-red-500/10' : 'border-emerald-500/25 bg-emerald-500/10')}><CheckCircle2 className={cn('w-4 h-4', Number(p.amount) < 0 ? 'text-red-400' : 'text-emerald-400')} /></div>
-              <div className="min-w-0">
-                <p className="text-sm font-semibold text-ink">{Number(p.amount) < 0 ? '−' : ''}{formatCurrency(Math.abs(Number(p.amount)))}</p>
-                <p className="text-xs text-ink-muted truncate">{p.paid_at ? formatDate(p.paid_at) : formatDate(p.created_at)}{inv ? ` · ${inv.invoice_number}` : ''} · {Number(p.amount) < 0 ? 'Refund' : paymentMethodLabel(p.provider)}</p>
+          <div key={p.id} className="rounded-card border border-border bg-bg-secondary p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+            {/* Details + status — the badge stays with the details on every width. */}
+            <div className="flex items-center justify-between gap-3 min-w-0 flex-1">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className={cn('w-9 h-9 rounded-lg border flex items-center justify-center shrink-0', Number(p.amount) < 0 ? 'border-red-500/25 bg-red-500/10' : 'border-emerald-500/25 bg-emerald-500/10')}><CheckCircle2 className={cn('w-4 h-4', Number(p.amount) < 0 ? 'text-red-400' : 'text-emerald-400')} /></div>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-ink">{Number(p.amount) < 0 ? '−' : ''}{formatCurrency(Math.abs(Number(p.amount)))}</p>
+                  <p className="text-xs text-ink-muted truncate">{p.paid_at ? formatDate(p.paid_at) : formatDate(p.created_at)}{inv ? ` · ${inv.invoice_number}` : ''} · {Number(p.amount) < 0 ? 'Refund' : paymentMethodLabel(p.provider)}</p>
+                </div>
               </div>
+              <span className={cn('shrink-0 text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', Number(p.amount) < 0 ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10')}>{Number(p.amount) < 0 ? 'Refunded' : 'Paid'}</span>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', Number(p.amount) < 0 ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10')}>{Number(p.amount) < 0 ? 'Refunded' : 'Paid'}</span>
-              {inv && (
-                <button onClick={() => downloadReceipt(p, inv)} disabled={receiptBusy === p.id}
-                  className="text-ink-faint hover:text-accent transition-colors p-1.5 -m-1" aria-label={Number(p.amount) < 0 ? 'Download refund receipt' : 'Download receipt'} title={Number(p.amount) < 0 ? 'Download refund receipt (PDF)' : 'Download receipt (PDF)'}>
-                  {receiptBusy === p.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                </button>
-              )}
-            </div>
+            {/* Receipt download is a PRIMARY action — labeled button, full-width on
+                mobile, right-aligned on desktop. One per payment row. */}
+            {inv && (
+              <Button size="sm" variant="secondary" className="w-full sm:w-auto shrink-0"
+                onClick={() => downloadReceipt(p, inv)} loading={receiptBusy === p.id}>
+                <FileText className="w-4 h-4" /> Download {Number(p.amount) < 0 ? 'Refund ' : ''}Receipt
+              </Button>
+            )}
           </div>
         )
       })}

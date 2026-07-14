@@ -365,6 +365,9 @@ export default function SettingsPage() {
               <Input label="GST % (if registered)" type="number" step="0.5" min="0" max="15"
                 hint="Alberta GST is 5%. Leave 0 if you're not GST-registered — no GST line will be shown."
                 {...register('gst_percent')} />
+              <Input label="E-transfer email" type="email" placeholder="pay@yourbusiness.com"
+                hint="The email registered with your bank for Interac e-transfers (often your business email). Shown to customers in the portal's Ways to Pay."
+                {...register('etransfer_email')} />
             </div>
             <Input label="E-transfer email" type="email" placeholder="pay@yourbusiness.com"
               hint="The email registered with your bank for Interac e-transfers (often your business email). Shown to customers in the portal's Ways to pay."

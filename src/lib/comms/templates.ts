@@ -80,7 +80,7 @@ This is a friendly reminder that {{business_name}} is scheduled to service your 
 
 If anything changes before then, simply reply to this message.
 
-We look forward to seeing you tomorrow!`,
+We look forward to seeing you then!`,
 
   introduction: `Hi {{first_name}},
 
@@ -184,7 +184,7 @@ Thank you again—we truly appreciate your support!`,
 
 Your quote from {{business_name}} is ready.
 
-You can view, approve, or decline it anytime using the secure link below:
+You can view and approve it anytime using the secure link below:
 
 {{portal_link}}
 

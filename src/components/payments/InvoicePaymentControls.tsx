@@ -6,7 +6,7 @@ import { toast } from '@/lib/toast'
 import { formatCurrency } from '@/lib/utils'
 import { Invoice, BusinessSettings, Payment, PAYMENT_METHODS, paymentMethodLabel } from '@/types'
 import { Button } from '@/components/ui/Button'
-import { invoiceBalance, recordPayment, applyCreditToInvoice, overpaymentToCredit, recordRefund, receiptNumberFor } from '@/lib/payments/ledger'
+import { invoiceBalance, recordPayment, applyCreditToInvoice, overpaymentToCredit, recordRefund, receiptNumberFor, removePayment, restorePayment } from '@/lib/payments/ledger'
 import { receiptMessageBody } from '@/lib/comms/templates'
 import { Wallet, Plus, Gift, RotateCcw, TrendingUp, X, FileDown, Mail, MessageSquare, ReceiptText } from 'lucide-react'
 
@@ -19,11 +19,12 @@ function todayISO(): string {
 // Record-Payment (multiple payments per invoice), the overpayment resolver
 // (credit / refund / raise total), and one-tap apply-credit. All movements go
 // through the shared ledger so dashboard, portal and reports update automatically.
-export function InvoicePaymentControls({ invoice, settings, uid, credit, onChanged }: {
+export function InvoicePaymentControls({ invoice, settings, uid, credit, payments = [], onChanged }: {
   invoice: Invoice
   settings: BusinessSettings | null
   uid: string
   credit: number              // the customer's available credit
+  payments?: Payment[]        // this invoice's ledger rows (permanent receipts + revert)
   onChanged: () => void
 }) {
   const supabase = useState(() => createClient())[0]
@@ -38,6 +39,35 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, onChang
   // The just-recorded payment → drives the automatic receipt panel (PDF/email/SMS).
   const [lastPayment, setLastPayment] = useState<Payment | null>(null)
   const [sendingReceipt, setSendingReceipt] = useState<string | null>(null)
+  // Per-row busy state for the PERMANENT ledger list (receipt download / revert).
+  const [rowBusy, setRowBusy] = useState<string | null>(null)
+
+  // Revert = remove the ledger row through the engine; the trigger re-derives the
+  // invoice (paid → partial/unpaid) naturally. Undo re-inserts the same row.
+  async function revertPayment(p: Payment) {
+    setRowBusy(p.id)
+    const res = await removePayment(supabase, p)
+    setRowBusy(null)
+    if (res.error) { toast.error(res.error); return }
+    onChanged()
+    toast.undo(`Payment of ${formatCurrency(Math.abs(Number(p.amount)))} reverted on ${invoice.invoice_number}.`, async () => {
+      const r = await restorePayment(supabase, p)
+      if (r.error) toast.error('Could not restore the payment: ' + r.error)
+      onChanged()
+    })
+  }
+  // Receipt for a HISTORIC row — amount_paid on the invoice prop is already
+  // current, so render straight from the row + invoice (no balance projection).
+  async function downloadRowReceipt(p: Payment) {
+    setRowBusy(p.id)
+    try {
+      const [{ renderReceiptBlob }, { downloadBlob }] = await Promise.all([
+        import('@/components/payments/ReceiptPDF'), import('@/lib/portalPdf'),
+      ])
+      downloadBlob(await renderReceiptBlob(p, invoice, settings), `${receiptNumberFor(p.id)}.pdf`)
+    } catch { toast.error('Could not generate the receipt PDF.') }
+    setRowBusy(null)
+  }
 
   const applyable = Math.min(credit, balance)
 
@@ -127,6 +157,13 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, onChang
     onChanged()
   }
 
+  // Nothing to show, nothing to do → render nothing at all. An unpaid invoice
+  // with no ledger rows gets the Record-payment action but never an empty
+  // receipt area; a cancelled invoice with no history adds zero chrome.
+  const canRecord = invoice.status !== 'paid' && invoice.status !== 'cancelled' && balance > 0
+  const hasContent = payments.length > 0 || paid > 0 || balance !== total || overpaid > 0 || canRecord || !!lastPayment
+  if (!hasContent) return null
+
   return (
     <div className="mt-3 pt-3 border-t border-border space-y-2.5">
       {/* Summary — only once money is involved (drafts/unpaid stay quiet) */}
@@ -136,6 +173,51 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, onChang
           {overpaid > 0
             ? <span className="text-ink-muted">Overpaid <span className="font-semibold text-violet-400">{formatCurrency(overpaid)}</span></span>
             : <span className="text-ink-muted">Balance <span className={`font-semibold ${balance > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>{formatCurrency(balance)}</span></span>}
+        </div>
+      )}
+
+      {/* ── Payments on this invoice — PERMANENT, straight from the ledger. Every
+          row keeps its receipt forever; manual rows can be safely reverted (the
+          trigger re-derives the status — the invoice is never unlocked by hand). */}
+      {payments.length > 0 && (
+        <div className="rounded-lg border border-border bg-bg-secondary divide-y divide-border">
+          {payments.map(p => {
+            const negative = Number(p.amount) < 0
+            const revertable = !negative && p.provider !== 'stripe'
+            return (
+              <div key={p.id} className="flex items-center justify-between gap-2 px-2.5 py-1.5">
+                <div className="min-w-0 text-xs">
+                  <span className={`font-semibold ${negative ? 'text-red-400' : 'text-emerald-400'}`}>
+                    {negative ? '−' : ''}{formatCurrency(Math.abs(Number(p.amount)))}
+                  </span>
+                  <span className="text-ink-faint"> · {negative ? 'Refund' : paymentMethodLabel(p.method || p.provider)} · {new Date(p.paid_at || p.created_at).toLocaleDateString()}</span>
+                  <span className="block font-mono text-[10px] text-ink-faint mt-0.5">{receiptNumberFor(p.id)}</span>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button onClick={() => downloadRowReceipt(p)} disabled={rowBusy === p.id}
+                    className="p-1.5 text-ink-faint hover:text-accent transition-colors"
+                    aria-label={negative ? 'Download refund receipt' : 'Download receipt'}
+                    title={`Download ${negative ? 'refund receipt' : 'receipt'} ${receiptNumberFor(p.id)}`}>
+                    <FileDown className="w-3.5 h-3.5" />
+                  </button>
+                  {invoice.customers?.phone && (
+                    <button onClick={() => sendReceipt(p, 'sms')} disabled={rowBusy === p.id || sendingReceipt !== null}
+                      className="p-1.5 text-ink-faint hover:text-accent transition-colors"
+                      aria-label="Text this receipt to the customer" title={`Text ${negative ? 'refund receipt' : 'receipt'} ${receiptNumberFor(p.id)} to the customer`}>
+                      <MessageSquare className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                  {revertable && (
+                    <button onClick={() => revertPayment(p)} disabled={rowBusy === p.id}
+                      className="p-1.5 text-ink-faint hover:text-red-400 transition-colors"
+                      aria-label="Revert payment" title="Revert this payment (undoable) — the invoice recalculates from the ledger">
+                      <RotateCcw className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            )
+          })}
         </div>
       )}
 
@@ -159,7 +241,7 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, onChang
       )}
 
       {/* Actions */}
-      {invoice.status !== 'paid' && balance > 0 && (
+      {canRecord && (
         <div className="flex flex-wrap items-center gap-2">
           <Button size="sm" variant="secondary" onClick={() => { setAmount(balance > 0 ? String(balance) : ''); setOpen(o => !o) }}>
             <Plus className="w-3.5 h-3.5" /> Record payment
