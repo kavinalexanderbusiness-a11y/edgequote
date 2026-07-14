@@ -1,70 +1,57 @@
 import { WeekendOutlook } from '@/components/dashboard/WeekendOutlook'
-import { DashboardSections } from '@/components/dashboard/DashboardSections'
-import { createClient } from '@/lib/supabase/server'
-import { StatsGrid } from '@/components/dashboard/StatsGrid'
-import { RecentQuotes } from '@/components/dashboard/RecentQuotes'
-import { AcquisitionInsights } from '@/components/dashboard/AcquisitionInsights'
-import { DashboardTopSuggestions } from '@/components/dashboard/DashboardTopSuggestions'
 import { TodaysPriorities } from '@/components/dashboard/TodaysPriorities'
+import { DashboardKpis } from '@/components/dashboard/DashboardKpis'
+import { createClient } from '@/lib/supabase/server'
 import { PageHeader } from '@/components/layout/PageHeader'
-import { DashboardStats, Quote } from '@/types'
 import Link from 'next/link'
 import { Button } from '@/components/ui/Button'
 import { Plus } from 'lucide-react'
 
+// The 7:00-AM owner view — answers both halves of the morning:
+//   WHAT DO I DO TODAY?
+//     1. What first?            → Today's Priorities (ranked queue)
+//     2. Who owes me money?     → Today's Priorities (unpaid-invoices row)
+//     3. What jobs are today?   → Your next work days (today's stops, call/map)
+//     4. What needs scheduling? → Today's Priorities (accepted-not-scheduled row)
+//     5. Who needs follow-up?   → Today's Priorities (follow-up-quotes row)
+//   HOW IS MY BUSINESS DOING?  → the compact KPI strip (Collected, Outstanding,
+//     Jobs This Month, Conversion) under the day plan.
+// Nothing else earns space: growth suggestions, recent quotes and acquisition
+// insights don't help you start the day and live on their own pages.
 export default async function DashboardPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
-  const [{ data: quotes }, { data: invoices }, { data: jobs }, { data: settingsRow }] = await Promise.all([
-    supabase.from('quotes').select('*').eq('user_id', user!.id).order('created_at', { ascending: false }),
+  const [{ data: invoices }, { data: jobs }, { data: quotes }] = await Promise.all([
     supabase.from('invoices').select('amount, status').eq('user_id', user!.id),
     supabase.from('jobs').select('status, scheduled_date').eq('user_id', user!.id),
-    supabase.from('business_settings').select('dashboard_cards').eq('user_id', user!.id).maybeSingle(),
+    supabase.from('quotes').select('status').eq('user_id', user!.id),
   ])
-
-  const allQuotes: Quote[] = quotes || []
   const allInvoices = (invoices as { amount: number; status: string }[]) || []
   const allJobs = (jobs as { status: string; scheduled_date: string }[]) || []
-  const collectedRevenue = allInvoices.filter(i => i.status === 'paid').reduce((s, i) => s + Number(i.amount || 0), 0)
+  const allQuotes = (quotes as { status: string }[]) || []
 
-  // Month boundary — only needed for the "this month" jobs count below.
+  // Collected = invoices paid; Outstanding = money owed. Outstanding uses the SAME
+  // filter as the "Collect unpaid invoices" priority above, so the two never disagree.
+  const collected = allInvoices.filter(i => i.status === 'paid').reduce((s, i) => s + Number(i.amount || 0), 0)
+  const outstanding = allInvoices.filter(i => i.status === 'unpaid' || i.status === 'sent').reduce((s, i) => s + Number(i.amount || 0), 0)
+
   const now = new Date()
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+  const monthStartISO = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
+  const jobsThisMonth = allJobs.filter(j => j.status === 'completed' && j.scheduled_date >= monthStartISO).length
 
-  // Conversion rate = accepted / (everything except draft)
-  const acceptedCount = allQuotes.filter(q => q.status === 'accepted').length
-  const decidedCount = allQuotes.filter(q => q.status !== 'draft').length
-  const conversionRate = decidedCount > 0
-    ? Math.round((acceptedCount / decidedCount) * 100)
-    : 0
+  const accepted = allQuotes.filter(q => q.status === 'accepted').length
+  const decided = allQuotes.filter(q => q.status !== 'draft').length
+  const conversionRate = decided > 0 ? Math.round((accepted / decided) * 100) : 0
 
-  // Done (completed) jobs feed reporting.
-  const doneJobs = allJobs.filter(j => j.status === 'completed')
-  const monthStartISO = `${monthStart.getFullYear()}-${String(monthStart.getMonth() + 1).padStart(2, '0')}-01`
-  const jobsDone = doneJobs.length
-  const jobsDoneThisMonth = doneJobs.filter(j => j.scheduled_date >= monthStartISO).length
-
-  const stats: DashboardStats = {
-    collectedRevenue,
-    acceptedRevenue: allQuotes
-      .filter(q => q.status === 'accepted')
-      .reduce((sum, q) => sum + Number(q.total), 0),
-    jobsDone,
-    jobsDoneThisMonth,
-    conversionRate,
-  }
-
-  const recent = allQuotes.slice(0, 8)
-
-  const hour = new Date().getHours()
+  const hour = now.getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
 
   return (
     <div className="max-w-6xl space-y-6">
       <PageHeader
         title={greeting}
-        description="Here's what's happening with Edge Property Services today."
+        description="Your day, and how the business is doing."
         action={
           <Link href="/dashboard/quotes/new">
             <Button>
@@ -73,20 +60,9 @@ export default async function DashboardPage() {
           </Link>
         }
       />
-      {/* Ranked action queue — leads the page so the most valuable next moves are
-          one short list, not a scan across every card below. Rendered above the
-          customizable sections so it always stays on top. */}
       <TodaysPriorities />
-      <DashboardSections
-        initialPrefs={(settingsRow as { dashboard_cards: { order: string[]; hidden: string[] } | null } | null)?.dashboard_cards ?? null}
-        sections={{
-          suggestions: <DashboardTopSuggestions />,
-          stats: <StatsGrid stats={stats} />,
-          weekend: <WeekendOutlook />,
-          recent: <RecentQuotes quotes={recent} />,
-          acquisition: <AcquisitionInsights />,
-        }}
-      />
+      <WeekendOutlook />
+      <DashboardKpis collected={collected} outstanding={outstanding} jobsThisMonth={jobsThisMonth} conversionRate={conversionRate} />
     </div>
   )
 }
