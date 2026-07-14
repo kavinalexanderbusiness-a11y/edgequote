@@ -11,13 +11,15 @@ import { MSG_LABELS, MsgType } from '@/lib/comms/templates'
 import { describeSkip } from '@/lib/comms/skipReasons'
 import { statusMeta, TONE_CLASS } from '@/lib/comms/logStatus'
 import { SmsCost } from '@/components/comms/SmsCost'
-import { Send, StickyNote, Clock, Mail, MessageSquare } from 'lucide-react'
+import { PHOTO_BUCKET, thumbUrl } from '@/lib/photos'
+import { Send, StickyNote, Clock, Mail, MessageSquare, Camera } from 'lucide-react'
 import { format } from 'date-fns'
 import { Skeleton } from '@/components/ui/Skeleton'
 
-interface Msg { id: string; created_at: string; direction: string; channel: string; body: string; status: string | null }
+interface Msg { id: string; created_at: string; direction: string; channel: string; body: string; status: string | null; meta: Record<string, unknown> | null }
 interface Log { id: string; created_at: string; channel: string; template: string; status: string; message_id: string | null; detail: string | null }
-type Item = { id: string; at: string; kind: 'in' | 'out' | 'note' | 'event'; channel: string; body: string; status?: string | null; template?: string; detail?: string | null }
+type Photo = { thumb: string; full: string }
+type Item = { id: string; at: string; kind: 'in' | 'out' | 'note' | 'event'; channel: string; body: string; status?: string | null; template?: string; detail?: string | null; photos?: Photo[] }
 
 // One customer's unified timeline: inbound SMS + portal requests, outbound
 // replies, internal notes, and templated sends (from notification_log). Reply by
@@ -46,6 +48,20 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
   }, [])
   useEffect(() => () => { if (loadTimer.current) clearTimeout(loadTimer.current) }, [])
 
+  // Resolve a lead-photos event's storage paths (meta.paths) to public URLs. The
+  // bucket is public, so getPublicUrl is a cheap synchronous lookup; thumbUrl gives
+  // a small render-sized image for the strip and .full is kept for open/enlarge.
+  function leadPhotos(meta: Record<string, unknown> | null): Photo[] | undefined {
+    if (!meta || meta.kind !== 'lead_photos' || !Array.isArray(meta.paths)) return undefined
+    const out: Photo[] = []
+    for (const p of meta.paths) {
+      if (typeof p !== 'string') continue
+      const full = supabase.storage.from(PHOTO_BUCKET).getPublicUrl(p).data.publicUrl
+      out.push({ thumb: thumbUrl(full, 160, 160), full })
+    }
+    return out.length ? out : undefined
+  }
+
   async function load() {
     const mySeq = ++reqSeq.current
     const cid = customerId
@@ -53,7 +69,7 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
     const uid = session?.user?.id
     if (!uid) { if (mySeq === reqSeq.current) setLoading(false); return }
     const [mRes, lRes] = await Promise.all([
-      supabase.from('messages').select('id, created_at, direction, channel, body, status').eq('customer_id', cid).eq('user_id', uid).order('created_at'),
+      supabase.from('messages').select('id, created_at, direction, channel, body, status, meta').eq('customer_id', cid).eq('user_id', uid).order('created_at'),
       supabase.from('notification_log').select('id, created_at, channel, template, status, message_id, detail').eq('customer_id', cid).eq('user_id', uid).neq('template', 'reply').order('created_at'),
     ])
     // Mark THIS conversation read (you opened it) regardless of a later switch; only
@@ -63,6 +79,9 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
     const msgs: Item[] = (mRes.data as Msg[] || []).map(m => ({
       id: 'm' + m.id, at: m.created_at, channel: m.channel, body: m.body, status: m.status,
       kind: m.direction === 'inbound' ? 'in' : m.direction === 'internal' ? 'note' : 'out',
+      // A "Customer uploaded X photos" event carries the storage paths in meta —
+      // resolve them to public thumb/full URLs so the bubble can show a strip.
+      photos: leadPhotos(m.meta),
     }))
     // A log row linked to a thread message is already shown as the full bubble —
     // skip its event pill so a sent message isn't displayed twice.
@@ -220,9 +239,23 @@ const Bubble = memo(function Bubble({ it, customerId }: { it: Item; customerId: 
   }
   const inbound = it.kind === 'in'
   const Icon = it.channel === 'email' ? Mail : MessageSquare
+  const photos = it.photos
   return (
     <div className={cn('max-w-[82%] rounded-xl px-3 py-2 transition-opacity', inbound ? 'bg-bg-tertiary border border-border' : 'ml-auto bg-accent/15 border border-accent/25', (sending || queued) && 'opacity-70')}>
-      <p className="text-sm text-ink whitespace-pre-wrap">{it.body}</p>
+      <p className="text-sm text-ink whitespace-pre-wrap flex items-center gap-1.5">
+        {photos && photos.length > 0 && <Camera className="w-3.5 h-3.5 text-ink-faint shrink-0" />}{it.body}
+      </p>
+      {photos && photos.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mt-1.5">
+          {photos.map((ph, i) => (
+            <a key={i} href={ph.full} target="_blank" rel="noopener noreferrer"
+              className="block w-16 h-16 rounded-lg overflow-hidden border border-border bg-bg-tertiary hover:border-accent transition-colors" title="Open full size">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={ph.thumb} alt="Customer photo" loading="lazy" className="w-full h-full object-cover" />
+            </a>
+          ))}
+        </div>
+      )}
       <p className="text-[10px] text-ink-faint mt-0.5 flex items-center gap-1">
         {sending ? <><Clock className="w-3 h-3" /> Sending…</> : queued ? <><Clock className="w-3 h-3" /> Queued · sends when online</> : <><Icon className="w-3 h-3" /> {inbound ? (it.channel === 'portal' ? 'Portal' : 'Received') : 'Sent'} · {time}{!inbound && it.status && it.status !== 'sent' && <span className="text-amber-400">· {it.status}</span>}</>}
       </p>

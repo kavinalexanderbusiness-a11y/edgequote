@@ -444,6 +444,8 @@ function buildSnippet(endpoint: string, token: string): string {
     if (form._gotcha.value) { window.location.href = THANK_YOU; return; } // drop bots
     var payload = { token: TOKEN };
     new FormData(form).forEach(function (v, k) { if (k !== "_gotcha") payload[k] = v; });
+    // Optional: attach customer photos as an array of image URLs (or data: URIs) —
+    // they're saved to the lead + customer profile. e.g. payload.photos = ["https://.../1.jpg"];
     fetch(ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

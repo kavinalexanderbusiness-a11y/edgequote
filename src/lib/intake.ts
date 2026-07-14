@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { ingestLeadPhotos } from '@/lib/leadPhotos'
 
 // ── Shared lead intake ───────────────────────────────────────────────────────
 // THE single server-side door for turning ANY external submission (website
@@ -57,9 +58,28 @@ export async function submitLead(opts: {
   }
   if (!data) return { ok: false, status: 404, body: { error: 'This form is not currently accepting submissions.' } }
 
-  const result = data as { error?: string; lead_id?: string; customer_id?: string; source?: string }
+  const result = data as {
+    error?: string; lead_id?: string; customer_id?: string; property_id?: string
+    conversation_id?: string; photo_count?: number; source?: string
+  }
   if (result.error === 'rate_limited') {
     return { ok: false, status: 429, body: { error: 'Too many requests — please try again shortly.' } }
   }
+
+  // Fold any submitted photos into the SAME photo engine (job-photos bucket +
+  // job_photos), linked to this lead's customer/property. Best-effort and awaited
+  // (serverless kills un-awaited work) — a failure here never fails the lead.
+  if (result.customer_id && Array.isArray((opts.payload as Record<string, unknown>).photos)) {
+    try {
+      await ingestLeadPhotos({
+        token,
+        customerId: result.customer_id,
+        propertyId: result.property_id ?? null,
+        conversationId: result.conversation_id ?? null,
+        photos: (opts.payload as Record<string, unknown>).photos,
+      })
+    } catch (e) { console.error('[intake] photo ingest error:', e instanceof Error ? e.message : e) }
+  }
+
   return { ok: true, status: 200, body: { ok: true, ...result } }
 }
