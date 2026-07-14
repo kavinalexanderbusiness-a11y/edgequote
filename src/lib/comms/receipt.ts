@@ -36,7 +36,7 @@ export async function sendPaymentReceipt(
     const token = await ensurePortalToken(sb, opts.userId, opts.customerId)
     const rendered = renderMessage('receipt', biz?.message_templates, {
       firstName: c.name,
-      businessName: biz?.company_name || 'Edge Property Services',
+      businessName: biz?.company_name || 'Your service provider',
       amount: formatAmount(opts.amount),
       portalLink: token ? portalUrl(token, opts.origin) : undefined,
       reviewLink: biz?.review_url || undefined,

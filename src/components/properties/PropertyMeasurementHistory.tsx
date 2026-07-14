@@ -38,7 +38,9 @@ export function PropertyMeasurementHistory({ propertyId }: { propertyId: string 
   return (
     <Card>
       <CardHeader>
-        <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><History className="w-4 h-4 text-accent" /> Measurement history</h2>
+        {/* Not "Measurement history" — MeasureTool renders a section by that name
+            on the same page; this table is the auto-vs-accepted comparison. */}
+        <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><History className="w-4 h-4 text-accent" /> Auto-measure accuracy</h2>
         <p className="text-xs text-ink-faint mt-0.5">Auto estimate vs what you accepted, over time — this is what trains the per-neighborhood learning.</p>
       </CardHeader>
       <CardBody>

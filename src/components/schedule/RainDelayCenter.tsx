@@ -57,6 +57,13 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
   const [applying, setApplying] = useState(false)
   const [applied, setApplied] = useState(false)
 
+  // Same dialog hygiene as every other schedule modal: Escape closes.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
   // Customer notifications
   const [notify, setNotify] = useState(true)
   const [recipientIds, setRecipientIds] = useState<Set<string>>(new Set())
@@ -249,12 +256,12 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-black/50" onClick={onClose}>
-      <div className="min-h-full flex items-start justify-center p-4 sm:p-6">
+      <div role="dialog" aria-modal="true" aria-label="Weather Ops" className="min-h-full flex items-start justify-center p-4 sm:p-6">
         <Card className="w-full max-w-2xl my-2 shadow-2xl" onClick={e => e.stopPropagation()}>
           <div className="px-5 py-4 border-b border-border flex items-center justify-between">
             {/* "Weather Ops" — the exact name every button that opens this uses. */}
             <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><CloudRain className="w-4 h-4 text-sky-400" /> Weather Ops</h2>
-            <button onClick={onClose} className="w-9 h-9 -mr-2 flex items-center justify-center text-ink-faint hover:text-ink"><X className="w-4 h-4" /></button>
+            <button type="button" onClick={onClose} aria-label="Close" className="w-9 h-9 -mr-2 rounded-lg flex items-center justify-center text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><X className="w-4 h-4" /></button>
           </div>
           <CardBody className="space-y-4">
             {applied && result ? (
@@ -313,7 +320,7 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
               <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-1.5">Why are jobs moving?</p>
               <div className="flex flex-wrap gap-1.5">
                 {DISRUPTION_REASONS.map(rk => (
-                  <button key={rk} onClick={() => setReason(rk)}
+                  <button key={rk} type="button" onClick={() => setReason(rk)}
                     className={cn('text-xs font-medium rounded-full px-2.5 py-1 border transition-colors',
                       reason === rk ? 'border-accent bg-accent/15 text-accent' : 'border-border text-ink-muted hover:text-ink')}>
                     {DISRUPTION_META[rk].emoji} {DISRUPTION_META[rk].label}
@@ -327,7 +334,7 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
               <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-1.5">Affected day</p>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 {dayChips.map(c => (
-                  <button key={c.date} onClick={() => setSelectedDay(c.date)}
+                  <button key={c.date} type="button" onClick={() => setSelectedDay(c.date)}
                     className={cn('rounded-xl border p-2.5 text-left transition-colors',
                       selectedDay === c.date ? 'border-sky-400/60 bg-sky-400/10' : 'border-border-strong bg-surface hover:border-sky-400/40')}>
                     <p className="text-sm font-semibold text-ink">{c.label}</p>
@@ -357,9 +364,10 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
                 <div className="rounded-xl border border-border overflow-hidden">
                   <div className="px-3 py-2 flex items-center justify-between bg-bg-tertiary border-b border-border">
                     <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Jobs to move ({selectedJobIds.size}/{movable.length})</span>
-                    <div className="flex items-center gap-2 text-[11px]">
-                      <button onClick={() => setSelectedJobIds(new Set(movable.map(j => j.id)))} className="text-accent hover:underline font-medium">All</button>
-                      <button onClick={() => setSelectedJobIds(new Set())} className="text-ink-faint hover:text-ink">None</button>
+                    <div className="flex items-center gap-2 text-[11px] font-medium">
+                      <button type="button" onClick={() => setSelectedJobIds(new Set(movable.map(j => j.id)))} className="text-accent hover:underline">All</button>
+                      <span className="text-ink-faint">·</span>
+                      <button type="button" onClick={() => setSelectedJobIds(new Set())} className="text-accent hover:underline">None</button>
                     </div>
                   </div>
                   <div className="max-h-44 overflow-y-auto divide-y divide-border">
@@ -389,7 +397,7 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
                   <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-1.5">Move them to</p>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                     {STRATEGIES.map(s => (
-                      <button key={s} onClick={() => setStrategy(s)}
+                      <button key={s} type="button" onClick={() => setStrategy(s)}
                         className={cn('rounded-xl border p-2.5 text-left transition-colors',
                           strategy === s ? 'border-accent bg-accent/10' : 'border-border-strong bg-surface hover:border-accent/40')}>
                         <p className="text-xs font-semibold text-ink">{STRATEGY_META[s].label}</p>
@@ -399,7 +407,7 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
                   </div>
                   {strategy === 'specific_date' && (
                     <input type="date" value={specificDate} min={format(addDays(parseISO(today), 1), 'yyyy-MM-dd')} onChange={e => setSpecificDate(e.target.value)}
-                      className="mt-2 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none focus:border-accent" />
+                      className="mt-2 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
                   )}
                 </div>
 
@@ -508,7 +516,7 @@ function Stat({ icon: Icon, label, value, tone }: { icon: typeof Clock; label: s
 
 function Chip({ label, icon: Icon, on, onClick }: { label: string; icon: typeof Mail; on: boolean; onClick: () => void }) {
   return (
-    <button onClick={onClick}
+    <button type="button" onClick={onClick}
       className={cn('h-7 px-2 rounded-lg border text-[11px] font-medium flex items-center gap-1 transition-colors',
         on ? 'border-accent/40 bg-accent/10 text-accent' : 'border-border text-ink-faint hover:text-ink')}>
       <Icon className="w-3 h-3" /> {label} {on && <Check className="w-3 h-3" />}

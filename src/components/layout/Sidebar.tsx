@@ -3,24 +3,42 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { LayoutDashboard, Users, FileText, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Receipt, Menu, X, Sprout, MessageSquare, Ruler, Search } from 'lucide-react'
+import { LayoutDashboard, Users, FileText, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Receipt, Menu, X, Sprout, MessageSquare, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { NotificationBell } from '@/components/notifications/NotificationBell'
 
-// Everyday work up top; the 7 analytics pages now live behind one "Grow" hub
+// Everyday work up top; the analytics pages live behind one "Grow" hub
 // (/dashboard/grow) so the sidebar stays short — fewer navigation decisions.
+// (Measurement Accuracy moved into the Grow hub with the other analytics.)
 const navMain = [
   { label: 'Dashboard',  href: '/dashboard',            icon: LayoutDashboard },
   { label: 'Schedule',   href: '/dashboard/schedule',   icon: CalendarDays },
   { label: 'Customers',  href: '/dashboard/customers',  icon: Users },
   { label: 'Properties', href: '/dashboard/properties', icon: Home },
-  { label: 'Measurements', href: '/dashboard/measurements', icon: Ruler },
   { label: 'Quotes',     href: '/dashboard/quotes',     icon: FileText },
   { label: 'Invoices',   href: '/dashboard/invoices',   icon: Receipt },
   { label: 'Messages',   href: '/dashboard/messages',   icon: MessageSquare },
   { label: 'Grow',       href: '/dashboard/grow',       icon: Sprout },
 ]
+
+// Pages that live outside their hub's path still light up their parent nav item,
+// so the sidebar always answers "where am I" — even on Grow's analytics leaves
+// and the weather ops page (a Schedule tool).
+const sectionOf: Record<string, string> = {
+  '/dashboard/intelligence': '/dashboard/grow',
+  '/dashboard/revenue-intelligence': '/dashboard/grow',
+  '/dashboard/pricing-recovery': '/dashboard/grow',
+  '/dashboard/profitability': '/dashboard/grow',
+  '/dashboard/saturation': '/dashboard/grow',
+  '/dashboard/neighbors': '/dashboard/grow',
+  '/dashboard/reactivation': '/dashboard/grow',
+  '/dashboard/review': '/dashboard/grow',
+  '/dashboard/data-quality': '/dashboard/grow',
+  '/dashboard/routes': '/dashboard/grow',
+  '/dashboard/measurements': '/dashboard/grow',
+  '/dashboard/weather': '/dashboard/schedule',
+}
 
 export function Sidebar() {
   const pathname = usePathname()
@@ -105,7 +123,10 @@ export function Sidebar() {
             <kbd className="hidden lg:inline text-[10px] font-semibold text-ink-faint border border-border rounded px-1.5 py-0.5">⌘K</kbd>
           </button>
           {navMain.map(({ label, href, icon: Icon }) => {
-            const active = href === '/dashboard' ? pathname === '/dashboard' : pathname.startsWith(href)
+            const section = Object.keys(sectionOf).find(p => pathname.startsWith(p))
+            const active = href === '/dashboard'
+              ? pathname === '/dashboard'
+              : pathname.startsWith(href) || (section != null && sectionOf[section] === href)
             const badge = label === 'Messages' && unread > 0 ? unread : 0
             return (
               <Link key={href} href={href} onClick={onNavigate} className={linkClass(active)}>
@@ -121,15 +142,15 @@ export function Sidebar() {
           })}
         </nav>
         <div className="px-3 py-4 border-t border-border flex flex-col gap-0.5">
-          <Link href="/dashboard/settings/templates" onClick={onNavigate}
-            className={linkClass(pathname === '/dashboard/settings/templates')}>
-            <LayoutTemplate className="w-4 h-4" />
-            Service Templates
-          </Link>
           <Link href="/dashboard/settings" onClick={onNavigate}
             className={linkClass(pathname === '/dashboard/settings')}>
             <Settings className="w-4 h-4" />
             Settings
+          </Link>
+          <Link href="/dashboard/settings/templates" onClick={onNavigate}
+            className={linkClass(pathname === '/dashboard/settings/templates')}>
+            <LayoutTemplate className="w-4 h-4" />
+            Service Templates
           </Link>
           <button
             onClick={() => { onNavigate?.(); handleSignOut() }}
@@ -182,8 +203,8 @@ export function Sidebar() {
       {/* Mobile drawer */}
       {open && (
         <div className="lg:hidden fixed inset-0 z-50">
-          <div className="absolute inset-0 bg-black/60" onClick={() => setOpen(false)} />
-          <aside className="absolute left-0 top-0 h-full w-64 max-w-[80%] bg-bg-secondary border-r border-border flex flex-col">
+          <div className="absolute inset-0 bg-black/60 animate-fade" onClick={() => setOpen(false)} />
+          <aside className="absolute left-0 top-0 h-full w-64 max-w-[80%] bg-bg-secondary border-r border-border flex flex-col animate-drawer">
             <div className="h-14 flex items-center justify-between px-4 border-b border-border">
               {logo}
               <button onClick={() => setOpen(false)} className="text-ink-faint hover:text-ink p-2 -mr-2" aria-label="Close menu">

@@ -258,11 +258,11 @@ export default function NewQuotePage() {
     }
   }
 
-  if (loading) return <SkeletonRows count={6} />
+  if (loading) return <div className="max-w-5xl mx-auto space-y-6"><SkeletonRows count={6} /></div>
 
   return (
-    <div className="max-w-5xl space-y-6">
-      <PageHeader title="New Quote" description="Build and save a new service quote" />
+    <div className="max-w-5xl mx-auto space-y-6">
+      <PageHeader title="New Quote" description="Build and save a new service quote." />
       <QuoteBuilder
         customers={customers}
         templates={templates}

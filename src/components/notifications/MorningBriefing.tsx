@@ -88,7 +88,7 @@ export function MorningBriefing() {
                 <p className="text-[10px] uppercase tracking-wide text-ink-faint">{stat.label}</p>
                 {stat.href && <ChevronRight className="w-3 h-3 text-ink-faint" />}
               </div>
-              <p className={cn('text-lg font-bold leading-tight', stat.tone === 'warn' ? 'text-amber-300' : 'text-ink')}>{stat.value}</p>
+              <p className={cn('text-lg font-bold leading-tight tabular-nums', stat.tone === 'warn' ? 'text-amber-300' : 'text-ink')}>{stat.value}</p>
               {stat.detail && <p className="text-[11px] text-ink-muted truncate">{stat.detail}</p>}
             </>
           )

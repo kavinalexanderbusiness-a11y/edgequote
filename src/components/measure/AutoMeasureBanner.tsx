@@ -60,7 +60,7 @@ export function AutoMeasureBanner({ lat, lng, neighborhood, onAuto, onUse }: {
     <div className="rounded-xl border border-border bg-bg-secondary px-4 py-3 text-xs text-ink-muted">Couldn’t auto-measure this address — trace the lawn on the map below.</div>
   )
   return (
-    <div className="rounded-card border border-accent/30 bg-accent/5 px-4 py-3 motion-safe:animate-[fadeIn_140ms_ease-out]">
+    <div className="rounded-card border border-accent/30 bg-accent/5 px-4 py-3 animate-fade">
       <div className="flex items-center justify-between gap-3">
         <span className="text-sm font-semibold text-ink flex items-center gap-2"><Sparkles className="w-4 h-4 text-accent" /> Auto-measured lawn</span>
         <ConfidenceBadge confidence={result.confidence} />
@@ -73,10 +73,12 @@ export function AutoMeasureBanner({ lat, lng, neighborhood, onAuto, onUse }: {
       </p>
       <div className="flex items-center gap-2 mt-2 flex-wrap">
         <input type="number" value={val} onChange={e => setVal(e.target.value)}
-          className="w-28 bg-bg-tertiary border border-border-strong rounded-lg px-3 py-1.5 text-base font-bold text-ink tabular-nums outline-none focus:border-accent" />
+          aria-label="Measured lawn size (sq ft)"
+          className="w-28 bg-bg-tertiary border border-border-strong rounded-lg px-3 py-1.5 text-base font-bold text-ink tabular-nums outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
         <span className="text-sm text-ink-muted">sq ft</span>
+        {/* The label carries the value — you can see exactly what you're accepting. */}
         <Button type="button" size="sm" className="transition-colors" onClick={() => { const n = Number(val) || 0; if (n > 0) { onUse(n); setUsed(true) } }}>
-          {used ? <><Check className="w-3.5 h-3.5" /> Used</> : 'Use this'}
+          {used ? <><Check className="w-3.5 h-3.5" /> Used</> : Number(val) > 0 ? `Use ${Number(val).toLocaleString()} sq ft` : 'Use estimate'}
         </Button>
       </div>
       <p className="text-[11px] text-ink-faint mt-1.5">Edit the number and tap Use, or trace on the map to set it exactly (tracing overrides this).</p>

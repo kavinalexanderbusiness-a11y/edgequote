@@ -10,6 +10,7 @@ import { prefetchCustomer, hoverIntent } from '@/lib/prefetch'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { applyConsent, SMS_CONSENT_WARNING, ConsentChannel } from '@/lib/consent'
 import { toast as notify } from '@/lib/toast'
+import { confirm as confirmDialog } from '@/lib/confirm'
 import { useBulkSelect } from '@/hooks/useBulkSelect'
 import { useListShortcuts } from '@/hooks/useListShortcuts'
 import { BulkActionBar, SelectCheckbox, SelectAllToggle, type BulkAction } from '@/components/ui/BulkActions'
@@ -18,10 +19,11 @@ import type { MsgType } from '@/lib/comms/templates'
 import { exportRowsToCsv } from '@/lib/csv'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
+import { Menu } from '@/components/ui/Menu'
+import { FilterPill } from '@/components/ui/FilterPill'
 import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { SearchInput } from '@/components/ui/SearchInput'
-import { FilterPill } from '@/components/ui/FilterPill'
-import { Edit2, Trash2, Phone, Mail, FileText, Link2, Check, MessageSquare, ShieldAlert, Archive, Download, Send, Users } from 'lucide-react'
+import { Edit2, Phone, Mail, FileText, Link2, MessageSquare, ShieldAlert, Archive, Download, Send, Users, Star, Smartphone, MoreHorizontal } from 'lucide-react'
 
 type ConsentFilter = '' | 'sms_in' | 'sms_out' | 'email_in' | 'email_out' | 'both' | 'neither'
 const CONSENT_FILTERS: { value: ConsentFilter; label: string }[] = [
@@ -52,7 +54,6 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
   const [consentFilter, setConsentFilter] = useState<ConsentFilter>('')
   const [deleting, setDeleting] = useState<string | null>(null)
   const [portalBusy, setPortalBusy] = useState<string | null>(null)
-  const [smsConfirm, setSmsConfirm] = useState(false)
   // Which template the Send-Message dialog opens on (null = closed; 'choose' = let the
   // owner pick). Lets "Send introduction" / "Review request" be one-tap entries into
   // THE same dialog instead of separate UIs.
@@ -105,9 +106,23 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
     sel.clear()
     await onRefresh()
   }
-  // Enabling SMS always routes through an explicit confirmation first.
-  function requestBulk(channel: ConsentChannel, value: boolean) {
-    if (channel === 'sms' && value) { setSmsConfirm(true); return }
+  // Enabling SMS always routes through an explicit confirmation first — THE shared
+  // confirm dialog (same title/message/handler as before, one confirm experience app-wide).
+  async function requestBulk(channel: ConsentChannel, value: boolean) {
+    if (channel === 'sms' && value) {
+      const ok = await confirmDialog({
+        title: 'Enable SMS consent?',
+        icon: ShieldAlert,
+        confirmLabel: 'Enable SMS',
+        message: (
+          <>
+            <p>{SMS_CONSENT_WARNING}</p>
+            <p className="text-xs text-ink-faint mt-2">This enables SMS for {sel.count} selected customer{sel.count !== 1 ? 's' : ''}.</p>
+          </>
+        ),
+      })
+      if (!ok) return
+    }
     runBulk(channel, value)
   }
 
@@ -149,11 +164,11 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
     { key: 'message', label: 'Message', icon: Send, tone: 'primary', onClick: () => setMsgTemplate('choose') },
     // One-tap entries into THE same dialog, preselected — not separate UIs.
     { key: 'introduction', label: 'Send introduction', icon: MessageSquare, onClick: () => setMsgTemplate('introduction') },
-    { key: 'review', label: 'Review request', icon: Check, onClick: () => setMsgTemplate('review_request') },
+    { key: 'review', label: 'Send review request', icon: Star, onClick: () => setMsgTemplate('review_request') },
     { key: 'archive', label: 'Archive', icon: Archive, onClick: bulkArchive },
     { key: 'export', label: 'Export', icon: Download, onClick: exportSelected },
-    { key: 'email-on', label: 'Email on', icon: Mail, onClick: () => requestBulk('email', true) },
-    { key: 'sms-on', label: 'SMS on', icon: MessageSquare, onClick: () => requestBulk('sms', true) },
+    { key: 'email-on', label: 'Enable email', icon: Mail, onClick: () => requestBulk('email', true) },
+    { key: 'sms-on', label: 'Enable SMS', icon: Smartphone, onClick: () => requestBulk('sms', true) },
   ]
 
   async function handleDelete(id: string) {
@@ -192,6 +207,7 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
         onKeyDown={e => { if (e.key === 'Escape') { setSearch(''); e.currentTarget.blur() } }}
       />
 
+      {/* Consent filters — the shared FilterPill (aria-pressed + focus ring built in) */}
       <div className="flex flex-wrap gap-1.5">
         {CONSENT_FILTERS.map(f => (
           <FilterPill key={f.value} active={consentFilter === f.value} onClick={() => setConsentFilter(f.value)}>
@@ -213,16 +229,16 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
           <Card>
             <EmptyState icon={Users} title="No customers yet"
               description="Add your first customer, or import your existing list from a CSV in one step."
-              action={onAdd ? { label: 'Add Customer', onClick: onAdd } : { label: 'Import customers', onClick: () => router.push('/dashboard/customers/import') }} />
+              action={onAdd ? { label: 'Add customer', onClick: onAdd } : { label: 'Import customers', onClick: () => router.push('/dashboard/customers/import') }} />
           </Card>
         ) : (
           <Card><InlineEmpty>No customers match your filters.</InlineEmpty></Card>
         )
       ) : (
         <div className="grid gap-3">
-          {filtered.map(c => (
+          {filtered.map((c, i) => (
             <Card key={c.id} {...hoverIntent(() => prefetchCustomer(c.id))}
-              className={cn('flex items-center gap-3 px-5 py-4 transition-colors', sel.isSelected(c.id) ? 'border-accent/50' : 'hover:border-border-strong')}>
+              className={cn('flex items-center gap-3 px-5 py-4 transition-colors card-lift animate-rise', i < 6 && `stagger-${i + 1}`, sel.isSelected(c.id) ? 'border-accent/50' : 'hover:border-border-strong')}>
               <SelectCheckbox checked={sel.isSelected(c.id)} onToggle={shift => sel.toggle(c.id, shift)} />
               {/* Avatar */}
               <div className="w-10 h-10 rounded-full bg-accent/10 border border-accent/20 flex items-center justify-center flex-shrink-0">
@@ -248,28 +264,31 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
                   )}
                   {c.city && <span className="text-xs text-ink-faint">{c.city}, {c.province}</span>}
                   {c.acquisition_source && (
-                    <span className="text-[10px] uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5">{c.acquisition_source}</span>
+                    <span className="text-[10px] uppercase tracking-wide text-ink-muted border border-border rounded px-1.5 py-0.5">{c.acquisition_source}</span>
                   )}
                 </div>
               </div>
               {/* Added */}
               <p className="text-xs text-ink-faint hidden md:block">{formatDate(c.created_at)}</p>
-              {/* Actions — the quoting workflow's entry point is labeled and first;
-                  one Portal action (copy), no duplicate open-in-tab twin. */}
+              {/* Actions — the quoting workflow's entry point stays labeled and first;
+                  the secondary actions live in one shared overflow menu. */}
               <div className="flex items-center gap-1">
                 <Button variant="secondary" size="sm" onClick={() => router.push(`/dashboard/quotes/new?customer=${c.id}`)} title="Start a new quote for this customer">
                   <FileText className="w-4 h-4" /> Quote
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => copyPortal(c.id)} loading={portalBusy === c.id}
-                  title="Copy this customer's private portal link (quotes, invoices, history, photos)">
-                  <Link2 className="w-4 h-4" /> Portal
-                </Button>
-                <Button variant="ghost" size="sm" onClick={() => onEdit(c)} title="Edit">
-                  <Edit2 className="w-4 h-4" />
-                </Button>
-                <Button variant="danger" size="sm" onClick={() => handleDelete(c.id)} loading={deleting === c.id} title="Delete">
-                  <Trash2 className="w-4 h-4" />
-                </Button>
+                <Menu align="end" width={220} items={[
+                  { key: 'portal', label: 'Copy portal link', icon: Link2, onSelect: () => copyPortal(c.id) },
+                  { key: 'edit', label: 'Edit customer', icon: Edit2, onSelect: () => onEdit(c) },
+                  // Archive, not delete — reversible (the undo toast restores it).
+                  { key: 'archive', label: 'Archive customer', icon: Archive, onSelect: () => handleDelete(c.id) },
+                ]}>
+                  {({ toggle, triggerProps }) => (
+                    <Button size="sm" variant="ghost" onClick={toggle} aria-label="More actions" title="More actions"
+                      loading={portalBusy === c.id || deleting === c.id} {...triggerProps}>
+                      <MoreHorizontal className="w-4 h-4" />
+                    </Button>
+                  )}
+                </Menu>
               </div>
             </Card>
           ))}
@@ -298,21 +317,6 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
           onClose={sent => { setMsgTemplate(null); if (sent) sel.clear() }}
         />
       )}
-
-      {/* SMS safety confirmation */}
-      {smsConfirm && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setSmsConfirm(false)}>
-          <div className="bg-bg-secondary border border-border-strong rounded-card max-w-md w-full p-5 space-y-4" onClick={e => e.stopPropagation()}>
-            <p className="text-sm font-bold text-amber-400 flex items-center gap-2"><ShieldAlert className="w-4 h-4" /> Enable SMS consent?</p>
-            <p className="text-sm text-ink-muted">{SMS_CONSENT_WARNING}</p>
-            <p className="text-xs text-ink-faint">This enables SMS for {sel.count} selected customer{sel.count !== 1 ? 's' : ''}.</p>
-            <div className="flex justify-end gap-2">
-              <Button variant="ghost" size="sm" onClick={() => setSmsConfirm(false)}>Cancel</Button>
-              <Button size="sm" onClick={() => { setSmsConfirm(false); runBulk('sms', true) }}>I confirm — enable SMS</Button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
@@ -321,7 +325,7 @@ function ReportStat({ label, value, tone }: { label: string; value: number; tone
   return (
     <div className="rounded-xl border border-border bg-bg-secondary px-3 py-2">
       <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className={cn('text-lg font-bold', tone || 'text-ink')}>{value}</p>
+      <p className={cn('text-lg font-bold tabular-nums', tone || 'text-ink')}>{value}</p>
     </div>
   )
 }

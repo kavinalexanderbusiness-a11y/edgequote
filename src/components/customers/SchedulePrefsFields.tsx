@@ -60,16 +60,16 @@ export function SchedulePrefsFields({ value, onChange }: { value: PrefsDraft; on
       <DayRow label="Avoid days" tone="amber" selected={value.avoid_days} onToggle={d => toggle('avoid', d)} />
       <div className="grid grid-cols-2 gap-3">
         <label className="flex flex-col gap-1.5">
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Earliest start</span>
+          <span className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Earliest start</span>
           <input type="time" value={value.pref_time_start}
             onChange={e => onChange({ ...value, pref_time_start: e.target.value })}
-            className="bg-bg-tertiary border border-border-strong rounded-lg px-2.5 py-1.5 text-sm text-ink outline-none focus:border-accent" />
+            className="bg-bg-tertiary border border-border-strong rounded-lg px-2.5 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
         </label>
         <label className="flex flex-col gap-1.5">
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Latest start</span>
+          <span className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Latest start</span>
           <input type="time" value={value.pref_time_end}
             onChange={e => onChange({ ...value, pref_time_end: e.target.value })}
-            className="bg-bg-tertiary border border-border-strong rounded-lg px-2.5 py-1.5 text-sm text-ink outline-none focus:border-accent" />
+            className="bg-bg-tertiary border border-border-strong rounded-lg px-2.5 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
         </label>
       </div>
       <p className="text-[11px] text-ink-faint">Used as soft warnings when scheduling, and to steer the optimizer and best-day picker. Nothing is hard-blocked.</p>
@@ -80,7 +80,7 @@ export function SchedulePrefsFields({ value, onChange }: { value: PrefsDraft; on
 function DayRow({ label, tone, selected, onToggle }: { label: string; tone: 'accent' | 'amber'; selected: number[]; onToggle: (d: number) => void }) {
   return (
     <div>
-      <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-1.5">{label}</p>
+      <p className="text-xs font-semibold uppercase tracking-wide text-ink-muted mb-1.5">{label}</p>
       <div className="flex flex-wrap gap-1.5">
         {DAYS.map(d => {
           const on = selected.includes(d)
@@ -88,8 +88,8 @@ function DayRow({ label, tone, selected, onToggle }: { label: string; tone: 'acc
             ? 'border-accent bg-accent/15 text-accent'
             : 'border-amber-500/50 bg-amber-500/15 text-amber-300'
           return (
-            <button key={d} type="button" onClick={() => onToggle(d)}
-              className={`w-10 py-1.5 rounded-lg border text-xs font-medium transition-colors ${on ? onClasses : 'border-border-strong bg-surface text-ink-muted hover:border-accent/40'}`}>
+            <button key={d} type="button" onClick={() => onToggle(d)} aria-pressed={on}
+              className={`w-10 py-1.5 rounded-lg border text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${on ? onClasses : 'border-border-strong bg-surface text-ink-muted hover:border-accent/40'}`}>
               {weekdayShort(d)}
             </button>
           )

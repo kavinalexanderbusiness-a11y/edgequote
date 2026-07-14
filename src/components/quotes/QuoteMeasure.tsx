@@ -376,6 +376,16 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
     onClose()
   }
 
+  // Escape routes through the same guarded close as Cancel/X — never a silent
+  // discard. Ref keeps one stable listener over the per-render closure.
+  const requestCloseRef = useRef<() => void>(() => {})
+  requestCloseRef.current = requestClose
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') requestCloseRef.current() }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [])
+
   // The complete recommendation package — same engine the property MeasureTool
   // and travel-density discount use; nearby = located upcoming jobs within range.
   // ONE composed result (lib/prospect.gradedProspectPricing): the assessment is
@@ -423,10 +433,10 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center p-0 sm:p-4">
-      <div className="w-full sm:max-w-3xl bg-bg-secondary border border-border sm:rounded-card max-h-[95vh] overflow-auto">
+      <div role="dialog" aria-modal="true" aria-label="Measure & Price" className="w-full sm:max-w-3xl bg-bg-secondary border border-border sm:rounded-card max-h-[95vh] overflow-auto">
         <div className="flex items-center justify-between px-4 py-3 border-b border-border sticky top-0 bg-bg-secondary z-10">
           <h2 className="text-sm font-semibold text-ink">Measure & Price</h2>
-          <button type="button" onClick={requestClose} aria-label="Close" className="text-ink-faint hover:text-ink p-1.5 -m-1.5"><X className="w-5 h-5" /></button>
+          <button type="button" onClick={requestClose} aria-label="Close" className="h-7 w-7 rounded-lg flex items-center justify-center text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><X className="w-5 h-5" /></button>
         </div>
 
         <div className="p-4 space-y-4">
@@ -439,7 +449,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
               <select
                 value={serviceType ?? ''}
                 onChange={e => onServiceChange?.(e.target.value)}
-                className="bg-bg border border-border-strong rounded-lg px-2.5 py-1.5 text-sm text-ink outline-none focus:border-accent">
+                className="bg-bg border border-border-strong rounded-lg px-2.5 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20">
                 <option value="">Select a service…</option>
                 {services.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
@@ -513,7 +523,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
                 <Button type="button" variant="secondary" onClick={undo} disabled={points === 0 && shapes === 0} className="h-12">
                   <Undo2 className="w-4 h-4" /> Undo
                 </Button>
-                <Button type="button" variant="secondary" onClick={clearAll} disabled={points === 0 && shapes === 0} className="h-12">
+                <Button type="button" variant="danger" onClick={clearAll} disabled={points === 0 && shapes === 0} className="h-12">
                   <Trash2 className="w-4 h-4" /> Clear
                 </Button>
               </div>
@@ -536,13 +546,13 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
                       type="number" min="0" step="0.05"
                       value={overgrowthRaw}
                       onChange={e => setOvergrowthRaw(e.target.value)}
-                      className="w-16 bg-bg border border-border-strong rounded-lg px-2.5 py-2 text-base sm:text-sm text-ink tabular-nums outline-none focus:border-accent"
+                      className="w-16 bg-bg border border-border-strong rounded-lg px-2.5 py-2 text-base sm:text-sm text-ink tabular-nums outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20"
                     />
                   </label>
                 </div>
 
                 {pkg ? (
-                  <div className="border-t border-border pt-3 space-y-3 motion-safe:animate-[fadeIn_140ms_ease-out]">
+                  <div className="border-t border-border pt-3 space-y-3 animate-fade">
                     <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-2">
                       Pricing recommendation{Number(travelFee || 0) > 0 ? ` · $${Number(travelFee).toLocaleString()} travel stays on the quote` : ''}
                     </p>

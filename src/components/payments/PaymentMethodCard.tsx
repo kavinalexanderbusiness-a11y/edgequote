@@ -136,7 +136,7 @@ export function PaymentMethodCard({ customer, onCustomerChange }: {
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <Button size="sm" variant="secondary" onClick={saveCard} loading={busy === 'save'} disabled={!paymentsEnabled} title={!paymentsEnabled ? "Connect Stripe in Settings to enable card payments" : undefined}>Replace</Button>
-              <Button size="sm" variant="ghost" onClick={removeCard} loading={busy === 'remove'} className="hover:text-red-400" title="Remove card">
+              <Button size="sm" variant="ghost" onClick={removeCard} loading={busy === 'remove'} className="text-red-400/70 hover:text-red-400" aria-label="Remove card" title="Remove card">
                 <Trash2 className="w-3.5 h-3.5" />
               </Button>
             </div>

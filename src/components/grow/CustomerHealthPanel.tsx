@@ -5,8 +5,9 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { loadCustomerHealth, HealthRow, HealthTier } from '@/lib/customerHealth'
 import { Skeleton } from '@/components/ui/Skeleton'
+import { FilterPill } from '@/components/ui/FilterPill'
 import { formatCurrency, cn } from '@/lib/utils'
-import { HeartPulse, Loader2, RefreshCw, Star, ArrowRight } from 'lucide-react'
+import { HeartPulse, RefreshCw, Star, ArrowRight } from 'lucide-react'
 import { IconButton } from '@/components/ui/IconButton'
 
 const TIER: Record<HealthTier, { label: string; tone: string; dot: string }> = {
@@ -48,7 +49,6 @@ export function CustomerHealthPanel() {
   if (loading) {
     return (
       <div className="rounded-card border border-border bg-bg-secondary p-5">
-        <p className="text-xs text-ink-muted flex items-center gap-2 mb-3"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Scoring customer health…</p>
         <div className="space-y-2.5" aria-hidden>
           {[0, 1, 2].map(i => (
             <div key={i} className="flex items-center gap-3">
@@ -86,11 +86,9 @@ export function CustomerHealthPanel() {
 
       <div className="px-4 py-2.5 border-b border-border flex flex-wrap gap-1.5">
         {SORTS.map(s => (
-          <button key={s.key} onClick={() => { setSort(s.key); setShowAll(false) }}
-            className={cn('text-xs font-medium rounded-full px-2.5 py-1 border transition-colors',
-              sort === s.key ? 'bg-accent text-black border-accent font-semibold pill-glow' : 'border-border text-ink-muted hover:text-ink hover:border-border-strong')}>
+          <FilterPill key={s.key} active={sort === s.key} onClick={() => { setSort(s.key); setShowAll(false) }}>
             {s.label}
-          </button>
+          </FilterPill>
         ))}
       </div>
 
@@ -119,7 +117,7 @@ export function CustomerHealthPanel() {
         })}
       </div>
       {sorted.length > 12 && (
-        <button onClick={() => setShowAll(s => !s)} className="w-full py-2.5 text-xs font-medium text-accent hover:underline border-t border-border">
+        <button onClick={() => setShowAll(s => !s)} aria-expanded={showAll} className="w-full py-2.5 text-xs font-medium text-accent hover:underline border-t border-border">
           {showAll ? 'Show less' : `Show all ${sorted.length} customers`}
         </button>
       )}

@@ -8,6 +8,7 @@ import {
 import { loadLaborModel, estimateLabor, LaborModel, Cadence, Confidence } from '@/lib/labor'
 import { loadProspectContext } from '@/lib/prospect'
 import type { PricingConfig } from '@/lib/pricing'
+import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import { Brain, Check, TrendingUp } from 'lucide-react'
 
@@ -110,7 +111,7 @@ export function PriceIntelligence({
 
   return (
     // fadeIn so the resolved card dissolves in over the skeleton instead of hard-swapping.
-    <div className={cn('rounded-xl border p-3 space-y-2.5 motion-safe:animate-[fadeIn_140ms_ease-out]', rec.enoughData ? 'border-accent/25 bg-accent/[0.05]' : 'border-border bg-bg-tertiary')}>
+    <div className={cn('rounded-xl border p-3 space-y-2.5 animate-fade', rec.enoughData ? 'border-accent/25 bg-accent/[0.05]' : 'border-border bg-bg-tertiary')}>
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-bold text-ink flex items-center gap-1.5">
           <Brain className={cn('w-3.5 h-3.5', rec.enoughData ? 'text-accent' : 'text-ink-faint')} /> Pricing Intelligence
@@ -132,8 +133,8 @@ export function PriceIntelligence({
           </p>
         </div>
         {!applied
-          ? <button type="button" onClick={() => onApply(rec.price)} className="shrink-0 text-xs font-bold rounded-lg px-3 py-1.5 bg-accent text-black transition-opacity hover:opacity-90">Use ${rec.price}</button>
-          : <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 shrink-0 motion-safe:animate-[fadeIn_120ms_ease-out]"><Check className="w-3.5 h-3.5" /> Applied</span>}
+          ? <Button size="sm" type="button" onClick={() => onApply(rec.price)} className="shrink-0">Use ${rec.price}</Button>
+          : <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 shrink-0 animate-fade"><Check className="w-3.5 h-3.5" /> Applied</span>}
       </div>
 
       {/* The WHY (req: explain every recommendation as a clear "Because" list). */}

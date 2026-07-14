@@ -7,6 +7,7 @@ import { Coord, SchedJob, geocodeAddress, fetchUpcomingSchedulingJobs, todayLoca
 import { recommendScheduleDays, DayPlan } from '@/lib/route'
 import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
 import { formatCurrency } from '@/lib/utils'
+import { Button } from '@/components/ui/Button'
 import { Trophy, Scale, DollarSign, Loader2 } from 'lucide-react'
 
 const DEFAULT_WORK_DAYS = [5, 6, 0] // Fri/Sat/Sun
@@ -110,10 +111,9 @@ export function WeeklyScheduler({ coord, address, excludeJobId, targetHours, tar
               <p className="text-[11px] text-ink-faint">{format(parseISO(plan.date + 'T00:00:00'), 'MMM d')}</p>
               <p className="text-[11px] text-ink-muted mt-1 flex-1">{stat(plan)}</p>
               {onPick && (
-                <button type="button" onClick={() => onPick(plan.date, plan)}
-                  className="mt-2 h-8 rounded-lg bg-accent text-black text-xs font-semibold hover:opacity-90 active:scale-95 transition-transform">
+                <Button size="sm" variant="secondary" className="mt-2" onClick={() => onPick(plan.date, plan)}>
                   Use {plan.weekday}
-                </button>
+                </Button>
               )}
             </div>
           )

@@ -122,14 +122,56 @@ body { min-height: 100dvh; overscroll-behavior-y: none; }
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+/* Overlay-surface entrances. One vocabulary for everything that pops into view:
+   fade (backdrops), pop (menus/popovers), panel (dialog panels), drawer (the
+   mobile nav sheet), toast (feedback), page (route navigations). All use
+   fill-mode `backwards` — NEVER `both`/`forwards` — so no residual transform
+   survives the animation: a lingering transform makes the element a containing
+   block and silently re-anchors `position:fixed` descendants (Modal renders
+   inline, so a risen wrapper would swallow its backdrop). */
+@keyframes panelIn {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes drawerIn {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(0); }
+}
+@keyframes toastIn {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
 @media (prefers-reduced-motion: no-preference) {
-  .animate-rise { animation: riseIn 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
+  .animate-rise { animation: riseIn 0.45s cubic-bezier(0.22, 1, 0.36, 1) backwards; }
   .stagger-1 { animation-delay: 40ms; }
   .stagger-2 { animation-delay: 80ms; }
   .stagger-3 { animation-delay: 120ms; }
   .stagger-4 { animation-delay: 160ms; }
   .stagger-5 { animation-delay: 200ms; }
   .stagger-6 { animation-delay: 240ms; }
+
+  .animate-fade   { animation: fadeIn 0.15s ease-out backwards; }
+  .animate-pop    { animation: popIn 0.14s cubic-bezier(0.22, 1, 0.36, 1) backwards; }
+  .animate-panel  { animation: panelIn 0.22s cubic-bezier(0.22, 1, 0.36, 1) backwards; }
+  .animate-drawer { animation: drawerIn 0.26s cubic-bezier(0.22, 1, 0.36, 1) backwards; }
+  .animate-toast  { animation: toastIn 0.22s cubic-bezier(0.22, 1, 0.36, 1) backwards; }
+  .animate-page   { animation: fadeIn 0.24s ease-out backwards; }
+}
+
+/* Reduced motion: one net for the whole app. Neutralizes every animation and
+   transition (including raw `animate-[popIn…]` utilities that predate the named
+   classes) — content appears in place instead of moving. Spinners keep turning:
+   a frozen spinner reads as "hung", and rotation in place isn't a vestibular
+   trigger the way translation/scaling is. */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *:not(.animate-spin),
+  *:not(.animate-spin)::before,
+  *:not(.animate-spin)::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* Hover lift: cards float 1px with a soft accent-less shadow — tactile, never loud. */

@@ -36,8 +36,8 @@ export default function IntelligencePage() {
 
   if (loading && !bi) {
     return (
-      <div className="max-w-6xl space-y-6">
-        <PageHeader title="Business Intelligence" description="How your business is performing — and where to focus next." />
+      <div className="max-w-6xl mx-auto space-y-6">
+        <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Business Intelligence" description="How your business is performing — and where to focus next." />
         <SkeletonTiles count={4} />
         <Skeleton className="h-32 w-full rounded-card" />
         <div className="grid md:grid-cols-3 gap-3">{[0, 1, 2].map(i => <Skeleton key={i} className="h-40 rounded-card" />)}</div>
@@ -48,8 +48,8 @@ export default function IntelligencePage() {
   if (!bi) return null
 
   return (
-    <div className="max-w-6xl space-y-6">
-      <PageHeader title="Business Intelligence" description={`How your business is performing — and where to focus. As of ${bi.generatedFor}.`} />
+    <div className="max-w-6xl mx-auto space-y-6">
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Business Intelligence" description={`How your business is performing — and where to focus. As of ${bi.generatedFor}.`} />
 
       {/* ── FINANCIAL ── */}
       <Section title="Financial" icon={DollarSign}>
@@ -114,7 +114,15 @@ export default function IntelligencePage() {
               engines' numbers could disagree, so only the learned one is shown). */}
           <Stat label="Capacity used (4 wk)" value={bi.operations.capacityUtilizationPct != null ? `${bi.operations.capacityUtilizationPct}%` : '—'} sub="of workday capacity" />
           <Stat label="Booked next 2 wk" value={bi.operations.bookedUtilizationPct != null ? `${bi.operations.bookedUtilizationPct}%` : '—'} sub="of capacity" />
-          <Stat label="Avg route density" value={`${bi.operations.avgRouteDensity}/100`} sub="how clustered you are" />
+          <Stat label="Avg route density" value={String(bi.operations.avgRouteDensity)}
+            sub={
+              <span className="flex items-center gap-1.5">
+                <span className="w-10 h-1 rounded-full bg-bg-tertiary overflow-hidden shrink-0">
+                  <span className="block h-full rounded-full bg-accent/80" style={{ width: `${Math.min(100, Math.max(0, bi.operations.avgRouteDensity))}%` }} />
+                </span>
+                how clustered you are
+              </span>
+            } />
         </div>
       </Section>
 
@@ -149,9 +157,9 @@ export default function IntelligencePage() {
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   {labor.crewTrends.map(t => (
                     <div key={t.crewSize} className="rounded-lg border border-border bg-bg-tertiary px-3 py-2">
-                      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{t.crewSize}-person crew</p>
-                      <p className="text-base font-bold text-ink">{t.effectiveWorkers}× <span className="text-[11px] font-normal text-ink-muted">effective</span></p>
-                      <p className="text-[10px] text-ink-faint">{t.manMinPer1000} man-min / 1,000 ft²</p>
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">{t.crewSize}-person crew</p>
+                      <p className="text-base font-bold text-ink tabular-nums">{t.effectiveWorkers}× <span className="text-[11px] font-normal text-ink-muted">effective</span></p>
+                      <p className="text-[10px] text-ink-faint tabular-nums">{t.manMinPer1000} man-min / 1,000 ft²</p>
                     </div>
                   ))}
                 </div>
@@ -165,7 +173,7 @@ export default function IntelligencePage() {
                     {labor.bestProperties.map(p => (
                       <li key={p.propertyId} className="flex items-center justify-between gap-2 text-sm">
                         <span className="text-ink truncate">{p.name}</span>
-                        <span className="shrink-0 font-semibold text-emerald-400">{p.accuracyPct}% <span className="text-[11px] text-ink-faint font-normal">· {p.n}</span></span>
+                        <span className="shrink-0 font-semibold text-emerald-400 tabular-nums">{p.accuracyPct}% <span className="text-[11px] text-ink-faint font-normal">· {p.n}</span></span>
                       </li>
                     ))}
                   </ul>
@@ -177,7 +185,7 @@ export default function IntelligencePage() {
                     {labor.worstMisses.map((m, i) => (
                       <li key={i} className="flex items-center justify-between gap-2 text-sm">
                         <span className="text-ink truncate">{m.propertyName} <span className="text-ink-faint text-[11px]">· {m.combo}</span></span>
-                        <span className="shrink-0 text-ink-muted text-xs">est {m.estimated} → <span className="font-semibold text-red-400">{m.actual}</span> ({m.errorPct}%)</span>
+                        <span className="shrink-0 text-ink-muted text-xs tabular-nums">est {m.estimated} → <span className="font-semibold text-red-400">{m.actual}</span> ({m.errorPct}%)</span>
                       </li>
                     ))}
                   </ul>
@@ -225,7 +233,7 @@ function Section({ title, icon: Icon, children }: { title: string; icon: typeof 
 // Thin adapter over the ONE shared KPI tile — the delta (▲/▼ vs last period)
 // renders as the tile's `sub` node, so the change is highlighted right under
 // the number without a second tile style existing anywhere.
-function Stat({ label, value, sub, delta, deltaLabel, accent }: { label: string; value: string; sub?: string; delta?: number | null; deltaLabel?: string; accent?: boolean }) {
+function Stat({ label, value, sub, delta, deltaLabel, accent }: { label: string; value: string; sub?: React.ReactNode; delta?: number | null; deltaLabel?: string; accent?: boolean }) {
   const deltaNode = delta != null ? (
     <span className={cn('font-semibold inline-flex items-center gap-1 tabular-nums', delta >= 0 ? 'text-emerald-400' : 'text-red-400')}>
       {delta >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
@@ -306,7 +314,7 @@ function TrendBars({ trend, label = 'Revenue / month', integer = false }: { tren
 function LaborCard({ title, icon: Icon, children }: { title: string; icon: typeof Gauge; children: React.ReactNode }) {
   return (
     <div className="rounded-card border border-border bg-bg-secondary p-4">
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-2 flex items-center gap-1.5"><Icon className="w-3.5 h-3.5" /> {title}</p>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint mb-2 flex items-center gap-1.5"><Icon className="w-3.5 h-3.5" /> {title}</p>
       {children}
     </div>
   )
@@ -321,7 +329,7 @@ function LaborAccuracyList({ title, icon, items, good }: { title: string; icon: 
           {items.map(s => (
             <li key={s.combo} className="flex items-center justify-between gap-2 text-sm">
               <span className="text-ink truncate">{s.label} <span className="text-[11px] text-ink-faint">· {s.n}</span></span>
-              <span className={cn('shrink-0 font-semibold', good ? 'text-emerald-400' : s.accuracyPct < 70 ? 'text-amber-400' : 'text-ink')}>{s.accuracyPct}%</span>
+              <span className={cn('shrink-0 font-semibold tabular-nums', good ? 'text-emerald-400' : s.accuracyPct < 70 ? 'text-amber-400' : 'text-ink')}>{s.accuracyPct}%</span>
             </li>
           ))}
         </ul>
@@ -337,7 +345,7 @@ function LaborProfitList({ title, icon, items }: { title: string; icon: typeof G
           {items.map(s => (
             <li key={s.combo} className="flex items-center justify-between gap-2 text-sm">
               <span className="text-ink truncate">{s.label} <span className="text-[11px] text-ink-faint">· {s.n}</span></span>
-              <span className="shrink-0 font-semibold text-ink">${s.revPerHour}/hr <span className="text-[11px] text-ink-faint font-normal">{formatCurrency(s.profit)}</span></span>
+              <span className="shrink-0 font-semibold text-ink tabular-nums">${s.revPerHour}/hr <span className="text-[11px] text-ink-faint font-normal">{formatCurrency(s.profit)}</span></span>
             </li>
           ))}
         </ul>

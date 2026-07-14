@@ -7,7 +7,7 @@ import { SuggestionsCenter } from '@/components/grow/SuggestionsCenter'
 import { CustomerHealthPanel } from '@/components/grow/CustomerHealthPanel'
 import { WinLossPanel } from '@/components/grow/WinLossPanel'
 import {
-  BarChart3, Gauge, HeartPulse, Map as MapIcon, Target, ShieldCheck, CalendarCheck, ArrowRight, TrendingUp, CloudRain, Images, Sparkles,
+  BarChart3, Gauge, HeartPulse, Map as MapIcon, Target, ShieldCheck, CalendarCheck, ArrowRight, TrendingUp, CloudRain, Images, Sparkles, Ruler,
 } from 'lucide-react'
 
 // ── Grow hub ──────────────────────────────────────────────────────────────────
@@ -36,6 +36,7 @@ const GROUPS: { title: string; tools: Tool[] }[] = [
   {
     title: 'Show off your work',
     tools: [
+      { label: 'Marketing Studio', href: '/dashboard/grow/studio', icon: Sparkles, blurb: 'AI posts from finished jobs — draft, review and publish in one place.' },
       { label: 'Before / After Studio', href: '/dashboard/grow/before-after', icon: Images, blurb: 'Turn job photos into branded before/after posts — AI picks the best pair.' },
     ],
   },
@@ -49,8 +50,9 @@ const GROUPS: { title: string; tools: Tool[] }[] = [
     title: 'Stay on top of it',
     tools: [
       { label: 'Weekly Review', href: '/dashboard/review', icon: CalendarCheck, blurb: 'Last week’s results and this week’s moves at a glance.' },
-      { label: 'Move Jobs', href: '/dashboard/weather', icon: CloudRain, blurb: 'Spot rain-threatened work and reschedule it — jobs, hours & revenue at stake.' },
+      { label: 'Weather', href: '/dashboard/weather', icon: CloudRain, blurb: 'Spot rain-threatened work and reschedule it — jobs, hours & revenue at stake.' },
       { label: 'Data Quality', href: '/dashboard/data-quality', icon: ShieldCheck, blurb: 'Missing customers, prices and locations to clean up.' },
+      { label: 'Measurement Accuracy', href: '/dashboard/measurements', icon: Ruler, blurb: 'How close auto-measure runs to what you accept — calibration over time.' },
     ],
   },
 ]
@@ -61,7 +63,7 @@ const GROUPS: { title: string; tools: Tool[] }[] = [
 function FeatureCard({ href, icon: Icon, title, blurb }: { href: string; icon: typeof BarChart3; title: string; blurb: string }) {
   return (
     <Link href={href} className="group block h-full">
-      <Card className="p-5 h-full border-accent/25 hero-aurora card-lift hover:border-accent/50">
+      <Card className="p-5 h-full border-accent/25 card-lift hover:border-accent/50">
         <div className="flex items-center gap-3.5">
           <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
             <Icon className="w-5 h-5 text-accent" />
@@ -80,7 +82,7 @@ function FeatureCard({ href, icon: Icon, title, blurb }: { href: string; icon: t
 
 export default function GrowPage() {
   return (
-    <div className="max-w-5xl space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       <PageHeader title="Grow" description="Your AI advisor for pricing, growth and retention — built on your own numbers." />
 
       {/* Suggestions Center — the action feed comes FIRST: "what should I do next?"
@@ -95,9 +97,10 @@ export default function GrowPage() {
           blurb="Every customer scored for renewal, upsell, cross-sell, referral — ranked by $ impact." />
       </div>
 
-      {/* Customer Automation — reviews, referrals, follow-ups & campaigns. */}
+      {/* Automations — reviews, referrals, follow-ups & campaigns. Same word as
+          the rail pill and the page title so the handshake is instant. */}
       <div className="animate-rise stagger-3">
-        <FeatureCard href="/dashboard/grow/crm" icon={Sparkles} title="Customer Automation"
+        <FeatureCard href="/dashboard/grow/crm" icon={Sparkles} title="Automations"
           blurb="Review pipeline, referral tracking, follow-up radar, and birthday/anniversary/win-back/marketing campaigns." />
       </div>
 

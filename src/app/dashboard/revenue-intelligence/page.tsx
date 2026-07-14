@@ -12,9 +12,10 @@ import { Button } from '@/components/ui/Button'
 import { StatTile } from '@/components/ui/StatTile'
 import { Skeleton, SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
+import { FilterPill } from '@/components/ui/FilterPill'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { formatCurrency, cn } from '@/lib/utils'
-import { TrendingUp, Check, X, Trophy, ArrowRight, Sparkles, AlertTriangle, RefreshCw } from 'lucide-react'
+import { TrendingUp, Check, X, Trophy, ArrowRight, Sparkles, AlertTriangle, RefreshCw, HelpCircle } from 'lucide-react'
 
 // Confidence is a quiet dot + label (same language as the Suggestions advisor);
 // the loud tinted pill is reserved for the churn-risk badge where alarm is the point.
@@ -52,8 +53,8 @@ export default function RevenueIntelligencePage() {
 
   if (loading && !report) {
     return (
-      <div className="max-w-5xl space-y-6">
-        <PageHeader title="Revenue Intelligence" description="Every customer scored for the moves that grow revenue — ranked by expected impact." />
+      <div className="max-w-5xl mx-auto space-y-6">
+        <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Revenue Intelligence" description="Every customer scored for the moves that grow revenue — ranked by expected impact." />
         <SkeletonTiles count={4} />
         <Skeleton className="h-20 w-full rounded-card" />
         <SkeletonRows count={5} />
@@ -75,13 +76,13 @@ export default function RevenueIntelligencePage() {
   const kindCount = (k: OppKind | 'all') => k === 'all' ? live.length : live.filter(o => o.kind === k).length
 
   return (
-    <div className="max-w-5xl space-y-6">
-      <PageHeader title="Revenue Intelligence"
+    <div className="max-w-5xl mx-auto space-y-6">
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Revenue Intelligence"
         description="Every customer scored for the moves that grow revenue — ranked by expected impact."
         action={<Link href="/dashboard/intelligence"><Button variant="secondary" size="sm">View BI dashboard <ArrowRight className="w-3.5 h-3.5" /></Button></Link>} />
 
       {/* Summary — upside on the left, risk on the right (the two numbers that matter) */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 animate-rise">
         <Tile label="Recurring opportunity" value={formatCurrency(summary.totalOpportunity)} sub="/yr if all won" accent />
         <Tile label="One-time opportunity" value={formatCurrency(summary.totalOneTime)} />
         <Tile label="Revenue from acted" value={formatCurrency(wonValue)} sub={`${actedCount} acted · ${wonCount} won`} />
@@ -121,14 +122,12 @@ export default function RevenueIntelligencePage() {
           const n = kindCount(k)
           if (k !== 'all' && n === 0) return null
           return (
-            <button key={k} onClick={() => setFilter(k)}
-              className={cn('text-xs font-medium rounded-full px-3 py-1.5 border transition-colors',
-                filter === k ? 'bg-accent text-black border-accent font-semibold pill-glow' : 'border-border text-ink-muted hover:text-ink hover:border-border-strong')}>
+            <FilterPill key={k} active={filter === k} onClick={() => setFilter(k)}>
               {k === 'all' ? 'All' : OPP_META[k as OppKind].label} {n > 0 && <span className="opacity-70 tabular-nums">{n}</span>}
-            </button>
+            </FilterPill>
           )
         })}
-        <button onClick={load} title="Refresh" className="ml-auto h-7 w-7 rounded-lg border border-border text-ink-muted hover:text-ink flex items-center justify-center"><RefreshCw className="w-3.5 h-3.5" /></button>
+        <button onClick={load} title="Refresh" aria-label="Refresh opportunities" className="ml-auto h-8 w-8 rounded-lg border border-border text-ink-muted hover:text-ink flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><RefreshCw className="w-3.5 h-3.5" /></button>
       </div>
 
       {/* Ranked opportunities — the Action Center */}
@@ -143,7 +142,7 @@ export default function RevenueIntelligencePage() {
 
       {/* LTV Forecast */}
       <div id="ltv-forecast" className="rounded-card border border-border bg-bg-secondary overflow-hidden scroll-mt-4">
-        <button onClick={() => setShowForecast(s => !s)} className="w-full px-5 py-3.5 flex items-center justify-between text-left">
+        <button onClick={() => setShowForecast(s => !s)} aria-expanded={showForecast} className="w-full px-5 py-3.5 flex items-center justify-between text-left rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40">
           <span className="text-sm font-bold text-ink flex items-center gap-2"><Sparkles className="w-4 h-4 text-accent" /> Lifetime Value Forecast</span>
           <span className="text-xs text-ink-muted">{showForecast ? 'Hide' : `Show top ${Math.min(12, ltvForecast.length)}`}</span>
         </button>
@@ -153,7 +152,7 @@ export default function RevenueIntelligencePage() {
               <div key={f.customerId} className="px-5 py-2.5 flex items-center gap-3">
                 <div className="min-w-0 flex-1">
                   <Link href={`/dashboard/customers/${f.customerId}`} className="text-sm font-semibold text-ink truncate hover:text-accent">{f.customerName}</Link>
-                  <p className="text-[11px] text-ink-faint">Now {formatCurrency(f.currentLtv)} → forecast {formatCurrency(f.forecastLtv)} · {formatCurrency(f.revenueRemaining)} remaining</p>
+                  <p className="text-[11px] text-ink-faint tabular-nums">Now {formatCurrency(f.currentLtv)} → forecast {formatCurrency(f.forecastLtv)} · {formatCurrency(f.revenueRemaining)} remaining</p>
                 </div>
                 {f.churnRiskImpact > 0 && (
                   <span className={cn('shrink-0 text-[11px] font-semibold rounded-full px-2 py-0.5 border flex items-center gap-1 tabular-nums', RISK_PILL[f.churnRisk])}>
@@ -223,8 +222,8 @@ function OppCard({ o, index, status, busy, onAct }: { o: Opportunity; index: num
             <Button size="sm" variant="ghost" onClick={() => onAct(o, 'dismissed')} disabled={busy}><X className="w-3.5 h-3.5" /> Dismiss</Button>
           </>
         )}
-        <button onClick={() => setShowWhy(v => !v)} className="ml-auto text-[11px] font-medium text-ink-faint hover:text-ink transition-colors">
-          {showWhy ? 'Hide' : 'Why this?'}
+        <button onClick={() => setShowWhy(v => !v)} className="ml-auto text-[11px] font-medium text-ink-faint hover:text-ink transition-colors rounded flex items-center gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+          <HelpCircle className="w-3 h-3" /> {showWhy ? 'Hide' : 'Why?'}
         </button>
       </div>
 

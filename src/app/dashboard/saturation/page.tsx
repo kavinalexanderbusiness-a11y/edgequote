@@ -15,6 +15,7 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Banner } from '@/components/ui/Banner'
 import { InlineEmpty } from '@/components/ui/EmptyState'
+import { FilterPill } from '@/components/ui/FilterPill'
 import { SkeletonTiles } from '@/components/ui/Skeleton'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { format } from 'date-fns'
@@ -270,8 +271,8 @@ export default function SaturationPage() {
   }, [jobs, properties, quotes, customersById, ctx])
 
   if (loading) return (
-    <div className="max-w-5xl space-y-6">
-      <PageHeader title="Saturation Map" description="Where your customers, revenue and routes concentrate — and where to grow next" />
+    <div className="max-w-6xl mx-auto space-y-6">
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Saturation Map" description="Where your customers, revenue and routes concentrate — and where to grow next." />
       <SkeletonTiles count={4} />
     </div>
   )
@@ -279,8 +280,8 @@ export default function SaturationPage() {
   const m = model
 
   return (
-    <div className="max-w-5xl space-y-6">
-      <PageHeader title="Saturation Map" description="Where your customers, revenue and routes concentrate — and where to grow next" />
+    <div className="max-w-6xl mx-auto space-y-6">
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Saturation Map" description="Where your customers, revenue and routes concentrate — and where to grow next." />
 
       {loadError && (
         <Banner tone="danger">
@@ -291,11 +292,9 @@ export default function SaturationPage() {
       {/* Layer toggles */}
       <div className="flex flex-wrap items-center gap-1.5">
         {LAYER_DEFS.map(l => (
-          <button key={l.key} onClick={() => setLayers(prev => ({ ...prev, [l.key]: !prev[l.key] }))}
-            className={cn('px-3.5 py-2.5 rounded-lg text-xs font-medium border transition-colors',
-              layers[l.key] ? 'bg-accent text-black border-accent' : 'bg-surface border-border-strong text-ink-muted hover:text-ink')}>
+          <FilterPill key={l.key} active={layers[l.key]} onClick={() => setLayers(prev => ({ ...prev, [l.key]: !prev[l.key] }))}>
             {l.label}
-          </button>
+          </FilterPill>
         ))}
       </div>
 
@@ -346,7 +345,7 @@ export default function SaturationPage() {
                     ? <>{h.pendingQuotes} pending quote{h.pendingQuotes !== 1 ? 's' : ''} worth <span className="text-amber-400 font-semibold">{formatCurrency(h.pendingValue)}</span> — close them to densify this area.</>
                     : <>Only {h.customers} customer{h.customers !== 1 ? 's' : ''} here but strong value (<span className="text-ink font-medium">{formatCurrency(h.revPerJob)}/job</span>) — knock neighbors, drop flyers, ask for referrals.</>}
                 </p>
-                <p className="text-[11px] text-ink-faint mt-1">{formatCurrency(h.revenue)} booked · {h.recurringCustomers} recurring · ${h.revPerHour}/hr</p>
+                <p className="text-[11px] text-ink-faint mt-1 tabular-nums">{formatCurrency(h.revenue)} booked · {h.recurringCustomers} recurring · ${h.revPerHour}/hr</p>
               </div>
             ))}
           </CardBody>
@@ -367,9 +366,9 @@ export default function SaturationPage() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-sm font-bold text-ink">{h.key}</p>
-                    <p className="text-sm font-bold text-accent">{formatCurrency(h.revenue)}</p>
+                    <p className="text-sm font-bold text-accent tabular-nums">{formatCurrency(h.revenue)}</p>
                   </div>
-                  <p className="text-[11px] text-ink-muted mt-0.5 flex items-center gap-x-3 flex-wrap">
+                  <p className="text-[11px] text-ink-muted mt-0.5 flex items-center gap-x-3 flex-wrap tabular-nums">
                     <span className="flex items-center gap-1"><Users className="w-3 h-3" />{h.customers}</span>
                     <span className="flex items-center gap-1"><Repeat className="w-3 h-3" />{h.recurringCustomers} recurring</span>
                     <span>{formatCurrency(h.revPerJob)}/job</span>
@@ -427,7 +426,7 @@ function IntelRow({ label, hood, stat }: { label: string; hood: string; stat: st
       <span className="text-sm font-bold text-ink min-w-0 truncate flex items-center gap-1.5">
         <MapPin className="w-3.5 h-3.5 text-accent shrink-0" /> {hood}
       </span>
-      <span className="ml-auto text-xs text-ink-muted shrink-0">{stat}</span>
+      <span className="ml-auto text-xs text-ink-muted shrink-0 tabular-nums">{stat}</span>
     </div>
   )
 }
@@ -441,10 +440,10 @@ function RouteLine({ date, grade, revenue, revPerHour, stops }: { date: string; 
       </div>
       <div className="min-w-0 flex-1">
         <p className="text-sm font-semibold text-ink">{formatDate(date)}</p>
-        <p className="text-[11px] text-ink-muted">{stops} stops · ${revPerHour}/hr</p>
+        <p className="text-[11px] text-ink-muted tabular-nums">{stops} stops · ${revPerHour}/hr</p>
       </div>
-      <p className="text-sm font-bold text-accent shrink-0">{formatCurrency(revenue)}</p>
-      <Link href="/dashboard/routes" className="text-ink-faint hover:text-ink shrink-0" title="Analyze this route">
+      <p className="text-sm font-bold text-accent shrink-0 tabular-nums">{formatCurrency(revenue)}</p>
+      <Link href="/dashboard/routes" className="text-ink-faint hover:text-ink shrink-0" title="Analyze this route" aria-label="Analyze this route">
         <Navigation className="w-4 h-4" />
       </Link>
     </div>

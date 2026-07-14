@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Job } from '@/types'
 import { cn } from '@/lib/utils'
 import { DayStatusRow, dayStatusMeta, dayCrew, dayWorkHours, dayLaborHours, dayStartTime, dayEndTime, hasCapacityOverride } from '@/lib/dayStatus'
+import { Button } from '@/components/ui/Button'
 import {
   Users, Clock, Gauge, Minus, Plus, RotateCcw, CalendarX2, AlertTriangle, ChevronDown,
 } from 'lucide-react'
@@ -107,9 +108,9 @@ export function DaySettingsBar({
             <div className="min-w-0">
               <p className="text-[10px] font-semibold text-ink-faint uppercase tracking-wide mb-1 flex items-center gap-1"><Users className="w-3 h-3" /> Crew</p>
               <div className="flex items-center gap-1.5">
-                <button onClick={() => setCrew(crew - 1)} disabled={busy || blocked || crew <= 1} className="w-9 h-9 sm:w-7 sm:h-7 rounded-lg border border-border-strong text-ink-muted hover:text-ink disabled:opacity-40 flex items-center justify-center"><Minus className="w-3.5 h-3.5" /></button>
+                <button onClick={() => setCrew(crew - 1)} disabled={busy || blocked || crew <= 1} aria-label="Decrease crew size" className="w-9 h-9 sm:w-7 sm:h-7 rounded-lg border border-border-strong text-ink-muted hover:text-ink disabled:opacity-40 flex items-center justify-center"><Minus className="w-3.5 h-3.5" /></button>
                 <span className="w-9 text-center text-sm font-bold text-ink tabular-nums">{crew}</span>
-                <button onClick={() => setCrew(crew + 1)} disabled={busy || blocked} className="w-9 h-9 sm:w-7 sm:h-7 rounded-lg border border-border-strong text-ink-muted hover:text-ink disabled:opacity-40 flex items-center justify-center"><Plus className="w-3.5 h-3.5" /></button>
+                <button onClick={() => setCrew(crew + 1)} disabled={busy || blocked} aria-label="Increase crew size" className="w-9 h-9 sm:w-7 sm:h-7 rounded-lg border border-border-strong text-ink-muted hover:text-ink disabled:opacity-40 flex items-center justify-center"><Plus className="w-3.5 h-3.5" /></button>
                 <span className="text-[11px] text-ink-faint ml-0.5">{crew === 1 ? 'person' : 'people'}</span>
               </div>
             </div>
@@ -120,11 +121,11 @@ export function DaySettingsBar({
               <div className="flex items-center gap-1.5">
                 <input type="time" value={start} disabled={busy || blocked}
                   onChange={e => onSetCapacity({ startsAt: e.target.value || null, endsAt: end })}
-                  className="bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1 text-xs text-ink outline-none focus:border-accent disabled:opacity-50" />
+                  className="bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1 text-xs text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:opacity-50" />
                 <span className="text-ink-faint text-xs">–</span>
                 <input type="time" value={end} disabled={busy || blocked}
                   onChange={e => onSetCapacity({ startsAt: start, endsAt: e.target.value || null })}
-                  className="bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1 text-xs text-ink outline-none focus:border-accent disabled:opacity-50" />
+                  className="bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1 text-xs text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:opacity-50" />
               </div>
             </div>
 
@@ -146,7 +147,7 @@ export function DaySettingsBar({
           )}
 
           <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-            <Action onClick={onToggleDisable} disabled={busy} icon={CalendarX2} label={blocked ? 'Enable Day' : 'Disable Day'} primary={blocked} />
+            <Action onClick={onToggleDisable} disabled={busy} icon={CalendarX2} label={blocked ? 'Enable day' : 'Disable day'} primary={blocked} />
             {hasOverride && (
               <button onClick={onResetCapacity} disabled={busy} className="text-[11px] text-ink-faint hover:text-ink flex items-center gap-1 disabled:opacity-50 px-1.5">
                 <RotateCcw className="w-3 h-3" /> Reset to default
@@ -171,10 +172,8 @@ function Stat({ label, value, sub, tone }: { label: string; value: string; sub?:
 
 function Action({ onClick, disabled, icon: Icon, label, primary }: { onClick: () => void; disabled?: boolean; icon: typeof Gauge; label: string; primary?: boolean }) {
   return (
-    <button onClick={onClick} disabled={disabled}
-      className={cn('px-3 py-2 rounded-lg text-xs font-medium border transition-colors flex items-center gap-1.5 disabled:opacity-50',
-        primary ? 'bg-accent text-black border-accent hover:bg-accent/90' : 'bg-surface border-border text-ink-muted hover:text-ink')}>
+    <Button size="sm" variant={primary ? 'primary' : 'secondary'} onClick={onClick} disabled={disabled}>
       <Icon className="w-3.5 h-3.5" /> {label}
-    </button>
+    </Button>
   )
 }

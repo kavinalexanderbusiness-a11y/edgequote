@@ -18,7 +18,7 @@ import { InlineEmpty } from '@/components/ui/EmptyState'
 import { SkeletonTiles } from '@/components/ui/Skeleton'
 import { StatTile } from '@/components/ui/StatTile'
 import { parseISO, startOfWeek, format } from 'date-fns'
-import { TrendingUp, TrendingDown, Navigation, Clock, DollarSign, MapPin, Lightbulb, Trophy, AlertTriangle } from 'lucide-react'
+import { TrendingUp, TrendingDown, Navigation, Clock, DollarSign, MapPin, Lightbulb, Trophy, AlertTriangle, ChevronDown } from 'lucide-react'
 
 type Period = 'day' | 'week' | 'month'
 
@@ -150,15 +150,15 @@ export default function ProfitabilityPage() {
   }, [jobs, routes])
 
   if (loading) return (
-    <div className="max-w-4xl space-y-6">
-      <PageHeader title="Route Profitability" description="Which routes, days and neighborhoods make the most per hour" />
+    <div className="max-w-6xl mx-auto space-y-6">
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Route Profitability" description="Which routes, days and neighborhoods make the most per hour." />
       <SkeletonTiles count={4} />
     </div>
   )
 
   return (
-    <div className="max-w-4xl space-y-6">
-      <PageHeader title="Route Profitability" description="Which routes, days and neighborhoods make the most per hour" />
+    <div className="max-w-6xl mx-auto space-y-6">
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Route Profitability" description="Which routes, days and neighborhoods make the most per hour." />
 
       {loadError && (
         <Banner tone="danger">
@@ -201,7 +201,7 @@ export default function ProfitabilityPage() {
       {/* Period toggle */}
       <div className="flex items-center gap-1 bg-bg-secondary border border-border rounded-xl p-1 w-fit">
         {(['day', 'week', 'month'] as Period[]).map(p => (
-          <button key={p} onClick={() => setPeriod(p)}
+          <button key={p} onClick={() => setPeriod(p)} aria-pressed={period === p}
             className={cn('px-4 py-1.5 rounded-lg text-sm font-medium capitalize transition-all', period === p ? 'bg-accent text-black' : 'text-ink-muted hover:text-ink')}>
             {p}
           </button>
@@ -214,33 +214,43 @@ export default function ProfitabilityPage() {
       ) : period === 'day' ? (
         <div className="space-y-3">
           {upcomingRoutes.length > 0 && (
-            <button onClick={() => setShowUpcoming(v => !v)}
-              className="w-full text-left rounded-xl border border-border bg-bg-secondary px-4 py-2.5 text-sm text-ink-muted hover:text-ink transition-colors">
-              {showUpcoming ? '▾' : '▸'} {upcomingRoutes.length} upcoming booked day{upcomingRoutes.length !== 1 ? 's' : ''} · {formatCurrency(upcomingRoutes.reduce((s, r) => s + r.revenue, 0))} on the books
+            <button onClick={() => setShowUpcoming(v => !v)} aria-expanded={showUpcoming}
+              className="w-full text-left rounded-xl border border-border bg-bg-secondary px-4 py-2.5 text-sm text-ink-muted hover:text-ink transition-colors flex items-center gap-1.5">
+              <ChevronDown className={cn('w-3.5 h-3.5 shrink-0 transition-transform', !showUpcoming && '-rotate-90')} />
+              <span>{upcomingRoutes.length} upcoming booked day{upcomingRoutes.length !== 1 ? 's' : ''} · {formatCurrency(upcomingRoutes.reduce((s, r) => s + r.revenue, 0))} on the books</span>
             </button>
           )}
-          {showUpcoming && upcomingRoutes.slice(0, 30).map(r => <RouteCard key={r.date} r={r} />)}
+          {showUpcoming && upcomingRoutes.slice(0, 30).map((r, i) => (
+            <div key={r.date} className={cn('animate-rise', i < 6 && `stagger-${i + 1}`)}><RouteCard r={r} /></div>
+          ))}
           {pastRoutes.length === 0 ? (
             <Card><InlineEmpty>No completed days yet — past routes appear here once you work them.</InlineEmpty></Card>
-          ) : pastRoutes.slice(0, 60).map(r => <RouteCard key={r.date} r={r} />)}
+          ) : pastRoutes.slice(0, 60).map((r, i) => (
+            <div key={r.date} className={cn('animate-rise', i < 6 && `stagger-${i + 1}`)}><RouteCard r={r} /></div>
+          ))}
         </div>
       ) : (
         <div className="space-y-2">
-          {(period === 'week' ? weeks : months).map(a => <AggCard key={a.key} a={a} />)}
+          {(period === 'week' ? weeks : months).map((a, i) => (
+            <div key={a.key} className={cn('animate-rise', i < 6 && `stagger-${i + 1}`)}><AggCard a={a} /></div>
+          ))}
         </div>
       )}
 
       {/* Historical trends (monthly) */}
       {trends.length > 0 && (
         <Card>
-          <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-            <Clock className="w-4 h-4 text-accent" />
-            <h2 className="text-sm font-semibold text-ink">Monthly trends</h2>
+          <div className="px-4 py-3 border-b border-border flex items-center gap-2.5">
+            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
+              <Clock className="w-3.5 h-3.5 text-accent" />
+            </span>
+            <h2 className="text-sm font-bold tracking-tight text-ink">Monthly trends</h2>
+            <span className="flex-1 h-px bg-border" aria-hidden />
           </div>
           <CardBody className="overflow-x-auto p-0">
             <table className="w-full text-sm">
               <thead>
-                <tr className="text-[11px] uppercase tracking-wide text-ink-faint border-b border-border">
+                <tr className="text-[10px] uppercase tracking-[0.14em] text-ink-faint border-b border-border">
                   <th className="text-left font-semibold px-4 py-2">Month</th>
                   <th className="text-right font-semibold px-3 py-2">Revenue</th>
                   <th className="text-right font-semibold px-3 py-2">$/hr</th>
@@ -253,11 +263,11 @@ export default function ProfitabilityPage() {
                 {trends.map(t => (
                   <tr key={t.month} className="border-b border-border last:border-0">
                     <td className="px-4 py-2 text-ink font-medium">{format(parseISO(t.month + '-01'), 'MMM yyyy')}</td>
-                    <td className="px-3 py-2 text-right text-ink font-semibold">{formatCurrency(t.revenue)}</td>
-                    <td className="px-3 py-2 text-right text-ink-muted">${t.revPerHour}</td>
-                    <td className="px-3 py-2 text-right text-ink-muted">${t.revPerKm}</td>
-                    <td className="px-3 py-2 text-right text-ink-muted">{Math.round(t.driveMinutes / 60 * 10) / 10}h</td>
-                    <td className="px-4 py-2 text-right text-ink-muted">{Math.round(t.laborMinutes / 60 * 10) / 10}h</td>
+                    <td className="px-3 py-2 text-right text-ink font-semibold tabular-nums">{formatCurrency(t.revenue)}</td>
+                    <td className="px-3 py-2 text-right text-ink-muted tabular-nums">${t.revPerHour}</td>
+                    <td className="px-3 py-2 text-right text-ink-muted tabular-nums">${t.revPerKm}</td>
+                    <td className="px-3 py-2 text-right text-ink-muted tabular-nums">{Math.round(t.driveMinutes / 60 * 10) / 10}h</td>
+                    <td className="px-4 py-2 text-right text-ink-muted tabular-nums">{Math.round(t.laborMinutes / 60 * 10) / 10}h</td>
                   </tr>
                 ))}
               </tbody>
@@ -269,7 +279,13 @@ export default function ProfitabilityPage() {
       {/* Profitability map */}
       {mapPoints.length > 0 && (
         <div className="space-y-2">
-          <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><MapPin className="w-4 h-4 text-accent" /> Profitability map</h2>
+          <div className="flex items-center gap-2.5">
+            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
+              <MapPin className="w-3.5 h-3.5 text-accent" />
+            </span>
+            <h2 className="text-sm font-bold tracking-tight text-ink">Profitability map</h2>
+            <span className="flex-1 h-px bg-border" aria-hidden />
+          </div>
           <ProfitMap points={mapPoints} />
         </div>
       )}
@@ -299,7 +315,7 @@ function RouteCard({ r }: { r: RouteProfit }) {
                 {formatDate(r.date)}
                 {r.future && <span className="text-[10px] font-semibold uppercase tracking-wide text-blue-400 border border-blue-500/30 rounded px-1.5 py-0.5">Booked</span>}
               </p>
-              <p className="text-lg font-bold text-accent">{formatCurrency(r.revenue)}</p>
+              <p className="text-lg font-bold text-accent tabular-nums">{formatCurrency(r.revenue)}</p>
             </div>
             <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mt-2 text-xs">
               <Metric label={r.hasDriveData ? '$/hr' : '$/hr*'} value={`$${r.revPerHour}`} />
@@ -336,7 +352,7 @@ function AggCard({ a }: { a: AggRow }) {
           <div className="min-w-0 flex-1">
             <div className="flex items-center justify-between gap-2">
               <p className="text-sm font-bold text-ink">{a.label}</p>
-              <p className="text-lg font-bold text-accent">{formatCurrency(a.revenue)}</p>
+              <p className="text-lg font-bold text-accent tabular-nums">{formatCurrency(a.revenue)}</p>
             </div>
             <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mt-1.5 text-xs">
               <Metric label="$/hr" value={`$${a.revPerHour}`} />
@@ -355,8 +371,8 @@ function AggCard({ a }: { a: AggRow }) {
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-border bg-bg-tertiary px-2 py-1.5">
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className="text-sm font-bold text-ink mt-0.5">{value}</p>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">{label}</p>
+      <p className="text-sm font-bold text-ink mt-0.5 tabular-nums">{value}</p>
     </div>
   )
 }

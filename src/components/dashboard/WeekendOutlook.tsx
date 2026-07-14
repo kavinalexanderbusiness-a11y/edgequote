@@ -151,7 +151,8 @@ export function WeekendOutlook() {
                     )}
                   </span>
                 ) : (
-                  <Link href="/dashboard/schedule" className="text-xs text-amber-400 font-medium flex items-center gap-1 hover:underline"><Plus className="w-3 h-3" /> Open — add a job</Link>
+                  // Accent, not amber — open capacity is opportunity, and amber is reserved for risk on this page.
+                  <Link href="/dashboard/schedule" className="text-xs text-accent font-medium flex items-center gap-1 hover:underline"><Plus className="w-3 h-3" /> Open — add a job</Link>
                 )}
               </div>
               {g.jobs.length > 0 && (

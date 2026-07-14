@@ -3,11 +3,12 @@
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import { enablePush, disablePush, getPushState, isIos, isStandalone, type PushState } from '@/lib/push'
 import {
   Bell, BellRing, Check, MessageSquare, FileText, DollarSign, Globe, Star,
-  CloudRain, CalendarClock, Sun, Loader2, Smartphone,
+  CloudRain, CalendarClock, Sun, Smartphone,
 } from 'lucide-react'
 
 // The eight owner-facing preference rows. `key` matches the notif_prefs jsonb keys
@@ -112,17 +113,15 @@ export function PushNotificationSettings() {
               </p>
             </div>
           </div>
-          <button
-            type="button"
+          <Button
+            variant={enabled ? 'secondary' : 'primary'}
+            loading={busy}
             onClick={toggle}
             disabled={busy || state === 'unsupported' || state === 'denied'}
-            className={cn(
-              'shrink-0 px-4 py-2 rounded-xl text-sm font-medium border transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed',
-              enabled ? 'bg-surface border-border-strong text-ink-muted hover:text-ink' : 'bg-accent border-accent text-black hover:bg-accent/90',
-            )}>
-            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : enabled ? <Check className="w-4 h-4" /> : <Bell className="w-4 h-4" />}
-            {enabled ? 'Enabled' : 'Enable'}
-          </button>
+            className="shrink-0">
+            {!busy && (enabled ? <Check className="w-4 h-4" /> : <Bell className="w-4 h-4" />)}
+            {enabled ? 'Turn off' : 'Enable'}
+          </Button>
         </div>
 
         {iosNeedsInstall && (
@@ -149,9 +148,11 @@ export function PushNotificationSettings() {
               <button
                 key={key}
                 type="button"
+                role="switch"
+                aria-checked={on}
                 disabled={!loaded}
                 onClick={() => setPref(key, !on)}
-                className="w-full flex items-center justify-between gap-3 py-2.5 px-1 text-left rounded-lg hover:bg-surface/40 transition-colors disabled:opacity-50">
+                className="w-full flex items-center justify-between gap-3 py-2.5 px-1 text-left rounded-lg hover:bg-surface/40 transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                 <span className="flex items-center gap-3 min-w-0">
                   <Icon className="w-4 h-4 text-ink-muted shrink-0" />
                   <span className="min-w-0">

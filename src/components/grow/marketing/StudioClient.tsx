@@ -160,7 +160,7 @@ export function StudioClient({ candidates, aiEnabled, businessName, logoUrl, use
       <div className="grid lg:grid-cols-[300px_1fr] gap-5 items-start">
         {/* Ranked candidate list */}
         <div className="space-y-2">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint px-1">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-faint px-1">
             Postable jobs · {candidates.length}
           </p>
           <div className="space-y-2 max-h-[70vh] overflow-y-auto pr-0.5">

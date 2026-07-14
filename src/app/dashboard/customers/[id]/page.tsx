@@ -27,6 +27,7 @@ import { Banner } from '@/components/ui/Banner'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { InlineEmpty } from '@/components/ui/EmptyState'
 import { Button } from '@/components/ui/Button'
+import { Textarea } from '@/components/ui/Textarea'
 import { SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
 import { formatCurrency, formatDate, getInitials } from '@/lib/utils'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
@@ -37,7 +38,7 @@ import { ReferralPanel } from '@/components/customers/ReferralPanel'
 import { ConversationThread } from '@/components/messages/ConversationThread'
 import { PaymentMethodCard } from '@/components/payments/PaymentMethodCard'
 import {
-  ArrowLeft, Phone, MessageSquare, FilePlus, CalendarPlus, Mail, MapPin, Repeat,
+  Phone, MessageSquare, FilePlus, CalendarPlus, Mail, MapPin, Repeat,
   FileText, Send, RotateCw, CheckCircle2, Wrench, Receipt, DollarSign, Sparkles, Users,
   Edit2, ExternalLink, Ruler, AlertTriangle, StickyNote, Wallet, Timer, CalendarClock,
   Link2, Check, Cake, PartyPopper, Camera,
@@ -384,13 +385,13 @@ export default function CustomerDetailPage() {
     return arr
   }, [quotes, jobs, invoices, extraTimeline, gstPercent])
 
-  if (loading) return <div className="max-w-5xl space-y-6"><SkeletonTiles count={4} /><SkeletonRows count={5} /></div>
+  if (loading) return <div className="max-w-5xl mx-auto space-y-6"><SkeletonTiles count={4} /><SkeletonRows count={5} /></div>
   // Cached customer (if any) keeps showing on a revalidation blip; only when there's
   // genuinely nothing to show do we branch error-vs-not-found.
   if (!customer) return loadError ? (
     <div className="text-center py-16 text-sm">
       <p className="text-red-400">{loadError}</p>
-      <button onClick={reload} className="mt-2 underline font-medium text-accent">Retry</button>
+      <Button size="sm" variant="secondary" className="mt-2" onClick={reload}>Retry</Button>
     </div>
   ) : (
     <div className="text-center py-16 text-sm">
@@ -453,7 +454,9 @@ export default function CustomerDetailPage() {
   }
   for (const inv of invoices.filter(i => OPEN_INVOICE.has(i.status))) {
     const overdue = !!inv.due_date && inv.due_date < today
-    openItems.push({ key: `inv-${inv.id}`, icon: Receipt, label: `${overdue ? 'Overdue' : 'Unpaid'} invoice ${inv.invoice_number}`, sub: `${formatCurrency(Math.round(Number(inv.amount) * custGstMult * 100) / 100)}${inv.due_date ? ` · due ${formatDate(inv.due_date)}` : ''}`, href: '/dashboard/invoices', tone: overdue ? 'text-red-400' : 'text-amber-400' })
+    // Deep-link straight to the focused invoice — landing on the unfiltered list
+    // meant re-finding the invoice you just tapped.
+    openItems.push({ key: `inv-${inv.id}`, icon: Receipt, label: `${overdue ? 'Overdue' : 'Unpaid'} invoice ${inv.invoice_number}`, sub: `${formatCurrency(Math.round(Number(inv.amount) * custGstMult * 100) / 100)}${inv.due_date ? ` · due ${formatDate(inv.due_date)}` : ''}`, href: `/dashboard/invoices?invoice=${encodeURIComponent(inv.invoice_number)}`, tone: overdue ? 'text-red-400' : 'text-amber-400' })
   }
 
   const phone = customer.phone
@@ -478,7 +481,7 @@ export default function CustomerDetailPage() {
   ]
 
   return (
-    <div className="max-w-5xl space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       {/* THE shared DetailHeader — same back/title/action anatomy as quotes/[id]. */}
       <DetailHeader
         title={customer.name}
@@ -546,19 +549,19 @@ export default function CustomerDetailPage() {
 
           {/* Quick actions — one tap, large targets */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            <Link href={`/dashboard/quotes/new?customer=${customer.id}`} className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium bg-accent text-black hover:opacity-90 transition-opacity">
-              <FilePlus className="w-4 h-4" /> New Quote
+            <Link href={`/dashboard/quotes/new?customer=${customer.id}`} className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium bg-accent text-black hover:opacity-90 transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+              <FilePlus className="w-4 h-4" /> New quote
             </Link>
-            <Link href={`/dashboard/schedule?customer=${customer.id}`} className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border border-border bg-surface text-ink hover:border-border-strong transition-colors">
+            <Link href={`/dashboard/schedule?customer=${customer.id}`} className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border border-border bg-surface text-ink hover:border-border-strong transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
               <CalendarPlus className="w-4 h-4" /> Schedule
             </Link>
-            <a href={phone ? `tel:${phone}` : undefined} aria-disabled={!phone} className={`h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border transition-colors ${phone ? 'bg-surface border-border text-ink hover:border-border-strong' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}>
+            <a href={phone ? `tel:${phone}` : undefined} aria-disabled={!phone} className={`h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${phone ? 'bg-surface border-border text-ink hover:border-border-strong' : 'border-border text-ink-faint pointer-events-none opacity-50'}`}>
               <Phone className="w-4 h-4" /> Call
             </a>
             {/* Opens the ONE shared Send Message dialog (templates + editable body,
                 logged to the thread) — not a device-only sms: deep link. */}
             <button onClick={() => setShowMessage(true)}
-              className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border bg-surface border-border text-ink hover:border-border-strong transition-colors">
+              className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border bg-surface border-border text-ink hover:border-border-strong transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
               <MessageSquare className="w-4 h-4" /> Message
             </button>
           </div>
@@ -648,17 +651,16 @@ export default function CustomerDetailPage() {
         </CardHeader>
         <CardBody>
           {editingNotes ? (
-            <div className="space-y-2">
-              <textarea
+            <div className="space-y-3">
+              <Textarea
                 value={notesValue}
                 onChange={e => setNotesValue(e.target.value)}
                 rows={4}
                 autoFocus
                 placeholder="Gate codes, dog info, preferred contact, billing notes, access instructions, equipment restrictions..."
-                className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
               />
               <div className="flex items-center gap-2">
-                <Button size="sm" onClick={saveNotes} loading={savingNotes}>Save</Button>
+                <Button size="sm" onClick={saveNotes} loading={savingNotes}>Save note</Button>
                 <Button size="sm" variant="ghost" onClick={() => { setNotesValue(customer.notes || ''); setEditingNotes(false) }}>Cancel</Button>
               </div>
             </div>
@@ -687,7 +689,7 @@ export default function CustomerDetailPage() {
             <div className="space-y-3">
               <SchedulePrefsFields value={prefsDraft} onChange={setPrefsDraft} />
               <div className="flex items-center gap-2">
-                <Button size="sm" onClick={savePrefs} loading={savingPrefs}>Save</Button>
+                <Button size="sm" onClick={savePrefs} loading={savingPrefs}>Save preferences</Button>
                 <Button size="sm" variant="ghost" onClick={() => setEditingPrefs(false)}>Cancel</Button>
               </div>
             </div>
@@ -711,10 +713,10 @@ export default function CustomerDetailPage() {
           return (
             <Card key={c.label} className="p-4 sm:p-5">
               <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide">{c.label}</p>
+                <p className="text-[10px] font-semibold text-ink-muted uppercase tracking-[0.14em]">{c.label}</p>
                 <Icon className={`w-4 h-4 ${c.color}`} />
               </div>
-              <p className="text-xl sm:text-2xl font-bold text-ink tracking-tight mt-2 tabular-nums">{c.value}</p>
+              <p className="text-xl sm:text-2xl font-bold text-ink tracking-tight tabular-nums mt-2">{c.value}</p>
               <p className="text-xs text-ink-faint mt-1">{c.sub}</p>
             </Card>
           )
@@ -834,7 +836,7 @@ export default function CustomerDetailPage() {
           </CardHeader>
           <CardBody className="space-y-3">
             {properties.length === 0 ? (
-              <p className="text-sm text-ink-muted">No properties on file.</p>
+              <InlineEmpty className="py-6">No properties on file.</InlineEmpty>
             ) : properties.map(p => {
               const jobCount = jobs.filter(j => j.property_id === p.id).length
               const measures = [
@@ -885,7 +887,7 @@ export default function CustomerDetailPage() {
                         </p>
                         <SchedulePrefsFields value={propPrefsDraft} onChange={setPropPrefsDraft} />
                         <div className="flex items-center gap-2">
-                          <Button size="sm" onClick={() => savePropPrefs(p.id)} loading={savingPropPrefs}>Save</Button>
+                          <Button size="sm" onClick={() => savePropPrefs(p.id)} loading={savingPropPrefs}>Save override</Button>
                           <Button size="sm" variant="ghost" onClick={() => setEditingPropPrefs(null)}>Cancel</Button>
                         </div>
                       </div>
@@ -950,25 +952,21 @@ function ServicePlanRow({ plan, customerId, pausing, onPause }: {
         </div>
       </div>
       <div className="flex flex-wrap gap-2 mt-2.5">
-        <Link href={`/dashboard/schedule?customer=${customerId}`}
-          className="text-xs font-medium px-2.5 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong transition-colors">
-          View schedule
+        {/* One entry into the schedule — focuses this plan when it has an upcoming visit. */}
+        <Link
+          href={!plan.paused && plan.nextVisitDate ? `/dashboard/schedule?focus=${plan.recurrenceId}` : `/dashboard/schedule?customer=${customerId}`}
+          className="inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-surface border border-border-strong text-ink hover:bg-surface-raised active:scale-[0.98] px-3.5 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+          Open schedule
         </Link>
-        {!plan.paused && plan.nextVisitDate && (
-          <Link href={`/dashboard/schedule?focus=${plan.recurrenceId}`}
-            className="text-xs font-medium px-2.5 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong transition-colors">
-            Edit schedule
-          </Link>
-        )}
         {!plan.paused && plan.remaining > 0 && (
-          <Button variant="ghost" size="sm" loading={pausing} onClick={onPause} className="hover:text-amber-400">
+          <Button variant="ghost" size="sm" loading={pausing} onClick={onPause}>
             Pause schedule
           </Button>
         )}
         {plan.paused && (
           <Link href={`/dashboard/schedule?customer=${customerId}`}
-            className="text-xs font-medium px-2.5 py-1 rounded-lg border border-emerald-500/25 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors">
-            Resume / reschedule
+            className="inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-surface border border-border-strong text-ink hover:bg-surface-raised active:scale-[0.98] px-3.5 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+            Resume schedule
           </Link>
         )}
       </div>

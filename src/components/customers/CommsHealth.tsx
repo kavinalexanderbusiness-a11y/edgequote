@@ -61,7 +61,7 @@ export function CommsHealth({ customer, onChange }: {
               <w.icon className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" /> {w.text}
             </p>
             {w.add && adding !== w.add && (
-              <button onClick={() => startAdd(w.add!)} className="text-xs font-medium text-accent hover:underline shrink-0 whitespace-nowrap">
+              <button onClick={() => startAdd(w.add!)} className="text-xs font-medium text-accent hover:underline shrink-0 whitespace-nowrap rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                 {w.add === 'email' ? 'Add email →' : 'Add phone →'}
               </button>
             )}
@@ -77,7 +77,7 @@ export function CommsHealth({ customer, onChange }: {
               onChange={e => setValue(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') save(adding) }}
               placeholder={adding === 'email' ? 'name@example.com' : '(403) 555-0100'}
-              className="flex-1 rounded-lg border border-border-strong bg-bg-tertiary px-3 py-1.5 text-sm text-ink outline-none focus:border-accent"
+              className="flex-1 rounded-lg border border-border-strong bg-bg-tertiary px-3 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20"
             />
             <Button size="sm" onClick={() => save(adding)} loading={saving} disabled={!value.trim()}>Save</Button>
             <Button size="sm" variant="ghost" onClick={() => { setAdding(null); setValue('') }}>Cancel</Button>

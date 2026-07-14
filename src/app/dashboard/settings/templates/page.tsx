@@ -27,7 +27,7 @@ export default function ServiceTemplatesPage() {
   const [editing, setEditing] = useState<ServiceTemplate | null>(null)
   const formRef = useRef<HTMLDivElement>(null)
 
-  const { register, handleSubmit, reset, watch, setValue, formState: { isSubmitting } } =
+  const { register, handleSubmit, reset, watch, setValue, formState: { isSubmitting, errors } } =
     useForm<ServiceTemplateFormValues>({
       defaultValues: { name: '', category: 'Lawn Care', pricing_display_type: 'starting_from', default_rate: 65, default_description: '', notes: '', is_active: true },
     })
@@ -100,11 +100,12 @@ export default function ServiceTemplatesPage() {
   if (loading) return <SkeletonRows count={5} />
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="max-w-3xl mx-auto space-y-6">
       <PageHeader
+        crumb={{ label: 'Settings', href: '/dashboard/settings' }}
         title="Service Templates"
         description="Add, edit, or remove services. The quote builder pulls from this list."
-        action={<Button onClick={openNew}><Plus className="w-4 h-4" /> Add Service</Button>}
+        action={<Button variant={showForm ? 'secondary' : 'primary'} onClick={openNew}><Plus className="w-4 h-4" /> Add service</Button>}
       />
 
       {showForm && (
@@ -112,19 +113,23 @@ export default function ServiceTemplatesPage() {
         <Card>
           <CardHeader className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-ink">{editing ? 'Edit Service' : 'New Service'}</h2>
-            <button onClick={() => { setShowForm(false); setEditing(null) }} className="text-ink-faint hover:text-ink">
+            <Button variant="ghost" size="sm" aria-label="Close editor" onClick={() => { setShowForm(false); setEditing(null) }}>
               <X className="w-4 h-4" />
-            </button>
+            </Button>
           </CardHeader>
           <CardBody>
             <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-              <Input label="Service Name" autoFocus {...register('name', { required: true })} />
+              <Input label="Service Name *" autoFocus
+                error={errors.name ? 'Service name is required' : undefined}
+                {...register('name', { required: true })} />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <Select label="Category" options={categoryOptions} {...register('category')} />
                 <Select label="Pricing Display Type" options={pricingTypeOptions} {...register('pricing_display_type')} />
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
-                <Input label={priceInputLabel(pdType)} type="number" step={priceInputStep(pdType)} min="0" {...register('default_rate', { required: true })} />
+                <Input label={`${priceInputLabel(pdType)} *`} type="number" step={priceInputStep(pdType)} min="0"
+                  error={errors.default_rate ? 'A price is required' : undefined}
+                  {...register('default_rate', { required: true })} />
                 <div className="sm:pt-7">
                   <p className="text-xs text-ink-muted">Shows as <span className="font-semibold text-accent">{formatServicePrice({ pricing_display_type: pdType, default_rate: Number(priceVal) || 0 })}</span></p>
                 </div>
@@ -135,7 +140,7 @@ export default function ServiceTemplatesPage() {
                 <Toggle checked={isActive} onChange={v => setValue('is_active', v)} label={isActive ? 'Active' : 'Inactive'} />
                 <div className="flex gap-2">
                   <Button type="button" variant="ghost" onClick={() => { setShowForm(false); setEditing(null) }}>Cancel</Button>
-                  <Button type="submit" loading={isSubmitting}>{editing ? 'Save' : 'Add Service'}</Button>
+                  <Button type="submit" loading={isSubmitting}>{editing ? 'Save service' : 'Add service'}</Button>
                 </div>
               </div>
             </form>
@@ -149,7 +154,7 @@ export default function ServiceTemplatesPage() {
       ) : (
         SERVICE_CATEGORIES.filter(c => grouped[c]?.length).map(category => (
           <div key={category}>
-            <h3 className="text-xs font-semibold text-ink-faint uppercase tracking-wide mb-2 px-1">{category}</h3>
+            <h3 className="text-[10px] font-semibold text-ink-faint uppercase tracking-[0.14em] mb-2 px-1">{category}</h3>
             <Card>
               <div className="divide-y divide-border">
                 {grouped[category].map(t => (
@@ -166,8 +171,8 @@ export default function ServiceTemplatesPage() {
                     </div>
                     <span className="text-sm font-semibold text-accent shrink-0">{formatServicePrice(t)}</span>
                     <span onClick={e => e.stopPropagation()}><Toggle checked={t.is_active} onChange={() => toggleActive(t)} /></span>
-                    <Button variant="ghost" size="sm" onClick={e => { e.stopPropagation(); openEdit(t) }}><Edit2 className="w-4 h-4" /></Button>
-                    <Button variant="ghost" size="sm" onClick={e => { e.stopPropagation(); remove(t) }} className="hover:text-red-400"><Trash2 className="w-4 h-4" /></Button>
+                    <Button variant="ghost" size="sm" aria-label="Edit service" title="Edit" onClick={e => { e.stopPropagation(); openEdit(t) }}><Edit2 className="w-4 h-4" /></Button>
+                    <Button variant="ghost" size="sm" aria-label="Delete service" title="Delete" onClick={e => { e.stopPropagation(); remove(t) }} className="text-red-400/70 hover:text-red-400"><Trash2 className="w-4 h-4" /></Button>
                   </div>
                 ))}
               </div>

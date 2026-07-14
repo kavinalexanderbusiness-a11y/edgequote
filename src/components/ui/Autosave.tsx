@@ -22,9 +22,10 @@ export function AutosaveStatus({ status, savedAt, className = '' }: { status: Au
   if (status === 'idle' && !savedAt) return null
   return (
     <span className={`inline-flex items-center gap-1 text-[11px] text-ink-faint ${className}`} aria-live="polite">
+      {/* Keyed by saving/saved so the swap cross-fades instead of hard-switching. */}
       {status === 'saving'
-        ? <><Loader2 className="w-3 h-3 animate-spin" /> Saving…</>
-        : <><Check className="w-3 h-3 text-emerald-400" /> Draft saved{savedAt && status !== 'saved' ? ` · ${ago(savedAt)}` : ''}</>}
+        ? <span key="saving" className="inline-flex items-center gap-1 animate-fade"><Loader2 className="w-3 h-3 animate-spin" /> Saving…</span>
+        : <span key="saved" className="inline-flex items-center gap-1 animate-fade"><Check className="w-3 h-3 text-emerald-400" /> Draft saved{savedAt && status !== 'saved' ? ` · ${ago(savedAt)}` : ''}</span>}
     </span>
   )
 }

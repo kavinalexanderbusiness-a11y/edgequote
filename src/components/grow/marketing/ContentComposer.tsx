@@ -185,7 +185,7 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
         <p className="text-sm text-ink-muted max-w-xs mx-auto">
           Draft a {def.label} post for this job in your brand voice — ready to review and post.
         </p>
-        <Button onClick={runGenerate} disabled={!aiEnabled}>
+        <Button variant="secondary" onClick={runGenerate} disabled={!aiEnabled}>
           <Sparkles className="w-4 h-4" /> Generate {def.label} post
         </Button>
         {!aiEnabled && <p className="text-[11px] text-ink-faint">Add your Anthropic key to turn on generation.</p>}

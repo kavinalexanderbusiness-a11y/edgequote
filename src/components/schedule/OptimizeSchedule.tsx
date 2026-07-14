@@ -15,18 +15,18 @@ import { Card, CardBody } from '@/components/ui/Card'
 import { Rocket, X, Trophy, Scale, DollarSign, Target, ArrowRight, Repeat, Check, Navigation, Clock, Gauge, CalendarDays, Lightbulb, AlertTriangle, ShieldCheck, Loader2 } from 'lucide-react'
 
 const MODES: { key: OptimizeMode; label: string; sub: string; Icon: typeof Trophy }[] = [
-  { key: 'recommended', label: 'Smart Recommended', sub: 'Best overall balance', Icon: Target },
-  { key: 'revenue', label: 'Max Profit', sub: 'Revenue per hour, fill clusters', Icon: DollarSign },
-  { key: 'density', label: 'Max Density', sub: 'Least driving, tightest routes', Icon: Trophy },
-  { key: 'balanced', label: 'Balanced Workload', sub: 'Even hours, no overloads', Icon: Scale },
+  { key: 'recommended', label: 'Smart recommended', sub: 'Best overall balance', Icon: Target },
+  { key: 'revenue', label: 'Max profit', sub: 'Revenue per hour, fill clusters', Icon: DollarSign },
+  { key: 'density', label: 'Max density', sub: 'Least driving, tightest routes', Icon: Trophy },
+  { key: 'balanced', label: 'Balanced workload', sub: 'Even hours, no overloads', Icon: Scale },
 ]
 
 const SCOPES: { key: OptimizeScope; label: string }[] = [
-  { key: 'day', label: 'Selected Day' },
+  { key: 'day', label: 'Selected day' },
   { key: 'weekend', label: 'Weekend' },
-  { key: 'week', label: 'This Week' },
-  { key: 'month', label: 'This Month' },
-  { key: 'future', label: 'All Future' },
+  { key: 'week', label: 'This week' },
+  { key: 'month', label: 'This month' },
+  { key: 'future', label: 'All future' },
 ]
 
 interface Props {
@@ -215,7 +215,7 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
         <Card className="w-full max-w-2xl my-2 shadow-2xl" onClick={e => e.stopPropagation()}>
           <div className="px-5 py-4 border-b border-border flex items-center justify-between">
             <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Rocket className="w-4 h-4 text-accent" /> Optimize Schedule</h2>
-            <button onClick={onClose} className="w-9 h-9 -mr-2 flex items-center justify-center text-ink-faint hover:text-ink"><X className="w-4 h-4" /></button>
+            <button type="button" onClick={onClose} aria-label="Close" className="w-9 h-9 -mr-2 flex items-center justify-center text-ink-faint hover:text-ink"><X className="w-4 h-4" /></button>
           </div>
           <CardBody className="space-y-4">
             <p className="text-xs text-ink-muted">

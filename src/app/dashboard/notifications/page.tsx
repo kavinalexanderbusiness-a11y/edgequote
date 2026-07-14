@@ -120,14 +120,14 @@ export default function NotificationsPage() {
         )}
         <button onClick={() => dismiss(g.ids)} title={supportsManage ? 'Dismiss' : 'Mark read'} aria-label="Dismiss"
           className="h-7 w-7 rounded-lg text-ink-faint hover:text-ink hover:bg-surface flex items-center justify-center">
-          {compact ? <X className="w-3.5 h-3.5" /> : <X className="w-3.5 h-3.5" />}
+          <X className="w-3.5 h-3.5" />
         </button>
       </div>
     )
   }
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="max-w-3xl mx-auto space-y-6">
       <PageHeader title="Notifications" description="Grouped and prioritized — only what needs you."
         action={(totalUnread > 0 || readVisible.length > 0) ? (
           <div className="flex items-center gap-2">
@@ -154,7 +154,7 @@ export default function NotificationsPage() {
         <div className="space-y-4">
           {/* Needs attention — money/trust problems, never grouped, never buried */}
           {actionNeeded.length > 0 && (
-            <section className="space-y-1.5">
+            <section className="space-y-1.5 animate-rise">
               <SectionHeading eyebrow icon={AlertTriangle} title="Needs attention" />
               <div className="rounded-card border border-amber-500/30 bg-amber-500/[0.04] divide-y divide-border overflow-hidden">
                 {actionNeeded.map(g => {
@@ -177,7 +177,7 @@ export default function NotificationsPage() {
 
           {/* Recent activity — wins & chatter, grouped by type, expandable */}
           {activity.length > 0 && (
-            <section className="space-y-1.5">
+            <section className="space-y-1.5 animate-rise stagger-1">
               <SectionHeading eyebrow title="Recent activity"
                 action={snoozedCount > 0 ? <span className="text-[10px] text-ink-faint flex items-center gap-1"><Clock className="w-3 h-3" /> {snoozedCount} snoozed</span> : undefined} />
               <div className="rounded-card border border-border bg-bg-secondary divide-y divide-border overflow-hidden">
@@ -197,7 +197,7 @@ export default function NotificationsPage() {
                           {g.body && <p className="text-xs text-ink-muted mt-0.5 truncate">{g.body}</p>}
                           <p className="text-[10px] text-ink-faint mt-0.5">{timeAgo(g.latestAt)}</p>
                         </button>
-                        {g.count > 1 && <ChevronDown className={cn('w-4 h-4 text-ink-faint shrink-0 mt-1.5 transition-transform cursor-pointer', isOpen && 'rotate-180')} onClick={onMain} />}
+                        {g.count > 1 && <ChevronDown aria-hidden="true" className={cn('w-4 h-4 text-ink-faint shrink-0 mt-1.5 transition-transform', isOpen && 'rotate-180')} />}
                         <Controls g={g} compact />
                       </div>
                       {isOpen && g.count > 1 && (
@@ -211,8 +211,8 @@ export default function NotificationsPage() {
                               </button>
                               <div className="flex items-center gap-1 shrink-0">
                                 {n.href && <button onClick={() => openItem(n)} className="text-[11px] font-semibold text-accent hover:underline px-1.5 py-1">{notificationActionLabel(n.type)}</button>}
-                                {supportsManage && <button onClick={() => snooze([n.id])} title="Remind me tomorrow" className="h-6 w-6 rounded-lg text-ink-faint hover:text-ink hover:bg-surface flex items-center justify-center"><Clock className="w-3 h-3" /></button>}
-                                <button onClick={() => dismiss([n.id])} title={supportsManage ? 'Dismiss' : 'Mark read'} className="h-6 w-6 rounded-lg text-ink-faint hover:text-ink hover:bg-surface flex items-center justify-center"><X className="w-3 h-3" /></button>
+                                {supportsManage && <button onClick={() => snooze([n.id])} title="Remind me tomorrow" aria-label="Snooze" className="h-6 w-6 rounded-lg text-ink-faint hover:text-ink hover:bg-surface flex items-center justify-center"><Clock className="w-3 h-3" /></button>}
+                                <button onClick={() => dismiss([n.id])} title={supportsManage ? 'Dismiss' : 'Mark read'} aria-label="Dismiss" className="h-6 w-6 rounded-lg text-ink-faint hover:text-ink hover:bg-surface flex items-center justify-center"><X className="w-3 h-3" /></button>
                               </div>
                             </div>
                           ))}

@@ -8,7 +8,8 @@ import { Collapsible } from '@/components/ui/Collapsible'
 import { Input } from '@/components/ui/Input'
 import { MSG_LABELS, MsgType, DEFAULT_TEMPLATES, MSG_VARIABLES } from '@/lib/comms/templates'
 import { SmsCost } from '@/components/comms/SmsCost'
-import { MessageSquare, Check, RotateCcw, Loader2 } from 'lucide-react'
+import { MessageSquare, Check, RotateCcw } from 'lucide-react'
+import { Skeleton } from '@/components/ui/Skeleton'
 
 const TYPES: MsgType[] = [
   'introduction',
@@ -53,7 +54,7 @@ export function MessageTemplateEditor() {
   }
 
   return (
-    <Card className="mt-6">
+    <Card>
       <CardHeader>
         <div className="flex items-center justify-between gap-3">
           <div>
@@ -65,7 +66,13 @@ export function MessageTemplateEditor() {
       </CardHeader>
       <CardBody className="space-y-4">
         {loading ? (
-          <p className="text-xs text-ink-muted flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…</p>
+          // Shimmer in the shape of the loaded editor (input + variables + rows) —
+          // the shared skeleton language, not a lone spinner.
+          <div className="space-y-3">
+            <Skeleton className="h-10 w-full" />
+            <Skeleton className="h-14 w-full" />
+            {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-9 w-full" />)}
+          </div>
         ) : (
           <>
             <Input label="Google review link" placeholder="https://g.page/r/…/review" value={reviewUrl} onChange={e => setReviewUrl(e.target.value)} hint="Used by the {{review_link}} variable in the review request." />
@@ -93,17 +100,23 @@ export function MessageTemplateEditor() {
                     <div>
                       {!usingDefault && (
                         <div className="flex justify-end mb-1">
-                          <button onClick={() => setTemplates(prev => ({ ...prev, [t]: '' }))} className="text-[11px] text-ink-faint hover:text-ink flex items-center gap-1"><RotateCcw className="w-3 h-3" /> Reset to default</button>
+                          <button type="button" onClick={() => setTemplates(prev => ({ ...prev, [t]: '' }))} className="text-[11px] text-ink-faint hover:text-ink flex items-center gap-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><RotateCcw className="w-3 h-3" /> Reset to default</button>
                         </div>
                       )}
                       <textarea rows={6} value={val} placeholder={DEFAULT_TEMPLATES[t]}
                         onChange={e => setTemplates(prev => ({ ...prev, [t]: e.target.value }))}
-                        className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent placeholder:text-ink-faint resize-y leading-relaxed" />
+                        className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20 placeholder:text-ink-faint resize-y leading-relaxed" />
                       <SmsCost text={val || DEFAULT_TEMPLATES[t]} className="mt-1.5" />
                     </div>
                   </Collapsible>
                 )
               })}
+            </div>
+
+            {/* Save repeated at the bottom — the header button is off-screen by
+                the time you're editing the lower rows of 17 templates. */}
+            <div className="flex justify-end pt-1">
+              <Button size="sm" onClick={save} loading={saving}>{saved ? <><Check className="w-3.5 h-3.5" /> Saved</> : 'Save templates'}</Button>
             </div>
           </>
         )}

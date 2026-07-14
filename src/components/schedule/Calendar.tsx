@@ -139,11 +139,22 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
   const suppressClick = useRef(false)
   const cancelLongPress = () => { if (longPressRef.current) { clearTimeout(longPressRef.current.timer); longPressRef.current = null } }
   function dayHandlers(dateISO: string, day: Date) {
+    // The ONE activation path — mouse click and Enter/Space share it exactly.
+    const activate = (e: { metaKey: boolean; ctrlKey: boolean }) => {
+      if ((e.metaKey || e.ctrlKey) && onToggleDaySelect) { onToggleDaySelect(dateISO); return }
+      onSelectDay(day)
+    }
     return {
       onClick: (e: React.MouseEvent) => {
         if (suppressClick.current) { suppressClick.current = false; return }
-        if ((e.metaKey || e.ctrlKey) && onToggleDaySelect) { onToggleDaySelect(dateISO); return }
-        onSelectDay(day)
+        activate(e)
+      },
+      onKeyDown: (e: React.KeyboardEvent) => {
+        // Only the cell itself — chips inside are real buttons with their own keys.
+        if (e.target !== e.currentTarget) return
+        if (e.key !== 'Enter' && e.key !== ' ') return
+        e.preventDefault()
+        activate(e)
       },
       onContextMenu: onDayMenu ? (e: React.MouseEvent) => { e.preventDefault(); onDayMenu(dateISO, { x: e.clientX, y: e.clientY }) } : undefined,
       onPointerDown: onDayMenu ? (e: React.PointerEvent) => {

@@ -175,17 +175,18 @@ export default function CustomersPage() {
   }
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       <PageHeader
         title="Customers"
         description={`${customers.length} customer${customers.length !== 1 ? 's' : ''} in your database`}
         action={
           <div className="flex items-center gap-2">
-            <Link href="/dashboard/customers/import">
-              <Button variant="secondary"><Upload className="w-4 h-4" /> Import</Button>
+            <Link href="/dashboard/customers/import"
+              className="inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-surface border border-border-strong text-ink hover:bg-surface-raised active:scale-[0.98] px-4 py-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+              <Upload className="w-4 h-4" /> Import
             </Link>
             <Button onClick={() => { setShowForm(true); setEditing(null) }}>
-              <Plus className="w-4 h-4" /> Add Customer
+              <Plus className="w-4 h-4" /> Add customer
             </Button>
           </div>
         }
@@ -199,7 +200,8 @@ export default function CustomersPage() {
             </h2>
             <button
               onClick={() => { setShowForm(false); setEditing(null) }}
-              className="text-ink-faint hover:text-ink transition-colors"
+              aria-label="Close form"
+              className="h-7 w-7 rounded-lg flex items-center justify-center text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
               <X className="w-4 h-4" />
             </button>
@@ -245,7 +247,7 @@ export default function CustomersPage() {
       {/* Archived customers — fully preserved, restorable any time */}
       {!loading && archived.length > 0 && (
         <div className="rounded-card border border-border bg-bg-secondary p-4">
-          <button onClick={() => setShowArchived(s => !s)} className="text-sm font-medium text-ink-muted hover:text-ink flex items-center gap-1.5">
+          <button onClick={() => setShowArchived(s => !s)} className="text-sm font-medium text-ink-muted hover:text-ink flex items-center gap-1.5 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
             <Archive className="w-4 h-4" /> {showArchived ? 'Hide' : 'Show'} archived ({archived.length})
           </button>
           {showArchived && (
@@ -258,7 +260,7 @@ export default function CustomersPage() {
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <Button size="sm" variant="secondary" onClick={() => handleRestore(c.id)}><RotateCcw className="w-3.5 h-3.5" /> Restore</Button>
-                    <Button size="sm" variant="danger" onClick={() => handleDeletePermanently(c.id)} title="Delete permanently"><Trash2 className="w-3.5 h-3.5" /> Delete</Button>
+                    <Button size="sm" variant="danger" onClick={() => handleDeletePermanently(c.id)}><Trash2 className="w-3.5 h-3.5" /> Delete permanently</Button>
                   </div>
                 </div>
               ))}

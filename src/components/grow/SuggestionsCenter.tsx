@@ -8,6 +8,7 @@ import { loadSuggestions } from '@/lib/suggestionsLoad'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { InlineEmpty } from '@/components/ui/EmptyState'
+import { FilterPill } from '@/components/ui/FilterPill'
 import { formatCurrency, cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
 import { Sparkles, Check, ArrowRight, Clock, Navigation, TrendingUp, RefreshCw, HelpCircle, Calculator, X, BellOff, Undo2 } from 'lucide-react'
@@ -154,11 +155,9 @@ export function SuggestionsCenter() {
             const n = counts[f.key] || 0
             if (f.key !== 'all' && n === 0) return null
             return (
-              <button key={f.key} onClick={() => { setFilter(f.key); setShowAll(false) }}
-                className={cn('text-xs font-medium rounded-full px-2.5 py-1 border transition-colors',
-                  filter === f.key ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
+              <FilterPill key={f.key} active={filter === f.key} onClick={() => { setFilter(f.key); setShowAll(false) }}>
                 {f.label} {n > 0 && <span className="opacity-70">{n}</span>}
-              </button>
+              </FilterPill>
             )
           })}
         </div>
@@ -216,6 +215,10 @@ function SuggestionCard({ s, index, applying, applied, onAction, onDismiss }: { 
   // one-click applies land in ~1 min; anything that navigates to do work is ~5 min.
   const effortMin = actions.some(a => a.kind === 'apply-price' || a.kind === 'create-recurring') ? 1 : 5
 
+  // Visual hierarchy: only the FIRST one-tap action reads as the primary move;
+  // any further one-tap actions step down to secondary.
+  const firstOneTap = actions.findIndex(a => a.kind !== 'navigate')
+
   function renderAction(a: SuggestionAction, i: number) {
     if (a.kind === 'navigate') {
       return (
@@ -224,7 +227,7 @@ function SuggestionCard({ s, index, applying, applied, onAction, onDismiss }: { 
         </Link>
       )
     }
-    return <Button key={i} size="sm" onClick={() => onAction(a)} loading={applying}>{a.label}</Button>
+    return <Button key={i} size="sm" variant={i === firstOneTap ? 'primary' : 'secondary'} onClick={() => onAction(a)} loading={applying}>{a.label}</Button>
   }
 
   return (

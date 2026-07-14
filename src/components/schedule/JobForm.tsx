@@ -404,7 +404,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     >
       <Controller name="customer_id" control={control}
         render={({ field }) => (
-          <Select label="Customer" options={customerOptions} {...field} />
+          <Select label="Customer" autoFocus options={customerOptions} {...field} />
         )} />
 
       <Input label="Service Type" placeholder="e.g. Lawn Mowing"
@@ -418,7 +418,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
           {...register('price', { min: 0 })} />
         {measuredPrice != null && measuredPrice > 0 && (
           <button type="button" onClick={() => setValue('price', measuredPrice)}
-            className="text-xs text-accent hover:underline mt-1.5">
+            className="text-xs text-accent hover:underline mt-1.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
             Use measured price ({formatCurrency(measuredPrice)})
           </button>
         )}
@@ -564,15 +564,15 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
                 </p>
                 <div className="flex flex-wrap gap-2">
                   <a href={`/dashboard/customers/${customerId}`} target="_blank" rel="noopener noreferrer"
-                    className="text-xs font-medium px-2.5 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong">
+                    className="text-xs font-medium px-2.5 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                     View existing schedule
                   </a>
                   <button type="button" onClick={() => { setPreset('none'); setDupAck(true) }}
-                    className="text-xs font-medium px-2.5 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong">
+                    className="text-xs font-medium px-2.5 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                     Add one-time visit instead
                   </button>
                   <button type="button" onClick={() => setDupAck(true)}
-                    className="text-xs font-medium px-2.5 py-1 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20">
+                    className="text-xs font-medium px-2.5 py-1 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                     Create another schedule anyway
                   </button>
                 </div>
@@ -596,7 +596,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
                 { kind: 'monthly', label: 'Monthly Service' },
               ] as const).map(p => (
                 <button key={p.kind} type="button" onClick={() => applyLawnPreset(p.kind)}
-                  className="text-xs font-medium px-3 py-1.5 rounded-lg border border-accent/30 bg-accent/10 text-accent hover:bg-accent/20 transition-colors">
+                  className="text-xs font-medium px-3 py-1.5 rounded-lg border border-accent/30 bg-accent/10 text-accent hover:bg-accent/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                   {p.label}
                 </button>
               ))}
@@ -660,7 +660,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
       {/* Sticky save — reachable one-handed without scrolling past the form. */}
       <div className="sticky bottom-0 -mx-1 px-1 pt-2 pb-1 bg-bg-secondary/95 backdrop-blur border-t border-border flex items-center gap-2 flex-wrap">
         <Button type="submit" loading={isSubmitting} onClick={() => { addAnotherRef.current = false }}>
-          {isEdit ? 'Update Job' : 'Add Job'}
+          {isEdit ? 'Update job' : 'Add job'}
         </Button>
         {allowAddAnother && (
           <Button type="submit" variant="secondary" onClick={() => { addAnotherRef.current = true }}>

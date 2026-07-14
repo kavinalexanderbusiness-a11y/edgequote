@@ -6,7 +6,7 @@ import { loadWinLoss, recordQuoteOutcome, WinLossData, LostQuoteRow, LOSS_REASON
 import { Skeleton } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { formatCurrency, cn } from '@/lib/utils'
-import { Trophy, Loader2, RefreshCw, Check } from 'lucide-react'
+import { Trophy, RefreshCw, Check } from 'lucide-react'
 import { IconButton } from '@/components/ui/IconButton'
 
 // ── Win/Loss (Growth) ───────────────────────────────────────────────────────────
@@ -39,7 +39,6 @@ export function WinLossPanel() {
   if (loading) {
     return (
       <div className="rounded-card border border-border bg-bg-secondary p-5">
-        <p className="text-xs text-ink-muted flex items-center gap-2 mb-3"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Reading your quote outcomes…</p>
         <div className="space-y-2.5" aria-hidden>
           {[0, 1].map(i => (
             <div key={i} className="flex items-center gap-3">

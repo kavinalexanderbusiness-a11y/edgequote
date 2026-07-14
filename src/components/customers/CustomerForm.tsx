@@ -80,7 +80,7 @@ export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel
         />
       )}
       <Input
-        label="Full Name" autoFocus
+        label="Full Name *" autoFocus
         placeholder="Jane Smith"
         error={errors.name?.message}
         {...register('name', { required: 'Name is required' })}
@@ -140,15 +140,11 @@ export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel
             {...register('city')}
           />
         </div>
-        <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Province</label>
-          <select
-            className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
-            {...register('province')}
-          >
-            {PROVINCES.map(p => <option key={p} value={p} className="bg-bg-secondary">{p}</option>)}
-          </select>
-        </div>
+        <Select
+          label="Province"
+          options={PROVINCES.map(p => ({ value: p, label: p }))}
+          {...register('province')}
+        />
       </div>
       <Input
         label="Postal Code"
@@ -179,13 +175,15 @@ export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel
           automation). Month + day are used; the year is fine to leave approximate. */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <Input
-          label="Birthday (optional)"
+          label="Birthday"
           type="date"
+          hint="Powers birthday campaigns — the year can be approximate"
           {...register('birthday')}
         />
         <Input
-          label="Customer anniversary (optional)"
+          label="Customer anniversary"
           type="date"
+          hint="First service date — powers anniversary campaigns"
           {...register('anniversary')}
         />
       </div>
@@ -199,7 +197,7 @@ export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel
         <AutosaveStatus status={autosave.status} savedAt={autosave.savedAt} className="mr-auto" />
         <Button type="button" variant="ghost" onClick={onCancel}>Cancel</Button>
         <Button type="submit" loading={isSubmitting}>
-          {isEdit ? 'Save Changes' : 'Add Customer'}
+          {isEdit ? 'Save changes' : 'Add customer'}
         </Button>
       </div>
     </form>

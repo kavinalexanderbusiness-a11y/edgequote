@@ -26,6 +26,7 @@ export interface MenuItem {
   icon?: LucideIcon
   onSelect: () => void
   disabled?: boolean
+  danger?: boolean   // destructive item — red text/icon so danger is visible before hover
 }
 
 interface TriggerApi {
@@ -154,7 +155,7 @@ export function Menu({ items, align = 'start', width = 288, ariaLabel = 'Menu', 
             maxHeight: 'calc(100vh - 16px)',
             visibility: coords ? 'visible' : 'hidden',
           }}
-          className="z-[200] overflow-y-auto rounded-xl border border-border bg-bg-secondary shadow-2xl p-1.5">
+          className="z-[200] overflow-y-auto rounded-xl border border-border bg-bg-secondary shadow-2xl p-1.5 origin-top animate-pop">
           {items.map((it, i) => {
             const Icon = it.icon
             return (
@@ -168,12 +169,14 @@ export function Menu({ items, align = 'start', width = 288, ariaLabel = 'Menu', 
                 onMouseEnter={() => !it.disabled && setActive(i)}
                 className={cn(
                   'w-full text-left flex items-start gap-2.5 px-2.5 py-2 rounded-lg transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-                  i === active ? 'bg-surface text-ink' : 'text-ink-muted hover:bg-surface hover:text-ink',
+                  it.danger
+                    ? (i === active ? 'bg-red-500/10 text-red-400' : 'text-red-400/80 hover:bg-red-500/10 hover:text-red-400')
+                    : (i === active ? 'bg-surface text-ink' : 'text-ink-muted hover:bg-surface hover:text-ink'),
                   it.disabled && 'opacity-50 pointer-events-none',
                 )}>
-                {Icon && <Icon className="w-4 h-4 text-accent shrink-0 mt-0.5" />}
+                {Icon && <Icon className={cn('w-4 h-4 shrink-0 mt-0.5', it.danger ? 'text-red-400' : 'text-accent')} />}
                 <span className="min-w-0">
-                  <span className="block text-sm font-medium text-ink">{it.label}</span>
+                  <span className={cn('block text-sm font-medium', it.danger ? 'text-red-400' : 'text-ink')}>{it.label}</span>
                   {it.description && <span className="block text-[11px] text-ink-faint leading-snug line-clamp-2 mt-0.5">{it.description}</span>}
                 </span>
               </button>

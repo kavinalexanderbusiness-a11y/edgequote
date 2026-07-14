@@ -13,9 +13,9 @@ interface ScopeDialogProps {
 }
 
 const OPTIONS: { scope: RecurrenceScope; label: string }[] = [
-  { scope: 'this', label: 'This Event Only' },
-  { scope: 'future', label: 'This and Future Events' },
-  { scope: 'all', label: 'All Events' },
+  { scope: 'this', label: 'This visit only' },
+  { scope: 'future', label: 'This and future visits' },
+  { scope: 'all', label: 'All visits' },
 ]
 
 // Apple Calendar-style scope chooser for editing/moving/deleting a recurring job.

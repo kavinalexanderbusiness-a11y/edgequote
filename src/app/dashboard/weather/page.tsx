@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { format, parseISO } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { loadWeatherImpact, WeatherImpactReport, DayImpact } from '@/lib/weatherImpact'
@@ -11,8 +12,9 @@ import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { StatTile } from '@/components/ui/StatTile'
 import { Skeleton, SkeletonTiles } from '@/components/ui/Skeleton'
+import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { formatCurrency, cn } from '@/lib/utils'
-import { CloudRain, Droplets, Wind, Clock, DollarSign, Users, AlertTriangle, ArrowRight, MapPin, Thermometer, CalendarOff } from 'lucide-react'
+import { CloudRain, Droplets, Wind, Clock, DollarSign, Users, AlertTriangle, ArrowRight, MapPin, Thermometer, CalendarOff, Sun } from 'lucide-react'
 
 const dayLabel = (iso: string, today: string) => iso === today ? 'Today' : format(parseISO(iso + 'T00:00:00'), 'EEE MMM d')
 
@@ -35,6 +37,7 @@ function ScoreBadge({ f }: { f: DayForecast }) {
 
 export default function WeatherPage() {
   const supabase = useMemo(() => createClient(), [])
+  const router = useRouter()
   const [r, setR] = useState<WeatherImpactReport | null>(null)
   const [loading, setLoading] = useState(true)
   const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
@@ -43,8 +46,8 @@ export default function WeatherPage() {
 
   if (loading) {
     return (
-      <div className="max-w-5xl space-y-6">
-        <PageHeader title="Weather" description="Rain risk to your booked work — and the best dry days to move it." />
+      <div className="max-w-5xl mx-auto space-y-6">
+        <PageHeader crumb={{ label: 'Schedule', href: '/dashboard/schedule' }} title="Weather" description="Rain risk to your booked work — and the best dry days to move it." />
         <Skeleton className="h-7 w-64 rounded-full" />
         <div className="grid grid-cols-2 gap-3">
           <Skeleton className="h-32 rounded-card" />
@@ -59,29 +62,29 @@ export default function WeatherPage() {
 
   if (!r.hasBase) {
     return (
-      <div className="max-w-5xl">
-        <PageHeader title="Weather" description="Rain risk to your booked work — and the best dry days to move it." />
-        <Card className="p-8 text-center">
-          <MapPin className="w-10 h-10 text-ink-faint mx-auto mb-3" />
-          <p className="text-sm font-medium text-ink">Set your base location first</p>
-          <p className="text-xs text-ink-muted mt-1">Add your business base address in Settings so we can pull the local forecast.</p>
-          <Link href="/dashboard/settings" className="inline-block mt-3"><Button size="sm" variant="secondary">Open Settings <ArrowRight className="w-3.5 h-3.5" /></Button></Link>
-        </Card>
+      <div className="max-w-5xl mx-auto space-y-6">
+        <PageHeader crumb={{ label: 'Schedule', href: '/dashboard/schedule' }} title="Weather" description="Rain risk to your booked work — and the best dry days to move it." />
+        <EmptyState
+          icon={MapPin}
+          title="Set your base location first"
+          description="Add your business base address in Settings so we can pull the local forecast."
+          action={{ label: 'Open settings', onClick: () => router.push('/dashboard/settings') }}
+        />
       </div>
     )
   }
   if (r.forecast.length === 0) {
     return (
-      <div className="max-w-5xl">
-        <PageHeader title="Weather" description="Rain risk to your booked work — and the best dry days to move it." />
-        <div className="py-16 text-center text-sm text-ink-muted">Couldn’t reach the forecast service right now. Try again shortly.</div>
+      <div className="max-w-5xl mx-auto space-y-6">
+        <PageHeader crumb={{ label: 'Schedule', href: '/dashboard/schedule' }} title="Weather" description="Rain risk to your booked work — and the best dry days to move it." />
+        <InlineEmpty>Couldn’t reach the forecast service right now. Try again shortly.</InlineEmpty>
       </div>
     )
   }
 
   return (
-    <div className="max-w-5xl space-y-6">
-      <PageHeader title="Weather" description="Rain risk to your booked work — and the best dry days to move it." />
+    <div className="max-w-5xl mx-auto space-y-6">
+      <PageHeader crumb={{ label: 'Schedule', href: '/dashboard/schedule' }} title="Weather" description="Rain risk to your booked work — and the best dry days to move it." />
 
       {/* Which location the forecast is for — always visible so you know it's right */}
       <div className="flex flex-wrap items-center gap-2">
@@ -102,7 +105,7 @@ export default function WeatherPage() {
             : r.atRiskDays.some(d => d.recommendation.action === 'monitor') ? LEVEL_STYLE.yellow.ring : LEVEL_STYLE.green.ring)}>
           <CloudRain className="w-4 h-4 shrink-0 text-ink-muted" />
           <p className="text-sm font-semibold text-ink">{r.headline}</p>
-          {r.totals.days > 0 && <Link href="/dashboard/schedule" className="ml-auto shrink-0"><Button size="sm">Weather Ops <ArrowRight className="w-3.5 h-3.5" /></Button></Link>}
+          {r.totals.days > 0 && <Link href="/dashboard/schedule" className="ml-auto shrink-0"><Button size="sm">Open Weather Ops <ArrowRight className="w-3.5 h-3.5" /></Button></Link>}
         </div>
       )}
 
@@ -135,7 +138,7 @@ export default function WeatherPage() {
             const lvl = weatherScore(f).level
             return (
               <div key={f.date} className="flex-1 flex flex-col items-center justify-end gap-1 min-w-0">
-                <span className="text-[10px] text-ink-faint">{f.precipProbability}%</span>
+                <span className="text-[10px] text-ink-faint tabular-nums">{f.precipProbability}%</span>
                 <div className={cn('w-full rounded-t', LEVEL_STYLE[lvl].bar)} style={{ height: `${Math.max(4, f.precipProbability)}%` }} title={`${f.label} · ${f.precipMm}mm · wind ${f.windKph} km/h`} />
                 <span className="text-base leading-none">{f.emoji}</span>
                 <span className="text-[10px] text-ink-faint truncate w-full text-center">{f.date === today ? 'Now' : format(parseISO(f.date + 'T00:00:00'), 'EEE')}</span>
@@ -147,9 +150,9 @@ export default function WeatherPage() {
         <div className="grid grid-cols-7 gap-1.5 mt-3">
           {r.forecast.map(f => (
             <div key={f.date} className="text-center">
-              <p className="text-[10px] text-ink-faint flex items-center justify-center gap-0.5"><Wind className="w-3 h-3" /> {f.windKph}</p>
-              {f.tempMax != null && <p className="text-[10px] text-ink-muted flex items-center justify-center gap-0.5"><Thermometer className="w-3 h-3" /> {f.tempMax}°</p>}
-              {f.severe && <p className="text-[10px] font-semibold text-red-400">⚠</p>}
+              <p className="text-[9px] text-ink-faint flex items-center justify-center gap-0.5"><Wind className="w-2.5 h-2.5" /> {f.windKph}</p>
+              {f.tempMax != null && <p className="text-[9px] text-ink-muted flex items-center justify-center gap-0.5"><Thermometer className="w-2.5 h-2.5" /> {f.tempMax}°</p>}
+              {f.severe && <p className="flex items-center justify-center"><AlertTriangle className="w-2.5 h-2.5 text-red-400" /></p>}
             </div>
           ))}
         </div>
@@ -163,10 +166,12 @@ export default function WeatherPage() {
 
       {/* Impact totals */}
       {r.atRiskDays.length === 0 ? (
-        <div className="rounded-card border border-emerald-500/20 bg-emerald-500/[0.04] p-5 text-center">
-          <p className="text-sm font-semibold text-emerald-400">No rain risk to your booked work this week ☀️</p>
-          <p className="text-xs text-ink-muted mt-1">No scheduled jobs fall on a likely-rainy day in the next 7 days.</p>
-        </div>
+        <EmptyState
+          icon={Sun}
+          tone="positive"
+          title="No rain risk to your booked work this week"
+          description="No scheduled jobs fall on a likely-rainy day in the next 7 days."
+        />
       ) : (
         <>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -192,7 +197,7 @@ export default function WeatherPage() {
 
 function WeatherCard({ f, label }: { f: DayForecast; label: string }) {
   return (
-    <div className={cn('rounded-card border p-4', LEVEL_STYLE[weatherScore(f).level].ring)}>
+    <Card className={cn('p-4', LEVEL_STYLE[weatherScore(f).level].ring)}>
       <div className="flex items-center justify-between gap-2">
         <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
         <ScoreBadge f={f} />
@@ -206,7 +211,7 @@ function WeatherCard({ f, label }: { f: DayForecast; label: string }) {
         </div>
       </div>
       {f.severe && <p className="text-[11px] font-semibold text-red-400 mt-2 flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Severe — strong reschedule signal</p>}
-    </div>
+    </Card>
   )
 }
 
@@ -222,7 +227,7 @@ function RiskRow({ d, today }: { d: DayImpact; today: string }) {
           </p>
           <p className="text-[11px] text-ink-muted mt-0.5">{d.forecast.precipProbability}% rain · {d.forecast.precipMm}mm · wind {d.forecast.windKph} km/h · {d.jobs} job{d.jobs !== 1 ? 's' : ''} · {d.laborHours}h · {formatCurrency(d.revenue)} · {d.customers} customer{d.customers !== 1 ? 's' : ''}</p>
         </div>
-        <Link href="/dashboard/schedule" className="shrink-0"><Button size="sm">Weather Ops <ArrowRight className="w-3.5 h-3.5" /></Button></Link>
+        <Link href="/dashboard/schedule" className="shrink-0"><Button size="sm" variant="secondary">Open Weather Ops <ArrowRight className="w-3.5 h-3.5" /></Button></Link>
       </div>
 
       {/* The action recommendation — Delay N / Monitor / Keep */}
@@ -246,8 +251,8 @@ function RiskRow({ d, today }: { d: DayImpact; today: string }) {
 function Mini({ label, value, tone }: { label: string; value: string; tone?: string }) {
   return (
     <div className="rounded-md bg-bg-tertiary border border-border px-2 py-1.5 text-center">
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className={cn('text-sm font-bold text-ink', tone)}>{value}</p>
+      <p className="text-[9px] uppercase tracking-wide text-ink-faint">{label}</p>
+      <p className={cn('text-sm font-bold text-ink tabular-nums', tone)}>{value}</p>
     </div>
   )
 }

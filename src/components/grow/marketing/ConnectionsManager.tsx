@@ -98,7 +98,7 @@ export function ConnectionsManager({ userId }: { userId: string }) {
                       <p className="text-xs font-medium text-ink truncate">{a.account_name}</p>
                       <p className="text-[10px] text-ink-faint">{a.mode === 'api' ? 'Connected · auto-publish' : 'Connected · copy & paste'}</p>
                     </div>
-                    {a.account_url && <a href={a.account_url} target="_blank" rel="noreferrer" className="text-ink-faint hover:text-ink shrink-0"><Link2 className="w-3.5 h-3.5" /></a>}
+                    {a.account_url && <a href={a.account_url} target="_blank" rel="noreferrer" title="Open profile" aria-label="Open profile" className="text-ink-faint hover:text-ink shrink-0"><Link2 className="w-3.5 h-3.5" /></a>}
                     <button onClick={() => remove(a)} className="text-ink-faint hover:text-red-400 shrink-0" title="Disconnect"><X className="w-3.5 h-3.5" /></button>
                   </div>
                 ))}
@@ -115,7 +115,7 @@ export function ConnectionsManager({ userId }: { userId: string }) {
                 <input value={url} onChange={e => setUrl(e.target.value)} placeholder="Profile/page URL (optional)"
                   className="w-full bg-bg-tertiary border border-border rounded-lg px-2.5 py-1.5 text-xs text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40" />
                 <div className="flex gap-1.5">
-                  <Button size="sm" onClick={() => add(def.key)} loading={busy} disabled={!name.trim()}>Connect</Button>
+                  <Button size="sm" onClick={() => add(def.key)} loading={busy} disabled={!name.trim()}>Add account</Button>
                   <Button size="sm" variant="ghost" onClick={() => setAdding(null)}>Cancel</Button>
                 </div>
               </div>

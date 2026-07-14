@@ -768,7 +768,7 @@ export function BeforeAfterStudio() {
             <span className="font-semibold">{selected?.context.customerName || 'This customer'}</span> hasn’t cleared their photos for public marketing.
             Get a quick OK before you post, then mark it here.
           </p>
-          <Button size="sm" variant="secondary" onClick={allowPhotos} className="shrink-0 border-amber-500/40 text-amber-200">
+          <Button size="sm" variant="secondary" onClick={allowPhotos} className="shrink-0">
             <BadgeCheck className="w-4 h-4" /> Mark allowed
           </Button>
         </div>
@@ -847,7 +847,7 @@ export function BeforeAfterStudio() {
             <Button variant="secondary" onClick={downloadAllPlatforms} disabled={downloading} loading={downloading && !!batchProgress} className="w-full">
               {batchDone
                 ? <><Check className="w-4 h-4" /> Saved all {PLATFORM_KEYS.length}</>
-                : <><Images className="w-4 h-4" /> {batchProgress ? `Saving ${batchProgress}…` : `All platforms (${PLATFORM_KEYS.length})`}</>}
+                : <><Images className="w-4 h-4" /> {batchProgress ? `Saving ${batchProgress}…` : `Download all platforms (${PLATFORM_KEYS.length})`}</>}
             </Button>
             {/* Screen-reader announcement for download progress / completion. */}
             <span className="sr-only" aria-live="polite">
@@ -894,7 +894,7 @@ export function BeforeAfterStudio() {
                     )}
                     <FocusRow label="Before" focus={beforeFocus} onChange={setBeforeFocus} />
                     <FocusRow label="After" focus={afterFocus} onChange={setAfterFocus} />
-                    <button onClick={resetFraming} className="text-[11px] text-accent hover:underline flex items-center gap-1">
+                    <button onClick={resetFraming} className={`text-[11px] text-accent hover:underline flex items-center gap-1 rounded ${FOCUS_RING}`}>
                       <RefreshCw className="w-3 h-3" /> Reset framing
                     </button>
                     {selected.beforeOptions.length > 1 && (
@@ -963,8 +963,8 @@ function SwapRow({ label, photos, activeId, onPick }: { label: string; photos: P
     <div>
       <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-1">{label}</p>
       <div className="flex gap-1.5 overflow-x-auto pb-1">
-        {photos.map(p => (
-          <button key={p.id} onClick={() => onPick(p.id)} aria-label={label} aria-pressed={activeId === p.id}
+        {photos.map((p, i) => (
+          <button key={p.id} onClick={() => onPick(p.id)} aria-label={`${label} — photo ${i + 1} of ${photos.length}`} aria-pressed={activeId === p.id}
             className={`shrink-0 w-12 h-12 rounded-lg overflow-hidden border-2 ${FOCUS_RING} ${activeId === p.id ? 'border-accent' : 'border-transparent opacity-70 hover:opacity-100'}`}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={thumbUrl(p.url, 120, 120)} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />

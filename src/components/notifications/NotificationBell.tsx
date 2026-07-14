@@ -196,7 +196,7 @@ export function NotificationBell() {
       role="dialog"
       aria-label="Notifications"
       style={{ position: 'fixed', top: pos.top, left: pos.left, width: pos.width, maxHeight: pos.maxHeight }}
-      className="z-[100] flex flex-col rounded-card border border-border bg-bg-secondary shadow-2xl overflow-hidden origin-top-right animate-[popIn_0.12s_ease-out]">
+      className="z-[100] flex flex-col rounded-card border border-border bg-bg-secondary shadow-2xl overflow-hidden origin-top-right animate-pop">
       <div className="px-4 py-2.5 border-b border-border flex items-center justify-between shrink-0">
         <p className="text-sm font-bold text-ink">Notifications</p>
         {unread > 0 && (
@@ -227,7 +227,7 @@ export function NotificationBell() {
                   <button type="button"
                     onClick={e => { e.stopPropagation(); scheduleFromNotification(n) }}
                     disabled={schedulingId !== null}
-                    className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-semibold rounded-lg px-2 py-1 border border-accent/30 bg-accent/10 text-accent hover:bg-accent/20 transition-colors disabled:opacity-60">
+                    className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-semibold rounded-lg px-2 py-1 border border-accent/30 bg-accent/10 text-accent hover:bg-accent/20 transition-colors disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                     {schedulingId === n.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <CalendarPlus className="w-3 h-3" />} Schedule now
                   </button>
                 )}
@@ -246,7 +246,7 @@ export function NotificationBell() {
 
   return (
     <div className="relative shrink-0">
-      <button ref={btnRef} onClick={toggle} aria-label="Notifications" aria-expanded={open}
+      <button ref={btnRef} onClick={toggle} aria-label="Notifications" aria-haspopup="dialog" aria-expanded={open}
         className="relative h-9 w-9 rounded-lg border border-border text-ink-muted hover:text-ink hover:bg-surface flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
         <Bell className="w-4 h-4" />
         {unread > 0 && (

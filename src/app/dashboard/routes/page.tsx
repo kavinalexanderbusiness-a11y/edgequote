@@ -5,7 +5,6 @@ import { createClient } from '@/lib/supabase/client'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
-import { Button } from '@/components/ui/Button'
 import { InlineEmpty } from '@/components/ui/EmptyState'
 import { SkeletonTiles } from '@/components/ui/Skeleton'
 import { format } from 'date-fns'
@@ -140,10 +139,10 @@ export default function RoutesPage() {
   const tips = improvementSuggestions(profit)
 
   return (
-    <div className="max-w-4xl space-y-6">
-      <PageHeader
+    <div className="max-w-5xl mx-auto space-y-6">
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }}
         title="Route Analysis"
-        description="Visualize and analyze a day's route — distance, density, and profit per hour"
+        description="Visualize and analyze a day's route — distance, density, and profit per hour."
       />
 
       <div className="flex flex-col sm:flex-row sm:items-end gap-3">
@@ -187,8 +186,9 @@ export default function RoutesPage() {
               <div className="flex items-center gap-3">
                 <p className="text-xl font-bold text-accent tabular-nums">{formatCurrency(profit.revenue)}</p>
                 {route?.mapsUrl && (
-                  <a href={route.mapsUrl} target="_blank" rel="noopener noreferrer">
-                    <Button size="sm" variant="secondary"><ExternalLink className="w-3.5 h-3.5" /> Maps</Button>
+                  <a href={route.mapsUrl} target="_blank" rel="noopener noreferrer"
+                    className="inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-surface border border-border-strong text-ink hover:bg-surface-raised active:scale-[0.98] px-3.5 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+                    <ExternalLink className="w-3.5 h-3.5" /> Open in Maps
                   </a>
                 )}
               </div>
@@ -243,7 +243,7 @@ export default function RoutesPage() {
           {/* Improvement suggestions */}
           {tips.length > 0 && (
             <div className="rounded-card border border-amber-500/20 bg-amber-500/5 px-4 py-3 space-y-1.5">
-              <p className="text-[11px] font-semibold text-amber-400 flex items-center gap-1 uppercase tracking-wide"><Lightbulb className="w-3 h-3" /> Ways to improve this route</p>
+              <p className="text-[10px] font-semibold text-amber-400 flex items-center gap-1 uppercase tracking-[0.14em]"><Lightbulb className="w-3 h-3" /> Ways to improve this route</p>
               {tips.map((t, i) => <p key={i} className="text-sm text-ink-muted">• {t}</p>)}
             </div>
           )}
@@ -316,8 +316,8 @@ function GradeBadge({ grade }: { grade: Grade }) {
 function Metric({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
     <div className="rounded-lg border border-border bg-bg-tertiary px-2 py-1.5">
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className={cn('text-sm font-bold mt-0.5', accent ? 'text-accent' : 'text-ink')}>{value}</p>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">{label}</p>
+      <p className={cn('text-sm font-bold mt-0.5 tabular-nums', accent ? 'text-accent' : 'text-ink')}>{value}</p>
     </div>
   )
 }

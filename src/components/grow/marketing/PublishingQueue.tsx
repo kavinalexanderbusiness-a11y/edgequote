@@ -165,13 +165,13 @@ export function PublishingQueue({ userId }: { userId: string }) {
         <div className="flex items-center gap-1.5 pl-6">
           {j.mode === 'manual' && j.status === 'queued' && (
             <>
-              <button onClick={() => copyCaption(j)} className="text-ink-faint hover:text-ink inline-flex items-center gap-1 text-[11px]" title="Copy caption"><Copy className="w-3.5 h-3.5" /> Copy caption</button>
+              <Button size="sm" variant="ghost" onClick={() => copyCaption(j)} title="Copy caption"><Copy className="w-3.5 h-3.5" /> Copy caption</Button>
               <a href={def.openUrl} target="_blank" rel="noreferrer" className="text-ink-faint hover:text-ink inline-flex items-center gap-1 text-[11px]" title={`Open ${def.label}`}><ExternalLink className="w-3.5 h-3.5" /> Open</a>
-              <Button size="sm" variant="ghost" onClick={() => markPosted(j)} loading={postingId === j.id}><CheckCircle2 className="w-3.5 h-3.5" /> Mark as posted</Button>
+              <Button size="sm" variant="secondary" onClick={() => markPosted(j)} loading={postingId === j.id}><CheckCircle2 className="w-3.5 h-3.5" /> Mark as posted</Button>
             </>
           )}
           {j.status === 'failed' && <Button size="sm" variant="ghost" loading={retrying === j.id} onClick={() => retry(j)}><RotateCcw className="w-3.5 h-3.5" /> Retry</Button>}
-          {(j.status === 'scheduled' || j.status === 'queued') && <button onClick={() => cancel(j)} className="text-ink-faint hover:text-red-400 inline-flex items-center gap-1 text-[11px]" title="Cancel"><X className="w-3.5 h-3.5" /> Cancel</button>}
+          {(j.status === 'scheduled' || j.status === 'queued') && <Button size="sm" variant="ghost" className="text-red-400/70 hover:text-red-400" onClick={() => cancel(j)} title="Cancel"><X className="w-3.5 h-3.5" /> Cancel</Button>}
           {j.status === 'published' && j.external_url && <a href={j.external_url} target="_blank" rel="noreferrer" className="text-accent inline-flex items-center gap-1 text-[11px]" title="View post"><ExternalLink className="w-3.5 h-3.5" /> View post</a>}
         </div>
       </div>
@@ -222,7 +222,7 @@ export function PublishingQueue({ userId }: { userId: string }) {
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">History · {history.length}</p>
-                <button onClick={clear} className="text-[11px] text-ink-faint hover:text-red-400 inline-flex items-center gap-1"><Trash2 className="w-3 h-3" /> Clear</button>
+                <button onClick={clear} className="text-[11px] text-ink-faint hover:text-red-400 inline-flex items-center gap-1"><Trash2 className="w-3 h-3" /> Clear history</button>
               </div>
               {history.map(j => <Row key={j.id} j={j} />)}
             </div>

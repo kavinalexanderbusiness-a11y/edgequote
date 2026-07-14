@@ -58,7 +58,7 @@ export function IdeasClient({ ideas, pieces }: { ideas: MarketingIdea[]; pieces:
     <div className="space-y-5">
       {/* Suggestions */}
       <div>
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-2 inline-flex items-center gap-1.5"><Lightbulb className="w-3.5 h-3.5 text-accent" /> Suggestions for you</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-faint mb-2 inline-flex items-center gap-1.5"><Lightbulb className="w-3.5 h-3.5 text-accent" /> Suggestions for you</p>
         {ideas.length === 0 ? (
           <EmptyState icon={Lightbulb} title="You’re all caught up" description="Finish a job, collect a review, or wait for the next season — fresh ideas will show up here." />
         ) : (
@@ -74,8 +74,8 @@ export function IdeasClient({ ideas, pieces }: { ideas: MarketingIdea[]; pieces:
                       <p className="text-xs text-ink-muted leading-snug">{idea.detail}</p>
                     </div>
                   </div>
-                  <Link href={idea.href} className="self-start text-xs font-semibold text-accent inline-flex items-center gap-1 hover:underline">
-                    {idea.actionLabel} <ArrowRight className="w-3 h-3" />
+                  <Link href={idea.href} className="group self-start text-xs font-semibold text-accent inline-flex items-center gap-1 hover:underline">
+                    {idea.actionLabel} <ArrowRight className="w-3 h-3 transition-transform group-hover:translate-x-0.5" />
                   </Link>
                 </Card>
               )
@@ -86,7 +86,7 @@ export function IdeasClient({ ideas, pieces }: { ideas: MarketingIdea[]; pieces:
 
       {/* Content reuse */}
       <div>
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-2 inline-flex items-center gap-1.5"><Repeat2 className="w-3.5 h-3.5 text-accent" /> Get more from what you’ve made</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-faint mb-2 inline-flex items-center gap-1.5"><Repeat2 className="w-3.5 h-3.5 text-accent" /> Get more from what you’ve made</p>
         {reuse.length === 0 ? (
           <EmptyState icon={Repeat2} title="Nothing to reuse yet" description="Once you’ve published a few posts, you’ll get one-tap ways to repurpose them across platforms." />
         ) : (

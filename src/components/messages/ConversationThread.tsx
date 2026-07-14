@@ -191,10 +191,14 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
               note ? 'bg-amber-500/5 border-amber-500/30' : 'bg-bg-tertiary border-border-strong')} />
           <div className="flex flex-col gap-1.5 shrink-0">
             <button type="button" onClick={() => setNote(n => !n)} title="Toggle internal note"
+              aria-pressed={note} aria-label="Internal note mode"
               className={cn('h-8 w-9 rounded-lg border flex items-center justify-center', note ? 'text-amber-400 border-amber-500/40 bg-amber-500/10' : 'text-ink-faint border-border hover:text-ink')}>
               <StickyNote className="w-4 h-4" />
             </button>
-            <Button size="sm" onClick={send} loading={sending} disabled={!text.trim()}>{note ? 'Save' : <Send className="w-4 h-4" />}</Button>
+            <Button size="sm" onClick={send} loading={sending} disabled={!text.trim()}
+              aria-label={note ? 'Save note' : 'Send message'} title={note ? 'Save note' : 'Send message'}>
+              {note ? 'Save note' : <Send className="w-4 h-4" />}
+            </Button>
           </div>
         </div>
         <p className="text-[10px] text-ink-faint mt-1">{note ? 'Internal note — only you see this.' : 'Sends an SMS via your number. ⌘/Ctrl+Enter to send.'}</p>

@@ -8,7 +8,7 @@ import { Invoice, BusinessSettings, Payment, PAYMENT_METHODS, paymentMethodLabel
 import { Button } from '@/components/ui/Button'
 import { invoiceBalance, recordPayment, applyCreditToInvoice, overpaymentToCredit, recordRefund, receiptNumberFor, removePayment, restorePayment } from '@/lib/payments/ledger'
 import { receiptMessageBody } from '@/lib/comms/templates'
-import { Wallet, Plus, Gift, RotateCcw, TrendingUp, X, FileDown, Mail, MessageSquare, ReceiptText } from 'lucide-react'
+import { Wallet, Plus, Gift, RotateCcw, Banknote, TrendingUp, X, FileDown, Mail, MessageSquare, ReceiptText } from 'lucide-react'
 
 function todayISO(): string {
   const d = new Date()
@@ -209,7 +209,7 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
                   )}
                   {revertable && (
                     <button onClick={() => revertPayment(p)} disabled={rowBusy === p.id}
-                      className="p-1.5 text-ink-faint hover:text-red-400 transition-colors"
+                      className="p-1.5 ml-1 pl-1 border-l border-border text-red-400/70 hover:text-red-400 transition-colors"
                       aria-label="Revert payment" title="Revert this payment (undoable) — the invoice recalculates from the ledger">
                       <RotateCcw className="w-3.5 h-3.5" />
                     </button>
@@ -230,7 +230,7 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
               <Gift className="w-3.5 h-3.5" /> Apply as credit
             </Button>
             <Button size="sm" variant="secondary" loading={busy} onClick={() => run(() => recordRefund(supabase, { userId: uid, invoice, amount: overpaid, notes: 'Overpayment refund' }), `Refund of ${formatCurrency(overpaid)} recorded.`)}>
-              <RotateCcw className="w-3.5 h-3.5" /> Record refund
+              <Banknote className="w-3.5 h-3.5" /> Record refund
             </Button>
             <Button size="sm" variant="ghost" loading={busy} onClick={raiseTotal}>
               <TrendingUp className="w-3.5 h-3.5" /> Raise total
@@ -247,7 +247,7 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
             <Plus className="w-3.5 h-3.5" /> Record payment
           </Button>
           {applyable > 0 && (
-            <Button size="sm" variant="ghost" className="text-accent" loading={busy}
+            <Button size="sm" variant="secondary" loading={busy}
               onClick={() => run(() => applyCreditToInvoice(supabase, { userId: uid, invoice, amount: applyable }), `Applied ${formatCurrency(applyable)} credit to ${invoice.invoice_number}.`)}>
               <Gift className="w-3.5 h-3.5" /> Apply {formatCurrency(applyable)} credit
             </Button>
@@ -257,38 +257,41 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
 
       {/* Record-payment form */}
       {open && (
-        <div className="rounded-lg border border-border bg-bg-secondary p-3 space-y-2.5">
+        <form onSubmit={e => { e.preventDefault(); if (Number(amount) > 0 && !busy) save() }}
+          className="rounded-lg border border-border bg-bg-secondary p-3 space-y-2.5">
           <div className="flex items-center justify-between">
             <p className="text-xs font-semibold text-ink flex items-center gap-1.5"><Wallet className="w-3.5 h-3.5 text-accent" /> Record a payment</p>
-            <button onClick={() => setOpen(false)} className="text-ink-faint hover:text-ink" aria-label="Close"><X className="w-4 h-4" /></button>
+            <button type="button" onClick={() => setOpen(false)} className="h-7 w-7 rounded-lg flex items-center justify-center text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" aria-label="Close"><X className="w-4 h-4" /></button>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            <label className="text-[10px] uppercase tracking-wide text-ink-faint">Amount
-              <div className="relative mt-0.5">
+            <label className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Amount
+              <div className="relative mt-1">
                 <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-faint text-sm">$</span>
                 <input type="number" min="0" step="0.01" autoFocus value={amount} onChange={e => setAmount(e.target.value)}
-                  className="w-full bg-bg-tertiary border border-border-strong rounded-lg pl-6 pr-2 py-2 text-base sm:text-sm text-ink outline-none focus:border-accent" />
+                  className="w-full bg-bg-tertiary border border-border-strong rounded-lg pl-6 pr-2 py-2 text-base sm:text-sm font-normal text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
               </div>
             </label>
-            <label className="text-[10px] uppercase tracking-wide text-ink-faint">Method
+            <label className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Method
               <select value={method} onChange={e => setMethod(e.target.value)}
-                className="w-full mt-0.5 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2 text-sm text-ink outline-none focus:border-accent">
+                className="w-full mt-1 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2 text-sm font-normal text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20">
                 {PAYMENT_METHODS.filter(m => m.value !== 'credit').map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
               </select>
             </label>
-            <label className="text-[10px] uppercase tracking-wide text-ink-faint">Date
+            <label className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Date
               <input type="date" value={date} onChange={e => setDate(e.target.value)}
-                className="w-full mt-0.5 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2 text-sm text-ink outline-none focus:border-accent" />
+                className="w-full mt-1 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2 text-sm font-normal text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
             </label>
           </div>
-          <input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Note (optional)"
-            className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-2.5 py-2 text-base sm:text-sm text-ink outline-none focus:border-accent" />
+          <label className="block text-xs font-semibold uppercase tracking-wide text-ink-muted">Note
+            <input value={notes} onChange={e => setNotes(e.target.value)} placeholder="e.g. cheque #142 — optional"
+              className="w-full mt-1 bg-bg-tertiary border border-border-strong rounded-lg px-2.5 py-2 text-base sm:text-sm font-normal text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+          </label>
           <div className="flex items-center gap-2">
-            <Button size="sm" onClick={save} loading={busy} disabled={!(Number(amount) > 0)}>Record {Number(amount) > 0 ? formatCurrency(Number(amount)) : 'payment'}</Button>
+            <Button size="sm" type="submit" loading={busy} disabled={!(Number(amount) > 0)}>Record {Number(amount) > 0 ? formatCurrency(Number(amount)) : 'payment'}</Button>
             <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
             {balance > 0 && Number(amount) > 0 && Number(amount) < balance && <span className="text-[10px] text-amber-400 ml-auto">Partial — {formatCurrency(balance - Number(amount))} will remain</span>}
           </div>
-        </div>
+        </form>
       )}
 
       {/* Automatic receipt — appears the moment a payment is recorded. Generated
@@ -301,7 +304,7 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
               <ReceiptText className="w-3.5 h-3.5 text-emerald-400" />
               Receipt {receiptNumberFor(lastPayment.id)} · {formatCurrency(Number(lastPayment.amount) || 0)} {paymentMethodLabel(lastPayment.method || lastPayment.provider).toLowerCase()}
             </p>
-            <button onClick={() => setLastPayment(null)} className="text-ink-faint hover:text-ink" aria-label="Dismiss"><X className="w-4 h-4" /></button>
+            <button onClick={() => setLastPayment(null)} className="h-7 w-7 rounded-lg flex items-center justify-center text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" aria-label="Dismiss"><X className="w-4 h-4" /></button>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button size="sm" variant="secondary" loading={sendingReceipt === 'pdf'} onClick={() => downloadReceipt(lastPayment)}>

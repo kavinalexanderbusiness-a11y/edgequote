@@ -54,7 +54,7 @@ export function QuoteStatusControl({ quoteId, status, followUpCount, onChanged }
         onChange={handleChange}
         disabled={saving}
         title="Change status"
-        className={`appearance-none cursor-pointer pl-2.5 pr-6 py-1 rounded-full text-xs font-semibold border uppercase tracking-wide outline-none ${STATUS_COLORS[current]}`}
+        className={`appearance-none cursor-pointer pl-2.5 pr-6 py-1 rounded-full text-xs font-semibold border uppercase tracking-wide outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${STATUS_COLORS[current]}`}
       >
         {ALL.map(s => (
           <option key={s} value={s} className="bg-bg-secondary text-ink normal-case">

@@ -4,9 +4,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Toggle } from '@/components/ui/Toggle'
+import { Skeleton } from '@/components/ui/Skeleton'
 import { resolveAutomations, Automations, AUTOMATION_LABELS } from '@/lib/comms/automations'
-import { cn } from '@/lib/utils'
-import { Zap, Loader2 } from 'lucide-react'
+import { Zap } from 'lucide-react'
 
 const KEYS: (keyof Automations)[] = ['reminder', 'job_complete', 'review', 'marketing_draft']
 const HINTS: Record<keyof Automations, string> = {
@@ -42,14 +42,24 @@ export function AutomationToggles() {
   }
 
   return (
-    <Card className="mt-6">
+    <Card>
       <CardHeader>
         <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Zap className="w-4 h-4 text-accent" /> Automated messages</h2>
         <p className="text-xs text-ink-faint mt-0.5">Which messages send on their own. Per-customer SMS/email opt-in still applies — nothing sends to a customer who hasn’t consented.</p>
       </CardHeader>
       <CardBody>
         {loading ? (
-          <p className="text-xs text-ink-muted flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…</p>
+          <div className="space-y-2" aria-hidden>
+            {KEYS.map(k => (
+              <div key={k} className="flex items-center justify-between gap-3 py-1.5">
+                <div className="min-w-0 flex-1">
+                  <Skeleton className="h-3.5 w-40" />
+                  <Skeleton className="h-2.5 w-3/4 mt-1.5" />
+                </div>
+                <Skeleton className="w-10 h-6 rounded-full shrink-0" />
+              </div>
+            ))}
+          </div>
         ) : (
           <div className="space-y-2">
             {KEYS.map(k => (

@@ -80,7 +80,9 @@ export function PaymentHistory({ settings }: { settings?: BusinessSettings | nul
                   </span>
                   {r.kind === 'payment' && r.invoices && (
                     <button onClick={() => downloadReceipt(r)} disabled={receiptId === r.id}
-                      className="text-ink-faint hover:text-accent transition-colors" title={`Download ${Number(r.amount) < 0 ? 'refund receipt' : 'receipt'} ${receiptNumberFor(r.id)}`}>
+                      className="p-1.5 rounded-lg text-ink-faint hover:text-accent transition-colors"
+                      aria-label={negative ? 'Download refund receipt' : 'Download receipt'}
+                      title={`Download ${Number(r.amount) < 0 ? 'refund receipt' : 'receipt'} ${receiptNumberFor(r.id)}`}>
                       {receiptId === r.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileDown className="w-3.5 h-3.5" />}
                     </button>
                   )}

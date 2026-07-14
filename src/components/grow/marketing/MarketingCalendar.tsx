@@ -13,7 +13,7 @@ import { upcomingHolidays, upcomingSeasonReminders } from '@/lib/marketing/holid
 import { PublishingHub } from './PublishingHub'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { cn } from '@/lib/utils'
-import { ChevronLeft, ChevronRight, CalendarDays, CalendarRange, Calendar as CalIcon, Sparkles, CalendarPlus, Send, ExternalLink, Copy, Check, X, CircleCheck, Clock, FileText, TriangleAlert, GripVertical } from 'lucide-react'
+import { ChevronLeft, ChevronRight, CalendarDays, CalendarRange, Calendar as CalIcon, Sparkles, CalendarPlus, ListChecks, ExternalLink, Copy, Check, X, CheckCircle2, Clock, FileText, TriangleAlert, GripVertical, Star } from 'lucide-react'
 import type { ContentPiece, ContentStatus, MarketingChannel } from '@/lib/marketing/types'
 
 type View = 'month' | 'week' | 'day'
@@ -180,8 +180,8 @@ export function MarketingCalendar({ userId, aiEnabled, openPlan }: { userId: str
           <FilterPill active={view === 'month'} onClick={() => setView('month')}><CalendarDays className="w-3 h-3" /> Month</FilterPill>
           <FilterPill active={view === 'week'} onClick={() => setView('week')}><CalendarRange className="w-3 h-3" /> Week</FilterPill>
           <FilterPill active={view === 'day'} onClick={() => setView('day')}><CalIcon className="w-3 h-3" /> Day</FilterPill>
-          <Button size="sm" variant="secondary" onClick={() => setHubOpen(true)}><Send className="w-4 h-4" /> Publishing</Button>
-          <Button size="sm" onClick={() => setPlanOpen(o => !o)} disabled={!aiEnabled} title={!aiEnabled ? "Add your Anthropic API key to enable AI generation" : undefined}><CalendarPlus className="w-4 h-4" /> Plan a month</Button>
+          <Button size="sm" variant="secondary" onClick={() => setHubOpen(true)}><ListChecks className="w-4 h-4" /> Publishing queue</Button>
+          <Button size="sm" variant={planOpen ? 'secondary' : 'primary'} onClick={() => setPlanOpen(o => !o)} disabled={!aiEnabled} title={!aiEnabled ? "Add your Anthropic API key to enable AI generation" : undefined}><CalendarPlus className="w-4 h-4" /> Plan a month</Button>
         </div>
       </div>
 
@@ -215,7 +215,7 @@ export function MarketingCalendar({ userId, aiEnabled, openPlan }: { userId: str
             </div>
           )}
           <Card className="p-3 space-y-2">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Unscheduled drafts · {drafts.length}</p>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-faint">Unscheduled drafts · {drafts.length}</p>
             <p className="text-[11px] text-ink-faint">Drag a draft onto a day — or tap it to open and schedule.</p>
             <div className="space-y-1.5 max-h-[50vh] overflow-y-auto">
               {drafts.length === 0 && <p className="text-xs text-ink-faint py-3 text-center">No unscheduled drafts.</p>}
@@ -263,7 +263,7 @@ function MonthGrid({ cursor, byDay, markers, todayKey, onDropDay, setDragId, onS
               <div className="flex items-center justify-between">
                 <span className={cn('text-[11px] font-medium', out ? 'text-ink-faint/60' : 'text-ink-muted', k === todayKey && 'text-accent font-bold')}>{d.getDate()}</span>
               </div>
-              {mk.slice(0, 1).map(m => <span key={m} className="text-[10px] text-amber-300/90 truncate" title={m}>★ {m}</span>)}
+              {mk.slice(0, 1).map(m => <span key={m} className="inline-flex items-center gap-1 text-[9px] text-amber-300/90 truncate" title={m}><Star className="w-3 h-3 shrink-0" /> {m}</span>)}
               {dayPieces.slice(0, 3).map(p => <CalChip key={p.id} piece={p} setDragId={setDragId} onSelect={onSelect} />)}
               {dayPieces.length > 3 && (
                 <button onClick={() => onOpenDay(d)} className="text-[10px] text-ink-faint hover:text-accent text-left" title="See all posts this day">
@@ -302,7 +302,7 @@ function WeekColumns({ from, byDay, markers, todayKey, onDropDay, setDragId, onS
               <p className="text-[10px] uppercase tracking-wide text-ink-faint">{WEEKDAYS[d.getDay()]}</p>
               <p className={cn('text-sm font-bold', k === todayKey ? 'text-accent' : 'text-ink')}>{d.getDate()}</p>
             </div>
-            {mk.slice(0, 1).map(m => <span key={m} className="text-[10px] text-amber-300/90 truncate" title={m}>★ {m}</span>)}
+            {mk.slice(0, 1).map(m => <span key={m} className="inline-flex items-center gap-1 text-[9px] text-amber-300/90 truncate" title={m}><Star className="w-3 h-3 shrink-0" /> {m}</span>)}
             {dayPieces.map(p => <CalChip key={p.id} piece={p} setDragId={setDragId} onSelect={onSelect} />)}
           </div>
         )
@@ -316,7 +316,7 @@ function DayAgenda({ day, pieces, markers, onSelect, onDropDay }: { day: Date; p
   return (
     // A real drop target so the empty-state "drag a draft here" actually works.
     <div className="space-y-2 min-h-[50vh]" onDragOver={e => e.preventDefault()} onDrop={() => onDropDay(key(day))}>
-      {markers.map(m => <Banner key={m} tone="warn">★ {m}</Banner>)}
+      {markers.map(m => <Banner key={m} tone="warn" icon={Star}>{m}</Banner>)}
       {pieces.length === 0 ? (
         <EmptyState icon={CalendarDays} title="Nothing scheduled" description="Drag a draft here — or tap a draft in the tray to schedule it." />
       ) : pieces.map(p => (
@@ -371,17 +371,18 @@ function DraftChip({ piece, setDragId, onSelect }: { piece: ContentPiece; setDra
   const def = channelDef(piece.channel)
   const Icon = def.icon
   return (
-    <div
+    <button
+      type="button"
       draggable
       onDragStart={() => setDragId(piece.id)}
       onDragEnd={() => setDragId(null)}
       onClick={() => onSelect(piece)}
-      className="rounded-lg border border-border bg-bg-secondary px-2 py-1.5 flex items-center gap-2 cursor-grab active:cursor-grabbing hover:border-accent/40"
+      className="w-full text-left rounded-lg border border-border bg-bg-secondary px-2 py-1.5 flex items-center gap-2 cursor-grab active:cursor-grabbing hover:border-accent/40"
     >
       <GripVertical className="w-3.5 h-3.5 text-ink-faint shrink-0" />
       <Icon className="w-3.5 h-3.5 text-ink-muted shrink-0" />
       <span className="text-xs text-ink truncate flex-1">{piece.title || piece.body || 'Untitled draft'}</span>
-    </div>
+    </button>
   )
 }
 
@@ -401,23 +402,23 @@ function PieceDetail({ piece, onClose, onUnschedule, onPublish, onFail, onSchedu
     <Card className="p-3 space-y-2.5">
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-semibold text-ink inline-flex items-center gap-1.5"><def.icon className="w-3.5 h-3.5" /> {def.label}</span>
-        <button onClick={onClose} className="text-ink-faint hover:text-ink"><X className="w-4 h-4" /></button>
+        <button onClick={onClose} aria-label="Close" className="text-ink-faint hover:text-ink"><X className="w-4 h-4" /></button>
       </div>
       {piece.title && <p className="text-sm font-semibold text-ink">{piece.title}</p>}
       <p className="text-xs text-ink-muted whitespace-pre-wrap max-h-40 overflow-y-auto leading-relaxed">{piece.body}</p>
       {piece.hashtags.length > 0 && <p className="text-[11px] text-accent break-words">{piece.hashtags.map(h => `#${h}`).join(' ')}</p>}
       <div className="flex flex-wrap gap-1.5 pt-1">
         <Button size="sm" onClick={copy}>{copied ? <><Check className="w-3.5 h-3.5" /> Copied</> : <><Copy className="w-3.5 h-3.5" /> Copy</>}</Button>
-        <Button size="sm" variant="secondary" onClick={() => window.open(def.openUrl, '_blank')}><ExternalLink className="w-3.5 h-3.5" /> Open</Button>
-        {piece.status !== 'published' && <Button size="sm" variant="secondary" onClick={onPublish}><CircleCheck className="w-3.5 h-3.5" /> Mark as posted</Button>}
+        <Button size="sm" variant="secondary" onClick={() => window.open(def.openUrl, '_blank')}><ExternalLink className="w-3.5 h-3.5" /> Open {def.label}</Button>
+        {piece.status !== 'published' && <Button size="sm" variant="secondary" onClick={onPublish}><CheckCircle2 className="w-3.5 h-3.5" /> Mark as posted</Button>}
         {piece.status !== 'published' && <Button size="sm" variant="secondary" onClick={() => setPickDate(o => !o)}><CalendarPlus className="w-3.5 h-3.5" /> {piece.scheduled_for ? 'Reschedule' : 'Schedule'}</Button>}
         {piece.scheduled_for && piece.status !== 'published' && <Button size="sm" variant="ghost" onClick={onUnschedule}><Clock className="w-3.5 h-3.5" /> Unschedule</Button>}
-        {piece.status === 'scheduled' && <Button size="sm" variant="ghost" onClick={onFail}><TriangleAlert className="w-3.5 h-3.5" /> Mark failed</Button>}
+        {piece.status === 'scheduled' && <Button size="sm" variant="ghost" onClick={onFail}><TriangleAlert className="w-3.5 h-3.5" /> Mark as failed</Button>}
       </div>
       {pickDate && piece.status !== 'published' && (
         <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
           <input type="date" value={date} onChange={e => setDate(e.target.value)} className="bg-bg-tertiary border border-border rounded-lg px-2 py-1 text-xs text-ink" />
-          <Button size="sm" onClick={() => { onSchedule(date); setPickDate(false) }}>Set date</Button>
+          <Button size="sm" variant="secondary" onClick={() => { onSchedule(date); setPickDate(false) }}>Set date</Button>
         </div>
       )}
     </Card>
@@ -452,7 +453,7 @@ function PlanPanel({ aiEnabled, onClose, onDone, defaultStart }: { aiEnabled: bo
     <Card className="p-4 space-y-3 border-accent/30">
       <div className="flex items-center justify-between">
         <p className="text-sm font-bold text-ink inline-flex items-center gap-2"><Sparkles className="w-4 h-4 text-accent" /> Plan a month of content</p>
-        <button onClick={onClose} className="text-ink-faint hover:text-ink"><X className="w-4 h-4" /></button>
+        <button onClick={onClose} aria-label="Close" className="text-ink-faint hover:text-ink"><X className="w-4 h-4" /></button>
       </div>
       <p className="text-xs text-ink-muted">Generate varied posts across your platforms and spread them across the calendar — one click, no repetition.</p>
       <div className="flex items-end gap-3 flex-wrap">
