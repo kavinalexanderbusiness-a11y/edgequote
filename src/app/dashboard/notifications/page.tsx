@@ -159,7 +159,7 @@ export default function NotificationsPage() {
                   const Icon = ICON[g.type] || Bell
                   return (
                     <div key={g.key} className={cn('px-4 py-3 flex items-start gap-3', g.unread && 'bg-amber-500/[0.06]')}>
-                      <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border border-amber-500/30 bg-amber-500/10 text-amber-300"><Icon className="w-4 h-4" /></div>
+                      <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border border-amber-500/30 bg-amber-500/10 text-amber-300"><Icon className="w-4.5 h-4.5" /></div>
                       <button onClick={() => openItem(g.items[0])} className="min-w-0 flex-1 text-left">
                         <p className={cn('text-sm', g.unread ? 'font-semibold text-ink' : 'text-ink-muted')}>{g.title}</p>
                         {g.body && <p className="text-xs text-ink-muted mt-0.5">{g.body}</p>}
@@ -188,7 +188,7 @@ export default function NotificationsPage() {
                   return (
                     <div key={g.key}>
                       <div className={cn('px-4 py-3.5 flex items-start gap-3', g.unread && 'bg-accent/[0.04]')}>
-                        <div className={cn('w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border', g.unread ? 'border-accent/30 bg-accent/10 text-accent' : 'border-border text-ink-muted')}><Icon className="w-4 h-4" /></div>
+                        <div className={cn('w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border', g.unread ? 'border-accent/30 bg-accent/10 text-accent' : 'border-border text-ink-muted')}><Icon className="w-4.5 h-4.5" /></div>
                         <button onClick={onMain} className="min-w-0 flex-1 text-left">
                           <p className={cn('text-sm flex items-center gap-2', g.unread ? 'font-semibold text-ink' : 'text-ink-muted')}>
                             {g.title}
