@@ -82,7 +82,7 @@ export default function CrmAutomationPage() {
   useRealtimeRefresh('referrals', uid ? `user_id=eq.${uid}` : null, load)
 
   return (
-    <div className="max-w-5xl space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       {/* No back arrow — the Grow rail above is the navigation, same as every
           sibling subpage; "Automations" matches its rail pill and hub card. */}
       <PageHeader title="Automations" description="Reviews, referrals, follow-ups and campaigns — all wired into your customers and messaging." />

@@ -53,7 +53,7 @@ export default function RevenueIntelligencePage() {
 
   if (loading && !report) {
     return (
-      <div className="max-w-5xl space-y-6">
+      <div className="max-w-5xl mx-auto space-y-6">
         <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Revenue Intelligence" description="Every customer scored for the moves that grow revenue — ranked by expected impact." />
         <SkeletonTiles count={4} />
         <Skeleton className="h-20 w-full rounded-card" />
@@ -76,7 +76,7 @@ export default function RevenueIntelligencePage() {
   const kindCount = (k: OppKind | 'all') => k === 'all' ? live.length : live.filter(o => o.kind === k).length
 
   return (
-    <div className="max-w-5xl space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Revenue Intelligence"
         description="Every customer scored for the moves that grow revenue — ranked by expected impact."
         action={<Link href="/dashboard/intelligence"><Button variant="secondary" size="sm">View BI dashboard <ArrowRight className="w-3.5 h-3.5" /></Button></Link>} />

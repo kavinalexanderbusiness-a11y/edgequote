@@ -1474,7 +1474,7 @@ export default function SchedulePage() {
     : pendingAction?.type === 'price' ? 'Update price for' : 'Save changes to'
 
   return (
-    <div className="max-w-5xl space-y-6">
+    <div className="max-w-6xl mx-auto space-y-6">
       <PageHeader
         title="Schedule"
         description={`${jobs.length} job${jobs.length !== 1 ? 's' : ''} on the calendar`}

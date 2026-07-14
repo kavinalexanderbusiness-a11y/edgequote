@@ -119,7 +119,7 @@ export default function ImportCustomersPage() {
   }
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="max-w-3xl mx-auto space-y-6">
       {/* Hidden in the success state — the done card renders its own "Back to customers" CTA. */}
       {done == null && (
         <Link href="/dashboard/customers" className="text-sm text-ink-muted hover:text-ink flex items-center gap-1.5"><ArrowLeft className="w-4 h-4" /> Back to customers</Link>

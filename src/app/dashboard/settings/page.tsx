@@ -236,7 +236,7 @@ export default function SettingsPage() {
     // flex-col + order utilities put Company Information first on the Business
     // tab (it's what people come here to check) while the react-hook-form keeps
     // its single mounted <form> — no field ever registers twice.
-    <div className="max-w-3xl flex flex-col gap-6">
+    <div className="max-w-3xl mx-auto flex flex-col gap-6">
       <PageHeader title="Business Settings" description="Business info, pricing, scheduling, messaging, notifications and booking." />
 
       <div className="sticky top-0 z-10 -mx-1 px-1 py-2 bg-bg/90 backdrop-blur">

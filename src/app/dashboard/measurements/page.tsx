@@ -31,7 +31,7 @@ export default function MeasurementsPage() {
   const hoods = (stats?.byNeighborhood || []).length
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="max-w-6xl mx-auto space-y-6">
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Measurement Accuracy" description="How well auto-measure performs — and how it's learning your neighborhoods. Each property's own measurements live on its card in Properties." />
 
       {loading ? (

@@ -128,7 +128,7 @@ export default function WeeklyReviewPage() {
   // nothing jumps when the numbers arrive.
   if (loading) {
     return (
-      <div className="max-w-3xl space-y-6">
+      <div className="max-w-5xl mx-auto space-y-6">
         <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }}
           title="Weekly Review"
           description="How the week went, and next week's moves" />
@@ -139,7 +139,7 @@ export default function WeeklyReviewPage() {
   }
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }}
         title="Weekly Review"
         description={`${formatDate(m.weekStart)} – ${formatDate(m.today)} · how the week went, and next week's moves`}

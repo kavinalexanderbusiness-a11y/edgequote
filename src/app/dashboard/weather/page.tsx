@@ -45,7 +45,7 @@ export default function WeatherPage() {
 
   if (loading) {
     return (
-      <div className="max-w-5xl">
+      <div className="max-w-5xl mx-auto space-y-6">
         <PageHeader crumb={{ label: 'Schedule', href: '/dashboard/schedule' }} title="Weather" description="Rain risk to your booked work — and the best dry days to move it." />
         <SkeletonTiles count={4} />
       </div>
@@ -55,7 +55,7 @@ export default function WeatherPage() {
 
   if (!r.hasBase) {
     return (
-      <div className="max-w-5xl">
+      <div className="max-w-5xl mx-auto space-y-6">
         <PageHeader crumb={{ label: 'Schedule', href: '/dashboard/schedule' }} title="Weather" description="Rain risk to your booked work — and the best dry days to move it." />
         <EmptyState
           icon={MapPin}
@@ -68,7 +68,7 @@ export default function WeatherPage() {
   }
   if (r.forecast.length === 0) {
     return (
-      <div className="max-w-5xl">
+      <div className="max-w-5xl mx-auto space-y-6">
         <PageHeader crumb={{ label: 'Schedule', href: '/dashboard/schedule' }} title="Weather" description="Rain risk to your booked work — and the best dry days to move it." />
         <InlineEmpty>Couldn’t reach the forecast service right now. Try again shortly.</InlineEmpty>
       </div>
@@ -76,7 +76,7 @@ export default function WeatherPage() {
   }
 
   return (
-    <div className="max-w-5xl space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       <PageHeader crumb={{ label: 'Schedule', href: '/dashboard/schedule' }} title="Weather" description="Rain risk to your booked work — and the best dry days to move it." />
 
       {/* Which location the forecast is for — always visible so you know it's right */}

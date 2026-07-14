@@ -283,7 +283,7 @@ export default function InvoicesPage() {
     : invoices.filter(i => i.status !== 'cancelled')
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       <PageHeader
         title="Invoices"
         description={`${invoices.length} invoice${invoices.length !== 1 ? 's' : ''}`}

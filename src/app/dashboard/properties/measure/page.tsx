@@ -52,7 +52,7 @@ export default function MeasurePage() {
   )
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       {/* Breadcrumb instead of history-back: this page is deep-linked from
           Customers, Data Quality and the command palette, where back() would
           leave the app or bounce somewhere unhelpful. */}

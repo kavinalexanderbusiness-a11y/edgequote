@@ -125,7 +125,7 @@ export default function NotificationsPage() {
   }
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="max-w-3xl mx-auto space-y-6">
       <PageHeader title="Notifications" description="Grouped and prioritized — only what needs you."
         action={(totalUnread > 0 || readVisible.length > 0) ? (
           <div className="flex items-center gap-2">

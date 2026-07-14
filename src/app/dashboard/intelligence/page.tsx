@@ -36,7 +36,7 @@ export default function IntelligencePage() {
 
   if (loading && !bi) {
     return (
-      <div className="max-w-5xl space-y-6">
+      <div className="max-w-6xl mx-auto space-y-6">
         <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Business Intelligence" description="How your business is performing — and where to focus next." />
         <SkeletonTiles count={4} />
         <Skeleton className="h-32 w-full rounded-card" />
@@ -48,7 +48,7 @@ export default function IntelligencePage() {
   if (!bi) return null
 
   return (
-    <div className="max-w-5xl space-y-6">
+    <div className="max-w-6xl mx-auto space-y-6">
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Business Intelligence" description={`How your business is performing — and where to focus. As of ${bi.generatedFor}.`} />
 
       {/* ── FINANCIAL ── */}

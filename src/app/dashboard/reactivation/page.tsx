@@ -229,7 +229,7 @@ export default function ReactivationPage() {
 
   if (loading) {
     return (
-      <div className="max-w-4xl space-y-6">
+      <div className="max-w-5xl mx-auto space-y-6">
         <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Customer Reactivation" description="Win back customers you already paid to acquire." />
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3" aria-hidden>
           {[0, 1, 2, 3].map(i => <Card key={i} className="p-4"><Skeleton className="h-3 w-20" /><Skeleton className="h-7 w-16 mt-2" /></Card>)}
@@ -240,7 +240,7 @@ export default function ReactivationPage() {
   }
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Customer Reactivation" description="Win back customers you already paid to acquire." />
 
       {/* Headline metrics */}

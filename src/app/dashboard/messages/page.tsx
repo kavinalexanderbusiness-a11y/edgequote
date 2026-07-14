@@ -371,7 +371,7 @@ export default function MessagesPage() {
   }, [query, selectMode, sel, list]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div className="max-w-5xl space-y-6">
+    <div className="max-w-6xl mx-auto space-y-6">
       <PageHeader title="Messages" description="Two-way SMS + portal conversations — archived chats stay in CRM history forever."
         action={
           <Button variant="secondary" onClick={openCompose}>

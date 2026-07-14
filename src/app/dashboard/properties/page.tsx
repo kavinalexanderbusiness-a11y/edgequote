@@ -225,7 +225,7 @@ export default function PropertiesPage() {
   }
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       <PageHeader
         title="Properties"
         description={`${properties.length} propert${properties.length !== 1 ? 'ies' : 'y'} on file${properties.length > 0 ? ' — created automatically from customers and quotes' : ''}`}

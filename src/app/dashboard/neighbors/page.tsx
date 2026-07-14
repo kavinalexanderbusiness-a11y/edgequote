@@ -217,7 +217,7 @@ export default function NeighborsPage() {
   if (loading) return <SkeletonRows count={5} />
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Neighbor Leads" description="Turn strong routes into denser routes — knock the doors next to your best customers." />
 
       {/* Funnel metrics */}

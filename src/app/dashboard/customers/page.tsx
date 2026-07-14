@@ -175,7 +175,7 @@ export default function CustomersPage() {
   }
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       <PageHeader
         title="Customers"
         description={`${customers.length} customer${customers.length !== 1 ? 's' : ''} in your database`}

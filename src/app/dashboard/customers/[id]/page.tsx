@@ -384,7 +384,7 @@ export default function CustomerDetailPage() {
     return arr
   }, [quotes, jobs, invoices, extraTimeline, gstPercent])
 
-  if (loading) return <div className="max-w-5xl space-y-6"><SkeletonTiles count={4} /><SkeletonRows count={5} /></div>
+  if (loading) return <div className="max-w-5xl mx-auto space-y-6"><SkeletonTiles count={4} /><SkeletonRows count={5} /></div>
   // Cached customer (if any) keeps showing on a revalidation blip; only when there's
   // genuinely nothing to show do we branch error-vs-not-found.
   if (!customer) return loadError ? (
@@ -480,7 +480,7 @@ export default function CustomerDetailPage() {
   ]
 
   return (
-    <div className="max-w-5xl space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       <div className="flex items-center gap-3">
         <button onClick={() => router.back()} aria-label="Go back" className="text-ink-muted hover:text-ink transition-colors rounded p-1 -m-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
           <ArrowLeft className="w-4 h-4" />

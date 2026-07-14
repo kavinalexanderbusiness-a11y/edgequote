@@ -270,7 +270,7 @@ export default function SaturationPage() {
   }, [jobs, properties, quotes, customersById, ctx])
 
   if (loading) return (
-    <div className="max-w-5xl space-y-6">
+    <div className="max-w-6xl mx-auto space-y-6">
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Saturation Map" description="Where your customers, revenue and routes concentrate — and where to grow next." />
       <SkeletonTiles count={4} />
     </div>
@@ -279,7 +279,7 @@ export default function SaturationPage() {
   const m = model
 
   return (
-    <div className="max-w-5xl space-y-6">
+    <div className="max-w-6xl mx-auto space-y-6">
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Saturation Map" description="Where your customers, revenue and routes concentrate — and where to grow next." />
 
       {loadError && (

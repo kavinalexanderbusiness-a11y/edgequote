@@ -70,7 +70,7 @@ export default function QuotesPage() {
   }
 
   return (
-    <div className="max-w-6xl space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       <PageHeader
         title="Quotes"
         description={`${quotes.length} quote${quotes.length !== 1 ? 's' : ''} total`}

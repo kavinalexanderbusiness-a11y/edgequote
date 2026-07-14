@@ -265,7 +265,7 @@ export default function PricingRecoveryPage() {
   const scoreTone = m.score >= 90 ? 'text-emerald-400' : m.score >= 60 ? 'text-amber-400' : 'text-red-400'
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Pricing Recovery" description="Find unpriced work so reports and growth features run on real revenue." />
 
       {/* Data Quality Score */}

@@ -139,7 +139,7 @@ export default function RoutesPage() {
   const tips = improvementSuggestions(profit)
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }}
         title="Route Analysis"
         description="Visualize and analyze a day's route — distance, density, and profit per hour."

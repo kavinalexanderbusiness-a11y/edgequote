@@ -100,7 +100,7 @@ export default function ServiceTemplatesPage() {
   if (loading) return <SkeletonRows count={5} />
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="max-w-3xl mx-auto space-y-6">
       <PageHeader
         crumb={{ label: 'Settings', href: '/dashboard/settings' }}
         title="Service Templates"

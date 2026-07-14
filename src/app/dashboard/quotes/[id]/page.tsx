@@ -462,7 +462,7 @@ export default function QuoteDetailPage() {
     } finally { setActionBusy(false) }
   }
 
-  if (loading) return <div className="max-w-3xl"><SkeletonRows count={6} /></div>
+  if (loading) return <div className="max-w-5xl mx-auto"><SkeletonRows count={6} /></div>
   if (!quote) return <div className="text-center py-16 text-sm text-red-400">Quote not found.</div>
 
   const customerPhone = customers.find(c => c.id === quote.customer_id)?.phone || null
@@ -488,7 +488,7 @@ export default function QuoteDetailPage() {
   const { primary: primaryLine, extras: extraServiceRows } = splitServices(services)
 
   if (editing) return (
-    <div className="max-w-5xl space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       <PageHeader title={`Edit ${quote.quote_number}`} />
       <QuoteBuilder
         customers={customers}
@@ -538,7 +538,7 @@ export default function QuoteDetailPage() {
   )
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       {/* Responsive header: title + actions on one row on desktop (lg); on
           tablet/mobile the action toolbar wraps onto its own row beneath the
           title. The title group is flex-1 so it CLAIMS the width the (shrink-0)
