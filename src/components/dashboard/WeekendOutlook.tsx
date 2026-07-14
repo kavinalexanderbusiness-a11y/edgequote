@@ -104,7 +104,17 @@ export function WeekendOutlook() {
     load()
   }, [supabase])
 
-  if (loading) return null
+  if (loading) {
+    // Hold the slot while loading — returning null made the KPI strip jump up
+    // and back down when this card popped in.
+    return (
+      <Card className="p-5" aria-hidden>
+        <div className="h-4 w-40 rounded bg-bg-tertiary animate-pulse" />
+        <div className="h-3 w-64 rounded bg-bg-tertiary animate-pulse mt-3" />
+        <div className="h-3 w-52 rounded bg-bg-tertiary animate-pulse mt-2" />
+      </Card>
+    )
+  }
   const totalJobs = groups.reduce((s, g) => s + g.jobs.length, 0)
   const totalHours = Math.round(groups.reduce((s, g) => s + g.hours, 0) * 10) / 10
   const totalRev = groups.reduce((s, g) => s + g.revenue, 0)
@@ -112,8 +122,13 @@ export function WeekendOutlook() {
   return (
     <Card>
       <CardHeader className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span className="flex items-center gap-2"><CalendarRange className="w-4 h-4 text-accent" /><h2 className="text-sm font-semibold text-ink">Your next work days</h2></span>
-        <span className="ml-auto flex items-center gap-3 text-xs text-ink-muted">
+        <span className="flex items-center gap-2.5">
+          <span className="w-7 h-7 rounded-lg bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
+            <CalendarRange className="w-4 h-4 text-accent" />
+          </span>
+          <h2 className="text-sm font-bold tracking-tight text-ink">Your next work days</h2>
+        </span>
+        <span className="ml-auto flex items-center gap-3 text-xs text-ink-muted tabular-nums">
           <span className="flex items-center gap-1"><DollarSign className="w-3 h-3 text-accent" />{formatCurrency(totalRev)}</span>
           <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{totalHours}h</span>
           <span>{totalJobs} job{totalJobs !== 1 ? 's' : ''}</span>
@@ -124,9 +139,9 @@ export function WeekendOutlook() {
           {groups.map(g => (
             <div key={g.date} className="px-5 py-3">
               <div className="flex items-center justify-between gap-2 mb-1.5">
-                <p className="text-sm font-semibold text-ink">{g.weekday} <span className="text-ink-faint font-normal">{format(parseISO(g.date + 'T00:00:00'), 'MMM d')}</span></p>
+                <p className="text-sm font-semibold tracking-tight text-ink">{g.weekday} <span className="text-ink-faint font-normal">{format(parseISO(g.date + 'T00:00:00'), 'MMM d')}</span></p>
                 {g.jobs.length > 0 ? (
-                  <span className="text-xs text-ink-muted flex items-center gap-1.5 flex-wrap justify-end">
+                  <span className="text-xs text-ink-muted flex items-center gap-1.5 flex-wrap justify-end tabular-nums">
                     <span>{g.jobs.length} job{g.jobs.length !== 1 ? 's' : ''} · {g.hours}h · done ~{g.finish} · <span className="text-accent font-semibold">{formatCurrency(g.revenue)}</span></span>
                     {g.loadState !== 'full' && (
                       <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 border',

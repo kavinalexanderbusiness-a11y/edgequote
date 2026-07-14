@@ -30,7 +30,7 @@ export function DashboardKpis({ collected, outstanding, jobsThisMonth, conversio
               <Icon className={`w-3.5 h-3.5 ${color}`} />
             </div>
           </div>
-          <p className="text-xl font-bold text-ink tracking-tight">{value}</p>
+          <p className="text-xl font-bold text-ink tracking-tight tabular-nums">{value}</p>
         </Card>
       ))}
     </div>
