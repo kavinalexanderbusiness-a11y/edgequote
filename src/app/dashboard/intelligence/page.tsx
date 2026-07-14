@@ -247,7 +247,7 @@ function RankList({ title, items, fmt, subFmt }: { title: string; items: NamedVa
             <li key={i} className="flex items-center justify-between gap-2 text-sm">
               <span className="text-ink truncate flex items-center gap-2">
                 <span className={cn(
-                  'w-4 h-4 rounded text-[9px] font-bold flex items-center justify-center shrink-0 tabular-nums',
+                  'w-4 h-4 rounded text-[10px] font-bold flex items-center justify-center shrink-0 tabular-nums',
                   i === 0 ? 'bg-accent/15 text-accent' : 'bg-bg-tertiary text-ink-faint'
                 )}>{i + 1}</span>
                 <span className={cn('truncate', i === 0 && 'font-medium')}>{it.name}</span>
@@ -293,7 +293,7 @@ function TrendBars({ trend, label = 'Revenue / month', integer = false }: { tren
                 style={{ height: `${Math.max(3, (t.revenue / max) * 100)}%` }}
                 title={`${t.month}: ${fmt(t.revenue)}`}
               />
-              <span className={cn('text-[9px] truncate w-full text-center tabular-nums', current ? 'text-ink-muted font-semibold' : 'text-ink-faint')}>{t.month.slice(5)}</span>
+              <span className={cn('text-[10px] truncate w-full text-center tabular-nums', current ? 'text-ink-muted font-semibold' : 'text-ink-faint')}>{t.month.slice(5)}</span>
             </div>
           )
         })}

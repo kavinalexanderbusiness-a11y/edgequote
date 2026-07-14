@@ -42,10 +42,10 @@ export interface DayStatusMeta {
 // Display + default-blocking config for the known statuses. Add a status here for
 // nice display (optional) — but the DB `blocks` column is what actually decides.
 export const DAY_STATUS_META: Record<DayStatus, DayStatusMeta> = {
-  rain:      { label: 'Rain',            emoji: '🌧️', defaultBlocks: true, shade: 'bg-blue-500/10',   badge: 'border-blue-400/40 bg-blue-400/10 text-blue-300' },
-  snow:      { label: 'Snow',            emoji: '❄️', defaultBlocks: true, shade: 'bg-sky-500/10',    badge: 'border-sky-400/40 bg-sky-400/10 text-sky-300' },
-  holiday:   { label: 'Holiday',         emoji: '🎉', defaultBlocks: true, shade: 'bg-violet-500/10', badge: 'border-violet-400/40 bg-violet-400/10 text-violet-300' },
-  vacation:  { label: 'Vacation',        emoji: '🏖️', defaultBlocks: true, shade: 'bg-amber-500/10',  badge: 'border-amber-400/40 bg-amber-400/10 text-amber-300' },
+  rain:      { label: 'Rain',            emoji: '🌧️', defaultBlocks: true, shade: 'bg-blue-500/10',   badge: 'border-blue-400/40 bg-blue-400/10 text-blue-400' },
+  snow:      { label: 'Snow',            emoji: '❄️', defaultBlocks: true, shade: 'bg-sky-500/10',    badge: 'border-sky-400/40 bg-sky-400/10 text-sky-400' },
+  holiday:   { label: 'Holiday',         emoji: '🎉', defaultBlocks: true, shade: 'bg-violet-500/10', badge: 'border-violet-400/40 bg-violet-400/10 text-violet-400' },
+  vacation:  { label: 'Vacation',        emoji: '🏖️', defaultBlocks: true, shade: 'bg-amber-500/10',  badge: 'border-amber-400/40 bg-amber-400/10 text-amber-400' },
   sick:      { label: 'Sick day',        emoji: '🤒', defaultBlocks: true, shade: 'bg-rose-500/10',   badge: 'border-rose-400/40 bg-rose-400/10 text-rose-300' },
   equipment: { label: 'Equipment issue', emoji: '🔧', defaultBlocks: true, shade: 'bg-orange-500/10', badge: 'border-orange-400/40 bg-orange-400/10 text-orange-300' },
   personal:  { label: 'Personal day',    emoji: '🧍', defaultBlocks: true, shade: 'bg-teal-500/10',   badge: 'border-teal-400/40 bg-teal-400/10 text-teal-300' },

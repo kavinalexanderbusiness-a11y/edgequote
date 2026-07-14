@@ -18,7 +18,9 @@ import { exportRowsToCsv } from '@/lib/csv'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { EmptyState } from '@/components/ui/EmptyState'
-import { Edit2, Trash2, Phone, Mail, FileText, Search, Link2, Check, MessageSquare, ShieldAlert, Archive, Download, Send, Users } from 'lucide-react'
+import { SearchInput } from '@/components/ui/SearchInput'
+import { FilterPill } from '@/components/ui/FilterPill'
+import { Edit2, Trash2, Phone, Mail, FileText, Link2, Check, MessageSquare, ShieldAlert, Archive, Download, Send, Users } from 'lucide-react'
 
 type ConsentFilter = '' | 'sms_in' | 'sms_out' | 'email_in' | 'email_out' | 'both' | 'neither'
 const CONSENT_FILTERS: { value: ConsentFilter; label: string }[] = [
@@ -177,26 +179,14 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
 
   return (
     <div className="space-y-4">
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-faint" />
-        <input
-          type="text"
-          placeholder="Search customers..."
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          className="w-full bg-surface border border-border-strong rounded-xl pl-10 pr-4 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
-        />
-      </div>
+      {/* Search + consent filters — THE shared SearchInput + FilterPill */}
+      <SearchInput placeholder="Search customers..." value={search} onChange={e => setSearch(e.target.value)} />
 
-      {/* Consent filters */}
       <div className="flex flex-wrap gap-1.5">
         {CONSENT_FILTERS.map(f => (
-          <button key={f.value} onClick={() => setConsentFilter(f.value)}
-            className={cn('px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors',
-              consentFilter === f.value ? 'bg-accent text-black border-accent' : 'bg-surface border-border-strong text-ink-muted hover:text-ink')}>
+          <FilterPill key={f.value} active={consentFilter === f.value} onClick={() => setConsentFilter(f.value)}>
             {f.label}
-          </button>
+          </FilterPill>
         ))}
       </div>
 

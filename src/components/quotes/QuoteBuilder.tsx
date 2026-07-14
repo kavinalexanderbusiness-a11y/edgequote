@@ -599,7 +599,7 @@ export function QuoteBuilder({
                             {/* ONE recommendation on screen: when Pricing Intelligence is
                                 the primary card, the tile badge would be a second,
                                 differently-priced "Rec". */}
-                            {!(pricingKind === 'lawn_recurring' && measuredSqft > 0) && suggested.recommended === opt.c && <span className="text-[9px] font-bold uppercase tracking-wide text-accent">Rec</span>}
+                            {!(pricingKind === 'lawn_recurring' && measuredSqft > 0) && suggested.recommended === opt.c && <span className="text-[10px] font-bold uppercase tracking-wide text-accent">Rec</span>}
                           </span>
                           <span className="block text-base font-bold text-ink mt-0.5 leading-tight tabular-nums">
                             {formatCurrency(opt.price)}<span className="text-[10px] font-normal text-ink-faint">{opt.per}</span>
@@ -887,7 +887,7 @@ export function QuoteBuilder({
                 </div>
                 <div className="flex items-center justify-between pt-2 border-t border-border">
                   <span className="text-sm font-semibold text-ink">First visit total</span>
-                  <span className="text-2xl font-bold text-accent">{formatCurrency(effectiveTotal)}</span>
+                  <span className="text-2xl font-bold text-accent tabular-nums">{formatCurrency(effectiveTotal)}</span>
                 </div>
               </div>
               {(weeklyPrice > 0 || biweeklyPrice > 0 || monthlyPrice > 0) && (
@@ -913,7 +913,7 @@ export function QuoteBuilder({
       <div className="lg:hidden fixed bottom-0 left-0 right-0 z-30 px-4 py-2.5 bg-bg-secondary/95 backdrop-blur border-t border-border flex items-center justify-between gap-3">
         <div className="leading-tight min-w-0">
           <p className="text-[10px] uppercase tracking-wide text-ink-faint">First visit total</p>
-          <p className="text-xl font-bold text-accent leading-none">{formatCurrency(effectiveTotal)}</p>
+          <p className="text-xl font-bold text-accent leading-none tabular-nums">{formatCurrency(effectiveTotal)}</p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <Button type="button" variant="ghost" size="sm" onClick={() => router.back()}>Cancel</Button>

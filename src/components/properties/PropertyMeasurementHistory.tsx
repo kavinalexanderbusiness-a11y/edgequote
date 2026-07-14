@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { Th, Td, tableRowHover } from '@/components/ui/Table'
 import { ConfidenceBadge } from '@/components/measure/AutoMeasureBanner'
 import { formatDate } from '@/lib/utils'
 import { History } from 'lucide-react'
@@ -42,26 +43,27 @@ export function PropertyMeasurementHistory({ propertyId }: { propertyId: string 
       </CardHeader>
       <CardBody>
         <div className="overflow-x-auto">
+          {/* Shared table cells (ui/Table) — one header/cell treatment app-wide */}
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-left text-[10px] uppercase tracking-wide text-ink-faint border-b border-border">
-                <th className="py-2 pr-3">Date</th>
-                <th className="py-2 pr-3">Auto est.</th>
-                <th className="py-2 pr-3">Accepted</th>
-                <th className="py-2 pr-3">Δ</th>
-                <th className="py-2 pr-3">How</th>
-                <th className="py-2">Confidence</th>
+              <tr className="border-b border-border">
+                <Th className="px-0 pr-3 py-2">Date</Th>
+                <Th className="px-0 pr-3 py-2">Auto est.</Th>
+                <Th className="px-0 pr-3 py-2">Accepted</Th>
+                <Th className="px-0 pr-3 py-2">Δ</Th>
+                <Th className="px-0 pr-3 py-2">How</Th>
+                <Th className="px-0 py-2">Confidence</Th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {rows.map(r => (
-                <tr key={r.id}>
-                  <td className="py-2 pr-3 text-ink-muted whitespace-nowrap">{formatDate(r.created_at)}</td>
-                  <td className="py-2 pr-3 text-ink-muted">{r.auto_sqft != null ? `${Number(r.auto_sqft).toLocaleString()} ft²` : '—'}</td>
-                  <td className="py-2 pr-3 font-semibold text-ink">{r.accepted_sqft != null ? `${Number(r.accepted_sqft).toLocaleString()} ft²` : '—'}</td>
-                  <td className={`py-2 pr-3 ${r.adjusted ? 'text-amber-400' : 'text-emerald-400'}`}>{r.diff_pct != null ? `${r.diff_pct > 0 ? '+' : ''}${r.diff_pct}%` : (r.auto_sqft != null ? '0%' : '—')}</td>
-                  <td className="py-2 pr-3 text-ink-faint text-xs">{SOURCE_LABEL[r.source || ''] || r.source || '—'}{r.context ? ` · ${CONTEXT_LABEL[r.context] || r.context}` : ''}</td>
-                  <td className="py-2">{r.auto_sqft != null ? <ConfidenceBadge confidence={r.confidence} /> : <span className="text-ink-faint text-xs">manual</span>}</td>
+                <tr key={r.id} className={tableRowHover}>
+                  <Td className="px-0 pr-3 py-2 text-ink-muted whitespace-nowrap">{formatDate(r.created_at)}</Td>
+                  <Td className="px-0 pr-3 py-2 text-ink-muted tabular-nums">{r.auto_sqft != null ? `${Number(r.auto_sqft).toLocaleString()} ft²` : '—'}</Td>
+                  <Td className="px-0 pr-3 py-2 font-semibold tabular-nums">{r.accepted_sqft != null ? `${Number(r.accepted_sqft).toLocaleString()} ft²` : '—'}</Td>
+                  <Td className={`px-0 pr-3 py-2 tabular-nums ${r.adjusted ? 'text-amber-400' : 'text-emerald-400'}`}>{r.diff_pct != null ? `${r.diff_pct > 0 ? '+' : ''}${r.diff_pct}%` : (r.auto_sqft != null ? '0%' : '—')}</Td>
+                  <Td className="px-0 pr-3 py-2 text-ink-faint text-xs">{SOURCE_LABEL[r.source || ''] || r.source || '—'}{r.context ? ` · ${CONTEXT_LABEL[r.context] || r.context}` : ''}</Td>
+                  <Td className="px-0 py-2">{r.auto_sqft != null ? <ConfidenceBadge confidence={r.confidence} /> : <span className="text-ink-faint text-xs">manual</span>}</Td>
                 </tr>
               ))}
             </tbody>

@@ -88,7 +88,7 @@ export function MessageTemplateEditor() {
                 const usingDefault = !val.trim()
                 return (
                   <Collapsible key={t} title={MSG_LABELS[t]}
-                    badge={!usingDefault ? <span className="text-[9px] font-semibold uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5">Customised</span> : undefined}
+                    badge={!usingDefault ? <span className="text-[10px] font-semibold uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5">Customised</span> : undefined}
                     summary={usingDefault ? 'Using default' : (val.split('\n').find(l => l.trim()) || '').slice(0, 60)}>
                     <div>
                       {!usingDefault && (

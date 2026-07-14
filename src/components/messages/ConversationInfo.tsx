@@ -192,7 +192,7 @@ function Fact({ icon: Icon, text, tone }: { icon: typeof DollarSign; text: strin
 function Cell({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="min-w-0">
-      <p className="text-[9px] uppercase tracking-wide text-ink-faint">{label}</p>
+      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
       <div className="truncate mt-0.5">{children}</div>
     </div>
   )

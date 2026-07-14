@@ -253,7 +253,7 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
               <div key={t.tempId} className="relative aspect-square rounded-lg overflow-hidden border border-border bg-bg-tertiary">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={t.url} alt="" className={`w-full h-full object-cover ${t.status === 'error' ? 'opacity-40' : 'opacity-70'}`} />
-                <span className={`absolute top-1 left-1 text-[9px] font-semibold uppercase tracking-wide rounded px-1 py-0.5 border ${KIND_BADGE[t.kind]}`}>
+                <span className={`absolute top-1 left-1 text-[10px] font-semibold uppercase tracking-wide rounded px-1 py-0.5 border ${KIND_BADGE[t.kind]}`}>
                   {PHOTO_KIND_LABELS[t.kind]}
                 </span>
                 {t.status === 'uploading' ? (
@@ -275,7 +275,7 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={thumbUrl(p.url)} alt={p.caption || PHOTO_KIND_LABELS[p.kind]} loading="lazy"
                   className="w-full h-full object-cover transition-transform group-hover:scale-105" />
-                <span className={`absolute top-1 left-1 text-[9px] font-semibold uppercase tracking-wide rounded px-1 py-0.5 border ${KIND_BADGE[p.kind]}`}>
+                <span className={`absolute top-1 left-1 text-[10px] font-semibold uppercase tracking-wide rounded px-1 py-0.5 border ${KIND_BADGE[p.kind]}`}>
                   {PHOTO_KIND_LABELS[p.kind]}
                 </span>
               </button>

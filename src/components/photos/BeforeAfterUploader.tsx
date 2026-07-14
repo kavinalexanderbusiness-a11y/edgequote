@@ -474,12 +474,12 @@ function StagedThumb({ s, uploading, onFlip, onRemove, large }: {
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={s.url} alt="" className={cn('w-full h-full object-cover', s.dup && 'opacity-50')} />
       <button type="button" onClick={() => onFlip(s.id)} disabled={uploading}
-        className={cn('absolute top-1 left-1 inline-flex items-center gap-0.5 font-bold uppercase tracking-wide rounded px-1 py-0.5 border', large ? 'text-[9px]' : 'text-[8px]',
+        className={cn('absolute top-1 left-1 inline-flex items-center gap-0.5 font-bold uppercase tracking-wide rounded px-1 py-0.5 border text-[10px]',
           s.kind === 'before' ? 'bg-amber-500/80 text-white border-amber-300' : 'bg-emerald-500/80 text-white border-emerald-300')}>
         <ArrowLeftRight className={large ? 'w-2.5 h-2.5' : 'w-2 h-2'} /> {s.kind}
       </button>
       {s.dup && (
-        <span title={PHOTO_MATCH_LABEL[s.dup]} className="absolute bottom-1 left-1 text-[8px] font-bold uppercase rounded px-1 py-0.5 bg-amber-500/90 text-white">dup</span>
+        <span title={PHOTO_MATCH_LABEL[s.dup]} className="absolute bottom-1 left-1 text-[10px] font-bold uppercase rounded px-1 py-0.5 bg-amber-500/90 text-white">dup</span>
       )}
       {!uploading && (
         <button type="button" onClick={() => onRemove(s.id)} className="absolute top-1 right-1 h-4 w-4 rounded-full bg-black/60 text-white flex items-center justify-center opacity-0 group-hover:opacity-100"><X className="w-2.5 h-2.5" /></button>

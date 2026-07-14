@@ -7,6 +7,7 @@ import { loadCustomerHealth, HealthRow, HealthTier } from '@/lib/customerHealth'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { formatCurrency, cn } from '@/lib/utils'
 import { HeartPulse, Loader2, RefreshCw, Star, ArrowRight } from 'lucide-react'
+import { IconButton } from '@/components/ui/IconButton'
 
 const TIER: Record<HealthTier, { label: string; tone: string; dot: string }> = {
   healthy: { label: 'Healthy', tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10', dot: 'bg-emerald-400' },
@@ -71,7 +72,7 @@ export function CustomerHealthPanel() {
       <div className="px-5 py-4 border-b border-border flex items-start justify-between gap-3">
         <div className="flex items-start gap-3 min-w-0">
           <div className="w-9 h-9 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
-            <HeartPulse className="w-4.5 h-4.5 text-accent" />
+            <HeartPulse className="w-4 h-4 text-accent" />
           </div>
           <div className="min-w-0">
             <p className="text-base font-bold tracking-tight text-ink">Customer Health</p>
@@ -80,9 +81,7 @@ export function CustomerHealthPanel() {
             </p>
           </div>
         </div>
-        <button onClick={load} title="Refresh" aria-label="Refresh customer health" className="h-8 w-8 rounded-lg border border-border text-ink-muted hover:text-ink hover:border-border-strong transition-colors flex items-center justify-center shrink-0">
-          <RefreshCw className="w-4 h-4" />
-        </button>
+        <IconButton icon={RefreshCw} label="Refresh customer health" onClick={load} />
       </div>
 
       <div className="px-4 py-2.5 border-b border-border flex flex-wrap gap-1.5">

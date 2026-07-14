@@ -42,7 +42,7 @@ export function WeatherRainCard(props: Props) {
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-start gap-2.5 min-w-0">
             <span className="w-8 h-8 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 flex items-center justify-center shrink-0">
-              <Check className="w-4.5 h-4.5" />
+              <Check className="w-4 h-4" />
             </span>
             <div className="min-w-0">
               <p className="text-sm font-bold text-ink">
@@ -80,7 +80,7 @@ export function WeatherRainCard(props: Props) {
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-2.5 min-w-0">
           <span className="w-8 h-8 rounded-lg bg-amber-500/15 border border-amber-400/30 text-amber-300 flex items-center justify-center shrink-0">
-            <CloudRain className="w-4.5 h-4.5" />
+            <CloudRain className="w-4 h-4" />
           </span>
           <div className="min-w-0">
             <p className="text-sm font-bold text-ink flex items-center gap-2">

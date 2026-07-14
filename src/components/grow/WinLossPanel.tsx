@@ -7,6 +7,7 @@ import { Skeleton } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { formatCurrency, cn } from '@/lib/utils'
 import { Trophy, Loader2, RefreshCw, Check } from 'lucide-react'
+import { IconButton } from '@/components/ui/IconButton'
 
 // ── Win/Loss (Growth) ───────────────────────────────────────────────────────────
 // Decision-first: the win rate up top, then the ONE action — tag why each lost
@@ -62,7 +63,7 @@ export function WinLossPanel() {
       <div className="px-5 py-4 border-b border-border flex items-start justify-between gap-3">
         <div className="flex items-start gap-3 min-w-0">
           <div className="w-9 h-9 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
-            <Trophy className="w-4.5 h-4.5 text-accent" />
+            <Trophy className="w-4 h-4 text-accent" />
           </div>
           <div className="min-w-0">
             <p className="text-base font-bold tracking-tight text-ink">Win / Loss</p>
@@ -72,9 +73,7 @@ export function WinLossPanel() {
             </p>
           </div>
         </div>
-        <button onClick={load} title="Refresh" aria-label="Refresh win/loss" className="h-8 w-8 rounded-lg border border-border text-ink-muted hover:text-ink hover:border-border-strong transition-colors flex items-center justify-center shrink-0">
-          <RefreshCw className="w-4 h-4" />
-        </button>
+        <IconButton icon={RefreshCw} label="Refresh win/loss" onClick={load} />
       </div>
 
       {/* Why you're losing — at a glance */}

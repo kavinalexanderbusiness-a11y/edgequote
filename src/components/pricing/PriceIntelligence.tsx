@@ -132,7 +132,7 @@ export function PriceIntelligence({
           </p>
         </div>
         {!applied
-          ? <button type="button" onClick={() => onApply(rec.price)} className="shrink-0 text-xs font-bold rounded-lg px-3 py-1.5 bg-accent text-white transition-opacity hover:opacity-90">Use ${rec.price}</button>
+          ? <button type="button" onClick={() => onApply(rec.price)} className="shrink-0 text-xs font-bold rounded-lg px-3 py-1.5 bg-accent text-black transition-opacity hover:opacity-90">Use ${rec.price}</button>
           : <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 shrink-0 motion-safe:animate-[fadeIn_120ms_ease-out]"><Check className="w-3.5 h-3.5" /> Applied</span>}
       </div>
 

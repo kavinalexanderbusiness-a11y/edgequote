@@ -88,7 +88,7 @@ function Stat({ icon: Icon, label, value, sub }: { icon: typeof Ruler; label: st
   return (
     <Card><CardBody>
       <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1"><Icon className="w-3 h-3" /> {label}</p>
-      <p className="text-2xl font-bold text-ink mt-0.5">{value}</p>
+      <p className="text-2xl font-bold text-ink mt-0.5 tabular-nums">{value}</p>
       <p className="text-[11px] text-ink-faint">{sub}</p>
     </CardBody></Card>
   )

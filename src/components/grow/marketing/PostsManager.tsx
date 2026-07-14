@@ -17,7 +17,7 @@ import type { ContentPiece, ContentStatus, MarketingCampaign, MarketingChannel, 
 const STATUSES: ContentStatus[] = ['draft', 'scheduled', 'published', 'failed']
 const SEASONS: Season[] = ['spring', 'summer', 'fall', 'winter']
 const STATUS_TONE: Record<ContentStatus, string> = {
-  draft: 'text-ink-muted', approved: 'text-sky-300', scheduled: 'text-accent', published: 'text-emerald-300', failed: 'text-red-300',
+  draft: 'text-ink-muted', approved: 'text-sky-400', scheduled: 'text-accent', published: 'text-emerald-400', failed: 'text-red-400',
 }
 // Same words the calendar uses for a content piece ("Posted", not "Published").
 const STATUS_LABEL: Record<ContentStatus, string> = {
@@ -206,7 +206,7 @@ function PostCard({ piece, campaignName, supabase, onFavorite, onDuplicate, onAr
       )}
 
       <div className="flex items-center gap-1 flex-wrap pt-1 border-t border-border/60">
-        {campaignName && <span className="text-[9px] text-ink-faint truncate max-w-[90px]" title={campaignName}>◆ {campaignName}</span>}
+        {campaignName && <span className="text-[10px] text-ink-faint truncate max-w-[90px]" title={campaignName}>◆ {campaignName}</span>}
         <div className="ml-auto flex items-center gap-0.5">
           <IconBtn title="Copy caption" onClick={copy}>{copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}</IconBtn>
           <IconBtn title="Edit" onClick={() => setEditing(e => !e)}><Pencil className="w-3.5 h-3.5" /></IconBtn>

@@ -505,7 +505,7 @@ export default function MessagesPage() {
                   <div className="min-w-0">
                     <p className="text-sm font-bold text-ink truncate flex items-center gap-1.5">
                       {sel.pinned_at && <Pin className="w-3 h-3 text-accent shrink-0" />}{nameOf(sel)}
-                      {sel.lead_status === 'new' && <span className="text-[10px] font-bold uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5 flex items-center gap-0.5"><Globe className="w-2.5 h-2.5" /> Website Lead</span>}
+                      {sel.lead_status === 'new' && <span className="text-[10px] font-bold uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5 flex items-center gap-0.5"><Globe className="w-3 h-3" /> Website Lead</span>}
                       {sel.archived_at && <span className="text-[10px] font-semibold uppercase text-ink-faint border border-border rounded px-1 py-0.5">Archived</span>}
                       {sel.muted && <BellOff className="w-3 h-3 text-ink-faint shrink-0" />}
                     </p>
@@ -641,7 +641,7 @@ function ConversationRow({ c, selected, actions, query, selectMode, checked, onT
           <div className="flex items-center gap-1.5">
             {c.pinned_at && <Pin className="w-3 h-3 text-accent shrink-0" />}
             <p className={cn('text-sm truncate flex-1', c.unread > 0 ? 'font-bold text-ink' : 'font-semibold text-ink')}><Highlight text={nameOf(c)} q={query} /></p>
-            {c.lead_status === 'new' && <span className="shrink-0 text-[9px] font-bold uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded px-1 leading-4">Lead</span>}
+            {c.lead_status === 'new' && <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded px-1 leading-4">Lead</span>}
             {c.muted && <BellOff className="w-3 h-3 text-ink-faint shrink-0" />}
             {c.archived_at && <Archive className="w-3 h-3 text-ink-faint shrink-0" />}
             {c.unread > 0 && <span className="shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-accent text-black text-[10px] font-bold flex items-center justify-center">{c.unread > 9 ? '9+' : c.unread}</span>}
@@ -652,8 +652,8 @@ function ConversationRow({ c, selected, actions, query, selectMode, checked, onT
           <div className="flex items-center gap-2 mt-0.5">
             <p className="text-[10px] text-ink-faint">{timeAgo(c.last_message_at)}</p>
             {isSearch && match
-              ? <span className="text-[10px] font-semibold text-accent flex items-center gap-0.5"><match.icon className="w-2.5 h-2.5" /> {match.label}</span>
-              : needsReply && <span className="text-[10px] font-semibold text-amber-400 flex items-center gap-0.5"><Reply className="w-2.5 h-2.5" /> Needs reply</span>}
+              ? <span className="text-[10px] font-semibold text-accent flex items-center gap-0.5"><match.icon className="w-3 h-3" /> {match.label}</span>
+              : needsReply && <span className="text-[10px] font-semibold text-amber-400 flex items-center gap-0.5"><Reply className="w-3 h-3" /> Needs reply</span>}
           </div>
         </div>
 

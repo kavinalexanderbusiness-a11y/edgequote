@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { Toggle } from '@/components/ui/Toggle'
 import { resolveAutomations, Automations, AUTOMATION_LABELS } from '@/lib/comms/automations'
 import { cn } from '@/lib/utils'
 import { Zap, Loader2 } from 'lucide-react'
@@ -57,10 +58,7 @@ export function AutomationToggles() {
                   <p className="text-sm text-ink">{AUTOMATION_LABELS[k]}</p>
                   <p className="text-xs text-ink-faint">{HINTS[k]}</p>
                 </div>
-                <button onClick={() => toggle(k, !auto[k])} role="switch" aria-checked={auto[k]}
-                  className={cn('w-11 h-6 rounded-full border transition-colors shrink-0 relative', auto[k] ? 'bg-accent border-accent' : 'bg-bg-tertiary border-border')}>
-                  <span className={cn('absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all', auto[k] ? 'left-[22px]' : 'left-0.5')} />
-                </button>
+                <Toggle checked={auto[k]} onChange={v => toggle(k, v)} ariaLabel={AUTOMATION_LABELS[k]} />
               </div>
             ))}
           </div>

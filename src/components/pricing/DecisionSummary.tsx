@@ -92,7 +92,7 @@ export function DecisionSummary({
           <p className={cn('text-base font-bold', c.tone)}>{c.dot} {d.headline}</p>
           <div className="text-center shrink-0">
             <p className={cn('text-2xl font-black leading-none', gradeTone(a.score))}>{a.score}</p>
-            <p className="text-[9px] uppercase tracking-wide text-ink-faint mt-0.5">Grade</p>
+            <p className="text-[10px] uppercase tracking-wide text-ink-faint mt-0.5">Grade</p>
           </div>
         </div>
 

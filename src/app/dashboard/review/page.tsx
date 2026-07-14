@@ -15,6 +15,8 @@ import { needsFollowUp } from '@/lib/followup'
 import { localTodayISO, formatCurrency, formatDate, cn } from '@/lib/utils'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
+import { Banner } from '@/components/ui/Banner'
+import { SkeletonRows } from '@/components/ui/Skeleton'
 import {
   CalendarCheck, DollarSign, Gauge, MapPin, Bell, HeartPulse, Sprout, ArrowRight, TrendingUp, TrendingDown,
 } from 'lucide-react'
@@ -122,7 +124,7 @@ export default function WeeklyReviewPage() {
     return { weekStart, today, revenue, completedCount: completed.length, missed, dayRoutes, avgGrade, best, worst, followUps: followUps.length, followUpValue, pending: pending.length, pendingValue, growth }
   }, [jobs, quotes, ctx])
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Building your weekly review…</div>
+  if (loading) return <SkeletonRows />
 
   return (
     <div className="max-w-3xl space-y-6">
@@ -132,20 +134,20 @@ export default function WeeklyReviewPage() {
       />
 
       {loadError && (
-        <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5">
+        <Banner tone="danger">
           {loadError} <button onClick={() => window.location.reload()} className="underline font-medium ml-1">Retry</button>
-        </div>
+        </Banner>
       )}
 
       {/* The week in numbers */}
       <div className="grid grid-cols-3 gap-3">
         <Card className="p-4">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted flex items-center gap-1.5"><DollarSign className="w-3.5 h-3.5 text-accent" /> Revenue earned</p>
-          <p className="text-2xl font-bold text-accent mt-1">{formatCurrency(m.revenue)}</p>
+          <p className="text-2xl font-bold text-accent mt-1 tabular-nums">{formatCurrency(m.revenue)}</p>
         </Card>
         <Card className="p-4">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted flex items-center gap-1.5"><CalendarCheck className="w-3.5 h-3.5" /> Jobs completed</p>
-          <p className="text-2xl font-bold text-ink mt-1">{m.completedCount}{m.missed > 0 && <span className="text-sm font-semibold text-amber-400"> · {m.missed} open</span>}</p>
+          <p className="text-2xl font-bold text-ink mt-1 tabular-nums">{m.completedCount}{m.missed > 0 && <span className="text-sm font-semibold text-amber-400"> · {m.missed} open</span>}</p>
         </Card>
         <Card className="p-4">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted flex items-center gap-1.5"><Gauge className="w-3.5 h-3.5" /> Avg route grade</p>

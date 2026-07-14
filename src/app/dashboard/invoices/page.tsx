@@ -299,7 +299,7 @@ export default function InvoicesPage() {
             <Card className={cn(filter === 'draft' && 'border-accent/50')}>
               <CardBody>
                 <p className="text-xs text-ink-faint uppercase tracking-wide font-semibold mb-1">Drafts to review</p>
-                <p className={cn('text-2xl font-bold', drafts.length ? 'text-sky-400' : 'text-ink-faint')}>{drafts.length ? formatCurrency(draftsTotal) : '—'}</p>
+                <p className={cn('text-2xl font-bold tabular-nums', drafts.length ? 'text-sky-400' : 'text-ink-faint')}>{drafts.length ? formatCurrency(draftsTotal) : '—'}</p>
                 {drafts.length > 0 && <p className="text-[11px] text-ink-faint mt-0.5">{drafts.length} draft{drafts.length !== 1 ? 's' : ''} — tap to review</p>}
               </CardBody>
             </Card>
@@ -307,13 +307,13 @@ export default function InvoicesPage() {
           <Card>
             <CardBody>
               <p className="text-xs text-ink-faint uppercase tracking-wide font-semibold mb-1">Outstanding</p>
-              <p className="text-2xl font-bold text-amber-400">{formatCurrency(outstanding)}</p>
+              <p className="text-2xl font-bold text-amber-400 tabular-nums">{formatCurrency(outstanding)}</p>
             </CardBody>
           </Card>
           <Card>
             <CardBody>
               <p className="text-xs text-ink-faint uppercase tracking-wide font-semibold mb-1">Collected</p>
-              <p className="text-2xl font-bold text-accent">{formatCurrency(paidTotal)}</p>
+              <p className="text-2xl font-bold text-accent tabular-nums">{formatCurrency(paidTotal)}</p>
             </CardBody>
           </Card>
         </div>

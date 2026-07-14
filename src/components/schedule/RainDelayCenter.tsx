@@ -500,7 +500,7 @@ const round1 = (n: number) => Math.round(n * 10) / 10
 function Stat({ icon: Icon, label, value, tone }: { icon: typeof Clock; label: string; value: string; tone?: string }) {
   return (
     <div className="rounded-lg border border-border bg-bg-tertiary px-2.5 py-2">
-      <p className="text-[9px] uppercase tracking-wide text-ink-faint flex items-center gap-1"><Icon className="w-3 h-3" /> {label}</p>
+      <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1"><Icon className="w-3 h-3" /> {label}</p>
       <p className={cn('text-sm font-bold mt-0.5', tone || 'text-ink')}>{value}</p>
     </div>
   )

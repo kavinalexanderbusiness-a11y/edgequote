@@ -162,9 +162,9 @@ export function DaySettingsBar({
 function Stat({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: string }) {
   return (
     <div className="min-w-0">
-      <p className="text-[9px] font-semibold text-ink-faint uppercase tracking-wide leading-none">{label}</p>
+      <p className="text-[10px] font-semibold text-ink-faint uppercase tracking-wide leading-none">{label}</p>
       <p className={cn('text-sm font-bold leading-tight mt-0.5 tabular-nums', tone || 'text-ink')}>{value}</p>
-      {sub && <p className="text-[9px] text-ink-faint leading-none">{sub}</p>}
+      {sub && <p className="text-[10px] text-ink-faint leading-none">{sub}</p>}
     </div>
   )
 }

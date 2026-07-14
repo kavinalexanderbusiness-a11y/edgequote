@@ -13,6 +13,9 @@ import {
 import { SaturationMap, SatPoint, SatHood, SatLayer } from '@/components/saturation/SaturationMap'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
+import { Banner } from '@/components/ui/Banner'
+import { InlineEmpty } from '@/components/ui/EmptyState'
+import { SkeletonRows } from '@/components/ui/Skeleton'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { format } from 'date-fns'
 import { Trophy, Sprout, TrendingDown, TrendingUp, Users, Repeat, FileText, MapPin, Navigation } from 'lucide-react'
@@ -25,7 +28,7 @@ type HoodTag = 'saturated' | 'warm' | 'expand' | 'growing'
 const TAG_META: Record<HoodTag, { label: string; cls: string }> = {
   saturated: { label: 'Saturated — protect it', cls: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' },
   warm: { label: 'Warm demand — close quotes', cls: 'text-amber-400 border-amber-500/30 bg-amber-500/10' },
-  expand: { label: 'Expand here', cls: 'text-violet-300 border-violet-400/40 bg-violet-400/10' },
+  expand: { label: 'Expand here', cls: 'text-violet-400 border-violet-400/40 bg-violet-400/10' },
   growing: { label: 'Growing', cls: 'text-ink-muted border-border bg-bg-tertiary' },
 }
 
@@ -266,7 +269,7 @@ export default function SaturationPage() {
     return { points, hoods, mapHoods, best, opportunities, strongest, weakest, unknownHood, intel }
   }, [jobs, properties, quotes, customersById, ctx])
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Mapping your service area…</div>
+  if (loading) return <SkeletonRows />
 
   const m = model
 
@@ -275,9 +278,9 @@ export default function SaturationPage() {
       <PageHeader title="Saturation Map" description="Where your customers, revenue and routes concentrate — and where to grow next" />
 
       {loadError && (
-        <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5">
+        <Banner tone="danger">
           {loadError} <button onClick={() => window.location.reload()} className="underline font-medium ml-1">Retry</button>
-        </div>
+        </Banner>
       )}
 
       {/* Layer toggles */}
@@ -326,9 +329,9 @@ export default function SaturationPage() {
           </div>
           <CardBody className="space-y-2.5">
             {m.opportunities.length === 0 ? (
-              <p className="text-sm text-ink-muted py-4 text-center">No clear expansion signal yet — add more priced, located jobs.</p>
+              <InlineEmpty>No clear expansion signal yet — add more priced, located jobs.</InlineEmpty>
             ) : m.opportunities.slice(0, 5).map(h => (
-              <div key={h.key} className="rounded-xl border border-border p-3">
+              <div key={h.key} className="rounded-card border border-border p-3">
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-sm font-bold text-ink flex items-center gap-2"><MapPin className="w-3.5 h-3.5 text-ink-faint" /> {h.key}</p>
                   <span className={cn('text-[10px] font-semibold uppercase tracking-wide border rounded px-1.5 py-0.5', TAG_META[h.tag].cls)}>{TAG_META[h.tag].label}</span>
@@ -352,9 +355,9 @@ export default function SaturationPage() {
           </div>
           <CardBody className="space-y-2.5">
             {m.best.length === 0 ? (
-              <p className="text-sm text-ink-muted py-4 text-center">No neighborhood data yet.</p>
+              <InlineEmpty>No neighborhood data yet.</InlineEmpty>
             ) : m.best.map((h, i) => (
-              <div key={h.key} className="flex items-center gap-3 rounded-xl border border-border p-3">
+              <div key={h.key} className="flex items-center gap-3 rounded-card border border-border p-3">
                 <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0" style={{ background: h.color + '33', color: h.color }}>{i + 1}</div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
@@ -426,7 +429,7 @@ function IntelRow({ label, hood, stat }: { label: string; hood: string; stat: st
 
 function RouteLine({ date, grade, revenue, revPerHour, stops }: { date: string; grade: keyof typeof GRADE_COLORS; revenue: number; revPerHour: number; stops: number }) {
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-border px-3 py-2.5">
+    <div className="flex items-center gap-3 rounded-card border border-border px-3 py-2.5">
       <div className="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-black shrink-0"
         style={{ backgroundColor: GRADE_COLORS[grade] + '22', color: GRADE_COLORS[grade], border: `1px solid ${GRADE_COLORS[grade]}55` }}>
         {grade}

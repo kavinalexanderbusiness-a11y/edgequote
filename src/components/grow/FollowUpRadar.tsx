@@ -37,7 +37,7 @@ export function FollowUpRadar() {
     <div className="rounded-card border border-border bg-bg-secondary overflow-hidden animate-rise">
       <div className="px-5 py-4 border-b border-border flex items-start gap-3">
         <div className="w-9 h-9 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
-          <Bell className="w-4.5 h-4.5 text-accent" />
+          <Bell className="w-4 h-4 text-accent" />
         </div>
         <div className="min-w-0">
           <p className="text-base font-bold tracking-tight text-ink">Follow-up radar</p>

@@ -196,7 +196,7 @@ const Bubble = memo(function Bubble({ it, customerId }: { it: Item; customerId: 
     return (
       <div className="text-center space-y-0.5">
         <span className={cn('inline-flex items-center gap-1 text-[10px] rounded-full px-2.5 py-0.5 border', TONE_CLASS[meta.tone])}>
-          <meta.Icon className="w-2.5 h-2.5 shrink-0" />
+          <meta.Icon className="w-3 h-3 shrink-0" />
           {meta.label}{reason && it.status !== 'sent' ? ` (${reason})` : ''} · {templateLabel} · {it.channel} · {time}
         </span>
         {skip?.action && (

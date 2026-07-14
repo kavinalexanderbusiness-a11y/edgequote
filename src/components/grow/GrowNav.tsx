@@ -40,7 +40,7 @@ export function GrowNav() {
             <span key={item.label} className={cn(base, 'bg-surface/50 text-ink-faint border-border cursor-default')} aria-disabled>
               <Icon className="w-3.5 h-3.5" />
               {item.label}
-              <span className="text-[9px] uppercase tracking-wide text-ink-faint/70 bg-ink-faint/10 rounded px-1 py-0.5">Soon</span>
+              <span className="text-[10px] uppercase tracking-wide text-ink-faint/70 bg-ink-faint/10 rounded px-1 py-0.5">Soon</span>
             </span>
           )
         }

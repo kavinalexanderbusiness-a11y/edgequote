@@ -9,6 +9,8 @@ import { MorningBriefing } from '@/components/notifications/MorningBriefing'
 import { groupNotifications, notificationActionLabel, type NotifGroup } from '@/lib/notifications'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
+import { Banner } from '@/components/ui/Banner'
+import { SectionHeading } from '@/components/ui/SectionHeading'
 import { cn } from '@/lib/utils'
 import { Bell, Check, FileText, DollarSign, Loader2, MessageSquare, Globe, Star, CreditCard, AlertTriangle, RotateCcw, ShieldAlert, ChevronDown, Clock, X, Archive } from 'lucide-react'
 
@@ -135,9 +137,9 @@ export default function NotificationsPage() {
       <MorningBriefing />
 
       {loadError && (
-        <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5">
+        <Banner tone="danger">
           {loadError} <button onClick={() => { setLoading(true); if (uid) load(uid) }} className="underline font-medium ml-1">Retry</button>
-        </div>
+        </Banner>
       )}
 
       {loading ? (
@@ -154,13 +156,13 @@ export default function NotificationsPage() {
           {/* Needs attention — money/trust problems, never grouped, never buried */}
           {actionNeeded.length > 0 && (
             <section className="space-y-1.5">
-              <h2 className="text-xs font-semibold uppercase tracking-wide text-amber-400 flex items-center gap-1.5"><AlertTriangle className="w-3.5 h-3.5" /> Needs attention</h2>
+              <SectionHeading eyebrow icon={AlertTriangle} title="Needs attention" />
               <div className="rounded-card border border-amber-500/30 bg-amber-500/[0.04] divide-y divide-border overflow-hidden">
                 {actionNeeded.map(g => {
                   const Icon = ICON[g.type] || Bell
                   return (
                     <div key={g.key} className={cn('px-4 py-3 flex items-start gap-3', g.unread && 'bg-amber-500/[0.06]')}>
-                      <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border border-amber-500/30 bg-amber-500/10 text-amber-300"><Icon className="w-4.5 h-4.5" /></div>
+                      <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border border-amber-500/30 bg-amber-500/10 text-amber-300"><Icon className="w-4 h-4" /></div>
                       <button onClick={() => openItem(g.items[0])} className="min-w-0 flex-1 text-left">
                         <p className={cn('text-sm', g.unread ? 'font-semibold text-ink' : 'text-ink-muted')}>{g.title}</p>
                         {g.body && <p className="text-xs text-ink-muted mt-0.5">{g.body}</p>}
@@ -177,10 +179,8 @@ export default function NotificationsPage() {
           {/* Recent activity — wins & chatter, grouped by type, expandable */}
           {activity.length > 0 && (
             <section className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Recent activity</h2>
-                {snoozedCount > 0 && <span className="text-[10px] text-ink-faint flex items-center gap-1"><Clock className="w-3 h-3" /> {snoozedCount} snoozed</span>}
-              </div>
+              <SectionHeading eyebrow title="Recent activity"
+                action={snoozedCount > 0 ? <span className="text-[10px] text-ink-faint flex items-center gap-1"><Clock className="w-3 h-3" /> {snoozedCount} snoozed</span> : undefined} />
               <div className="rounded-card border border-border bg-bg-secondary divide-y divide-border overflow-hidden">
                 {activity.map(g => {
                   const Icon = ICON[g.type] || Bell
@@ -189,7 +189,7 @@ export default function NotificationsPage() {
                   return (
                     <div key={g.key}>
                       <div className={cn('px-4 py-3.5 flex items-start gap-3', g.unread && 'bg-accent/[0.04]')}>
-                        <div className={cn('w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border', g.unread ? 'border-accent/30 bg-accent/10 text-accent' : 'border-border text-ink-muted')}><Icon className="w-4.5 h-4.5" /></div>
+                        <div className={cn('w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border', g.unread ? 'border-accent/30 bg-accent/10 text-accent' : 'border-border text-ink-muted')}><Icon className="w-4 h-4" /></div>
                         <button onClick={onMain} className="min-w-0 flex-1 text-left">
                           <p className={cn('text-sm flex items-center gap-2', g.unread ? 'font-semibold text-ink' : 'text-ink-muted')}>
                             {g.title}

@@ -15,10 +15,10 @@ import type { MarketingChannel, PublishJob, PublishJobStatus, SocialConnection }
 const STATUS: Record<PublishJobStatus, { label: string; chip: string }> = {
   draft:      { label: 'Draft',      chip: 'border-border text-ink-muted' },
   scheduled:  { label: 'Scheduled',  chip: 'border-accent/40 text-accent' },
-  queued:     { label: 'Ready to post', chip: 'border-sky-500/30 text-sky-300' },
-  publishing: { label: 'Publishing', chip: 'border-amber-500/30 text-amber-300' },
-  published:  { label: 'Published',  chip: 'border-emerald-500/30 text-emerald-300' },
-  failed:     { label: 'Failed',     chip: 'border-red-500/30 text-red-300' },
+  queued:     { label: 'Ready to post', chip: 'border-sky-500/30 text-sky-400' },
+  publishing: { label: 'Publishing', chip: 'border-amber-500/30 text-amber-400' },
+  published:  { label: 'Published',  chip: 'border-emerald-500/30 text-emerald-400' },
+  failed:     { label: 'Failed',     chip: 'border-red-500/30 text-red-400' },
   canceled:   { label: 'Canceled',   chip: 'border-border text-ink-faint' },
 }
 
@@ -144,7 +144,7 @@ export function PublishingQueue({ userId }: { userId: string }) {
           <div className="min-w-0 flex-1">
             <p className="text-xs font-medium text-ink truncate">
               {def.label} · {connName(j.connection_id)}
-              <span className="ml-1.5 text-[9px] uppercase tracking-wide text-ink-faint border border-border rounded px-1 py-0.5">{j.mode === 'api' ? 'API' : 'Manual'}</span>
+              <span className="ml-1.5 text-[10px] uppercase tracking-wide text-ink-faint border border-border rounded px-1 py-0.5">{j.mode === 'api' ? 'API' : 'Manual'}</span>
             </p>
             <p className="text-[10px] text-ink-faint truncate">{whenLabel(j)}{j.attempts > 0 ? ` · ${j.attempts} attempt${j.attempts > 1 ? 's' : ''}` : ''}</p>
           </div>

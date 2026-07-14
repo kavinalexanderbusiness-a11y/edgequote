@@ -487,7 +487,7 @@ export function DayOpsPanel({
       {/* Header: date + add */}
       <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-3 bg-gradient-to-r from-accent/5 to-transparent">
         <div className="min-w-0 flex items-center gap-2">
-          <p className="text-sm font-bold text-ink truncate">{dateLabel}</p>
+          <p className="text-sm font-semibold text-ink truncate">{dateLabel}</p>
           {active.length > 0 && (
             <span className={cn(
               'text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 border shrink-0',

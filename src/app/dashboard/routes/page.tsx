@@ -185,7 +185,7 @@ export default function RoutesPage() {
                 </div>
               </div>
               <div className="flex items-center gap-3">
-                <p className="text-xl font-bold text-accent">{formatCurrency(profit.revenue)}</p>
+                <p className="text-xl font-bold text-accent tabular-nums">{formatCurrency(profit.revenue)}</p>
                 {route?.mapsUrl && (
                   <a href={route.mapsUrl} target="_blank" rel="noopener noreferrer">
                     <Button size="sm" variant="secondary"><ExternalLink className="w-3.5 h-3.5" /> Maps</Button>

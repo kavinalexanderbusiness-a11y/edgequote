@@ -254,7 +254,7 @@ export default function ReactivationPage() {
         <div className="space-y-3">
           <div className="flex items-center gap-2 flex-wrap">
             <Repeat className="w-4 h-4 text-red-400" />
-            <h2 className="text-sm font-bold text-red-400">Recurring series ran out</h2>
+            <h2 className="text-sm font-semibold text-red-400">Recurring series ran out</h2>
             <span className="text-xs text-ink-faint">No next visit booked · {ranOut.length} customer{ranOut.length !== 1 ? 's' : ''} · {formatCurrency(ranOut.reduce((s, r) => s + r.perVisit, 0))}/visit at stake</span>
           </div>
           {ranOut.map(r => <RanOutCard key={r.customer.id} r={r} />)}
@@ -270,7 +270,7 @@ export default function ReactivationPage() {
         return (
           <div key={b.key} className="space-y-3">
             <div className="flex items-center gap-2">
-              <h2 className={`text-sm font-bold ${b.tone}`}>{b.label}</h2>
+              <h2 className={`text-sm font-semibold ${b.tone}`}>{b.label}</h2>
               <span className="text-xs text-ink-faint">{b.sub} · {list.length} customer{list.length !== 1 ? 's' : ''} · {formatCurrency(list.reduce((s, r) => s + r.potentialRecovery, 0))} potential</span>
             </div>
             {list.map(r => <RiskCard key={r.customer.id} r={r} />)}

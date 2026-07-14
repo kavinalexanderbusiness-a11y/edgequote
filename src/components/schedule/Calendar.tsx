@@ -70,13 +70,13 @@ function JobChip({ job, onSelect, onDragStart, recurLabel, value, addonCount, on
         title={recurLabel ? `${job.customers?.name || job.title} · ${recurLabel} (recurring)` : (job.customers?.name || job.title)}
       >
         <span className="flex items-center gap-0.5">
-          {job.status === 'completed' && <Check className="w-2.5 h-2.5 shrink-0" />}
-          {job.recurrence_id && <Repeat className="w-2.5 h-2.5 shrink-0 opacity-70" />}
+          {job.status === 'completed' && <Check className="w-3 h-3 shrink-0" />}
+          {job.recurrence_id && <Repeat className="w-3 h-3 shrink-0 opacity-70" />}
           {/* Customer name, matching the day board — the same visit must read the
               same in every view. */}
           <span className={cn('truncate', job.status === 'completed' && 'line-through opacity-80')}>{job.start_time ? job.start_time.slice(0, 5) + ' ' : ''}{job.customers?.name || job.title}</span>
           {addonCount != null && addonCount > 0 && (
-            <span className="shrink-0 text-[9px] font-bold text-accent" title={`${addonCount} add-on service${addonCount !== 1 ? 's' : ''}`}>+{addonCount}</span>
+            <span className="shrink-0 text-[10px] font-bold text-accent" title={`${addonCount} add-on service${addonCount !== 1 ? 's' : ''}`}>+{addonCount}</span>
           )}
           {value != null && <span className={cn('ml-auto shrink-0 pl-1 font-semibold', value > 0 ? 'opacity-90' : 'text-amber-400')}>{value > 0 ? `$${value}` : '$?'}</span>}
         </span>
@@ -116,7 +116,7 @@ function ItemChip({ item, onSelect, onDragStart }: { item: ScheduleItem; onSelec
       title={`${meta.label}: ${item.title}`}
     >
       <span className="flex items-center gap-0.5">
-        {done ? <Check className="w-2.5 h-2.5 shrink-0" /> : <meta.icon className="w-2.5 h-2.5 shrink-0 opacity-80" />}
+        {done ? <Check className="w-3 h-3 shrink-0" /> : <meta.icon className="w-3 h-3 shrink-0 opacity-80" />}
         <span className={cn('truncate', done && 'line-through opacity-80')}>{itemTimeLabel(item)}{item.title}</span>
       </span>
     </button>
@@ -317,7 +317,7 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
                     {format(day, 'd')}
                   </span>
                   {statusRow && (
-                    <span className={cn('min-w-0 text-[9px] leading-none px-1 py-0.5 rounded border font-semibold inline-flex items-center gap-0.5', dayStatusMeta(statusRow.status).badge)} title={dayStatusLabel(statusRow)}>
+                    <span className={cn('min-w-0 text-[10px] leading-none px-1 py-0.5 rounded border font-semibold inline-flex items-center gap-0.5', dayStatusMeta(statusRow.status).badge)} title={dayStatusLabel(statusRow)}>
                       <span className="shrink-0">{dayStatusMeta(statusRow.status).emoji}</span>
                       <span className="truncate">{dayStatusLabel(statusRow)}</span>
                     </span>

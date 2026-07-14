@@ -35,10 +35,10 @@ function pieceDayKey(p: ContentPiece): string | null {
 
 const STATUS_META: Record<ContentStatus, { label: string; dot: string; chip: string }> = {
   draft:     { label: 'Draft',     dot: 'bg-ink-faint',    chip: 'border-border text-ink-muted' },
-  approved:  { label: 'Ready',     dot: 'bg-sky-400',      chip: 'border-sky-500/30 text-sky-300' },
+  approved:  { label: 'Ready',     dot: 'bg-sky-400',      chip: 'border-sky-500/30 text-sky-400' },
   scheduled: { label: 'Scheduled', dot: 'bg-accent',       chip: 'border-accent/40 text-accent' },
-  published: { label: 'Posted',    dot: 'bg-emerald-400',  chip: 'border-emerald-500/30 text-emerald-300' },
-  failed:    { label: 'Failed',    dot: 'bg-red-400',      chip: 'border-red-500/30 text-red-300' },
+  published: { label: 'Posted',    dot: 'bg-emerald-400',  chip: 'border-emerald-500/30 text-emerald-400' },
+  failed:    { label: 'Failed',    dot: 'bg-red-400',      chip: 'border-red-500/30 text-red-400' },
 }
 
 export function MarketingCalendar({ userId, aiEnabled, openPlan }: { userId: string; aiEnabled: boolean; openPlan?: boolean }) {
@@ -263,10 +263,10 @@ function MonthGrid({ cursor, byDay, markers, todayKey, onDropDay, setDragId, onS
               <div className="flex items-center justify-between">
                 <span className={cn('text-[11px] font-medium', out ? 'text-ink-faint/60' : 'text-ink-muted', k === todayKey && 'text-accent font-bold')}>{d.getDate()}</span>
               </div>
-              {mk.slice(0, 1).map(m => <span key={m} className="text-[9px] text-amber-300/90 truncate" title={m}>★ {m}</span>)}
+              {mk.slice(0, 1).map(m => <span key={m} className="text-[10px] text-amber-300/90 truncate" title={m}>★ {m}</span>)}
               {dayPieces.slice(0, 3).map(p => <CalChip key={p.id} piece={p} setDragId={setDragId} onSelect={onSelect} />)}
               {dayPieces.length > 3 && (
-                <button onClick={() => onOpenDay(d)} className="text-[9px] text-ink-faint hover:text-accent text-left" title="See all posts this day">
+                <button onClick={() => onOpenDay(d)} className="text-[10px] text-ink-faint hover:text-accent text-left" title="See all posts this day">
                   +{dayPieces.length - 3} more
                 </button>
               )}
@@ -302,7 +302,7 @@ function WeekColumns({ from, byDay, markers, todayKey, onDropDay, setDragId, onS
               <p className="text-[10px] uppercase tracking-wide text-ink-faint">{WEEKDAYS[d.getDay()]}</p>
               <p className={cn('text-sm font-bold', k === todayKey ? 'text-accent' : 'text-ink')}>{d.getDate()}</p>
             </div>
-            {mk.slice(0, 1).map(m => <span key={m} className="text-[9px] text-amber-300/90 truncate" title={m}>★ {m}</span>)}
+            {mk.slice(0, 1).map(m => <span key={m} className="text-[10px] text-amber-300/90 truncate" title={m}>★ {m}</span>)}
             {dayPieces.map(p => <CalChip key={p.id} piece={p} setDragId={setDragId} onSelect={onSelect} />)}
           </div>
         )

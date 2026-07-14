@@ -245,7 +245,7 @@ export default function NeighborsPage() {
                   <p className="text-sm font-bold text-ink flex items-center gap-1.5"><MapPin className="w-3.5 h-3.5 text-ink-faint" /> {t.key}</p>
                   <span className={cn('text-[10px] font-semibold uppercase tracking-wide border rounded px-1.5 py-0.5',
                     t.kind === 'warm' ? 'text-amber-400 border-amber-500/30 bg-amber-500/10'
-                      : t.kind === 'expand' ? 'text-violet-300 border-violet-400/40 bg-violet-400/10'
+                      : t.kind === 'expand' ? 'text-violet-400 border-violet-400/40 bg-violet-400/10'
                       : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10')}>
                     {t.kind === 'warm' ? `${t.pending} pending quote${t.pending !== 1 ? 's' : ''} — warm` : t.kind === 'expand' ? 'Expand here' : 'Dominate it'}
                   </span>

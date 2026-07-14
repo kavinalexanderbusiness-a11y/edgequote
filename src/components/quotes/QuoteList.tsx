@@ -11,13 +11,15 @@ import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
+import { SearchInput } from '@/components/ui/SearchInput'
+import { FilterPill } from '@/components/ui/FilterPill'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from '@/lib/toast'
 import { useBulkSelect } from '@/hooks/useBulkSelect'
 import { BulkActionBar, SelectCheckbox, SelectAllToggle, type BulkAction } from '@/components/ui/BulkActions'
 import { exportRowsToCsv } from '@/lib/csv'
 import { addDays, format as formatDfn, parseISO } from 'date-fns'
-import { Search, Trash2, Bell, Send, FileText, Copy, Download } from 'lucide-react'
+import { Trash2, Bell, Send, FileText, Copy, Download } from 'lucide-react'
 
 interface QuoteListProps {
   quotes: Quote[]
@@ -212,45 +214,23 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
 
   return (
     <div className="space-y-4">
-      {/* Filters */}
+      {/* Filters — THE shared SearchInput + FilterPill (one chip shape app-wide) */}
       <div className="flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1">
-          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-faint" />
-          <input
-            type="text"
-            placeholder="Search quotes..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="w-full bg-surface border border-border-strong rounded-xl pl-10 pr-4 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
-          />
-        </div>
+        <SearchInput className="flex-1" placeholder="Search quotes..."
+          value={search} onChange={e => setSearch(e.target.value)} />
         {/* One scrollable row on phones (the wrap made a 3-row wall of pills
             before any quotes); wraps normally on desktop. */}
         <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto sm:flex-wrap sm:overflow-visible pb-1 sm:pb-0">
           {followUpCount > 0 && (
-            <button
-              onClick={() => setFollowUpOnly(v => !v)}
-              className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                followUpOnly
-                  ? 'bg-amber-400 text-black'
-                  : 'bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20'
-              }`}
-            >
+            <FilterPill active={followUpOnly} onClick={() => setFollowUpOnly(v => !v)}
+              className={followUpOnly ? '!bg-amber-400 !border-amber-400' : '!border-amber-500/30 !bg-amber-500/10 !text-amber-400 hover:!bg-amber-500/20'}>
               <Bell className="w-3 h-3" /> Follow up ({followUpCount})
-            </button>
+            </FilterPill>
           )}
           {STATUS_FILTERS.map(f => (
-            <button
-              key={f.value}
-              onClick={() => setStatusFilter(f.value)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                statusFilter === f.value
-                  ? 'bg-accent text-black'
-                  : 'bg-surface border border-border-strong text-ink-muted hover:text-ink'
-              }`}
-            >
+            <FilterPill key={f.value} active={statusFilter === f.value} onClick={() => setStatusFilter(f.value)}>
               {f.label}
-            </button>
+            </FilterPill>
           ))}
         </div>
       </div>

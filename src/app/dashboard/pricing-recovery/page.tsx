@@ -383,7 +383,7 @@ function Section({ title, sub, icon: Icon, children }: { title: string; sub: str
     <div className="space-y-2">
       <div className="flex items-center gap-2">
         <Icon className="w-4 h-4 text-accent" />
-        <h2 className="text-sm font-bold text-ink">{title}</h2>
+        <h2 className="text-sm font-semibold text-ink">{title}</h2>
         <span className="text-xs text-ink-faint">{sub}</span>
       </div>
       <div className="space-y-2">{children}</div>
@@ -432,7 +432,7 @@ function Metric({ icon: Icon, label, value, sub, tone }: { icon: typeof DollarSi
       <div className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-muted uppercase tracking-wide">
         <Icon className={`w-3.5 h-3.5 ${tone}`} /> {label}
       </div>
-      <p className={`text-2xl font-bold tracking-tight mt-1 ${tone}`}>{value}</p>
+      <p className={`text-2xl font-bold tracking-tight mt-1 tabular-nums ${tone}`}>{value}</p>
       <p className="text-xs text-ink-faint mt-0.5">{sub}</p>
     </Card>
   )

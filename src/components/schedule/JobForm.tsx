@@ -603,51 +603,31 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
             </div>
             )}
 
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Repeats</label>
-              <select
-                value={preset}
-                onChange={(e) => setPreset(e.target.value as RepeatPreset)}
-                className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
-              >
-                {PRESET_OPTIONS.map(o => <option key={o.value} value={o.value} className="bg-bg-secondary">{o.label}</option>)}
-              </select>
-            </div>
+            {/* THE shared Select — same chevron/field tokens as every other dropdown. */}
+            <Select label="Repeats" value={preset}
+              onChange={(e) => setPreset(e.target.value as RepeatPreset)}
+              options={PRESET_OPTIONS.map(o => ({ value: o.value, label: o.label }))} />
 
             {preset === 'custom' && (
               <div className="grid grid-cols-2 gap-4">
                 <Input label="Every" type="number" min="1" value={customCount}
                   onChange={(e) => setCustomCount(Math.max(1, Number(e.target.value) || 1))} />
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Unit</label>
-                  <select
-                    value={customUnit}
-                    onChange={(e) => setCustomUnit(e.target.value as RecurUnit)}
-                    className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
-                  >
-                    <option value="day" className="bg-bg-secondary">Days</option>
-                    <option value="week" className="bg-bg-secondary">Weeks</option>
-                    <option value="month" className="bg-bg-secondary">Months</option>
-                  </select>
-                </div>
+                <Select label="Unit" value={customUnit}
+                  onChange={(e) => setCustomUnit(e.target.value as RecurUnit)}
+                  options={[{ value: 'day', label: 'Days' }, { value: 'week', label: 'Weeks' }, { value: 'month', label: 'Months' }]} />
               </div>
             )}
 
             {preset !== 'none' && (
               <>
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Ends</label>
-                  <select
-                    value={endMode}
-                    onChange={(e) => { endTouched.current = true; setEndMode(e.target.value as EndMode) }}
-                    className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
-                  >
-                    {serviceSeason && <option value="season" className="bg-bg-secondary">Season end (recommended)</option>}
-                    <option value="on" className="bg-bg-secondary">Specific date</option>
-                    <option value="after" className="bg-bg-secondary">Number of visits</option>
-                    <option value="never" className="bg-bg-secondary">Never ends</option>
-                  </select>
-                </div>
+                <Select label="Ends" value={endMode}
+                  onChange={(e) => { endTouched.current = true; setEndMode(e.target.value as EndMode) }}
+                  options={[
+                    ...(serviceSeason ? [{ value: 'season', label: 'Season end (recommended)' }] : []),
+                    { value: 'on', label: 'Specific date' },
+                    { value: 'after', label: 'Number of visits' },
+                    { value: 'never', label: 'Never ends' },
+                  ]} />
                 {endMode === 'season' && (
                   <div className="rounded-xl border border-accent/20 bg-accent/5 px-3 py-2 flex items-center gap-2">
                     <CalendarRange className="w-4 h-4 text-accent shrink-0" />

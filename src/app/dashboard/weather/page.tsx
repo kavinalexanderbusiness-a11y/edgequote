@@ -129,7 +129,7 @@ export default function WeatherPage() {
                 <span className="text-[10px] text-ink-faint">{f.precipProbability}%</span>
                 <div className={cn('w-full rounded-t', LEVEL_STYLE[lvl].bar)} style={{ height: `${Math.max(4, f.precipProbability)}%` }} title={`${f.label} · ${f.precipMm}mm · wind ${f.windKph} km/h`} />
                 <span className="text-base leading-none">{f.emoji}</span>
-                <span className="text-[9px] text-ink-faint truncate w-full text-center">{f.date === today ? 'Now' : format(parseISO(f.date + 'T00:00:00'), 'EEE')}</span>
+                <span className="text-[10px] text-ink-faint truncate w-full text-center">{f.date === today ? 'Now' : format(parseISO(f.date + 'T00:00:00'), 'EEE')}</span>
               </div>
             )
           })}
@@ -138,9 +138,9 @@ export default function WeatherPage() {
         <div className="grid grid-cols-7 gap-1.5 mt-3">
           {r.forecast.map(f => (
             <div key={f.date} className="text-center">
-              <p className="text-[9px] text-ink-faint flex items-center justify-center gap-0.5"><Wind className="w-2.5 h-2.5" /> {f.windKph}</p>
-              {f.tempMax != null && <p className="text-[9px] text-ink-muted flex items-center justify-center gap-0.5"><Thermometer className="w-2.5 h-2.5" /> {f.tempMax}°</p>}
-              {f.severe && <p className="text-[9px] font-semibold text-red-400">⚠</p>}
+              <p className="text-[10px] text-ink-faint flex items-center justify-center gap-0.5"><Wind className="w-2.5 h-2.5" /> {f.windKph}</p>
+              {f.tempMax != null && <p className="text-[10px] text-ink-muted flex items-center justify-center gap-0.5"><Thermometer className="w-2.5 h-2.5" /> {f.tempMax}°</p>}
+              {f.severe && <p className="text-[10px] font-semibold text-red-400">⚠</p>}
             </div>
           ))}
         </div>
@@ -246,7 +246,7 @@ function RiskRow({ d, today }: { d: DayImpact; today: string }) {
 function Mini({ label, value, tone }: { label: string; value: string; tone?: string }) {
   return (
     <div className="rounded-md bg-bg-tertiary border border-border px-2 py-1.5 text-center">
-      <p className="text-[9px] uppercase tracking-wide text-ink-faint">{label}</p>
+      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
       <p className={cn('text-sm font-bold text-ink', tone)}>{value}</p>
     </div>
   )

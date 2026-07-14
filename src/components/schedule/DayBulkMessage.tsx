@@ -10,8 +10,9 @@ import { cn } from '@/lib/utils'
 import type { Job } from '@/types'
 import {
   Navigation, Clock, CalendarCheck, Bell, CloudRain, CalendarClock, Heart, Pencil,
-  X, Send, Loader2, Check, AlertTriangle, MessageSquare, Mail, Users,
+  Send, Loader2, Check, AlertTriangle, MessageSquare, Mail, Users,
 } from 'lucide-react'
+import { Modal } from '@/components/ui/Modal'
 
 // One shared dialog to message everyone scheduled today — reuses the SAME comms
 // engine as the per-job composer (/api/comms/send + renderMessage), so there's no
@@ -122,17 +123,12 @@ export function DayBulkMessage({ date, jobs, onClose }: { date: string; jobs: Jo
   }
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-start justify-center p-4 sm:p-6 bg-black/50 backdrop-blur-sm overflow-y-auto" onClick={onClose}>
-      <div className="w-full max-w-lg bg-bg-secondary rounded-card border border-border-strong shadow-xl mt-6 mb-6" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-          <p className="text-sm font-bold text-ink flex items-center gap-2"><Users className="w-4 h-4 text-accent" /> Message today’s customers</p>
-          <button onClick={onClose} className="text-ink-faint hover:text-ink" aria-label="Close"><X className="w-4 h-4" /></button>
-        </div>
-
+    // THE shared Modal — Escape, scroll-lock, aria-modal and the one scrim for free.
+    <Modal open onClose={onClose} title="Message today’s customers" icon={Users} size="lg">
         {recipients.length === 0 ? (
-          <div className="p-8 text-center text-sm text-ink-muted">No customers scheduled today.</div>
+          <div className="py-4 text-center text-sm text-ink-muted">No customers scheduled today.</div>
         ) : (
-          <div className="p-4 space-y-3 max-h-[70vh] overflow-y-auto">
+          <div className="space-y-3">
             {/* Recipients — everyone selected by default; deselect anyone */}
             <div className="flex items-center justify-between">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">{selectedCount} of {recipients.length} selected</p>
@@ -215,8 +211,7 @@ export function DayBulkMessage({ date, jobs, onClose }: { date: string; jobs: Jo
             )}
           </div>
         )}
-      </div>
-    </div>
+    </Modal>
   )
 }
 

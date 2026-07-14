@@ -189,7 +189,7 @@ export function TodaysPriorities() {
     <div className="rounded-card border border-border bg-bg-secondary overflow-hidden">
       <div className="px-4 sm:px-5 py-3 border-b border-border flex items-center gap-2">
         <ListChecks className="w-4 h-4 text-accent" />
-        <h2 className="text-sm font-bold text-ink">Today&rsquo;s Priorities</h2>
+        <h2 className="text-sm font-semibold text-ink">Today&rsquo;s Priorities</h2>
         {items.length > 0 && (
           <span className="text-xs font-semibold text-accent bg-accent/10 border border-accent/20 rounded-full px-2 py-0.5">{items.length}</span>
         )}

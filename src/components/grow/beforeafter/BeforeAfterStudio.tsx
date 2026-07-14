@@ -728,7 +728,7 @@ export function BeforeAfterStudio() {
                   <img src={thumbUrl(p.after.url, 240, 240)} alt="after" loading="lazy" decoding="async" className="w-full h-full object-cover" />
                 </div>
                 {p.jobId === bestAiJobId && (
-                  <span className="absolute top-1 right-1 inline-flex items-center gap-0.5 rounded-full bg-accent text-black text-[9px] font-bold px-1.5 py-0.5 shadow">
+                  <span className="absolute top-1 right-1 inline-flex items-center gap-0.5 rounded-full bg-accent text-black text-[10px] font-bold px-1.5 py-0.5 shadow">
                     <Crown className="w-2.5 h-2.5" /> AI pick
                   </span>
                 )}
@@ -746,7 +746,7 @@ export function BeforeAfterStudio() {
                 </div>
                 <p className="text-[10px] text-ink-faint truncate">{p.job.service_type || 'Service'} · {formatDate(p.job.completed_at || p.job.scheduled_date)}</p>
                 {assetStatus[p.jobId] === 'used' && (
-                  <span className="mt-1 inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wide text-accent"><BookMarked className="w-2.5 h-2.5" /> Used</span>
+                  <span className="mt-1 inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent"><BookMarked className="w-3 h-3" /> Used</span>
                 )}
                 {rank?.rationale && <p className="text-[10px] text-ink-muted mt-1 line-clamp-2">{rank.rationale}</p>}
               </div>

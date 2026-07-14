@@ -315,15 +315,15 @@ export default function PropertiesPage() {
                         )}
                         {activePlan && (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border uppercase tracking-wide bg-accent/10 text-accent border-accent/20">
-                            <Repeat className="w-2.5 h-2.5" /> {activePlan.cadenceLabel}
+                            <Repeat className="w-3 h-3" /> {activePlan.cadenceLabel}
                           </span>
                         )}
                         {/* One overall health score — measurement, pricing, history, recurring, scheduling, AI Vision */}
                         <span title="Property health — measurement freshness, pricing confidence, service history, recurring status, scheduling & AI Vision"
                           className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
-                            health.tone === 'good' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
-                            : health.tone === 'warn' ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
-                            : health.tone === 'new' ? 'border-sky-500/30 bg-sky-500/10 text-sky-300'
+                            health.tone === 'good' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
+                            : health.tone === 'warn' ? 'border-amber-500/30 bg-amber-500/10 text-amber-400'
+                            : health.tone === 'new' ? 'border-sky-500/30 bg-sky-500/10 text-sky-400'
                             : 'border-accent/20 bg-accent/10 text-accent'}`}>
                           ♥ {health.score} · {health.label}
                         </span>
@@ -428,7 +428,7 @@ export default function PropertiesPage() {
                           <p className="text-xs font-semibold text-ink flex items-center gap-1.5 truncate">
                             <Repeat className={`w-3 h-3 shrink-0 ${plan.paused ? 'text-ink-faint' : 'text-accent'}`} />
                             {plan.serviceName}
-                            {plan.paused && <span className="text-[9px] font-semibold uppercase tracking-wide text-ink-faint border border-border rounded px-1 py-0.5">Paused</span>}
+                            {plan.paused && <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint border border-border rounded px-1 py-0.5">Paused</span>}
                           </p>
                           <p className="text-[11px] text-ink-muted truncate">
                             {plan.cadenceLabel}{plan.weekday && ` · ${plan.weekday}`}{plan.windowLabel && ` · ${plan.windowLabel}`}

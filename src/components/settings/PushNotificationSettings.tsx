@@ -95,7 +95,7 @@ export function PushNotificationSettings() {
           <div className="flex items-start gap-3 min-w-0">
             <div className={cn('w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border',
               enabled ? 'border-accent/30 bg-accent/10 text-accent' : 'border-border text-ink-muted')}>
-              <Bell className="w-4.5 h-4.5" />
+              <Bell className="w-4 h-4" />
             </div>
             <div className="min-w-0">
               <p className="text-sm font-medium text-ink">

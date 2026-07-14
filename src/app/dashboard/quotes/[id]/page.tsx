@@ -7,6 +7,8 @@ import { Quote, Customer, QuoteFormValues, QuoteService, ServiceTemplate, Travel
 import { sumServiceLines, serviceLineTotals, splitServices } from '@/lib/quoteServices'
 import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
 import { PageHeader } from '@/components/layout/PageHeader'
+import { DetailHeader } from '@/components/layout/DetailHeader'
+import { Banner } from '@/components/ui/Banner'
 import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Button } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
@@ -18,7 +20,7 @@ import { addDays, format as formatDfn, parseISO } from 'date-fns'
 import { needsFollowUp, daysSince, logFollowUpPatch, markWonPatch } from '@/lib/followup'
 import { scheduleQuoteAsJob } from '@/lib/scheduleQuote'
 import { ensureCustomerAndProperty } from '@/lib/customers'
-import { Edit2, ArrowLeft, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Send } from 'lucide-react'
+import { Edit2, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Send } from 'lucide-react'
 
 export default function QuoteDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -537,23 +539,13 @@ export default function QuoteDetailPage() {
 
   return (
     <div className="max-w-3xl space-y-6">
-      {/* Responsive header: title + actions on one row on desktop (lg); on
-          tablet/mobile the action toolbar wraps onto its own row beneath the
-          title. The title group is flex-1 so it CLAIMS the width the (shrink-0)
-          toolbar doesn't use — without flex-1 it collapsed to ~0 and the quote
-          number stacked one character per line. The number truncates rather than
-          wrapping, so it always stays on one line. */}
-      <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
-        <div className="flex items-start gap-3 flex-1 min-w-0">
-          <button onClick={() => router.back()} className="mt-1 shrink-0 text-ink-muted hover:text-ink transition-colors" aria-label="Back">
-            <ArrowLeft className="w-4 h-4" />
-          </button>
-          <div className="min-w-0">
-            <h1 className="text-xl font-bold text-ink tracking-tight truncate">{quote.quote_number}</h1>
-            <p className="text-sm text-ink-muted mt-0.5">Created {formatDate(quote.created_at)}</p>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 lg:justify-end lg:shrink-0">
+      {/* THE shared DetailHeader — back + truncating title + action toolbar,
+          the same anatomy as every other detail page. */}
+      <DetailHeader
+        title={quote.quote_number}
+        description={`Created ${formatDate(quote.created_at)}`}
+        action={
+        <div className="flex flex-wrap items-center gap-2 lg:justify-end">
           {/* Owner-side PDF action. Honest label: this downloads the PDF to YOUR
               device and flips the status — it does NOT message the customer (the
               Send card below does that, and is the primary action for drafts). */}
@@ -593,7 +585,8 @@ export default function QuoteDetailPage() {
             <Copy className="w-3.5 h-3.5" /> Duplicate
           </Button>
         </div>
-      </div>
+        }
+      />
 
       {/* Persistent reminder — stays until the job is actually scheduled (status
           leaves "accepted"), so the next step is never lost by dismissing a prompt.
@@ -649,20 +642,13 @@ export default function QuoteDetailPage() {
         </Card>
       )}
 
+      {/* One-shot confirmations — THE shared Banner (one radius/padding/dismiss). */}
       {savedCustomerMsg && (
-        <div className="flex items-center justify-between gap-3 text-sm bg-emerald-500/10 border border-emerald-500/20 rounded-xl px-4 py-3">
-          <span className="flex items-center gap-2 text-emerald-300">
-            <Check className="w-4 h-4 shrink-0" /> {savedCustomerMsg}
-          </span>
-          <button onClick={() => setSavedCustomerMsg(null)} className="text-ink-faint hover:text-ink shrink-0">✕</button>
-        </div>
+        <Banner tone="success" icon={Check} onDismiss={() => setSavedCustomerMsg(null)}>{savedCustomerMsg}</Banner>
       )}
 
       {dupMsg && (
-        <div className="flex items-center justify-between gap-3 text-sm bg-accent/10 border border-accent/20 rounded-xl px-4 py-3">
-          <span className="flex items-center gap-2 text-ink"><Copy className="w-4 h-4 shrink-0 text-accent" /> {dupMsg}</span>
-          <button onClick={() => setDupMsg(null)} className="text-ink-faint hover:text-ink shrink-0">✕</button>
-        </div>
+        <Banner tone="accent" icon={Copy} onDismiss={() => setDupMsg(null)}>{dupMsg}</Banner>
       )}
 
       {/* Schedule/convert results flow through the ONE toast system — inline
@@ -814,7 +800,7 @@ export default function QuoteDetailPage() {
             )}
             <div className="flex justify-between items-center pt-2 border-t border-border">
               <span className="text-sm font-semibold text-ink">{(quote.weekly_price || quote.biweekly_price || quote.monthly_price) ? 'First Visit Total' : 'Quote Total'}</span>
-              <span className="text-3xl font-bold text-accent">{formatCurrency(quote.total)}</span>
+              <span className="text-3xl font-bold text-accent tabular-nums">{formatCurrency(quote.total)}</span>
             </div>
             {(quote.weekly_price || quote.biweekly_price || quote.monthly_price) ? (
               <div className="pt-3 border-t border-border space-y-1.5">

@@ -7,6 +7,8 @@ import type { ServiceTemplate, ServiceTemplateFormValues } from '@/types'
 import { SERVICE_CATEGORIES, PRICING_DISPLAY_TYPES, PRICING_DISPLAY_TYPE_LABELS } from '@/types'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { SkeletonRows } from '@/components/ui/Skeleton'
+import { InlineEmpty } from '@/components/ui/EmptyState'
 import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
 import { Textarea } from '@/components/ui/Textarea'
@@ -95,7 +97,7 @@ export default function ServiceTemplatesPage() {
   const categoryOptions = SERVICE_CATEGORIES.map(c => ({ value: c, label: c }))
   const pricingTypeOptions = PRICING_DISPLAY_TYPES.map(t => ({ value: t, label: PRICING_DISPLAY_TYPE_LABELS[t] }))
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading templates...</div>
+  if (loading) return <SkeletonRows count={4} />
 
   return (
     <div className="max-w-3xl space-y-6">
@@ -143,7 +145,7 @@ export default function ServiceTemplatesPage() {
       )}
 
       {Object.keys(grouped).length === 0 ? (
-        <Card className="py-14 text-center text-sm text-ink-muted">No services yet. Add your first one.</Card>
+        <Card><InlineEmpty>No services yet. Add your first one.</InlineEmpty></Card>
       ) : (
         SERVICE_CATEGORIES.filter(c => grouped[c]?.length).map(category => (
           <div key={category}>

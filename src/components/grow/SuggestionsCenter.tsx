@@ -11,6 +11,7 @@ import { InlineEmpty } from '@/components/ui/EmptyState'
 import { formatCurrency, cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
 import { Sparkles, Check, ArrowRight, Clock, Navigation, TrendingUp, RefreshCw, HelpCircle, Calculator, X, BellOff, Undo2 } from 'lucide-react'
+import { IconButton } from '@/components/ui/IconButton'
 import { addDays, format } from 'date-fns'
 
 // Confidence renders as a quiet dot + label — data, not decoration.
@@ -128,10 +129,7 @@ export function SuggestionsCenter() {
             </p>
           </div>
         </div>
-        <button onClick={load} disabled={loading} title="Refresh" aria-label="Refresh suggestions"
-          className="h-8 w-8 rounded-lg border border-border text-ink-muted hover:text-ink hover:border-border-strong transition-colors flex items-center justify-center shrink-0 disabled:opacity-50">
-          <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} />
-        </button>
+        <IconButton icon={RefreshCw} label="Refresh suggestions" onClick={load} disabled={loading} spin={loading} />
       </div>
 
       {note && (

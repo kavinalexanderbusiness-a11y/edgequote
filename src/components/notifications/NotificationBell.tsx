@@ -247,10 +247,10 @@ export function NotificationBell() {
   return (
     <div className="relative shrink-0">
       <button ref={btnRef} onClick={toggle} aria-label="Notifications" aria-expanded={open}
-        className="relative h-9 w-9 rounded-lg border border-border text-ink-muted hover:text-ink hover:bg-surface flex items-center justify-center">
-        <Bell className="w-4.5 h-4.5" />
+        className="relative h-9 w-9 rounded-lg border border-border text-ink-muted hover:text-ink hover:bg-surface flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+        <Bell className="w-4 h-4" />
         {unread > 0 && (
-          <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-accent text-black text-[9px] font-bold flex items-center justify-center">
+          <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-accent text-black text-[10px] font-bold flex items-center justify-center">
             {unread > 9 ? '9+' : unread}
           </span>
         )}

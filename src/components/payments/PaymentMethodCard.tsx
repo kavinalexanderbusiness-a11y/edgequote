@@ -7,6 +7,7 @@ import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { Customer, PaymentMethod } from '@/types'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { Toggle } from '@/components/ui/Toggle'
 import { CreditCard, ShieldCheck, Trash2, Zap, AlertCircle } from 'lucide-react'
 
 type Mode = 'inherit' | 'auto' | 'manual_review'
@@ -153,14 +154,7 @@ export function PaymentMethodCard({ customer, onCustomerChange }: {
             <p className="text-sm font-medium text-ink">AutoPay recurring invoices</p>
             <p className="text-[11px] text-ink-faint">Automatically charge the saved card when a recurring visit is completed.</p>
           </div>
-          <button
-            onClick={toggleAutopay}
-            disabled={!card && !autopay}
-            aria-pressed={autopay}
-            className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${autopay ? 'bg-accent' : 'bg-surface border border-border-strong'} ${(!card && !autopay) ? 'opacity-40 cursor-not-allowed' : ''}`}
-          >
-            <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${autopay ? 'translate-x-5' : ''}`} />
-          </button>
+          <Toggle checked={autopay} onChange={() => toggleAutopay()} disabled={!card && !autopay} ariaLabel="AutoPay recurring invoices" />
         </div>
 
         {/* Charge-mode override (only relevant when AutoPay is on) */}
