@@ -3,29 +3,29 @@
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Quote, Customer, QuoteFormValues, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS, CONFIDENCE_COLORS } from '@/types'
+import { Quote, Customer, QuoteFormValues, QuoteService, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS, CONFIDENCE_COLORS } from '@/types'
+import { sumServiceLines, serviceLineTotals, splitServices } from '@/lib/quoteServices'
 import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Button } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
-import { SendComms } from '@/components/comms/SendComms'
+import { SkeletonRows } from '@/components/ui/Skeleton'
+import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { formatCurrency, formatDate, applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
 import { toast } from '@/lib/toast'
 import { addDays, format as formatDfn, parseISO } from 'date-fns'
 import { needsFollowUp, daysSince, logFollowUpPatch, markWonPatch } from '@/lib/followup'
+import { scheduleQuoteAsJob } from '@/lib/scheduleQuote'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { Edit2, ArrowLeft, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Send } from 'lucide-react'
-
-function localToday(): string {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
 
 export default function QuoteDetailPage() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
   const [quote, setQuote] = useState<Quote | null>(null)
+  // Multi-service breakdown (quote_services). Empty = legacy single-service quote.
+  const [services, setServices] = useState<QuoteService[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
   const [templates, setTemplates] = useState<ServiceTemplate[]>([])
   const [tiers, setTiers] = useState<TravelFeeTier[]>([])
@@ -34,10 +34,9 @@ export default function QuoteDetailPage() {
   const [loading, setLoading] = useState(true)
   const [pdfLoading, setPdfLoading] = useState(false)
   const [scheduling, setScheduling] = useState(false)
-  const [scheduleMsg, setScheduleMsg] = useState<string | null>(null)
   const [converting, setConverting] = useState(false)
-  const [convertMsg, setConvertMsg] = useState<string | null>(null)
   const [duplicating, setDuplicating] = useState(false)
+  const [showMessage, setShowMessage] = useState(false)
   const [savedCustomerMsg, setSavedCustomerMsg] = useState<string | null>(null)
   const [dupMsg, setDupMsg] = useState<string | null>(null)
 
@@ -73,15 +72,19 @@ export default function QuoteDetailPage() {
 
   useEffect(() => {
     async function load() {
-      const { data: { user } } = await supabase.auth.getUser()
-      const [qRes, cRes, tRes, tierRes, sRes] = await Promise.all([
+      // Local session read — no auth round-trip before the batch below.
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
+      const [qRes, svcRes, cRes, tRes, tierRes, sRes] = await Promise.all([
         supabase.from('quotes').select('*').eq('id', id).eq('user_id', user!.id).single(),
+        supabase.from('quote_services').select('*').eq('quote_id', id).order('sort_order'),
         supabase.from('customers').select('*').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — archived hidden from the picker
         supabase.from('service_templates').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('travel_fee_tiers').select('*').eq('user_id', user!.id).order('sort_order'),
         supabase.from('business_settings').select('*').eq('user_id', user!.id).maybeSingle(),
       ])
       setQuote(qRes.data)
+      setServices((svcRes.data as QuoteService[]) || []) // error/absent table → [] (legacy)
       setCustomers(cRes.data || [])
       setTemplates(tRes.data || [])
       setTiers(tierRes.data || [])
@@ -115,6 +118,13 @@ export default function QuoteDetailPage() {
     const mult = Number(values.overgrowth_multiplier) || 1
     const finalRate = applyOvergrowth(Number(values.rate), mult)
 
+    // Multi-service: initial_price = primary + Σ additional line nets so the
+    // generated quotes.total stays correct. (Edit saves as-entered — fee recovery
+    // was baked in at creation, same as the single-service field.)
+    const extraLines = (values.services || []).filter(s => s.service_type.trim())
+    const extrasNet = sumServiceLines(extraLines).net
+    const initialWithExtras = (Number(values.initial_price) > 0 ? Number(values.initial_price) : 0) + extrasNet
+
     const { data, error } = await supabase
       .from('quotes')
       .update({
@@ -124,7 +134,7 @@ export default function QuoteDetailPage() {
         address: values.address,
         service_type: values.service_type,
         service_template_id: values.service_template_id || null,
-        initial_price: Number(values.initial_price) > 0 ? Number(values.initial_price) : null,
+        initial_price: initialWithExtras > 0 ? initialWithExtras : null,
         weekly_price: Number(values.weekly_price) > 0 ? Number(values.weekly_price) : null,
         biweekly_price: Number(values.biweekly_price) > 0 ? Number(values.biweekly_price) : null,
         monthly_price: Number(values.monthly_price) > 0 ? Number(values.monthly_price) : null,
@@ -145,6 +155,33 @@ export default function QuoteDetailPage() {
       .single()
 
     if (data) {
+      // Replace the service breakdown atomically-enough for a single owner:
+      // clear + reinsert (rows exist ONLY for multi-service quotes).
+      const { data: { user: u2 } } = await supabase.auth.getUser()
+      await supabase.from('quote_services').delete().eq('quote_id', id)
+      if (extraLines.length && u2) {
+        const { data: rows } = await supabase.from('quote_services').insert([
+          {
+            user_id: u2.id, quote_id: id, sort_order: 0,
+            service_type: values.service_type, service_template_id: values.service_template_id || null,
+            quantity: 1, unit: 'each', unit_price: Number(values.initial_price) || 0,
+            est_minutes: Math.round(Number(values.hours) * 60) || null,
+          },
+          ...extraLines.map((s, i) => ({
+            user_id: u2.id, quote_id: id, sort_order: i + 1,
+            service_type: s.service_type.trim(), service_template_id: s.service_template_id || null,
+            quantity: Number(s.quantity) > 0 ? Number(s.quantity) : 1,
+            unit: s.unit || 'each', unit_price: Number(s.unit_price) || 0,
+            est_minutes: Number(s.est_minutes) > 0 ? Math.round(Number(s.est_minutes)) : null,
+            discount_type: s.discount_type || null,
+            discount_value: s.discount_type && Number(s.discount_value) > 0 ? Number(s.discount_value) : null,
+            notes: s.notes?.trim() || null,
+          })),
+        ]).select('*')
+        setServices((rows as QuoteService[]) || [])
+      } else {
+        setServices([])
+      }
       setQuote(data)
       setEditing(false)
       // Keep the lawn size on the property in sync (it's a core attribute, not just
@@ -175,7 +212,7 @@ export default function QuoteDetailPage() {
     setPdfLoading(true)
     try {
       const { renderQuoteBlob } = await import('@/components/quotes/QuotePDF')
-      const blob = await renderQuoteBlob(quote, settings)
+      const blob = await renderQuoteBlob(quote, settings, services)
       const url = URL.createObjectURL(blob)
       // Hand the file directly to the device. On desktop this downloads the
       // PDF; on iOS it opens the PDF viewer / share sheet. Avoids the
@@ -210,48 +247,24 @@ export default function QuoteDetailPage() {
   async function handleScheduleJob(dateOverride?: string) {
     if (!quote) return
     setScheduling(true)
-    setScheduleMsg(null)
     try {
       const { data: { user } } = await supabase.auth.getUser()
-
-      // Find the property for this quote: use quote.property_id, else the customer's primary property
-      let propertyId: string | null = quote.property_id
-      if (!propertyId && quote.customer_id) {
-        const { data: props } = await supabase
-          .from('properties')
-          .select('id')
-          .eq('customer_id', quote.customer_id)
-          .order('is_primary', { ascending: false })
-          .limit(1)
-        if (props && props.length > 0) propertyId = props[0].id
-      }
-
-      const { error } = await supabase.from('jobs').insert({
-        user_id: user!.id,
-        customer_id: quote.customer_id,
-        property_id: propertyId,
-        quote_id: quote.id,
-        title: `${quote.service_type} — ${quote.customer_name}`,
-        service_type: quote.service_type,
-        scheduled_date: dateOverride || localToday(),
-        duration_minutes: Math.round(Number(quote.hours) * 60),
-        crew_size: quote.crew_size,
-        status: 'scheduled',
-        notes: quote.notes,
-      })
-
+      // THE quote→job engine (lib/scheduleQuote) — same job here as from the
+      // dashboard's "Accepted — not yet scheduled" card.
+      const { error } = await scheduleQuoteAsJob(supabase, user!.id, quote, { date: dateOverride, services })
       if (error) {
-        setScheduleMsg('Could not create job: ' + error.message)
+        toast.error('Could not create job: ' + error)
       } else {
-        // Bump quote to scheduled if it was accepted
-        if (quote.status === 'accepted') {
-          await supabase.from('quotes').update({ status: 'scheduled' }).eq('id', quote.id)
-          setQuote({ ...quote, status: 'scheduled' })
-        }
-        setScheduleMsg('Job created. Set the date on the Schedule page.')
+        if (quote.status === 'accepted') setQuote({ ...quote, status: 'scheduled' })
+        // Say exactly where the job landed (TODAY's route until moved) and offer
+        // one tap to it — crew/notes/time tweaks usually happen immediately.
+        toast('Job added to today’s schedule.', {
+          tone: 'success',
+          action: { label: 'View job', run: () => router.push('/dashboard/schedule') },
+        })
       }
     } catch {
-      setScheduleMsg('Could not create job. Please try again.')
+      toast.error('Could not create job. Please try again.')
     } finally {
       setScheduling(false)
     }
@@ -259,8 +272,20 @@ export default function QuoteDetailPage() {
 
   async function handleConvertToInvoice() {
     if (!quote) return
+    // A $0 invoice can never be paid — it would sit stuck until cancelled.
+    if (!(Number(quote.total) > 0)) { toast.error('Set a price on this quote before invoicing it.'); return }
     setConverting(true)
-    setConvertMsg(null)
+    // One invoice per quote — the completed-job auto-draft stamps quote_id too, so
+    // this catches BOTH a prior manual convert and an auto-draft. Without it,
+    // Convert after job completion double-billed the same work.
+    {
+      const { data: dup } = await supabase.from('invoices').select('invoice_number').eq('quote_id', quote.id).limit(1)
+      if (dup && dup.length > 0) {
+        toast.error(`This quote is already invoiced (${(dup[0] as { invoice_number: string }).invoice_number}) — edit that invoice instead of creating a duplicate.`)
+        setConverting(false)
+        return
+      }
+    }
     try {
       const { data: { user } } = await supabase.auth.getUser()
 
@@ -271,7 +296,7 @@ export default function QuoteDetailPage() {
         .eq('quote_id', quote.id)
         .limit(1)
       if (existing && existing.length > 0) {
-        setConvertMsg('An invoice already exists for this quote.')
+        toast.error('An invoice already exists for this quote.')
         setConverting(false)
         return
       }
@@ -288,6 +313,19 @@ export default function QuoteDetailPage() {
       const issued = localTodayISO()
       const dueISO = formatDfn(addDays(parseISO(issued), 14), 'yyyy-MM-dd')
 
+      // Multi-service: carry the full breakdown onto the invoice as line_items
+      // (the invoices jsonb snapshot shape), so the customer sees every service.
+      // amount stays quote.total — already the summed net + travel.
+      const lineItems = services.length
+        ? [
+            ...services.map(s => ({
+              description: s.quantity > 1 ? `${s.service_type} × ${s.quantity}` : s.service_type,
+              amount: serviceLineTotals(s).net,
+              kind: 'service' as const,
+            })),
+            ...(Number(quote.travel_fee) > 0 ? [{ description: 'Travel', amount: Number(quote.travel_fee), kind: 'travel' as const }] : []),
+          ]
+        : null
       const { error } = await supabase.from('invoices').insert({
         user_id: user!.id,
         quote_id: quote.id,
@@ -298,6 +336,7 @@ export default function QuoteDetailPage() {
         address: quote.address,
         service_type: quote.service_type,
         amount: quote.total,
+        line_items: lineItems,
         status: 'unpaid',
         issued_date: issued,
         due_date: dueISO,
@@ -305,12 +344,15 @@ export default function QuoteDetailPage() {
       })
 
       if (error) {
-        setConvertMsg('Could not create invoice: ' + error.message)
+        toast.error('Could not create invoice: ' + error.message)
       } else {
-        setConvertMsg(`Invoice ${invoiceNumber} created.`)
+        toast(`Invoice ${invoiceNumber} created.`, {
+          tone: 'success',
+          action: { label: 'View invoice', run: () => router.push(`/dashboard/invoices?invoice=${encodeURIComponent(invoiceNumber)}`) },
+        })
       }
     } catch {
-      setConvertMsg('Could not create invoice. Please try again.')
+      toast.error('Could not create invoice. Please try again.')
     } finally {
       setConverting(false)
     }
@@ -364,6 +406,16 @@ export default function QuoteDetailPage() {
       }).select().single()
 
       if (!error && data) {
+        // Copy the multi-service breakdown onto the duplicate.
+        if (services.length) {
+          await supabase.from('quote_services').insert(services.map(s => ({
+            user_id: user!.id, quote_id: data.id, sort_order: s.sort_order,
+            service_type: s.service_type, service_template_id: s.service_template_id,
+            quantity: s.quantity, unit: s.unit, unit_price: s.unit_price,
+            est_minutes: s.est_minutes, discount_type: s.discount_type,
+            discount_value: s.discount_value, notes: s.notes,
+          })))
+        }
         try { window.sessionStorage.setItem('eq_quote_dup_from', quote.quote_number) } catch { /* ignore */ }
         router.push(`/dashboard/quotes/${data.id}`)
       } else if (error) {
@@ -408,7 +460,7 @@ export default function QuoteDetailPage() {
     } finally { setActionBusy(false) }
   }
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading quote…</div>
+  if (loading) return <div className="max-w-3xl"><SkeletonRows count={6} /></div>
   if (!quote) return <div className="text-center py-16 text-sm text-red-400">Quote not found.</div>
 
   const customerPhone = customers.find(c => c.id === quote.customer_id)?.phone || null
@@ -428,6 +480,11 @@ export default function QuoteDetailPage() {
   const actualPrice = Number(quote.total)
   const priceDiff = suggestedPrice != null ? actualPrice - suggestedPrice : null
 
+  // Multi-service edit: quotes.initial_price stores the SUMMED net, so decompose
+  // it back into the builder's shape — primary price from row 0, extras from rows
+  // 1+. Legacy quotes (no rows) load exactly as before.
+  const { primary: primaryLine, extras: extraServiceRows } = splitServices(services)
+
   if (editing) return (
     <div className="max-w-5xl space-y-6">
       <PageHeader title={`Edit ${quote.quote_number}`} />
@@ -442,7 +499,18 @@ export default function QuoteDetailPage() {
           address: quote.address,
           service_type: quote.service_type,
           service_template_id: quote.service_template_id || '',
-          initial_price: quote.initial_price || 0,
+          initial_price: primaryLine ? primaryLine.unit_price : (quote.initial_price || 0),
+          services: extraServiceRows.map(s => ({
+            service_type: s.service_type,
+            service_template_id: s.service_template_id || '',
+            quantity: s.quantity,
+            unit: s.unit || 'each',
+            unit_price: s.unit_price,
+            est_minutes: s.est_minutes || 0,
+            discount_type: (s.discount_type || '') as '' | 'amount' | 'percent',
+            discount_value: s.discount_value || 0,
+            notes: s.notes || '',
+          })),
           weekly_price: quote.weekly_price || 0,
           biweekly_price: quote.biweekly_price || 0,
           monthly_price: quote.monthly_price || 0,
@@ -461,6 +529,8 @@ export default function QuoteDetailPage() {
         }}
         onSubmit={handleUpdate}
         isEdit
+        autosaveKey={`quote:${quote.id}`}
+        autosaveBaselineUpdatedAt={quote.updated_at}
       />
     </div>
   )
@@ -469,22 +539,27 @@ export default function QuoteDetailPage() {
     <div className="max-w-3xl space-y-6">
       {/* Responsive header: title + actions on one row on desktop (lg); on
           tablet/mobile the action toolbar wraps onto its own row beneath the
-          quote number, which stays min-w-0/break-words so it's never covered. */}
+          title. The title group is flex-1 so it CLAIMS the width the (shrink-0)
+          toolbar doesn't use — without flex-1 it collapsed to ~0 and the quote
+          number stacked one character per line. The number truncates rather than
+          wrapping, so it always stays on one line. */}
       <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
-        <div className="flex items-start gap-3 min-w-0">
+        <div className="flex items-start gap-3 flex-1 min-w-0">
           <button onClick={() => router.back()} className="mt-1 shrink-0 text-ink-muted hover:text-ink transition-colors" aria-label="Back">
             <ArrowLeft className="w-4 h-4" />
           </button>
           <div className="min-w-0">
-            <h1 className="text-xl font-bold text-ink tracking-tight break-words">{quote.quote_number}</h1>
+            <h1 className="text-xl font-bold text-ink tracking-tight truncate">{quote.quote_number}</h1>
             <p className="text-sm text-ink-muted mt-0.5">Created {formatDate(quote.created_at)}</p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 lg:justify-end lg:shrink-0">
-          {/* Primary deliver action — leads the row */}
+          {/* Owner-side PDF action. Honest label: this downloads the PDF to YOUR
+              device and flips the status — it does NOT message the customer (the
+              Send card below does that, and is the primary action for drafts). */}
           {quote.status === 'draft' ? (
-            <Button onClick={handleSendQuote} size="sm" loading={pdfLoading}>
-              <Send className="w-3.5 h-3.5" /> PDF &amp; mark sent
+            <Button onClick={handleSendQuote} size="sm" variant={quote.customer_id ? 'secondary' : 'primary'} loading={pdfLoading}>
+              <FileDown className="w-3.5 h-3.5" /> Download PDF + mark sent
             </Button>
           ) : (
             <Button onClick={handleOpenPdf} size="sm" loading={pdfLoading}>
@@ -503,7 +578,7 @@ export default function QuoteDetailPage() {
               action is for already-scheduled quotes (book another visit). */}
           {quote.status === 'scheduled' && (
             <Button onClick={() => handleScheduleJob()} variant="secondary" size="sm" loading={scheduling}>
-              <CalendarPlus className="w-3.5 h-3.5" /> Schedule Job
+              <CalendarPlus className="w-3.5 h-3.5" /> Book another visit
             </Button>
           )}
           {canInvoice && (
@@ -520,16 +595,57 @@ export default function QuoteDetailPage() {
         </div>
       </div>
 
-      {/* Send this quote to the customer (SMS / Email / Both) */}
+      {/* Persistent reminder — stays until the job is actually scheduled (status
+          leaves "accepted"), so the next step is never lost by dismissing a prompt.
+          Rendered ABOVE the send card: once the customer approved, scheduling is
+          the next step — not re-sending the quote. */}
+      {quote.status === 'accepted' && (
+        <div className="flex items-center justify-between flex-wrap gap-3 text-sm bg-accent/10 border border-accent/20 rounded-xl px-4 py-3">
+          <span className="text-ink font-medium flex items-center gap-2">
+            <CalendarPlus className="w-4 h-4 shrink-0 text-accent" /> Accepted — this job isn’t scheduled yet.
+          </span>
+          <div className="flex items-center gap-2">
+            {/* Honest label — this books the job on TODAY's route (move it after). */}
+            <Button size="sm" onClick={() => handleScheduleJob()} loading={scheduling}>
+              <CalendarPlus className="w-3.5 h-3.5" /> Schedule for today
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => router.push(`/dashboard/schedule?quote=${quote.id}`)}>Pick a day</Button>
+          </div>
+        </div>
+      )}
+
+      {/* Send this quote to the customer — the ONE shared Send Message dialog. */}
       {quote.customer_id && (
         <Card>
           <CardBody className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <p className="text-sm font-semibold text-ink">Send this quote to the customer</p>
-              <p className="text-xs text-ink-muted mt-0.5">Texts/emails a personalized message with a link to view &amp; accept it in their portal.</p>
+              <p className="text-sm font-semibold text-ink">
+                {quote.status === 'draft' || quote.status === 'sent' ? 'Send this quote to the customer' : 'Resend this quote to the customer'}
+              </p>
+              <p className="text-xs text-ink-muted mt-0.5">
+                {quote.status === 'draft' || quote.status === 'sent'
+                  ? <>Texts/emails a personalized message with a link to view &amp; accept it in their portal.</>
+                  : <>Texts/emails them a copy with a link to their portal.</>}
+              </p>
             </div>
-            <SendComms customerId={quote.customer_id} template="quote" label="Send quote" />
+            {/* The REAL send is the primary action while the quote awaits delivery. */}
+            <Button variant={quote.status === 'draft' || quote.status === 'sent' ? 'primary' : 'secondary'} onClick={() => setShowMessage(true)}>
+              <MessageSquare className="w-4 h-4" /> {quote.status === 'draft' || quote.status === 'sent' ? 'Send quote' : 'Resend quote'}
+            </Button>
           </CardBody>
+          <SendMessageDialog open={showMessage} onClose={() => setShowMessage(false)}
+            customerId={quote.customer_id} customerName={quote.customer_name}
+            defaultTemplate="quote" vars={{ amount: formatCurrency(quote.total) }}
+            onSent={async () => {
+              // Actually delivering the quote IS sending it — flip Draft → Sent and
+              // arm the follow-up clock, exactly like the PDF path does.
+              if (quote.status === 'draft') {
+                const nowIso = new Date().toISOString()
+                await supabase.from('quotes').update({ status: 'sent' }).eq('id', quote.id)
+                await supabase.from('quotes').update({ sent_at: nowIso }).eq('id', quote.id).is('sent_at', null)
+                setQuote(prev => prev ? { ...prev, status: 'sent', sent_at: prev.sent_at ?? nowIso } : prev)
+              }
+            }} />
         </Card>
       )}
 
@@ -549,34 +665,8 @@ export default function QuoteDetailPage() {
         </div>
       )}
 
-      {/* Persistent reminder — stays until the job is actually scheduled (status
-          leaves "accepted"), so the next step is never lost by dismissing a prompt. */}
-      {quote.status === 'accepted' && (
-        <div className="flex items-center justify-between flex-wrap gap-3 text-sm bg-accent/10 border border-accent/20 rounded-xl px-4 py-3">
-          <span className="text-ink font-medium flex items-center gap-2">
-            <CalendarPlus className="w-4 h-4 shrink-0 text-accent" /> Accepted — this job isn’t scheduled yet.
-          </span>
-          {/* One click opens the scheduler with everything prefilled — customer,
-              property, service, price, recurring cadence, learned visit length and a
-              suggested start time. Just pick the day. */}
-          <Button size="sm" onClick={() => router.push(`/dashboard/schedule?quote=${quote.id}`)}>
-            <CalendarPlus className="w-3.5 h-3.5" /> Schedule this job
-          </Button>
-        </div>
-      )}
-
-      {scheduleMsg && (
-        <div className="text-sm text-accent bg-accent/10 border border-accent/20 rounded-xl px-4 py-2.5">
-          {scheduleMsg} <button onClick={() => router.push('/dashboard/schedule')} className="underline font-medium ml-1">Go to Schedule</button>
-        </div>
-      )}
-
-      {convertMsg && (
-        <div className="text-sm text-accent bg-accent/10 border border-accent/20 rounded-xl px-4 py-2.5">
-          {convertMsg} <button onClick={() => router.push('/dashboard/invoices')} className="underline font-medium ml-1">Go to Invoices</button>
-        </div>
-      )}
-
+      {/* Schedule/convert results flow through the ONE toast system — inline
+          banners here stacked three deep on a phone before any quote content. */}
       {quote.status === 'sent' && (
         <Card className={needsFollowUp(quote) ? 'border-amber-500/40' : ''}>
           <CardBody>
@@ -670,7 +760,7 @@ export default function QuoteDetailPage() {
             </div>
             <div>
               <p className="text-xs text-ink-faint uppercase tracking-wide font-semibold mb-1">Rate</p>
-              <p className="text-ink font-medium">{formatCurrency(quote.rate)}/man-hour</p>
+              <p className="text-ink font-medium">{formatCurrency(quote.rate)}/crew hr</p>
             </div>
             {quote.overgrowth_multiplier && quote.overgrowth_multiplier !== 1 && (
               <div>
@@ -691,18 +781,39 @@ export default function QuoteDetailPage() {
             {quote.custom_travel_required && (
               <div className="flex items-center gap-2 text-xs text-amber-400 mb-1">Custom travel fee applied (beyond standard tiers)</div>
             )}
-            <div className="flex justify-between text-sm">
-              <span className="text-ink-muted">Initial / first visit</span>
-              <span className="text-ink font-medium">{formatCurrency(quote.initial_price ?? quote.subtotal)}</span>
-            </div>
+            {services.length > 0 ? (
+              // Multi-service breakdown — one row per line (rows are the source of
+              // truth; quotes.initial_price is their summed net).
+              <div className="space-y-1.5">
+                {services.map(s => {
+                  const t = serviceLineTotals(s)
+                  return (
+                    <div key={s.id} className="flex justify-between gap-3 text-sm">
+                      <span className="text-ink-muted min-w-0">
+                        {s.service_type}
+                        {Number(s.quantity) > 1 && <span className="text-ink-faint"> × {s.quantity}</span>}
+                        {t.discountAmount > 0 && <span className="text-emerald-400 text-xs"> (−{formatCurrency(t.discountAmount)})</span>}
+                        {s.notes && <span className="block text-xs text-ink-faint truncate">{s.notes}</span>}
+                      </span>
+                      <span className="text-ink font-medium shrink-0">{formatCurrency(t.net)}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="flex justify-between text-sm">
+                <span className="text-ink-muted">First visit</span>
+                <span className="text-ink font-medium">{formatCurrency(quote.initial_price ?? quote.subtotal)}</span>
+              </div>
+            )}
             {quote.travel_fee > 0 && (
               <div className="flex justify-between text-sm">
-                <span className="text-ink-muted">Travel Fee {quote.show_travel_separately ? '(shown to customer)' : '(in total)'}</span>
+                <span className="text-ink-muted">Travel Fee {quote.show_travel_separately ? '(shown to customer)' : '(included in total)'}</span>
                 <span className="text-ink font-medium">{formatCurrency(quote.travel_fee)}</span>
               </div>
             )}
             <div className="flex justify-between items-center pt-2 border-t border-border">
-              <span className="text-sm font-semibold text-ink">First Invoice Total</span>
+              <span className="text-sm font-semibold text-ink">{(quote.weekly_price || quote.biweekly_price || quote.monthly_price) ? 'First Visit Total' : 'Quote Total'}</span>
               <span className="text-3xl font-bold text-accent">{formatCurrency(quote.total)}</span>
             </div>
             {(quote.weekly_price || quote.biweekly_price || quote.monthly_price) ? (

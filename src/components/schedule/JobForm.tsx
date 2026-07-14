@@ -17,9 +17,11 @@ import {
 } from '@/lib/seasons'
 import { WeeklyScheduler } from '@/components/schedule/WeeklyScheduler'
 import { SmartLaborField } from '@/components/labor/SmartLaborField'
-import { useSmartDuration } from '@/hooks/useSmartDuration'
+import type { Cadence } from '@/lib/labor'
 import { resolvePrefs, type PrefSource } from '@/lib/preferences'
-import { Repeat, Sparkles, Snowflake, Sun, AlertTriangle, CalendarRange, Clock, Timer } from 'lucide-react'
+import { findJobMatch, type JobLiteForMatch } from '@/lib/dedup'
+import { Collapsible } from '@/components/ui/Collapsible'
+import { Repeat, Sparkles, Snowflake, Sun, AlertTriangle, CalendarRange, Clock } from 'lucide-react'
 
 // Flexible recurrence: any interval (count + unit), three end modes.
 export interface Recurrence {
@@ -54,16 +56,6 @@ interface JobFormProps {
     propertyPrefs: PrefSource | null
     customerName: string | null
   }) => string[]
-  // Next-available start-time suggestion for the chosen date (page-supplied, so the
-  // day's existing schedule + work-start + the ETA engine stay in one place). Honours
-  // the customer's preferred time window. Returns a 24h value + a friendly label.
-  suggestStart?: (input: {
-    date: string
-    durationMin: number
-    customerPrefs: PrefSource | null
-    propertyPrefs: PrefSource | null
-    excludeJobId?: string
-  }) => { time: string; display: string; reason: string } | null
   onSubmit: (values: JobFormValues, recurrence: Recurrence, meta?: SuggestionMeta, opts?: { addAnother?: boolean }) => Promise<void>
   onCancel: () => void
   isEdit?: boolean
@@ -100,6 +92,16 @@ function presetToInterval(preset: RepeatPreset, customUnit: RecurUnit, customCou
   }
 }
 
+// Map a recurrence interval to the labor engine's cadence bucket, so the Smart
+// Labor estimate learns "weekly mow from weekly mow" (not all mows pooled).
+function intervalToCadence(iv: { unit: RecurUnit; count: number } | null): Cadence {
+  if (!iv) return 'one_time'
+  if (iv.unit === 'month') return 'monthly'
+  if (iv.unit === 'week') return iv.count <= 1 ? 'weekly' : iv.count === 2 ? 'biweekly' : 'monthly'
+  if (iv.unit === 'day') return iv.count <= 10 ? 'weekly' : iv.count <= 18 ? 'biweekly' : 'monthly'
+  return 'one_time'
+}
+
 type EndMode = 'season' | 'on' | 'after' | 'never'
 
 // Map an existing series back onto the Repeat UI controls so editing pre-fills.
@@ -126,7 +128,7 @@ function recurrenceToUi(r?: Recurrence) {
   }
 }
 
-export function JobForm({ customers, defaultValues, excludeJobId, initialRecurrence, allowAddAnother, suggestedPrice, warnFor, suggestStart, onSubmit, onCancel, isEdit }: JobFormProps) {
+export function JobForm({ customers, defaultValues, excludeJobId, initialRecurrence, allowAddAnother, suggestedPrice, warnFor, onSubmit, onCancel, isEdit }: JobFormProps) {
   const supabase = createClient()
   const [properties, setProperties] = useState<Property[]>([])
   const addAnotherRef = useRef(false)
@@ -154,7 +156,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
         scheduled_date: '',
         start_time: '',
         end_time: '',
-        duration_minutes: 0, // 0 = let the learned-duration engine fill it (see useSmartDuration)
+        duration_minutes: 60,
         crew_size: 1,
         status: 'scheduled',
         notes: '',
@@ -185,44 +187,6 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   // Effective scheduling prefs (customer default + property override) for the
   // best-day picker — boosts the customer's preferred days, hides avoided ones.
   const effectivePrefs = resolvePrefs((selectedCustomer ?? null) as PrefSource | null, (selProp ?? null) as PrefSource | null)
-
-  // ── P1: learned on-site duration (the ONE engine) ──
-  // Defaults duration_minutes to the property/service's learned visit length the
-  // moment a property is selected — in quick-add AND advanced — so no job is ever
-  // saved with a flat guess. Never overwrites a number you typed (untouched guard).
-  const durationValue = Number(watch('duration_minutes')) || null
-  const smartDuration = useSmartDuration(
-    {
-      sqft: Number(selProp?.lawn_sqft) || 0,
-      serviceType: serviceType || null,
-      crewSize: Number(watch('crew_size')) || 1,
-      propertyId: selectedPropertyId || null,
-    },
-    {
-      value: durationValue,
-      onApply: (min) => setValue('duration_minutes', min, { shouldValidate: true }),
-      autoFill: !isEdit, // editing keeps the saved duration; new jobs get the learned default
-    },
-  )
-  const learnedEst = smartDuration.est
-
-  // ── P2 + P4: next-available start time (honours the customer's preferred window) ──
-  // Suggested only when a date is chosen and no start time is committed yet. Tapping
-  // "Use" commits it; left untouched, the job stays movable by the optimizer.
-  const startSuggestion = !startTime && scheduledDate && suggestStart
-    ? suggestStart({
-        date: scheduledDate,
-        durationMin: Number(watch('duration_minutes')) || learnedEst?.minutes || 45,
-        customerPrefs: (selectedCustomer ?? null) as PrefSource | null,
-        propertyPrefs: (selProp ?? null) as PrefSource | null,
-        excludeJobId,
-      })
-    : null
-  // Friendly read-back of a committed start time (so quick-add shows it without
-  // expanding the advanced panel).
-  const startDisplay = startTime
-    ? (() => { const [h, m] = startTime.split(':').map(Number); const h12 = h % 12 === 0 ? 12 : h % 12; return `${h12}:${String(m || 0).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}` })()
-    : null
   const scheduleWarnings = warnFor && customerId && scheduledDate
     ? warnFor({
         jobId: excludeJobId,
@@ -367,6 +331,32 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     return () => { active = false }
   }, [selectedPropertyId, isEdit, supabase])
 
+  // Same-day duplicate visit — THE unified dedup engine (lib/dedup): same property +
+  // same day + same service (or the same recurring series already has that visit).
+  // Never blocks saving; asks the one question so a double-booking is deliberate.
+  const [dupJob, setDupJob] = useState<{ title: string; time: string | null; reason: string } | null>(null)
+  useEffect(() => {
+    if (!selectedPropertyId || !scheduledDate || !serviceType) { setDupJob(null); return }
+    let active = true
+    const t = setTimeout(async () => {
+      const { data } = await supabase
+        .from('jobs')
+        .select('id, property_id, scheduled_date, service_type, recurrence_id, status, title, start_time')
+        .eq('property_id', selectedPropertyId)
+        .eq('scheduled_date', scheduledDate)
+      if (!active) return
+      const match = findJobMatch((data as JobLiteForMatch[]) || [], {
+        propertyId: selectedPropertyId, date: scheduledDate, serviceType, excludeJobId,
+      })
+      setDupJob(match ? {
+        title: match.job.title || match.job.service_type || 'a visit',
+        time: match.job.start_time ?? null,
+        reason: match.reason === 'recurrence-visit' ? 'this recurring series already has that visit' : 'same property, same day, same service',
+      } : null)
+    }, 300)
+    return () => { active = false; clearTimeout(t) }
+  }, [selectedPropertyId, scheduledDate, serviceType, excludeJobId, supabase])
+
   const customerOptions = [
     { value: '', label: 'Select a customer...' },
     ...customers.map(c => ({ value: c.id, label: c.name })),
@@ -382,6 +372,16 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     : endMode === 'after' ? `ends after ${Math.max(1, endCount)} visit${endCount !== 1 ? 's' : ''}`
     : endMode === 'on' && endDate ? `until ${endDate}`
     : 'no end date (kept rolling on your calendar)'
+
+  // Cadence for the Smart Labor estimate: this job's own repeat, else the
+  // property's existing series cadence, else one-time. So a weekly mow's duration
+  // learns from weekly mows.
+  const laborCadence: Cadence = (() => {
+    const iv = presetToInterval(preset, customUnit, customCount)
+    if (iv) return intervalToCadence(iv)
+    const s = propSeries[0]
+    return s?.unit ? intervalToCadence({ unit: s.unit as RecurUnit, count: s.count || 1 }) : 'one_time'
+  })()
 
   return (
     <form
@@ -434,36 +434,18 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
         error={errors.scheduled_date?.message}
         {...register('scheduled_date', { required: 'Required' })} />
 
-      {/* P2/P4: next-available start time — appears once a date is chosen and no
-          start time is committed. Honours the customer's preferred window. */}
-      {startSuggestion && (
-        <button type="button"
-          onClick={() => setValue('start_time', startSuggestion.time, { shouldValidate: true })}
-          className="w-full flex items-center gap-2 rounded-xl border border-accent/25 bg-accent/[0.06] px-3 py-2 text-left hover:border-accent/40 transition-colors">
-          <Clock className="w-4 h-4 text-accent shrink-0" />
-          <span className="min-w-0 flex-1">
-            <span className="text-sm font-semibold text-ink">Start around {startSuggestion.display}</span>
-            <span className="block text-[11px] text-ink-muted">{startSuggestion.reason}</span>
-          </span>
-          <span className="text-[11px] font-semibold text-accent shrink-0">Use</span>
-        </button>
-      )}
-      {startDisplay && !startSuggestion && (
-        <p className="text-[11px] text-ink-muted flex items-center gap-1.5">
-          <Clock className="w-3.5 h-3.5 text-accent" /> Starts {startDisplay}
-          <button type="button" onClick={() => setValue('start_time', '', { shouldValidate: true })}
-            className="text-accent hover:underline ml-1">Clear</button>
-        </p>
-      )}
-
-      {/* P1 explainability: the learned on-site duration, visible without expanding
-          the advanced Smart Labor card. */}
-      {!isEdit && learnedEst && smartDuration.enabled && (
-        <p className="text-[11px] text-ink-muted flex items-center gap-1.5">
-          <Timer className="w-3.5 h-3.5 text-accent" />
-          ≈ {learnedEst.minutes} min on site
-          {learnedEst.reasons[0] ? <span className="text-ink-faint">· {learnedEst.reasons[0]}</span> : null}
-        </p>
+      {/* Duplicate-visit check (unified dedup engine) — one clear question, never blocks */}
+      {dupJob && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5">
+          <p className="text-xs text-amber-300 flex items-start gap-1.5">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />
+            <span>
+              Existing match found — <span className="font-semibold">{dupJob.title}</span>
+              {dupJob.time ? ` at ${dupJob.time}` : ''} is already booked ({dupJob.reason}).
+              Save anyway only if this is deliberately a second visit.
+            </span>
+          </p>
+        </div>
       )}
 
       {/* Soft cadence / customer-preference warnings — informational, never blocking */}
@@ -504,39 +486,12 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
 
       {adv && (
       <div className="space-y-4">
+      {/* The real edit workflow: WHERE (property) → what STATE it's in → NOTES.
+          Time/crew details and recurrence are rarer — they collapse below. */}
       <Controller name="property_id" control={control}
         render={({ field }) => (
           <Select label="Property" options={propertyOptions} {...field} />
         )} />
-
-      <Input label="Job Title" placeholder="Auto-named from service + customer if blank"
-        error={errors.title?.message}
-        {...register('title')} />
-
-      <div className="grid grid-cols-2 gap-4">
-        <Input label="Duration (minutes)" type="number" step="1" min="0"
-          {...register('duration_minutes', { min: 0 })} />
-        <Input label="Crew Size" type="number" min="1"
-          {...register('crew_size', { min: { value: 1, message: 'Min 1' } })} />
-      </div>
-
-      {/* Smart Labor Calculator V2 — learns duration from history; fills the field
-          above (never overwrites a typed value, never affects price). */}
-      <SmartLaborField
-        engine={smartDuration}
-        sqft={Number(selProp?.lawn_sqft) || 0}
-        serviceType={serviceType}
-        crewSize={Number(watch('crew_size')) || 1}
-        propertyId={selectedPropertyId || null}
-        price={Number(watch('price')) || (measuredPrice ?? 0)}
-        value={Number(watch('duration_minutes')) || null}
-        onApply={(min) => setValue('duration_minutes', min, { shouldValidate: true })}
-      />
-
-      <div className="grid grid-cols-2 gap-4">
-        <Input label="Start Time" type="time" {...register('start_time')} />
-        <Input label="End Time" type="time" {...register('end_time')} />
-      </div>
 
       <Controller name="status" control={control}
         render={({ field }) => (
@@ -549,14 +504,48 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
           {...register('actual_minutes', { min: 0 })} />
       )}
 
-      {/* Repeat — available for new AND existing jobs */}
-      <div className="border border-border-strong rounded-xl overflow-hidden">
-          <div className="bg-bg-tertiary px-4 py-3 flex items-center gap-2 border-b border-border">
-            <Repeat className="w-4 h-4 text-accent" />
-            <span className="text-sm font-semibold text-ink">Repeat</span>
-            {interval && <span className="ml-auto text-xs text-accent font-medium">{recurrenceLabel(interval.unit, interval.count)} · {endSummary}</span>}
-          </div>
-          <div className="p-4 space-y-3">
+      <Textarea label="Notes" placeholder="Access instructions, gate codes, special requests..."
+        {...register('notes')} />
+
+      {/* Time & crew — expanded while creating (the smart duration suggestion
+          matters then), a one-line summary when editing. */}
+      <Collapsible title="Time & crew" icon={Clock} defaultOpen={!isEdit}
+        summary={`${Number(watch('duration_minutes')) || 0}m · ${Number(watch('crew_size')) || 1} crew${watch('start_time') ? ` · ${watch('start_time')}` : ''}`}>
+        <Input label="Job Title" placeholder="Auto-named from service + customer if blank"
+          error={errors.title?.message}
+          {...register('title')} />
+
+        <div className="grid grid-cols-2 gap-4">
+          <Input label="Duration (minutes)" type="number" step="1" min="0"
+            {...register('duration_minutes', { min: 0 })} />
+          <Input label="Crew Size" type="number" min="1"
+            {...register('crew_size', { min: { value: 1, message: 'Min 1' } })} />
+        </div>
+
+        {/* Smart Labor Calculator V2 — learns duration from history; fills the field
+            above (never overwrites a typed value, never affects price). */}
+        <SmartLaborField
+          sqft={Number(selProp?.lawn_sqft) || 0}
+          serviceType={serviceType}
+          crewSize={Number(watch('crew_size')) || 1}
+          propertyId={selectedPropertyId || null}
+          cadence={laborCadence}
+          price={Number(watch('price')) || (measuredPrice ?? 0)}
+          value={Number(watch('duration_minutes')) || null}
+          onApply={(min) => setValue('duration_minutes', min, { shouldValidate: true })}
+        />
+
+        <div className="grid grid-cols-2 gap-4">
+          <Input label="Start Time" type="time" {...register('start_time')} />
+          <Input label="End Time" type="time" {...register('end_time')} />
+        </div>
+      </Collapsible>
+
+      {/* Repeat — available for new AND existing jobs; collapses to its cadence
+          summary when editing so it stops dominating the form. */}
+      <Collapsible title="Repeat" icon={Repeat} defaultOpen={!isEdit}
+        summary={interval ? `${recurrenceLabel(interval.unit, interval.count)} · ${endSummary}` : 'Does not repeat'}>
+          <div className="space-y-3">
             {isEdit && (
               <p className="text-xs text-ink-faint">
                 {initialRecurrence?.unit
@@ -675,10 +664,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
                   <Input label="Number of visits" type="number" min="1" value={endCount}
                     onChange={(e) => setEndCount(Math.max(1, Number(e.target.value) || 1))} />
                 )}
-                <p className="text-xs text-ink-faint">
-                  Repeats {recurrenceLabel(interval!.unit, interval!.count).toLowerCase()}, {endSummary}.
-                </p>
-                {/* Live visit-count estimate */}
+                {/* Live visit-count estimate — the ONE cadence restatement. */}
                 {visitEstimate != null && visitEstimate > 0 && (
                   <p className="text-xs font-semibold text-accent">
                     {recurrenceLabel(interval!.unit, interval!.count)} · {scheduledDate ? formatDate(scheduledDate) : '?'} → {effectiveEndDate ? formatDate(effectiveEndDate) : '?'} · ≈ {visitEstimate} visit{visitEstimate !== 1 ? 's' : ''}
@@ -687,14 +673,12 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
               </>
             )}
           </div>
-      </div>
-
-      <Textarea label="Notes" placeholder="Access instructions, gate codes, special requests..."
-        {...register('notes')} />
+      </Collapsible>
       </div>
       )}
 
-      <div className="flex items-center gap-2 pt-2 flex-wrap">
+      {/* Sticky save — reachable one-handed without scrolling past the form. */}
+      <div className="sticky bottom-0 -mx-1 px-1 pt-2 pb-1 bg-bg-secondary/95 backdrop-blur border-t border-border flex items-center gap-2 flex-wrap">
         <Button type="submit" loading={isSubmitting} onClick={() => { addAnotherRef.current = false }}>
           {isEdit ? 'Update Job' : 'Add Job'}
         </Button>

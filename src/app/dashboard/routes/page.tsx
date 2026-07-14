@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/Button'
 import { format } from 'date-fns'
 import { Coord, geocodeAddress } from '@/lib/geo'
 import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, routeStats, computeDayEtas, DEFAULT_JOB_MIN } from '@/lib/route'
+import { loadTravelModel } from '@/lib/travelLearning'
 import {
   ProfitJob, ProfitQuote, ProfitContext, RecInfo, Grade, GRADE_COLORS,
   dayProfitability, jobValue, improvementSuggestions,
@@ -41,8 +42,10 @@ export default function RoutesPage() {
   const load = useCallback(async () => {
     setLoading(true)
     setRoute(null)
-    const { data: { user } } = await supabase.auth.getUser()
-    const [jRes, qRes, rRes, sRes] = await Promise.all([
+    // Local session read — no auth round-trip before the data batch below.
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
+    const [jRes, qRes, rRes, sRes, travel] = await Promise.all([
       supabase.from('jobs')
         .select('id, title, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, properties(id, address, lat, lng, city, postal_code, neighborhood)')
         .eq('user_id', user!.id)
@@ -52,6 +55,7 @@ export default function RoutesPage() {
       supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
       supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user!.id),
       supabase.from('business_settings').select('base_lat, base_lng, base_address, work_start_time').eq('user_id', user!.id).maybeSingle(),
+      loadTravelModel(supabase),
     ])
 
     const quotesById: Record<string, ProfitQuote> = {}
@@ -88,7 +92,7 @@ export default function RoutesPage() {
     for (const r of rows) { const st = byId.get(r.id); if (st) { r.lat = st.lat; r.lng = st.lng } }
 
     setDayJobs(rows)
-    setCtx({ quotesById, recById, base, today: format(new Date(), 'yyyy-MM-dd') })
+    setCtx({ quotesById, recById, base, today: format(new Date(), 'yyyy-MM-dd'), speed: travel })
 
     // Optimize the day's route for the map (real roads when available).
     if (base && stops.some(st => st.lat != null && st.lng != null)) {
@@ -125,8 +129,8 @@ export default function RoutesPage() {
     if (!route || route.ordered.length === 0) return null
     const dur: Record<string, number> = {}
     for (const j of dayJobs) dur[j.id] = j.duration_minutes || DEFAULT_JOB_MIN
-    return computeDayEtas(workStart, route.ordered, dur)
-  }, [route, dayJobs, workStart])
+    return computeDayEtas(workStart, route.ordered, dur, ctx.speed)
+  }, [route, dayJobs, workStart, ctx.speed])
   const etaByJob = useMemo(() => Object.fromEntries((etas?.stops || []).map(s => [s.jobId, s.arrival])), [etas])
   const titleById = useMemo(() => Object.fromEntries(dayJobs.map(j => [j.id, j.title])), [dayJobs])
   const hasBase = !!ctx.base

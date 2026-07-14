@@ -1,4 +1,4 @@
-import type { Quote, Invoice, BusinessSettings } from '@/types'
+import type { Quote, QuoteService, Invoice, BusinessSettings } from '@/types'
 
 // ── Portal PDF bridge ────────────────────────────────────────────────────────
 // The portal renders the SAME quote/invoice PDFs as the dashboard. We map the
@@ -8,17 +8,27 @@ import type { Quote, Invoice, BusinessSettings } from '@/types'
 // Security: get_portal_data only ever returns this token's customer's records,
 // so a customer can only ever build their own documents.
 
+// One service line on a multi-service quote (from get_portal_data's nested
+// quote_services array). Same fields the dashboard PDF consumes.
+export interface PortalQuoteService {
+  service_type: string; quantity: number; unit: string | null; unit_price: number
+  est_minutes: number | null; discount_type: 'amount' | 'percent' | null
+  discount_value: number | null; notes: string | null; sort_order: number
+}
+
 export interface PortalPdfQuote {
   quote_number: string; service_type: string; address: string; total: number
   initial_price: number | null; subtotal: number | null
   weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null
   notes: string | null; status: string; created_at: string; issued_date: string | null
   crew_size: number | null; hours: number | null; travel_fee: number | null
+  services?: PortalQuoteService[] | null
 }
 export interface PortalPdfInvoice {
   invoice_number: string; service_type: string | null; amount: number; status: string
   issued_date: string | null; due_date: string | null; notes: string | null; address: string | null
   line_items: { description: string; amount: number; kind: string }[] | null; created_at: string
+  amount_paid?: number | null; discount_type?: 'amount' | 'percent' | null; discount_value?: number | null
 }
 export interface PortalPdfBusiness {
   company_name: string | null; phone: string | null; email_primary: string | null
@@ -58,6 +68,11 @@ function portalInvoiceToInvoice(inv: PortalPdfInvoice, customerName: string, fal
     address: inv.address || fallbackAddress,
     service_type: inv.service_type,
     amount: num(inv.amount),
+    // Paid-to-date + discount must survive the mapping — the customer's PDF has to
+    // show the same Balance Due the owner's InvoicePDF and the portal balance show.
+    amount_paid: num(inv.amount_paid ?? 0),
+    discount_type: inv.discount_type ?? null,
+    discount_value: inv.discount_value ?? null,
     status: inv.status,
     issued_date: inv.issued_date,
     due_date: inv.due_date,
@@ -70,7 +85,7 @@ function portalInvoiceToInvoice(inv: PortalPdfInvoice, customerName: string, fal
 function portalBusinessToSettings(b: PortalPdfBusiness | null): BusinessSettings | null {
   if (!b) return null
   return {
-    company_name: b.company_name || 'Edge Property Services',
+    company_name: b.company_name || 'Your service provider',
     phone: b.phone,
     email_primary: b.email_primary,
     email_secondary: b.email_secondary,
@@ -85,8 +100,38 @@ function portalBusinessToSettings(b: PortalPdfBusiness | null): BusinessSettings
 
 export async function renderPortalQuoteBlob(q: PortalPdfQuote, customerName: string, b: PortalPdfBusiness | null): Promise<Blob> {
   const { renderQuoteBlob } = await import('@/components/quotes/QuotePDF')
-  return renderQuoteBlob(portalQuoteToQuote(q, customerName), portalBusinessToSettings(b))
+  // Multi-service breakdown flows into the SAME PDF pipeline the dashboard uses —
+  // the customer sees every service line, not a lump sum under one service name.
+  const services: QuoteService[] | undefined = q.services?.length
+    ? q.services.map((s, i) => ({
+        id: String(i), created_at: q.created_at, user_id: '', quote_id: '',
+        service_type: s.service_type, service_template_id: null,
+        quantity: num(s.quantity, 1) || 1, unit: s.unit, unit_price: num(s.unit_price),
+        est_minutes: s.est_minutes, discount_type: s.discount_type,
+        discount_value: s.discount_value, notes: s.notes, sort_order: s.sort_order,
+      }))
+    : undefined
+  return renderQuoteBlob(portalQuoteToQuote(q, customerName), portalBusinessToSettings(b), services)
 }
+// A payment row as the portal sees it — enough for the receipt document.
+export interface PortalPdfPayment {
+  id: string; amount: number; provider: string; method?: string | null
+  paid_at: string | null; created_at: string; notes?: string | null
+  kind?: string; currency?: string; status?: string
+}
+
+// Customer-side receipt: the SAME ReceiptPDF the owner uses, fed through the
+// portal→Invoice/Settings mappers — one receipt engine, permanently re-renderable
+// from the ledger row (receipts are never stored, so they can't drift).
+export async function renderPortalReceiptBlob(payment: PortalPdfPayment, inv: PortalPdfInvoice, customerName: string, fallbackAddress: string | null, b: PortalPdfBusiness | null): Promise<Blob> {
+  const { renderReceiptBlob } = await import('@/components/payments/ReceiptPDF')
+  return renderReceiptBlob(
+    payment as unknown as import('@/types').Payment,
+    portalInvoiceToInvoice(inv, customerName, fallbackAddress),
+    portalBusinessToSettings(b),
+  )
+}
+
 export async function renderPortalInvoiceBlob(inv: PortalPdfInvoice, customerName: string, fallbackAddress: string | null, b: PortalPdfBusiness | null): Promise<Blob> {
   const { renderInvoiceBlob } = await import('@/components/quotes/InvoicePDF')
   return renderInvoiceBlob(portalInvoiceToInvoice(inv, customerName, fallbackAddress), portalBusinessToSettings(b))

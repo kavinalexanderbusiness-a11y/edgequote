@@ -4,6 +4,8 @@ import { toast } from '@/lib/toast'
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { loadAnalyticsCore } from '@/lib/analyticsData'
+import { loadTravelModel } from '@/lib/travelLearning'
 import { Customer } from '@/types'
 import { format } from 'date-fns'
 import { Coord, haversineKm, geocodeAddressDetailed } from '@/lib/geo'
@@ -58,15 +60,16 @@ export default function NeighborsPage() {
   const [working, setWorking] = useState<string | null>(null)
 
   async function load() {
-    const { data: { user } } = await supabase.auth.getUser()
+    // Local session read — no auth round-trip before the data batch below.
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
     if (!user) { setLoading(false); return }
-    const [lRes, cRes, pRes, jRes, qRes, rRes] = await Promise.all([
+    const [lRes, cRes, pRes, core, travel] = await Promise.all([
       supabase.from('neighbor_leads').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
       supabase.from('customers').select('*').eq('user_id', user.id).order('name'),
       supabase.from('properties').select('id, customer_id, address, lat, lng, city, postal_code, neighborhood').eq('user_id', user.id),
-      supabase.from('jobs').select('id, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, properties(lat, lng, city, postal_code, neighborhood)').eq('user_id', user.id),
-      supabase.from('quotes').select('id, status, property_id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user.id),
-      supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user.id),
+      loadAnalyticsCore(supabase),
+      loadTravelModel(supabase),
     ])
     setLeads((lRes.data as Lead[]) || [])
     setCustomers((cRes.data as Customer[]) || [])
@@ -74,11 +77,11 @@ export default function NeighborsPage() {
     setProperties(props)
 
     const quotesById: Record<string, ProfitQuote> = {}
-    for (const q of (qRes.data as (ProfitQuote & { id: string })[]) || []) quotesById[q.id] = q
+    for (const q of (core?.quotes as unknown as (ProfitQuote & { id: string })[]) || []) quotesById[q.id] = q
     const recById: Record<string, RecInfo> = {}
-    for (const r of (rRes.data as (RecInfo & { id: string })[]) || []) recById[r.id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count }
-    setCtx({ quotesById, recById, base: null, today: format(new Date(), 'yyyy-MM-dd') })
-    setJobs(((jRes.data as unknown as Array<Record<string, any>>) || []).map(j => ({
+    for (const r of (core?.recurrences as unknown as (RecInfo & { id: string })[]) || []) recById[r.id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count }
+    setCtx({ quotesById, recById, base: null, today: format(new Date(), 'yyyy-MM-dd'), speed: travel })
+    setJobs(((core?.jobs as unknown as Array<Record<string, any>>) || []).map(j => ({
       id: j.id, scheduled_date: j.scheduled_date, status: j.status, service_type: j.service_type,
       quote_id: j.quote_id, recurrence_id: j.recurrence_id, duration_minutes: j.duration_minutes,
       actual_minutes: j.actual_minutes, price: j.price, customer_id: j.customer_id,
@@ -89,7 +92,7 @@ export default function NeighborsPage() {
     // Pending quote demand per hood (warm areas to knock).
     const pend: Record<string, number> = {}
     const propsById = new Map(props.map(p => [p.id, p]))
-    for (const q of (qRes.data as unknown as Array<{ status: string; property_id: string | null }>) || []) {
+    for (const q of (core?.quotes as unknown as Array<{ status: string; property_id: string | null }>) || []) {
       if (q.status !== 'draft' && q.status !== 'sent') continue
       const p = q.property_id ? propsById.get(q.property_id) : null
       if (!p) continue
@@ -162,10 +165,20 @@ export default function NeighborsPage() {
   }
 
   // Conversion is the ONLY moment a customer record is created — through the one
-  // find-or-create engine, linked back via converted_customer_id.
+  // find-or-create engine, linked back via converted_customer_id. The name is
+  // captured inline on the card (no browser prompt): first click opens the field,
+  // Enter/Convert confirms.
+  const [converting, setConverting] = useState<{ leadId: string; thenQuote: boolean } | null>(null)
+  const [convertName, setConvertName] = useState('')
   async function convertLead(lead: Lead, thenQuote: boolean) {
-    const name = prompt(`Customer name for ${lead.address}?`)
-    if (!name?.trim()) return
+    if (converting?.leadId !== lead.id) {
+      setConverting({ leadId: lead.id, thenQuote })
+      setConvertName('')
+      return
+    }
+    const name = convertName
+    if (!name.trim()) return
+    setConverting(null)
     setWorking(lead.id)
     try {
       const { data: { user } } = await supabase.auth.getUser()
@@ -293,6 +306,19 @@ export default function NeighborsPage() {
                     </span>
                   </div>
 
+                  {/* Inline name capture for conversion — no browser prompt */}
+                  {converting?.leadId === l.id && (
+                    <div className="flex items-center gap-2 mb-2">
+                      <input
+                        value={convertName} onChange={e => setConvertName(e.target.value)} autoFocus
+                        placeholder={`Customer name for ${l.address}`}
+                        onKeyDown={e => { if (e.key === 'Enter' && convertName.trim()) convertLead(l, converting.thenQuote); if (e.key === 'Escape') setConverting(null) }}
+                        className="flex-1 bg-bg-tertiary border border-border-strong rounded-lg px-3 py-1.5 text-sm text-ink outline-none focus:border-accent"
+                      />
+                      <Button size="sm" disabled={!convertName.trim()} onClick={() => convertLead(l, converting.thenQuote)}><Check className="w-3.5 h-3.5" /> Convert</Button>
+                      <Button size="sm" variant="ghost" onClick={() => setConverting(null)}>Cancel</Button>
+                    </div>
+                  )}
                   <div className="flex items-center gap-1.5 flex-wrap">
                     {l.status === 'prospect' && (
                       <Button size="sm" variant="secondary" disabled={busy} onClick={() => setStatus(l, 'contacted')}>

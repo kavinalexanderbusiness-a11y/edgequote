@@ -7,8 +7,11 @@ import Link from 'next/link'
 import { formatDistanceToNow } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { cn } from '@/lib/utils'
+import { toast } from '@/lib/toast'
+import { scheduleQuoteAsJob } from '@/lib/scheduleQuote'
+import type { Quote } from '@/types'
 import { InlineEmpty } from '@/components/ui/EmptyState'
-import { Bell, Check, FileText, DollarSign, MessageSquare, Globe, Star, CreditCard, AlertTriangle, RotateCcw, ShieldAlert } from 'lucide-react'
+import { Bell, Check, FileText, DollarSign, MessageSquare, Globe, Star, CreditCard, AlertTriangle, RotateCcw, ShieldAlert, CalendarPlus, Loader2 } from 'lucide-react'
 
 export interface AppNotification {
   id: string
@@ -18,6 +21,9 @@ export interface AppNotification {
   body: string | null
   href: string | null
   read: boolean
+  // For one-click actions on the alert itself (e.g. quote_accepted → Schedule now).
+  entity_type?: string | null
+  entity_id?: string | null
   // Optional management fields (present once RUN-2026-06-27-notification-manage.sql
   // is applied; undefined before that — callers degrade gracefully).
   snoozed_until?: string | null
@@ -54,14 +60,15 @@ export function NotificationBell() {
 
   async function load(userId: string) {
     // Active feed only — hide archived/snoozed so the bell matches the page. Falls
-    // back to the legacy columns if the manage migration hasn't run yet.
+    // back to the legacy columns if the manage migration hasn't run yet. Both
+    // selects carry entity_type/entity_id for the one-click Schedule-now action.
     const managed = await supabase.from('notifications')
-      .select('id, created_at, type, title, body, href, read, snoozed_until, archived_at')
+      .select('id, created_at, type, title, body, href, read, entity_type, entity_id, snoozed_until, archived_at')
       .eq('user_id', userId).is('archived_at', null).order('created_at', { ascending: false }).limit(30)
     let data = managed.data as AppNotification[] | null
     if (managed.error && /archived_at|snoozed_until|column/i.test(managed.error.message)) {
       const legacy = await supabase.from('notifications')
-        .select('id, created_at, type, title, body, href, read')
+        .select('id, created_at, type, title, body, href, read, entity_type, entity_id')
         .eq('user_id', userId).order('created_at', { ascending: false }).limit(30)
       data = legacy.data as AppNotification[] | null
     }
@@ -145,11 +152,42 @@ export function NotificationBell() {
   async function markRead(ids: string[]) {
     if (!ids.length) return
     setItems(prev => prev.map(n => ids.includes(n.id) ? { ...n, read: true } : n))
-    await supabase.from('notifications').update({ read: true, read_at: new Date().toISOString() }).in('id', ids)
+    const { error } = await supabase.from('notifications').update({ read: true, read_at: new Date().toISOString() }).in('id', ids)
+    if (error) setItems(prev => prev.map(n => ids.includes(n.id) ? { ...n, read: false } : n))   // revert unread state + badge
   }
   function openItem(n: AppNotification) {
     markRead([n.id]); setOpen(false)
     if (n.href) router.push(n.href)
+  }
+
+  // One-click "Schedule now" on a quote-accepted alert — THE shared quote→job
+  // engine (lib/scheduleQuote), exactly the same job the quote page and the
+  // dashboard card create. Guards on the LIVE quote status, so a stale alert
+  // can never double-book.
+  const [schedulingId, setSchedulingId] = useState<string | null>(null)
+  async function scheduleFromNotification(n: AppNotification) {
+    if (schedulingId || !n.entity_id) return
+    setSchedulingId(n.id)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      const { data: q } = await supabase.from('quotes').select('*').eq('id', n.entity_id).eq('user_id', user!.id).maybeSingle()
+      const quote = q as Quote | null
+      if (!quote) { toast.error('This quote no longer exists.'); markRead([n.id]); return }
+      if (quote.status !== 'accepted') {
+        toast.info(quote.status === 'scheduled' ? 'Already scheduled.' : 'This quote is no longer accepted — open it to review.')
+        markRead([n.id])
+        return
+      }
+      const { error } = await scheduleQuoteAsJob(supabase, user!.id, quote)
+      if (error) toast.error('Could not create job: ' + error)
+      else {
+        markRead([n.id])
+        toast('Job added to today’s schedule.', {
+          tone: 'success',
+          action: { label: 'View job', run: () => { setOpen(false); router.push('/dashboard/schedule') } },
+        })
+      }
+    } finally { setSchedulingId(null) }
   }
 
   const panel = open && pos && (
@@ -171,9 +209,13 @@ export function NotificationBell() {
           <InlineEmpty icon={Bell}>You&apos;re all caught up — no notifications.</InlineEmpty>
         ) : items.map(n => {
           const Icon = ICON[n.type] || Bell
+          const canScheduleNow = n.type === 'quote_accepted' && !!n.entity_id
+          // A div-with-role row (not <button>) so the inline "Schedule now"
+          // action can be a real button without invalid nesting.
           return (
-            <button key={n.id} onClick={() => openItem(n)}
-              className={cn('w-full text-left px-4 py-3 flex items-start gap-3 hover:bg-surface/40 transition-colors', !n.read && 'bg-accent/[0.04]')}>
+            <div key={n.id} role="button" tabIndex={0} onClick={() => openItem(n)}
+              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openItem(n) } }}
+              className={cn('w-full cursor-pointer text-left px-4 py-3 flex items-start gap-3 hover:bg-surface/40 transition-colors', !n.read && 'bg-accent/[0.04]')}>
               <div className={cn('w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border', !n.read ? 'border-accent/30 bg-accent/10 text-accent' : 'border-border text-ink-muted')}>
                 <Icon className="w-4 h-4" />
               </div>
@@ -181,9 +223,17 @@ export function NotificationBell() {
                 <p className={cn('text-sm truncate', !n.read ? 'font-semibold text-ink' : 'text-ink-muted')}>{n.title}</p>
                 {n.body && <p className="text-[11px] text-ink-muted truncate">{n.body}</p>}
                 <p className="text-[10px] text-ink-faint mt-0.5">{timeAgo(n.created_at)}</p>
+                {canScheduleNow && (
+                  <button type="button"
+                    onClick={e => { e.stopPropagation(); scheduleFromNotification(n) }}
+                    disabled={schedulingId !== null}
+                    className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-semibold rounded-lg px-2 py-1 border border-accent/30 bg-accent/10 text-accent hover:bg-accent/20 transition-colors disabled:opacity-60">
+                    {schedulingId === n.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <CalendarPlus className="w-3 h-3" />} Schedule now
+                  </button>
+                )}
               </div>
               {!n.read && <span className="w-2 h-2 rounded-full bg-accent shrink-0 mt-1.5" />}
-            </button>
+            </div>
           )
         })}
       </div>

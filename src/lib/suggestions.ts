@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Job, Quote, JobRecurrence, Property, Customer, JobLineItem } from '@/types'
 import { Coord, haversineKm } from '@/lib/geo'
-import { dayLoad, DEFAULT_JOB_MIN, computeDayEtas, timeToMinutes } from '@/lib/route'
+import { dayLoad, DEFAULT_JOB_MIN, computeDayEtas, timeToMinutes, type SpeedModel } from '@/lib/route'
 import { densityFor, locatedStops } from '@/lib/routeDensity'
 import { resolvePrefs } from '@/lib/preferences'
 import { analyzeWinLoss, WLQuote, QuoteOutcomeRow, LOSS_REASON_LABEL } from '@/lib/winLoss'
@@ -130,6 +130,7 @@ export interface SuggestionContext {
   // so buildSuggestions just filters by membership.
   dismissedKeys: Set<string>
   workStart: string         // business_settings.work_start_time ('HH:mm') — ETA origin
+  speed?: SpeedModel        // learned drive speed (lib/travelLearning); else legacy 2 min/km
   quoteOutcomes: { quote_id: string; reason: string; detail: string | null; competitor_price: number | null }[]
 }
 
@@ -241,7 +242,7 @@ function driveMinFor(p: Property | undefined, ctx: SuggestionContext, locatedCoo
   }
   if (!isFinite(nearest) && ctx.baseCoord) nearest = haversineKm(here, ctx.baseCoord)
   if (!isFinite(nearest)) return 12
-  return Math.round((nearest / 0.5)) // AVG_SPEED_KM_PER_MIN = 0.5
+  return Math.round(nearest * (ctx.speed?.minPerKm ?? 2)) // learned drive speed, else 2 min/km
 }
 // The soonest preferred work day strictly after today — where a new recurring
 // plan's first visit lands.
@@ -697,6 +698,7 @@ function routeImprovements(ctx: SuggestionContext): Suggestion[] {
   for (const [id, r] of Object.entries(ctx.recurrences)) recs[id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count }
   const base: Omit<OptOptions, 'mode' | 'scope' | 'anchorDate'> = {
     today: ctx.today, base: ctx.baseCoord, preferredDays: ctx.preferredDays, capacityHours: ctx.capacityHours, recurrences: recs,
+    minPerKm: ctx.speed?.minPerKm,
   }
   let schedSuggestions
   try { schedSuggestions = analyzeSchedule(optJobs, base) } catch { return out }
@@ -1700,7 +1702,7 @@ function timeWindowWarnings(ctx: SuggestionContext): Suggestion[] {
     const ordered = nnOrderFromBase(ctx.baseCoord, dayJobs)
     const durByJob: Record<string, number> = {}
     for (const j of dayJobs) durByJob[j.id] = learnedDurationFor(j, model)
-    const etas = computeDayEtas(ctx.workStart, ordered.map(o => ({ jobId: o.job.id, legKm: o.legKm })), durByJob)
+    const etas = computeDayEtas(ctx.workStart, ordered.map(o => ({ jobId: o.job.id, legKm: o.legKm })), durByJob, ctx.speed)
     const arrivalByJob: Record<string, { min: number; label: string }> = {}
     for (const s of etas.stops) arrivalByJob[s.jobId] = { min: s.arrivalMin, label: s.arrival }
     for (const j of windowed) {

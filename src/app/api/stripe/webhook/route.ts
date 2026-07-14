@@ -82,7 +82,7 @@ export async function POST(req: NextRequest) {
           stripe_payment_intent: typeof s.payment_intent === 'string' ? s.payment_intent : null,
           status: 'paid',
           paid_at: now(),
-        }, { onConflict: 'stripe_session_id', ignoreDuplicates: true })
+        }, { onConflict: 'stripe_session_id', ignoreDuplicates: true }).select('id')
         // A DB write must NOT be reported as handled — return 500 so Stripe RETRIES
         // (both writes are idempotent: the upsert dedupes on stripe_session_id and
         // the invoice flip is guarded by .neq('paid'), so a retry can't double-count
@@ -91,13 +91,25 @@ export async function POST(req: NextRequest) {
           console.error('[stripe] payment upsert failed:', payRes.error.message)
           return NextResponse.json({ error: 'db write failed' }, { status: 500 })
         }
-        // Mark the invoice paid — scoped to the owner from metadata, and only
-        // while it's still owing (never un-pay or touch someone else's invoice).
-        const invRes = await sb.from('invoices').update({ status: 'paid', paid_at: now(), payment_method: 'stripe' })
-          .eq('id', invoiceId).eq('user_id', userId).neq('status', 'paid')
+        // The recompute_invoice_paid trigger derives status + paid_at from the ledger
+        // the moment the payment row lands; here we only stamp the method for display.
+        // Scoped to the owner from metadata (never touches someone else's invoice).
+        const invRes = await sb.from('invoices').update({ payment_method: 'stripe' })
+          .eq('id', invoiceId).eq('user_id', userId)
         if (invRes.error) {
           console.error('[stripe] invoice update failed:', invRes.error.message)
           return NextResponse.json({ error: 'db write failed' }, { status: 500 })
+        }
+        // Receipt for ONE-TIME online payments too (AutoPay already sends one).
+        // Gated on THIS delivery inserting the payment row (a Stripe re-delivery
+        // ignores the duplicate → no second receipt); best-effort + time-boxed so
+        // a slow provider never stalls the webhook 200.
+        const receiptCustomer = s.metadata?.customer_id ?? null
+        if ((payRes.data?.length ?? 0) > 0 && receiptCustomer) {
+          await Promise.race([
+            sendPaymentReceipt(sb, { userId, customerId: receiptCustomer, amount: (s.amount_total ?? 0) / 100, origin }),
+            new Promise<void>(resolve => setTimeout(resolve, 6000)),
+          ])
         }
       }
     }
@@ -150,25 +162,29 @@ export async function POST(req: NextRequest) {
       if (invoiceId && userId) {
         // Deterministic dedupe key 'autopay:<invoiceId>' — a re-delivered event is a
         // no-op and a one-time payment (cs_… session id) never collides with it.
+        // .select() tells us whether THIS event inserted a NEW payment row. The
+        // recompute_invoice_paid trigger now derives the invoice status from the ledger
+        // the moment this row lands, so we gate the once-only receipt on the payment
+        // insert (a re-delivered event ignores the duplicate → no second receipt).
         const payRes = await sb.from('payments').upsert({
           user_id: userId, customer_id: customerId, invoice_id: invoiceId,
           amount: (pi.amount ?? 0) / 100, currency: pi.currency ?? 'cad',
           stripe_session_id: `autopay:${invoiceId}`, stripe_payment_intent: pi.id,
           status: 'paid', paid_at: now(),
-        }, { onConflict: 'stripe_session_id', ignoreDuplicates: true })
+        }, { onConflict: 'stripe_session_id', ignoreDuplicates: true }).select('id')
         if (payRes.error) {
           console.error('[stripe] autopay payment upsert failed:', payRes.error.message)
           return NextResponse.json({ error: 'db write failed' }, { status: 500 })
         }
-        // .select() tells us whether THIS event actually flipped the invoice — so the
-        // receipt fires exactly once (a retry flips 0 rows → no duplicate receipt).
-        const invRes = await sb.from('invoices').update({ status: 'paid', paid_at: now(), payment_method: 'stripe' })
-          .eq('id', invoiceId).eq('user_id', userId).neq('status', 'paid').select('id')
+        const isNewPayment = (payRes.data?.length ?? 0) > 0
+        // Stamp the payment method for display (the trigger owns status + paid_at).
+        const invRes = await sb.from('invoices').update({ payment_method: 'stripe' })
+          .eq('id', invoiceId).eq('user_id', userId)
         if (invRes.error) {
           console.error('[stripe] autopay invoice update failed:', invRes.error.message)
           return NextResponse.json({ error: 'db write failed' }, { status: 500 })
         }
-        if ((invRes.data?.length ?? 0) > 0) {
+        if (isNewPayment) {
           // The payment is already recorded + the invoice flipped, so the receipt is
           // pure best-effort. Time-box it: a slow/hung SMS/email provider must never
           // stall the webhook 200 (which would make Stripe needlessly retry).
@@ -210,9 +226,13 @@ export async function POST(req: NextRequest) {
   }
 
   // ── Refund ────────────────────────────────────────────────────────────────
-  // A FULL refund reverts the invoice to unpaid + marks the payment refunded (so
-  // revenue stops counting it); a partial refund only notifies. Idempotent: the
-  // invoice flip is guarded by .eq('status','paid') and the notification is deduped.
+  // EVERY refund (full or partial) lands in the LEDGER as a negative payment row
+  // for the not-yet-recorded delta; the recompute_invoice_paid trigger then derives
+  // amount_paid + status (paid → partial → unpaid) — the webhook never writes
+  // invoice status directly (a multi-payment invoice must not flip to 'unpaid'
+  // because ONE of its charges was refunded). Idempotent two ways: the row's
+  // unique key encodes the CUMULATIVE refunded amount, and the delta is computed
+  // against refund rows already recorded for this charge.
   if (event.type === 'charge.refunded') {
     const ch = event.data.object as { id: string; payment_intent?: string | null; amount?: number; amount_refunded?: number; refunded?: boolean }
     const piId = typeof ch.payment_intent === 'string' ? ch.payment_intent : null
@@ -223,17 +243,29 @@ export async function POST(req: NextRequest) {
         const refunded = (ch.amount_refunded ?? 0) / 100
         const full = ch.refunded === true || (captured > 0 && refunded >= captured)
         const entityId = p.invoice_id ?? p.id
-        if (full && p.invoice_id) {
-          const invRes = await sb.from('invoices').update({ status: 'unpaid', payment_method: null, paid_at: null })
-            .eq('id', p.invoice_id).eq('user_id', p.user_id).eq('status', 'paid')
-          if (invRes.error) {
-            console.error('[stripe] refund invoice revert failed:', invRes.error.message)
-            return NextResponse.json({ error: 'db write failed' }, { status: 500 })
+        if (p.invoice_id && refunded > 0) {
+          const { data: prior } = await sb.from('payments').select('amount')
+            .eq('user_id', p.user_id).eq('invoice_id', p.invoice_id).eq('kind', 'payment')
+            .lt('amount', 0).like('stripe_session_id', `refund:${ch.id}:%`)
+          const already = ((prior as { amount: number }[] | null) || []).reduce((s, r) => s + Math.abs(Number(r.amount) || 0), 0)
+          const delta = Math.round((refunded - already) * 100) / 100
+          if (delta > 0.005) {
+            const refRes = await sb.from('payments').upsert({
+              user_id: p.user_id, customer_id: p.customer_id, invoice_id: p.invoice_id,
+              amount: -delta, currency: 'cad', provider: 'stripe', kind: 'payment', method: 'refund',
+              status: 'paid', paid_at: now(),
+              stripe_session_id: `refund:${ch.id}:${Math.round(refunded * 100)}`,
+              stripe_payment_intent: piId,
+              notes: full ? 'Full refund (Stripe)' : 'Partial refund (Stripe)',
+            }, { onConflict: 'stripe_session_id', ignoreDuplicates: true })
+            if (refRes.error) {
+              console.error('[stripe] refund ledger write failed:', refRes.error.message)
+              return NextResponse.json({ error: 'db write failed' }, { status: 500 })
+            }
           }
-          await sb.from('payments').update({ status: 'refunded' }).eq('id', p.id)
         }
         await notifyOnce(p.user_id, 'payment_refunded', entityId, full ? 'Payment refunded' : 'Partial refund',
-          `${p.invoiceNumber ? p.invoiceNumber + ': ' : ''}${cad(refunded)} refunded${full ? ' — the invoice is unpaid again.' : '.'}`, p.customer_id)
+          `${p.invoiceNumber ? p.invoiceNumber + ': ' : ''}${cad(refunded)} refunded${full ? ' — the invoice balance reopened.' : '.'}`, p.customer_id)
       }
     }
   }

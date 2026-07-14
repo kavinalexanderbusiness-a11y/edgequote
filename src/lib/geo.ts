@@ -165,11 +165,14 @@ interface DatedPoint { scheduled_date: string; lat: number | null; lng: number |
 export function suggestBestDays(
   target: Coord,
   jobs: DatedPoint[],
-  opts: { fromISO: string; days?: number; radiusKm?: number; max?: number; excludeDate?: string },
+  opts: { fromISO: string; days?: number; radiusKm?: number; max?: number; excludeDate?: string; minPerKm?: number; overheadMin?: number },
 ): DaySuggestion[] {
   const days = opts.days ?? 21
   const radius = opts.radiusKm ?? NEARBY_RADIUS_KM
   const max = opts.max ?? 4
+  // Learned drive speed (lib/travelLearning) or the legacy 2 min/km fallback.
+  const minPerKm = opts.minPerKm ?? (1 / AVG_SPEED_KM_PER_MIN)
+  const overheadMin = opts.overheadMin ?? 0
   const located = jobs.filter(j => j.lat != null && j.lng != null)
   const from = parseISO(opts.fromISO)
 
@@ -194,7 +197,7 @@ export function suggestBestDays(
       nearbyCount: nearby.length,
       avgKm: Math.round(avgKm * 10) / 10,
       nearestKm: Math.round(nearestKm * 10) / 10,
-      addedDriveMin: Math.round((nearestKm * 2) / AVG_SPEED_KM_PER_MIN),
+      addedDriveMin: Math.round(overheadMin + (nearestKm * 2) * minPerKm),
     })
   }
 

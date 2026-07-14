@@ -1,12 +1,18 @@
 'use client'
 
+import { useMemo } from 'react'
+import Link from 'next/link'
 import { useForm, Controller } from 'react-hook-form'
 import { Input } from '@/components/ui/Input'
 import { Textarea } from '@/components/ui/Textarea'
 import { Select } from '@/components/ui/Select'
 import { Button } from '@/components/ui/Button'
 import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
+import { useAutosave } from '@/hooks/useAutosave'
+import { AutosaveStatus, DraftRestoreBanner } from '@/components/ui/Autosave'
+import { findCustomerMatch } from '@/lib/customers'
 import { Customer, CustomerFormValues, ACQUISITION_SOURCES } from '@/types'
+import { Users } from 'lucide-react'
 
 interface CustomerFormProps {
   defaultValues?: Partial<CustomerFormValues>
@@ -14,12 +20,14 @@ interface CustomerFormProps {
   onSubmit: (values: CustomerFormValues) => Promise<void>
   onCancel: () => void
   isEdit?: boolean
+  /** Autosave key — defaults per add/edit; pass a precise one (e.g. `customer:${id}`). */
+  autosaveKey?: string
 }
 
 const PROVINCES = ['AB','BC','MB','NB','NL','NS','NT','NU','ON','PE','QC','SK','YT']
 
-export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel, isEdit }: CustomerFormProps) {
-  const { register, handleSubmit, control, watch, setValue, formState: { errors, isSubmitting } } = useForm<CustomerFormValues>({
+export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel, isEdit, autosaveKey }: CustomerFormProps) {
+  const { register, handleSubmit, control, watch, setValue, reset, formState: { errors, isSubmitting } } = useForm<CustomerFormValues>({
     defaultValues: {
       province: 'AB',
       acquisition_source: '',
@@ -30,20 +38,48 @@ export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel
     },
   })
 
+  // Autosave the whole form — survives refresh / crash / accidental close. Shared engine.
+  const formValues = watch()
+  const autosave = useAutosave<CustomerFormValues>({
+    key: autosaveKey || `customer:${isEdit ? 'edit' : 'new'}`,
+    value: formValues,
+    isEmpty: v => !v.name?.trim() && !v.email?.trim() && !v.phone?.trim() && !v.address?.trim(),
+  })
+  const submit = handleSubmit(async v => { await onSubmit(v); autosave.clear() })
+
+  // Live duplicate detection — reuses the ONE matching engine (phone/email/address
+  // confident, name not). Only when creating, so we never warn a customer about
+  // themselves. Surfaces the existing record instead of creating a duplicate.
+  const name = watch('name'); const email = watch('email'); const phone = watch('phone'); const addr = watch('address')
+  const dupMatch = useMemo(
+    () => (isEdit ? null : findCustomerMatch(customers, { name, phone, email, address: addr })),
+    [isEdit, customers, name, phone, email, addr],
+  )
+
   const source = watch('acquisition_source')
   const sourceOptions = [
     { value: '', label: 'How did they find you?' },
     ...ACQUISITION_SOURCES.map(s => ({ value: s, label: s })),
   ]
-  const referrerOptions = [
+  // Memoized: at 8k customers this array (and the form's watch()-driven re-renders)
+  // would otherwise rebuild the whole option list on every keystroke/field change.
+  const referrerOptions = useMemo(() => [
     { value: '', label: 'Select referring customer...' },
     ...customers.map(c => ({ value: c.id, label: c.name })),
-  ]
+  ], [customers])
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
+    <form onSubmit={submit} className="space-y-5">
+      {autosave.draft && (
+        <DraftRestoreBanner
+          savedAt={autosave.savedAt}
+          label="unsaved customer"
+          onRestore={() => { const v = autosave.restore(); if (v) reset(v) }}
+          onDiscard={autosave.discard}
+        />
+      )}
       <Input
-        label="Full Name"
+        label="Full Name" autoFocus
         placeholder="Jane Smith"
         error={errors.name?.message}
         {...register('name', { required: 'Name is required' })}
@@ -62,6 +98,24 @@ export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel
           {...register('phone')}
         />
       </div>
+
+      {/* Duplicate guard — link to the existing record instead of creating a copy */}
+      {dupMatch && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 flex items-start gap-2">
+          <Users className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+          <div className="text-xs text-ink flex-1 min-w-0">
+            <p>
+              {dupMatch.confident
+                ? <>Looks like this customer already exists — <span className="font-semibold">{dupMatch.customer.name}</span> (same {dupMatch.reason}).</>
+                : <>Possible existing customer — <span className="font-semibold">{dupMatch.customer.name}</span> (same name).</>}
+            </p>
+            <Link href={`/dashboard/customers/${dupMatch.customer.id}`} className="inline-flex items-center gap-1 mt-1 text-accent font-medium hover:underline">
+              Open {dupMatch.customer.name.split(' ')[0]} instead →
+            </Link>
+          </div>
+        </div>
+      )}
+
       <Controller
         name="address"
         control={control}
@@ -144,6 +198,7 @@ export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel
         {...register('notes')}
       />
       <div className="flex items-center justify-end gap-3 pt-2">
+        <AutosaveStatus status={autosave.status} savedAt={autosave.savedAt} className="mr-auto" />
         <Button type="button" variant="ghost" onClick={onCancel}>Cancel</Button>
         <Button type="submit" loading={isSubmitting}>
           {isEdit ? 'Save Changes' : 'Add Customer'}

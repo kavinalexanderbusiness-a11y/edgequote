@@ -2,6 +2,7 @@ import { WeekendOutlook } from '@/components/dashboard/WeekendOutlook'
 import { TodaysPriorities } from '@/components/dashboard/TodaysPriorities'
 import { DashboardKpis } from '@/components/dashboard/DashboardKpis'
 import { createClient } from '@/lib/supabase/server'
+import { invoiceBalance } from '@/lib/payments/ledger'
 import { PageHeader } from '@/components/layout/PageHeader'
 import Link from 'next/link'
 import { Button } from '@/components/ui/Button'
@@ -22,19 +23,23 @@ export default async function DashboardPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
-  const [{ data: invoices }, { data: jobs }, { data: quotes }] = await Promise.all([
-    supabase.from('invoices').select('amount, status').eq('user_id', user!.id),
+  const [{ data: invoices }, { data: jobs }, { data: quotes }, { data: settingsRow }] = await Promise.all([
+    supabase.from('invoices').select('amount, status, amount_paid, discount_type, discount_value').eq('user_id', user!.id),
     supabase.from('jobs').select('status, scheduled_date').eq('user_id', user!.id),
     supabase.from('quotes').select('status').eq('user_id', user!.id),
+    supabase.from('business_settings').select('gst_percent').eq('user_id', user!.id).maybeSingle(),
   ])
-  const allInvoices = (invoices as { amount: number; status: string }[]) || []
+  const allInvoices = (invoices as { amount: number; status: string; amount_paid?: number; discount_type: 'amount' | 'percent' | null; discount_value: number | null }[]) || []
   const allJobs = (jobs as { status: string; scheduled_date: string }[]) || []
   const allQuotes = (quotes as { status: string }[]) || []
 
-  // Collected = invoices paid; Outstanding = money owed. Outstanding uses the SAME
-  // filter as the "Collect unpaid invoices" priority above, so the two never disagree.
-  const collected = allInvoices.filter(i => i.status === 'paid').reduce((s, i) => s + Number(i.amount || 0), 0)
-  const outstanding = allInvoices.filter(i => i.status === 'unpaid' || i.status === 'sent').reduce((s, i) => s + Number(i.amount || 0), 0)
+  // Ledger-aware, so these agree with the "Collect unpaid invoices" priority AND the
+  // Invoices page: Collected = money actually received (amount_paid, incl. partials);
+  // Outstanding = remaining GST-inclusive balance across issued invoices.
+  const collected = allInvoices.reduce((s, i) => s + (Number(i.amount_paid) || 0), 0)
+  const outstanding = allInvoices
+    .filter(i => i.status !== 'draft' && i.status !== 'cancelled')
+    .reduce((s, i) => s + Math.max(0, invoiceBalance(i, settingsRow).balance), 0)
 
   const now = new Date()
   const monthStartISO = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`

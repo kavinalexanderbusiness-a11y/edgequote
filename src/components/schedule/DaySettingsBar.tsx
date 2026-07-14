@@ -1,11 +1,11 @@
 'use client'
 
+import { useState } from 'react'
 import { Job } from '@/types'
 import { cn } from '@/lib/utils'
-import { DayStatusRow, dayStatusMeta } from '@/lib/dayStatus'
+import { DayStatusRow, dayStatusMeta, dayCrew, dayWorkHours, dayLaborHours, dayStartTime, dayEndTime, hasCapacityOverride } from '@/lib/dayStatus'
 import {
-  Users, Clock, Gauge, Minus, Plus, RotateCcw, Wand2, CloudRain, CalendarX2,
-  CalendarPlus, AlertTriangle,
+  Users, Clock, Gauge, Minus, Plus, RotateCcw, CalendarX2, AlertTriangle, ChevronDown,
 } from 'lucide-react'
 
 interface Props {
@@ -19,39 +19,41 @@ interface Props {
   onSetCapacity: (patch: { crewSize?: number | null; startsAt?: string | null; endsAt?: string | null }) => void
   onResetCapacity: () => void
   onToggleDisable: () => void
-  onAutoOptimize: () => void
-  onWeatherOps: () => void
-  onAddJob: () => void
 }
 
 const toMin = (hhmm: string) => { const [h, m] = hhmm.split(':'); return Number(h) * 60 + Number(m || '0') }
-const toHHMM = (min: number) => `${String(Math.floor(min / 60) % 24).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`
 const to12 = (hhmm: string) => { const [h, m] = hhmm.split(':').map(Number); const ap = h < 12 ? 'AM' : 'PM'; const hr = h % 12 || 12; return `${hr}:${String(m).padStart(2, '0')} ${ap}` }
 const round1 = (n: number) => Math.round(n * 10) / 10
 
-// Day View operational control center: per-day crew + working-hours overrides,
-// live capacity, quick actions and smart warnings. The override applies ONLY to
-// this day (business defaults stay the default everywhere else); the optimizer,
-// Weather Ops and capacity all read it. Reset returns the day to the defaults.
+// Day View capacity controls: per-day crew + working-hours overrides, live
+// capacity, and smart warnings. This is CONFIGURATION, not dispatch — it opens
+// as a one-line summary so the route board and first stop stay above the fold,
+// and expands only when the owner wants to change the day. The override applies
+// ONLY to this day; the optimizer, Weather Ops and capacity all read it via the
+// ONE engine (lib/dayStatus). Weather Ops / Optimize / Add Job live in the page
+// header and the day board — no duplicates here.
 export function DaySettingsBar({
   date, jobs, row, defaultCrew, capacityHours, workStartTime, busy,
-  onSetCapacity, onResetCapacity, onToggleDisable, onAutoOptimize, onWeatherOps, onAddJob,
+  onSetCapacity, onResetCapacity, onToggleDisable,
 }: Props) {
+  const [open, setOpen] = useState(false)
   const blocked = !!row?.blocks
-  const perCrewHours = (capacityHours > 0 ? capacityHours : 8) / (defaultCrew > 0 ? defaultCrew : 1)
+  // ONE capacity engine (lib/dayStatus) — the Day Ops panel, optimizer and Weather
+  // Ops all read these same helpers, so this bar never drifts from the rest of the
+  // day. Business default per-crew work-hours = daily_capacity_hours ÷ default crew.
+  const def = { crew: defaultCrew > 0 ? defaultCrew : 1, hours: (capacityHours > 0 ? capacityHours : 8) / (defaultCrew > 0 ? defaultCrew : 1) }
 
-  const crew = row?.crew_size && row.crew_size > 0 ? row.crew_size : defaultCrew
-  const start = (row?.starts_at?.slice(0, 5)) || workStartTime
-  const defaultEnd = toHHMM(toMin(start) + Math.round(perCrewHours * 60))
-  const end = (row?.ends_at?.slice(0, 5)) || defaultEnd
-  const workHours = Math.max(0, (toMin(end) - toMin(start)) / 60)
-
-  const available = blocked ? 0 : round1(crew * workHours)                       // labor-hours
+  const crew = dayCrew(row, def)
+  const start = dayStartTime(row, workStartTime)
+  const end = dayEndTime(row, def, workStartTime)
+  const defaultEnd = dayEndTime(null, def, start)                 // end if hours weren't overridden
+  const workHours = dayWorkHours(row, def)
+  const available = round1(dayLaborHours(row, def))               // labor-hours (0 when blocked)
   const bookedMin = jobs.filter(j => j.status !== 'cancelled').reduce((s, j) => s + (j.duration_minutes || 0), 0)
   const booked = round1(bookedMin / 60)
   const remaining = round1(available - booked)
   const util = available > 0 ? Math.round((booked / available) * 100) : (booked > 0 ? 999 : 0)
-  const hasOverride = row?.crew_size != null || (!!row?.starts_at && !!row?.ends_at)
+  const hasOverride = hasCapacityOverride(row)
 
   const setCrew = (n: number) => onSetCapacity({ crewSize: Math.max(1, n) })
 
@@ -64,70 +66,95 @@ export function DaySettingsBar({
   }
 
   return (
-    <div className="rounded-card border border-border bg-bg-secondary p-3.5 mb-4 space-y-3">
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-xs font-bold text-ink uppercase tracking-wide flex items-center gap-1.5">
-          <Gauge className="w-3.5 h-3.5 text-accent" /> Day Settings
+    <div className="rounded-card border border-border bg-bg-secondary mb-4">
+      {/* One-line summary — always visible; tap to configure the day. */}
+      <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open}
+        className="w-full flex items-center justify-between gap-2 px-3.5 py-2.5 text-left">
+        <p className="text-xs font-bold text-ink uppercase tracking-wide flex items-center gap-1.5 min-w-0">
+          <Gauge className="w-3.5 h-3.5 text-accent shrink-0" /> Day Settings
           {hasOverride && <span className="text-[10px] font-medium text-accent normal-case tracking-normal">· override</span>}
           {blocked && row && <span className={cn('text-[10px] px-1.5 py-0.5 rounded border font-semibold normal-case tracking-normal', dayStatusMeta(row.status).badge)}>{dayStatusMeta(row.status).emoji} {dayStatusMeta(row.status).label}</span>}
         </p>
-        {hasOverride && (
-          <button onClick={onResetCapacity} disabled={busy} className="text-[11px] text-ink-faint hover:text-ink flex items-center gap-1 disabled:opacity-50">
-            <RotateCcw className="w-3 h-3" /> Reset to default
-          </button>
-        )}
-      </div>
+        <span className="flex items-center gap-3 text-xs text-ink-muted shrink-0">
+          {blocked ? (
+            <span className="text-ink-faint">Day off</span>
+          ) : (
+            <>
+              <span className="flex items-center gap-1"><Users className="w-3 h-3" /> {crew}</span>
+              <span className="hidden sm:flex items-center gap-1"><Clock className="w-3 h-3" /> {to12(start)}–{to12(end)}</span>
+              <span className={cn('font-semibold tabular-nums', remaining < 0 ? 'text-red-400' : remaining < 2.5 ? 'text-amber-400' : 'text-emerald-400')}>
+                {remaining < 0 ? `${round1(-remaining)}h over` : `${remaining}h free`}
+              </span>
+            </>
+          )}
+          <ChevronDown className={cn('w-4 h-4 transition-transform', open && 'rotate-180')} />
+        </span>
+      </button>
 
-      <div className="grid grid-cols-1 sm:grid-cols-[auto_auto_1fr] gap-3 items-start">
-        {/* Crew */}
-        <div className="min-w-0">
-          <p className="text-[10px] font-semibold text-ink-faint uppercase tracking-wide mb-1 flex items-center gap-1"><Users className="w-3 h-3" /> Crew</p>
-          <div className="flex items-center gap-1.5">
-            <button onClick={() => setCrew(crew - 1)} disabled={busy || blocked || crew <= 1} className="w-7 h-7 rounded-lg border border-border-strong text-ink-muted hover:text-ink disabled:opacity-40 flex items-center justify-center"><Minus className="w-3.5 h-3.5" /></button>
-            <span className="w-9 text-center text-sm font-bold text-ink tabular-nums">{crew}</span>
-            <button onClick={() => setCrew(crew + 1)} disabled={busy || blocked} className="w-7 h-7 rounded-lg border border-border-strong text-ink-muted hover:text-ink disabled:opacity-40 flex items-center justify-center"><Plus className="w-3.5 h-3.5" /></button>
-            <span className="text-[11px] text-ink-faint ml-0.5">{crew === 1 ? 'person' : 'people'}</span>
-          </div>
-        </div>
-
-        {/* Working hours */}
-        <div className="min-w-0">
-          <p className="text-[10px] font-semibold text-ink-faint uppercase tracking-wide mb-1 flex items-center gap-1"><Clock className="w-3 h-3" /> Working hours</p>
-          <div className="flex items-center gap-1.5">
-            <input type="time" value={start} disabled={busy || blocked}
-              onChange={e => onSetCapacity({ startsAt: e.target.value || null, endsAt: end })}
-              className="bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1 text-xs text-ink outline-none focus:border-accent disabled:opacity-50" />
-            <span className="text-ink-faint text-xs">–</span>
-            <input type="time" value={end} disabled={busy || blocked}
-              onChange={e => onSetCapacity({ startsAt: start, endsAt: e.target.value || null })}
-              className="bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1 text-xs text-ink outline-none focus:border-accent disabled:opacity-50" />
-          </div>
-        </div>
-
-        {/* Capacity panel */}
-        <div className="rounded-xl border border-border bg-surface/40 px-3 py-2 grid grid-cols-2 sm:grid-cols-4 gap-x-3 gap-y-1.5">
-          <Stat label="Available" value={blocked ? '0 h' : `${available} h`} sub={blocked ? 'blocked' : `${crew}×${round1(workHours)}h`} />
-          <Stat label="Booked" value={`${booked} h`} />
-          <Stat label="Remaining" value={`${remaining} h`} tone={remaining < 0 ? 'text-red-400' : remaining < 2.5 ? 'text-amber-400' : 'text-emerald-400'} />
-          <Stat label="Utilization" value={util > 998 ? 'over' : `${util}%`} tone={util > 100 ? 'text-red-400' : util >= 85 ? 'text-amber-400' : 'text-ink'} />
-        </div>
-      </div>
-
-      {warnings.length > 0 && (
-        <div className="space-y-1">
+      {/* Capacity warnings stay visible even when collapsed — they're safety info. */}
+      {!open && warnings.length > 0 && (
+        <div className="px-3.5 pb-2.5 space-y-1 -mt-1">
           {warnings.map((w, i) => (
             <p key={i} className="text-[11px] text-amber-300 flex items-center gap-1.5"><AlertTriangle className="w-3 h-3 shrink-0 text-amber-400" /> {w}</p>
           ))}
         </div>
       )}
 
-      {/* Quick actions */}
-      <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-        <Action onClick={onToggleDisable} disabled={busy} icon={CalendarX2} label={blocked ? 'Enable Day' : 'Disable Day'} primary={blocked} />
-        <Action onClick={onAutoOptimize} disabled={busy} icon={Wand2} label="Auto Optimize" />
-        <Action onClick={onWeatherOps} disabled={busy} icon={CloudRain} label="Weather Ops" />
-        <Action onClick={onAddJob} disabled={busy} icon={CalendarPlus} label="Add Job" />
-      </div>
+      {open && (
+        <div className="px-3.5 pb-3.5 space-y-3 border-t border-border pt-3">
+          <div className="grid grid-cols-1 sm:grid-cols-[auto_auto_1fr] gap-3 items-start">
+            {/* Crew */}
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold text-ink-faint uppercase tracking-wide mb-1 flex items-center gap-1"><Users className="w-3 h-3" /> Crew</p>
+              <div className="flex items-center gap-1.5">
+                <button onClick={() => setCrew(crew - 1)} disabled={busy || blocked || crew <= 1} className="w-9 h-9 sm:w-7 sm:h-7 rounded-lg border border-border-strong text-ink-muted hover:text-ink disabled:opacity-40 flex items-center justify-center"><Minus className="w-3.5 h-3.5" /></button>
+                <span className="w-9 text-center text-sm font-bold text-ink tabular-nums">{crew}</span>
+                <button onClick={() => setCrew(crew + 1)} disabled={busy || blocked} className="w-9 h-9 sm:w-7 sm:h-7 rounded-lg border border-border-strong text-ink-muted hover:text-ink disabled:opacity-40 flex items-center justify-center"><Plus className="w-3.5 h-3.5" /></button>
+                <span className="text-[11px] text-ink-faint ml-0.5">{crew === 1 ? 'person' : 'people'}</span>
+              </div>
+            </div>
+
+            {/* Working hours */}
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold text-ink-faint uppercase tracking-wide mb-1 flex items-center gap-1"><Clock className="w-3 h-3" /> Working hours</p>
+              <div className="flex items-center gap-1.5">
+                <input type="time" value={start} disabled={busy || blocked}
+                  onChange={e => onSetCapacity({ startsAt: e.target.value || null, endsAt: end })}
+                  className="bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1 text-xs text-ink outline-none focus:border-accent disabled:opacity-50" />
+                <span className="text-ink-faint text-xs">–</span>
+                <input type="time" value={end} disabled={busy || blocked}
+                  onChange={e => onSetCapacity({ startsAt: start, endsAt: e.target.value || null })}
+                  className="bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1 text-xs text-ink outline-none focus:border-accent disabled:opacity-50" />
+              </div>
+            </div>
+
+            {/* Capacity panel */}
+            <div className="rounded-xl border border-border bg-surface/40 px-3 py-2 grid grid-cols-2 sm:grid-cols-4 gap-x-3 gap-y-1.5">
+              <Stat label="Available" value={blocked ? '0 h' : `${available} h`} sub={blocked ? 'blocked' : `${crew}×${round1(workHours)}h`} />
+              <Stat label="Booked" value={`${booked} h`} />
+              <Stat label="Remaining" value={`${remaining} h`} tone={remaining < 0 ? 'text-red-400' : remaining < 2.5 ? 'text-amber-400' : 'text-emerald-400'} />
+              <Stat label="Utilization" value={util > 998 ? 'over' : `${util}%`} tone={util > 100 ? 'text-red-400' : util >= 85 ? 'text-amber-400' : 'text-ink'} />
+            </div>
+          </div>
+
+          {warnings.length > 0 && (
+            <div className="space-y-1">
+              {warnings.map((w, i) => (
+                <p key={i} className="text-[11px] text-amber-300 flex items-center gap-1.5"><AlertTriangle className="w-3 h-3 shrink-0 text-amber-400" /> {w}</p>
+              ))}
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+            <Action onClick={onToggleDisable} disabled={busy} icon={CalendarX2} label={blocked ? 'Enable Day' : 'Disable Day'} primary={blocked} />
+            {hasOverride && (
+              <button onClick={onResetCapacity} disabled={busy} className="text-[11px] text-ink-faint hover:text-ink flex items-center gap-1 disabled:opacity-50 px-1.5">
+                <RotateCcw className="w-3 h-3" /> Reset to default
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -142,10 +169,10 @@ function Stat({ label, value, sub, tone }: { label: string; value: string; sub?:
   )
 }
 
-function Action({ onClick, disabled, icon: Icon, label, primary }: { onClick: () => void; disabled?: boolean; icon: typeof Wand2; label: string; primary?: boolean }) {
+function Action({ onClick, disabled, icon: Icon, label, primary }: { onClick: () => void; disabled?: boolean; icon: typeof Gauge; label: string; primary?: boolean }) {
   return (
     <button onClick={onClick} disabled={disabled}
-      className={cn('px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors flex items-center gap-1.5 disabled:opacity-50',
+      className={cn('px-3 py-2 rounded-lg text-xs font-medium border transition-colors flex items-center gap-1.5 disabled:opacity-50',
         primary ? 'bg-accent text-black border-accent hover:bg-accent/90' : 'bg-surface border-border text-ink-muted hover:text-ink')}>
       <Icon className="w-3.5 h-3.5" /> {label}
     </button>

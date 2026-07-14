@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Customer } from '@/types'
@@ -10,9 +10,15 @@ import { prefetchCustomer, hoverIntent } from '@/lib/prefetch'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { applyConsent, SMS_CONSENT_WARNING, ConsentChannel } from '@/lib/consent'
 import { toast as notify } from '@/lib/toast'
+import { useBulkSelect } from '@/hooks/useBulkSelect'
+import { BulkActionBar, SelectCheckbox, SelectAllToggle, type BulkAction } from '@/components/ui/BulkActions'
+import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
+import type { MsgType } from '@/lib/comms/templates'
+import { exportRowsToCsv } from '@/lib/csv'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
-import { Edit2, Trash2, Phone, Mail, FileText, Search, Link2, ExternalLink, Check, MessageSquare, ShieldAlert } from 'lucide-react'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { Edit2, Trash2, Phone, Mail, FileText, Search, Link2, Check, MessageSquare, ShieldAlert, Archive, Download, Send, Users } from 'lucide-react'
 
 type ConsentFilter = '' | 'sms_in' | 'sms_out' | 'email_in' | 'email_out' | 'both' | 'neither'
 const CONSENT_FILTERS: { value: ConsentFilter; label: string }[] = [
@@ -30,18 +36,22 @@ interface CustomerListProps {
   onEdit: (customer: Customer) => void
   onDelete: (id: string) => Promise<void>
   onRefresh: () => void | Promise<void>
+  /** Opens the page's Add-Customer form — powers the empty state's action. */
+  onAdd?: () => void
 }
 
-export function CustomerList({ customers, onEdit, onDelete, onRefresh }: CustomerListProps) {
+export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: CustomerListProps) {
   const router = useRouter()
   const [search, setSearch] = useState('')
   const [consentFilter, setConsentFilter] = useState<ConsentFilter>('')
   const [deleting, setDeleting] = useState<string | null>(null)
   const [portalBusy, setPortalBusy] = useState<string | null>(null)
-  const [toast, setToast] = useState<string | null>(null)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [bulkBusy, setBulkBusy] = useState(false)
   const [smsConfirm, setSmsConfirm] = useState(false)
+  // Which template the Send-Message dialog opens on (null = closed; 'choose' = let the
+  // owner pick). Lets "Send introduction" / "Review request" be one-tap entries into
+  // THE same dialog instead of separate UIs.
+  const [msgTemplate, setMsgTemplate] = useState<'choose' | MsgType | null>(null)
+  const [busyKey, setBusyKey] = useState<string | null>(null)
 
   function matchesConsent(c: Customer): boolean {
     switch (consentFilter) {
@@ -54,37 +64,39 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
       default: return true
     }
   }
-  const filtered = customers.filter(c =>
-    (c.name.toLowerCase().includes(search.toLowerCase()) ||
-      c.email?.toLowerCase().includes(search.toLowerCase()) ||
-      c.city?.toLowerCase().includes(search.toLowerCase())) && matchesConsent(c)
-  )
+  // Memoized so typing in a search box or ticking a bulk-select checkbox (which
+  // changes unrelated state) doesn't re-run these O(n) passes over every customer.
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase()
+    return customers.filter(c =>
+      (c.name.toLowerCase().includes(q) ||
+        c.email?.toLowerCase().includes(q) ||
+        c.city?.toLowerCase().includes(q)) && matchesConsent(c)
+    )
+  }, [customers, search, consentFilter]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Missing-consent report — over ALL customers, not the filtered view.
   const total = customers.length
-  const smsIn = customers.filter(c => c.sms_opt_in).length
-  const emailIn = customers.filter(c => c.email_opt_in).length
+  const { smsIn, emailIn } = useMemo(() => ({
+    smsIn: customers.filter(c => c.sms_opt_in).length,
+    emailIn: customers.filter(c => c.email_opt_in).length,
+  }), [customers])
 
-  function showToast(msg: string) { setToast(msg); setTimeout(() => setToast(null), 2600) }
-
-  const allFilteredSelected = filtered.length > 0 && filtered.every(c => selected.has(c.id))
-  function toggleSelect(id: string) {
-    setSelected(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n })
-  }
-  function toggleSelectAll() { setSelected(allFilteredSelected ? new Set() : new Set(filtered.map(c => c.id))) }
+  // Shared multi-select — same behavior as every other list.
+  const sel = useBulkSelect(filtered)
 
   async function runBulk(channel: ConsentChannel, value: boolean) {
     const supabase = createClient()
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
-    const targets = customers.filter(c => selected.has(c.id)).map(c => ({ id: c.id, sms_opt_in: c.sms_opt_in, email_opt_in: c.email_opt_in }))
+    const targets = sel.selectedItems.map(c => ({ id: c.id, sms_opt_in: c.sms_opt_in, email_opt_in: c.email_opt_in }))
     if (!targets.length) return
-    setBulkBusy(true)
+    setBusyKey(channel === 'sms' ? 'sms-on' : 'email-on')
     const res = await applyConsent(supabase, { targets, channel, value, userId: user.id, changedBy: user.email || user.id, source: 'bulk' })
-    setBulkBusy(false)
-    if (res.error) { showToast('Could not update consent. Please try again.'); return }
-    showToast(`${channel === 'sms' ? 'SMS' : 'Email'} consent ${value ? 'enabled' : 'disabled'} for ${res.changed} customer${res.changed !== 1 ? 's' : ''}.`)
-    setSelected(new Set())
+    setBusyKey(null)
+    if (res.error) { notify.error('Could not update consent. Please try again.'); return }
+    notify.success(`${channel === 'sms' ? 'SMS' : 'Email'} consent ${value ? 'enabled' : 'disabled'} for ${res.changed} customer${res.changed !== 1 ? 's' : ''}.`)
+    sel.clear()
     await onRefresh()
   }
   // Enabling SMS always routes through an explicit confirmation first.
@@ -92,6 +104,51 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
     if (channel === 'sms' && value) { setSmsConfirm(true); return }
     runBulk(channel, value)
   }
+
+  // Bulk archive — reversible, with the shared Undo pattern (restores archived_at=null).
+  async function bulkArchive() {
+    const ids = sel.selectedItems.map(c => c.id)
+    if (!ids.length) return
+    const supabase = createClient()
+    setBusyKey('archive')
+    const { error } = await supabase.from('customers').update({ archived_at: new Date().toISOString() }).in('id', ids)
+    setBusyKey(null)
+    if (error) { notify.error('Could not archive: ' + error.message); return }
+    sel.clear()
+    await onRefresh()
+    notify.undo(`Archived ${ids.length} customer${ids.length !== 1 ? 's' : ''}`, async () => {
+      await supabase.from('customers').update({ archived_at: null }).in('id', ids); await onRefresh()
+    })
+  }
+
+  function exportSelected() {
+    const rows = sel.selectedItems
+    if (!rows.length) return
+    exportRowsToCsv(`customers-${rows.length}`, rows, [
+      { label: 'Name', value: c => c.name },
+      { label: 'Email', value: c => c.email },
+      { label: 'Phone', value: c => c.phone },
+      { label: 'Address', value: c => c.address },
+      { label: 'City', value: c => c.city },
+      { label: 'Province', value: c => c.province },
+      { label: 'SMS opt-in', value: c => (c.sms_opt_in ? 'yes' : 'no') },
+      { label: 'Email opt-in', value: c => (c.email_opt_in ? 'yes' : 'no') },
+      { label: 'Source', value: c => c.acquisition_source },
+      { label: 'Added', value: c => c.created_at },
+    ])
+    notify.success(`Exported ${rows.length} customer${rows.length !== 1 ? 's' : ''} to CSV.`)
+  }
+
+  const bulkActions: BulkAction[] = [
+    { key: 'message', label: 'Message', icon: Send, tone: 'primary', onClick: () => setMsgTemplate('choose') },
+    // One-tap entries into THE same dialog, preselected — not separate UIs.
+    { key: 'introduction', label: 'Send introduction', icon: MessageSquare, onClick: () => setMsgTemplate('introduction') },
+    { key: 'review', label: 'Review request', icon: Check, onClick: () => setMsgTemplate('review_request') },
+    { key: 'archive', label: 'Archive', icon: Archive, onClick: bulkArchive },
+    { key: 'export', label: 'Export', icon: Download, onClick: exportSelected },
+    { key: 'email-on', label: 'Email on', icon: Mail, onClick: () => requestBulk('email', true) },
+    { key: 'sms-on', label: 'SMS on', icon: MessageSquare, onClick: () => requestBulk('sms', true) },
+  ]
 
   async function handleDelete(id: string) {
     // The page runs a record-aware safety check + an accurate confirmation
@@ -111,32 +168,15 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
     setPortalBusy(customerId)
     try {
       const token = await getToken(customerId)
-      if (!token) { showToast('Could not create the portal link — run the customer-portal migration first.'); return }
+      if (!token) { notify.error('Could not create the portal link — run the customer-portal migration first.'); return }
       const url = portalUrl(token)
       try { await navigator.clipboard.writeText(url) } catch { notify('Portal link (copy manually): ' + url, { duration: 20000 }) }
-      showToast('Portal link copied to clipboard')
-    } finally { setPortalBusy(null) }
-  }
-  async function openPortal(customerId: string) {
-    setPortalBusy(customerId)
-    try {
-      const token = await getToken(customerId)
-      if (!token) { showToast('Could not create the portal link — run the customer-portal migration first.'); return }
-      window.open(portalUrl(token), '_blank', 'noopener')
+      notify.success('Portal link copied to clipboard')
     } finally { setPortalBusy(null) }
   }
 
   return (
     <div className="space-y-4">
-      {/* Missing Consent Report */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-        <ReportStat label="Customers" value={total} />
-        <ReportStat label="SMS opted in" value={smsIn} tone="text-emerald-400" />
-        <ReportStat label="SMS opted out" value={total - smsIn} />
-        <ReportStat label="Email opted in" value={emailIn} tone="text-emerald-400" />
-        <ReportStat label="Email opted out" value={total - emailIn} />
-      </div>
-
       {/* Search */}
       <div className="relative">
         <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-faint" />
@@ -160,39 +200,30 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
         ))}
       </div>
 
-      {/* Bulk action bar */}
-      {selected.size > 0 && (
-        <div className="sticky top-2 z-20 flex items-center gap-2 flex-wrap bg-bg-secondary border border-accent/40 rounded-xl px-4 py-2.5 shadow-lg">
-          <span className="text-sm font-semibold text-ink">{selected.size} selected</span>
-          <span className="text-xs text-ink-faint">consent:</span>
-          <Button size="sm" variant="secondary" loading={bulkBusy} onClick={() => requestBulk('email', true)}><Mail className="w-3.5 h-3.5" /> Email on</Button>
-          <Button size="sm" variant="ghost" onClick={() => requestBulk('email', false)}>Email off</Button>
-          <Button size="sm" variant="secondary" loading={bulkBusy} onClick={() => requestBulk('sms', true)}><MessageSquare className="w-3.5 h-3.5" /> SMS on</Button>
-          <Button size="sm" variant="ghost" onClick={() => requestBulk('sms', false)}>SMS off</Button>
-          <button onClick={() => setSelected(new Set())} className="ml-auto text-xs font-medium text-ink-faint hover:text-ink">Clear</button>
-        </div>
-      )}
+      {/* Shared bulk action bar — same everywhere */}
+      <BulkActionBar count={sel.count} actions={bulkActions} onClear={sel.clear} busyKey={busyKey} />
 
       {/* Select all */}
-      {filtered.length > 0 && (
-        <label className="flex items-center gap-2 text-xs text-ink-muted cursor-pointer select-none">
-          <input type="checkbox" checked={allFilteredSelected} onChange={toggleSelectAll} className="w-4 h-4 rounded border-border-strong accent-accent" />
-          Select all {filtered.length}
-        </label>
-      )}
+      <SelectAllToggle allSelected={sel.allSelected} onToggle={sel.toggleAll} count={filtered.length} noun="customer" />
 
       {/* List */}
       {filtered.length === 0 ? (
-        <Card className="py-14 text-center text-sm text-ink-muted">
-          {search || consentFilter ? 'No customers match your filters.' : 'No customers yet.'}
-        </Card>
+        customers.length === 0 ? (
+          // Truly empty → lead to the next action, don't dead-end.
+          <Card>
+            <EmptyState icon={Users} title="No customers yet"
+              description="Add your first customer, or import your existing list from a CSV in one step."
+              action={onAdd ? { label: 'Add Customer', onClick: onAdd } : { label: 'Import customers', onClick: () => router.push('/dashboard/customers/import') }} />
+          </Card>
+        ) : (
+          <Card className="py-14 text-center text-sm text-ink-muted">No customers match your filters.</Card>
+        )
       ) : (
         <div className="grid gap-3">
           {filtered.map(c => (
             <Card key={c.id} {...hoverIntent(() => prefetchCustomer(c.id))}
-              className={cn('flex items-center gap-3 px-5 py-4 transition-colors', selected.has(c.id) ? 'border-accent/50' : 'hover:border-border-strong')}>
-              <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggleSelect(c.id)}
-                className="w-4 h-4 rounded border-border-strong accent-accent shrink-0" title="Select" />
+              className={cn('flex items-center gap-3 px-5 py-4 transition-colors', sel.isSelected(c.id) ? 'border-accent/50' : 'hover:border-border-strong')}>
+              <SelectCheckbox checked={sel.isSelected(c.id)} onToggle={shift => sel.toggle(c.id, shift)} />
               {/* Avatar */}
               <div className="w-10 h-10 rounded-full bg-accent/10 border border-accent/20 flex items-center justify-center flex-shrink-0">
                 <span className="text-sm font-bold text-accent">{getInitials(c.name)}</span>
@@ -223,17 +254,15 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
               </div>
               {/* Added */}
               <p className="text-xs text-ink-faint hidden md:block">{formatDate(c.created_at)}</p>
-              {/* Actions */}
+              {/* Actions — the quoting workflow's entry point is labeled and first;
+                  one Portal action (copy), no duplicate open-in-tab twin. */}
               <div className="flex items-center gap-1">
-                <Button variant="secondary" size="sm" onClick={() => copyPortal(c.id)} loading={portalBusy === c.id}
+                <Button variant="secondary" size="sm" onClick={() => router.push(`/dashboard/quotes/new?customer=${c.id}`)} title="Start a new quote for this customer">
+                  <FileText className="w-4 h-4" /> Quote
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => copyPortal(c.id)} loading={portalBusy === c.id}
                   title="Copy this customer's private portal link (quotes, invoices, history, photos)">
                   <Link2 className="w-4 h-4" /> Portal
-                </Button>
-                <Button variant="ghost" size="sm" onClick={() => openPortal(c.id)} title="Open the customer portal in a new tab">
-                  <ExternalLink className="w-4 h-4" />
-                </Button>
-                <Button variant="ghost" size="sm" onClick={() => router.push(`/dashboard/quotes/new?customer=${c.id}`)} title="New quote">
-                  <FileText className="w-4 h-4" />
                 </Button>
                 <Button variant="ghost" size="sm" onClick={() => onEdit(c)} title="Edit">
                   <Edit2 className="w-4 h-4" />
@@ -248,10 +277,26 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
       )}
       <p className="text-xs text-ink-faint text-right">{filtered.length} customer{filtered.length !== 1 ? 's' : ''}</p>
 
-      {toast && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-bg-secondary border border-border-strong rounded-full px-4 py-2 text-sm text-ink shadow-lg flex items-center gap-2">
-          <Check className="w-4 h-4 text-emerald-400 shrink-0" /> {toast}
-        </div>
+      {/* Consent overview — compliance reference, below the work surface so the
+          list (what the owner came for) is never pushed a screen down. */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+        <ReportStat label="Customers" value={total} />
+        <ReportStat label="SMS opted in" value={smsIn} tone="text-emerald-400" />
+        <ReportStat label="SMS opted out" value={total - smsIn} />
+        <ReportStat label="Email opted in" value={emailIn} tone="text-emerald-400" />
+        <ReportStat label="Email opted out" value={total - emailIn} />
+      </div>
+
+      {/* THE shared multi-recipient Send-Message dialog — 'choose' opens on the default
+          template list; a specific value ("introduction"/"review_request") preselects it. */}
+      {msgTemplate && (
+        <SendMessageDialog
+          open
+          recipients={sel.selectedItems.map(c => ({ customerId: c.id, name: c.name, phone: c.phone }))}
+          title="Message customers"
+          defaultTemplate={msgTemplate === 'choose' ? undefined : msgTemplate}
+          onClose={sent => { setMsgTemplate(null); if (sent) sel.clear() }}
+        />
       )}
 
       {/* SMS safety confirmation */}
@@ -260,7 +305,7 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh }: Custome
           <div className="bg-bg-secondary border border-border-strong rounded-card max-w-md w-full p-5 space-y-4" onClick={e => e.stopPropagation()}>
             <p className="text-sm font-bold text-amber-400 flex items-center gap-2"><ShieldAlert className="w-4 h-4" /> Enable SMS consent?</p>
             <p className="text-sm text-ink-muted">{SMS_CONSENT_WARNING}</p>
-            <p className="text-xs text-ink-faint">This enables SMS for {selected.size} selected customer{selected.size !== 1 ? 's' : ''}.</p>
+            <p className="text-xs text-ink-faint">This enables SMS for {sel.count} selected customer{sel.count !== 1 ? 's' : ''}.</p>
             <div className="flex justify-end gap-2">
               <Button variant="ghost" size="sm" onClick={() => setSmsConfirm(false)}>Cancel</Button>
               <Button size="sm" onClick={() => { setSmsConfirm(false); runBulk('sms', true) }}>I confirm — enable SMS</Button>

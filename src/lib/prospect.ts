@@ -14,7 +14,7 @@ import {
   ProfitJob, ProfitQuote, ProfitContext, RecInfo, Grade,
   gradeRoute, neighborhoodProfitability,
 } from '@/lib/profitability'
-import { PricingPackage, CadenceKey, SEASON_VISITS } from '@/lib/pricing'
+import { PricingPackage, PricingConfig, CadenceKey, SEASON_VISITS, pricingPackage } from '@/lib/pricing'
 
 type Supa = ReturnType<typeof createClient>
 
@@ -152,7 +152,14 @@ export interface ProspectAssessment {
 export function assessProspect(
   pkg: PricingPackage,
   ctx: ProspectContext,
-  opts: { distanceKm?: number | null; travelFee?: number; neighborhoodName?: string | null; estimatedMinutes?: number; timedJobs?: number; crewCostPerHour?: number | null },
+  opts: {
+    distanceKm?: number | null; travelFee?: number; neighborhoodName?: string | null
+    estimatedMinutes?: number; timedJobs?: number; crewCostPerHour?: number | null
+    // Pass 2 of gradedProspectPricing: reuse pass 1's grade instead of re-deriving
+    // it from the (now grade-adjusted) prices — the grade prices the customer, the
+    // price must never re-grade the customer.
+    lockedScore?: ProspectScore
+  },
 ): ProspectAssessment {
   const cadence: CadenceKey = pkg.recommended.cadence
   const opt = pkg.options.find(o => o.cadence === cadence)
@@ -161,15 +168,16 @@ export function assessProspect(
   const visits = opt ? SEASON_VISITS[opt.cadence] : 1
   const hood = opts.neighborhoodName?.trim() || null
 
-  // ── Letter score: THE route grading engine, applied to this one stop ──
+  // ── Route economics: THE route grading engine, applied to this one stop ──
   // Drive leg = distance to the nearest existing job (joining a route), else
-  // the from-base distance (a standalone trip).
+  // the from-base distance (a standalone trip). This is ONE input to the
+  // overall grade below — not the grade itself.
   const legKm = ctx.nearbyJobs > 0 && ctx.nearestKm != null ? ctx.nearestKm : (opts.distanceKm ?? null)
   const onSiteMin = opts.estimatedMinutes ?? DEFAULT_JOB_MIN
   const driveMin = legKm != null ? Math.round(legKm / AVG_SPEED_KM_PER_MIN) : 0
   const revPerHour = Math.round(revPerVisit / ((onSiteMin + driveMin) / 60))
   const revPerKm = legKm && legKm > 0 ? Math.round((revPerVisit / legKm) * 10) / 10 : 25
-  const grade = gradeRoute(revPerHour, revPerKm, legKm ?? 10, legKm != null)
+  const routeEconGrade = gradeRoute(revPerHour, revPerKm, legKm ?? 10, legKm != null)
 
   // ── Profit: revenue minus the crew-time this visit eats (lib/economics) ──
   const crewCost = resolveCrewCost(opts.crewCostPerHour)
@@ -177,14 +185,6 @@ export function assessProspect(
 
   const routeImpact: RouteImpact = ctx.nearbyJobs >= 2 ? 'strengthens' : ctx.nearbyJobs === 1 ? 'neutral' : 'isolated'
   const recurring = cadence === 'weekly' || cadence === 'biweekly' || cadence === 'monthly'
-
-  const score: ProspectScore = grade === 'A' && recurring && ctx.nearbyJobs >= 3 ? 'A+' : grade
-  let verdict = (score === 'A+' || score === 'A' || score === 'B') ? 'excellent' as const
-    : score === 'C' ? 'decent' as const : 'weak' as const
-  // Profit overrides the route grade: a customer that loses money after crew
-  // cost can never be "excellent", and a thin margin caps it at "decent".
-  if (econ.profit <= 0) verdict = 'weak'
-  else if (econ.margin < 0.35 && verdict === 'excellent') verdict = 'decent'
 
   const reasons: string[] = []
   if (hood) reasons.push(hood)
@@ -304,6 +304,37 @@ export function assessProspect(
     ],
   }
 
+  // ── Overall grade: composed from ALL four sub-scores ──
+  // Route economics ($/hr, $/km), profit after crew cost, route ownership and
+  // customer value each contribute — a stop that strengthens a route, bills
+  // recurring and clears healthy profit can no longer sit at C just because one
+  // denominator (a long on-site visit) drags $/hr. The sub-scores themselves are
+  // unchanged and still shown separately (Route Impact / Customer Value stars).
+  const routePts = ({ A: 100, B: 78, C: 55, D: 30, F: 5 } as Record<Grade, number>)[routeEconGrade]
+  const profitPts = econ.profit <= 0 ? 0 : econ.margin >= 0.5 ? 100 : econ.margin >= 0.35 ? 75 : 45
+  const ownPts = (ownStars - 1) * 25
+  const valuePts = (starsClamped - 1) * 25
+  const composite = Math.round(routePts * 0.35 + profitPts * 0.3 + ownPts * 0.2 + valuePts * 0.15)
+  let overall: Grade = composite >= 82 ? 'A' : composite >= 65 ? 'B' : composite >= 45 ? 'C' : composite >= 28 ? 'D' : 'F'
+  // Money-losing work can never grade well, whatever the route looks like.
+  if (econ.profit <= 0 && (overall === 'A' || overall === 'B')) overall = 'C'
+  // lockedScore: pass 2 of the graded-pricing composition — the grade priced the
+  // package; the discounted price must not re-grade the customer (no feedback loop).
+  const score: ProspectScore = opts.lockedScore
+    ?? (overall === 'A' && recurring && ctx.nearbyJobs >= 3 ? 'A+' : overall)
+  let verdict = (score === 'A+' || score === 'A' || score === 'B') ? 'excellent' as const
+    : score === 'C' ? 'decent' as const : 'weak' as const
+  // Profit overrides the grade: a customer that loses money after crew cost can
+  // never be "excellent", and a thin margin caps it at "decent".
+  if (econ.profit <= 0) verdict = 'weak'
+  else if (econ.margin < 0.35 && verdict === 'excellent') verdict = 'decent'
+  // Explain a split verdict — trust comes from saying WHY the letter moved.
+  if (routeEconGrade !== overall && !opts.lockedScore) {
+    reasons.push(routePts < composite
+      ? `Route economics alone grade ${routeEconGrade} — lifted by profit, route ownership and customer value`
+      : `Strong route economics (${routeEconGrade}) held back by profit / ownership / customer value`)
+  }
+
   // ── Pre-composed decision (decision-first cards + Suggestions Center) ──
   const call: 'take' | 'maybe' | 'pass' =
     verdict === 'excellent' ? 'take' : verdict === 'decent' ? 'maybe' : 'pass'
@@ -371,4 +402,27 @@ export function assessProspect(
     routeOwnership,
     decision,
   }
+}
+
+// ── Graded pricing + assessment, composed ONCE ───────────────────────────────
+// THE two-pass flow every verdict surface must use. Pass 1 grades the prospect
+// off the neutral package; pass 2 re-prices the package with that grade and
+// REASSESSES against the graded package with the score locked — so the hero
+// recommendation, CTA, Accept-at tile, Pricing Details, Pricing Guidance and
+// "Use recommended" all read the SAME number, and profit/annual/lifetime are
+// computed from the price actually shown. Never build the graded package and
+// the assessment separately — that is exactly the $65 hero vs  details
+// split this exists to prevent.
+export function gradedProspectPricing(
+  sqft: number,
+  cfg: PricingConfig,
+  pkgCtx: { overgrowth?: number; nearbyCount: number; neighborhoodName?: string | null },
+  ctx: ProspectContext,
+  opts: { distanceKm?: number | null; travelFee?: number; neighborhoodName?: string | null; estimatedMinutes?: number; timedJobs?: number; crewCostPerHour?: number | null },
+): { pkg: PricingPackage; assessment: ProspectAssessment } {
+  const basePkg = pricingPackage(sqft, cfg, pkgCtx)
+  const first = assessProspect(basePkg, ctx, opts)
+  const pkg = pricingPackage(sqft, cfg, { ...pkgCtx, valueGrade: first.score })
+  const assessment = assessProspect(pkg, ctx, { ...opts, lockedScore: first.score })
+  return { pkg, assessment }
 }

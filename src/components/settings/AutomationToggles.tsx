@@ -21,7 +21,8 @@ export function AutomationToggles() {
   const [loading, setLoading] = useState(true)
 
   async function load() {
-    const { data: { user } } = await supabase.auth.getUser()
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
     if (!user) { setLoading(false); return }
     const { data } = await supabase.from('business_settings').select('automations').eq('user_id', user.id).maybeSingle()
     setAuto(resolveAutomations((data as { automations: unknown } | null)?.automations))
@@ -30,10 +31,13 @@ export function AutomationToggles() {
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function toggle(key: keyof Automations, value: boolean) {
+    const prev = auto
     const next = { ...auto, [key]: value }
-    setAuto(next)
+    setAuto(next)   // optimistic
     const { data: { user } } = await supabase.auth.getUser()
-    if (user) await supabase.from('business_settings').update({ automations: next }).eq('user_id', user.id)
+    if (!user) { setAuto(prev); return }
+    const { error } = await supabase.from('business_settings').update({ automations: next }).eq('user_id', user.id)
+    if (error) setAuto(prev)   // revert — never show a toggle the cron won't honor
   }
 
   return (

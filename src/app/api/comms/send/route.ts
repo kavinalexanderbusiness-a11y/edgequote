@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { renderMessage, MsgType, MSG_LABELS } from '@/lib/comms/templates'
+import { renderMessage, renderBody, MsgType, MSG_LABELS, prefAllows, type MessagePrefs } from '@/lib/comms/templates'
 import { sendSms, sendEmail, commsEnabled } from '@/lib/comms/send'
 import { getOrCreateConversation } from '@/lib/comms/conversation'
 import { SKIP_REASON } from '@/lib/comms/skipReasons'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
+import { claimSend, finalizeSend } from '@/lib/comms/idempotency'
 
 // Manual send — fired by an owner action (Day Ops one-tap buttons, the editable
 // scheduler composer, Weather Ops notifications, quote/invoice send). Uses the
@@ -26,10 +27,14 @@ export async function POST(req: NextRequest) {
   // used for the subject, logging, dedupe and the on-my-way stamp.
   const bodyOverride = typeof body.bodyOverride === 'string' ? body.bodyOverride.trim() : ''
   const vars: { eta?: string | number; dateLabel?: string; amount?: string; timeWindow?: string; oldDateLabel?: string; address?: string } = body.vars || {}
+  // Idempotency key: the client generates this once per logical send and reuses it
+  // across retries / concurrent tabs / double-clicks. Optional → legacy callers keep
+  // working. See lib/comms/idempotency.
+  const clientMessageId = (typeof body.clientMessageId === 'string' && body.clientMessageId) ? body.clientMessageId : null
   if (!customerId || !(template in MSG_LABELS)) return NextResponse.json({ error: 'bad request' }, { status: 400 })
 
   const { data: cust } = await supabase.from('customers')
-    .select('id, name, phone, email, sms_opt_in, email_opt_in').eq('id', customerId).eq('user_id', user.id).maybeSingle()
+    .select('id, name, phone, email, sms_opt_in, email_opt_in, message_prefs').eq('id', customerId).eq('user_id', user.id).maybeSingle()
   if (!cust) return NextResponse.json({ error: 'customer not found' }, { status: 404 })
   const c = cust as { id: string; name: string; phone: string | null; email: string | null; sms_opt_in: boolean; email_opt_in: boolean }
 
@@ -38,6 +43,15 @@ export async function POST(req: NextRequest) {
   if (body.dedupe && jobId) {
     const { data: prior } = await supabase.from('notification_log').select('id').eq('user_id', user.id).eq('job_id', jobId).eq('template', template).eq('status', 'sent').limit(1)
     if (prior && prior.length) return NextResponse.json({ enabled: commsEnabled(), results: {}, skipped: 'duplicate' })
+  }
+
+  // Reserve this send exactly once BEFORE dispatching any SMS/email (skipped for a
+  // preview, which never sends). A retry / concurrent tab with the same
+  // clientMessageId loses the atomic claim and returns without resending → no
+  // duplicate SMS AND no duplicate email.
+  if (clientMessageId && !body.previewOnly) {
+    const { claimed } = await claimSend(supabase, user.id, clientMessageId, channels.join('+'))
+    if (!claimed) return NextResponse.json({ enabled: commsEnabled(), results: {}, deduped: true })
   }
 
   const { data: bizRow } = await supabase.from('business_settings')
@@ -53,7 +67,7 @@ export async function POST(req: NextRequest) {
   // Build portal links off the REQUEST origin so they're always absolute and work
   // in SMS/email (NEXT_PUBLIC_APP_URL may be unset in some deploys).
   const origin = req.nextUrl?.origin || process.env.NEXT_PUBLIC_APP_URL || ''
-  const rendered = renderMessage(template, biz?.message_templates, {
+  const msgVars = {
     firstName: c.name,
     businessName: biz?.company_name || 'Edge Property Services',
     eta: vars.eta,
@@ -64,13 +78,18 @@ export async function POST(req: NextRequest) {
     timeWindow: vars.timeWindow,
     oldDateLabel: vars.oldDateLabel,
     address: vars.address,
-  })
-  // The text we actually send: the owner's edit when present, else the rendered
-  // template. Email keeps the template subject; its body mirrors the SMS text.
-  const outText = bodyOverride || rendered.sms
-  const outHtml = bodyOverride
-    ? `<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;font-size:15px;line-height:1.55;color:#1A2333">${escapeHtml(bodyOverride).replace(/\n/g, '<br>')}</div>`
-    : rendered.html
+  }
+  const rendered = renderMessage(template, biz?.message_templates, msgVars)
+  // The text we actually send: the owner's edit (or a caller-supplied body such
+  // as the payment receipt) when present, else the rendered template. An
+  // override may still carry {{portal_link}}/{{first_name}}-style tokens — only
+  // THIS route knows the real portal token, so they resolve here, through the
+  // SAME interpolation engine the templates use. Without this, every
+  // single-recipient quote/invoice send went out with a blank where the portal
+  // link belonged, and receipts shipped literal {{portal_link}} text.
+  const out = bodyOverride ? renderBody(bodyOverride, msgVars, rendered.subject) : rendered
+  const outText = out.sms
+  const outHtml = out.html
 
   // Caller can preview the fully-rendered text without sending (no I/O side effects).
   if (body.previewOnly) return NextResponse.json({ enabled: commsEnabled(), preview: outText })
@@ -81,6 +100,11 @@ export async function POST(req: NextRequest) {
   // can be linked to its log rows.
   const attempts: { channel: string; status: string; detail?: string; sent: boolean }[] = []
 
+  // Granular consent — the customer declined this CATEGORY (e.g. marketing) even
+  // though a channel is opted in. Same rule the dispatch engine + crons apply.
+  if (!prefAllows((cust as { message_prefs?: MessagePrefs | null }).message_prefs, template)) {
+    for (const ch of channels) { results[ch] = { sent: false, reason: 'no-optin' }; attempts.push({ channel: ch, status: 'skipped', detail: SKIP_REASON.UNSUBSCRIBED, sent: false }) }
+  } else {
   if (channels.includes('sms')) {
     if (!c.sms_opt_in) { results.sms = { sent: false, reason: 'no-optin' }; attempts.push({ channel: 'sms', status: 'skipped', detail: SKIP_REASON.NO_OPT_IN, sent: false }) }
     else if (!c.phone) { results.sms = { sent: false, reason: 'no-phone' }; attempts.push({ channel: 'sms', status: 'skipped', detail: SKIP_REASON.NO_PHONE, sent: false }) }
@@ -94,6 +118,7 @@ export async function POST(req: NextRequest) {
   if (channels.includes('push')) {
     // Future channel — wired through, always disabled for now (no provider).
     results.push = { sent: false, reason: 'disabled' }; attempts.push({ channel: 'push', status: 'disabled', detail: 'push not configured', sent: false })
+  }
   }
 
   // Record anything actually delivered into the customer's message thread, so it
@@ -115,12 +140,9 @@ export async function POST(req: NextRequest) {
   for (const a of attempts) {
     await logSend(supabase, { userId: user.id, customerId, jobId, channel: a.channel, template, status: a.status, detail: a.detail, messageId: a.sent ? messageId : null })
   }
+  await finalizeSend(supabase, user.id, clientMessageId, sentChannels.length ? 'sent' : 'skipped')
 
   return NextResponse.json({ enabled, results, preview: outText, threaded: !!messageId })
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
 // Insert a notification_log row. Links to the thread message when one exists; falls

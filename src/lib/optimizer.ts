@@ -10,6 +10,10 @@
 import { addDays, format, getDay, parseISO } from 'date-fns'
 import { Coord } from '@/lib/geo'
 import { routeKmEstimate, clusterKmEstimate, AVG_SPEED_KM_PER_MIN, DEFAULT_JOB_MIN, DistFn } from '@/lib/route'
+
+// Learned drive minutes/km (lib/travelLearning, passed via OptOptions.minPerKm) or
+// the legacy 2 min/km fallback — so capacity/drive-time decisions sharpen over time.
+const DEFAULT_MIN_PER_KM = 1 / AVG_SPEED_KM_PER_MIN
 import { effectiveFreq } from '@/lib/invoicing'
 import { DayStatusMap, isDayBlocked } from '@/lib/dayStatus'
 
@@ -67,6 +71,8 @@ export interface OptOptions {
   // Per-day available LABOR-HOURS (Day Settings crew/hours overrides). When set,
   // capacity checks use this PER DAY instead of the flat capacityHours.
   capacityForDate?: (dateISO: string) => number
+  // Learned drive minutes per km (lib/travelLearning). Omitted → legacy 2 min/km.
+  minPerKm?: number
 }
 
 // Resolve a scope into its date windows. movable = origin dates that may move;
@@ -272,7 +278,7 @@ export function planRainDelay(jobs: OptJob[], dayISO: string, opts: Omit<OptOpti
     const labor = list.reduce((s, j) => s + (j.duration_minutes || DEFAULT_JOB_MIN), 0)
     const located = list.filter(j => j.lat != null && j.lng != null).map(j => ({ lat: j.lat as number, lng: j.lng as number }))
     const km = opts.base ? routeKmEstimate(opts.base, located) : clusterKmEstimate(located)
-    return { labor, km, total: labor + Math.round(km / AVG_SPEED_KM_PER_MIN) }
+    return { labor, km, total: labor + Math.round(km * (opts.minPerKm ?? DEFAULT_MIN_PER_KM)) }
   }
 
   // Greedy fill: keep route order, pour into the first target day with capacity
@@ -621,7 +627,7 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
       if (j.lat != null && j.lng != null) { located.push({ lat: j.lat, lng: j.lng }); cellSet.add(cellKey(j.lat, j.lng)) }
     }
     const km = opts.base ? routeKmEstimate(opts.base, located, opts.roadDist) : clusterKmEstimate(located, opts.roadDist)
-    const driveMin = Math.round(km / AVG_SPEED_KM_PER_MIN)
+    const driveMin = Math.round(km * (opts.minPerKm ?? DEFAULT_MIN_PER_KM))
     const e = { driveMin, laborMin, km, totalMin: driveMin + laborMin, cells: cellSet.size }
     if (cfgCache.size < 200000) cfgCache.set(key, e)
     return e
@@ -1143,7 +1149,7 @@ function fmtDur(min: number): string {
 // result.after exactly.
 export function metricsWithMoves(
   jobs: OptJob[],
-  opts: Pick<OptOptions, 'scope' | 'anchorDate' | 'today' | 'base' | 'capacityHours' | 'roadDist' | 'capacityForDate'>,
+  opts: Pick<OptOptions, 'scope' | 'anchorDate' | 'today' | 'base' | 'capacityHours' | 'roadDist' | 'capacityForDate' | 'minPerKm'>,
   moves: Pick<PlannedMove, 'jobId' | 'to'>[],
 ): ScheduleMetrics {
   const capMinFor = (date: string) => (opts.capacityForDate ? opts.capacityForDate(date) : (opts.capacityHours > 0 ? opts.capacityHours : 8)) * 60
@@ -1164,7 +1170,7 @@ export function metricsWithMoves(
     const laborMin = list.reduce((s, j) => s + (j.duration_minutes || DEFAULT_JOB_MIN), 0)
     const located = list.filter(j => j.lat != null && j.lng != null).map(j => ({ lat: j.lat as number, lng: j.lng as number }))
     const dayKm = opts.base ? routeKmEstimate(opts.base, located, opts.roadDist) : clusterKmEstimate(located, opts.roadDist)
-    const driveMin = Math.round(dayKm / AVG_SPEED_KM_PER_MIN)
+    const driveMin = Math.round(dayKm * (opts.minPerKm ?? DEFAULT_MIN_PER_KM))
     km += dayKm; drive += driveMin; labor += laborMin; days++; stops += list.length
     if (driveMin + laborMin > capMinFor(date)) over++
     revenue += list.reduce((s, j) => s + j.value, 0)
@@ -1242,7 +1248,7 @@ export function analyzeSchedule(jobs: OptJob[], base: Omit<OptOptions, 'mode' | 
     const labor = list.reduce((s, j) => s + (j.duration_minutes || DEFAULT_JOB_MIN), 0)
     const located = list.filter(j => j.lat != null && j.lng != null).map(j => ({ lat: j.lat as number, lng: j.lng as number }))
     const km = base.base ? routeKmEstimate(base.base, located) : clusterKmEstimate(located)
-    return { total: labor + Math.round(km / AVG_SPEED_KM_PER_MIN) }
+    return { total: labor + Math.round(km * (base.minPerKm ?? DEFAULT_MIN_PER_KM)) }
   }
 
   // 1) Overloaded days — for each, SIMULATE the exact balanced/week optimize the

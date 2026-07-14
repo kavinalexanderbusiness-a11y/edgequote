@@ -1,6 +1,7 @@
 import type { createClient } from '@/lib/supabase/client'
 import type { Job, InvoiceLineItem, JobLineItem } from '@/types'
 import { localTodayISO, maxNumericSuffix } from '@/lib/utils'
+import { applyDiscount, type DiscountType } from '@/lib/invoiceTotals'
 import { addDays, format, parseISO } from 'date-fns'
 
 type Supa = ReturnType<typeof createClient>
@@ -110,8 +111,8 @@ export async function syncDraftInvoiceAmounts(
 ): Promise<number> {
   const ids = [...new Set(jobIds.filter(Boolean))]
   if (ids.length === 0) return 0
-  const { data: invData } = await supabase.from('invoices').select('id, job_id, amount, notes, line_items').in('job_id', ids).eq('status', 'draft')
-  const invoices = (invData as { id: string; job_id: string; amount: number; notes: string | null; line_items: InvoiceLineItem[] | null }[] | null) || []
+  const { data: invData } = await supabase.from('invoices').select('id, job_id, amount, notes, line_items, discount_type, discount_value').in('job_id', ids).eq('status', 'draft')
+  const invoices = (invData as { id: string; job_id: string; amount: number; notes: string | null; line_items: InvoiceLineItem[] | null; discount_type: DiscountType | null; discount_value: number | null }[] | null) || []
   if (invoices.length === 0) return 0
 
   const jobIdsWithInv = [...new Set(invoices.map(i => i.job_id))]
@@ -123,13 +124,16 @@ export async function syncDraftInvoiceAmounts(
   const quoteIds = [...new Set(Object.values(jobsById).map(j => j.quote_id).filter((x): x is string => !!x))]
   const recIds = [...new Set(Object.values(jobsById).map(j => j.recurrence_id).filter((x): x is string => !!x))]
   const quotesById: Record<string, Record<string, unknown>> = {}
-  if (quoteIds.length) { const { data } = await supabase.from('quotes').select('*').in('id', quoteIds); for (const q of (data as Record<string, unknown>[]) || []) quotesById[q.id as string] = q }
   const recById: Record<string, { freq: string | null; interval_unit: string | null; interval_count: number | null }> = {}
-  if (recIds.length) { const { data } = await supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').in('id', recIds); for (const r of (data as { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null }[]) || []) recById[r.id] = r }
   // Add-ons on these visits feed both the amount and the breakdown.
   const addonsByJob: Record<string, Pick<JobLineItem, 'description' | 'amount'>[]> = {}
-  { const { data } = await supabase.from('job_line_items').select('job_id, description, amount').in('job_id', jobIdsWithInv)
-    for (const a of (data as { job_id: string; description: string; amount: number }[]) || []) (addonsByJob[a.job_id] ||= []).push({ description: a.description, amount: a.amount }) }
+  // These three reads all derive from the already-resolved jobs (independent of each
+  // other) — run them together instead of three serial round-trips on every price edit.
+  await Promise.all([
+    (async () => { if (!quoteIds.length) return; const { data } = await supabase.from('quotes').select('*').in('id', quoteIds); for (const q of (data as Record<string, unknown>[]) || []) quotesById[q.id as string] = q })(),
+    (async () => { if (!recIds.length) return; const { data } = await supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').in('id', recIds); for (const r of (data as { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null }[]) || []) recById[r.id] = r })(),
+    (async () => { const { data } = await supabase.from('job_line_items').select('job_id, description, amount').in('job_id', jobIdsWithInv); for (const a of (data as { job_id: string; description: string; amount: number }[]) || []) (addonsByJob[a.job_id] ||= []).push({ description: a.description, amount: a.amount }) })(),
+  ])
 
   let changed = 0
   for (const inv of invoices) {
@@ -140,7 +144,10 @@ export async function syncDraftInvoiceAmounts(
     const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
     const base = jobVisitValue(j.price, quote, freq, j.is_initial_visit)
     const { lineItems, total } = buildInvoiceLineItems({ serviceType: j.service_type, baseAmount: base, freq, isInitial: j.is_initial_visit, addons: addonsByJob[inv.job_id], quote })
-    const amount = Math.round(total)
+    // line_items stay the GROSS services; the stored amount is the NET, so a manual
+    // discount on this draft is preserved when its job price changes (one engine).
+    const { net } = applyDiscount(Math.round(total), { type: inv.discount_type, value: inv.discount_value })
+    const amount = Math.round(net)
     const prev = Math.round(Number(inv.amount))
     const sameLines = JSON.stringify(inv.line_items ?? null) === JSON.stringify(lineItems)
     if (!(amount > 0) || (amount === prev && sameLines)) continue
@@ -152,23 +159,38 @@ export async function syncDraftInvoiceAmounts(
   return changed
 }
 
-// When a recurring visit is completed, create a DRAFT invoice for that visit,
-// pulling customer/property/service/pricing from the originating quote.
-// Never sends. De-dupes by job_id so a visit can't be double-invoiced.
+// When a billable job is completed — a one-time job OR a recurring visit — create a
+// DRAFT invoice for it, pulling customer/property/service/pricing from the job and
+// its originating quote. Never sends. De-dupes by job_id so a visit can't be
+// double-invoiced, and (for one-time jobs) by quote_id so it can't collide with a
+// manual "Convert to Invoice". An unpriced job drafts nothing (never a $0 invoice).
 export async function createDraftInvoiceForCompletedJob(supabase: Supa, job: Job): Promise<AutoInvoiceResult> {
-  if (!job.recurrence_id) return { created: false, reason: 'not-recurring' }
-
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { created: false, reason: 'error' }
 
-  // Prevent duplicates — one invoice per completed visit.
+  // Prevent duplicates — one invoice per completed visit (job_id is the atomic key;
+  // a partial unique index on invoices(job_id) is the race backstop further down).
   const { data: existing } = await supabase.from('invoices').select('id').eq('job_id', job.id).limit(1)
   if (existing && existing.length > 0) return { created: false, reason: 'exists' }
 
-  // Recurrence cadence drives which quoted price applies (interval-aware).
-  const { data: rec } = await supabase.from('job_recurrences').select('freq, interval_unit, interval_count').eq('id', job.recurrence_id).maybeSingle()
-  const r = rec as { freq: string | null; interval_unit: string | null; interval_count: number | null } | null
-  const freq = effectiveFreq(r?.freq ?? null, r?.interval_unit ?? null, r?.interval_count ?? null)
+  // A one-time job billed from a quote yields exactly ONE invoice. That quote may
+  // already have been turned into an invoice manually (the "Convert to Invoice" path
+  // stamps quote_id but no job_id), so dedupe by quote_id too — otherwise completing
+  // the job would double-bill the customer. Recurring jobs intentionally skip this:
+  // many visits share one quote_id and each visit is invoiced separately.
+  if (!job.recurrence_id && job.quote_id) {
+    const { data: q } = await supabase.from('invoices').select('id').eq('quote_id', job.quote_id).limit(1)
+    if (q && q.length > 0) return { created: false, reason: 'exists' }
+  }
+
+  // Recurrence cadence drives which quoted price applies (interval-aware). A one-time
+  // job has no recurrence → freq stays null and the first-visit price applies.
+  let freq: string | null = null
+  if (job.recurrence_id) {
+    const { data: rec } = await supabase.from('job_recurrences').select('freq, interval_unit, interval_count').eq('id', job.recurrence_id).maybeSingle()
+    const r = rec as { freq: string | null; interval_unit: string | null; interval_count: number | null } | null
+    freq = effectiveFreq(r?.freq ?? null, r?.interval_unit ?? null, r?.interval_count ?? null)
+  }
 
   // Originating quote → pricing + fallbacks for customer/address.
   let quote: Record<string, unknown> | null = null
@@ -224,7 +246,7 @@ export async function createDraftInvoiceForCompletedJob(supabase: Supa, job: Job
     status: 'draft',
     issued_date: today,
     due_date: dueISO,
-    notes: `Auto-generated from completed ${freq || 'recurring'} visit on ${job.scheduled_date}.`,
+    notes: `Auto-generated from completed ${job.recurrence_id ? `${freq || 'recurring'} visit` : 'job'} on ${job.scheduled_date}.`,
   }).select('id').single()
 
   if (error || !created) {

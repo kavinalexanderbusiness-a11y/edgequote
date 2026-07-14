@@ -11,7 +11,6 @@ import { Coord, geocodeAddress } from '@/lib/geo'
 import { JobForm, Recurrence, SuggestionMeta } from '@/components/schedule/JobForm'
 import { ScopeDialog } from '@/components/schedule/ScopeDialog'
 import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel } from '@/lib/recurrence'
-import { timeToMinutes, minutesToTime12, roughFinishEstimate, DEFAULT_JOB_MIN } from '@/lib/route'
 import type { JobRecurrence } from '@/types'
 import { createDraftInvoiceForCompletedJob, quoteVisitAmount, jobVisitValue, effectiveFreq, syncDraftInvoiceAmounts } from '@/lib/invoicing'
 import { resolveAutomations, Automations } from '@/lib/comms/automations'
@@ -19,8 +18,9 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { cn, minutesBetween } from '@/lib/utils'
+import { toast } from '@/lib/toast'
 import { format, addMonths, addWeeks, addDays, subMonths, subWeeks, subDays, parseISO, getDay } from 'date-fns'
-import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repeat, Lightbulb, Info } from 'lucide-react'
+import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repeat, Lightbulb, Info, Phone, MessageSquare, Navigation, User as UserIcon, FileText, Receipt } from 'lucide-react'
 import { OptimizeSchedule } from '@/components/schedule/OptimizeSchedule'
 import { RainDelayCenter } from '@/components/schedule/RainDelayCenter'
 import { WeatherStrip } from '@/components/weather/WeatherStrip'
@@ -35,7 +35,9 @@ import { analyzeScheduleHealth } from '@/lib/scheduleHealth'
 import type { HealthIssue, HealthJob } from '@/lib/scheduleHealth'
 import { ScheduleHealthCard } from '@/components/schedule/ScheduleHealthCard'
 import { DayStatusMenu } from '@/components/schedule/DayStatusMenu'
-import { buildDayStatusMap, buildCapacityForDate, loadDayStatuses, setDayStatus, setDayCapacity, clearDayStatus, DAY_STATUS_META, DAY_STATUS_SELECT, type DayStatusMap, type DayStatusRow, type DayStatus } from '@/lib/dayStatus'
+import { buildDayStatusMap, buildCapacityForDate, dayStartTime, isDayBlocked, loadDayStatuses, setDayStatus, setDayCapacity, clearDayStatus, DAY_STATUS_META, DAY_STATUS_SELECT, type DayStatusMap, type DayStatusRow, type DayStatus } from '@/lib/dayStatus'
+import { directionsUrl } from '@/lib/route'
+import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { DaySettingsBar } from '@/components/schedule/DaySettingsBar'
 import { WeatherRainCard, type RainMoveSummary } from '@/components/schedule/WeatherRainCard'
@@ -71,6 +73,9 @@ function recFromRow(r: JobRecurrence): Recurrence {
 
 export default function SchedulePage() {
   const supabase = createClient()
+  // Learned drive speed — feeds the proactive optimizer suggestions below.
+  const [travel, setTravel] = useState<TravelModel>(DEFAULT_TRAVEL_MODEL)
+  useEffect(() => { loadTravelModel(supabase).then(setTravel) }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const router = useRouter()
   const searchParams = useSearchParams()
   const quoteId = searchParams.get('quote')
@@ -81,22 +86,25 @@ export default function SchedulePage() {
   const [jobs, setJobs] = useState<Job[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
   const [loading, setLoading] = useState(true)
-  const [view, setView] = useState<CalendarView>(() =>
-    typeof window !== 'undefined' && window.innerWidth < 1024 ? 'day' : 'month'
-  )
+  // Dispatcher-first: land on TODAY's day board everywhere — "where next / when
+  // finished / am I behind" lives there, not in a passive month grid.
+  const [view, setView] = useState<CalendarView>('day')
   const [cursor, setCursor] = useState(new Date())
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Job | null>(null)
   const [formDate, setFormDate] = useState<string>('')
   const [formSeq, setFormSeq] = useState(0) // bump to remount a fresh add form
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null)
-  const [banner, setBanner] = useState<string | null>(null)
-  // One-click undo for the last move/delete/done.
-  const [undoAction, setUndoAction] = useState<{ label: string; run: () => Promise<void> } | null>(null)
-  const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // Fire the marketing auto-draft at most once per job per session, so a
-  // complete → undo → re-complete can't kick off overlapping draft generations.
-  const autoDraftFired = useRef<Set<string>>(new Set())
+  // Outcome + undo feedback flows through the ONE toast system (viewport-
+  // anchored) — the old inline banner rendered above the page header, invisible
+  // from where day-view actions actually happen. Same call shape kept so every
+  // callsite reads unchanged.
+  function setBanner(msg: string | null) {
+    if (!msg) return
+    const isError = /could not|please try again|nothing was scheduled|partially applied/i.test(msg)
+    if (isError) toast.error(msg)
+    else toast.success(msg)
+  }
   const [recurrenceLabels, setRecurrenceLabels] = useState<Record<string, string>>({})
   const [recurrences, setRecurrences] = useState<Record<string, JobRecurrence>>({})
   const [quotesById, setQuotesById] = useState<Record<string, QuoteLite>>({})
@@ -194,8 +202,20 @@ export default function SchedulePage() {
     for (const [id, r] of Object.entries(recurrences)) recs[id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count }
     const crew = defaultCrew > 0 ? defaultCrew : 1
     const capacityForDate = buildCapacityForDate(dayStatusMap, { crew, hours: (capacityHours > 0 ? capacityHours : 8) / crew })
-    return { today: localToday(), base: baseCoord, preferredDays: preferredWorkDays, capacityHours, recurrences: recs, roadDist, dayStatusMap, capacityForDate }
-  }, [recurrences, baseCoord, preferredWorkDays, capacityHours, roadDist, dayStatusMap, defaultCrew])
+    return { today: localToday(), base: baseCoord, preferredDays: preferredWorkDays, capacityHours, recurrences: recs, roadDist, dayStatusMap, capacityForDate, minPerKm: travel.minPerKm }
+  }, [recurrences, baseCoord, preferredWorkDays, capacityHours, roadDist, dayStatusMap, defaultCrew, travel.minPerKm])
+
+  // ── Effective capacity for the OPEN day (one source: lib/dayStatus) ──────────
+  // Feeds the Day Ops panel the day's real start time + labour-hours (after any
+  // crew / working-hours / start-end / disable override), reusing the SAME
+  // capacityForDate the optimizer uses. Because it derives from dayStatusMap +
+  // cursor, changing any of those instantly re-flows every ETA, the estimated
+  // finish, utilization, remaining hours and overbooked warnings — no refresh.
+  const dayView = useMemo(() => {
+    const iso = format(cursor, 'yyyy-MM-dd')
+    const row = dayStatusMap?.byDate[iso] ?? null
+    return { start: dayStartTime(row, workStartTime), laborHours: optBaseOpts.capacityForDate(iso) }
+  }, [cursor, dayStatusMap, workStartTime, optBaseOpts])
 
   // Proactive auto-suggestions (overloaded days, isolated jobs, recurring-cluster
   // opportunities) — same engines, shown without opening the optimizer.
@@ -321,47 +341,6 @@ export default function SchedulePage() {
     }).warnings
   }
 
-  // P2/P4: the next-available start time for the job FORM on a chosen date. Reuses
-  // the ONE ETA engine (roughFinishEstimate) over the day's existing work + the
-  // owner's work-start, then honours the customer's preferred time window. Returns
-  // null for a blocked day (we never suggest starting work on a day off).
-  function suggestStartTime(input: {
-    date: string
-    durationMin: number
-    customerPrefs: PrefSource | null
-    propertyPrefs: PrefSource | null
-    excludeJobId?: string
-  }): { time: string; display: string; reason: string } | null {
-    if (!input.date) return null
-    if (dayStatusMap?.blockedDates.has(input.date)) return null
-    const toHHmm = (min: number) => {
-      const m = ((Math.round(min) % 1440) + 1440) % 1440
-      return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
-    }
-    const prefs = resolvePrefs(input.customerPrefs, input.propertyPrefs)
-    const dayJobs = jobs.filter(j => j.scheduled_date === input.date && j.id !== input.excludeJobId
-      && j.status !== 'cancelled' && j.status !== 'completed')
-    let slotMin: number
-    let reason: string
-    if (dayJobs.length === 0) {
-      slotMin = timeToMinutes(workStartTime)
-      reason = `Your day starts at ${minutesToTime12(slotMin)}`
-    } else {
-      const laborMin = dayJobs.reduce((s, j) => s + (j.duration_minutes || DEFAULT_JOB_MIN), 0)
-      slotMin = roughFinishEstimate(workStartTime, laborMin, dayJobs.length).finishMin
-      reason = `Next open slot after ${dayJobs.length} job${dayJobs.length !== 1 ? 's' : ''} that day`
-    }
-    // Never earlier than the customer's preferred start; note the promised window.
-    if (prefs.timeStart) {
-      const lo = timeToMinutes(prefs.timeStart)
-      if (slotMin < lo) {
-        slotMin = lo
-        reason = `Honours the preferred ${prefs.timeStart}${prefs.timeEnd ? `–${prefs.timeEnd}` : '+'} window`
-      }
-    }
-    return { time: toHHmm(slotMin), display: minutesToTime12(slotMin), reason }
-  }
-
   // ── Schedule Health ──
   // Catches duplicate / conflicting / overlapping visits before they reach Day
   // Ops, reusing the same cadence grouping the optimizer uses.
@@ -393,12 +372,14 @@ export default function SchedulePage() {
     if (issue.removableJobIds.length === 0) return
     setHealthBusyKey(issue.key)
     const rows = jobs.filter(j => issue.removableJobIds.includes(j.id)).map(jobInsertRow)
+    const addons = addonInsertRows(issue.removableJobIds)
     const { error } = await supabase.from('jobs').delete().in('id', issue.removableJobIds)
     if (error) { setBanner('Could not remove the duplicate: ' + error.message); setHealthBusyKey(null); return }
     await fetchJobs()
     setHealthBusyKey(null)
     offerUndo(`Removed ${rows.length} ${issue.isMow ? 'mowing ' : ''}visit${rows.length !== 1 ? 's' : ''}`, async () => {
       if (rows.length) await supabase.from('jobs').insert(rows)
+      if (addons.length) await supabase.from('job_line_items').insert(addons)
     })
   }
 
@@ -414,6 +395,7 @@ export default function SchedulePage() {
     const futureJobs = jobs.filter(j => j.recurrence_id && otherSet.has(j.recurrence_id)
       && j.scheduled_date >= today && (j.status === 'scheduled' || j.status === 'in_progress') && !invoicedJobIds.has(j.id))
     const futureRows = futureJobs.map(jobInsertRow)
+    const futureAddons = addonInsertRows(futureJobs.map(j => j.id))
     const futureIds = new Set(futureJobs.map(j => j.id))
     const pastReattach = jobs.filter(j => j.recurrence_id && otherSet.has(j.recurrence_id) && !futureIds.has(j.id))
       .map(j => ({ id: j.id, recurrence_id: j.recurrence_id as string }))
@@ -429,6 +411,7 @@ export default function SchedulePage() {
     offerUndo(`Merged ${others.length + 1} ${issue.isMow ? 'mowing ' : ''}plans into one`, async () => {
       if (recRows.length) await supabase.from('job_recurrences').insert(recRows)
       if (futureRows.length) await supabase.from('jobs').insert(futureRows)
+      if (futureAddons.length) await supabase.from('job_line_items').insert(futureAddons)
       for (const p of pastReattach) await supabase.from('jobs').update({ recurrence_id: p.recurrence_id }).eq('id', p.id)
     })
   }
@@ -512,6 +495,11 @@ export default function SchedulePage() {
     if (user) setDayStatusMap(buildDayStatusMap(await loadDayStatuses(supabase, user.id)))
   }, [supabase])
   useRealtimeRefresh('day_statuses', uid ? `user_id=eq.${uid}` : null, reloadDayStatuses)
+  // Jobs too: any write (this tab's optimistic mutations, another device, the
+  // route_order trigger, Weather Ops) reconciles the UI to the DB — debounced —
+  // and the hook refetches on reconnect/visibility, so optimistic state can
+  // never silently diverge from what was actually persisted.
+  useRealtimeRefresh('jobs', uid ? `user_id=eq.${uid}` : null, fetchJobs)
 
   // Open the day menu — if the day is part of a multi-selection, target them all.
   function openDayMenu(dateISO: string, pos: { x: number; y: number }) {
@@ -885,10 +873,19 @@ export default function SchedulePage() {
     const failed = results.find(r => r.error)
     if (failed?.error) setBanner('Could not save the job: ' + failed.error.message)
 
-    if (values.status === 'completed' && job.recurrence_id) {
+    if (values.status === 'completed' && job.status !== 'completed') {
       const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed' })
-      if (res.created) setBanner(`Draft invoice ${res.invoiceNumber} created from the completed visit — review it in Invoices.`)
-      else if (res.reason === 'exists') setBanner('That visit already has an invoice.')
+      if (res.created) setBanner(`Draft invoice ${res.invoiceNumber} created from the completed job — review it in Invoices.`)
+      else if (res.reason === 'exists') setBanner('That job already has an invoice.')
+      else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
+    }
+
+    // A price edit here must flow into the SAME linked draft invoice(s) — never a
+    // second draft, never a stale amount. Sent/paid/cancelled invoices are locked
+    // (the sync engine only touches drafts); scope-wide edits sync every visit.
+    if (Number(values.price) !== Number(job.price)) {
+      const synced = await syncDraftInvoiceAmounts(supabase, targets.map(t => t.id))
+      if (synced > 0) setBanner(`Saved — ${synced} draft invoice${synced !== 1 ? 's' : ''} updated to match the new price.`)
     }
   }
 
@@ -1014,19 +1011,27 @@ export default function SchedulePage() {
   async function applyMove(job: Job, newDate: string, scope: RecurrenceScope) {
     const delta = dayDelta(job.scheduled_date, newDate)
     const targets = jobsInScope(job, jobs, scope)
-    const prev = targets.map(t => ({ id: t.id, scheduled_date: t.scheduled_date }))
+    const prev = targets.map(t => ({ id: t.id, scheduled_date: t.scheduled_date, route_order: t.route_order ?? null }))
     await Promise.all(targets.map(t =>
       supabase.from('jobs').update({ scheduled_date: shiftDate(t.scheduled_date, delta) }).eq('id', t.id)
     ))
     await fetchJobs()
     offerUndo(`Moved ${targets.length} visit${targets.length !== 1 ? 's' : ''}`, async () => {
-      await Promise.all(prev.map(p => supabase.from('jobs').update({ scheduled_date: p.scheduled_date }).eq('id', p.id)))
+      // Restore dates AND manual route positions (the trigger nulled them on the
+      // way out; it keeps an explicitly-set route_order in the same update).
+      await Promise.all(prev.map(p => supabase.from('jobs').update({ scheduled_date: p.scheduled_date, route_order: p.route_order }).eq('id', p.id)))
     })
   }
 
   async function applyDelete(job: Job, scope: RecurrenceScope) {
     const targets = jobsInScope(job, jobs, scope)
     const snapshot = targets.map(jobInsertRow)
+    const addons = addonInsertRows(targets.map(t => t.id))
+    // Snapshot invoice links (FK sets job_id NULL on delete) so undo re-stamps them.
+    const invTargets = targets.filter(t => invoicedJobIds.has(t.id)).map(t => t.id)
+    const linkedInv = invTargets.length
+      ? (((await supabase.from('invoices').select('id, job_id').in('job_id', invTargets)).data as { id: string; job_id: string }[] | null) ?? [])
+      : []
     const r = (scope === 'all' && job.recurrence_id) ? recurrences[job.recurrence_id] : null
     const recRow = r ? {
       id: r.id, user_id: r.user_id, freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count,
@@ -1039,6 +1044,8 @@ export default function SchedulePage() {
     offerUndo(`Deleted ${targets.length} visit${targets.length !== 1 ? 's' : ''}`, async () => {
       if (recRow) await supabase.from('job_recurrences').insert(recRow)
       if (snapshot.length) await supabase.from('jobs').insert(snapshot)
+      if (addons.length) await supabase.from('job_line_items').insert(addons)
+      for (const inv of linkedInv) await supabase.from('invoices').update({ job_id: inv.job_id }).eq('id', inv.id)
     })
   }
 
@@ -1071,10 +1078,20 @@ export default function SchedulePage() {
       return
     }
     const row = jobInsertRow(job)
+    const addons = addonInsertRows([job.id])
+    // Deleting sets invoices.job_id NULL (FK) — snapshot the links so undo can
+    // re-stamp them, or the visit stops counting as invoiced (double-invoice risk).
+    const linkedInvoices = invoicedJobIds.has(job.id)
+      ? (((await supabase.from('invoices').select('id').eq('job_id', job.id)).data as { id: string }[] | null) ?? [])
+      : []
     await supabase.from('jobs').delete().eq('id', job.id)
     await fetchJobs()
     setEditing(prev => (prev?.id === job.id ? null : prev))
-    offerUndo('Job deleted', async () => { await supabase.from('jobs').insert(row) })
+    offerUndo('Job deleted', async () => {
+      await supabase.from('jobs').insert(row) // job first — FKs point at it
+      if (addons.length) await supabase.from('job_line_items').insert(addons)
+      if (linkedInvoices.length) await supabase.from('invoices').update({ job_id: job.id }).in('id', linkedInvoices.map(i => i.id))
+    })
   }
 
   async function handleDelete() {
@@ -1103,21 +1120,12 @@ export default function SchedulePage() {
     const { error } = await supabase.from('jobs').update({ status: 'completed', completed_at: now, actual_minutes: actual }).eq('id', job.id)
     if (error) { setBanner('Could not complete the job: ' + error.message); return }
     let invoiceCreated = false
-    if (job.recurrence_id) {
-      const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed', actual_minutes: actual })
-      if (res.created) { invoiceCreated = true; setBanner(`Draft invoice ${res.invoiceNumber} created. Review in Invoices.`) }
-      else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this visit has no price. Set a price to bill it.')
-    }
+    const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed', actual_minutes: actual })
+    if (res.created) { invoiceCreated = true; setBanner(`Draft invoice ${res.invoiceNumber} created. Review in Invoices.`) }
+    else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
     // Automated job-complete message (opt-in + dedupe are enforced by the route).
     if (automations.job_complete && job.customer_id) {
       fetch('/api/comms/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ customerId: job.customer_id, template: 'job_complete', jobId: job.id, dedupe: true }) }).catch(() => {})
-    }
-    // Best-effort marketing draft when this job has before+after photos (the route is
-    // idempotent + never publishes; the daily cron is the reliable backstop). Mirrors
-    // the fire-and-forget above — errors are swallowed so completion never breaks.
-    if (automations.marketing_draft && !autoDraftFired.current.has(job.id)) {
-      autoDraftFired.current.add(job.id)
-      fetch(`/api/marketing/auto-draft?jobId=${job.id}`, { method: 'POST' }).catch(() => {})
     }
     await fetchJobs()
     offerUndo('Job completed', async () => {
@@ -1137,9 +1145,10 @@ export default function SchedulePage() {
       price: patch.price,
     }).eq('id', job.id)
     if (error) { setBanner('Could not save the job: ' + error.message); return }
-    if (patch.status === 'completed' && job.status !== 'completed' && job.recurrence_id) {
+    if (patch.status === 'completed' && job.status !== 'completed') {
       const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed' })
       if (res.created) setBanner(`Saved — draft invoice ${res.invoiceNumber} created.`)
+      else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
     }
     // If the inline edit changed the price, keep its draft invoice in sync.
     if (Number(patch.price) !== Number(job.price)) await syncDraftInvoiceAmounts(supabase, [job.id])
@@ -1287,27 +1296,27 @@ export default function SchedulePage() {
   }
 
   // ── Undo ────────────────────────────────────────────────────────────────────
+  // THE shared undo toast — fixed to the viewport, so it's reachable no matter
+  // how far down the day list the action happened.
   function offerUndo(label: string, run: () => Promise<void>) {
-    setUndoAction({ label, run })
-    if (undoTimer.current) clearTimeout(undoTimer.current)
-    undoTimer.current = setTimeout(() => setUndoAction(null), 8000)
+    toast.undo(label, async () => { await run(); await fetchJobs() })
   }
-  async function runUndo() {
-    const a = undoAction
-    if (undoTimer.current) clearTimeout(undoTimer.current)
-    setUndoAction(null)
-    if (a) { await a.run(); await fetchJobs() }
-  }
-  // Insertable job row (strips joined customers/properties) for delete-undo.
+  // Insertable job row for delete-undo: the FULL row minus the two joined
+  // relations. A hand-maintained column allowlist here silently amputated
+  // resurrected jobs (lost started_at/completed_at/on_my_way_at/route_order and
+  // would lose every future column); rest-spread can never drift because
+  // fetchJobs selects '*' plus exactly these two joins.
   function jobInsertRow(j: Job) {
-    return {
-      id: j.id, user_id: j.user_id, customer_id: j.customer_id, property_id: j.property_id,
-      quote_id: j.quote_id, recurrence_id: j.recurrence_id, title: j.title, service_type: j.service_type,
-      scheduled_date: j.scheduled_date, start_time: j.start_time, end_time: j.end_time,
-      duration_minutes: j.duration_minutes, crew_size: j.crew_size, status: j.status, notes: j.notes,
-      price: j.price, actual_minutes: j.actual_minutes, suggested_date: j.suggested_date, suggested_nearby_count: j.suggested_nearby_count,
-      is_initial_visit: j.is_initial_visit,
-    }
+    const { customers, properties, ...row } = j
+    void customers; void properties
+    return row
+  }
+
+  // Insertable add-on rows for these visits, snapshotted from the already-loaded
+  // cache (the ONE listLineItemsByJob engine) — job deletion CASCADE-deletes
+  // job_line_items, so delete-undo must restore them or priced extras vanish.
+  function addonInsertRows(ids: string[]): JobLineItem[] {
+    return ids.flatMap(id => addonsByJobId[id] || [])
   }
 
   // Apply a batch of date moves (optimizer or rain delay): grouped by target
@@ -1321,24 +1330,27 @@ export default function SchedulePage() {
       if (error) { setBanner('Optimization partially applied — ' + error.message); break }
     }
     await fetchJobs()
+    // Capture each moved job's manual route position so undo restores it (the
+    // date-move trigger nulls route_order on the way out).
+    const prevOrder = new Map(moves.map(m => [m.jobId, jobs.find(j => j.id === m.jobId)?.route_order ?? null]))
     const byFrom: Record<string, string[]> = {}
     for (const m of moves) (byFrom[m.from] ||= []).push(m.jobId)
     offerUndo(`${moves.length} job${moves.length !== 1 ? 's' : ''} moved`, async () => {
       for (const [from, ids] of Object.entries(byFrom)) {
-        await supabase.from('jobs').update({ scheduled_date: from }).in('id', ids)
+        await Promise.all(ids.map(id => supabase.from('jobs').update({ scheduled_date: from, route_order: prevOrder.get(id) ?? null }).eq('id', id)))
       }
     })
   }
 
-  // Next date on/after `fromISO`+1 whose weekday is a preferred work day AND isn't
-  // owner-blocked (rain/vacation/holiday/no crew) — higher-priority day states
-  // suppress this lower-priority bump target.
+  // Next date on/after `fromISO`+1 whose weekday is a preferred work day AND
+  // that isn't blocked (rain/holiday/vacation…) — a rain delay must never bump
+  // the day's jobs onto another day that's already marked unavailable.
   function nextWorkday(fromISO: string): string {
     const pref = preferredWorkDays.length ? new Set(preferredWorkDays) : null
     let d = addDays(parseISO(fromISO), 1)
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 21; i++) {
       const iso = format(d, 'yyyy-MM-dd')
-      if ((!pref || pref.has(getDay(d))) && !dayStatusMap?.blockedDates.has(iso)) return iso
+      if ((!pref || pref.has(getDay(d))) && !isDayBlocked(dayStatusMap, iso)) return iso
       d = addDays(d, 1)
     }
     return format(addDays(parseISO(fromISO), 1), 'yyyy-MM-dd')
@@ -1351,12 +1363,16 @@ export default function SchedulePage() {
     if (!dayJobs.length) { setBanner('No jobs to bump on this day.'); return }
     const to = nextWorkday(dateISO)
     const ids = dayJobs.map(j => j.id)
+    const prevOrders = dayJobs.map(j => ({ id: j.id, route_order: j.route_order ?? null }))
     const { error } = await supabase.from('jobs').update({ scheduled_date: to }).in('id', ids)
     if (error) { setBanner('Could not bump the day: ' + error.message); return }
     await fetchJobs()
     setCursor(parseISO(to + 'T00:00:00'))
     offerUndo(`Rain delay — bumped ${ids.length} job${ids.length !== 1 ? 's' : ''} to ${format(parseISO(to + 'T00:00:00'), 'EEE, MMM d')}`,
-      async () => { await supabase.from('jobs').update({ scheduled_date: dateISO }).in('id', ids) })
+      async () => {
+        // Per-job so each visit gets back its own manual route position.
+        await Promise.all(prevOrders.map(p => supabase.from('jobs').update({ scheduled_date: dateISO, route_order: p.route_order }).eq('id', p.id)))
+      })
   }
 
   async function moveJobToDate(job: Job, date: Date) {
@@ -1375,10 +1391,20 @@ export default function SchedulePage() {
       return
     }
     const prevDate = job.scheduled_date
-    setJobs(prev => prev.map(j => j.id === job.id ? { ...j, scheduled_date: newDate } : j))
-    await supabase.from('jobs').update({ scheduled_date: newDate }).eq('id', job.id)
+    const prevOrder = job.route_order ?? null
+    // Optimistic patch mirrors the DB trigger: a date move clears the manual
+    // route position, so the target day's order is correct without a refetch.
+    setJobs(prev => prev.map(j => j.id === job.id ? { ...j, scheduled_date: newDate, route_order: null } : j))
+    const { error } = await supabase.from('jobs').update({ scheduled_date: newDate }).eq('id', job.id)
+    if (error) {
+      setJobs(prev => prev.map(j => j.id === job.id ? { ...j, scheduled_date: prevDate, route_order: prevOrder } : j))
+      setBanner('Could not move the job: ' + error.message)
+      return
+    }
     offerUndo('Job moved', async () => {
-      await supabase.from('jobs').update({ scheduled_date: prevDate }).eq('id', job.id)
+      // Restore the date AND the manual route position (the trigger keeps an
+      // explicitly-set route_order when it changes in the same update).
+      await supabase.from('jobs').update({ scheduled_date: prevDate, route_order: prevOrder }).eq('id', job.id)
     })
   }
 
@@ -1457,27 +1483,6 @@ export default function SchedulePage() {
       {quoteCtx && (
         <div className="text-sm text-accent bg-accent/10 border border-accent/20 rounded-xl px-4 py-2.5">
           Scheduling from accepted quote <span className="font-semibold">{quoteCtx.quote_number}</span> — pick a date and set recurrence below.
-        </div>
-      )}
-
-      {banner && (
-        <div className="flex items-center justify-between gap-3 text-sm text-accent bg-accent/10 border border-accent/20 rounded-xl px-4 py-2.5">
-          <span>{banner}</span>
-          <div className="flex items-center gap-3 shrink-0">
-            <button onClick={() => router.push('/dashboard/invoices')} className="underline font-medium">Invoices</button>
-            <button onClick={() => setBanner(null)} className="text-ink-faint hover:text-ink">✕</button>
-          </div>
-        </div>
-      )}
-
-      {/* Undo toast — restore the last move / delete / done */}
-      {undoAction && (
-        <div className="flex items-center justify-between gap-3 text-sm bg-ink text-bg border border-border-strong rounded-xl px-4 py-2.5 shadow-lg">
-          <span className="font-medium">{undoAction.label}</span>
-          <div className="flex items-center gap-3 shrink-0">
-            <button onClick={runUndo} className="font-bold underline">Undo</button>
-            <button onClick={() => setUndoAction(null)} className="opacity-60 hover:opacity-100">✕</button>
-          </div>
         </div>
       )}
 
@@ -1608,6 +1613,21 @@ export default function SchedulePage() {
             </div>
           </CardHeader>
           <CardBody>
+            {/* Every customer action in ONE row — no hunting through the form.
+                Same link patterns as the day board (tel:/sms:/directionsUrl). */}
+            {editing && (
+              <div className="flex flex-wrap items-center gap-1.5 mb-4 pb-3 border-b border-border">
+                {editing.customers?.phone && <QuickAction href={`tel:${editing.customers.phone}`} icon={Phone} label="Call" />}
+                {editing.customers?.phone && <QuickAction href={`sms:${editing.customers.phone}`} icon={MessageSquare} label="Text" />}
+                {(editing.properties?.address || editing.properties?.lat != null) && (
+                  <QuickAction external icon={Navigation} label="Navigate"
+                    href={directionsUrl({ lat: editing.properties?.lat ?? null, lng: editing.properties?.lng ?? null, address: editing.properties?.address }, baseCoord)} />
+                )}
+                {editing.customer_id && <QuickAction href={`/dashboard/customers/${editing.customer_id}`} icon={UserIcon} label="Customer" />}
+                {editing.quote_id && <QuickAction href={`/dashboard/quotes/${editing.quote_id}`} icon={FileText} label="Quote" />}
+                {editing.status === 'completed' && <QuickAction href="/dashboard/invoices" icon={Receipt} label="Invoice" />}
+              </div>
+            )}
             <JobForm
               key={editing?.id ?? `new-${formSeq}`}
               customers={customers}
@@ -1638,17 +1658,11 @@ export default function SchedulePage() {
                       ? effectiveFreq(recurrences[editing.recurrence_id].freq, recurrences[editing.recurrence_id].interval_unit, recurrences[editing.recurrence_id].interval_count)
                       : null,
                   ) || undefined
-                : quoteCtx
-                  ? quoteVisitAmount(
-                      quoteCtx as unknown as Record<string, unknown>,
-                      quoteRecurrence?.unit ? effectiveFreq(null, quoteRecurrence.unit, quoteRecurrence.count) : null,
-                    ) || undefined
-                  : undefined}
+                : undefined}
               onSubmit={editing ? handleEdit : handleAdd}
               onCancel={closeForm}
               isEdit={!!editing}
               warnFor={formMoveWarnings}
-              suggestStart={suggestStartTime}
             />
           </CardBody>
             </Card>
@@ -1687,9 +1701,6 @@ export default function SchedulePage() {
           onSetCapacity={(patch) => saveDayCapacity(format(cursor, 'yyyy-MM-dd'), patch)}
           onResetCapacity={() => resetDayCapacity(format(cursor, 'yyyy-MM-dd'))}
           onToggleDisable={() => toggleDisableDay(format(cursor, 'yyyy-MM-dd'))}
-          onAutoOptimize={() => launchOptimizer({ scope: 'week', mode: 'recommended', anchorDate: format(cursor, 'yyyy-MM-dd') })}
-          onWeatherOps={() => setShowRainCenter(true)}
-          onAddJob={() => openNewJob(cursor)}
         />
         <DayOpsPanel
           date={format(cursor, 'yyyy-MM-dd')}
@@ -1709,8 +1720,8 @@ export default function SchedulePage() {
           onDeleteLineItem={removeLineItem}
           getPreviousAddons={getPreviousAddons}
           onCopyPreviousAddons={copyPreviousAddons}
-          workStartTime={dayStatusMap?.byDate[format(cursor, 'yyyy-MM-dd')]?.starts_at || workStartTime}
-          capacityHours={optBaseOpts.capacityForDate(format(cursor, 'yyyy-MM-dd')) || capacityHours}
+          workStartTime={dayView.start}
+          capacityHours={dayView.laborHours}
           onRainDelay={() => rainDelayDay(format(cursor, 'yyyy-MM-dd'))}
           onAddJob={() => openNewJob(cursor)}
           onQuickSave={quickSaveJob}
@@ -1836,5 +1847,16 @@ export default function SchedulePage() {
         </div>
       )}
     </div>
+  )
+}
+
+// One customer/job quick-action chip — the SAME link patterns as the day board
+// (tel:, sms:, Google Maps directions, app routes), grouped in one row.
+function QuickAction({ href, icon: Icon, label, external }: { href: string; icon: typeof Phone; label: string; external?: boolean }) {
+  return (
+    <a href={href} {...(external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+      className="h-10 sm:h-8 px-3 rounded-lg border border-border bg-bg-tertiary text-xs font-medium text-ink-muted hover:text-ink hover:border-border-strong flex items-center gap-1.5 transition-colors">
+      <Icon className="w-3.5 h-3.5" /> {label}
+    </a>
   )
 }

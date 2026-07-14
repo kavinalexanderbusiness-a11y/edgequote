@@ -12,7 +12,7 @@ import { InlineEmpty } from '@/components/ui/EmptyState'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { Customer, Referral } from '@/types'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { Gift, Users, Plus, Check, Trophy, ThumbsDown, Trash2, ExternalLink } from 'lucide-react'
+import { Gift, Plus, Check, Trophy, ThumbsDown, Trash2, ExternalLink } from 'lucide-react'
 
 const STATUS_META: Record<Referral['status'], { label: string; tone: string }> = {
   invited:  { label: 'Invited',  tone: 'text-amber-400 border-amber-500/30 bg-amber-500/10' },
@@ -41,7 +41,10 @@ export function ReferralPanel({ customer, referrer, referredRevenue }: {
   const [form, setForm] = useState({ name: '', contact: '', reward: '' })
 
   async function load() {
-    const { data: { user } } = await supabase.auth.getUser()
+    // Local session read — this panel renders on the customer profile; avoids a second
+    // GoTrue round-trip in parallel with the page's own load.
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
     setUid(user?.id || null)
     const { data } = await supabase.from('referrals').select('*').eq('referrer_customer_id', customer.id).order('created_at', { ascending: false })
     const list = (data as Referral[]) || []
@@ -99,12 +102,8 @@ export function ReferralPanel({ customer, referrer, referredRevenue }: {
         </span>
       </CardHeader>
       <CardBody className="space-y-3">
-        {referrer && (
-          <Link href={`/dashboard/customers/${referrer.id}`} className="inline-flex items-center gap-1.5 text-xs text-ink-muted hover:text-ink rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-            <Users className="w-3.5 h-3.5" /> Referred by <span className="font-medium text-ink">{referrer.name}</span>
-          </Link>
-        )}
-
+        {/* "Referred by {name}" lives on the identity card at the top of the profile —
+            repeating it here showed the same fact twice on one page. */}
         {loading ? (
           <div className="space-y-3 py-1" aria-hidden="true">
             {[0, 1].map(i => (

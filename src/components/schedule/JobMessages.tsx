@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { format, parseISO } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
-import { MsgType, renderMessage } from '@/lib/comms/templates'
+import { MsgType, renderMessage, toDisplayBody, fromDisplayBody } from '@/lib/comms/templates'
+import { summarizeSendOutcome as summarize, type SendOutcome as Outcome } from '@/lib/comms/sendOutcome'
 import { SmsCost } from '@/components/comms/SmsCost'
 import { localTodayISO, cn } from '@/lib/utils'
 import {
@@ -39,8 +40,6 @@ const ACTIONS: { type: MsgType; label: string; icon: typeof Navigation; tone?: s
   { type: 'rescheduled', label: 'Rescheduled', icon: CalendarClock, reschedule: 'date' },
   { type: 'rain_delay', label: 'Weather delay', icon: CloudRain, reschedule: 'weather', tone: 'text-blue-300 border-blue-400/30 bg-blue-400/10 hover:bg-blue-400/20' },
 ]
-
-interface Outcome { ok: boolean; text: string }
 
 export function JobMessages({ jobId, customerId, customerName, visitDate, timeWindow, address }: Props) {
   const supabase = useMemo(() => createClient(), [])
@@ -86,16 +85,20 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
     const nd = opts?.newDate ?? newDate
     const od = opts?.oldDate ?? oldDate
     const dateLabel = (type === 'rescheduled' || type === 'rain_delay') ? fmtDate(nd) : (visitDate ? fmtDate(visitDate) : undefined)
-    return renderMessage(type, custom, {
+    // Only the server knows the customer's portal token — the composer shows a
+    // friendly [Customer Portal Link] placeholder; send() converts it back to the
+    // {{portal_link}} token so the route injects the real URL.
+    return toDisplayBody(renderMessage(type, custom, {
       firstName: customerName,
       businessName: company,
       eta: e,
       reviewLink: reviewUrl || undefined,
+      portalLink: '{{portal_link}}',
       dateLabel,
       timeWindow: timeWindow,
       oldDateLabel: fmtDate(od),
       address,
-    }).sms
+    }).sms)
   }
 
   function open(type: MsgType) {
@@ -122,7 +125,7 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
       const res = await fetch('/api/comms/send', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          customerId, template: active, jobId, channels, bodyOverride: text,
+          customerId, template: active, jobId, channels, bodyOverride: fromDisplayBody(text),
           vars: { eta, dateLabel, timeWindow, oldDateLabel: fmtDate(oldDate), address },
         }),
       })
@@ -184,7 +187,7 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
           )}
 
           {/* Editable message */}
-          <textarea value={text} onChange={e => setText(e.target.value)} rows={4}
+          <textarea value={text} onChange={e => { setText(e.target.value); setOutcome(null) }} rows={4}
             className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent resize-none" />
           {ch.sms ? <SmsCost text={text} className="mt-0.5" /> : <p className="text-[10px] text-ink-faint">{text.length} characters · edit freely before sending</p>}
           {active === 'review_request' && !reviewUrl && (
@@ -199,17 +202,26 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
               className="h-7 px-2 rounded-lg border border-dashed border-border text-[11px] font-medium text-ink-faint flex items-center gap-1 opacity-60 cursor-not-allowed">
               <Smartphone className="w-3 h-3" /> Push · soon
             </span>
-            <button onClick={send} disabled={busy}
-              className="ml-auto h-8 px-3 rounded-lg bg-accent text-black text-xs font-semibold flex items-center gap-1.5 active:scale-95 transition-transform disabled:opacity-50">
-              {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />} Send
-            </button>
+            {/* After a successful send the action becomes Done (collapses the
+                panel) — no accidental double-send, clear next step. */}
+            {outcome?.ok ? (
+              <button onClick={() => setActive(null)}
+                className="ml-auto h-8 px-3 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-semibold flex items-center gap-1.5 active:scale-95 transition-transform">
+                <Check className="w-3.5 h-3.5" /> Done
+              </button>
+            ) : (
+              <button onClick={send} disabled={busy}
+                className="ml-auto h-8 px-3 rounded-lg bg-accent text-black text-xs font-semibold flex items-center gap-1.5 active:scale-95 transition-transform disabled:opacity-50">
+                {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />} Send
+              </button>
+            )}
           </div>
 
           {outcome && (
             <div className={cn('flex items-start gap-1.5 text-[11px] rounded-lg px-2.5 py-1.5 border',
               outcome.ok ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : 'text-amber-400 border-amber-500/30 bg-amber-500/10')}>
               {outcome.ok ? <Check className="w-3.5 h-3.5 shrink-0 mt-px" /> : <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />}
-              <span>{outcome.text}</span>
+              <span>{outcome.text}{outcome.ok ? ' Logged in the customer’s conversation.' : ''}</span>
             </div>
           )}
         </div>
@@ -228,15 +240,3 @@ function ChannelChip({ label, icon: Icon, on, onClick }: { label: string; icon: 
   )
 }
 
-// Turn the send route response into one human line.
-function summarize(data: { results?: Record<string, { sent?: boolean; reason?: string; error?: string }> }): Outcome {
-  const r = data.results || {}
-  const sent = Object.entries(r).filter(([, v]) => v.sent).map(([ch]) => ch)
-  if (sent.length) return { ok: true, text: `Sent by ${sent.join(' & ')} — saved to the customer's timeline.` }
-  const reasons = Object.values(r).map(v => v.reason)
-  if (reasons.includes('no-optin')) return { ok: false, text: 'Customer hasn’t opted in — turn on SMS/email on their profile.' }
-  if (reasons.includes('disabled')) return { ok: false, text: 'Messaging is off — add Twilio/Resend keys in Settings.' }
-  const err = Object.values(r).find(v => v.error)?.error
-  if (err) return { ok: false, text: err }
-  return { ok: false, text: 'Nothing sent (no phone/email on file).' }
-}

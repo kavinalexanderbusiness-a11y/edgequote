@@ -87,8 +87,8 @@ export function JobAddons({ baseValue, items, isRecurring, onAdd, onDelete, prev
               </span>
               <span className="font-semibold text-ink shrink-0">{formatCurrency(Number(it.amount))}</span>
               <button onClick={() => remove(it)} disabled={deletingId === it.id} title="Remove add-on"
-                className="h-6 w-6 rounded-md border border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20 flex items-center justify-center shrink-0 disabled:opacity-50">
-                <Trash2 className="w-3 h-3" />
+                className="h-8 w-8 rounded-md border border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20 flex items-center justify-center shrink-0 disabled:opacity-50">
+                <Trash2 className="w-3.5 h-3.5" />
               </button>
             </div>
           ))}

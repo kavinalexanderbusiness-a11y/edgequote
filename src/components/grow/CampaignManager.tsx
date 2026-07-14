@@ -47,7 +47,8 @@ export function CampaignManager() {
   const [creating, setCreating] = useState(false)
 
   async function load() {
-    const { data: { user } } = await supabase.auth.getUser()
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
     setUid(user?.id || null)
     if (!user) { setLoading(false); return }
     const [campRes, totalRes, bdayRes, annivRes] = await Promise.all([

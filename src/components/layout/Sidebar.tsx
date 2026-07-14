@@ -38,7 +38,10 @@ export function Sidebar() {
         if (cached) { const c = JSON.parse(cached); if (active && c?.url) setBrand({ url: c.url, scale: c.scale || 100 }) }
       } catch { /* ignore */ }
       const supabase = createClient()
-      const { data: { user } } = await supabase.auth.getUser()
+      // Local session read — the sidebar mounts on every page; no auth round-trip
+      // before the logo query (it already painted from the localStorage cache above).
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
       if (!user) return
       const { data } = await supabase.from('business_settings').select('logo_url, logo_scale').eq('user_id', user.id).maybeSingle()
       const s = data as { logo_url: string | null; logo_scale: number | null } | null
@@ -63,7 +66,8 @@ export function Sidebar() {
       if (active) setUnread((data as { unread: number }[] | null)?.reduce((s, c) => s + (c.unread || 0), 0) || 0)
     }
     ;(async () => {
-      const { data: { user } } = await supabase.auth.getUser()
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
       if (!user || !active) return
       await refresh(user.id)
       channel = supabase

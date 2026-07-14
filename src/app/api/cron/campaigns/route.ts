@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
-import { renderMessage, MsgType } from '@/lib/comms/templates'
+import { renderMessage, MsgType, type MessagePrefs } from '@/lib/comms/templates'
 import { commsEnabled } from '@/lib/comms/send'
 import { dispatchToCustomer } from '@/lib/comms/dispatch'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
@@ -32,7 +32,8 @@ interface CampaignRow {
 }
 interface Cand {
   id: string; name: string; phone: string | null; email: string | null
-  sms_opt_in: boolean; email_opt_in: boolean; birthday: string | null; anniversary: string | null
+  sms_opt_in: boolean; email_opt_in: boolean; message_prefs?: MessagePrefs | null
+  birthday: string | null; anniversary: string | null
 }
 
 export async function GET(req: NextRequest) {
@@ -74,7 +75,7 @@ export async function GET(req: NextRequest) {
 
     // ── Candidate query ──
     let q = supabase.from('customers')
-      .select('id, name, phone, email, sms_opt_in, email_opt_in, birthday, anniversary')
+      .select('id, name, phone, email, sms_opt_in, email_opt_in, message_prefs, birthday, anniversary')
       .eq('user_id', camp.user_id).is('archived_at', null).limit(MAX_AUDIENCE + 1)
     if (camp.kind === 'birthday') q = q.not('birthday', 'is', null)
     if (camp.kind === 'anniversary') q = q.not('anniversary', 'is', null)
@@ -118,6 +119,14 @@ export async function GET(req: NextRequest) {
 
     for (const c of cands) {
       if (done.has(c.id)) continue
+      // RESERVE-THEN-SEND: claim the (campaign, customer, period) row BEFORE dispatching.
+      // The UNIQUE(campaign_id, customer_id, period_key) makes this atomic — a concurrent
+      // cron invocation (Vercel at-least-once) that already claimed this customer/period
+      // fails the insert and is skipped here, so the customer is never double-messaged.
+      const { error: claimErr } = await supabase.from('crm_campaign_log').insert({
+        user_id: camp.user_id, campaign_id: camp.id, customer_id: c.id, period_key: periodKey, status: 'sending',
+      })
+      if (claimErr) continue   // another run owns this customer/period → skip (no send)
       processed++
       const portalLink = needsPortal ? (await ensurePortalToken(supabase, camp.user_id, c.id).then(t => t ? portalUrl(t) : undefined)) : undefined
       const rendered = renderMessage(templateKey, customOverride, {
@@ -125,7 +134,7 @@ export async function GET(req: NextRequest) {
       })
       const res = await dispatchToCustomer(supabase, {
         userId: camp.user_id,
-        customer: { id: c.id, phone: c.phone, email: c.email, sms_opt_in: c.sms_opt_in, email_opt_in: c.email_opt_in },
+        customer: { id: c.id, phone: c.phone, email: c.email, sms_opt_in: c.sms_opt_in, email_opt_in: c.email_opt_in, message_prefs: c.message_prefs },
         channels, smsText: rendered.sms, emailSubject: rendered.subject, emailHtml: rendered.html, emailText: rendered.text,
         template: templateKey, meta: { campaign_id: camp.id, campaign_kind: camp.kind },
       })
@@ -137,14 +146,12 @@ export async function GET(req: NextRequest) {
           status: a.status, detail: a.detail ?? null, message_id: a.sent ? res.messageId : null,
         })
       }
-      // Campaign dedupe + history (one row per customer per period). Recorded even
-      // when nothing sent (no consent), so it won't be retried within the period.
+      // Finalize the claimed row (UPDATE, not a second insert) with the real outcome.
       const overall = res.sentChannels.length ? 'sent' : (res.attempts.every(a => a.status === 'skipped') ? 'skipped' : 'failed')
       const firstDetail = res.attempts.find(a => !a.sent)?.detail ?? null
-      await supabase.from('crm_campaign_log').insert({
-        user_id: camp.user_id, campaign_id: camp.id, customer_id: c.id, period_key: periodKey,
+      await supabase.from('crm_campaign_log').update({
         channel: res.sentChannels[0] ?? null, status: overall, detail: firstDetail, message_id: res.messageId,
-      })
+      }).eq('campaign_id', camp.id).eq('customer_id', c.id).eq('period_key', periodKey)
       if (res.sentChannels.length) sent++
     }
 

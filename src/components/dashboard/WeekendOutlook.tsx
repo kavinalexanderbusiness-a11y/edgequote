@@ -32,7 +32,9 @@ export function WeekendOutlook() {
 
   useEffect(() => {
     async function load() {
-      const { data: { user } } = await supabase.auth.getUser()
+      // Local session read — no auth round-trip before the RLS-scoped queries below.
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
       const [jRes, qRes, rRes, sRes] = await Promise.all([
         supabase.from('jobs')
           .select('id, scheduled_date, status, start_time, service_type, duration_minutes, price, quote_id, recurrence_id, customers(name, phone), properties(address)')
@@ -56,7 +58,9 @@ export function WeekendOutlook() {
       const workStart = sRow?.work_start_time || '08:00'
       const capacity = sRow?.daily_capacity_hours && sRow.daily_capacity_hours > 0 ? sRow.daily_capacity_hours : 8
 
-      // The next DAYS_TO_SHOW preferred work days from today.
+      // The next DAYS_TO_SHOW preferred work days starting TODAY — this is the one
+      // day-plan card on the dashboard, so it answers "what's on today" plus the days
+      // ahead (stops, call/map, revenue and load) in a single glance.
       const wantDates: string[] = []
       let d = parseISO(todayLocalISO())
       for (let i = 0; i < 21 && wantDates.length < DAYS_TO_SHOW; i++) {

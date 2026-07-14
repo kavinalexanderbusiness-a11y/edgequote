@@ -1,0 +1,82 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
+import type { Quote, QuoteService } from '@/types'
+import { splitServices, serviceLineTotals } from '@/lib/quoteServices'
+import { addLineItems } from '@/lib/jobPricing'
+import { localTodayISO } from '@/lib/utils'
+
+// ── Quote → scheduled job (ONE engine) ───────────────────────────────────────
+// Every "schedule this quote" entry point (the quote page's Schedule button and
+// the dashboard's "Accepted — not yet scheduled" card) MUST create the same
+// job: property resolved, duration = primary hours + extras' minutes, extras as
+// job_line_items, price = primary net when extras exist, quote bumped
+// accepted→scheduled. Anything less silently drops crew time and revenue the
+// customer already approved.
+export async function scheduleQuoteAsJob(
+  supabase: SupabaseClient,
+  userId: string,
+  quote: Quote,
+  opts?: { date?: string; services?: QuoteService[] },
+): Promise<{ jobId: string | null; error: string | null }> {
+  // The quote's property, else the customer's primary.
+  let propertyId: string | null = quote.property_id
+  if (!propertyId && quote.customer_id) {
+    const { data: props } = await supabase
+      .from('properties').select('id')
+      .eq('customer_id', quote.customer_id)
+      .order('is_primary', { ascending: false }).limit(1)
+    if (props && props.length > 0) propertyId = props[0].id
+  }
+
+  // Callers that already hold the service rows pass them; everyone else gets
+  // them fetched here so multi-service quotes can never lose their add-ons.
+  let services = opts?.services
+  if (!services) {
+    const { data } = await supabase
+      .from('quote_services').select('*')
+      .eq('quote_id', quote.id).order('sort_order')
+    services = (data as QuoteService[]) || []
+  }
+
+  // Multi-service: the visit covers every line, so the job's duration includes
+  // the additional services' estimated minutes (primary = hours×60 as before).
+  const { primary: primaryLine, extras: extraLines } = splitServices(services)
+  const extraMinutes = extraLines.reduce((m, s) => m + (Number(s.est_minutes) || 0), 0)
+  const { data: newJob, error } = await supabase.from('jobs').insert({
+    user_id: userId,
+    customer_id: quote.customer_id,
+    property_id: propertyId,
+    quote_id: quote.id,
+    title: `${quote.service_type} — ${quote.customer_name}`,
+    service_type: quote.service_type,
+    scheduled_date: opts?.date || localTodayISO(),
+    duration_minutes: Math.round(Number(quote.hours) * 60) + extraMinutes,
+    crew_size: quote.crew_size,
+    status: 'scheduled',
+    notes: quote.notes,
+    // Multi-service quotes: the job's base value is the PRIMARY line only; the
+    // extras become job_line_items below. quote.initial_price caches primary +
+    // extras, so leaving price null would double-count once add-ons exist.
+    ...(extraLines.length && primaryLine ? { price: serviceLineTotals(primaryLine).net } : {}),
+  }).select('id').single()
+  if (error || !newJob) return { jobId: null, error: error?.message || 'unknown error' }
+
+  // Extras → the EXISTING job add-on rows (one engine: lib/jobPricing
+  // addLineItems — same shape the visit add-on flow, invoice auto-draft and BI
+  // already consume). Base(primary) + add-ons(extras) = the quote total.
+  for (const s of extraLines) {
+    const qty = Number(s.quantity) > 0 ? Number(s.quantity) : 1
+    await addLineItems(supabase, {
+      userId,
+      targetJobIds: [newJob.id as string],
+      description: `${s.service_type}${qty !== 1 ? ` ×${qty}` : ''}`,
+      amount: serviceLineTotals(s).net,
+      serviceType: s.service_type,
+      recurring: false,
+    })
+  }
+
+  if (quote.status === 'accepted') {
+    await supabase.from('quotes').update({ status: 'scheduled' }).eq('id', quote.id)
+  }
+  return { jobId: newJob.id as string, error: null }
+}

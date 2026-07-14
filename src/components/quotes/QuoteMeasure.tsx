@@ -2,10 +2,10 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { loadGoogleMaps } from '@/lib/googleMaps'
+import { loadGoogleMaps, addPropertyPin, flashRing, type PropertyPinHandle } from '@/lib/googleMaps'
 import { pricingPackage, estimateVisitMinutes, PricingConfig, CadenceKey } from '@/lib/pricing'
 import { Coord } from '@/lib/geo'
-import { ProspectContext, loadProspectContext, assessProspect } from '@/lib/prospect'
+import { ProspectContext, loadProspectContext, gradedProspectPricing } from '@/lib/prospect'
 import { PricePackagePanel, CadenceSelection } from '@/components/pricing/PricePackagePanel'
 import { DecisionSummary } from '@/components/pricing/DecisionSummary'
 import { AutoMeasureBanner } from '@/components/measure/AutoMeasureBanner'
@@ -32,11 +32,16 @@ interface Props {
   address: string
   travelFee: number
   cfg: PricingConfig
+  serviceType?: string | null   // the selected service — pricing/duration learn from THIS service only
+  propertyId?: string | null
+  customerId?: string | null
+  services?: string[]           // selectable service names (so the service is chosen BEFORE measuring)
+  onServiceChange?: (name: string) => void
   onApply: (sel: MeasureApplyPayload) => void
   onClose: () => void
 }
 
-export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Props) {
+export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId, customerId, services, onServiceChange, onApply, onClose }: Props) {
   const supabase = createClient()
   const [center, setCenter] = useState<Coord | null>(null)
   const [hoodName, setHoodName] = useState<string | null>(null)
@@ -73,6 +78,11 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
   const preview = useRef<any>(null)
   const overrideRef = useRef(0)
   const autoRef = useRef<AutoMeasureResult | null>(null)
+  // The branded "Selected Property" pin (click-through; survives the whole trace).
+  const setCenterMarker = useRef<PropertyPinHandle | null>(null)
+  // 'located' = rooftop-accurate pin · 'approx' = low-confidence geocode (amber pin
+  // + warning, never silent) · 'failed' = no pin, owner must verify visually.
+  const [geoStatus, setGeoStatus] = useState<'none' | 'located' | 'approx' | 'failed'>('none')
 
   const [ready, setReady] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -113,26 +123,7 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
 
   // Instant "click registered" pulse at the exact spot (zoom-independent).
   function flashClick(latLng: any) {
-    const g = window.google
-    if (!gmap.current) return
-    const pulse = new g.maps.Marker({
-      position: latLng, map: gmap.current, clickable: false, zIndex: 3000,
-      icon: { path: g.maps.SymbolPath.CIRCLE, scale: 7, fillColor: '#00C896', fillOpacity: 0.45, strokeColor: '#FFFFFF', strokeWeight: 2 },
-    })
-    let frame = 0
-    const FRAMES = 18
-    const tick = () => {
-      frame++
-      const t = frame / FRAMES
-      pulse.setIcon({
-        path: g.maps.SymbolPath.CIRCLE, scale: 7 + t * 18,
-        fillColor: '#00C896', fillOpacity: 0.4 * (1 - t),
-        strokeColor: '#FFFFFF', strokeOpacity: 1 - t, strokeWeight: 2,
-      })
-      if (frame < FRAMES) requestAnimationFrame(tick)
-      else pulse.setMap(null)
-    }
-    requestAnimationFrame(tick)
+    if (gmap.current) flashRing(gmap.current, latLng)
   }
 
   function updatePreview(cursor: any) {
@@ -167,6 +158,7 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
         if (cancelled || !mapEl.current) return
 
         let center: { lat: number; lng: number } | null = null
+        let precise = false
         if (address) {
           try {
             const res = await fetch('/api/geocode', {
@@ -177,11 +169,14 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
             const data = await res.json()
             if (res.ok && typeof data.lat === 'number') {
               center = { lat: data.lat, lng: data.lng }
+              precise = data.precise !== false // older API shape (no flag) = trust it
               if (typeof data.neighborhood === 'string') setHoodName(data.neighborhood)
             }
           } catch { /* ignore */ }
         }
         if (center) setCenter(center) // route-density context for the pricing package
+        setGeoStatus(center ? (precise ? 'located' : 'approx') : (address ? 'failed' : 'none'))
+        const hadFix = !!center // pin only where the geocoder actually landed — never on the city fallback
         if (!center) center = { lat: 51.0447, lng: -114.0719 }
         // Re-check after the geocode await — the modal may have been closed.
         if (cancelled || !mapEl.current) return
@@ -193,6 +188,15 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
           // Reliable single-click placement (see MeasureTool for the rationale).
           disableDoubleClickZoom: true, clickableIcons: false, gestureHandling: 'greedy',
         })
+
+        // ── THE branded property pin (shared engine) — instantly obvious WHICH
+        // lot is being quoted; pulses on open; skipped when geocoding failed so
+        // a meaningless city-center pin can never masquerade as the lot.
+        setCenterMarker.current?.remove(); setCenterMarker.current = null
+        if (address && hadFix && gmap.current) {
+          setCenterMarker.current = addPropertyPin(gmap.current, center, precise)
+          setCenterMarker.current?.pulse()
+        }
         gmap.current.addListener('click', (e: any) => {
           flashClick(e.latLng)
           currentPath.current = [...currentPath.current, e.latLng]
@@ -213,6 +217,7 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
       if (g?.maps?.event && gmap.current) g.maps.event.clearInstanceListeners(gmap.current)
       committedOverlays.current.forEach(o => o.setMap(null)); committedOverlays.current = []
       currentOverlay.current?.setMap(null); currentOverlay.current = null
+      setCenterMarker.current?.remove(); setCenterMarker.current = null
       preview.current?.setMap(null); preview.current = null
       gmap.current = null
     }
@@ -252,24 +257,24 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
 
   // The complete recommendation package — same engine the property MeasureTool
   // and travel-density discount use; nearby = located upcoming jobs within range.
-  // Pass 1: base package → Pass 2: grade-adjusted recurring pricing, so recurring
-  // prices reflect the customer's business value (route grade), not just lawn size.
+  // ONE composed result (lib/prospect.gradedProspectPricing): the assessment is
+  // re-run against the grade-adjusted package, so the hero recommendation, CTA,
+  // Pricing Details, Pricing Guidance and "Use recommended" all show the SAME
+  // number — never a $65 hero over $70 details.
   const nearby = prospect?.nearbyJobs ?? 0
-  const basePkg = totalSqft > 0 ? pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount: nearby, neighborhoodName: hoodName }) : null
-  const assessment = basePkg && prospect
-    ? assessProspect(basePkg, prospect, {
+  const graded = totalSqft > 0 && prospect
+    ? gradedProspectPricing(totalSqft, cfg, { overgrowth, nearbyCount: nearby, neighborhoodName: hoodName }, prospect, {
         distanceKm: null, travelFee: Number(travelFee) || 0, neighborhoodName: hoodName,
         estimatedMinutes: estimateVisitMinutes(totalSqft, prospect.observedMinPer1000),
         timedJobs: prospect.timedJobs, crewCostPerHour: crewCost,
       })
     : null
-  const pkg = totalSqft > 0
-    ? pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount: nearby, neighborhoodName: hoodName, valueGrade: assessment?.score ?? null })
-    : null
+  const assessment = graded?.assessment ?? null
+  const pkg = graded?.pkg
+    ?? (totalSqft > 0 ? pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount: nearby, neighborhoodName: hoodName }) : null)
 
-  function applySelection(sel: CadenceSelection) {
-    if (!pkg) return
-    // Record auto vs accepted so the estimate self-calibrates (best-effort).
+  // Record auto vs accepted so the estimate self-calibrates (best-effort).
+  function recordMeasure() {
     ;(async () => {
       const { data: { user } } = await supabase.auth.getUser()
       if (user) recordMeasurement(supabase, {
@@ -277,6 +282,11 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
         neighborhood: neighborhoodOf(null, null, hoodName), auto: autoRef.current, acceptedSqft: totalSqft,
       }).catch(() => {})
     })()
+  }
+
+  function applySelection(sel: CadenceSelection) {
+    if (!pkg) return
+    recordMeasure()
     onApply({
       cadence: sel.cadence,
       price: sel.price,
@@ -298,6 +308,24 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
         </div>
 
         <div className="p-4 space-y-4">
+          {/* Service FIRST — measurement, pricing, duration & profitability are all
+              specific to this service (req: auto-select the service before measuring). */}
+          {services && services.length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap rounded-xl border border-accent/20 bg-accent/[0.04] px-3 py-2">
+              <Ruler className="w-3.5 h-3.5 text-accent shrink-0" />
+              <span className="text-xs font-medium text-ink">Service</span>
+              <select
+                value={serviceType ?? ''}
+                onChange={e => onServiceChange?.(e.target.value)}
+                className="bg-bg border border-border-strong rounded-lg px-2.5 py-1.5 text-sm text-ink outline-none focus:border-accent">
+                <option value="">Select a service…</option>
+                {services.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+              <span className="text-[11px] text-ink-faint">
+                {serviceType ? 'Pricing & duration are specific to this service' : 'Pick a service for service-specific pricing'}
+              </span>
+            </div>
+          )}
           {center && (
             <AutoMeasureBanner lat={center.lat} lng={center.lng}
               neighborhood={neighborhoodOf(null, null, hoodName)}
@@ -311,6 +339,18 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
             </div>
           ) : (
             <>
+              {/* Geocoding honesty — say when the pin is approximate or missing
+                  instead of silently measuring the wrong lot. */}
+              {ready && geoStatus === 'approx' && (
+                <p className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-3 py-2">
+                  Approximate location — the amber pin may not be the exact lot. Verify before quoting.
+                </p>
+              )}
+              {ready && geoStatus === 'failed' && (
+                <p className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-3 py-2">
+                  Couldn&apos;t locate this address — showing the general area with no property pin. Check the address on the quote.
+                </p>
+              )}
               <div className="relative rounded-card overflow-hidden border border-border">
                 <div ref={mapEl} className="w-full h-[45vh] min-h-[300px] bg-bg-tertiary" />
                 {!ready && (
@@ -340,14 +380,14 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
                     <span className="text-lg font-bold text-ink">{totalSqft.toLocaleString()} sq ft</span>
                     {shapes > 0 && <span className="text-xs text-ink-faint">({shapes} + current)</span>}
                   </div>
-                  <label className="flex items-center gap-1.5 text-xs text-ink-muted">
+                  <label className="flex items-center gap-1.5 text-xs text-ink-muted" title="Lawn condition multiplier — 0.75 easy, 1.0 standard, 1.25 overgrown">
                     <input
                       type="number" min="0" step="0.05"
                       value={overgrowthRaw}
                       onChange={e => setOvergrowthRaw(e.target.value)}
                       className="w-16 bg-bg border border-border-strong rounded-lg px-2.5 py-2 text-base sm:text-sm text-ink outline-none focus:border-accent"
                     />
-                    Condition
+                    <span>Condition<span className="block text-[10px] text-ink-faint">1.0 standard · 1.25 overgrown</span></span>
                   </label>
                 </div>
 
@@ -361,6 +401,10 @@ export function QuoteMeasure({ address, travelFee, cfg, onApply, onClose }: Prop
                     ) : (
                       <PricePackagePanel pkg={pkg} onUse={applySelection} />
                     )}
+                    {/* Pricing Intelligence intentionally NOT repeated here — it is the
+                        PRIMARY recommendation card in the Quote Builder itself, so the
+                        modal keeps ONE decision surface (verdict + accept) instead of
+                        three competing CTAs. */}
                   </div>
                 ) : (
                   <div className="border-t border-border pt-3 text-xs text-ink-faint">

@@ -6,6 +6,8 @@ import { loadBusinessIntelligence, BIReport, NamedValue } from '@/lib/businessIn
 import { loadLaborInsights, LaborInsights, ServiceAccuracy, ServiceProfit } from '@/lib/labor'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Skeleton, SkeletonTiles } from '@/components/ui/Skeleton'
+import { StatTile } from '@/components/ui/StatTile'
+import { Collapsible } from '@/components/ui/Collapsible'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { formatCurrency, cn } from '@/lib/utils'
 import { TrendingUp, TrendingDown, DollarSign, Gauge, Users, Target, Activity, LineChart, Home, AlertTriangle } from 'lucide-react'
@@ -106,16 +108,22 @@ export default function IntelligencePage() {
 
       {/* ── OPERATIONS ── */}
       <Section title="Operations" icon={Activity}>
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+          {/* "Estimate accuracy" lives ONCE — in the Labour section below (the two
+              engines' numbers could disagree, so only the learned one is shown). */}
           <Stat label="Capacity used (4 wk)" value={bi.operations.capacityUtilizationPct != null ? `${bi.operations.capacityUtilizationPct}%` : '—'} sub="of workday capacity" />
           <Stat label="Booked next 2 wk" value={bi.operations.bookedUtilizationPct != null ? `${bi.operations.bookedUtilizationPct}%` : '—'} sub="of capacity" />
-          <Stat label="Labor estimate accuracy" value={bi.operations.laborAccuracyPct != null ? `${bi.operations.laborAccuracyPct}%` : '—'} sub={`${bi.operations.timedJobs} timed jobs`} />
           <Stat label="Avg route density" value={`${bi.operations.avgRouteDensity}/100`} sub="how clustered you are" />
         </div>
       </Section>
 
-      {/* ── LABOUR ACCURACY & CREW EFFICIENCY ── (merged from the former Labor Intelligence page) */}
-      <Section title="Labour accuracy & crew efficiency" icon={Gauge}>
+      {/* ── LABOUR ACCURACY & CREW EFFICIENCY ── (merged from the former Labor
+          Intelligence page). Collapsed by default — it's a deep-dive, not a daily
+          decision; the one-line summary keeps the headline number visible. */}
+      <Collapsible title="Labour accuracy & crew efficiency" icon={Gauge}
+        summary={labor && labor.trainingJobs >= 1
+          ? `${labor.overallAccuracyPct != null ? `${labor.overallAccuracyPct}% estimate accuracy` : ''} · ${labor.trainingJobs} timed job${labor.trainingJobs !== 1 ? 's' : ''}`
+          : 'No timed jobs yet — check in/out in Day Ops to start learning'}>
         {labor && labor.trainingJobs >= 1 ? (
           <div className="space-y-3">
             <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
@@ -183,13 +191,12 @@ export default function IntelligencePage() {
             <p className="text-xs text-ink-muted mt-1">Start and complete jobs in Day Ops (check-in / check-out) and the model learns automatically. The Smart Estimate falls back to lawn size until then.</p>
           </div>
         )}
-      </Section>
+      </Collapsible>
 
-      {/* ── FORECASTING ── */}
+      {/* ── FORECASTING ── ("Projected this month" lives once, in Financial above) */}
       <Section title="Forecasting" icon={LineChart}>
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <Stat label="Projected this month" value={formatCurrency(bi.forecasting.projectedThisMonth)} accent />
-          <Stat label="Recurring run-rate" value={formatCurrency(bi.forecasting.projectedRecurringAnnual)} sub="/yr locked in" />
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+          <Stat label="Recurring run-rate" value={formatCurrency(bi.forecasting.projectedRecurringAnnual)} sub="/yr locked in" accent />
           <Stat label="Rest of season" value={formatCurrency(bi.forecasting.projectedSeasonRemaining)} sub="recurring booked" />
           <Stat label="Growth trend" value={bi.forecasting.growthForecastPct != null ? `${bi.forecasting.growthForecastPct > 0 ? '+' : ''}${bi.forecasting.growthForecastPct}%` : '—'} delta={bi.forecasting.growthForecastPct} deltaLabel="3-mo revenue" />
         </div>
@@ -209,20 +216,17 @@ function Section({ title, icon: Icon, children }: { title: string; icon: typeof 
   )
 }
 
+// Thin adapter over the ONE shared KPI tile — the delta (▲/▼ vs last period)
+// renders as the tile's `sub` node, so the change is highlighted right under
+// the number without a second tile style existing anywhere.
 function Stat({ label, value, sub, delta, deltaLabel, accent }: { label: string; value: string; sub?: string; delta?: number | null; deltaLabel?: string; accent?: boolean }) {
-  return (
-    <div className={cn('rounded-card border p-3.5', accent ? 'border-accent/30 bg-accent/[0.05]' : 'border-border bg-bg-secondary')}>
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className={cn('text-xl font-black mt-1', accent ? 'text-accent' : 'text-ink')}>{value}</p>
-      {delta != null && (
-        <p className={cn('text-[11px] font-semibold mt-0.5 flex items-center gap-1', delta >= 0 ? 'text-emerald-400' : 'text-red-400')}>
-          {delta >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-          {delta > 0 ? '+' : ''}{delta}% {deltaLabel && <span className="text-ink-faint font-normal">{deltaLabel}</span>}
-        </p>
-      )}
-      {sub && delta == null && <p className="text-[11px] text-ink-muted mt-0.5">{sub}</p>}
-    </div>
-  )
+  const deltaNode = delta != null ? (
+    <span className={cn('font-semibold inline-flex items-center gap-1', delta >= 0 ? 'text-emerald-400' : 'text-red-400')}>
+      {delta >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+      {delta > 0 ? '+' : ''}{delta}% {deltaLabel && <span className="text-ink-faint font-normal">{deltaLabel}</span>}
+    </span>
+  ) : null
+  return <StatTile label={label} value={value} accent={accent} sub={deltaNode ?? sub} />
 }
 
 function RankList({ title, items, fmt, subFmt }: { title: string; items: NamedValue[]; fmt: (v: number) => string; subFmt?: (v: number) => string }) {

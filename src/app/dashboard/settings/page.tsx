@@ -15,7 +15,7 @@ import { MessageTemplateEditor } from '@/components/settings/MessageTemplateEdit
 import { MessagingUsage } from '@/components/settings/MessagingUsage'
 import { AutomationToggles } from '@/components/settings/AutomationToggles'
 import { PushNotificationSettings } from '@/components/settings/PushNotificationSettings'
-import { BookingLink } from '@/components/settings/BookingLink'
+import { WebsiteIntegration } from '@/components/settings/WebsiteIntegration'
 import { Tabs, type TabItem } from '@/components/ui/Tabs'
 import { useForm, Controller } from 'react-hook-form'
 import { cn } from '@/lib/utils'
@@ -93,6 +93,7 @@ export default function SettingsPage() {
         payment_fee_strategy: settings.payment_fee_strategy ?? 'global_price_increase',
         fee_recovery_percent: settings.fee_recovery_percent ?? 3,
         etransfer_discount_percent: settings.etransfer_discount_percent ?? 0,
+        etransfer_email: settings.etransfer_email || '',
         gst_percent: settings.gst_percent ?? 0,
         autopay_charge_mode: settings.autopay_charge_mode ?? 'auto',
         autopay_variance_pct: settings.autopay_variance_pct ?? 40,
@@ -148,6 +149,7 @@ export default function SettingsPage() {
         payment_fee_strategy: values.payment_fee_strategy || 'global_price_increase',
         fee_recovery_percent: Number(values.fee_recovery_percent) >= 0 ? Number(values.fee_recovery_percent) : 3,
         etransfer_discount_percent: Number(values.etransfer_discount_percent) >= 0 ? Number(values.etransfer_discount_percent) : 0,
+        etransfer_email: values.etransfer_email?.trim() || null,
         gst_percent: Number(values.gst_percent) >= 0 ? Number(values.gst_percent) : 0,
         autopay_charge_mode: values.autopay_charge_mode === 'manual_review' ? 'manual_review' : 'auto',
         autopay_variance_pct: Number(values.autopay_variance_pct) >= 0 ? Number(values.autopay_variance_pct) : 40,
@@ -158,6 +160,13 @@ export default function SettingsPage() {
         base_lat: null, base_lng: null,
       })
       .eq('user_id', user!.id)
+    // The sticky footer promises "save everything" — so it must also persist any
+    // edited travel-fee tier rows (they previously needed their own per-row save).
+    await Promise.all(localTiers.filter(t => t.id).map(t =>
+      supabase.from('travel_fee_tiers')
+        .update({ min_km: t.min_km, max_km: t.max_km, fee: t.fee, is_custom: t.fee === null })
+        .eq('id', t.id),
+    ))
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
     refresh()
@@ -231,7 +240,7 @@ export default function SettingsPage() {
                 <input type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} disabled={uploading} />
               </label>
               <p className="text-xs text-ink-faint mt-2 max-w-xs">
-                Upload your official Edge Property Services logo. Used in the sidebar, on the login screen and on PDF quotes &amp; invoices.
+                Upload your company logo. Used in the sidebar, on the login screen and on PDF quotes &amp; invoices.
               </p>
             </div>
           </div>
@@ -345,7 +354,7 @@ export default function SettingsPage() {
                 className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all">
                 <option value="global_price_increase">Global price increase (recommended)</option>
                 <option value="absorb">Absorb the fee (no change)</option>
-                <option value="etransfer_discount">E-transfer discount (coming soon)</option>
+                <option value="etransfer_discount" disabled>E-transfer discount (coming soon)</option>
               </select>
               <p className="text-xs text-ink-faint">“Global price increase” adds the % below to every NEW quote so card fees are covered. Existing quotes are never changed.</p>
             </div>
@@ -357,9 +366,9 @@ export default function SettingsPage() {
                 hint="Alberta GST is 5%. Leave 0 if you're not GST-registered — no GST line will be shown."
                 {...register('gst_percent')} />
             </div>
-            <Input label="E-transfer discount % (future — leave 0)" type="number" step="0.5" min="0" max="10"
-              hint="Reserved for a future cash/e-transfer discount. Not active yet."
-              {...register('etransfer_discount_percent')} />
+            <Input label="E-transfer email" type="email" placeholder="pay@yourbusiness.com"
+              hint="The email registered with your bank for Interac e-transfers (often your business email). Shown to customers in the portal's Ways to pay."
+              {...register('etransfer_email')} />
 
             {/* ── Recurring AutoPay ── */}
             <div className="pt-4 mt-2 border-t border-border">
@@ -425,7 +434,6 @@ export default function SettingsPage() {
                 <p className="text-xs text-ink-faint">Days past this show as overloaded; days with an hour+ spare show room for more jobs.</p>
               </div>
             </div>
-            <p className="text-xs text-ink-faint">Save (below) to apply.</p>
           </CardBody>
         </Card>
 
@@ -547,7 +555,7 @@ export default function SettingsPage() {
 
       {/* BOOKING */}
       <div className={cn('space-y-6', tab !== 'booking' && 'hidden')}>
-        <BookingLink />
+        <WebsiteIntegration />
       </div>
     </div>
   )

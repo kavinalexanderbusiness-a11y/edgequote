@@ -119,6 +119,8 @@ function hoursBetween(start: string, end: string): number {
   const mins = (Number(eh) * 60 + Number(em)) - (Number(sh) * 60 + Number(sm))
   return Math.max(0, mins / 60)
 }
+function hhmmToMin(hhmm: string): number { const [h, m = '0'] = hhmm.split(':'); return Number(h) * 60 + Number(m) }
+function minToHHMM(min: number): string { return `${String(Math.floor(min / 60) % 24).padStart(2, '0')}:${String(Math.round(min) % 60).padStart(2, '0')}` }
 
 // Crew working that day (override → default).
 export function dayCrew(row: DayStatusRow | null | undefined, def: CapacityDefaults): number {
@@ -132,6 +134,16 @@ export function dayWorkHours(row: DayStatusRow | null | undefined, def: Capacity
 export function dayLaborHours(row: DayStatusRow | null | undefined, def: CapacityDefaults): number {
   if (row?.blocks) return 0
   return dayCrew(row, def) * dayWorkHours(row, def)
+}
+// Effective working START for a day (override → business default), 'HH:mm'. The
+// scheduler feeds this to the timing engine so ETAs shift when the day's start does.
+export function dayStartTime(row: DayStatusRow | null | undefined, defaultStart: string): string {
+  return row?.starts_at?.slice(0, 5) || defaultStart
+}
+// Effective working END for a day: explicit override, else start + per-crew hours.
+export function dayEndTime(row: DayStatusRow | null | undefined, def: CapacityDefaults, defaultStart: string): string {
+  if (row?.ends_at) return row.ends_at.slice(0, 5)
+  return minToHHMM(hhmmToMin(dayStartTime(row, defaultStart)) + Math.round(def.hours * 60))
 }
 // A per-date labor-hours function for the optimizer / capacity math / Weather Ops.
 export function buildCapacityForDate(map: DayStatusMap | null | undefined, def: CapacityDefaults): (dateISO: string) => number {
@@ -159,14 +171,23 @@ export interface SetDayStatusInput {
   createdBy?: string | null
 }
 
-// Set (or change) a day's status — upsert on (user, date).
+// Set (or change) a day's status — upsert on (user, date). Fields the caller
+// doesn't specify are PRESERVED from the existing row (setting a day to "Rain"
+// must not wipe a crew/hours override saved via Day Settings — they're
+// independent facts about the same day).
 export async function setDayStatus(supabase: SupabaseClient, userId: string, date: string, input: SetDayStatusInput) {
   const blocks = input.blocks ?? dayStatusMeta(input.status).defaultBlocks
+  const { data } = await supabase.from('day_statuses')
+    .select('label, notes, starts_at, ends_at, crew_size')
+    .eq('user_id', userId).eq('date', date).maybeSingle()
+  const cur = data as Pick<DayStatusRow, 'label' | 'notes' | 'starts_at' | 'ends_at' | 'crew_size'> | null
   return supabase.from('day_statuses').upsert({
     user_id: userId, date, status: input.status, blocks,
-    label: input.label ?? null, notes: input.notes ?? null,
-    starts_at: input.startsAt ?? null, ends_at: input.endsAt ?? null,
-    crew_size: input.crewSize ?? null,
+    label: input.label !== undefined ? input.label : (cur?.label ?? null),
+    notes: input.notes !== undefined ? input.notes : (cur?.notes ?? null),
+    starts_at: input.startsAt !== undefined ? input.startsAt : (cur?.starts_at ?? null),
+    ends_at: input.endsAt !== undefined ? input.endsAt : (cur?.ends_at ?? null),
+    crew_size: input.crewSize !== undefined ? input.crewSize : (cur?.crew_size ?? null),
     created_by: input.createdBy ?? null, updated_at: new Date().toISOString(),
   }, { onConflict: 'user_id,date' })
 }

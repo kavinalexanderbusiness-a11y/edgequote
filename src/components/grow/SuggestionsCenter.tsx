@@ -92,7 +92,16 @@ export function SuggestionsCenter() {
     return c
   }, [items])
   const CAP = 6
-  const inCategory = filter === 'all' ? items : items.filter(s => s.category === filter)
+  // Rank by confidence-weighted value so the list answers "what should I do FIRST":
+  // a high-confidence $300 beats a low-confidence $500; recurring (annual) impact
+  // outweighs one-time; zero-impact problem/route cards sort by confidence alone.
+  const CONF_W: Record<Confidence, number> = { high: 1, medium: 0.6, low: 0.3 }
+  const ranked = useMemo(() =>
+    [...items].sort((a, b) => {
+      const score = (s: Suggestion) => CONF_W[s.confidence] * (s.impact > 0 ? s.impact * (s.oneTime ? 0.6 : 1) : 50)
+      return score(b) - score(a)
+    }), [items]) // eslint-disable-line react-hooks/exhaustive-deps
+  const inCategory = filter === 'all' ? ranked : ranked.filter(s => s.category === filter)
   const lowHidden = showLow ? 0 : inCategory.filter(s => s.confidence === 'low').length
   const filtered = showLow ? inCategory : inCategory.filter(s => s.confidence !== 'low')
   const visible = showAll ? filtered : filtered.slice(0, CAP)
@@ -193,6 +202,9 @@ function SuggestionCard({ s, applying, applied, onAction, onDismiss }: { s: Sugg
   const [showWhy, setShowWhy] = useState(false)
   const [showCalc, setShowCalc] = useState(false)
   const actions = s.actions && s.actions.length ? s.actions : [s.action]
+  // Time-required — a display heuristic from the action shape (NOT another engine):
+  // one-click applies land in ~1 min; anything that navigates to do work is ~5 min.
+  const effortMin = actions.some(a => a.kind === 'apply-price' || a.kind === 'create-recurring') ? 1 : 5
 
   function renderAction(a: SuggestionAction, i: number) {
     if (a.kind === 'navigate') {
@@ -229,6 +241,9 @@ function SuggestionCard({ s, applying, applied, onAction, onDismiss }: { s: Sugg
         {s.timeSavedMin != null && s.timeSavedMin > 0 && (
           <span className="text-xs text-ink-muted flex items-center gap-1"><Clock className="w-3 h-3" /> {s.timeSavedMin} min saved</span>
         )}
+        <span className="text-xs text-ink-faint flex items-center gap-1" title="Roughly how long this takes to act on">
+          <Clock className="w-3 h-3" /> ~{effortMin} min to do
+        </span>
         {s.distanceSavedKm != null && s.distanceSavedKm > 0 && (
           <span className="text-xs text-ink-muted flex items-center gap-1"><Navigation className="w-3 h-3" /> {s.distanceSavedKm} km saved</span>
         )}

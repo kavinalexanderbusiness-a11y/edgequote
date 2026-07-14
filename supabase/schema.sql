@@ -401,7 +401,11 @@ create table if not exists public.invoices (
   job_id         uuid references public.jobs(id) on delete set null,
   line_items     jsonb,
   paid_at        timestamptz,
-  payment_method text check (payment_method is null or payment_method in ('stripe','etransfer','cash','cheque'))
+  payment_method text check (payment_method is null or payment_method in ('stripe','etransfer','cash','cheque')),
+  -- Discount (fixed $ or %). amount stays the NET (post-discount) subtotal; these are
+  -- display + recompute metadata only (see RUN-2026-06-27-invoice-discounts.sql).
+  discount_type  text check (discount_type is null or discount_type in ('amount','percent')),
+  discount_value numeric(10,2)
 );
 alter table public.invoices enable row level security;
 drop trigger if exists invoices_updated_at on public.invoices;
@@ -419,6 +423,15 @@ create index if not exists invoices_customer_id_idx on public.invoices(customer_
 create index if not exists invoices_property_id_idx on public.invoices(property_id);
 create index if not exists invoices_quote_id_idx    on public.invoices(quote_id);
 create index if not exists invoices_job_id_idx      on public.invoices(job_id);
+-- Invoice discounts (idempotent — mirrors RUN-2026-06-27-invoice-discounts.sql).
+alter table public.invoices add column if not exists discount_type  text;
+alter table public.invoices add column if not exists discount_value numeric(10,2);
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'invoices_discount_type_check') then
+    alter table public.invoices add constraint invoices_discount_type_check
+      check (discount_type is null or discount_type in ('amount','percent'));
+  end if;
+end $$;
 -- Finding #1 fix: at most one invoice per job (atomic guard against a double-complete
 -- minting a second invoice → a second AutoPay charge). No live duplicates exist.
 create unique index if not exists invoices_job_id_key on public.invoices(job_id) where job_id is not null;
@@ -1469,6 +1482,30 @@ drop policy if exists "messages: insert own" on public.messages;
 create policy "messages: insert own" on public.messages for insert with check (auth.uid() = user_id);
 create index if not exists messages_convo_idx on public.messages(conversation_id, created_at);
 
+-- Message-send idempotency guard (see RUN-2026-07-07-message-idempotency.sql).
+-- One reservation per LOGICAL send, keyed by a client-generated client_message_id
+-- reused across every retry / offline replay / concurrent tab. The composite PK is
+-- the atomic at-most-once guard the comms routes claim before dispatching SMS/email;
+-- nothing is sent from here (not a second messaging system).
+create table if not exists public.message_sends (
+  user_id           uuid not null references auth.users(id) on delete cascade,
+  client_message_id text not null,
+  created_at        timestamptz not null default now(),
+  channel           text,
+  status            text,
+  primary key (user_id, client_message_id)
+);
+alter table public.message_sends enable row level security;
+do $$ begin
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='message_sends' and policyname='message_sends: select own') then
+    create policy "message_sends: select own" on public.message_sends for select using (auth.uid() = user_id); end if;
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='message_sends' and policyname='message_sends: insert own') then
+    create policy "message_sends: insert own" on public.message_sends for insert with check (auth.uid() = user_id); end if;
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='message_sends' and policyname='message_sends: update own') then
+    create policy "message_sends: update own" on public.message_sends for update using (auth.uid() = user_id); end if;
+end $$;
+create index if not exists message_sends_age_idx on public.message_sends(created_at);
+
 -- Keep the conversation summary + owner unread in sync on every message.
 create or replace function public.bump_conversation() returns trigger language plpgsql security definer set search_path = public as $$
 begin
@@ -2508,6 +2545,8 @@ create table if not exists public.website_leads (
   frequency               text,
   yard_condition          text,
   website_estimated_price numeric,
+  budget                  text,
+  preferred_schedule      text,
   notes                   text
 );
 alter table public.website_leads enable row level security;
@@ -3037,3 +3076,517 @@ do $$ begin
       alter publication supabase_realtime add table public.crm_campaign_log; end if;
   end if;
 end $$;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-27 — Invoice discounts ($ or %) on the customer portal.
+-- get_portal_data also returns invoices.discount_type/discount_value so the portal
+-- can show the discount in its totals breakdown. invoices.amount stays the NET
+-- subtotal, so charged totals are unaffected. (Columns added near the invoices table
+-- above.) See RUN-2026-06-27-invoice-discounts.sql.
+-- ════════════════════════════════════════════════════════════
+create or replace function public.get_portal_data(p_token text)
+returns json language plpgsql security definer set search_path = public as $$
+declare v_customer uuid; v_user uuid; result json;
+begin
+  select customer_id, user_id into v_customer, v_user
+    from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return null; end if;
+  select json_build_object(
+    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code, sms_opt_in, email_opt_in, reviewed_at, autopay_enabled from public.customers where id = v_customer) c),
+    'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, email_secondary, website, logo_url, logo_scale, base_address, terms_text, review_url, coalesce(gst_percent,0) as gst_percent from public.business_settings where user_id = v_user) b),
+    'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood, notes from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
+    'quotes', coalesce((select json_agg(q order by q.created_at desc) from (select id, quote_number, service_type, address, total, initial_price, subtotal, weekly_price, biweekly_price, monthly_price, notes, status, created_at, issued_date, crew_size, hours, travel_fee from public.quotes where customer_id = v_customer and status <> 'draft') q), '[]'::json),
+    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, status, issued_date, due_date, notes, address, line_items, job_id, created_at, discount_type, discount_value from public.invoices where customer_id = v_customer) i), '[]'::json),
+    'payments', coalesce((select json_agg(pm order by pm.paid_at desc nulls last) from (select id, amount, status, paid_at, provider, invoice_id, created_at from public.payments where customer_id = v_customer and status = 'paid') pm), '[]'::json),
+    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, notes from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
+    'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, end_date from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
+    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json),
+    'payment_method', (select to_json(pm) from (select brand, last4, exp_month, exp_year from public.payment_methods where customer_id = v_customer and is_default order by created_at desc limit 1) pm)
+  ) into result;
+  return result;
+end; $$;
+grant execute on function public.get_portal_data(text) to anon, authenticated;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-27 — Payment ledger + customer credit.
+-- Multiple payments per invoice; amount_paid + status derived by trigger; customer
+-- credit as ledger rows (kind='credit'). See RUN-2026-06-27-payment-ledger.sql.
+-- ════════════════════════════════════════════════════════════
+alter table public.payments
+  add column if not exists kind   text not null default 'payment',
+  add column if not exists method text,
+  add column if not exists notes  text;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'payments_kind_check') then
+    alter table public.payments add constraint payments_kind_check check (kind in ('payment','credit'));
+  end if;
+end $$;
+do $$ begin
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='payments' and policyname='payments: insert own') then
+    create policy "payments: insert own" on public.payments for insert with check (auth.uid() = user_id);
+    create policy "payments: update own" on public.payments for update using (auth.uid() = user_id);
+    create policy "payments: delete own" on public.payments for delete using (auth.uid() = user_id);
+  end if;
+end $$;
+create index if not exists payments_customer_kind_idx on public.payments(customer_id, kind);
+alter table public.invoices add column if not exists amount_paid numeric(10,2) not null default 0;
+
+create or replace function public.recompute_invoice_paid() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare v_inv uuid; v_paid numeric; v_amount numeric; v_gst numeric; v_total numeric; v_user uuid; v_status text;
+begin
+  v_inv := coalesce(new.invoice_id, old.invoice_id);
+  if v_inv is null then return coalesce(new, old); end if;
+  select amount, user_id, status into v_amount, v_user, v_status from public.invoices where id = v_inv;
+  if not found then return coalesce(new, old); end if;
+  select coalesce(sum(amount),0) into v_paid from public.payments where invoice_id = v_inv and kind='payment' and status='paid';
+  select coalesce(gst_percent,0) into v_gst from public.business_settings where user_id = v_user;
+  v_total := round(coalesce(v_amount,0) * (1 + coalesce(v_gst,0)/100), 2);
+  update public.invoices set
+    amount_paid = round(v_paid,2),
+    paid_at = case when v_paid >= v_total and v_total > 0 then coalesce(paid_at, now())
+                   when v_paid <= 0 then null else paid_at end,
+    status = case
+      when status='draft' then 'draft'
+      when v_paid <= 0 then (case when status in ('paid','partial','overpaid') then 'unpaid' else status end)
+      when v_paid + 0.01 < v_total then 'partial'
+      when v_paid <= v_total + 0.01 then 'paid'
+      else 'overpaid' end
+  where id = v_inv;
+  return coalesce(new, old);
+end; $$;
+drop trigger if exists trg_recompute_invoice_paid on public.payments;
+create trigger trg_recompute_invoice_paid after insert or update or delete on public.payments
+  for each row execute function public.recompute_invoice_paid();
+
+-- get_portal_data + portal_invoice_for_payment — final superset (amount_paid, discount, payment kind).
+create or replace function public.get_portal_data(p_token text)
+returns json language plpgsql security definer set search_path = public as $$
+declare v_customer uuid; v_user uuid; result json;
+begin
+  select customer_id, user_id into v_customer, v_user
+    from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return null; end if;
+  select json_build_object(
+    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code, sms_opt_in, email_opt_in, reviewed_at, autopay_enabled from public.customers where id = v_customer) c),
+    'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, email_secondary, website, logo_url, logo_scale, base_address, terms_text, review_url, coalesce(gst_percent,0) as gst_percent from public.business_settings where user_id = v_user) b),
+    'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood, notes from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
+    'quotes', coalesce((select json_agg(q order by q.created_at desc) from (select id, quote_number, service_type, address, total, initial_price, subtotal, weekly_price, biweekly_price, monthly_price, notes, status, created_at, issued_date, crew_size, hours, travel_fee from public.quotes where customer_id = v_customer and status <> 'draft') q), '[]'::json),
+    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, amount_paid, status, issued_date, due_date, notes, address, line_items, job_id, created_at, discount_type, discount_value from public.invoices where customer_id = v_customer) i), '[]'::json),
+    'payments', coalesce((select json_agg(pm order by pm.paid_at desc nulls last) from (select id, amount, status, paid_at, provider, kind, invoice_id, created_at from public.payments where customer_id = v_customer and status = 'paid') pm), '[]'::json),
+    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, notes from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
+    'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, end_date from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
+    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json),
+    'payment_method', (select to_json(pm) from (select brand, last4, exp_month, exp_year from public.payment_methods where customer_id = v_customer and is_default order by created_at desc limit 1) pm)
+  ) into result;
+  return result;
+end; $$;
+grant execute on function public.get_portal_data(text) to anon, authenticated;
+
+create or replace function public.portal_invoice_for_payment(p_token text, p_invoice_id uuid)
+returns json language plpgsql security definer set search_path = public as $$
+declare v_customer uuid; result json;
+begin
+  select customer_id into v_customer from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return null; end if;
+  select to_json(i) into result from (
+    select id, invoice_number, service_type, amount, amount_paid, status, customer_id, user_id
+    from public.invoices where id = p_invoice_id and customer_id = v_customer and status in ('unpaid','sent','partial')
+  ) i;
+  return result;
+end; $$;
+grant execute on function public.portal_invoice_for_payment(text, uuid) to anon, authenticated;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-06-27 — Multi-service quotes (quote_services)
+-- ════════════════════════════════════════════════════════════
+-- A quote can hold one or many services. When rows exist they are the source of
+-- truth; quotes.service_type / initial_price are derived caches (primary label +
+-- summed net) so the generated quotes.total stays correct for every consumer.
+create table if not exists public.quote_services (
+  id                  uuid primary key default uuid_generate_v4(),
+  created_at          timestamptz not null default now(),
+  user_id             uuid not null references auth.users(id) on delete cascade,
+  quote_id            uuid not null references public.quotes(id) on delete cascade,
+  service_type        text not null,
+  service_template_id uuid references public.service_templates(id) on delete set null,
+  quantity            numeric not null default 1,
+  unit                text,                                -- each | hour | sqft | linear_ft
+  unit_price          numeric not null default 0,          -- customer-facing (fee recovery baked in)
+  est_minutes         int,
+  discount_type       text check (discount_type in ('amount','percent')),
+  discount_value      numeric,
+  notes               text,
+  sort_order          int not null default 0               -- 0 = the primary service
+);
+alter table public.quote_services enable row level security;
+do $$ begin
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='quote_services' and policyname='quote_services: select own') then
+    create policy "quote_services: select own" on public.quote_services for select using (auth.uid() = user_id);
+  end if;
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='quote_services' and policyname='quote_services: insert own') then
+    create policy "quote_services: insert own" on public.quote_services for insert with check (auth.uid() = user_id);
+  end if;
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='quote_services' and policyname='quote_services: update own') then
+    create policy "quote_services: update own" on public.quote_services for update using (auth.uid() = user_id);
+  end if;
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='quote_services' and policyname='quote_services: delete own') then
+    create policy "quote_services: delete own" on public.quote_services for delete using (auth.uid() = user_id);
+  end if;
+end $$;
+create index if not exists quote_services_user_quote_idx on public.quote_services(user_id, quote_id);
+create index if not exists quote_services_quote_sort_idx on public.quote_services(quote_id, sort_order);
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-07-02 — Manual route order (drag-and-drop day sequencing)
+-- ════════════════════════════════════════════════════════════
+-- null = automatic (optimizer orders the day); 1..N = the owner's manual order.
+alter table public.jobs add column if not exists route_order int;
+-- Moving a job to another date clears its manual order at the source (no app
+-- path can forget to) — it appends to the target day's sequence. An update that
+-- EXPLICITLY sets route_order alongside the date keeps its value (that's how
+-- Undo restores a job's manual position when moving it back).
+create or replace function public.clear_route_order_on_move() returns trigger
+language plpgsql as $$
+begin
+  if new.scheduled_date is distinct from old.scheduled_date
+     and new.route_order is not distinct from old.route_order then
+    new.route_order := null;
+  end if;
+  return new;
+end $$;
+drop trigger if exists trg_jobs_clear_route_order on public.jobs;
+create trigger trg_jobs_clear_route_order before update of scheduled_date on public.jobs
+  for each row execute function public.clear_route_order_on_move();
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-07-02 — Invoice lifecycle: Viewed + Cancelled.
+-- Completes the QuickBooks-style flow: Draft → Sent → Viewed → Partial → Paid,
+-- with Overdue derived at read time (ledger.ts) and Cancelled as a terminal
+-- stored status. Idempotent; safe to re-run.
+--   • viewed_at — stamped (once) when the CUSTOMER opens the invoice in the
+--     portal, via a token-scoped RPC (same pattern as portal_mark_reviewed).
+--     'Viewed' is a display overlay of 'sent', never a stored status.
+--   • 'cancelled' — added to the status check. The payments-ledger trigger is
+--     guarded so recording/removing payments never resurrects a cancelled
+--     invoice; the app only allows cancelling when nothing has been paid.
+-- ════════════════════════════════════════════════════════════
+
+alter table public.invoices add column if not exists viewed_at timestamptz;
+
+-- Status check now includes 'cancelled' (supersedes the 2026-06-27 ledger check).
+alter table public.invoices drop constraint if exists invoices_status_check;
+alter table public.invoices add constraint invoices_status_check
+  check (status in ('draft','unpaid','sent','partial','paid','overpaid','cancelled'));
+
+-- Ledger trigger: leave cancelled invoices alone (a refund on a cancelled
+-- invoice must not flip it back to 'unpaid').
+create or replace function public.recompute_invoice_paid() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare
+  v_invoice_id uuid;
+  v_inv record;
+  v_paid numeric;
+  v_total numeric;
+  v_gst numeric;
+begin
+  v_invoice_id := coalesce(new.invoice_id, old.invoice_id);
+  if v_invoice_id is null then return coalesce(new, old); end if;
+
+  select i.*, bs.gst_percent into v_inv
+  from public.invoices i
+  left join public.business_settings bs on bs.user_id = i.user_id
+  where i.id = v_invoice_id;
+  if not found then return coalesce(new, old); end if;
+
+  select coalesce(sum(p.amount), 0) into v_paid
+  from public.payments p
+  where p.invoice_id = v_invoice_id and p.kind = 'payment' and p.status = 'paid';
+
+  v_gst := coalesce(v_inv.gst_percent, 0);
+  v_total := round(v_inv.amount * (1 + v_gst / 100), 2);
+
+  update public.invoices set
+    amount_paid = v_paid,
+    paid_at = case when v_paid + 0.01 >= v_total and v_total > 0 then coalesce(paid_at, now()) else null end,
+    status = case
+      when status = 'cancelled' then status                    -- terminal: never auto-revived
+      when status = 'draft' then status
+      when v_paid <= 0 then (case when status in ('paid','partial','overpaid') then 'unpaid' else status end)
+      when v_paid + 0.01 < v_total then 'partial'
+      when v_paid <= v_total + 0.01 then 'paid'
+      else 'overpaid'
+    end
+  where id = v_invoice_id;
+
+  return coalesce(new, old);
+end; $$;
+
+-- Customer opened this invoice in the portal (idempotent; token-scoped so the
+-- anon portal can call it for its own customer's invoices only).
+create or replace function public.portal_mark_invoice_viewed(p_token text, p_invoice_id uuid)
+returns void language plpgsql security definer set search_path = public as $$
+declare v_customer uuid; v_user uuid;
+begin
+  select customer_id, user_id into v_customer, v_user
+  from public.customer_portal_tokens
+  where token = p_token and not revoked;
+  if v_customer is null then return; end if;
+  update public.invoices
+     set viewed_at = coalesce(viewed_at, now())
+   where id = p_invoice_id and customer_id = v_customer and user_id = v_user
+     and status <> 'draft';
+end; $$;
+grant execute on function public.portal_mark_invoice_viewed(text, uuid) to anon, authenticated;
+
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-07-07 — Portal: multi-service quote breakdown
+-- ════════════════════════════════════════════════════════════
+-- get_portal_data quotes now carry a nested services array (quote_services),
+-- so the portal + portal PDF show every line instead of a lump sum.
+create or replace function public.get_portal_data(p_token text)
+returns json language plpgsql security definer set search_path = public as $$
+declare v_customer uuid; v_user uuid; result json;
+begin
+  select customer_id, user_id into v_customer, v_user
+    from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return null; end if;
+  select json_build_object(
+    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code, sms_opt_in, email_opt_in, reviewed_at, autopay_enabled from public.customers where id = v_customer) c),
+    'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, email_secondary, website, logo_url, logo_scale, base_address, terms_text, review_url, coalesce(gst_percent,0) as gst_percent from public.business_settings where user_id = v_user) b),
+    'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood, notes from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
+    'quotes', coalesce((select json_agg(q order by q.created_at desc) from (
+      select qt.id, qt.quote_number, qt.service_type, qt.address, qt.total, qt.initial_price, qt.subtotal,
+             qt.weekly_price, qt.biweekly_price, qt.monthly_price, qt.notes, qt.status, qt.created_at,
+             qt.issued_date, qt.crew_size, qt.hours, qt.travel_fee,
+             coalesce((select json_agg(s order by s.sort_order) from (
+               select qs.service_type, qs.quantity, qs.unit, qs.unit_price, qs.est_minutes,
+                      qs.discount_type, qs.discount_value, qs.notes, qs.sort_order
+               from public.quote_services qs where qs.quote_id = qt.id
+             ) s), '[]'::json) as services
+      from public.quotes qt where qt.customer_id = v_customer and qt.status <> 'draft') q), '[]'::json),
+    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, amount_paid, status, issued_date, due_date, notes, address, line_items, job_id, created_at, discount_type, discount_value from public.invoices where customer_id = v_customer) i), '[]'::json),
+    'payments', coalesce((select json_agg(pm order by pm.paid_at desc nulls last) from (select id, amount, status, paid_at, provider, kind, invoice_id, created_at from public.payments where customer_id = v_customer and status = 'paid') pm), '[]'::json),
+    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, notes from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
+    'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, end_date from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
+    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json),
+    'payment_method', (select to_json(pm) from (select brand, last4, exp_month, exp_year from public.payment_methods where customer_id = v_customer and is_default order by created_at desc limit 1) pm)
+  ) into result;
+  return result;
+end; $$;
+grant execute on function public.get_portal_data(text) to anon, authenticated;
+-- ════════════════════════════════════════════════════════════
+-- MIGRATION 2026-07-09 — Backfill ledger rows for LEGACY paid invoices.
+-- Invoices marked paid BEFORE the payment ledger existed have status='paid'
+-- but no `payments` row and amount_paid = 0. They therefore bypass every
+-- ledger-driven surface: no receipt can be rendered, the payment timeline and
+-- portal history omit them, the Paid summary hides, and their full total
+-- wrongly counts as OUTSTANDING (balance = total − 0).
+--
+-- Fix: insert ONE synthetic kind='payment' row per such invoice for its
+-- GST-inclusive total, dated from its paid_at. The existing
+-- recompute_invoice_paid trigger then derives amount_paid/status exactly like
+-- any modern payment — one ledger engine, no special cases left in the app.
+--
+-- Idempotent two ways: the anti-join (only invoices with NO payment rows) and
+-- the unique stripe_session_id 'legacy:<invoice id>'. Safe to re-run.
+-- ════════════════════════════════════════════════════════════
+
+insert into public.payments
+  (user_id, customer_id, invoice_id, amount, currency, provider, kind, method,
+   status, paid_at, notes, stripe_session_id)
+select
+  i.user_id,
+  i.customer_id,
+  i.id,
+  round(i.amount * (1 + coalesce(bs.gst_percent, 0) / 100), 2),   -- what the trigger expects as "total"
+  'cad',
+  coalesce(i.payment_method, 'other'),
+  'payment',
+  coalesce(i.payment_method, 'other'),
+  'paid',
+  coalesce(i.paid_at, i.updated_at, now()),
+  'Recorded from legacy mark-paid (backfill)',
+  'legacy:' || i.id
+from public.invoices i
+left join public.business_settings bs on bs.user_id = i.user_id
+where i.status = 'paid'
+  and not exists (
+    select 1 from public.payments p
+    where p.invoice_id = i.id and p.kind = 'payment'
+  )
+on conflict (stripe_session_id) do nothing;
+
+-- ── E-transfer recipient email for the portal's "Ways to pay" (2026-07-09) ─────
+-- See supabase/RUN-2026-07-09-etransfer-email.sql. Additive + idempotent.
+alter table public.business_settings
+  add column if not exists etransfer_email text;
+
+create or replace function public.get_portal_data(p_token text)
+returns json language plpgsql security definer set search_path = public as $$
+declare v_customer uuid; v_user uuid; result json;
+begin
+  select customer_id, user_id into v_customer, v_user
+    from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return null; end if;
+  select json_build_object(
+    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code, sms_opt_in, email_opt_in, reviewed_at, autopay_enabled from public.customers where id = v_customer) c),
+    'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, email_secondary, website, logo_url, logo_scale, base_address, terms_text, review_url, etransfer_email, coalesce(gst_percent,0) as gst_percent from public.business_settings where user_id = v_user) b),
+    'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood, notes from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
+    'quotes', coalesce((select json_agg(q order by q.created_at desc) from (
+      select qt.id, qt.quote_number, qt.service_type, qt.address, qt.total, qt.initial_price, qt.subtotal,
+             qt.weekly_price, qt.biweekly_price, qt.monthly_price, qt.notes, qt.status, qt.created_at,
+             qt.issued_date, qt.crew_size, qt.hours, qt.travel_fee,
+             coalesce((select json_agg(s order by s.sort_order) from (
+               select qs.service_type, qs.quantity, qs.unit, qs.unit_price, qs.est_minutes,
+                      qs.discount_type, qs.discount_value, qs.notes, qs.sort_order
+               from public.quote_services qs where qs.quote_id = qt.id
+             ) s), '[]'::json) as services
+      from public.quotes qt where qt.customer_id = v_customer and qt.status <> 'draft') q), '[]'::json),
+    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, amount_paid, status, issued_date, due_date, notes, address, line_items, job_id, created_at, discount_type, discount_value from public.invoices where customer_id = v_customer) i), '[]'::json),
+    'payments', coalesce((select json_agg(pm order by pm.paid_at desc nulls last) from (select id, amount, status, paid_at, provider, kind, invoice_id, created_at from public.payments where customer_id = v_customer and status = 'paid') pm), '[]'::json),
+    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, notes from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
+    'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, end_date from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
+    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json),
+    'payment_method', (select to_json(pm) from (select brand, last4, exp_month, exp_year from public.payment_methods where customer_id = v_customer and is_default order by created_at desc limit 1) pm)
+  ) into result;
+  return result;
+end; $$;
+grant execute on function public.get_portal_data(text) to anon, authenticated;
+
+-- ── Website leads: Budget + Preferred schedule + richer summary (2026-07-13) ──
+-- See supabase/RUN-2026-07-13-lead-details.sql. Additive + idempotent. Drops the
+-- stale 2-arg overload so only the current 3-arg intake function remains.
+alter table public.website_leads
+  add column if not exists budget             text,
+  add column if not exists preferred_schedule text;
+
+drop function if exists public.submit_website_lead(text, jsonb);
+
+create or replace function public.submit_website_lead(p_token text, p_payload jsonb, p_source text default 'Website')
+returns json language plpgsql security definer set search_path = public as $$
+declare
+  v_user uuid; v_customer uuid; v_prop uuid; v_lead uuid; v_convo uuid;
+  v_phone text; v_email text; v_name text; v_first text; v_last text; v_address text;
+  v_digits text; v_summary text; v_services text;
+  v_budget text; v_schedule text; v_contact text;
+  v_limit int; v_recent int;
+  v_source text := coalesce(nullif(trim(p_source), ''), 'Website');
+begin
+  select user_id into v_user from public.business_settings where booking_token = p_token and booking_enabled = true;
+  if v_user is null then return null; end if;
+
+  select coalesce(website_lead_hourly_limit, 30) into v_limit from public.business_settings where user_id = v_user;
+  if coalesce(v_limit, 0) > 0 then
+    select count(*) into v_recent from public.website_leads where user_id = v_user and created_at > now() - interval '1 hour';
+    if v_recent >= v_limit then
+      raise log 'submit_website_lead: rate limit reached for user % (% leads in last hour, limit %)', v_user, v_recent, v_limit;
+      return json_build_object('error', 'rate_limited');
+    end if;
+  end if;
+
+  v_first    := nullif(trim(coalesce(p_payload->>'firstName', p_payload->>'first_name', '')), '');
+  v_last     := nullif(trim(coalesce(p_payload->>'lastName',  p_payload->>'last_name',  '')), '');
+  v_name     := nullif(trim(coalesce(p_payload->>'fullName',  p_payload->>'name', concat_ws(' ', v_first, v_last))), '');
+  v_phone    := nullif(trim(coalesce(p_payload->>'phone', '')), '');
+  v_email    := lower(nullif(trim(coalesce(p_payload->>'email', '')), ''));
+  v_address  := nullif(trim(coalesce(p_payload->>'address', p_payload->>'serviceAddress', '')), '');
+  v_services := nullif(trim(coalesce(p_payload->>'requestedServices', p_payload->>'services', p_payload->>'serviceType', '')), '');
+  v_budget   := nullif(trim(coalesce(p_payload->>'budget', p_payload->>'budgetRange', '')), '');
+  v_schedule := nullif(trim(coalesce(p_payload->>'preferredSchedule', p_payload->>'preferred_schedule', p_payload->>'schedule', p_payload->>'timeline', '')), '');
+  v_contact  := nullif(trim(coalesce(p_payload->>'preferredContact', p_payload->>'preferred_contact', p_payload->>'contactMethod', '')), '');
+
+  v_digits := right(regexp_replace(coalesce(v_phone, ''), '\D', '', 'g'), 10);
+  if length(v_digits) = 10 then
+    select id into v_customer from public.customers
+      where user_id = v_user and phone is not null
+        and right(regexp_replace(phone, '\D', '', 'g'), 10) = v_digits
+      order by created_at desc limit 1;
+  end if;
+  if v_customer is null and v_email is not null then
+    select id into v_customer from public.customers
+      where user_id = v_user and lower(coalesce(email, '')) = v_email order by created_at desc limit 1;
+  end if;
+  if v_customer is null and v_address is not null then
+    select id into v_customer from public.customers
+      where user_id = v_user and lower(coalesce(address, '')) = lower(v_address) order by created_at desc limit 1;
+  end if;
+
+  if v_customer is null then
+    insert into public.customers (user_id, name, email, phone, address, city, province, postal_code, acquisition_source)
+    values (v_user, coalesce(v_name, v_source || ' lead'), v_email, v_phone, v_address,
+            nullif(p_payload->>'city', ''), coalesce(nullif(p_payload->>'province', ''), 'AB'),
+            nullif(coalesce(p_payload->>'postalCode', p_payload->>'postal_code'), ''),
+            v_source)
+    returning id into v_customer;
+  else
+    update public.customers set
+      phone = coalesce(phone, v_phone),
+      email = coalesce(email, v_email)
+    where id = v_customer;
+  end if;
+
+  select id into v_prop from public.properties
+    where customer_id = v_customer and v_address is not null and lower(coalesce(address, '')) = lower(v_address)
+    order by is_primary desc nulls last, created_at asc limit 1;
+  if v_prop is null then
+    insert into public.properties (
+      customer_id, user_id, address, city, province, postal_code, lat, lng,
+      lawn_sqft, lawn_polygon, google_place_id, maps_url, property_travel_distance_km, property_travel_fee, is_primary
+    ) values (
+      v_customer, v_user, coalesce(v_address, v_source || ' lead'),
+      nullif(p_payload->>'city', ''), coalesce(nullif(p_payload->>'province', ''), 'AB'),
+      nullif(coalesce(p_payload->>'postalCode', p_payload->>'postal_code'), ''),
+      nullif(p_payload->>'lat', '')::double precision, nullif(p_payload->>'lng', '')::double precision,
+      nullif(coalesce(p_payload->>'lawnSqft', p_payload->>'lawn_sqft'), '')::numeric,
+      p_payload->'polygon',
+      nullif(coalesce(p_payload->>'placeId', p_payload->>'place_id'), ''),
+      nullif(coalesce(p_payload->>'mapsUrl', p_payload->>'maps_url'), ''),
+      nullif(coalesce(p_payload->>'travelDistanceKm', p_payload->>'travel_distance_km'), '')::numeric,
+      nullif(coalesce(p_payload->>'travelFee', p_payload->>'travel_fee'), '')::numeric,
+      not exists (select 1 from public.properties where customer_id = v_customer)
+    ) returning id into v_prop;
+  end if;
+
+  insert into public.website_leads (
+    user_id, customer_id, status, raw_submission, submitted_at,
+    contact_first, contact_last, contact_name, phone, email, preferred_contact,
+    address, city, province, postal_code, place_id, maps_url, lat, lng,
+    lawn_sqft, lawn_polygon, sections, travel_distance_km, travel_fee,
+    requested_services, frequency, yard_condition, website_estimated_price,
+    budget, preferred_schedule, notes
+  ) values (
+    v_user, v_customer, 'new', p_payload, nullif(p_payload->>'submittedAt', '')::timestamptz,
+    v_first, v_last, v_name, v_phone, v_email, v_contact,
+    v_address, nullif(p_payload->>'city', ''), coalesce(nullif(p_payload->>'province', ''), 'AB'),
+    nullif(coalesce(p_payload->>'postalCode', p_payload->>'postal_code'), ''),
+    nullif(coalesce(p_payload->>'placeId', p_payload->>'place_id'), ''),
+    nullif(coalesce(p_payload->>'mapsUrl', p_payload->>'maps_url'), ''),
+    nullif(p_payload->>'lat', '')::double precision, nullif(p_payload->>'lng', '')::double precision,
+    nullif(coalesce(p_payload->>'lawnSqft', p_payload->>'lawn_sqft'), '')::numeric,
+    p_payload->'polygon', p_payload->'sections',
+    nullif(coalesce(p_payload->>'travelDistanceKm', p_payload->>'travel_distance_km'), '')::numeric,
+    nullif(coalesce(p_payload->>'travelFee', p_payload->>'travel_fee'), '')::numeric,
+    v_services, nullif(p_payload->>'frequency', ''), nullif(p_payload->>'yardCondition', ''),
+    nullif(p_payload->>'estimatedPrice', '')::numeric,
+    v_budget, v_schedule, nullif(p_payload->>'notes', '')
+  ) returning id into v_lead;
+
+  v_summary := 'New ' || v_source || ' lead'
+    || case when v_services is not null then ' — ' || v_services else '' end
+    || case when v_address is not null then ' · ' || v_address else '' end
+    || case when v_budget is not null then ' · Budget: ' || v_budget else '' end
+    || case when v_schedule is not null then ' · Prefers ' || v_schedule else '' end
+    || case when v_contact is not null then ' · via ' || v_contact else '' end
+    || case when nullif(p_payload->>'lawnSqft', '') is not null then ' · ' || (p_payload->>'lawnSqft') || ' ft² lawn' else '' end
+    || case when nullif(p_payload->>'estimatedPrice', '') is not null then ' · est. $' || (p_payload->>'estimatedPrice') else '' end;
+  insert into public.service_requests (user_id, customer_id, message, status)
+    values (v_user, v_customer, v_summary, 'new');
+
+  update public.conversations set lead_status = 'new'
+    where user_id = v_user and customer_id = v_customer;
+  select id into v_convo from public.conversations where user_id = v_user and customer_id = v_customer limit 1;
+  update public.website_leads set conversation_id = v_convo where id = v_lead;
+
+  return json_build_object('lead_id', v_lead, 'customer_id', v_customer, 'source', v_source);
+end; $$;
+grant execute on function public.submit_website_lead(text, jsonb, text) to anon, authenticated;

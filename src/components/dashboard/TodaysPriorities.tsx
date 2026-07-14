@@ -6,7 +6,9 @@ import { createClient } from '@/lib/supabase/client'
 import { formatCurrency } from '@/lib/utils'
 import { needsFollowUp } from '@/lib/followup'
 import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
+import { invoiceBalance } from '@/lib/payments/ledger'
 import type { Quote } from '@/types'
+import { SkeletonRows } from '@/components/ui/Skeleton'
 import {
   ListChecks, CheckCircle2, ArrowRight,
   DollarSign, FileText, Bell, CalendarPlus, AlertTriangle, MessageSquare, Repeat,
@@ -34,7 +36,7 @@ function localTodayISO(): string {
 }
 
 interface JobLite { quote_id: string | null; customer_id: string | null; status: string; scheduled_date: string; recurrence_id: string | null; price: number | null }
-interface InvoiceLite { amount: number | null; status: string }
+interface InvoiceLite { amount: number; status: string; amount_paid?: number; discount_type: 'amount' | 'percent' | null; discount_value: number | null }
 
 export function TodaysPriorities() {
   const supabase = useMemo(() => createClient(), [])
@@ -43,18 +45,24 @@ export function TodaysPriorities() {
 
   useEffect(() => {
     async function load() {
-      const { data: { user } } = await supabase.auth.getUser()
+      // getSession() is a local read — no GoTrue round-trip before the data query. The
+      // reads below are RLS-scoped, so the session's uid is all we need.
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
       if (!user) { setLoading(false); return }
       const today = localTodayISO()
 
-      const [qRes, iRes, jRes, rRes, cRes] = await Promise.all([
+      const [qRes, iRes, jRes, rRes, cRes, sRes] = await Promise.all([
         // Quotes drive follow-ups + accepted-not-scheduled (reuse those exact signals).
         supabase.from('quotes').select('*').eq('user_id', user.id),
-        supabase.from('invoices').select('amount, status').eq('user_id', user.id),
+        supabase.from('invoices').select('amount, status, amount_paid, discount_type, discount_value').eq('user_id', user.id),
         supabase.from('jobs').select('quote_id, customer_id, status, scheduled_date, recurrence_id, price').eq('user_id', user.id),
         supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user.id),
         // Unread conversations — same source as the Messages inbox.
         supabase.from('conversations').select('unread').eq('user_id', user.id).is('archived_at', null).gt('unread', 0),
+        // GST — so the owed figure below agrees with the Invoices page and the
+        // Outstanding stat (both are ledger-derived, GST-inclusive).
+        supabase.from('business_settings').select('gst_percent').eq('user_id', user.id).maybeSingle(),
       ])
 
       const quotes = (qRes.data as Quote[]) || []
@@ -63,13 +71,17 @@ export function TodaysPriorities() {
       const recById: Record<string, { freq: string | null; interval_unit: string | null; interval_count: number | null }> = {}
       for (const r of (rRes.data as { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null }[]) || []) recById[r.id] = r
       const conversations = (cRes.data as { unread: number }[]) || []
+      const feeSettings = sRes.data as { gst_percent: number | null } | null
 
       const next: Priority[] = []
 
       // 1) Money already owed — invoices sent/unpaid. The single most valuable thing
       //    to chase: work done, just not collected.
-      const owed = invoices.filter(i => i.status === 'unpaid' || i.status === 'sent')
-      const owedTotal = owed.reduce((s, i) => s + Number(i.amount || 0), 0)
+      // Owed = remaining GST-inclusive BALANCE across issued invoices (partial
+      // payments count, cancelled paper doesn't) via THE ledger engine, so this
+      // dollar figure matches Outstanding below and the Invoices page it links to.
+      const owed = invoices.filter(i => i.status !== 'draft' && i.status !== 'cancelled' && invoiceBalance(i, feeSettings).balance > 0.01)
+      const owedTotal = owed.reduce((s, i) => s + invoiceBalance(i, feeSettings).balance, 0)
       if (owed.length > 0) {
         next.push({
           key: 'unpaid', icon: DollarSign, tone: 'text-red-400 bg-red-500/10 border-red-500/20',
@@ -79,7 +91,7 @@ export function TodaysPriorities() {
       }
 
       // 2) Accepted but not scheduled — committed revenue most at risk of slipping.
-      //    Cancelled jobs must NOT count as scheduled (matches UnscheduledAccepted).
+      //    Cancelled jobs must NOT count as scheduled.
       const scheduledQuoteIds = new Set(jobs.filter(j => j.quote_id && j.status !== 'cancelled').map(j => j.quote_id))
       const acceptedUnscheduled = quotes.filter(q => q.status === 'accepted' && !scheduledQuoteIds.has(q.id))
       const acceptedTotal = acceptedUnscheduled.reduce((s, q) => s + Number(q.total || 0), 0)
@@ -91,8 +103,7 @@ export function TodaysPriorities() {
         })
       }
 
-      // 3) Missed visits — past-date jobs still open. Un-invoiced, customers falling
-      //    behind (mirrors MissedJobs).
+      // 3) Missed visits — past-date jobs still open, un-invoiced, customers falling behind.
       const missed = jobs.filter(j => j.scheduled_date < today && (j.status === 'scheduled' || j.status === 'in_progress'))
       if (missed.length > 0) {
         next.push({
@@ -115,7 +126,7 @@ export function TodaysPriorities() {
       }
 
       // 5) Quotes needing follow-up — gone quiet, most recoverable new revenue
-      //    (reuse needsFollowUp so the count matches FollowUpQuotes exactly).
+      //    (reuse needsFollowUp so the count matches the Quotes follow-up queue exactly).
       const followups = quotes.filter(needsFollowUp)
       const followupTotal = followups.reduce((s, q) => s + Number(q.total || 0), 0)
       if (followups.length > 0) {
@@ -170,7 +181,9 @@ export function TodaysPriorities() {
     load()
   }, [supabase])
 
-  if (loading) return null // stay quiet until ready — no skeleton noise
+  // Reserve the top slot while loading — this card always renders once ready, so
+  // returning null here made the whole page jump down when it popped in.
+  if (loading) return <SkeletonRows count={4} />
 
   return (
     <div className="rounded-card border border-border bg-bg-secondary overflow-hidden">
@@ -186,7 +199,7 @@ export function TodaysPriorities() {
         <div className="px-5 py-8 text-center">
           <CheckCircle2 className="w-6 h-6 mx-auto mb-2 text-emerald-400" />
           <p className="text-sm font-medium text-ink">You&rsquo;re all caught up</p>
-          <p className="text-xs text-ink-muted mt-0.5">No follow-ups, unsent invoices, or unscheduled work right now.</p>
+          <p className="text-xs text-ink-muted mt-0.5">No follow-ups, unsent invoices, or unread replies right now.</p>
         </div>
       ) : (
         <ol className="divide-y divide-border">

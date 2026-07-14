@@ -1,18 +1,21 @@
 'use client'
 import { toast } from '@/lib/toast'
+import { confirm as confirmDialog } from '@/lib/confirm'
 
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
+import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { Customer, CustomerFormValues } from '@/types'
 import { CustomerList } from '@/components/customers/CustomerList'
+import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { CustomerForm } from '@/components/customers/CustomerForm'
 import { PageHeader } from '@/components/layout/PageHeader'
 import Link from 'next/link'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
-import { Plus, X, Upload, Archive, RotateCcw } from 'lucide-react'
+import { Plus, X, Upload, Archive, RotateCcw, Trash2 } from 'lucide-react'
 
 export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[]>([])
@@ -22,11 +25,16 @@ export default function CustomersPage() {
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Customer | null>(null)
   const [uid, setUid] = useState<string | null>(null)
+  // Just-created customer with contact info → offer the introduction right away
+  // (THE shared Send-Message dialog, preselected — one tap to send or cancel).
+  const [introFor, setIntroFor] = useState<Customer | null>(null)
 
   const supabase = useMemo(() => createClient(), [])
 
   async function fetchCustomers() {
-    const { data: { user } } = await supabase.auth.getUser()
+    // Local session read — no auth round-trip before the RLS-scoped queries below.
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
     if (!user) { setLoading(false); return }
     setUid(user.id)
     // Active (non-archived) customers only — archived ones are preserved but hidden.
@@ -36,10 +44,19 @@ export default function CustomersPage() {
     ])
     setCustomers(activeRes.data || [])
     setArchived(archRes.data || [])
+    // Cache only the first screenful for an instant revisit paint — never serialize
+    // thousands of customer rows into sessionStorage. The full list follows immediately.
+    writeCache('customers-list', (activeRes.data || []).slice(0, 100))
     setLoading(false)
   }
 
-  useEffect(() => { fetchCustomers() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // Instant revisit: paint the cached active list immediately (no skeleton), then
+  // revalidate in the background — realtime keeps it live. Reuses the shared clientCache.
+  useEffect(() => {
+    const cached = readCache<Customer[]>('customers-list', CACHE_TTL.short)
+    if (cached) { setCustomers(cached); setLoading(false) }
+    fetchCustomers()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Command-palette "New Customer" deep-links here with ?new=1 → open the form.
   useEffect(() => {
@@ -73,7 +90,7 @@ export default function CustomersPage() {
       .single()
 
     if (error || !newCustomer) {
-      console.error('Failed to create customer:', error)
+      toast.error('Could not create the customer: ' + (error?.message ?? 'please try again.'))
       return
     }
 
@@ -92,11 +109,15 @@ export default function CustomersPage() {
 
     await fetchCustomers()
     setShowForm(false)
+    // New customer with a phone/email → offer the introduction message right away.
+    const c = newCustomer as Customer
+    if (c.phone || c.email) setIntroFor(c)
   }
 
   async function handleEdit(values: CustomerFormValues) {
     if (!editing) return
-    await supabase.from('customers').update(normalize(values)).eq('id', editing.id)
+    const { error } = await supabase.from('customers').update(normalize(values)).eq('id', editing.id)
+    if (error) { toast.error('Could not save the customer: ' + error.message); return }   // keep the form open to retry
 
     // If address changed, update the primary property address too
     if (values.address) {
@@ -116,43 +137,41 @@ export default function CustomersPage() {
     setEditing(null)
   }
 
-  // Safe delete: a customer with ANY history is ARCHIVED (everything preserved), not
-  // hard-deleted — so one click can never wipe years of quotes/invoices/jobs/
-  // payments/messages. Only a customer with no related records is truly deleted.
+  // Delete from the active list ALWAYS archives (one rule, no branches): everything
+  // is preserved, one click can never wipe history, and Undo restores instantly.
+  // The only true permanent delete lives INSIDE the Archived list (below) — nowhere else.
   async function handleDelete(id: string) {
-    const [qc, ic, jc, pc, cc] = await Promise.all([
-      supabase.from('quotes').select('id', { count: 'exact', head: true }).eq('customer_id', id),
-      supabase.from('invoices').select('id', { count: 'exact', head: true }).eq('customer_id', id),
-      supabase.from('jobs').select('id', { count: 'exact', head: true }).eq('customer_id', id),
-      supabase.from('payments').select('id', { count: 'exact', head: true }).eq('customer_id', id),
-      supabase.from('conversations').select('id', { count: 'exact', head: true }).eq('customer_id', id),
-    ])
-    const n = { quotes: qc.count || 0, invoices: ic.count || 0, jobs: jc.count || 0, payments: pc.count || 0, convos: cc.count || 0 }
-    const total = n.quotes + n.invoices + n.jobs + n.payments + n.convos
-
-    if (total > 0) {
-      const parts = [
-        n.quotes && `${n.quotes} quote${n.quotes !== 1 ? 's' : ''}`,
-        n.invoices && `${n.invoices} invoice${n.invoices !== 1 ? 's' : ''}`,
-        n.jobs && `${n.jobs} job${n.jobs !== 1 ? 's' : ''}`,
-        n.payments && `${n.payments} payment${n.payments !== 1 ? 's' : ''}`,
-        n.convos && `${n.convos} conversation${n.convos !== 1 ? 's' : ''}`,
-      ].filter(Boolean).join(', ')
-      if (!confirm(`This customer has ${parts}.\n\nTo protect that history, they'll be ARCHIVED (hidden from your list but fully preserved) — not deleted. You can restore them anytime from "Show archived".\n\nArchive this customer?`)) return
-      const { error } = await supabase.from('customers').update({ archived_at: new Date().toISOString() }).eq('id', id)
-      if (error) { toast.error('Could not archive the customer: ' + error.message); return }
-    } else {
-      if (!confirm('Delete this customer permanently? They have no quotes, invoices, jobs, payments, or messages, so nothing else is affected. This cannot be undone.')) return
-      const { error } = await supabase.from('customers').delete().eq('id', id)
-      if (error) { toast.error('Could not delete the customer: ' + error.message); return }
-    }
+    const name = customers.find(c => c.id === id)?.name || 'Customer'
+    const { error } = await supabase.from('customers').update({ archived_at: new Date().toISOString() }).eq('id', id)
+    if (error) { toast.error('Could not archive the customer: ' + error.message); return }
     await fetchCustomers()
+    toast.undo(`Archived ${name} — everything preserved`, async () => {
+      await supabase.from('customers').update({ archived_at: null }).eq('id', id); await fetchCustomers()
+    })
   }
 
   async function handleRestore(id: string) {
     const { error } = await supabase.from('customers').update({ archived_at: null }).eq('id', id)
     if (error) { toast.error('Could not restore the customer: ' + error.message); return }
     await fetchCustomers()
+  }
+
+  // Permanent delete — offered ONLY inside the Archived list. It's the one truly
+  // irreversible action, so it keeps an explicit confirm (the deliberate escape hatch
+  // from the safe archive-by-default). Past quotes/invoices/jobs are preserved but
+  // unlinked (their customer_id FKs are set null).
+  async function handleDeletePermanently(id: string) {
+    const name = archived.find(c => c.id === id)?.name || 'this customer'
+    const ok = await confirmDialog({
+      title: `Permanently delete ${name}?`,
+      message: 'The customer record is removed for good. Their past quotes, invoices and jobs are kept but will no longer be linked to a customer. This cannot be undone.',
+      confirmLabel: 'Delete permanently', destructive: true,
+    })
+    if (!ok) return
+    const { error } = await supabase.from('customers').delete().eq('id', id)
+    if (error) { toast.error('Could not delete: ' + error.message); return }
+    await fetchCustomers()
+    toast.success(`${name} permanently deleted.`)
   }
 
   return (
@@ -205,6 +224,7 @@ export default function CustomersPage() {
               onSubmit={editing ? handleEdit : handleAdd}
               onCancel={() => { setShowForm(false); setEditing(null) }}
               isEdit={!!editing}
+              autosaveKey={editing ? `customer:${editing.id}` : 'customer:new'}
             />
           </CardBody>
         </Card>
@@ -218,6 +238,7 @@ export default function CustomersPage() {
           onEdit={c => { setEditing(c); setShowForm(false) }}
           onDelete={handleDelete}
           onRefresh={fetchCustomers}
+          onAdd={() => { setShowForm(true); setEditing(null) }}
         />
       )}
 
@@ -235,12 +256,26 @@ export default function CustomersPage() {
                     <p className="text-sm font-medium text-ink truncate">{c.name}</p>
                     <p className="text-[11px] text-ink-faint">Archived{c.archived_at ? ` ${new Date(c.archived_at).toLocaleDateString()}` : ''} · all history preserved</p>
                   </div>
-                  <Button size="sm" variant="secondary" onClick={() => handleRestore(c.id)}><RotateCcw className="w-3.5 h-3.5" /> Restore</Button>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Button size="sm" variant="secondary" onClick={() => handleRestore(c.id)}><RotateCcw className="w-3.5 h-3.5" /> Restore</Button>
+                    <Button size="sm" variant="danger" onClick={() => handleDeletePermanently(c.id)} title="Delete permanently"><Trash2 className="w-3.5 h-3.5" /> Delete</Button>
+                  </div>
                 </div>
               ))}
             </div>
           )}
         </div>
+      )}
+
+      {/* Just added a customer with contact info → one-tap introduction (same shared dialog) */}
+      {introFor && (
+        <SendMessageDialog
+          open
+          recipients={[{ customerId: introFor.id, name: introFor.name, phone: introFor.phone }]}
+          defaultTemplate="introduction"
+          title={`Welcome ${introFor.name.split(' ')[0]} — send an introduction?`}
+          onClose={() => setIntroFor(null)}
+        />
       )}
     </div>
   )

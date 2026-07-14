@@ -58,8 +58,9 @@ export interface WinLossStats {
   byHood: HoodWinLoss[]     // sorted: most price-loss first
 }
 
-const isWon = (s: string) => s === 'accepted' || s === 'scheduled' || s === 'completed' || s === 'paid'
-const isLost = (s: string) => s === 'declined'
+// THE canonical won/lost classification (reused by quoteLearning — never duplicated).
+export const isWon = (s: string) => s === 'accepted' || s === 'scheduled' || s === 'completed' || s === 'paid'
+export const isLost = (s: string) => s === 'declined'
 
 // Aggregate wins/losses. `hoodOf` maps a quote to its neighbourhood key (the
 // caller resolves property → neighbourhood with the shared naming engine).
