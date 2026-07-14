@@ -550,18 +550,24 @@ export function QuoteBuilder({
 
               {/* One-off / area services: the single service-appropriate price. */}
               {pricingKind !== 'lawn_recurring' && serviceRec && (
-                <div className="rounded-xl border border-accent/30 bg-accent/[0.06] p-3">
+                <div className="rounded-xl border border-accent/30 bg-accent/[0.06] p-3 motion-safe:animate-[fadeIn_140ms_ease-out]">
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Recommended price</p>
-                      <p className="text-xl font-bold text-ink leading-tight mt-0.5">{formatCurrency(serviceRec.price)}</p>
+                      <p className="text-xl font-bold text-ink leading-tight mt-0.5 tabular-nums">{formatCurrency(serviceRec.price)}</p>
                       <p className="text-[11px] text-ink-muted mt-0.5">
                         {serviceRec.basis}{serviceRec.materials ? ' · plus materials' : ''}
                       </p>
                     </div>
-                    <Button type="button" size="sm" onClick={applyServiceRec} className="shrink-0">
-                      <CheckCircle2 className="w-3.5 h-3.5" /> Accept
-                    </Button>
+                    {/* Same confirmation language as Pricing Intelligence — Accept
+                        flips to a green "Applied" once the price is in the field. */}
+                    {Math.abs((Number(initialPrice) || 0) - serviceRec.price) < 0.5
+                      ? <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 shrink-0 motion-safe:animate-[fadeIn_120ms_ease-out]"><CheckCircle2 className="w-3.5 h-3.5" /> Applied</span>
+                      : (
+                        <Button type="button" size="sm" onClick={applyServiceRec} className="shrink-0">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Accept
+                        </Button>
+                      )}
                   </div>
                   <p className="text-[10px] text-ink-faint mt-1.5">
                     {pricingKind === 'per_area'
@@ -586,7 +592,7 @@ export function QuoteBuilder({
                       const active = pickedCadence === opt.c && !initialManual
                       return (
                         <button key={opt.c} type="button" onClick={() => applySuggested(opt.c)}
-                          className={cn('rounded-xl border p-2.5 text-left transition-colors',
+                          className={cn('rounded-xl border p-2.5 text-left transition-all', // transition-all so the selection ring eases in too
                             active ? 'border-accent bg-accent/10 ring-1 ring-accent' : 'border-border bg-surface hover:border-border-strong')}>
                           <span className="flex items-center justify-between gap-1">
                             <span className="text-[11px] font-medium text-ink-muted">{opt.label}</span>
@@ -595,7 +601,7 @@ export function QuoteBuilder({
                                 differently-priced "Rec". */}
                             {!(pricingKind === 'lawn_recurring' && measuredSqft > 0) && suggested.recommended === opt.c && <span className="text-[9px] font-bold uppercase tracking-wide text-accent">Rec</span>}
                           </span>
-                          <span className="block text-base font-bold text-ink mt-0.5 leading-tight">
+                          <span className="block text-base font-bold text-ink mt-0.5 leading-tight tabular-nums">
                             {formatCurrency(opt.price)}<span className="text-[10px] font-normal text-ink-faint">{opt.per}</span>
                           </span>
                         </button>

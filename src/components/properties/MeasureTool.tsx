@@ -15,7 +15,7 @@ import { DEFAULT_CREW_COST, crewCostPerHour as resolveCrewCost } from '@/lib/eco
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { Coord, haversineKm, nearbyJobCount, fetchLocatedUpcomingJobs } from '@/lib/geo'
 import { Button } from '@/components/ui/Button'
-import { Undo2, Trash2, Check, Ruler, Plus, ZoomIn, ZoomOut, RotateCcw, FileText, Car, ShieldCheck, History, Move } from 'lucide-react'
+import { Undo2, Trash2, Check, Ruler, Plus, ZoomIn, ZoomOut, RotateCcw, FileText, Car, ShieldCheck, History, Move, Loader2 } from 'lucide-react'
 
 const M2_TO_SQFT = 10.7639
 const SNAP_PX = 24 // closing snap threshold in screen pixels (generous for touch)
@@ -696,8 +696,8 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
       <div className="relative rounded-card overflow-hidden border border-border">
         <div ref={mapEl} className="w-full h-[55vh] min-h-[340px] bg-bg-secondary" style={{ cursor: 'crosshair' }} />
         {!ready && !loadError && (
-          <div className="absolute inset-0 flex items-center justify-center text-sm text-ink-muted bg-bg-secondary/80">
-            Loading satellite map...
+          <div className="absolute inset-0 flex items-center justify-center gap-2 text-sm text-ink-muted bg-bg-secondary/80 animate-pulse">
+            <Loader2 className="w-4 h-4 animate-spin" /> Loading satellite map…
           </div>
         )}
         {ready && (
@@ -747,8 +747,8 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
         </button>
       )}
 
-      {/* Live breakdown + total */}
-      <div className="bg-bg-secondary border border-border rounded-xl px-4 py-3 space-y-2">
+      {/* Live breakdown + total — tabular figures so digits don't wobble while tracing */}
+      <div className="bg-bg-secondary border border-border rounded-card px-4 py-3.5 space-y-2">
         <div className="flex items-center gap-2 mb-1">
           <Ruler className="w-4 h-4 text-accent" />
           <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Measurement</span>
@@ -756,12 +756,12 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
         {SECTIONS.filter(s => breakdown[s.key] > 0).map(s => (
           <div key={s.key} className="flex items-center justify-between text-sm">
             <span className="flex items-center gap-2 text-ink-muted"><span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: s.color }} />{s.label}</span>
-            <span className="text-ink font-medium">{Math.round(breakdown[s.key]).toLocaleString()} sq ft</span>
+            <span className="text-ink font-medium tabular-nums">{Math.round(breakdown[s.key]).toLocaleString()} sq ft</span>
           </div>
         ))}
         <div className="flex items-center justify-between pt-2 border-t border-border">
           <span className="text-sm font-semibold text-ink">Total</span>
-          <span className="text-xl font-bold text-accent">{totalSqft > 0 ? `${totalSqft.toLocaleString()} sq ft` : '—'}</span>
+          <span className="text-xl font-bold text-accent tabular-nums transition-colors">{totalSqft > 0 ? `${totalSqft.toLocaleString()} sq ft` : '—'}</span>
         </div>
       </div>
 
@@ -770,13 +770,17 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
           the measurement; create a quote to price it. */}
       {showPricing && (<>
       {/* Auto pricing tiers (job only) */}
-      <div className="bg-bg-secondary border border-border rounded-xl px-4 py-3 space-y-3">
+      <div className="bg-bg-secondary border border-border rounded-card px-4 py-3.5 space-y-3 motion-safe:animate-[popIn_0.14s_ease-out]">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Suggested job price</span>
           <label className="flex items-center gap-1.5 text-xs text-ink-muted" title="Lawn condition multiplier — 0.75 easy, 1.0 standard, 1.25 overgrown">
-            <span>Condition<span className="block text-[10px] text-ink-faint">1.0 standard · 1.25 overgrown</span></span>
+            <span>
+              Condition<span className="block text-[10px] text-ink-faint">1.0 standard · 1.25 overgrown</span>
+              {/* A value ≠ 1 changes every price — say so instead of adjusting silently. */}
+              {overgrowth !== 1 && <span className="block text-[10px] font-semibold text-accent">×{overgrowth} applied to prices</span>}
+            </span>
             <input type="number" min="0" step="0.05" value={overgrowthRaw} onChange={e => setOvergrowthRaw(e.target.value)}
-              className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none focus:border-accent" />
+              className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink tabular-nums outline-none focus:border-accent" />
           </label>
         </div>
         {totalSqft > 0 ? (
@@ -791,7 +795,7 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
                 }`}
               >
                 <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1">{t.label}{t.recommended && <span className="text-accent">★</span>}</p>
-                <p className="text-lg font-bold text-ink">${t.amount.toLocaleString()}</p>
+                <p className="text-lg font-bold text-ink tabular-nums">${t.amount.toLocaleString()}</p>
               </button>
             ))}
           </div>
@@ -816,14 +820,23 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
         const assessment = graded?.assessment ?? null
         const pkg = graded?.pkg ?? pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood })
         return (
-          <div className="bg-bg-secondary border border-border rounded-xl px-4 py-3 space-y-3">
+          <div className="bg-bg-secondary border border-border rounded-card px-4 py-3.5 space-y-3 motion-safe:animate-[popIn_0.14s_ease-out]">
             <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Pricing recommendation</span>
             {assessment ? (
               // Decision-first: five numbers + take/minimum/avoid up top; the full
               // route/customer/growth/LTV analysis folds under "View full analysis".
-              <DecisionSummary a={assessment} pkg={pkg} onUse={sel => createQuote(sel)} />
+              <DecisionSummary a={assessment} pkg={pkg} onUse={sel => createQuote(sel)} busy={creating} />
             ) : (
-              <PricePackagePanel pkg={pkg} onUse={sel => createQuote(sel)} />
+              <>
+                {/* Route & customer context is still loading — say the verdict is
+                    coming so its upgrade doesn't read as a flicker. */}
+                {prospect == null && (
+                  <p className="text-[11px] text-ink-faint flex items-center gap-1.5 animate-pulse">
+                    <Loader2 className="w-3 h-3 animate-spin" /> Analyzing route fit &amp; customer value…
+                  </p>
+                )}
+                <PricePackagePanel pkg={pkg} onUse={sel => createQuote(sel)} />
+              </>
             )}
           </div>
         )
@@ -831,7 +844,7 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
 
       {/* Travel — distance, route-density discount, toggle */}
       {totalSqft > 0 && (
-        <div className="bg-bg-secondary border border-border rounded-xl px-4 py-3 space-y-3">
+        <div className="bg-bg-secondary border border-border rounded-card px-4 py-3.5 space-y-3 motion-safe:animate-[popIn_0.14s_ease-out]">
           <div className="flex items-center justify-between">
             <span className="flex items-center gap-2 text-xs font-semibold text-ink-muted uppercase tracking-wide"><Car className="w-3.5 h-3.5" /> Travel</span>
             <button
@@ -845,11 +858,13 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
           <div className="space-y-1 text-sm">
             <div className="flex items-center justify-between text-ink-muted">
               <span>Distance from base</span>
-              <span className="text-ink">{distanceKm != null ? `${distanceKm} km` : '—'}</span>
+              {distanceKm != null
+                ? <span className="text-ink tabular-nums">{distanceKm} km</span>
+                : <span className="inline-block h-3.5 w-12 rounded bg-border/60 animate-pulse" aria-label="Calculating distance" />}
             </div>
             <div className="flex items-center justify-between text-ink-muted">
               <span>Base travel fee</span>
-              <span className="text-ink">{formatCurrency(travelComp.baseFee)}</span>
+              <span className="text-ink tabular-nums">{formatCurrency(travelComp.baseFee)}</span>
             </div>
             {travelComp.discountPct > 0 && includeTravel && (
               <div className="flex items-center justify-between text-emerald-400">
@@ -859,7 +874,7 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
             )}
             <div className="flex items-center justify-between pt-1 border-t border-border">
               <span className="text-ink-muted">Travel applied</span>
-              <span className="font-semibold text-ink">{formatCurrency(effectiveTravel)}</span>
+              <span className="font-semibold text-ink tabular-nums">{formatCurrency(effectiveTravel)}</span>
             </div>
           </div>
         </div>
@@ -867,19 +882,23 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
 
       {/* Fast quote — recommended total + confidence + one click */}
       {totalSqft > 0 && (
-        <div className="bg-bg-secondary border border-accent/30 rounded-xl px-4 py-4 space-y-3">
+        <div className="bg-bg-secondary border border-accent/30 rounded-card px-4 py-3.5 space-y-3 motion-safe:animate-[popIn_0.14s_ease-out]">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">{TIER_LABEL(selectedTier)} total</span>
             <span className={`inline-flex items-center gap-1 text-[11px] font-semibold border rounded-full px-2 py-0.5 ${CONFIDENCE_COLORS[confidence]}`}>
               <ShieldCheck className="w-3 h-3" /> {CONFIDENCE_LABELS[confidence]}
             </span>
           </div>
+          {/* The basis behind the confidence pill — an assistant states its evidence. */}
+          <p className="text-[11px] text-ink-faint -mt-1.5">
+            Based on your traced measurement · {nearbyCount} nearby job{nearbyCount !== 1 ? 's' : ''} for comparison
+          </p>
           <div className="space-y-1 text-sm">
-            <div className="flex items-center justify-between"><span className="text-ink-muted">Job price</span><span className="text-ink font-medium">{formatCurrency(chosenJob)}</span></div>
-            <div className="flex items-center justify-between"><span className="text-ink-muted">Travel</span><span className="text-ink font-medium">{formatCurrency(effectiveTravel)}</span></div>
+            <div className="flex items-center justify-between"><span className="text-ink-muted">Job price</span><span className="text-ink font-medium tabular-nums">{formatCurrency(chosenJob)}</span></div>
+            <div className="flex items-center justify-between"><span className="text-ink-muted">Travel</span><span className="text-ink font-medium tabular-nums">{formatCurrency(effectiveTravel)}</span></div>
             <div className="flex items-center justify-between pt-1.5 border-t border-border">
               <span className="text-sm font-semibold text-ink">Recommended total</span>
-              <span className="text-2xl font-bold text-accent">{formatCurrency(chosenTotal)}</span>
+              <span className="text-2xl font-bold text-accent tabular-nums transition-colors">{formatCurrency(chosenTotal)}</span>
             </div>
           </div>
           {/* "one-time" in the label — the recommendation card's "Use <plan>" button
@@ -901,10 +920,10 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
       {/* Measurement-focused actions (standalone Measurements page). Saving keeps
           the boundary permanently; a quote is one tap away when ready to price. */}
       {!showPricing && totalSqft > 0 && (
-        <div className="bg-bg-secondary border border-accent/30 rounded-xl px-4 py-4 space-y-3">
+        <div className="bg-bg-secondary border border-accent/30 rounded-card px-4 py-3.5 space-y-3 motion-safe:animate-[popIn_0.14s_ease-out]">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Measured area</span>
-            <span className="text-2xl font-bold text-accent">{totalSqft.toLocaleString()} ft²</span>
+            <span className="text-2xl font-bold text-accent tabular-nums">{totalSqft.toLocaleString()} ft²</span>
           </div>
           <Button onClick={save} loading={saving} size="lg" className="w-full">
             <Check className="w-4 h-4" /> Save measurement
@@ -919,7 +938,7 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
 
       {/* Measurement history (versioned, never overwritten) */}
       {history.length > 0 && (
-        <div className="bg-bg-secondary border border-border rounded-xl px-4 py-3 space-y-2">
+        <div className="bg-bg-secondary border border-border rounded-card px-4 py-3.5 space-y-2">
           <div className="flex items-center gap-2">
             <History className="w-4 h-4 text-ink-muted" />
             <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Measurement history</span>

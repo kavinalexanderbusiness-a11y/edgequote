@@ -13,7 +13,7 @@ import { AutoMeasureBanner } from '@/components/measure/AutoMeasureBanner'
 import { recordMeasurement, neighborhoodOf, AutoMeasureResult } from '@/lib/autoMeasure'
 import { DEFAULT_CREW_COST, crewCostPerHour as resolveCrewCost } from '@/lib/economics'
 import { Button } from '@/components/ui/Button'
-import { X, Undo2, Trash2, Plus, Ruler } from 'lucide-react'
+import { X, Undo2, Trash2, Plus, Ruler, Loader2 } from 'lucide-react'
 
 const M2_TO_SQFT = 10.7639
 const SNAP_PX = 24 // "click near the starting point to finish" threshold (generous for touch)
@@ -366,8 +366,8 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
       const discard = await confirmDialog({
         title: 'Discard this measurement?',
         message: 'You have an unfinished measurement on the map.',
-        confirmLabel: 'Discard Measurement',
-        cancelLabel: 'Continue Measuring',
+        confirmLabel: 'Discard measurement',
+        cancelLabel: 'Continue measuring',
         destructive: true,
       })
       if (!discard) return
@@ -489,8 +489,8 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
               <div className="relative rounded-card overflow-hidden border border-border">
                 <div ref={mapEl} className="w-full h-[45vh] min-h-[300px] bg-bg-tertiary" />
                 {!ready && (
-                  <div className="absolute inset-0 flex items-center justify-center text-sm text-ink-muted bg-bg-tertiary/80">
-                    Loading satellite map...
+                  <div className="absolute inset-0 flex items-center justify-center gap-2 text-sm text-ink-muted bg-bg-tertiary/80 animate-pulse">
+                    <Loader2 className="w-4 h-4 animate-spin" /> Loading satellite map…
                   </div>
                 )}
                 {/* Step-by-step drawing guidance — follows the trace as it grows. */}
@@ -518,30 +518,39 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
                 </Button>
               </div>
 
-              <div className="bg-bg-tertiary border border-border rounded-xl p-4 space-y-3">
+              <div className="bg-bg-tertiary border border-border rounded-card p-4 space-y-3">
                 <div className="flex items-center justify-between flex-wrap gap-3">
                   <div className="flex items-center gap-2">
                     <Ruler className="w-4 h-4 text-accent" />
                     <span className="text-sm text-ink-muted">Total area:</span>
-                    <span className="text-lg font-bold text-ink">{totalSqft.toLocaleString()} sq ft</span>
+                    <span className="text-lg font-bold text-ink tabular-nums">{totalSqft.toLocaleString()} sq ft</span>
                     {shapes > 0 && <span className="text-xs text-ink-faint">({shapes} + current)</span>}
                   </div>
+                  {/* Same field order + hint as the Measure page — the two surfaces read identically. */}
                   <label className="flex items-center gap-1.5 text-xs text-ink-muted" title="Lawn condition multiplier — 0.75 easy, 1.0 standard, 1.25 overgrown">
+                    <span>
+                      Condition<span className="block text-[10px] text-ink-faint">1.0 standard · 1.25 overgrown</span>
+                      {overgrowth !== 1 && <span className="block text-[10px] font-semibold text-accent">×{overgrowth} applied to prices</span>}
+                    </span>
                     <input
                       type="number" min="0" step="0.05"
                       value={overgrowthRaw}
                       onChange={e => setOvergrowthRaw(e.target.value)}
-                      className="w-16 bg-bg border border-border-strong rounded-lg px-2.5 py-2 text-base sm:text-sm text-ink outline-none focus:border-accent"
+                      className="w-16 bg-bg border border-border-strong rounded-lg px-2.5 py-2 text-base sm:text-sm text-ink tabular-nums outline-none focus:border-accent"
                     />
-                    <span>Condition<span className="block text-[10px] text-ink-faint">1.0 standard · 1.25 overgrown</span></span>
                   </label>
                 </div>
 
                 {pkg ? (
-                  <div className="border-t border-border pt-3 space-y-3">
+                  <div className="border-t border-border pt-3 space-y-3 motion-safe:animate-[fadeIn_140ms_ease-out]">
                     <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-2">
                       Pricing recommendation{Number(travelFee || 0) > 0 ? ` · $${Number(travelFee).toLocaleString()} travel stays on the quote` : ''}
                     </p>
+                    {prospect == null && !assessment && (
+                      <p className="text-[11px] text-ink-faint flex items-center gap-1.5 animate-pulse">
+                        <Loader2 className="w-3 h-3 animate-spin" /> Analyzing route fit &amp; customer value…
+                      </p>
+                    )}
                     {assessment ? (
                       <DecisionSummary a={assessment} pkg={pkg} onUse={applySelection} />
                     ) : (

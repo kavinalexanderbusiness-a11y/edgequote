@@ -34,7 +34,7 @@ export function Collapsible({
         )}
         <ChevronDown className={cn('w-4 h-4 text-ink-faint ml-auto shrink-0 transition-transform', open && 'rotate-180')} />
       </button>
-      {open && <div className="px-4 pb-4 pt-1 space-y-4 border-t border-border">{children}</div>}
+      {open && <div className="px-4 pb-4 pt-1 space-y-4 border-t border-border motion-safe:animate-[fadeIn_140ms_ease-out]">{children}</div>}
     </div>
   )
 }

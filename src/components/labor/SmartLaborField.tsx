@@ -13,7 +13,8 @@ const CONF_TONE: Record<Confidence, string> = {
   medium: 'text-amber-400 border-amber-500/30 bg-amber-500/10',
   low: 'text-ink-muted border-border bg-bg-tertiary',
 }
-const CONF_LABEL: Record<Confidence, string> = { high: 'High confidence', medium: 'Medium', low: 'Low' }
+// One confidence vocabulary — full words everywhere, matching types CONFIDENCE_LABELS.
+const CONF_LABEL: Record<Confidence, string> = { high: 'High confidence', medium: 'Medium confidence', low: 'Low confidence' }
 
 // ── Smart Labor Calculator V2 — drop-in estimate widget ─────────────────────────
 // The estimated duration is a SMART DEFAULT, not a locked value:
@@ -102,7 +103,7 @@ export function SmartLaborField({
   const applied = value === est.minutes
 
   return (
-    <div className="rounded-xl border border-accent/20 bg-accent/[0.04] p-3 space-y-2.5">
+    <div className="rounded-xl border border-accent/20 bg-accent/[0.04] p-3 space-y-2.5 motion-safe:animate-[fadeIn_140ms_ease-out]">
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-bold text-ink flex items-center gap-1.5"><Sparkles className="w-3.5 h-3.5 text-accent" /> Smart Labor Estimate</span>
         {/* ON/OFF toggle (hidden in read-only / quote mode) */}
@@ -135,7 +136,7 @@ export function SmartLaborField({
 
       <div className="flex items-center gap-2">
         {!readOnly && (applied
-          ? <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400"><Check className="w-3.5 h-3.5" /> Applied</span>
+          ? <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 motion-safe:animate-[fadeIn_120ms_ease-out]"><Check className="w-3.5 h-3.5" /> Applied</span>
           : isOverride
             ? <button type="button" onClick={recalc} className="inline-flex items-center gap-1 text-[11px] font-semibold text-accent hover:underline"><RotateCw className="w-3 h-3" /> Recalculate ({est.minutes} min)</button>
             : <button type="button" onClick={recalc} className="text-[11px] font-semibold text-accent hover:underline">Use estimate ({est.minutes} min)</button>)}
@@ -154,11 +155,12 @@ export function SmartLaborField({
   )
 }
 
+// Same tile shape + micro-label size as every other pricing stat tile.
 function Mini({ label, value, tone }: { label: string; value: string; tone?: string }) {
   return (
-    <div className="rounded-md bg-bg-tertiary border border-border px-2 py-1.5 text-center">
-      <p className="text-[9px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className={cn('text-sm font-bold text-ink', tone)}>{value}</p>
+    <div className="rounded-lg bg-bg-tertiary border border-border px-2 py-1.5 text-center">
+      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
+      <p className={cn('text-sm font-bold text-ink tabular-nums', tone)}>{value}</p>
     </div>
   )
 }

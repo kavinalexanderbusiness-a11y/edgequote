@@ -6,7 +6,7 @@ import { PricingPackage } from '@/lib/pricing'
 import { PricePackagePanel, CadenceSelection, CADENCE_LABELS } from '@/components/pricing/PricePackagePanel'
 import { Collapsible } from '@/components/ui/Collapsible'
 import { cn } from '@/lib/utils'
-import { ArrowRight, BarChart3, ChevronDown, DollarSign, Route, Sprout, Star, TrendingUp } from 'lucide-react'
+import { ArrowRight, BarChart3, ChevronDown, DollarSign, Loader2, Route, Sprout, Star, TrendingUp } from 'lucide-react'
 
 // ── 80% of the value in 20% of the screen ───────────────────────────────────
 // The owner reads FIVE numbers and a row of tags, sees the take/minimum/avoid
@@ -67,11 +67,14 @@ function buildTags(a: ProspectAssessment, pkg: PricingPackage): { text: string; 
 }
 
 export function DecisionSummary({
-  a, pkg, onUse,
+  a, pkg, onUse, busy,
 }: {
   a: ProspectAssessment
   pkg: PricingPackage
   onUse: (sel: CadenceSelection) => void
+  /** The parent is acting on the selection (e.g. creating the quote) — the CTA
+      shows a spinner and locks against double-taps. Presentation only. */
+  busy?: boolean
 }) {
   const d = a.decision
   const c = CALL[d.call]
@@ -81,7 +84,7 @@ export function DecisionSummary({
   const tags = buildTags(a, pkg)
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 motion-safe:animate-[fadeIn_140ms_ease-out]">
       {/* ── DECISION SUMMARY — answers only: take? charge? minimum? freq? why? */}
       <div className={cn('rounded-xl border p-4 space-y-3', c.cls)}>
         {/* Q1 — should I take this customer? */}
@@ -132,14 +135,15 @@ export function DecisionSummary({
         </div>
       </div>
 
-      {/* ── PRIMARY ACTION ───────────────────────────────────────────────── */}
+      {/* ── PRIMARY ACTION — spinner + lock while the parent creates the quote */}
       <button
         type="button"
+        disabled={busy}
         onClick={() => onUse({ cadence: recCadence, price: d.recommendedPrice })}
-        className={cn('w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold transition-colors', c.btn)}
+        className={cn('w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold transition-colors disabled:opacity-60 disabled:pointer-events-none', c.btn)}
       >
-        Use {recLabel} — ${d.recommendedPrice}
-        <ArrowRight className="w-4 h-4" />
+        {busy ? 'Creating quote…' : <>Use {recLabel} — ${d.recommendedPrice}</>}
+        {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
       </button>
 
       {/* ── FULL ANALYSIS — folded away until asked for ──────────────────── */}
@@ -154,7 +158,7 @@ export function DecisionSummary({
       </button>
 
       {showFull && (
-        <div className="space-y-2">
+        <div className="space-y-2 motion-safe:animate-[fadeIn_140ms_ease-out]">
           {/* Pricing Details — the one home for cadence prices + guidance */}
           <Collapsible title="Pricing Details" icon={DollarSign}
             summary={`One-time $${pkg.oneTime} · ${recLabel} $${d.recommendedPrice}`}>
@@ -261,11 +265,13 @@ export function DecisionSummary({
   )
 }
 
+// Stat tiles share ONE micro-label size (text-[10px]) + tabular figures across
+// every pricing card, so grids read as one system.
 function Stat({ label, value, big, tone }: { label: string; value: string; big?: boolean; tone?: string }) {
   return (
     <div className="rounded-lg border border-border bg-bg-secondary px-2.5 py-2">
-      <p className="text-[9px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className={cn('font-bold text-ink', big ? 'text-lg' : 'text-sm', tone)}>{value}</p>
+      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
+      <p className={cn('font-bold text-ink tabular-nums', big ? 'text-lg' : 'text-sm', tone)}>{value}</p>
     </div>
   )
 }
@@ -273,8 +279,8 @@ function Stat({ label, value, big, tone }: { label: string; value: string; big?:
 function Decision({ label, value, tone, cls }: { label: string; value: string; tone: string; cls: string }) {
   return (
     <div className={cn('rounded-lg border px-2.5 py-2 text-center', cls)}>
-      <p className="text-[9px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className={cn('text-base font-bold', tone)}>{value}</p>
+      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
+      <p className={cn('text-base font-bold tabular-nums', tone)}>{value}</p>
     </div>
   )
 }
