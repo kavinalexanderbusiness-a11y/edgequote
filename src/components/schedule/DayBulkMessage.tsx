@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { MsgType, renderMessage } from '@/lib/comms/templates'
 import { SmsCost } from '@/components/comms/SmsCost'
 import { Button } from '@/components/ui/Button'
+import { InlineEmpty } from '@/components/ui/EmptyState'
 import { cn } from '@/lib/utils'
 import type { Job } from '@/types'
 import {
@@ -126,7 +127,7 @@ export function DayBulkMessage({ date, jobs, onClose }: { date: string; jobs: Jo
     // THE shared Modal — Escape, scroll-lock, aria-modal and the one scrim for free.
     <Modal open onClose={onClose} title="Message today’s customers" icon={Users} size="lg">
         {recipients.length === 0 ? (
-          <div className="py-4 text-center text-sm text-ink-muted">No customers scheduled today.</div>
+          <InlineEmpty>No customers scheduled today.</InlineEmpty>
         ) : (
           <div className="space-y-3">
             {/* Recipients — everyone selected by default; deselect anyone */}

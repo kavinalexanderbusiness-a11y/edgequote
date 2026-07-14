@@ -7,8 +7,8 @@ import type { ServiceTemplate, ServiceTemplateFormValues } from '@/types'
 import { SERVICE_CATEGORIES, PRICING_DISPLAY_TYPES, PRICING_DISPLAY_TYPE_LABELS } from '@/types'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
-import { SkeletonRows } from '@/components/ui/Skeleton'
 import { InlineEmpty } from '@/components/ui/EmptyState'
+import { SkeletonRows } from '@/components/ui/Skeleton'
 import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
 import { Textarea } from '@/components/ui/Textarea'
@@ -97,7 +97,7 @@ export default function ServiceTemplatesPage() {
   const categoryOptions = SERVICE_CATEGORIES.map(c => ({ value: c, label: c }))
   const pricingTypeOptions = PRICING_DISPLAY_TYPES.map(t => ({ value: t, label: PRICING_DISPLAY_TYPE_LABELS[t] }))
 
-  if (loading) return <SkeletonRows count={4} />
+  if (loading) return <SkeletonRows count={5} />
 
   return (
     <div className="max-w-3xl space-y-6">

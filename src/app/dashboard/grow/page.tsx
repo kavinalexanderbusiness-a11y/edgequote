@@ -80,7 +80,7 @@ function FeatureCard({ href, icon: Icon, title, blurb }: { href: string; icon: t
 
 export default function GrowPage() {
   return (
-    <div className="max-w-5xl space-y-8">
+    <div className="max-w-5xl space-y-6">
       <PageHeader title="Grow" description="Your AI advisor for pricing, growth and retention — built on your own numbers." />
 
       {/* Suggestions Center — the action feed comes FIRST: "what should I do next?"

@@ -17,6 +17,8 @@ import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { InlineEmpty } from '@/components/ui/EmptyState'
+import { SkeletonRows } from '@/components/ui/Skeleton'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { Target, MapPin, Plus, Phone, FileText, Check, X, Trash2, Sprout, UserPlus } from 'lucide-react'
 
@@ -211,7 +213,7 @@ export default function NeighborsPage() {
 
   const customerName = (id: string | null) => customers.find(c => c.id === id)?.name ?? null
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading neighbor leads…</div>
+  if (loading) return <SkeletonRows count={5} />
 
   return (
     <div className="max-w-4xl space-y-6">
@@ -280,9 +282,7 @@ export default function NeighborsPage() {
 
       {/* Leads */}
       {leads.length === 0 ? (
-        <Card><CardBody className="text-center py-10 text-sm text-ink-muted">
-          No leads yet. After a job, knock the two doors either side and add them here — the truck is already parked.
-        </CardBody></Card>
+        <Card><InlineEmpty icon={UserPlus}>No leads yet. After a job, knock the two doors either side and add them here — the truck is already parked.</InlineEmpty></Card>
       ) : (
         <div className="space-y-2">
           {leads.map(l => {

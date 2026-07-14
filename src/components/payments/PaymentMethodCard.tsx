@@ -133,7 +133,7 @@ export function PaymentMethodCard({ customer, onCustomerChange }: {
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <Button size="sm" variant="secondary" onClick={saveCard} loading={busy === 'save'} disabled={!paymentsEnabled}>Replace</Button>
+              <Button size="sm" variant="secondary" onClick={saveCard} loading={busy === 'save'} disabled={!paymentsEnabled} title={!paymentsEnabled ? "Connect Stripe in Settings to enable card payments" : undefined}>Replace</Button>
               <Button size="sm" variant="ghost" onClick={removeCard} loading={busy === 'remove'} className="hover:text-red-400" title="Remove card">
                 <Trash2 className="w-3.5 h-3.5" />
               </Button>
@@ -142,7 +142,7 @@ export function PaymentMethodCard({ customer, onCustomerChange }: {
         ) : (
           <div className="flex items-center justify-between gap-3 rounded-xl border border-dashed border-border p-3">
             <p className="text-sm text-ink-muted">No card on file.</p>
-            <Button size="sm" onClick={saveCard} loading={busy === 'save'} disabled={!paymentsEnabled}>
+            <Button size="sm" onClick={saveCard} loading={busy === 'save'} disabled={!paymentsEnabled} title={!paymentsEnabled ? "Connect Stripe in Settings to enable card payments" : undefined}>
               <CreditCard className="w-3.5 h-3.5" /> Add card
             </Button>
           </div>

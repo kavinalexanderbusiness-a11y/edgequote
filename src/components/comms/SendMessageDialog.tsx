@@ -164,7 +164,7 @@ export function SendMessageDialog({
         if (out.ok) sent++; else skipped++
       } catch (e) {
         skipped++
-        if (!bulk) single = { ok: false, text: e instanceof Error ? e.message : 'Failed to send.' }
+        if (!bulk) single = { ok: false, text: e instanceof Error ? e.message : 'Could not send the message.' }
       }
       setProgress(i + 1)
     }
@@ -178,6 +178,7 @@ export function SendMessageDialog({
 
   return (
     <Modal open={open} onClose={() => !busy && onClose()} icon={MessageSquare} size="lg"
+      onSubmit={() => { if (!busy && !outcome?.ok && chosen.length) send() }}
       title={title ?? (bulk ? `Message ${all.length} customers` : `Message ${(all[0]?.name || 'customer').split(' ')[0]}`)}>
       <div className="space-y-4">
         {/* Recipients — only when there's a real choice to make */}

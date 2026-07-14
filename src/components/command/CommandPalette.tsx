@@ -300,7 +300,7 @@ export function CommandPalette() {
                     onMouseMove={() => setSel(myIdx)}
                     onClick={item.run}
                     className={cn('w-full flex items-center gap-3 px-2.5 py-2 rounded-lg text-left transition-colors',
-                      active ? 'bg-accent/10' : 'hover:bg-surface/50')}>
+                      active ? 'bg-accent/10' : 'hover:bg-surface')}>
                     <span className={cn('w-7 h-7 rounded-lg flex items-center justify-center shrink-0 border transition-colors',
                       active ? 'border-accent/30 bg-accent/10 text-accent' : 'border-border text-ink-muted')}>
                       <Icon className="w-3.5 h-3.5" />

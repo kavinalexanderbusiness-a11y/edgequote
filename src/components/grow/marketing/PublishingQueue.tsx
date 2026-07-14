@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/Button'
 import { InlineEmpty } from '@/components/ui/EmptyState'
+import { SkeletonRows } from '@/components/ui/Skeleton'
 import { channel as channelDef } from '@/lib/marketing/channels'
 import { listJobs, cancelJob, retryJob, clearHistory, markManualPublished, captionFor } from '@/lib/marketing/publishQueue'
 import { listConnections } from '@/lib/marketing/connections'
@@ -86,9 +87,13 @@ export function PublishingQueue({ userId }: { userId: string }) {
     const cap = pieceByJob[j.content_piece_id]?.caption
     if (cap) { try { navigator.clipboard?.writeText(cap); toast.success('Caption copied.') } catch { /* still visible to copy by hand */ } }
   }
+  const [postingId, setPostingId] = useState<string | null>(null)
   async function markPosted(j: PublishJob) {
+    setPostingId(j.id)
     const updated = await markManualPublished(supabase, j)
-    if (updated) setJobs(prev => prev.map(x => x.id === j.id ? updated : x))
+    setPostingId(null)
+    if (updated) { setJobs(prev => prev.map(x => x.id === j.id ? updated : x)); toast.success('Marked as posted.') }
+    else toast.error('Could not mark it posted — please try again.')
   }
   // Drive the whole queue forward (API posts publish; manual scheduled → ready). The
   // server loop is per-job try/continue, so one failure never stops the rest.
@@ -130,7 +135,7 @@ export function PublishingQueue({ userId }: { userId: string }) {
   // so counting it here would make the button look like it did nothing.
   const readyCount = jobs.filter(j => j.status === 'scheduled' || (j.status === 'queued' && j.mode === 'api')).length
 
-  if (loading) return <div className="h-32 flex items-center justify-center text-ink-faint"><Loader2 className="w-5 h-5 animate-spin" /></div>
+  if (loading) return <SkeletonRows count={3} />
   if (!jobs.length) return <InlineEmpty icon={ListChecks}>No publishes yet. Schedule or publish a post and it’ll show up here.</InlineEmpty>
 
   const Row = ({ j }: { j: PublishJob }) => {
@@ -162,7 +167,7 @@ export function PublishingQueue({ userId }: { userId: string }) {
             <>
               <button onClick={() => copyCaption(j)} className="text-ink-faint hover:text-ink inline-flex items-center gap-1 text-[11px]" title="Copy caption"><Copy className="w-3.5 h-3.5" /> Copy caption</button>
               <a href={def.openUrl} target="_blank" rel="noreferrer" className="text-ink-faint hover:text-ink inline-flex items-center gap-1 text-[11px]" title={`Open ${def.label}`}><ExternalLink className="w-3.5 h-3.5" /> Open</a>
-              <Button size="sm" variant="ghost" onClick={() => markPosted(j)}><CheckCircle2 className="w-3.5 h-3.5" /> Mark as posted</Button>
+              <Button size="sm" variant="ghost" onClick={() => markPosted(j)} loading={postingId === j.id}><CheckCircle2 className="w-3.5 h-3.5" /> Mark as posted</Button>
             </>
           )}
           {j.status === 'failed' && <Button size="sm" variant="ghost" loading={retrying === j.id} onClick={() => retry(j)}><RotateCcw className="w-3.5 h-3.5" /> Retry</Button>}
@@ -204,7 +209,7 @@ export function PublishingQueue({ userId }: { userId: string }) {
       </div>
 
       {filtered.length === 0 ? (
-        <InlineEmpty icon={Search}>No posts match those filters.</InlineEmpty>
+        <InlineEmpty icon={Search}>No posts match your filters.</InlineEmpty>
       ) : (
         <>
           {active.length > 0 && (

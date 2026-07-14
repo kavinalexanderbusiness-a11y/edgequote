@@ -51,12 +51,13 @@ export default async function DashboardPage() {
 
   const hour = now.getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
+  const dateLine = now.toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' })
 
   return (
     <div className="max-w-6xl space-y-6">
       <PageHeader
         title={greeting}
-        description="Your day, and how the business is doing."
+        description={`${dateLine} — your day, and how the business is doing.`}
         action={
           <Link href="/dashboard/quotes/new">
             <Button>
@@ -65,9 +66,9 @@ export default async function DashboardPage() {
           </Link>
         }
       />
-      <TodaysPriorities />
-      <WeekendOutlook />
-      <DashboardKpis collected={collected} outstanding={outstanding} jobsThisMonth={jobsThisMonth} conversionRate={conversionRate} />
+      <div className="animate-rise"><TodaysPriorities /></div>
+      <div className="animate-rise stagger-2"><WeekendOutlook /></div>
+      <div className="animate-rise stagger-3"><DashboardKpis collected={collected} outstanding={outstanding} jobsThisMonth={jobsThisMonth} conversionRate={conversionRate} /></div>
     </div>
   )
 }

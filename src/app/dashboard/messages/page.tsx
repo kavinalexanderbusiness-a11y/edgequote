@@ -15,6 +15,7 @@ import { CustomerPicker } from '@/components/ui/CustomerPicker'
 import type { Customer } from '@/types'
 import { Button } from '@/components/ui/Button'
 import { Skeleton } from '@/components/ui/Skeleton'
+import { EmptyState } from '@/components/ui/EmptyState'
 import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import {
@@ -367,7 +368,7 @@ export default function MessagesPage() {
   }, [query, selectMode, sel, list]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div className="max-w-5xl space-y-4">
+    <div className="max-w-5xl space-y-6">
       <PageHeader title="Messages" description="Two-way SMS + portal conversations — archived chats stay in CRM history forever."
         action={
           <Button variant="secondary" onClick={openCompose}>
@@ -463,23 +464,17 @@ export default function MessagesPage() {
               ))}
             </div>
           ) : list.length === 0 ? (
-            <div className="py-16 text-center px-4">
-              <Inbox className="w-9 h-9 text-ink-faint mx-auto mb-2" />
-              <p className="text-sm font-medium text-ink">
-                {searchResults ? 'No matches'
-                  : filter === 'archived' ? 'No archived chats'
-                  : filter === 'website_lead' ? 'No new website leads'
-                  : filter === 'portal' ? 'No portal messages yet'
-                  : filter === 'sms' ? 'No text conversations yet'
-                  : 'No conversations yet'}
-              </p>
-              <p className="text-xs text-ink-muted mt-1">
-                {searchResults ? 'Try a name, address, service, or quote/invoice #.'
-                  : filter === 'website_lead' ? 'Leads land here the moment your website form is submitted.'
-                  : filter === 'portal' ? 'Requests customers send from their portal show up here.'
-                  : 'Inbound texts, portal requests and website leads all land here — replies go out from your business number.'}
-              </p>
-            </div>
+            <EmptyState icon={Inbox} className="py-16"
+              title={searchResults ? 'No matches'
+                : filter === 'archived' ? 'No archived chats'
+                : filter === 'website_lead' ? 'No new website leads'
+                : filter === 'portal' ? 'No portal messages yet'
+                : filter === 'sms' ? 'No text conversations yet'
+                : 'No conversations yet'}
+              description={searchResults ? 'Try a name, address, service, or quote/invoice #.'
+                : filter === 'website_lead' ? 'Leads land here the moment your website form is submitted.'
+                : filter === 'portal' ? 'Requests customers send from their portal show up here.'
+                : 'Inbound texts, portal requests and website leads all land here — replies go out from your business number.'} />
           ) : (
             <div ref={scrollRef} onScroll={onScroll} className="overflow-y-auto" style={{ maxHeight: '72vh' }}>
               <div style={{ height: list.length * ROW_H, position: 'relative' }}>
@@ -612,7 +607,7 @@ function ConversationRow({ c, selected, actions, query, selectMode, checked, onT
   const needsReply = !c.archived_at && c.last_direction === 'inbound'
   const Item = ({ icon: Icon, label, onClick, danger }: { icon: typeof Pin; label: string; onClick: () => void; danger?: boolean }) => (
     <button onClick={() => { setMenu(false); onClick() }}
-      className={cn('w-full text-left px-3 py-2 text-xs flex items-center gap-2 hover:bg-surface/60', danger ? 'text-red-400' : 'text-ink')}>
+      className={cn('w-full text-left px-3 py-2 text-xs flex items-center gap-2 hover:bg-surface transition-colors', danger ? 'text-red-400' : 'text-ink')}>
       <Icon className="w-3.5 h-3.5 shrink-0" /> {label}
     </button>
   )

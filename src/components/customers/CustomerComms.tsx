@@ -4,6 +4,7 @@ import { confirm as confirmDialog } from '@/lib/confirm'
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { InlineEmpty } from '@/components/ui/EmptyState'
 import { formatDate, cn } from '@/lib/utils'
 import { MessageSquare, Mail, Check, Loader2 } from 'lucide-react'
 import { MSG_LABELS, MsgType } from '@/lib/comms/templates'
@@ -72,7 +73,7 @@ export function CustomerComms({ customerId, smsOptIn, emailOptIn }: { customerId
           {loading ? (
             <p className="text-xs text-ink-muted flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…</p>
           ) : log.length === 0 ? (
-            <p className="text-xs text-ink-muted">No messages sent yet.</p>
+            <InlineEmpty className="py-3">No messages sent yet.</InlineEmpty>
           ) : (
             <div className="space-y-1">
               {log.map(r => (

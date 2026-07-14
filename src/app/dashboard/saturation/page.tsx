@@ -13,9 +13,8 @@ import {
 import { SaturationMap, SatPoint, SatHood, SatLayer } from '@/components/saturation/SaturationMap'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
-import { Banner } from '@/components/ui/Banner'
 import { InlineEmpty } from '@/components/ui/EmptyState'
-import { SkeletonRows } from '@/components/ui/Skeleton'
+import { SkeletonTiles } from '@/components/ui/Skeleton'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { format } from 'date-fns'
 import { Trophy, Sprout, TrendingDown, TrendingUp, Users, Repeat, FileText, MapPin, Navigation } from 'lucide-react'
@@ -269,7 +268,7 @@ export default function SaturationPage() {
     return { points, hoods, mapHoods, best, opportunities, strongest, weakest, unknownHood, intel }
   }, [jobs, properties, quotes, customersById, ctx])
 
-  if (loading) return <SkeletonRows />
+  if (loading) return <SkeletonTiles count={4} />
 
   const m = model
 
@@ -329,7 +328,7 @@ export default function SaturationPage() {
           </div>
           <CardBody className="space-y-2.5">
             {m.opportunities.length === 0 ? (
-              <InlineEmpty>No clear expansion signal yet — add more priced, located jobs.</InlineEmpty>
+              <InlineEmpty className="py-4">No clear expansion signal yet — add more priced, located jobs.</InlineEmpty>
             ) : m.opportunities.slice(0, 5).map(h => (
               <div key={h.key} className="rounded-card border border-border p-3">
                 <div className="flex items-center justify-between gap-2">
@@ -355,7 +354,7 @@ export default function SaturationPage() {
           </div>
           <CardBody className="space-y-2.5">
             {m.best.length === 0 ? (
-              <InlineEmpty>No neighborhood data yet.</InlineEmpty>
+              <InlineEmpty className="py-4">No neighborhood data yet.</InlineEmpty>
             ) : m.best.map((h, i) => (
               <div key={h.key} className="flex items-center gap-3 rounded-card border border-border p-3">
                 <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0" style={{ background: h.color + '33', color: h.color }}>{i + 1}</div>

@@ -42,7 +42,7 @@ export default function WeatherPage() {
     return (
       <div className="max-w-5xl">
         <PageHeader title="Weather" description="Rain risk to your booked work — and the best dry days to move it." />
-        <div className="py-20 text-center text-sm text-ink-muted flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Checking the forecast…</div>
+        <div className="py-16 text-center text-sm text-ink-muted flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Checking the forecast…</div>
       </div>
     )
   }

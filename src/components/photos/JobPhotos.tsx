@@ -4,11 +4,12 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { PhotoKind, PHOTO_KIND_LABELS } from '@/types'
 import { JobPhotoView, listPhotos, uploadPhotos, deletePhoto, updatePhoto, thumbUrl } from '@/lib/photos'
+import { downloadBlob } from '@/lib/portalPdf'
 import { toast } from '@/lib/toast'
 import { formatDate } from '@/lib/utils'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { InlineEmpty } from '@/components/ui/EmptyState'
-import { Camera, ImagePlus, Trash2, X, Loader2, Check, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Camera, ImagePlus, Trash2, X, Loader2, Check, ChevronLeft, ChevronRight, Download } from 'lucide-react'
 
 interface Props {
   propertyId: string | null
@@ -21,6 +22,10 @@ interface Props {
   // seeds from these and skips its own list query — so N galleries on one page
   // don't each fire a round-trip.
   initialPhotos?: JobPhotoView[]
+  // Read-only viewer: hides capture/delete/retag/caption controls — just
+  // thumbnails + the lightbox (with Download). Used to SHOW customer-attached
+  // photos (booking photos on the profile / draft quote) without edit actions.
+  readOnly?: boolean
   className?: string
 }
 
@@ -37,13 +42,14 @@ const PAGE = 12 // tiles shown before "Show more"
 // An in-flight upload rendered instantly from a local blob URL (no wait for the network).
 interface PendingTile { tempId: string; url: string; kind: PhotoKind; status: 'uploading' | 'error'; file: File }
 
-export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', initialPhotos, className }: Props) {
+export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', initialPhotos, readOnly = false, className }: Props) {
   const supabase = createClient()
   const [photos, setPhotos] = useState<JobPhotoView[]>(initialPhotos ?? [])
   const [loading, setLoading] = useState(!initialPhotos)
   const [pending, setPending] = useState<PendingTile[]>([])
   const [kindFilter, setKindFilter] = useState<'all' | PhotoKind>('all')
   const [shown, setShown] = useState(PAGE)
+  const [downloading, setDownloading] = useState<string | null>(null)
   // Track the open photo by ID (not index) so retagging/deleting/filtering can't make
   // the lightbox silently jump to a different photo — it stays on the same one or closes.
   const [lightboxId, setLightboxId] = useState<string | null>(null)
@@ -194,6 +200,21 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
     if (!ok) { setPhotos(ps => ps.map(p => p.id === photo.id ? { ...p, kind: prev } : p)); toast.error('Could not update the tag.') }
   }
 
+  // Real download (not just "open in a new tab"): a cross-origin storage URL ignores
+  // the anchor `download` attr, so fetch the bytes and save the blob via the shared
+  // downloadBlob helper. Available on every gallery, read-only or not.
+  async function download(photo: JobPhotoView) {
+    setDownloading(photo.id)
+    try {
+      const res = await fetch(photo.url)
+      const blob = await res.blob()
+      const ext = (photo.storage_path.split('?')[0].split('.').pop() || 'jpg').toLowerCase()
+      const base = (photo.caption || PHOTO_KIND_LABELS[photo.kind] || 'photo').replace(/[^\w.-]+/g, '-').slice(0, 40)
+      downloadBlob(blob, `${base}-${photo.id.slice(0, 8)}.${ext}`)
+    } catch { toast.error('Could not download the photo.') }
+    setDownloading(null)
+  }
+
   async function saveCaption(photo: JobPhotoView, caption: string) {
     const clean = caption.trim() || null
     if (clean === (photo.caption ?? null)) return
@@ -214,13 +235,16 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
     <div className={className}>
       <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={onFiles} />
 
-      {/* Capture buttons — never disabled during upload, so you can keep adding. */}
+      {/* Capture buttons — never disabled during upload, so you can keep adding.
+          Hidden in read-only mode (a pure viewer for customer-attached photos). */}
       <div className="flex items-center gap-2 flex-wrap">
-        <CaptureBtn label="Before" icon={Camera} busy={busyOf('before')} onClick={() => pick('before')} tone="amber" />
-        <CaptureBtn label="After" icon={Camera} busy={busyOf('after')} onClick={() => pick('after')} tone="emerald" />
-        {variant === 'gallery' && (
-          <CaptureBtn label="Photo" icon={ImagePlus} busy={busyOf('general')} onClick={() => pick('general')} />
-        )}
+        {!readOnly && <>
+          <CaptureBtn label="Before" icon={Camera} busy={busyOf('before')} onClick={() => pick('before')} tone="amber" />
+          <CaptureBtn label="After" icon={Camera} busy={busyOf('after')} onClick={() => pick('after')} tone="emerald" />
+          {variant === 'gallery' && (
+            <CaptureBtn label="Photo" icon={ImagePlus} busy={busyOf('general')} onClick={() => pick('general')} />
+          )}
+        </>}
         <span className="text-[11px] ml-auto inline-flex items-center gap-1.5">
           {uploadingCount > 0
             ? <span className="text-accent inline-flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Uploading {uploadingCount}…</span>
@@ -244,7 +268,7 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
           {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="aspect-square rounded-lg" />)}
         </div>
       ) : photos.length === 0 && pending.length === 0 ? (
-        <InlineEmpty icon={Camera}>No photos yet — snap a before &amp; after to build this property&apos;s service history.</InlineEmpty>
+        readOnly ? null : <InlineEmpty icon={Camera}>No photos yet — snap a before &amp; after to build this property&apos;s service history.</InlineEmpty>
       ) : (
         <>
           <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 mt-2.5">
@@ -314,26 +338,40 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={current.url} alt={current.caption || ''} className="w-full max-h-[55vh] object-contain bg-black" />
             <div className="p-4 space-y-3">
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] text-ink-faint uppercase tracking-wide">Tag</span>
-                {(['before', 'after', 'general'] as PhotoKind[]).map(k => (
-                  <button key={k} onClick={() => retag(current, k)}
-                    className={`text-xs font-medium rounded-lg px-2.5 py-1 border transition-colors ${current.kind === k ? KIND_BADGE[k] : 'border-border text-ink-muted hover:text-ink'}`}>
-                    {current.kind === k && <Check className="w-3 h-3 inline mr-1" />}{PHOTO_KIND_LABELS[k]}
+              {!readOnly && (
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-ink-faint uppercase tracking-wide">Tag</span>
+                  {(['before', 'after', 'general'] as PhotoKind[]).map(k => (
+                    <button key={k} onClick={() => retag(current, k)}
+                      className={`text-xs font-medium rounded-lg px-2.5 py-1 border transition-colors ${current.kind === k ? KIND_BADGE[k] : 'border-border text-ink-muted hover:text-ink'}`}>
+                      {current.kind === k && <Check className="w-3 h-3 inline mr-1" />}{PHOTO_KIND_LABELS[k]}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {!readOnly ? (
+                <input
+                  key={current.id}
+                  defaultValue={current.caption || ''}
+                  placeholder="Add a caption (optional)…"
+                  onBlur={e => saveCaption(current, e.target.value)}
+                  className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent" />
+              ) : current.caption ? (
+                <p className="text-sm text-ink">{current.caption}</p>
+              ) : null}
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <a href={current.url} target="_blank" rel="noopener noreferrer" className="text-xs text-accent hover:underline">Open full size</a>
+                  <button onClick={() => download(current)} disabled={downloading === current.id}
+                    className="text-xs font-medium text-ink-muted hover:text-ink flex items-center gap-1 disabled:opacity-50">
+                    {downloading === current.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />} Download
                   </button>
-                ))}
-              </div>
-              <input
-                key={current.id}
-                defaultValue={current.caption || ''}
-                placeholder="Add a caption (optional)…"
-                onBlur={e => saveCaption(current, e.target.value)}
-                className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent" />
-              <div className="flex items-center justify-between">
-                <a href={current.url} target="_blank" rel="noopener noreferrer" className="text-xs text-accent hover:underline">Open full size</a>
-                <button onClick={() => remove(current)} className="text-xs font-medium text-red-400 flex items-center gap-1 hover:text-red-300">
-                  <Trash2 className="w-3.5 h-3.5" /> Delete
-                </button>
+                </div>
+                {!readOnly && (
+                  <button onClick={() => remove(current)} className="text-xs font-medium text-red-400 flex items-center gap-1 hover:text-red-300">
+                    <Trash2 className="w-3.5 h-3.5" /> Delete
+                  </button>
+                )}
               </div>
             </div>
           </div>

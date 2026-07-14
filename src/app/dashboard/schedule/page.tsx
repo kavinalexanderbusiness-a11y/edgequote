@@ -1264,9 +1264,23 @@ export default function SchedulePage() {
     await fetchJobs()
   }
   async function removeLineItem(item: JobLineItem) {
+    // Snapshot BEFORE deleting: a grouped (plan-wide) add-on removes rows across
+    // many visits, so Undo must restore the whole group, not just this row.
+    let snapshot: JobLineItem[] = [item]
+    if (item.group_id) {
+      const { data } = await supabase.from('job_line_items').select('*').eq('group_id', item.group_id)
+      if (data?.length) snapshot = data as JobLineItem[]
+    }
     await deleteLineItem(supabase, item)
-    await syncDraftInvoiceAmounts(supabase, [item.job_id])
+    const affectedJobs = [...new Set(snapshot.map(r => r.job_id))]
+    await syncDraftInvoiceAmounts(supabase, affectedJobs)
     await fetchJobs()
+    const scope = snapshot.length > 1 ? ` from ${snapshot.length} visits` : ''
+    toast.undo(`Removed “${item.description}” ($${Number(item.amount).toFixed(2)})${scope}`, async () => {
+      await supabase.from('job_line_items').insert(snapshot)
+      await syncDraftInvoiceAmounts(supabase, affectedJobs)
+      await fetchJobs()
+    })
   }
   // The previous visit's add-ons (most recent earlier visit of the same series, or
   // same customer for one-offs, that had any). Drives the one-tap "copy previous".

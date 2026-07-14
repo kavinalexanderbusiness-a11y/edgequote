@@ -13,6 +13,8 @@ import { ProfitMap, ProfitPoint } from '@/components/profitability/ProfitMap'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
+import { InlineEmpty } from '@/components/ui/EmptyState'
+import { SkeletonTiles } from '@/components/ui/Skeleton'
 import { parseISO, startOfWeek, format } from 'date-fns'
 import { TrendingUp, TrendingDown, Navigation, Clock, DollarSign, MapPin, Lightbulb, Trophy, AlertTriangle } from 'lucide-react'
 
@@ -145,7 +147,7 @@ export default function ProfitabilityPage() {
       .map(j => ({ lat: j.lat as number, lng: j.lng as number, grade: gradeByDate[j.scheduled_date] ?? 'C', title: formatDate(j.scheduled_date) }))
   }, [jobs, routes])
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Crunching route profitability…</div>
+  if (loading) return <SkeletonTiles count={4} />
 
   return (
     <div className="max-w-4xl space-y-6">
@@ -201,7 +203,7 @@ export default function ProfitabilityPage() {
 
       {/* Routes */}
       {routes.length === 0 ? (
-        <Card><CardBody className="text-center py-12 text-sm text-ink-muted">No jobs to analyze yet.</CardBody></Card>
+        <Card><InlineEmpty>No jobs to analyze yet.</InlineEmpty></Card>
       ) : period === 'day' ? (
         <div className="space-y-3">
           {upcomingRoutes.length > 0 && (
@@ -212,7 +214,7 @@ export default function ProfitabilityPage() {
           )}
           {showUpcoming && upcomingRoutes.slice(0, 30).map(r => <RouteCard key={r.date} r={r} />)}
           {pastRoutes.length === 0 ? (
-            <Card><CardBody className="text-center py-8 text-sm text-ink-muted">No completed days yet — past routes appear here once you work them.</CardBody></Card>
+            <Card><InlineEmpty>No completed days yet — past routes appear here once you work them.</InlineEmpty></Card>
           ) : pastRoutes.slice(0, 60).map(r => <RouteCard key={r.date} r={r} />)}
         </div>
       ) : (

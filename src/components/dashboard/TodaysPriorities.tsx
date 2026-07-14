@@ -186,20 +186,24 @@ export function TodaysPriorities() {
   if (loading) return <SkeletonRows count={4} />
 
   return (
-    <div className="rounded-card border border-border bg-bg-secondary overflow-hidden">
-      <div className="px-4 sm:px-5 py-3 border-b border-border flex items-center gap-2">
-        <ListChecks className="w-4 h-4 text-accent" />
-        <h2 className="text-sm font-semibold text-ink">Today&rsquo;s Priorities</h2>
+    <div className="rounded-card border border-accent/20 hero-aurora overflow-hidden">
+      <div className="px-4 sm:px-5 py-3.5 border-b border-border flex items-center gap-2.5">
+        <span className="w-7 h-7 rounded-lg bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
+          <ListChecks className="w-4 h-4 text-accent" />
+        </span>
+        <h2 className="text-sm font-bold tracking-tight text-ink">Today&rsquo;s Priorities</h2>
         {items.length > 0 && (
-          <span className="text-xs font-semibold text-accent bg-accent/10 border border-accent/20 rounded-full px-2 py-0.5">{items.length}</span>
+          <span className="text-xs font-semibold text-accent bg-accent/10 border border-accent/20 rounded-full px-2 py-0.5 tabular-nums">{items.length}</span>
         )}
       </div>
 
       {items.length === 0 ? (
-        <div className="px-5 py-8 text-center">
-          <CheckCircle2 className="w-6 h-6 mx-auto mb-2 text-emerald-400" />
-          <p className="text-sm font-medium text-ink">You&rsquo;re all caught up</p>
-          <p className="text-xs text-ink-muted mt-0.5">No follow-ups, unsent invoices, or unread replies right now.</p>
+        <div className="px-5 py-10 text-center">
+          <div className="w-11 h-11 mx-auto rounded-full bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center mb-3">
+            <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+          </div>
+          <p className="text-sm font-semibold text-ink">You&rsquo;re all caught up</p>
+          <p className="text-xs text-ink-muted mt-1">No follow-ups, unsent invoices, or unread replies right now.</p>
         </div>
       ) : (
         <ol className="divide-y divide-border">
@@ -207,17 +211,17 @@ export function TodaysPriorities() {
             <li key={p.key}>
               <Link
                 href={p.href}
-                className="flex items-center gap-3 px-4 sm:px-5 py-3.5 hover:bg-surface/40 active:bg-surface/60 transition-colors"
+                className="group flex items-center gap-3 px-4 sm:px-5 py-3.5 hover:bg-surface/40 active:bg-surface/60 transition-colors"
               >
-                <span className="shrink-0 w-5 text-center text-xs font-bold text-ink-faint tabular-nums">{i + 1}</span>
+                <span className={`shrink-0 w-5 h-5 rounded text-[10px] font-bold flex items-center justify-center tabular-nums ${i === 0 ? 'bg-accent/15 text-accent' : 'bg-bg-tertiary text-ink-faint'}`}>{i + 1}</span>
                 <span className={`shrink-0 w-9 h-9 rounded-lg border flex items-center justify-center ${p.tone}`}>
                   <p.icon className="w-4 h-4" />
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block text-sm font-semibold text-ink truncate">{p.label}</span>
-                  <span className="block text-xs text-ink-muted truncate mt-0.5">{p.detail}</span>
+                  <span className="block text-sm font-semibold tracking-tight text-ink truncate">{p.label}</span>
+                  <span className="block text-xs text-ink-muted truncate mt-0.5 tabular-nums">{p.detail}</span>
                 </span>
-                <ArrowRight className="w-4 h-4 text-ink-faint shrink-0" />
+                <ArrowRight className="w-4 h-4 text-ink-faint shrink-0 transition-transform group-hover:translate-x-0.5" />
               </Link>
             </li>
           ))}

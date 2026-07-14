@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Customer } from '@/types'
@@ -11,16 +11,15 @@ import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { applyConsent, SMS_CONSENT_WARNING, ConsentChannel } from '@/lib/consent'
 import { toast as notify } from '@/lib/toast'
 import { useBulkSelect } from '@/hooks/useBulkSelect'
+import { useListShortcuts } from '@/hooks/useListShortcuts'
 import { BulkActionBar, SelectCheckbox, SelectAllToggle, type BulkAction } from '@/components/ui/BulkActions'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import type { MsgType } from '@/lib/comms/templates'
 import { exportRowsToCsv } from '@/lib/csv'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
-import { EmptyState } from '@/components/ui/EmptyState'
-import { SearchInput } from '@/components/ui/SearchInput'
-import { FilterPill } from '@/components/ui/FilterPill'
-import { Edit2, Trash2, Phone, Mail, FileText, Link2, Check, MessageSquare, ShieldAlert, Archive, Download, Send, Users } from 'lucide-react'
+import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
+import { Edit2, Trash2, Phone, Mail, FileText, Search, Link2, Check, MessageSquare, ShieldAlert, Archive, Download, Send, Users } from 'lucide-react'
 
 type ConsentFilter = '' | 'sms_in' | 'sms_out' | 'email_in' | 'email_out' | 'both' | 'neither'
 const CONSENT_FILTERS: { value: ConsentFilter; label: string }[] = [
@@ -44,6 +43,9 @@ interface CustomerListProps {
 
 export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: CustomerListProps) {
   const router = useRouter()
+  const searchRef = useRef<HTMLInputElement>(null)
+  // '/' focuses search, 'n' opens the Add-Customer form — the shared list idiom.
+  useListShortcuts({ search: searchRef, onNew: onAdd })
   const [search, setSearch] = useState('')
   const [consentFilter, setConsentFilter] = useState<ConsentFilter>('')
   const [deleting, setDeleting] = useState<string | null>(null)
@@ -179,8 +181,19 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
 
   return (
     <div className="space-y-4">
-      {/* Search + consent filters — THE shared SearchInput + FilterPill */}
-      <SearchInput placeholder="Search customers..." value={search} onChange={e => setSearch(e.target.value)} />
+      {/* Search */}
+      <div className="relative">
+        <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-faint" />
+        <input
+          ref={searchRef}
+          type="text"
+          placeholder="Search customers…  ( / )"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Escape') { setSearch(''); e.currentTarget.blur() } }}
+          className="w-full bg-surface border border-border-strong rounded-xl pl-10 pr-4 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
+        />
+      </div>
 
       <div className="flex flex-wrap gap-1.5">
         {CONSENT_FILTERS.map(f => (
@@ -206,7 +219,7 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
               action={onAdd ? { label: 'Add Customer', onClick: onAdd } : { label: 'Import customers', onClick: () => router.push('/dashboard/customers/import') }} />
           </Card>
         ) : (
-          <Card className="py-14 text-center text-sm text-ink-muted">No customers match your filters.</Card>
+          <Card><InlineEmpty>No customers match your filters.</InlineEmpty></Card>
         )
       ) : (
         <div className="grid gap-3">

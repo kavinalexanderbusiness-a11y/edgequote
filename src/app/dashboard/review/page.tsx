@@ -14,6 +14,7 @@ import {
 import { needsFollowUp } from '@/lib/followup'
 import { localTodayISO, formatCurrency, formatDate, cn } from '@/lib/utils'
 import { PageHeader } from '@/components/layout/PageHeader'
+import { SkeletonTiles } from '@/components/ui/Skeleton'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Banner } from '@/components/ui/Banner'
 import { SkeletonRows } from '@/components/ui/Skeleton'
@@ -124,7 +125,7 @@ export default function WeeklyReviewPage() {
     return { weekStart, today, revenue, completedCount: completed.length, missed, dayRoutes, avgGrade, best, worst, followUps: followUps.length, followUpValue, pending: pending.length, pendingValue, growth }
   }, [jobs, quotes, ctx])
 
-  if (loading) return <SkeletonRows />
+  if (loading) return <SkeletonTiles count={4} />
 
   return (
     <div className="max-w-3xl space-y-6">

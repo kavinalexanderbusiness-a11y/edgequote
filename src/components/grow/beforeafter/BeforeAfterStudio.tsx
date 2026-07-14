@@ -20,6 +20,7 @@ import { getPropertyContext, type PropertyIntelligence } from '@/lib/ai/property
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { EmptyState } from '@/components/ui/EmptyState'
 import {
   Download, Images, Loader2, Wand2, Tag, BadgeCheck, AlertTriangle,
   SlidersHorizontal, RefreshCw, Layers, ShieldCheck, ChevronDown, ChevronUp, Camera,
@@ -670,19 +671,16 @@ export function BeforeAfterStudio() {
     return (
       <div className="space-y-6">
         {header}
-        <Card className="p-8 text-center">
-          <div className="w-12 h-12 rounded-2xl bg-accent/10 border border-accent/20 flex items-center justify-center mx-auto mb-3">
-            <Camera className="w-6 h-6 text-accent" />
-          </div>
-          <p className="text-sm font-semibold text-ink">No before/after pairs yet</p>
-          <p className="text-xs text-ink-muted mt-1 max-w-md mx-auto">
-            On a completed visit, snap a <span className="text-amber-300 font-medium">Before</span> and an{' '}
-            <span className="text-emerald-300 font-medium">After</span> photo — any completed job with both lands
-            here, ready to turn into a branded post in one tap.
-          </p>
-          <Link href="/dashboard/schedule" className="inline-flex items-center gap-1.5 mt-4 text-xs font-semibold text-accent hover:underline">
-            <CalendarDays className="w-3.5 h-3.5" /> Go to today’s jobs
-          </Link>
+        <Card>
+          <EmptyState icon={Camera} className="py-10" title="No before/after pairs yet"
+            description={<>
+              On a completed visit, snap a <span className="text-amber-300 font-medium">Before</span> and an{' '}
+              <span className="text-emerald-300 font-medium">After</span> photo — any completed job with both lands
+              here, ready to turn into a branded post in one tap.
+              <Link href="/dashboard/schedule" className="flex items-center justify-center gap-1.5 mt-4 text-xs font-semibold text-accent hover:underline">
+                <CalendarDays className="w-3.5 h-3.5" /> Go to today’s jobs
+              </Link>
+            </>} />
         </Card>
       </div>
     )

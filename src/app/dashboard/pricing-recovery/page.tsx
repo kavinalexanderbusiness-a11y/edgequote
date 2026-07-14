@@ -10,6 +10,8 @@ import { generateQuoteNumber, formatCurrency, maxNumericSuffix, localTodayISO } 
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { SkeletonTiles } from '@/components/ui/Skeleton'
 import { Gauge, DollarSign, AlertTriangle, Repeat, Link2, FileText, Check, TrendingUp, Sparkles } from 'lucide-react'
 
 interface JobRow {
@@ -257,7 +259,7 @@ export default function PricingRecoveryPage() {
     await load(); setWorking(null)
   }
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Scanning for unpriced work…</div>
+  if (loading) return <SkeletonTiles count={4} />
 
   const m = model
   const scoreTone = m.score >= 90 ? 'text-emerald-400' : m.score >= 60 ? 'text-amber-400' : 'text-red-400'
@@ -290,9 +292,8 @@ export default function PricingRecoveryPage() {
       </div>
 
       {m.score === 100 && m.mispricedSeries.length === 0 && m.underpricedSeries.length === 0 ? (
-        <Card><CardBody className="text-center py-12 text-sm text-ink-muted">
-          <Check className="w-6 h-6 mx-auto mb-2 text-emerald-400" /> Every job is priced. Reports and growth dashboards are running on real revenue.
-        </CardBody></Card>
+        <Card><EmptyState icon={Check} tone="positive" className="py-12" title="Every job is priced"
+          description="Reports and growth dashboards are running on real revenue." /></Card>
       ) : null}
 
       {/* Unpriced recurring series — highest leverage */}

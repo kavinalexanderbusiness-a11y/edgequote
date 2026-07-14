@@ -6,6 +6,8 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
+import { InlineEmpty } from '@/components/ui/EmptyState'
+import { SkeletonTiles } from '@/components/ui/Skeleton'
 import { format } from 'date-fns'
 import { Coord, geocodeAddress } from '@/lib/geo'
 import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, routeStats, computeDayEtas, DEFAULT_JOB_MIN } from '@/lib/route'
@@ -160,11 +162,9 @@ export default function RoutesPage() {
       </p>
 
       {loading ? (
-        <div className="text-center py-20 text-sm text-ink-muted">Analyzing route…</div>
+        <SkeletonTiles count={4} />
       ) : activeCount === 0 ? (
-        <Card><CardBody className="text-center py-16 text-sm text-ink-muted">
-          No jobs scheduled for {format(new Date(date + 'T00:00:00'), 'EEEE, MMMM d')}. Schedule jobs first, then analyze the route.
-        </CardBody></Card>
+        <Card><InlineEmpty className="py-16">No jobs scheduled for {format(new Date(date + 'T00:00:00'), 'EEEE, MMMM d')}. Schedule jobs first, then analyze the route.</InlineEmpty></Card>
       ) : (
         <div className="space-y-5">
           {/* Summary + map */}
@@ -197,11 +197,10 @@ export default function RoutesPage() {
             {mapStops.length > 0 ? (
               <RouteMap base={ctx.base} stops={mapStops} grade={profit.grade} />
             ) : (
-              <div className="px-5 py-10 text-center text-sm text-ink-muted">
-                <MapPin className="w-5 h-5 mx-auto mb-2 text-ink-faint" />
+              <InlineEmpty icon={MapPin} className="py-10">
                 {hasBase ? 'No stop on this day has a locatable address yet — add proper addresses to the properties.'
                   : 'Set a base address in Settings to plot and measure the route.'}
-              </div>
+              </InlineEmpty>
             )}
           </Card>
 

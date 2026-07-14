@@ -13,6 +13,8 @@ import { custCacheKey, type CustomerPrefetch } from '@/lib/prefetch'
 import { Customer, Property, Quote, Job, Invoice, JobRecurrence } from '@/types'
 import { WebsiteLead } from '@/lib/leads'
 import { LeadSummary } from '@/components/leads/LeadSummary'
+import { JobPhotos } from '@/components/photos/JobPhotos'
+import { bookingPhotosFromQuotes } from '@/lib/bookingPhotos'
 import { needsFollowUp, daysSince } from '@/lib/followup'
 import { recurrenceLabel, recurringCustomerLabel, buildServicePlans, ServicePlan } from '@/lib/recurrence'
 import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
@@ -23,6 +25,7 @@ import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { DetailHeader } from '@/components/layout/DetailHeader'
 import { Banner } from '@/components/ui/Banner'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { InlineEmpty } from '@/components/ui/EmptyState'
 import { Button } from '@/components/ui/Button'
 import { SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
 import { formatCurrency, formatDate, getInitials } from '@/lib/utils'
@@ -37,7 +40,7 @@ import {
   ArrowLeft, Phone, MessageSquare, FilePlus, CalendarPlus, Mail, MapPin, Repeat,
   FileText, Send, RotateCw, CheckCircle2, Wrench, Receipt, DollarSign, Sparkles, Users,
   Edit2, ExternalLink, Ruler, AlertTriangle, StickyNote, Wallet, Timer, CalendarClock,
-  Link2, Check, Cake, PartyPopper,
+  Link2, Check, Cake, PartyPopper, Camera,
 } from 'lucide-react'
 
 const WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
@@ -304,8 +307,13 @@ export default function CustomerDetailPage() {
     setSavingPropPrefs(true)
     const row = draftToRow(propPrefsDraft)
     const { error } = await supabase.from('properties').update(row).eq('id', propId)
-    if (!error) setProperties(prev => prev.map(p => p.id === propId ? { ...p, ...row } : p))
     setSavingPropPrefs(false)
+    if (error) {
+      // Keep the editor open so the edit isn't lost — same behavior as saveNotes/savePrefs.
+      toast.error('Could not save the override: ' + error.message)
+      return
+    }
+    setProperties(prev => prev.map(p => p.id === propId ? { ...p, ...row } : p))
     setEditingPropPrefs(null)
   }
 
@@ -334,6 +342,10 @@ export default function CustomerDetailPage() {
   // Heavy derivations, memoized and hoisted above the guards (Rules of Hooks) so editing
   // the controlled Notes / Prefs inputs on this page doesn't rebuild the service plans and
   // the full activity timeline on every keystroke — only when the underlying data changes.
+  // Photos the customer attached during online booking (stored as URLs on the draft
+  // quote's lead_meta.photos). Rendered read-only through the shared gallery/lightbox.
+  const bookingPhotos = useMemo(() => bookingPhotosFromQuotes(quotes as unknown as { lead_meta?: unknown; created_at?: string | null }[]), [quotes])
+
   const servicePlans = useMemo(() => {
     const t = localToday()
     const quotesById: Record<string, Quote> = {}
@@ -559,6 +571,21 @@ export default function CustomerDetailPage() {
           · contact · source), shown identically to the Messages inbox card. */}
       {lead && <LeadSummary lead={lead} />}
 
+      {/* Photos the customer attached when booking — the SAME read-only gallery +
+          lightbox (thumbnails · enlarge · download) used everywhere else. */}
+      {bookingPhotos.length > 0 && (
+        <Card>
+          <CardHeader className="flex items-center gap-2">
+            <Camera className="w-4 h-4 text-accent" />
+            <h2 className="text-sm font-semibold text-ink">Customer photos</h2>
+            <span className="ml-auto text-xs text-ink-faint">{bookingPhotos.length} from booking</span>
+          </CardHeader>
+          <CardBody>
+            <JobPhotos propertyId={null} variant="gallery" readOnly initialPhotos={bookingPhotos} />
+          </CardBody>
+        </Card>
+      )}
+
       {/* Open items — "what needs action for this customer" comes FIRST, right under
           the identity card (it was buried five cards deep). */}
       <Card className={openItems.length > 0 ? 'border-amber-500/30' : ''}>
@@ -569,7 +596,7 @@ export default function CustomerDetailPage() {
         </CardHeader>
         <CardBody className="p-0">
           {openItems.length === 0 ? (
-            <p className="px-5 py-6 text-center text-sm text-ink-muted">Nothing needs action right now. 🎉</p>
+            <InlineEmpty className="py-6">Nothing needs action right now.</InlineEmpty>
           ) : (
             <div className="divide-y divide-border">
               {openItems.map(item => {
@@ -773,7 +800,7 @@ export default function CustomerDetailPage() {
           <CardHeader><h2 className="text-sm font-semibold text-ink">Timeline</h2></CardHeader>
           <CardBody>
             {events.length === 0 ? (
-              <p className="text-sm text-ink-muted">No history yet.</p>
+              <InlineEmpty className="py-6">No history yet.</InlineEmpty>
             ) : (
               <div className="space-y-3">
                 {events.map((e, i) => {

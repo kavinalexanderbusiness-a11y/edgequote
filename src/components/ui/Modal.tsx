@@ -24,6 +24,8 @@ interface ModalProps {
   size?: 'sm' | 'md' | 'lg' | 'xl'
   dismissable?: boolean
   className?: string
+  /** Cmd/Ctrl+Enter fires the dialog's primary action (mirrors Escape = close). */
+  onSubmit?: () => void
 }
 
 const SIZES: Record<NonNullable<ModalProps['size']>, string> = {
@@ -33,13 +35,14 @@ const SIZES: Record<NonNullable<ModalProps['size']>, string> = {
   xl: 'max-w-4xl',
 }
 
-export function Modal({ open, onClose, title, icon: Icon, children, footer, size = 'md', dismissable = true, className }: ModalProps) {
+export function Modal({ open, onClose, title, icon: Icon, children, footer, size = 'md', dismissable = true, className, onSubmit }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!open) return
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape' && dismissable) onClose()
+      else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && onSubmit) { e.preventDefault(); onSubmit() }
     }
     document.addEventListener('keydown', onKey)
     const prevOverflow = document.body.style.overflow
@@ -49,7 +52,7 @@ export function Modal({ open, onClose, title, icon: Icon, children, footer, size
       document.removeEventListener('keydown', onKey)
       document.body.style.overflow = prevOverflow
     }
-  }, [open, dismissable, onClose])
+  }, [open, dismissable, onClose, onSubmit])
 
   if (!open) return null
 

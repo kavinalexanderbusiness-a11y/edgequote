@@ -8,7 +8,7 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const Button = forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant = 'primary', size = 'md', loading, children, disabled, ...props }, ref) => {
+  ({ className, variant = 'primary', size = 'md', loading, children, disabled, type = 'button', ...props }, ref) => {
     const base = 'inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50'
 
     const variants = {
@@ -25,10 +25,15 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     }
 
     return (
+      // Default type="button": a plain <button> inside a <form> submits it, so an
+      // untyped Button in a form (toggles, dialogs, measure tools) silently saved
+      // the form. Submit buttons opt in explicitly with type="submit".
       <button
         ref={ref}
+        type={type}
         className={cn(base, variants[variant], sizes[size], className)}
         disabled={disabled || loading}
+        aria-busy={loading || undefined}
         {...props}
       >
         {loading && (

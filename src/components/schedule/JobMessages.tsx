@@ -131,7 +131,7 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
       })
       setOutcome(summarize(await res.json()))
     } catch (e) {
-      setOutcome({ ok: false, text: e instanceof Error ? e.message : 'Failed to send.' })
+      setOutcome({ ok: false, text: e instanceof Error ? e.message : 'Could not send the message.' })
     }
     setBusy(false)
   }

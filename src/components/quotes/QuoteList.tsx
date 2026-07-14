@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
+import { useListShortcuts } from '@/hooks/useListShortcuts'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { hoverIntent } from '@/lib/prefetch'
@@ -10,9 +11,7 @@ import { needsFollowUp, daysSince, compareFollowUp } from '@/lib/followup'
 import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
-import { EmptyState } from '@/components/ui/EmptyState'
-import { SearchInput } from '@/components/ui/SearchInput'
-import { FilterPill } from '@/components/ui/FilterPill'
+import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from '@/lib/toast'
 import { useBulkSelect } from '@/hooks/useBulkSelect'
@@ -43,6 +42,9 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
   const [statusFilter, setStatusFilter] = useState<'' | QuoteStatus>('')
   const [followUpOnly, setFollowUpOnly] = useState(false)
   const [deleting, setDeleting] = useState<string | null>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+  // '/' focuses search, 'n' starts a new quote — the shared list idiom.
+  useListShortcuts({ search: searchRef, onNew: () => router.push('/dashboard/quotes/new') })
 
   // Date math over every quote — memoized so it doesn't re-run on each search keystroke.
   const followUpCount = useMemo(() => quotes.filter(needsFollowUp).length, [quotes])
@@ -216,8 +218,18 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
     <div className="space-y-4">
       {/* Filters — THE shared SearchInput + FilterPill (one chip shape app-wide) */}
       <div className="flex flex-col sm:flex-row gap-3">
-        <SearchInput className="flex-1" placeholder="Search quotes..."
-          value={search} onChange={e => setSearch(e.target.value)} />
+        <div className="relative flex-1">
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-faint" />
+          <input
+            type="text"
+            ref={searchRef}
+            placeholder="Search quotes…  ( / )"
+            onKeyDown={e => { if (e.key === 'Escape') { setSearch(''); e.currentTarget.blur() } }}
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="w-full bg-surface border border-border-strong rounded-xl pl-10 pr-4 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
+          />
+        </div>
         {/* One scrollable row on phones (the wrap made a 3-row wall of pills
             before any quotes); wraps normally on desktop. */}
         <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto sm:flex-wrap sm:overflow-visible pb-1 sm:pb-0">
@@ -249,7 +261,7 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
               action={{ label: 'New Quote', onClick: () => router.push('/dashboard/quotes/new') }} />
           </Card>
         ) : (
-          <Card className="py-14 text-center text-sm text-ink-muted">No quotes match your filters.</Card>
+          <Card><InlineEmpty>No quotes match your filters.</InlineEmpty></Card>
         )
       ) : (
         <Card className="overflow-hidden">
