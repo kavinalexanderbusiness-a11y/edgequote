@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Customer } from '@/types'
@@ -11,6 +11,7 @@ import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { applyConsent, SMS_CONSENT_WARNING, ConsentChannel } from '@/lib/consent'
 import { toast as notify } from '@/lib/toast'
 import { useBulkSelect } from '@/hooks/useBulkSelect'
+import { useListShortcuts } from '@/hooks/useListShortcuts'
 import { BulkActionBar, SelectCheckbox, SelectAllToggle, type BulkAction } from '@/components/ui/BulkActions'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import type { MsgType } from '@/lib/comms/templates'
@@ -42,6 +43,9 @@ interface CustomerListProps {
 
 export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: CustomerListProps) {
   const router = useRouter()
+  const searchRef = useRef<HTMLInputElement>(null)
+  // '/' focuses search, 'n' opens the Add-Customer form — the shared list idiom.
+  useListShortcuts({ search: searchRef, onNew: onAdd })
   const [search, setSearch] = useState('')
   const [consentFilter, setConsentFilter] = useState<ConsentFilter>('')
   const [deleting, setDeleting] = useState<string | null>(null)
@@ -181,10 +185,12 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
       <div className="relative">
         <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-faint" />
         <input
+          ref={searchRef}
           type="text"
-          placeholder="Search customers..."
+          placeholder="Search customers…  ( / )"
           value={search}
           onChange={e => setSearch(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Escape') { setSearch(''); e.currentTarget.blur() } }}
           className="w-full bg-surface border border-border-strong rounded-xl pl-10 pr-4 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
         />
       </div>

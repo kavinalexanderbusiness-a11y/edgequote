@@ -167,7 +167,7 @@ export function Menu({ items, align = 'start', width = 288, ariaLabel = 'Menu', 
                 onClick={() => select(it)}
                 onMouseEnter={() => !it.disabled && setActive(i)}
                 className={cn(
-                  'w-full text-left flex items-start gap-2.5 px-2.5 py-2 rounded-lg transition-colors outline-none',
+                  'w-full text-left flex items-start gap-2.5 px-2.5 py-2 rounded-lg transition-colors outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
                   i === active ? 'bg-surface text-ink' : 'text-ink-muted hover:bg-surface hover:text-ink',
                   it.disabled && 'opacity-50 pointer-events-none',
                 )}>

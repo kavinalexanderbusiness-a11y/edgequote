@@ -304,8 +304,13 @@ export default function CustomerDetailPage() {
     setSavingPropPrefs(true)
     const row = draftToRow(propPrefsDraft)
     const { error } = await supabase.from('properties').update(row).eq('id', propId)
-    if (!error) setProperties(prev => prev.map(p => p.id === propId ? { ...p, ...row } : p))
     setSavingPropPrefs(false)
+    if (error) {
+      // Keep the editor open so the edit isn't lost — same behavior as saveNotes/savePrefs.
+      toast.error('Could not save the override: ' + error.message)
+      return
+    }
+    setProperties(prev => prev.map(p => p.id === propId ? { ...p, ...row } : p))
     setEditingPropPrefs(null)
   }
 

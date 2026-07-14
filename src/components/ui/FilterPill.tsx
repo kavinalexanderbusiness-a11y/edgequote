@@ -27,8 +27,8 @@ export function FilterPill({ active, onClick, children, ariaLabel, title, disabl
       title={title}
       disabled={disabled}
       className={cn(
-        'inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium border transition-colors whitespace-nowrap',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 disabled:cursor-not-allowed',
+        'inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium border transition-all whitespace-nowrap active:scale-[0.97]',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100',
         active
           ? 'bg-accent text-black border-accent'
           : 'bg-surface text-ink-muted border-border hover:text-ink hover:border-border-strong',

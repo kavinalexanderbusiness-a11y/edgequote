@@ -164,7 +164,10 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
         {err && <p className="text-xs text-red-400 mb-1">{err}</p>}
         <div className="flex items-end gap-2">
           <textarea value={text} onChange={e => setText(e.target.value)} rows={2}
-            onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send() }}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send()
+              else if (e.key === 'Escape') e.currentTarget.blur()
+            }}
             placeholder={note ? 'Internal note (not sent to the customer)…' : 'Reply by SMS…'}
             className={cn('flex-1 rounded-lg border px-3 py-2 text-sm text-ink outline-none focus:border-accent resize-none',
               note ? 'bg-amber-500/5 border-amber-500/30' : 'bg-bg-tertiary border-border-strong')} />

@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
+import { useListShortcuts } from '@/hooks/useListShortcuts'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { hoverIntent } from '@/lib/prefetch'
@@ -41,6 +42,9 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
   const [statusFilter, setStatusFilter] = useState<'' | QuoteStatus>('')
   const [followUpOnly, setFollowUpOnly] = useState(false)
   const [deleting, setDeleting] = useState<string | null>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+  // '/' focuses search, 'n' starts a new quote — the shared list idiom.
+  useListShortcuts({ search: searchRef, onNew: () => router.push('/dashboard/quotes/new') })
 
   // Date math over every quote — memoized so it doesn't re-run on each search keystroke.
   const followUpCount = useMemo(() => quotes.filter(needsFollowUp).length, [quotes])
@@ -218,7 +222,9 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-faint" />
           <input
             type="text"
-            placeholder="Search quotes..."
+            ref={searchRef}
+            placeholder="Search quotes…  ( / )"
+            onKeyDown={e => { if (e.key === 'Escape') { setSearch(''); e.currentTarget.blur() } }}
             value={search}
             onChange={e => setSearch(e.target.value)}
             className="w-full bg-surface border border-border-strong rounded-xl pl-10 pr-4 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"

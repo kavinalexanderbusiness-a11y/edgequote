@@ -200,6 +200,7 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
     const { data } = await supabase.from('content_pieces').update(patch).eq('id', draft.id).select('*').maybeSingle()
     setSaving(false)
     if (data) { setSaved(true); onDraftChange?.(data as ContentPiece); setTimeout(() => setSaved(false), 1500) }
+    else toast.error('Could not save your edits — check your connection and try again.')
   }
 
   function saveEdits() {
@@ -248,7 +249,7 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
           />
         )}
         <div className="flex items-center gap-3 flex-wrap">
-          <Button variant="secondary" size="sm" onClick={runGenerate} loading={streaming} disabled={!aiEnabled}>
+          <Button variant="secondary" size="sm" onClick={runGenerate} loading={streaming} disabled={!aiEnabled} title={!aiEnabled ? "Add your Anthropic API key to enable AI generation" : undefined}>
             <RefreshCw className="w-3.5 h-3.5" /> Regenerate
           </Button>
           <span className="text-[11px] text-ink-faint inline-flex items-center gap-1.5">

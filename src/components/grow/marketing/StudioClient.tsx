@@ -1,5 +1,6 @@
 'use client'
 
+import { toast } from '@/lib/toast'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -71,9 +72,13 @@ export function StudioClient({ candidates, aiEnabled, businessName, logoUrl, use
   const draftKey = `${selectedJobId}:${activeChannel}`
 
   async function grantConsent(customerId: string, jobId: string) {
-    await supabase.from('customers')
+    const { error } = await supabase.from('customers')
       .update({ photo_marketing_consent: true, photo_marketing_consent_at: new Date().toISOString() })
       .eq('id', customerId)
+    // Only unlock photos when the consent actually saved — a failed write must
+    // never leave the UI claiming consent the database doesn't have.
+    if (error) { toast.error('Could not save photo consent: ' + error.message); return }
+    toast.success('Photo use approved for this customer.')
     setConsentJobs(prev => new Set(prev).add(jobId))
   }
 
@@ -210,7 +215,7 @@ export function StudioClient({ candidates, aiEnabled, businessName, logoUrl, use
             <Card className="p-4 space-y-3">
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <p className="text-sm font-semibold text-ink">Create posts</p>
-                <Button onClick={generateAll} loading={genAll} disabled={!aiEnabled} className="shrink-0">
+                <Button onClick={generateAll} loading={genAll} disabled={!aiEnabled} title={!aiEnabled ? "Add your Anthropic API key to enable AI generation" : undefined} className="shrink-0">
                   <Wand2 className="w-4 h-4" /> Generate all platforms
                 </Button>
               </div>

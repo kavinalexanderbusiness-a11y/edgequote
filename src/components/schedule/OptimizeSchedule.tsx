@@ -253,6 +253,7 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
               <div className="grid grid-cols-2 gap-2">
                 {MODES.map(({ key, label, sub, Icon }) => (
                   <button key={key} onClick={() => run(key, scope)} disabled={running || invoicedIds === null}
+                    title={invoicedIds === null ? 'Loading job data…' : undefined}
                     className={cn('rounded-xl border p-3 text-left transition-colors disabled:opacity-60',
                       mode === key && result ? 'border-accent bg-accent/10' : 'border-border-strong bg-surface hover:border-accent/50')}>
                     <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><Icon className="w-4 h-4 text-accent" /> {label}</p>

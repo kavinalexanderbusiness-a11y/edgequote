@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { toast } from '@/lib/toast'
 import { useBusinessData } from '@/hooks/useBusinessData'
 import type { BusinessSettingsFormValues, TravelFeeTier } from '@/types'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -196,10 +197,19 @@ export default function SettingsPage() {
     refresh()
   }
 
+  // Remove-with-undo (the shared pattern): act immediately, offer a few seconds
+  // to restore the exact row — never a silent, irreversible delete.
   async function deleteTier(idx: number) {
     const t = localTiers[idx]
-    if (t.id) await supabase.from('travel_fee_tiers').delete().eq('id', t.id)
+    if (t.id) {
+      const { error } = await supabase.from('travel_fee_tiers').delete().eq('id', t.id)
+      if (error) { toast.error('Could not remove the fee tier: ' + error.message); return }
+    }
     setLocalTiers(prev => prev.filter((_, i) => i !== idx))
+    toast.undo('Travel fee tier removed', async () => {
+      if (t.id) await supabase.from('travel_fee_tiers').insert(t)
+      setLocalTiers(prev => [...prev.slice(0, idx), t, ...prev.slice(idx)])
+    })
   }
 
   if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading settings...</div>

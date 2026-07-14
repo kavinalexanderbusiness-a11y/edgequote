@@ -181,7 +181,7 @@ export function MarketingCalendar({ userId, aiEnabled, openPlan }: { userId: str
           <FilterPill active={view === 'week'} onClick={() => setView('week')}><CalendarRange className="w-3 h-3" /> Week</FilterPill>
           <FilterPill active={view === 'day'} onClick={() => setView('day')}><CalIcon className="w-3 h-3" /> Day</FilterPill>
           <Button size="sm" variant="secondary" onClick={() => setHubOpen(true)}><Send className="w-4 h-4" /> Publishing</Button>
-          <Button size="sm" onClick={() => setPlanOpen(o => !o)} disabled={!aiEnabled}><CalendarPlus className="w-4 h-4" /> Plan a month</Button>
+          <Button size="sm" onClick={() => setPlanOpen(o => !o)} disabled={!aiEnabled} title={!aiEnabled ? "Add your Anthropic API key to enable AI generation" : undefined}><CalendarPlus className="w-4 h-4" /> Plan a month</Button>
         </div>
       </div>
 
@@ -468,7 +468,7 @@ function PlanPanel({ aiEnabled, onClose, onDone, defaultStart }: { aiEnabled: bo
           <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
             className="mt-1 block bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-sm text-ink" />
         </label>
-        <Button onClick={run} loading={busy} disabled={!aiEnabled}><Sparkles className="w-4 h-4" /> Generate &amp; schedule</Button>
+        <Button onClick={run} loading={busy} disabled={!aiEnabled} title={!aiEnabled ? "Add your Anthropic API key to enable AI generation" : undefined}><Sparkles className="w-4 h-4" /> Generate &amp; schedule</Button>
       </div>
       {!aiEnabled && <p className="text-[11px] text-ink-faint">Add your Anthropic key to enable generation.</p>}
       {msg && <Banner tone="info" onDismiss={() => setMsg(null)}>{msg}</Banner>}

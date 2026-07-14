@@ -1,6 +1,6 @@
 'use client'
 
-import { useSyncExternalStore, useState } from 'react'
+import { useSyncExternalStore, useState, useEffect } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import { subscribeConfirm, getConfirm, settleConfirm } from '@/lib/confirm'
 import { toast } from '@/lib/toast'
@@ -10,10 +10,27 @@ import { Button } from './Button'
 // Renders the shared confirmation dialog from the confirm store. Mounted once in
 // the dashboard layout. One look + behaviour for every confirm in the app:
 // shared <Modal> (Escape / backdrop = cancel, focus, scroll-lock), destructive
-// styling on the action, async-aware (spinner while onConfirm runs).
+// styling on the action, async-aware (spinner while onConfirm runs), and
+// Enter = confirm (the keyboard mirror of Escape = cancel).
 export function ConfirmHost() {
   const req = useSyncExternalStore(subscribeConfirm, getConfirm, getConfirm)
   const [busy, setBusy] = useState(false)
+
+  // Enter confirms — unless focus is on a button (native Enter already clicks
+  // it, and double-firing would confirm a focused Cancel).
+  useEffect(() => {
+    if (!req) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== 'Enter' || busy) return
+      if (document.activeElement instanceof HTMLButtonElement) return
+      e.preventDefault()
+      onConfirm()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [req, busy])
+
   if (!req) return null
 
   const { opts } = req
