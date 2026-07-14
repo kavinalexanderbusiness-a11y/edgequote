@@ -11,7 +11,7 @@ import type { Quote } from '@/types'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import {
   ListChecks, CheckCircle2, ArrowRight,
-  DollarSign, FileText, Bell, MessageSquare, Repeat,
+  DollarSign, FileText, Bell, CalendarPlus, AlertTriangle, MessageSquare, Repeat,
 } from 'lucide-react'
 
 // ONE ranked queue of the highest-value things to do right now, distilled from the
@@ -90,9 +90,28 @@ export function TodaysPriorities() {
         })
       }
 
-      // (Accepted-but-unscheduled and missed visits are NOT queued here — the pinned
-      // UnscheduledAccepted and MissedJobs cards directly beneath this list carry the
-      // same signals WITH their one-tap actions; listing them twice was duplication.)
+      // 2) Accepted but not scheduled — committed revenue most at risk of slipping.
+      //    Cancelled jobs must NOT count as scheduled.
+      const scheduledQuoteIds = new Set(jobs.filter(j => j.quote_id && j.status !== 'cancelled').map(j => j.quote_id))
+      const acceptedUnscheduled = quotes.filter(q => q.status === 'accepted' && !scheduledQuoteIds.has(q.id))
+      const acceptedTotal = acceptedUnscheduled.reduce((s, q) => s + Number(q.total || 0), 0)
+      if (acceptedUnscheduled.length > 0) {
+        next.push({
+          key: 'unscheduled', icon: CalendarPlus, tone: 'text-amber-400 bg-amber-500/10 border-amber-500/20',
+          label: 'Schedule accepted jobs', detail: `${acceptedUnscheduled.length} · ${formatCurrency(acceptedTotal)}`,
+          href: '/dashboard/schedule', score: 80_000 + acceptedTotal,
+        })
+      }
+
+      // 3) Missed visits — past-date jobs still open, un-invoiced, customers falling behind.
+      const missed = jobs.filter(j => j.scheduled_date < today && (j.status === 'scheduled' || j.status === 'in_progress'))
+      if (missed.length > 0) {
+        next.push({
+          key: 'missed', icon: AlertTriangle, tone: 'text-red-400 bg-red-500/10 border-red-500/20',
+          label: 'Resolve missed jobs', detail: `${missed.length} past due`,
+          href: '/dashboard/schedule', score: 70_000 + missed.length * 200,
+        })
+      }
 
       // 4) Draft invoices to send — the auto-invoiced recurring pipeline that silently
       //    goes unsent (mirrors the Invoices "Drafts to review" card).
