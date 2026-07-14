@@ -62,6 +62,7 @@ export const MSG_VARIABLES: { key: string; hint: string }[] = [
   { key: 'quote_link', hint: 'link to the quote (portal)' },
   { key: 'invoice_link', hint: 'link to the invoice (portal)' },
   { key: 'amount', hint: 'invoice amount' },
+  { key: 'direct_phone', hint: 'your business phone (Settings → Business Information)' },
 ]
 
 // Professional, friendly defaults. **bold** → <strong> in email, stripped for SMS.
@@ -84,11 +85,13 @@ We look forward to seeing you then!`,
 
   introduction: `Hi {{first_name}},
 
-This is {{business_name}} — please save our new number so you can always reach us here.
+This is {{business_name}}.
 
-We truly appreciate your business and are always a text away if you need anything or want to book a service.
+Please save this number to your contacts. We'll send appointment reminders, scheduling updates, on-the-way notifications, weather delays, invoices, receipts, and other service updates from this number.
 
-Thank you!`,
+If you ever need to reach us directly, please call or text us at {{direct_phone}}.
+
+Thank you for choosing {{business_name}}!`,
 
   eta: `Hi {{first_name}},
 
@@ -303,6 +306,7 @@ export interface MsgVars {
   timeWindow?: string
   oldDateLabel?: string
   address?: string
+  directPhone?: string
 }
 
 export interface RenderedMessage { sms: string; subject: string; html: string; text: string }
@@ -321,6 +325,8 @@ function interpolate(tpl: string, v: MsgVars): string {
     time_window: v.timeWindow || 'your scheduled window',
     address: v.address || 'your property',
     amount: v.amount ? ` for ${v.amount}` : '',
+    // Graceful when no business phone is set: "call or text us at this number".
+    direct_phone: (v.directPhone || '').trim() || 'this number',
   }
   // Substitute, collapse runs of spaces/tabs (NOT newlines — paragraphs stay), trim.
   return tpl.replace(/\{\{\s*([a-z_]+)\s*\}\}/g, (_m, key: string) => (key in sub ? sub[key] : '')).replace(/[ \t]{2,}/g, ' ').trim()

@@ -70,7 +70,7 @@ export function AutoMeasureBanner({ lat, lng, neighborhood, onAuto, onUse }: {
         <input type="number" value={val} onChange={e => setVal(e.target.value)}
           className="w-28 bg-bg-tertiary border border-border-strong rounded-lg px-3 py-1.5 text-base font-bold text-ink outline-none focus:border-accent" />
         <span className="text-sm text-ink-muted">sq ft</span>
-        <Button size="sm" onClick={() => { const n = Number(val) || 0; if (n > 0) { onUse(n); setUsed(true) } }}>
+        <Button type="button" size="sm" onClick={() => { const n = Number(val) || 0; if (n > 0) { onUse(n); setUsed(true) } }}>
           {used ? <><Check className="w-3.5 h-3.5" /> Used</> : 'Use this'}
         </Button>
       </div>

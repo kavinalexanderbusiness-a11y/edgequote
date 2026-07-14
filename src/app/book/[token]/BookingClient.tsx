@@ -229,7 +229,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
       p_auto: autoResult?.sqft ?? null, p_accepted: sqft, p_building: autoResult?.buildingSqft ?? null, p_confidence: autoResult?.confidence ?? null,
     }).then(() => {}, () => {})
     // Best-effort owner alert (no-op if email isn't configured).
-    fetch('/api/booking/notify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, name: name.trim(), address: parsed.formatted, cadence: plan.label, quoteNumber: res.quote_number }) }).catch(() => {})
+    fetch('/api/booking/notify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, name: name.trim(), address: parsed.formatted, service: 'Lawn Mowing', cadence: plan.label, quoteNumber: res.quote_number }) }).catch(() => {})
     setStep('done')
   }
 

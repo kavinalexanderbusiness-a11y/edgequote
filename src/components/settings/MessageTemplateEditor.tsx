@@ -11,6 +11,7 @@ import { SmsCost } from '@/components/comms/SmsCost'
 import { MessageSquare, Check, RotateCcw, Loader2 } from 'lucide-react'
 
 const TYPES: MsgType[] = [
+  'introduction',
   'confirm', 'reminder', 'eta', 'on_my_way', 'running_late', 'arrived', 'early_arrival',
   'rescheduled', 'rain_delay', 'job_complete', 'thanks', 'review_request', 'quote', 'invoice',
   'estimate_reminder', 'payment_reminder', 'estimate_followup',

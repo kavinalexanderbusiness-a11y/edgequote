@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { confirm as confirmDialog } from '@/lib/confirm'
 import { loadGoogleMaps, addPropertyPin, flashRing, type PropertyPinHandle } from '@/lib/googleMaps'
 import { pricingPackage, estimateVisitMinutes, PricingConfig, CadenceKey } from '@/lib/pricing'
 import { Coord } from '@/lib/geo'
@@ -15,6 +16,15 @@ import { Button } from '@/components/ui/Button'
 import { X, Undo2, Trash2, Plus, Ruler } from 'lucide-react'
 
 const M2_TO_SQFT = 10.7639
+const SNAP_PX = 24 // "click near the starting point to finish" threshold (generous for touch)
+
+// A serialized in-progress trace, persisted per property so an accidental
+// refresh / navigation never loses field work ("Resume previous measurement").
+interface MeasureDraft {
+  committed: { lat: number; lng: number }[][]
+  current: { lat: number; lng: number }[]
+  ts: number
+}
 
 // Everything the builder needs to fill the quote's pricing structure in one tap.
 export interface MeasureApplyPayload {
@@ -71,6 +81,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
   }, [center])
   const mapEl = useRef<HTMLDivElement>(null)
   const gmap = useRef<any>(null)
+  const projection = useRef<any>(null) // pixel projection for snap-to-first closing
   const committedOverlays = useRef<any[]>([])
   const committedPaths = useRef<any[][]>([])
   const currentOverlay = useRef<any>(null)
@@ -89,6 +100,8 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
   const [totalSqft, setTotalSqft] = useState(0)
   const [points, setPoints] = useState(0)
   const [shapes, setShapes] = useState(0)
+  // An unfinished trace saved on a previous open — offered as "Resume".
+  const [draft, setDraft] = useState<MeasureDraft | null>(null)
   // Raw string so '0.5' is typeable — coercing each keystroke with `|| 1` made
   // sub-1 multipliers impossible and could turn '.5' keystrokes into 15×.
   const [overgrowthRaw, setOvergrowthRaw] = useState('1')
@@ -98,6 +111,43 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
   function areaOf(p: any[]): number {
     const g = window.google
     return p.length >= 3 ? g.maps.geometry.spherical.computeArea(p) * M2_TO_SQFT : 0
+  }
+
+  // ── Unfinished-measurement persistence ── keyed per property (falls back to the
+  // address) so reopening the tool can offer "Resume previous measurement" after an
+  // accidental close, refresh, or navigation. Cleared on apply/discard.
+  const draftKey = `eq_measure_draft:${propertyId || address || 'unknown'}`
+  function saveDraft() {
+    if (typeof window === 'undefined') return
+    try {
+      const committed = committedPaths.current.map(p => p.map((ll: any) => ({ lat: ll.lat(), lng: ll.lng() })))
+      const current = currentPath.current.map((ll: any) => ({ lat: ll.lat(), lng: ll.lng() }))
+      if (committed.length === 0 && current.length === 0) { window.localStorage.removeItem(draftKey); return }
+      window.localStorage.setItem(draftKey, JSON.stringify({ committed, current, ts: Date.now() } satisfies MeasureDraft))
+    } catch { /* storage blocked/full — resume just won't be offered */ }
+  }
+  function clearDraft() {
+    try { if (typeof window !== 'undefined') window.localStorage.removeItem(draftKey) } catch { /* ignore */ }
+  }
+
+  // Screen-pixel position of a LatLng (via the map's overlay projection) — powers
+  // "click near the starting point to finish" on both mouse and touch.
+  function toPixel(latLng: any): { x: number; y: number } | null {
+    const proj = projection.current?.getProjection?.()
+    if (!proj) return null
+    const p = proj.fromLatLngToContainerPixel(latLng)
+    return p ? { x: p.x, y: p.y } : null
+  }
+
+  // Auto-fit the view to everything traced so a completed polygon is fully
+  // visible (padded), instead of half off-screen at the tracing zoom.
+  function fitToTrace() {
+    const g = window.google
+    if (!gmap.current) return
+    const bounds = new g.maps.LatLngBounds()
+    committedPaths.current.forEach(p => p.forEach((ll: any) => bounds.extend(ll)))
+    currentPath.current.forEach((ll: any) => bounds.extend(ll))
+    if (!bounds.isEmpty()) gmap.current.fitBounds(bounds, 56)
   }
 
   function recompute() {
@@ -197,13 +247,38 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
           setCenterMarker.current = addPropertyPin(gmap.current, center, precise)
           setCenterMarker.current?.pulse()
         }
+        // Overlay used purely to expose the pixel projection for snap detection.
+        const ov = new g.maps.OverlayView()
+        ov.onAdd = () => {}
+        ov.draw = () => {}
+        ov.onRemove = () => {}
+        ov.setMap(gmap.current)
+        projection.current = ov
+
         gmap.current.addListener('click', (e: any) => {
           flashClick(e.latLng)
-          currentPath.current = [...currentPath.current, e.latLng]
-          redrawCurrent(); recompute()
+          // "Click near the starting point to finish" — commit the shape when the
+          // tap lands within SNAP_PX of point 1 (works on touch, no hover needed).
+          const pts = currentPath.current
+          if (pts.length >= 3) {
+            const a = toPixel(pts[0]); const b = toPixel(e.latLng)
+            if (a && b && Math.hypot(a.x - b.x, a.y - b.y) <= SNAP_PX) { addArea(); return }
+          }
+          currentPath.current = [...pts, e.latLng]
+          redrawCurrent(); recompute(); saveDraft()
         })
         gmap.current.addListener('mousemove', (e: any) => updatePreview(e.latLng))
         setReady(true)
+
+        // Offer to resume an unfinished trace saved on a previous open.
+        try {
+          const raw = window.localStorage.getItem(draftKey)
+          if (raw) {
+            const d = JSON.parse(raw) as MeasureDraft
+            if ((Array.isArray(d?.committed) && d.committed.length > 0) || (Array.isArray(d?.current) && d.current.length > 0)) setDraft(d)
+            else window.localStorage.removeItem(draftKey)
+          }
+        } catch { /* unreadable draft — ignore */ }
       } catch (e) {
         if (!cancelled) setLoadError(e instanceof Error ? e.message : 'Map failed to load')
       }
@@ -219,6 +294,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
       currentOverlay.current?.setMap(null); currentOverlay.current = null
       setCenterMarker.current?.remove(); setCenterMarker.current = null
       preview.current?.setMap(null); preview.current = null
+      projection.current?.setMap(null); projection.current = null
       gmap.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -231,8 +307,13 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
     currentPath.current = []
     if (preview.current) { preview.current.setMap(null); preview.current = null }
     recompute()
+    saveDraft()
+    fitToTrace() // show the completed polygon in full, padded
   }
 
+  // Undo ONLY steps the trace back — last point first, then a whole committed
+  // area. It never closes the tool; at zero points you simply stay in measuring
+  // mode ready to start again.
   function undo() {
     if (currentPath.current.length > 0) {
       currentPath.current = currentPath.current.slice(0, -1)
@@ -243,6 +324,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
       committedPaths.current.pop()
     }
     recompute()
+    saveDraft()
   }
 
   function clearAll() {
@@ -253,6 +335,45 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
     if (preview.current) { preview.current.setMap(null); preview.current = null }
     currentPath.current = []
     setTotalSqft(0); setPoints(0); setShapes(0)
+    saveDraft() // empty trace → removes the stored draft
+  }
+
+  // Rebuild the saved unfinished trace (committed areas + in-progress points).
+  function resumeDraft() {
+    const g = window.google
+    if (!draft || !gmap.current) return
+    for (const ring of draft.committed) {
+      if (!Array.isArray(ring) || ring.length < 3) continue
+      const path = ring.map(pt => new g.maps.LatLng(pt.lat, pt.lng))
+      const poly = new g.maps.Polygon({
+        paths: path, strokeColor: '#00C896', strokeWeight: 2,
+        fillColor: '#00C896', fillOpacity: 0.3, map: gmap.current, clickable: false,
+      })
+      committedOverlays.current.push(poly)
+      committedPaths.current.push(path)
+    }
+    currentPath.current = (draft.current || []).map(pt => new g.maps.LatLng(pt.lat, pt.lng))
+    redrawCurrent()
+    recompute()
+    fitToTrace()
+    setDraft(null)
+  }
+
+  // Closing is ONLY ever explicit (Cancel / X / Use recommended). With traced
+  // work still on the map, confirm before throwing it away.
+  async function requestClose() {
+    if (points > 0 || shapes > 0) {
+      const discard = await confirmDialog({
+        title: 'Discard this measurement?',
+        message: 'You have an unfinished measurement on the map.',
+        confirmLabel: 'Discard Measurement',
+        cancelLabel: 'Continue Measuring',
+        destructive: true,
+      })
+      if (!discard) return
+      clearDraft()
+    }
+    onClose()
   }
 
   // The complete recommendation package — same engine the property MeasureTool
@@ -287,6 +408,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
   function applySelection(sel: CadenceSelection) {
     if (!pkg) return
     recordMeasure()
+    clearDraft() // the measurement was used — nothing unfinished to resume
     onApply({
       cadence: sel.cadence,
       price: sel.price,
@@ -302,9 +424,9 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
   return (
     <div className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center p-0 sm:p-4">
       <div className="w-full sm:max-w-3xl bg-bg-secondary border border-border sm:rounded-card max-h-[95vh] overflow-auto">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border sticky top-0 bg-bg-secondary">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border sticky top-0 bg-bg-secondary z-10">
           <h2 className="text-sm font-semibold text-ink">Measure & Price</h2>
-          <button onClick={onClose} className="text-ink-faint hover:text-ink"><X className="w-5 h-5" /></button>
+          <button type="button" onClick={requestClose} aria-label="Close" className="text-ink-faint hover:text-ink p-1.5 -m-1.5"><X className="w-5 h-5" /></button>
         </div>
 
         <div className="p-4 space-y-4">
@@ -351,6 +473,19 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
                   Couldn&apos;t locate this address — showing the general area with no property pin. Check the address on the quote.
                 </p>
               )}
+              {/* Resume an unfinished trace saved on a previous open. */}
+              {ready && draft && (
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 rounded-xl border border-accent/30 bg-accent/[0.06] px-3.5 py-3">
+                  <p className="text-xs text-ink">
+                    <span className="font-semibold">Resume previous measurement?</span>{' '}
+                    <span className="text-ink-muted">An unfinished trace was saved for this property.</span>
+                  </p>
+                  <div className="flex gap-2 shrink-0">
+                    <Button type="button" size="sm" onClick={resumeDraft}>Resume</Button>
+                    <Button type="button" size="sm" variant="ghost" onClick={() => { clearDraft(); setDraft(null) }}>Start fresh</Button>
+                  </div>
+                </div>
+              )}
               <div className="relative rounded-card overflow-hidden border border-border">
                 <div ref={mapEl} className="w-full h-[45vh] min-h-[300px] bg-bg-tertiary" />
                 {!ready && (
@@ -358,17 +493,28 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
                     Loading satellite map...
                   </div>
                 )}
+                {/* Step-by-step drawing guidance — follows the trace as it grows. */}
+                {ready && (
+                  <div className="absolute top-3 left-3 max-w-[75%] px-3 py-1.5 rounded-lg bg-bg-secondary/90 border border-border-strong text-xs font-medium text-ink pointer-events-none">
+                    {points === 0
+                      ? (shapes > 0 ? 'Click around the edge of the next area.' : 'Click around the edge of the lawn.')
+                      : points < 3
+                        ? 'Continue clicking to outline the property.'
+                        : 'Click near the starting point to finish.'}
+                  </div>
+                )}
               </div>
 
-              <div className="flex items-center gap-2 flex-wrap">
-                <Button variant="secondary" size="sm" onClick={addArea} disabled={points < 3}>
-                  <Plus className="w-3.5 h-3.5" /> Add another area
+              {/* Drawing controls — large, thumb-friendly targets */}
+              <div className="grid grid-cols-3 gap-2">
+                <Button type="button" variant="secondary" onClick={addArea} disabled={points < 3} className="h-12">
+                  <Plus className="w-4 h-4" /> Add area
                 </Button>
-                <Button variant="secondary" size="sm" onClick={undo} disabled={points === 0 && shapes === 0}>
-                  <Undo2 className="w-3.5 h-3.5" /> Undo
+                <Button type="button" variant="secondary" onClick={undo} disabled={points === 0 && shapes === 0} className="h-12">
+                  <Undo2 className="w-4 h-4" /> Undo
                 </Button>
-                <Button variant="secondary" size="sm" onClick={clearAll} disabled={points === 0 && shapes === 0}>
-                  <Trash2 className="w-3.5 h-3.5" /> Clear
+                <Button type="button" variant="secondary" onClick={clearAll} disabled={points === 0 && shapes === 0} className="h-12">
+                  <Trash2 className="w-4 h-4" /> Clear
                 </Button>
               </div>
 
@@ -414,16 +560,16 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
               </div>
 
               <div className="flex items-center justify-end gap-2">
-                <Button variant="ghost" onClick={onClose}>Cancel</Button>
+                <Button type="button" variant="ghost" onClick={requestClose}>Cancel</Button>
                 {pkg && (
-                  <Button onClick={() => applySelection({ cadence: pkg.recommended.cadence, price: pkg.recommended.cadence === 'weekly' ? pkg.options[0].price : pkg.recommended.cadence === 'biweekly' ? pkg.options[1].price : pkg.recommended.cadence === 'monthly' ? pkg.options[2].price : pkg.oneTime })}>
+                  <Button type="button" onClick={() => applySelection({ cadence: pkg.recommended.cadence, price: pkg.recommended.cadence === 'weekly' ? pkg.options[0].price : pkg.recommended.cadence === 'biweekly' ? pkg.options[1].price : pkg.recommended.cadence === 'monthly' ? pkg.options[2].price : pkg.oneTime })}>
                     Use recommended
                   </Button>
                 )}
               </div>
 
               <p className="text-xs text-ink-faint">
-                Tap each corner of the lawn to trace it. For front + back, trace one, tap <span className="text-ink font-medium">Add another area</span>, then trace the next — they add up. The price is your rate × area, plus the travel fee from the quote.
+                Tap each corner of the lawn to trace it — tap near your starting point (or <span className="text-ink font-medium">Add area</span>) to close the shape. For front + back, close one area, then trace the next — they add up. The price is your rate × area, plus the travel fee from the quote.
               </p>
             </>
           )}

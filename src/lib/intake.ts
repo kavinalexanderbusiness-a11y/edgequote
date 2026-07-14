@@ -1,4 +1,5 @@
-import { createClient } from '@supabase/supabase-js'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { sendEmail, commsEnabled } from '@/lib/comms/send'
 
 // ── Shared lead intake ───────────────────────────────────────────────────────
 // THE single server-side door for turning ANY external submission (website
@@ -61,5 +62,50 @@ export async function submitLead(opts: {
   if (result.error === 'rate_limited') {
     return { ok: false, status: 429, body: { error: 'Too many requests — please try again shortly.' } }
   }
+
+  // Best-effort owner alert email — the lead is already saved + threaded into
+  // Messages, so a failed (or unconfigured) email never loses the lead. The
+  // requested SERVICE leads the subject and the field list, so the owner knows
+  // what the customer wants before they even open the app.
+  try { await emailOwnerAboutLead(anon, token, opts.source || 'Website', opts.payload) } catch { /* never block intake */ }
+
   return { ok: true, status: 200, body: { ok: true, ...result } }
+}
+
+// Resolve a lead field across the same aliases the RPC accepts.
+function leadField(p: Record<string, unknown>, keys: string[]): string {
+  for (const k of keys) {
+    const v = p[k]
+    if (typeof v === 'string' && v.trim()) return v.trim()
+    if (typeof v === 'number') return String(v)
+  }
+  return ''
+}
+
+const esc = (s: string) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] || c))
+
+async function emailOwnerAboutLead(anon: SupabaseClient, token: string, source: string, p: Record<string, unknown>): Promise<void> {
+  if (!commsEnabled().email) return
+  const { data } = await anon.rpc('get_booking_business', { p_token: token })
+  const biz = data as { email_primary?: string | null; company_name?: string | null } | null
+  if (!biz?.email_primary) return
+
+  const service = leadField(p, ['requestedServices', 'services', 'service', 'serviceType', 'service_type'])
+  const name = leadField(p, ['fullName', 'name']) || [leadField(p, ['firstName', 'first_name']), leadField(p, ['lastName', 'last_name'])].filter(Boolean).join(' ')
+  const rows: [string, string][] = [
+    ['Service', service || 'Not specified'],
+    ['Name', name || '—'],
+    ['Phone', leadField(p, ['phone', 'tel', 'telephone', 'mobile'])],
+    ['Email', leadField(p, ['email'])],
+    ['Address', leadField(p, ['address', 'serviceAddress', 'service_address'])],
+    ['Budget', leadField(p, ['budget', 'budgetRange'])],
+    ['Preferred schedule', leadField(p, ['preferredSchedule', 'preferred_schedule', 'schedule', 'timeline'])],
+    ['Notes', leadField(p, ['notes', 'details', 'message', 'comments'])],
+  ]
+  const shown = rows.filter(([, v]) => v)
+  const html = `<p>🌱 You have a new ${esc(source)} lead${service ? ` — <b>${esc(service)}</b>` : ''}.</p><ul>${
+    shown.map(([k, v]) => `<li><b>${k}:</b> ${esc(v)}</li>`).join('')
+  }</ul><p>It's in your Messages inbox — reply or build a quote from the lead card.</p>`
+  const text = `New ${source} lead${service ? ` — ${service}` : ''}\n${shown.map(([k, v]) => `${k}: ${v}`).join('\n')}\nIt's in your Messages inbox.`
+  await sendEmail(biz.email_primary, `🌱 New ${source} lead${service ? ` — ${service}` : ''}${name ? ` from ${name}` : ''}`, html, text)
 }

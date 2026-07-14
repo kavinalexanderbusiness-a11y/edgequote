@@ -985,10 +985,10 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
               </div>
               <span className={cn('shrink-0 text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', Number(p.amount) < 0 ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10')}>{Number(p.amount) < 0 ? 'Refunded' : 'Paid'}</span>
             </div>
-            {/* Receipt download is a PRIMARY action — labeled button, full-width on
-                mobile, right-aligned on desktop. One per payment row. */}
+            {/* Receipt download is THE primary action on a payment row — labeled,
+                accent-filled, full-width on mobile, right-aligned on desktop. */}
             {inv && (
-              <Button size="sm" variant="secondary" className="w-full sm:w-auto shrink-0"
+              <Button size="sm" className="w-full sm:w-auto shrink-0"
                 onClick={() => downloadReceipt(p, inv)} loading={receiptBusy === p.id}>
                 <FileText className="w-4 h-4" /> Download {Number(p.amount) < 0 ? 'Refund ' : ''}Receipt
               </Button>

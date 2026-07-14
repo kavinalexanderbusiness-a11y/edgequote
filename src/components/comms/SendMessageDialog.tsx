@@ -64,6 +64,7 @@ export function SendMessageDialog({
   const [custom, setCustom] = useState<Partial<Record<MsgType, string>> | null>(null)
   const [company, setCompany] = useState('Edge Property Services')
   const [reviewUrl, setReviewUrl] = useState('')
+  const [bizPhone, setBizPhone] = useState('')
 
   const [active, setActive] = useState<MsgType>(defaultTemplate ?? 'custom')
   const [selected, setSelected] = useState<Set<string>>(() => new Set(initialSelectedIds ?? all.map(r => r.customerId)))
@@ -93,10 +94,11 @@ export function SendMessageDialog({
       const uid = session?.user?.id
       if (!uid) return
       const { data } = await supabase.from('business_settings')
-        .select('company_name, review_url, message_templates').eq('user_id', uid).maybeSingle()
-      const d = data as { company_name: string | null; review_url: string | null; message_templates: Partial<Record<MsgType, string>> | null } | null
+        .select('company_name, phone, review_url, message_templates').eq('user_id', uid).maybeSingle()
+      const d = data as { company_name: string | null; phone: string | null; review_url: string | null; message_templates: Partial<Record<MsgType, string>> | null } | null
       if (!alive) return
       if (d?.company_name) setCompany(d.company_name)
+      setBizPhone(d?.phone || '')
       setReviewUrl(d?.review_url || '')
       setCustom(d?.message_templates || {})
     })()
@@ -119,6 +121,7 @@ export function SendMessageDialog({
       timeWindow: vars?.timeWindow,
       address: vars?.address,
       amount: vars?.amount,
+      directPhone: bizPhone || undefined,
     }).sms)
   }
 
@@ -130,7 +133,7 @@ export function SendMessageDialog({
     setEdited(false)
     setOutcome(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, active, custom, company])
+  }, [open, active, custom, company, bizPhone])
 
   const needsEta = active === 'on_my_way' || active === 'running_late'
 

@@ -21,8 +21,9 @@ export async function POST(req: NextRequest) {
   if (!biz?.email_primary) return NextResponse.json({ ok: true, skipped: 'no owner email' })
 
   const name = esc(body.name), address = esc(body.address), cadence = esc(body.cadence), quote = esc(body.quoteNumber)
-  const html = `<p>🌱 You have a new online booking.</p><ul><li><b>Name:</b> ${name}</li><li><b>Address:</b> ${address}</li><li><b>Plan:</b> ${cadence}</li><li><b>Quote:</b> ${quote}</li></ul><p>It's saved as a new <b>sent</b> quote — review it in Quotes, confirm the price, and schedule the first visit.</p>`
-  const text = `New online booking\nName: ${body.name}\nAddress: ${body.address}\nPlan: ${body.cadence}\nQuote: ${body.quoteNumber}\nReview it in Quotes.`
-  await sendEmail(biz.email_primary, `🌱 New online booking — ${body.name || 'customer'}`, html, text)
+  const service = esc(body.service || 'Lawn Mowing')
+  const html = `<p>🌱 You have a new online booking.</p><ul><li><b>Service:</b> ${service}</li><li><b>Name:</b> ${name}</li><li><b>Address:</b> ${address}</li><li><b>Plan:</b> ${cadence}</li><li><b>Quote:</b> ${quote}</li></ul><p>It's saved as a new <b>sent</b> quote — review it in Quotes, confirm the price, and schedule the first visit.</p>`
+  const text = `New online booking\nService: ${body.service || 'Lawn Mowing'}\nName: ${body.name}\nAddress: ${body.address}\nPlan: ${body.cadence}\nQuote: ${body.quoteNumber}\nReview it in Quotes.`
+  await sendEmail(biz.email_primary, `🌱 New online booking — ${body.name || 'customer'} · ${body.service || 'Lawn Mowing'}`, html, text)
   return NextResponse.json({ ok: true })
 }
