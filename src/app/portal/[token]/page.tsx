@@ -265,6 +265,7 @@ export default function PortalPage() {
     t.key === 'service' ? derived.completed.length > 0 :
     t.key === 'photos' ? data.photos.length > 0 :
     t.key === 'property' ? hasProperty :
+    t.key === 'timeline' ? (data.quotes.length + data.jobs.length + data.invoices.length + data.payments.length + data.photos.length) > 0 :
     true)
 
   return (
@@ -901,37 +902,35 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
             <p className="text-xs text-ink-muted">{paymentsEnabled ? 'Pay any invoice securely online with the Pay button.' : 'Ask us for a secure card payment link.'}</p>
           </div>
         </div>
+        {/* Only advertise e-transfer once the business has set its address —
+            never show a customer owner-facing setup instructions. */}
+        {etransferEmail && (
         <div className="flex items-start gap-3 border-t border-border pt-3">
           <span className="text-lg leading-none" aria-hidden>🏦</span>
           <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold text-ink">E-transfer</p>
-            {etransferEmail ? (
-              <>
-                <p className="text-xs text-ink-muted">Recipient: <span className="font-medium text-ink">{business?.company_name || 'Your service provider'}</span></p>
-                <p className="text-xs text-ink-muted mt-1">Send payment to:</p>
-                <p className="text-sm font-semibold text-accent break-all">{etransferEmail}</p>
-                {owingNums.length === 1 && (
-                  <p className="text-xs text-ink-muted mt-1">Please include invoice number <span className="font-semibold text-ink">{owingNums[0]}</span> in the e-transfer message.</p>
-                )}
-                {owingNums.length > 1 && (
-                  <p className="text-xs text-ink-muted mt-1">Please include your invoice number (e.g. <span className="font-semibold text-ink">{owingNums[0]}</span>) in the e-transfer message.</p>
-                )}
-                <div className="flex flex-wrap gap-2 mt-2">
-                  <Button size="sm" variant="secondary" onClick={() => copyText('email', etransferEmail)}>
-                    {copied === 'email' ? <Check className="w-3.5 h-3.5" /> : null} {copied === 'email' ? 'Copied' : 'Copy email'}
-                  </Button>
-                  {outstanding > 0 && (
-                    <Button size="sm" variant="secondary" onClick={() => copyText('amount', outstanding.toFixed(2))}>
-                      {copied === 'amount' ? <Check className="w-3.5 h-3.5" /> : null} {copied === 'amount' ? 'Copied' : `Copy amount (${formatCurrency(outstanding)})`}
-                    </Button>
-                  )}
-                </div>
-              </>
-            ) : (
-              <p className="text-xs text-amber-400">E-transfer email not configured — set it in Settings → Payments &amp; Fees.</p>
+            <p className="text-xs text-ink-muted">Recipient: <span className="font-medium text-ink">{business?.company_name || 'Your service provider'}</span></p>
+            <p className="text-xs text-ink-muted mt-1">Send payment to:</p>
+            <p className="text-sm font-semibold text-accent break-all">{etransferEmail}</p>
+            {owingNums.length === 1 && (
+              <p className="text-xs text-ink-muted mt-1">Please include invoice number <span className="font-semibold text-ink">{owingNums[0]}</span> in the e-transfer message.</p>
             )}
+            {owingNums.length > 1 && (
+              <p className="text-xs text-ink-muted mt-1">Please include your invoice number (e.g. <span className="font-semibold text-ink">{owingNums[0]}</span>) in the e-transfer message.</p>
+            )}
+            <div className="flex flex-wrap gap-2 mt-2">
+              <Button size="sm" variant="secondary" onClick={() => copyText('email', etransferEmail)}>
+                {copied === 'email' ? <Check className="w-3.5 h-3.5" /> : null} {copied === 'email' ? 'Copied' : 'Copy email'}
+              </Button>
+              {outstanding > 0 && (
+                <Button size="sm" variant="secondary" onClick={() => copyText('amount', outstanding.toFixed(2))}>
+                  {copied === 'amount' ? <Check className="w-3.5 h-3.5" /> : null} {copied === 'amount' ? 'Copied' : `Copy amount (${formatCurrency(outstanding)})`}
+                </Button>
+              )}
+            </div>
           </div>
         </div>
+        )}
         <div className="flex items-start gap-3 border-t border-border pt-3">
           <span className="text-lg leading-none" aria-hidden>💵</span>
           <div className="min-w-0">
@@ -1229,9 +1228,6 @@ function DocBtn({ icon: Icon, label, loading, disabled, onClick, primary }: { ic
 
 // ── shared bits ──
 function Empty({ text }: { text: string }) { return <p className="text-center text-sm text-ink-muted py-12">{text}</p> }
-function PriceChip({ label, v }: { label: string; v: number }) {
-  return <span className="text-xs rounded-lg border border-border bg-bg-tertiary px-2 py-1"><span className="text-ink-faint">{label}</span> <span className="font-semibold text-ink">{formatCurrency(Number(v))}</span></span>
-}
 function QuoteStatusPill({ status }: { status: string }) {
   // Homeowner-friendly labels — never leak raw internal statuses into the portal.
   const map: Record<string, { label: string; tone: string }> = {

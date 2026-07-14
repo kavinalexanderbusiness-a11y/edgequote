@@ -187,7 +187,7 @@ export default function BookPage() {
   }, [step, parsed, showTracer, measuring])
 
   async function submit() {
-    if (!parsed || !plan || !name.trim()) return
+    if (!parsed || !plan || !name.trim() || !(email.trim() || phone.trim())) return
     setSubmitting(true); setError(null)
     const fee = { payment_fee_strategy: biz?.payment_fee_strategy as never, fee_recovery_percent: biz?.fee_recovery_percent }
     const cfg = pricingConfigFromSettings(biz)
@@ -210,7 +210,7 @@ export default function BookPage() {
     })
     setSubmitting(false)
     const res = data as { quote_number?: string; quote_id?: string } | null
-    if (rpcErr || !res?.quote_number) { setError('Something went wrong — please try again or call us.'); return }
+    if (rpcErr || !res?.quote_number) { setError(`Something went wrong — please try again${biz?.phone ? `, or call us at ${biz.phone}` : ' or contact us directly'}.`); return }
     setQuoteNumber(res.quote_number)
     // Sync messaging consent into the customer record (best-effort). Channel
     // opt-in = they gave us that contact method + at least one category on.
@@ -423,9 +423,19 @@ export default function BookPage() {
               </div>
             )}
             {error && <p className="text-sm text-red-400 mt-3">{error}</p>}
+            {name.trim() && !email.trim() && !phone.trim() && (
+              <p className="text-xs text-ink-muted mt-3">Add an email or phone number so {biz.company_name || 'we'} can confirm your visit.</p>
+            )}
+            {/* Tell the customer exactly where their confirmation will arrive. */}
+            {(email.trim() || phone.trim()) && (
+              <p className="text-xs text-ink-muted mt-3 flex items-center gap-1.5">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                We&rsquo;ll confirm your visit by {phone.trim() && email.trim() ? 'text and email' : phone.trim() ? 'text' : 'email'}.
+              </p>
+            )}
             <div className="flex gap-2 mt-4">
               <Button variant="secondary" onClick={() => setStep('plan')}><ArrowLeft className="w-4 h-4" /></Button>
-              <Button className="flex-1" loading={submitting} disabled={!name.trim()} onClick={submit}>Book my service <Check className="w-4 h-4" /></Button>
+              <Button className="flex-1" loading={submitting} disabled={!name.trim() || !(email.trim() || phone.trim())} onClick={submit}>Book my service <Check className="w-4 h-4" /></Button>
             </div>
           </Section>
         )}
@@ -434,7 +444,7 @@ export default function BookPage() {
         {step === 'done' && (
           <div className="text-center py-10 space-y-3">
             <CheckCircle2 className="w-14 h-14 text-emerald-400 mx-auto" />
-            <p className="text-xl font-bold text-ink">You’re booked! 🎉</p>
+            <p className="text-xl font-bold text-ink">You’re all set! 🎉</p>
             <p className="text-sm text-ink-muted">Thanks, {name.split(' ')[0]}. {biz.company_name || 'We'} received your request{quoteNumber ? ` (${quoteNumber})` : ''} and will reach out shortly to confirm your first visit.</p>
             <div className="flex flex-col items-center gap-1.5 pt-3">
               {biz.phone && <a href={`tel:${biz.phone}`} className="text-sm text-accent flex items-center gap-1.5"><Phone className="w-4 h-4" /> {biz.phone}</a>}
