@@ -15,7 +15,7 @@ import { MessageTemplateEditor } from '@/components/settings/MessageTemplateEdit
 import { MessagingUsage } from '@/components/settings/MessagingUsage'
 import { AutomationToggles } from '@/components/settings/AutomationToggles'
 import { PushNotificationSettings } from '@/components/settings/PushNotificationSettings'
-import { BookingLink } from '@/components/settings/BookingLink'
+import { WebsiteIntegration } from '@/components/settings/WebsiteIntegration'
 import { Tabs, type TabItem } from '@/components/ui/Tabs'
 import { useForm, Controller } from 'react-hook-form'
 import { cn } from '@/lib/utils'
@@ -369,6 +369,9 @@ export default function SettingsPage() {
                 hint="The email registered with your bank for Interac e-transfers (often your business email). Shown to customers in the portal's Ways to Pay."
                 {...register('etransfer_email')} />
             </div>
+            <Input label="E-transfer email" type="email" placeholder="pay@yourbusiness.com"
+              hint="The email registered with your bank for Interac e-transfers (often your business email). Shown to customers in the portal's Ways to pay."
+              {...register('etransfer_email')} />
 
             {/* ── Recurring AutoPay ── */}
             <div className="pt-4 mt-2 border-t border-border">
@@ -555,7 +558,7 @@ export default function SettingsPage() {
 
       {/* BOOKING */}
       <div className={cn('space-y-6', tab !== 'booking' && 'hidden')}>
-        <BookingLink />
+        <WebsiteIntegration />
       </div>
     </div>
   )

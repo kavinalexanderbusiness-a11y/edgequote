@@ -6,10 +6,13 @@ import { useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
+import { queueOrRun } from '@/lib/offline/outbox'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { custCacheKey, type CustomerPrefetch } from '@/lib/prefetch'
 import { Customer, Property, Quote, Job, Invoice, JobRecurrence } from '@/types'
+import { WebsiteLead } from '@/lib/leads'
+import { LeadSummary } from '@/components/leads/LeadSummary'
 import { needsFollowUp, daysSince } from '@/lib/followup'
 import { recurrenceLabel, recurringCustomerLabel, buildServicePlans, ServicePlan } from '@/lib/recurrence'
 import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
@@ -91,6 +94,7 @@ export default function CustomerDetailPage() {
   const [jobs, setJobs] = useState<Job[]>([])
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [recurrences, setRecurrences] = useState<JobRecurrence[]>([])
+  const [lead, setLead] = useState<WebsiteLead | null>(null)
   const [extraTimeline, setExtraTimeline] = useState<TimelineEvent[]>([])
   const [seasons, setSeasons] = useState<ServiceSeasons>(DEFAULT_SEASONS)
   const [gstPercent, setGstPercent] = useState(0)
@@ -144,13 +148,30 @@ export default function CustomerDetailPage() {
 
   useEffect(() => {
     async function load() {
-      const { data: { user } } = await supabase.auth.getUser()
-      const [cRes, pRes, qRes, jRes, iRes] = await Promise.all([
+      // Local session read (no GoTrue round-trip). ONE batch for everything that
+      // depends only on the customer id / user id — the referrer name + referred-revenue
+      // are the only reads that need a prior result, so they run in a tiny second
+      // round-trip below. This replaces ~5 serial hops that also re-ran in full on every
+      // realtime refresh.
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
+      const [cRes, pRes, qRes, jRes, iRes, refRes, recRes, mRes, payRes, srRes, setRes, lRes] = await Promise.all([
         supabase.from('customers').select('*').eq('id', id).eq('user_id', user!.id).single(),
         supabase.from('properties').select('*').eq('customer_id', id).order('is_primary', { ascending: false }),
         supabase.from('quotes').select('*').eq('customer_id', id).order('created_at', { ascending: false }),
         supabase.from('jobs').select('*').eq('customer_id', id).order('scheduled_date', { ascending: true }),
         supabase.from('invoices').select('*').eq('customer_id', id).order('created_at', { ascending: false }),
+        // Advocates this customer referred (needs only id).
+        supabase.from('customers').select('id, name').eq('referred_by_customer_id', id),
+        supabase.from('job_recurrences').select('*').eq('customer_id', id),
+        // Unified timeline sources — degrade gracefully if a table isn't present yet.
+        // Payments carry kind/method/notes so credit/refund movements label correctly.
+        supabase.from('messages').select('direction, channel, body, created_at').eq('customer_id', id).order('created_at', { ascending: false }).limit(50),
+        supabase.from('payments').select('amount, status, kind, method, notes, created_at').eq('customer_id', id),
+        supabase.from('service_requests').select('message, created_at').eq('customer_id', id),
+        supabase.from('business_settings').select('service_seasons, gst_percent').eq('user_id', user!.id).maybeSingle(),
+        // Newest website lead — the full intake detail (service/address/budget/schedule/contact/source).
+        supabase.from('website_leads').select('*').eq('customer_id', id).order('created_at', { ascending: false }).limit(1).maybeSingle(),
       ])
       // A transient/network error must NOT render as "Customer not found." Only a
       // genuine no-rows result (.single() → PGRST116) means the customer is truly gone.
@@ -169,30 +190,11 @@ export default function CustomerDetailPage() {
         jobs: (jRes.data as Job[]) || [], invoices: (iRes.data as Invoice[]) || [],
       })
 
-      if (cust?.referred_by_customer_id) {
-        const { data } = await supabase.from('customers').select('id, name').eq('id', cust.referred_by_customer_id).maybeSingle()
-        if (data) setReferrer(data as { id: string; name: string })
-      }
-      // Advocates: who this customer referred, and the revenue they generated.
-      const { data: referred } = await supabase.from('customers').select('id, name').eq('referred_by_customer_id', id)
-      const referredList = (referred as { id: string; name: string }[]) || []
-      if (referredList.length > 0) {
-        const { data: rq } = await supabase.from('quotes').select('total, status').in('customer_id', referredList.map(r => r.id))
-        const rev = ((rq as { total: number; status: string }[]) || [])
-          .filter(q => WON.has(q.status)).reduce((s, q) => s + Number(q.total || 0), 0)
-        setReferredRevenue(rev)
-      }
-      const { data: recs } = await supabase.from('job_recurrences').select('*').eq('customer_id', id)
-      if (recs) setRecurrences(recs as JobRecurrence[])
+      if (recRes.data) setRecurrences(recRes.data as JobRecurrence[])
+      setLead((lRes.data as WebsiteLead | null) ?? null)
+      setSeasons(settingsToSeasons((setRes.data as { service_seasons: unknown } | null)?.service_seasons))
+      setGstPercent(Number((setRes.data as { gst_percent?: number | null } | null)?.gst_percent) || 0)
 
-      // Unified timeline — messages (SMS/email/portal), payments, and portal
-      // service requests. Read-only aggregation; degrades gracefully if a table
-      // isn't present yet.
-      const [mRes, payRes, srRes] = await Promise.all([
-        supabase.from('messages').select('direction, channel, body, created_at').eq('customer_id', id).order('created_at', { ascending: false }).limit(50),
-        supabase.from('payments').select('amount, status, kind, method, notes, created_at').eq('customer_id', id),
-        supabase.from('service_requests').select('message, created_at').eq('customer_id', id),
-      ])
       const extra: TimelineEvent[] = []
       for (const m of (mRes.data as { direction: string; channel: string; body: string | null; created_at: string }[]) || []) {
         if (m.direction === 'internal') continue // internal notes live in the notes card
@@ -214,13 +216,30 @@ export default function CustomerDetailPage() {
         }
       }
       for (const sr of (srRes.data as { message: string; created_at: string }[]) || []) {
-        extra.push({ at: sr.created_at, kind: 'portal_request', title: 'Portal service request', sub: (sr.message || '').slice(0, 90), href: '/dashboard/messages' })
+        const msg = sr.message || ''
+        const isLead = /^new .* lead/i.test(msg)
+        extra.push({ at: sr.created_at, kind: 'portal_request', title: isLead ? 'Website lead' : 'Portal service request', sub: msg.slice(0, 160), href: '/dashboard/messages' })
       }
       setExtraTimeline(extra)
 
-      const { data: settings } = await supabase.from('business_settings').select('service_seasons, gst_percent').eq('user_id', user!.id).maybeSingle()
-      setSeasons(settingsToSeasons((settings as { service_seasons: unknown } | null)?.service_seasons))
-      setGstPercent(Number((settings as { gst_percent?: number | null } | null)?.gst_percent) || 0)
+      // Dependent tail — the ONLY reads that need a prior result: the referrer's name
+      // (needs cust.referred_by_customer_id) and the revenue from people this customer
+      // referred (needs the referred list). Run them together, not serially.
+      const referredList = (refRes.data as { id: string; name: string }[]) || []
+      const [referrerRes, referredRevRes] = await Promise.all([
+        cust?.referred_by_customer_id
+          ? supabase.from('customers').select('id, name').eq('id', cust.referred_by_customer_id).maybeSingle()
+          : null,
+        referredList.length > 0
+          ? supabase.from('quotes').select('total, status').in('customer_id', referredList.map(r => r.id))
+          : null,
+      ])
+      if (referrerRes?.data) setReferrer(referrerRes.data as { id: string; name: string })
+      if (referredRevRes?.data) {
+        const rev = (referredRevRes.data as { total: number; status: string }[])
+          .filter(q => WON.has(q.status)).reduce((s, q) => s + Number(q.total || 0), 0)
+        setReferredRevenue(rev)
+      }
 
       setLoading(false)
     }
@@ -243,11 +262,18 @@ export default function CustomerDetailPage() {
   async function saveNotes() {
     if (!customer) return
     setSavingNotes(true)
-    const { error } = await supabase.from('customers').update({ notes: notesValue || null }).eq('id', customer.id)
-    setSavingNotes(false)
-    if (error) { toast.error('Could not save the note: ' + error.message); return }   // keep the editor open
-    setCustomer({ ...customer, notes: notesValue || null })
-    setEditingNotes(false)
+    const patch = { notes: notesValue || null }
+    try {
+      const outcome = await queueOrRun(
+        { kind: 'customer.update', payload: { id: customer.id, patch }, label: `Note · ${customer.name}` },
+        async () => { const { error } = await supabase.from('customers').update(patch).eq('id', customer.id); if (error) throw new Error(error.message) },
+      )
+      setCustomer({ ...customer, notes: patch.notes })
+      setEditingNotes(false)
+      if (outcome === 'queued') toast.info('Saved offline — syncs when you’re back online.')
+    } catch (e) {
+      toast.error('Could not save the note: ' + (e instanceof Error ? e.message : 'unknown error'))   // keep the editor open
+    } finally { setSavingNotes(false) }
   }
 
   function startEditPrefs() {
@@ -258,10 +284,15 @@ export default function CustomerDetailPage() {
     if (!customer) return
     setSavingPrefs(true)
     const row = draftToRow(prefsDraft)
-    const { error } = await supabase.from('customers').update(row).eq('id', customer.id)
-    if (!error) setCustomer({ ...customer, ...row })
-    setSavingPrefs(false)
-    setEditingPrefs(false)
+    try {
+      const outcome = await queueOrRun(
+        { kind: 'customer.update', payload: { id: customer.id, patch: row }, label: `Edit · ${customer.name}` },
+        async () => { const { error } = await supabase.from('customers').update(row).eq('id', customer.id); if (error) throw new Error(error.message) },
+      )
+      setCustomer({ ...customer, ...row })
+      if (outcome === 'queued') toast.info('Saved offline — syncs when you’re back online.')
+    } catch { toast.error('Could not save changes.') }
+    finally { setSavingPrefs(false); setEditingPrefs(false) }
   }
 
   function startEditPropPrefs(p: Property) {
@@ -299,6 +330,47 @@ export default function CustomerDetailPage() {
     setPausing(null)
   }
 
+  // Heavy derivations, memoized and hoisted above the guards (Rules of Hooks) so editing
+  // the controlled Notes / Prefs inputs on this page doesn't rebuild the service plans and
+  // the full activity timeline on every keystroke — only when the underlying data changes.
+  const servicePlans = useMemo(() => {
+    const t = localToday()
+    const quotesById: Record<string, Quote> = {}
+    for (const q of quotes) quotesById[q.id] = q
+    const recsById: Record<string, JobRecurrence> = {}
+    for (const r of recurrences) recsById[r.id] = r
+    const planValueOf = (j: Job) => {
+      const q = j.quote_id ? quotesById[j.quote_id] : null
+      const rec = j.recurrence_id ? recsById[j.recurrence_id] : null
+      const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
+      return jobVisitValue(j.price, q as unknown as Record<string, unknown>, freq, j.is_initial_visit)
+    }
+    return buildServicePlans(recurrences, jobs, seasons, t, planValueOf)
+  }, [quotes, recurrences, jobs, seasons])
+
+  const events = useMemo(() => {
+    // GST-inclusive invoice amounts, so the timeline agrees with the Invoices page + portal.
+    const gstMult = 1 + (Number(gstPercent) || 0) / 100
+    const arr: TimelineEvent[] = []
+    for (const q of quotes) {
+      arr.push({ at: q.created_at, kind: 'quote_created', title: `Quote ${q.quote_number} created`, sub: `${q.service_type} · ${formatCurrency(Number(q.total))}`, href: `/dashboard/quotes/${q.id}` })
+      if (q.sent_at) arr.push({ at: q.sent_at, kind: 'quote_sent', title: `Quote ${q.quote_number} sent`, href: `/dashboard/quotes/${q.id}` })
+      if (q.last_followed_up_at) arr.push({ at: q.last_followed_up_at, kind: 'followup', title: `Followed up on ${q.quote_number}`, sub: `${q.follow_up_count} total`, href: `/dashboard/quotes/${q.id}` })
+      if (WON.has(q.status)) arr.push({ at: q.updated_at, kind: 'quote_accepted', title: `Quote ${q.quote_number} accepted`, sub: formatCurrency(Number(q.total)), href: `/dashboard/quotes/${q.id}` })
+    }
+    for (const j of jobs) {
+      arr.push({ at: j.created_at, kind: 'job_scheduled', title: `Job scheduled — ${j.title}`, sub: `for ${formatDate(j.scheduled_date)}` })
+      if (j.status === 'completed') arr.push({ at: j.updated_at, kind: 'job_completed', title: `Job completed — ${j.title}` })
+    }
+    for (const inv of invoices) {
+      arr.push({ at: inv.created_at, kind: 'invoice_created', title: `Invoice ${inv.invoice_number} created`, sub: formatCurrency(Math.round(Number(inv.amount) * gstMult * 100) / 100) })
+      if (inv.status === 'paid') arr.push({ at: inv.updated_at, kind: 'invoice_paid', title: `Invoice ${inv.invoice_number} paid`, sub: formatCurrency(Math.round(Number(inv.amount) * gstMult * 100) / 100) })
+    }
+    arr.push(...extraTimeline) // messages, payments, portal requests
+    arr.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
+    return arr
+  }, [quotes, jobs, invoices, extraTimeline, gstPercent])
+
   if (loading) return <div className="max-w-5xl space-y-6"><SkeletonTiles count={4} /><SkeletonRows count={5} /></div>
   // Cached customer (if any) keeps showing on a revalidation blip; only when there's
   // genuinely nothing to show do we branch error-vs-not-found.
@@ -315,18 +387,6 @@ export default function CustomerDetailPage() {
   )
 
   const today = localToday()
-  // Per-visit valuation so plans can show the initial vs recurring price.
-  const quotesByIdLocal: Record<string, Quote> = {}
-  for (const q of quotes) quotesByIdLocal[q.id] = q
-  const recsByIdLocal: Record<string, JobRecurrence> = {}
-  for (const r of recurrences) recsByIdLocal[r.id] = r
-  const planValueOf = (j: Job) => {
-    const q = j.quote_id ? quotesByIdLocal[j.quote_id] : null
-    const rec = j.recurrence_id ? recsByIdLocal[j.recurrence_id] : null
-    const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
-    return jobVisitValue(j.price, q as unknown as Record<string, unknown>, freq, j.is_initial_visit)
-  }
-  const servicePlans = buildServicePlans(recurrences, jobs, seasons, today, planValueOf)
 
   // ── Revenue (three separate truths) ──
   const wonQuotes = quotes.filter(q => WON.has(q.status))
@@ -382,25 +442,6 @@ export default function CustomerDetailPage() {
     const overdue = !!inv.due_date && inv.due_date < today
     openItems.push({ key: `inv-${inv.id}`, icon: Receipt, label: `${overdue ? 'Overdue' : 'Unpaid'} invoice ${inv.invoice_number}`, sub: `${formatCurrency(Math.round(Number(inv.amount) * custGstMult * 100) / 100)}${inv.due_date ? ` · due ${formatDate(inv.due_date)}` : ''}`, href: '/dashboard/invoices', tone: overdue ? 'text-red-400' : 'text-amber-400' })
   }
-
-  // ── Timeline ──
-  const events: TimelineEvent[] = []
-  for (const q of quotes) {
-    events.push({ at: q.created_at, kind: 'quote_created', title: `Quote ${q.quote_number} created`, sub: `${q.service_type} · ${formatCurrency(Number(q.total))}`, href: `/dashboard/quotes/${q.id}` })
-    if (q.sent_at) events.push({ at: q.sent_at, kind: 'quote_sent', title: `Quote ${q.quote_number} sent`, href: `/dashboard/quotes/${q.id}` })
-    if (q.last_followed_up_at) events.push({ at: q.last_followed_up_at, kind: 'followup', title: `Followed up on ${q.quote_number}`, sub: `${q.follow_up_count} total`, href: `/dashboard/quotes/${q.id}` })
-    if (WON.has(q.status)) events.push({ at: q.updated_at, kind: 'quote_accepted', title: `Quote ${q.quote_number} accepted`, sub: formatCurrency(Number(q.total)), href: `/dashboard/quotes/${q.id}` })
-  }
-  for (const j of jobs) {
-    events.push({ at: j.created_at, kind: 'job_scheduled', title: `Job scheduled — ${j.title}`, sub: `for ${formatDate(j.scheduled_date)}` })
-    if (j.status === 'completed') events.push({ at: j.updated_at, kind: 'job_completed', title: `Job completed — ${j.title}` })
-  }
-  for (const inv of invoices) {
-    events.push({ at: inv.created_at, kind: 'invoice_created', title: `Invoice ${inv.invoice_number} created`, sub: formatCurrency(Math.round(Number(inv.amount) * custGstMult * 100) / 100) })
-    if (inv.status === 'paid') events.push({ at: inv.updated_at, kind: 'invoice_paid', title: `Invoice ${inv.invoice_number} paid`, sub: formatCurrency(Math.round(Number(inv.amount) * custGstMult * 100) / 100) })
-  }
-  events.push(...extraTimeline) // messages, payments, portal requests
-  events.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
 
   const phone = customer.phone
   const isHighValue = bookedRevenue >= 2000
@@ -513,6 +554,10 @@ export default function CustomerDetailPage() {
             customerId={customer.id} customerName={customer.name} />
         </CardBody>
       </Card>
+
+      {/* Website lead — the full intake detail (service · address · budget · schedule
+          · contact · source), shown identically to the Messages inbox card. */}
+      {lead && <LeadSummary lead={lead} />}
 
       {/* Open items — "what needs action for this customer" comes FIRST, right under
           the identity card (it was buried five cards deep). */}

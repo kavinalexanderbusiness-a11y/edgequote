@@ -99,8 +99,9 @@ export interface Property {
   notes: string | null
   measurement_history: MeasurementSnapshot[]
   // Permanently-saved lawn boundary + map identity (from a website measurement or
-  // an in-app trace). Polygon is an array of {lat,lng} rings (jsonb).
-  lawn_polygon?: unknown
+  // an in-app trace). The CURRENT boundary — section-tagged {lat,lng} rings (jsonb)
+  // — so a measured property can be reopened and redrawn without re-tracing.
+  lawn_polygon?: LawnPolygon | null
   google_place_id?: string | null
   maps_url?: string | null
   property_travel_distance_km?: number | null
@@ -140,6 +141,12 @@ export interface MeasurementSnapshot {
   sections?: LawnSections // per-section breakdown (front/back/left/right/boulevard/other)
   recommendation?: SavedRecommendation | null
   rate_per_1000?: number | null
+  // The exact traced boundary for THIS snapshot, so any past measurement can be
+  // redrawn/compared, not just the current one.
+  polygon?: LawnPolygon | null
+  // How the area was captured: 'traced' (drawn on the map), 'auto' (building-
+  // footprint estimate accepted as-is), 'manual' (typed), 'website' (online booking).
+  source?: string | null
   // legacy single-figure fields kept for older snapshots
   lawn_sqft?: number | null
   fence_length?: number | null
@@ -148,6 +155,14 @@ export interface MeasurementSnapshot {
   driveway_area?: number | null
   notes?: string | null
 }
+
+// A saved lawn boundary: each traced section as a closed ring of {lat,lng} points.
+// Stored on properties.lawn_polygon (current) and on each MeasurementSnapshot.
+export interface LawnPolygonSection {
+  section: string         // front | back | left | right | boulevard | other
+  ring: { lat: number; lng: number }[]
+}
+export type LawnPolygon = LawnPolygonSection[]
 
 // The six lawn sections the Measurement Tool traces, in square feet.
 export interface LawnSections {
@@ -460,14 +475,15 @@ export interface Payment {
 
 // Manual payment methods the owner can record (Stripe rows come from the webhook;
 // 'card' = a card charged outside EdgeQuote, e.g. a terminal or another processor).
+// The picker offers Card / E-transfer / Cash — the three ways customers actually pay.
+// Retired methods (cheque/debit/other) still LABEL correctly on legacy rows via the
+// fallback in paymentMethodLabel; 'credit' stays for labeling but is filtered out of
+// the picker (customer credit is applied by the ledger, never chosen here).
 export const PAYMENT_METHODS: { value: string; label: string }[] = [
-  { value: 'cash', label: 'Cash' },
+  { value: 'card', label: 'Card' },
   { value: 'etransfer', label: 'E-transfer' },
-  { value: 'cheque', label: 'Cheque' },
-  { value: 'card', label: 'Credit card' },
-  { value: 'debit', label: 'Debit' },
+  { value: 'cash', label: 'Cash' },
   { value: 'credit', label: 'Customer credit' },
-  { value: 'other', label: 'Other' },
 ]
 
 // Human label for any payment method value (ledger rows may also carry 'stripe'
@@ -669,15 +685,16 @@ export const ACQUISITION_SOURCES = [
   'Other',
 ] as const
 
+// The four business-health numbers the dashboard StatsGrid renders (Jobs Done shows
+// both the total and the this-month count). Trimmed to match the decluttered grid —
+// vanity/duplicate stats (totalQuotes, revenueQuoted, pendingQuotes, monthlyRevenue,
+// outstandingRevenue, acceptedJobs) were removed and must NOT be reintroduced.
 export interface DashboardStats {
-  acceptedJobs: number
-  acceptedRevenue: number
-  monthlyRevenue: number
-  conversionRate: number
   collectedRevenue: number
-  outstandingRevenue: number
+  acceptedRevenue: number
   jobsDone: number
   jobsDoneThisMonth: number
+  conversionRate: number
 }
 
 export interface BusinessSettings {

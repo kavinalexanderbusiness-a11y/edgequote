@@ -5,8 +5,9 @@ import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/Button'
 import { Banner } from '@/components/ui/Banner'
 import { CHANNELS } from '@/lib/marketing/channels'
-import { PROVIDERS } from '@/lib/marketing/providers'
+import { PROVIDERS, canConnectApi } from '@/lib/marketing/providers'
 import { listConnections, connectManual, disconnect, connectionsByPlatform } from '@/lib/marketing/connections'
+import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import { Plus, X, Link2, Loader2, CheckCircle2, Clock } from 'lucide-react'
 import type { MarketingChannel, SocialConnection } from '@/lib/marketing/types'
@@ -38,11 +39,15 @@ export function ConnectionsManager({ userId }: { userId: string }) {
     const created = await connectManual(supabase, userId, { platform, accountName: name, accountUrl: url })
     setBusy(false)
     if (created) { setConnections(prev => [...prev, created]); setAdding(null); setName(''); setUrl('') }
-    else setErr('Couldn’t connect that account. Run the social-publishing migration if you haven’t.')
+    else setErr('Couldn’t save that account. Please try again.')
   }
   async function remove(c: SocialConnection) {
-    await disconnect(supabase, c.id)
     setConnections(prev => prev.filter(x => x.id !== c.id))
+    await disconnect(supabase, c.id)
+    toast.undo(`Disconnected ${c.account_name}.`, async () => {
+      const restored = await connectManual(supabase, userId, { platform: c.platform, accountName: c.account_name, accountUrl: c.account_url ?? '' })
+      if (restored) setConnections(prev => [...prev, restored])
+    })
   }
 
   if (loading) return <div className="h-32 flex items-center justify-center text-ink-faint"><Loader2 className="w-5 h-5 animate-spin" /></div>
@@ -70,7 +75,9 @@ export function ConnectionsManager({ userId }: { userId: string }) {
                 </p>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
-                {p.apiStatus === 'planned' && (
+                {/* Only show one-tap Connect when the OAuth app is actually live —
+                    otherwise it dead-ends. Today that's never, so manual is the path. */}
+                {canConnectApi(def.key) && (
                   <a href={`/api/marketing/connect/${def.key}`} className="text-[11px] text-accent hover:underline inline-flex items-center gap-1" title={`Connect via ${p.apiName}`}>
                     <Link2 className="w-3 h-3" /> Connect
                   </a>

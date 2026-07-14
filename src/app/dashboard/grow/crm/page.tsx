@@ -47,7 +47,8 @@ export default function CrmAutomationPage() {
   }
 
   async function load() {
-    const { data: { user } } = await supabase.auth.getUser()
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
     setUid(user?.id || null)
     if (!user) { setLoading(false); return }
     const [custRes, refRes, radar] = await Promise.all([

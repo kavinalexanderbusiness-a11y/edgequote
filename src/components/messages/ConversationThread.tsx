@@ -1,8 +1,10 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
+import { queueOrRun } from '@/lib/offline/outbox'
+import { newClientMessageId } from '@/lib/comms/idempotency'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import { MSG_LABELS, MsgType } from '@/lib/comms/templates'
@@ -32,6 +34,17 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
   // Guards a fast conversation switch: a slow load for an earlier customer must never
   // overwrite the thread you've since opened (the component is reused across both).
   const reqSeq = useRef(0)
+  // Coalesce reload bursts into ONE fetch. A send triggers an explicit refresh AND a
+  // realtime INSERT echo for the same row — without this that's two identical 2-query
+  // reloads (and two repaints). A latest-ref keeps the debounced call bound to the
+  // current customer's load; the mount/switch load still runs immediately.
+  const loadRef = useRef<() => void>(() => {})
+  const loadTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const scheduleLoad = useCallback(() => {
+    if (loadTimer.current) clearTimeout(loadTimer.current)
+    loadTimer.current = setTimeout(() => { loadTimer.current = null; loadRef.current() }, 160)
+  }, [])
+  useEffect(() => () => { if (loadTimer.current) clearTimeout(loadTimer.current) }, [])
 
   async function load() {
     const mySeq = ++reqSeq.current
@@ -62,6 +75,7 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
     setItems([...msgs, ...logs].sort((a, b) => a.at.localeCompare(b.at)))
     setLoading(false)
   }
+  loadRef.current = load // keep the debounced reload pointed at the current closure
   // On switch: show the skeleton and load fresh (the seq guard drops any stale load).
   useEffect(() => { setLoading(true); setErr(null); load() }, [customerId]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { endRef.current?.scrollIntoView({ block: 'end' }) }, [items.length])
@@ -79,7 +93,7 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
   useEffect(() => {
     const channel = supabase
       .channel(`thread:${customerId}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `customer_id=eq.${customerId}` }, () => load())
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `customer_id=eq.${customerId}` }, () => scheduleLoad())
       .subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [customerId]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -89,17 +103,39 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
     if (!t) return
     const isNote = note
     // Optimistic: show the bubble instantly (status 'sending'), clear the box, then
-    // reconcile with the server. On a network failure nothing was saved → roll back.
+    // reconcile with the server. Offline → the message is queued in the ONE outbox and
+    // sent automatically on reconnect (through the same /api/messages/send engine); the
+    // bubble stays as 'queued'. A real (non-network) failure rolls the bubble back.
     const pendId = 'pending-' + (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(items.length))
+    // ONE stable id for this logical send. Threaded into BOTH the immediate request and
+    // the outbox payload, so a send that runs now and the SAME send replayed later carry
+    // the same id → the server dispatches the SMS at most once (no duplicate on replay).
+    const clientMessageId = newClientMessageId()
     setItems(prev => [...prev, { id: pendId, at: new Date().toISOString(), kind: isNote ? 'note' : 'out', channel: 'sms', body: t, status: 'sending' }])
     setText(''); setSending(true); setErr(null)
+    let deliveryWarn: string | null = null
     try {
-      const res = await fetch('/api/messages/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ customerId, body: t, internal: isNote }) })
-      const d = await res.json().catch(() => ({}))
-      if (!res.ok || (d.ok === false && !d.internal)) setErr(d.error || 'Message saved, but the text couldn’t be delivered.')
-      await load() // replaces the optimistic bubble with the saved message
+      const outcome = await queueOrRun(
+        { kind: 'message.send', payload: { customerId, body: t, internal: isNote, clientMessageId }, label: `${isNote ? 'Note' : 'Message'}: ${t.slice(0, 40)}` },
+        async () => {
+          const res = await fetch('/api/messages/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ customerId, body: t, internal: isNote, clientMessageId }) })
+          const d = await res.json().catch(() => ({}))
+          if (!res.ok) throw new Error(d.error || 'send failed')
+          // Saved server-side but SMS not delivered → surface a soft warning (don't roll back).
+          if (d.ok === false && !d.internal) deliveryWarn = d.error || 'Message saved, but the text couldn’t be delivered.'
+        },
+        // A lost response after the server may have sent must NOT re-queue (→ no double SMS);
+        // true offline still queues. See queueOrRun.
+        { queueOnRunError: false },
+      )
+      if (outcome === 'queued') {
+        setItems(prev => prev.map(i => i.id === pendId ? { ...i, status: 'queued' } : i))
+      } else {
+        if (deliveryWarn) setErr(deliveryWarn)
+        scheduleLoad() // replaces the optimistic bubble with the saved message; coalesces with the realtime echo
+      }
     } catch {
-      setErr('Could not reach the server. Please try again.')
+      setErr('Message could not be sent. Please try again.')
       setItems(prev => prev.filter(i => i.id !== pendId))
       setText(t)
     } finally { setSending(false) }
@@ -147,7 +183,9 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
   )
 }
 
-function Bubble({ it, customerId }: { it: Item; customerId: string }) {
+// Memoized: `it` refs are stable between reloads, so typing in the reply box no longer
+// re-renders (and re-formats the date of) every bubble in a long thread.
+const Bubble = memo(function Bubble({ it, customerId }: { it: Item; customerId: string }) {
   const time = (() => { try { return format(new Date(it.at), 'MMM d, h:mm a') } catch { return '' } })()
   if (it.kind === 'event') {
     // Badge from status (future-proof) + the TRUTHFUL skip reason from detail.
@@ -170,23 +208,24 @@ function Bubble({ it, customerId }: { it: Item; customerId: string }) {
     )
   }
   const sending = it.status === 'sending'
+  const queued = it.status === 'queued'   // offline — held in the outbox, sends on reconnect
   if (it.kind === 'note') {
     return (
-      <div className={cn('ml-auto max-w-[82%] rounded-xl bg-amber-500/10 border border-amber-500/25 px-3 py-2 transition-opacity', sending && 'opacity-70')}>
+      <div className={cn('ml-auto max-w-[82%] rounded-xl bg-amber-500/10 border border-amber-500/25 px-3 py-2 transition-opacity', (sending || queued) && 'opacity-70')}>
         <p className="text-[10px] font-semibold text-amber-400 uppercase tracking-wide flex items-center gap-1"><StickyNote className="w-3 h-3" /> Internal note</p>
         <p className="text-sm text-ink whitespace-pre-wrap mt-0.5">{it.body}</p>
-        <p className="text-[10px] text-ink-faint mt-0.5 flex items-center gap-1">{sending ? <><Clock className="w-3 h-3" /> Saving…</> : time}</p>
+        <p className="text-[10px] text-ink-faint mt-0.5 flex items-center gap-1">{sending ? <><Clock className="w-3 h-3" /> Saving…</> : queued ? <><Clock className="w-3 h-3" /> Queued · saves when online</> : time}</p>
       </div>
     )
   }
   const inbound = it.kind === 'in'
   const Icon = it.channel === 'email' ? Mail : MessageSquare
   return (
-    <div className={cn('max-w-[82%] rounded-xl px-3 py-2 transition-opacity', inbound ? 'bg-bg-tertiary border border-border' : 'ml-auto bg-accent/15 border border-accent/25', sending && 'opacity-70')}>
+    <div className={cn('max-w-[82%] rounded-xl px-3 py-2 transition-opacity', inbound ? 'bg-bg-tertiary border border-border' : 'ml-auto bg-accent/15 border border-accent/25', (sending || queued) && 'opacity-70')}>
       <p className="text-sm text-ink whitespace-pre-wrap">{it.body}</p>
       <p className="text-[10px] text-ink-faint mt-0.5 flex items-center gap-1">
-        {sending ? <><Clock className="w-3 h-3" /> Sending…</> : <><Icon className="w-3 h-3" /> {inbound ? (it.channel === 'portal' ? 'Portal' : 'Received') : 'Sent'} · {time}{!inbound && it.status && it.status !== 'sent' && <span className="text-amber-400">· {it.status}</span>}</>}
+        {sending ? <><Clock className="w-3 h-3" /> Sending…</> : queued ? <><Clock className="w-3 h-3" /> Queued · sends when online</> : <><Icon className="w-3 h-3" /> {inbound ? (it.channel === 'portal' ? 'Portal' : 'Received') : 'Sent'} · {time}{!inbound && it.status && it.status !== 'sent' && <span className="text-amber-400">· {it.status}</span>}</>}
       </p>
     </div>
   )
-}
+})

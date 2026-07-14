@@ -369,11 +369,19 @@ export function QuoteBuilder({
     }
   }
 
-  const activeTemplates = templates.filter(t => t.is_active)
-  const templateOptions = [
+  // Memoized: the builder re-renders on every keystroke (many watch() subscriptions),
+  // so without this these O(n) arrays would be rebuilt — and handed as fresh refs to the
+  // Select children — on each character typed. Recompute only when the source lists change.
+  const customerOptions = useMemo(() => [
+    { value: '', label: 'Select a customer...' },
+    ...customers.map(c => ({ value: c.id, label: c.name })),
+    { value: '__manual', label: '+ Enter manually' },
+  ], [customers])
+  const activeTemplates = useMemo(() => templates.filter(t => t.is_active), [templates])
+  const templateOptions = useMemo(() => [
     { value: '', label: 'Select a service...' },
     ...activeTemplates.map(t => ({ value: t.id, label: `${t.name} — ${formatServicePrice(t)}` })),
-  ]
+  ], [activeTemplates])
   const statusOptions = [
     { value: 'draft', label: 'Draft' }, { value: 'sent', label: 'Sent' },
     { value: 'accepted', label: 'Accepted' }, { value: 'scheduled', label: 'Scheduled' },

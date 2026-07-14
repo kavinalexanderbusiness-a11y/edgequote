@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -14,6 +14,7 @@ import { ContentComposer } from './ContentComposer'
 import { PostOptionsBar } from './PostOptionsBar'
 import { CHANNELS } from '@/lib/marketing/channels'
 import { WRITING_STYLES } from '@/lib/marketing/styles'
+import { thumbUrl } from '@/lib/photos'
 import { formatDate } from '@/lib/utils'
 import { Images, Sparkles, Lightbulb, Wand2, SlidersHorizontal } from 'lucide-react'
 import { DEFAULT_POST_OPTIONS, type ContentPiece, type GenerateAllResponse, type MarketingCandidate, type MarketingChannel, type PostOptions } from '@/lib/marketing/types'
@@ -106,13 +107,17 @@ export function StudioClient({ candidates, aiEnabled, businessName, logoUrl, use
     }
   }
 
-  // Load existing drafts for the selected job (newest per channel wins).
+  // Load existing drafts for the selected job (newest per channel wins). Fetch each
+  // job at most once per session — re-selecting an already-loaded job reuses the
+  // draftsByKey cache instead of re-querying content_pieces on every click.
+  const loadedJobs = useRef<Set<string>>(new Set())
   useEffect(() => {
-    if (!selectedJobId) return
+    if (!selectedJobId || loadedJobs.current.has(selectedJobId)) return
     let active = true
     supabase.from('content_pieces').select('*').eq('job_id', selectedJobId).order('created_at', { ascending: false })
       .then(({ data }) => {
         if (!active) return
+        loadedJobs.current.add(selectedJobId)
         const fresh: Record<string, ContentPiece> = {}
         for (const p of (data as ContentPiece[] | null) || []) {
           const k = `${p.job_id}:${p.channel}`
@@ -186,14 +191,14 @@ export function StudioClient({ candidates, aiEnabled, businessName, logoUrl, use
                   {selected.bestBeforeUrl && (
                     <figure className="flex-1 min-w-0">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={selected.bestBeforeUrl} alt="Before" className="w-full h-24 object-cover rounded-lg border border-border" />
+                      <img src={thumbUrl(selected.bestBeforeUrl, 480, 260)} alt="Before" loading="lazy" className="w-full h-24 object-cover rounded-lg border border-border" />
                       <figcaption className="text-[10px] text-ink-faint text-center mt-1">Before</figcaption>
                     </figure>
                   )}
                   {selected.bestAfterUrl && (
                     <figure className="flex-1 min-w-0">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={selected.bestAfterUrl} alt="After" className="w-full h-24 object-cover rounded-lg border border-border" />
+                      <img src={thumbUrl(selected.bestAfterUrl, 480, 260)} alt="After" loading="lazy" className="w-full h-24 object-cover rounded-lg border border-border" />
                       <figcaption className="text-[10px] text-ink-faint text-center mt-1">After</figcaption>
                     </figure>
                   )}

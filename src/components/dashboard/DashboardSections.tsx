@@ -15,7 +15,10 @@ export const SECTION_LABELS: Record<string, string> = {
 // "missed", "followups" and "unscheduled" were removed — Today's Priorities (top of
 // the page) now surfaces those exact signals in one ranked queue, so the standalone
 // cards were pure duplication. Their actions live on the pages each priority links to.
-export const DEFAULT_ORDER = ['suggestions', 'stats', 'weekend', 'recent', 'acquisition']
+// Order reflects a 7:30-AM open: what to chase (Priorities, fixed on top) → today's
+// work days → advisor moves → the business-health glance → history. Vanity stats sit
+// BELOW the day plan on purpose.
+export const DEFAULT_ORDER = ['weekend', 'suggestions', 'stats', 'recent', 'acquisition']
 
 export interface DashboardPrefs { order: string[]; hidden: string[] }
 

@@ -32,7 +32,9 @@ export function WeekendOutlook() {
 
   useEffect(() => {
     async function load() {
-      const { data: { user } } = await supabase.auth.getUser()
+      // Local session read — no auth round-trip before the RLS-scoped queries below.
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
       const [jRes, qRes, rRes, sRes] = await Promise.all([
         supabase.from('jobs')
           .select('id, scheduled_date, status, start_time, service_type, duration_minutes, price, quote_id, recurrence_id, customers(name, phone), properties(address)')

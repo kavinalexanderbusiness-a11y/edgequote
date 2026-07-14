@@ -41,7 +41,10 @@ export function ReferralPanel({ customer, referrer, referredRevenue }: {
   const [form, setForm] = useState({ name: '', contact: '', reward: '' })
 
   async function load() {
-    const { data: { user } } = await supabase.auth.getUser()
+    // Local session read — this panel renders on the customer profile; avoids a second
+    // GoTrue round-trip in parallel with the page's own load.
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
     setUid(user?.id || null)
     const { data } = await supabase.from('referrals').select('*').eq('referrer_customer_id', customer.id).order('created_at', { ascending: false })
     const list = (data as Referral[]) || []

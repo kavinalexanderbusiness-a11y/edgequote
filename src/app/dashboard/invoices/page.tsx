@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
+import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { Invoice, InvoiceStatus, InvoiceDisplayStatus, INVOICE_STATUS_LABELS, INVOICE_STATUS_COLORS, BusinessSettings, Payment, paymentMethodLabel } from '@/types'
 import { InvoicePaymentControls } from '@/components/payments/InvoicePaymentControls'
 import { invoiceBalance, displayInvoiceStatus, cancelInvoice, reactivateInvoice } from '@/lib/payments/ledger'
@@ -69,7 +70,9 @@ export default function InvoicesPage() {
 
   async function fetchInvoices() {
     try {
-      const { data: { user } } = await supabase.auth.getUser()
+      // Local session read — no auth round-trip before the RLS-scoped fetch batch.
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
       if (!user) { setLoadError('Session expired — sign in again.'); return }
       setUid(user.id)
       const [iRes, sRes, pmRes, crRes, payRes] = await Promise.all([
@@ -90,6 +93,11 @@ export default function InvoicesPage() {
       if (iRes.error) { setLoadError('Could not load invoices: ' + iRes.error.message); return }
       setLoadError(null)
       setInvoices((iRes.data as Invoice[]) || [])
+      // Cache only the first screenful — invoices carry a line_items jsonb + a customer
+      // join, so serializing all 15k on every fetch (incl. each realtime tick) would blow
+      // the sessionStorage quota and block the main thread. First screen paints instantly;
+      // the full list follows from the query above.
+      writeCache('invoices-list', ((iRes.data as Invoice[]) || []).slice(0, 60))
       setSettings(sRes.data as BusinessSettings | null)
       setCardCustomers(new Set(((pmRes.data as { customer_id: string }[] | null) || []).map(r => r.customer_id)))
       const credit: Record<string, number> = {}
@@ -131,7 +139,13 @@ export default function InvoicesPage() {
     } finally { setChargingId(null) }
   }
 
-  useEffect(() => { fetchInvoices() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // Instant revisit: paint the cached list immediately (no skeleton), then revalidate in
+  // the background — realtime keeps it live. Reuses the shared clientCache SWR module.
+  useEffect(() => {
+    const cached = readCache<Invoice[]>('invoices-list', CACHE_TTL.short)
+    if (cached) { setInvoices(cached); setLoading(false) }
+    fetchInvoices()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Live: when the Stripe webhook flips an invoice to paid (or status changes in
   // another tab) the list updates instantly — the ?paid=1 delay below is a backup.
@@ -223,6 +237,9 @@ export default function InvoicesPage() {
       customer_name: i.customer_name, address: i.address, service_type: i.service_type,
       amount: i.amount, status: i.status, issued_date: i.issued_date, due_date: i.due_date,
       notes: i.notes, line_items: i.line_items,
+      // Carry the paid state so restoring a Paid invoice keeps its date + method (else a
+      // manually-paid invoice loses its only payment record).
+      paid_at: i.paid_at, payment_method: i.payment_method,
     }
   }
 

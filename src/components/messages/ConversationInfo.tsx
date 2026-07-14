@@ -104,12 +104,14 @@ export function ConversationInfo({ customerId }: Props) {
     if (!uid) return
     setBusy(f.key)
     const date = f.when(localTodayISO())
-    await supabase.from('schedule_items').insert({
+    const { error } = await supabase.from('schedule_items').insert({
       user_id: uid, type: f.type, title: f.title, customer_id: customerId,
       scheduled_date: date, status: 'scheduled',
       due_at: (f.type === 'reminder' || f.type === 'task') ? new Date(date + 'T09:00:00').toISOString() : null,
     })
-    setBusy(null); setFollowDone(f.key); setFollowOpen(false)
+    setBusy(null)
+    if (error) return   // don't flip to "Added" if the reminder wasn't actually created
+    setFollowDone(f.key); setFollowOpen(false)
     setTimeout(() => setFollowDone(null), 2500)
   }
 

@@ -45,7 +45,10 @@ export function TodaysPriorities() {
 
   useEffect(() => {
     async function load() {
-      const { data: { user } } = await supabase.auth.getUser()
+      // getSession() is a local read — no GoTrue round-trip before the data query. The
+      // reads below are RLS-scoped, so the session's uid is all we need.
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
       if (!user) { setLoading(false); return }
       const today = localTodayISO()
 

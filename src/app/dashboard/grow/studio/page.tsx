@@ -2,7 +2,6 @@ import { createClient } from '@/lib/supabase/server'
 import { listCandidates } from '@/lib/marketing/data'
 import { aiEnabled } from '@/lib/ai/studioGateway'
 import { StudioClient } from '@/components/grow/marketing/StudioClient'
-import { MarketingSubnav } from '@/components/grow/marketing/MarketingSubnav'
 
 // Marketing Studio — the hero flow. Server-fetches the owner's postable jobs
 // (scored live) + branding, then hands off to the interactive composer.
@@ -20,7 +19,6 @@ export default async function StudioPage({ searchParams }: { searchParams: Promi
 
   return (
     <div className="space-y-5">
-      <MarketingSubnav />
       <StudioClient
         candidates={candidates}
         aiEnabled={aiEnabled()}

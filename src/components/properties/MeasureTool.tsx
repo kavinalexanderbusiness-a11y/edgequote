@@ -4,10 +4,10 @@ import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { loadGoogleMaps, addPropertyPin, flashRing, type PropertyPinHandle } from '@/lib/googleMaps'
 import { createClient } from '@/lib/supabase/client'
-import { Property, BusinessSettings, MeasurementSnapshot, LawnSections, PricingConfidence, CONFIDENCE_LABELS, CONFIDENCE_COLORS } from '@/types'
+import { Property, BusinessSettings, MeasurementSnapshot, LawnSections, LawnPolygon, PricingConfidence, CONFIDENCE_LABELS, CONFIDENCE_COLORS } from '@/types'
 import { priceTiers, routeDensityTravel, pricingConfidence, travelFeeForDistance, pricingConfigFromSettings, PricingConfig, DEFAULT_PRICING, PriceTier, pricingPackage, estimateVisitMinutes, buildSavedRecommendation } from '@/lib/pricing'
 import { PricePackagePanel, CadenceSelection } from '@/components/pricing/PricePackagePanel'
-import { ProspectContext, loadProspectContext, assessProspect } from '@/lib/prospect'
+import { ProspectContext, loadProspectContext, gradedProspectPricing } from '@/lib/prospect'
 import { DecisionSummary } from '@/components/pricing/DecisionSummary'
 import { AutoMeasureBanner } from '@/components/measure/AutoMeasureBanner'
 import { recordMeasurement, neighborhoodOf, AutoMeasureResult } from '@/lib/autoMeasure'
@@ -38,7 +38,13 @@ const sectionDef = (k: SectionKey) => SECTIONS.find(s => s.key === k)!
 
 type Shape = { id: number; section: SectionKey; polygon: any }
 
-export function MeasureTool({ property }: { property: Property }) {
+// `context` controls whether pricing is shown. 'measure' (default) keeps the page
+// focused on measuring/editing the boundary — no auto pricing. 'quote' shows the
+// full pricing recommendation (used when measuring AS PART OF a quote workflow),
+// because measuring then almost always means preparing a quote. (Distinct from the
+// internal draw/adjust `mode` below.)
+export function MeasureTool({ property, context = 'measure' }: { property: Property; context?: 'measure' | 'quote' }) {
+  const showPricing = context === 'quote'
   const supabase = createClient()
   const router = useRouter()
   const mapEl = useRef<HTMLDivElement>(null)
@@ -234,6 +240,22 @@ export function MeasureTool({ property }: { property: Property }) {
     }
   }
 
+  // Wire a section-tagged polygon into the editing model: live area on drag, and
+  // tap-a-vertex-to-delete in Adjust mode. Shared by freshly-drawn shapes AND the
+  // saved boundary we redraw when reopening a measured property.
+  function registerShape(section: SectionKey, polygon: any) {
+    const path = polygon.getPath()
+    // Live area while dragging vertices (throttled to one recompute per frame).
+    ;['set_at', 'insert_at', 'remove_at'].forEach(ev => path.addListener(ev, scheduleRecompute))
+    // Tap/click a vertex to delete it — touch-friendly, only active in Adjust
+    // mode (the polygon is only clickable then). Keeps a triangle minimum.
+    polygon.addListener('click', (e: any) => {
+      if (modeRef.current !== 'adjust') return
+      if (e.vertex != null && path.getLength() > 3) { path.removeAt(e.vertex); recompute() }
+    })
+    shapes.current.push({ id: ++shapeId.current, section, polygon })
+  }
+
   // Commit the in-progress shape into a section-tagged polygon. It's created
   // INERT (editable+clickable false) so it can never eat a draw-mode click; the
   // Adjust toggle flips it editable when the user wants to fine-tune.
@@ -247,20 +269,46 @@ export function MeasureTool({ property }: { property: Property }) {
       paths: currentPath.current, strokeColor: color, strokeWeight: 2,
       fillColor: color, fillOpacity: 0.32, editable: adjust, clickable: adjust, map: gmap.current,
     })
-    const path = polygon.getPath()
-    // Live area while dragging vertices (throttled to one recompute per frame).
-    ;['set_at', 'insert_at', 'remove_at'].forEach(ev => path.addListener(ev, scheduleRecompute))
-    // Tap/click a vertex to delete it — touch-friendly, only active in Adjust
-    // mode (the polygon is only clickable then). Keeps a triangle minimum.
-    polygon.addListener('click', (e: any) => {
-      if (modeRef.current !== 'adjust') return
-      if (e.vertex != null && path.getLength() > 3) { path.removeAt(e.vertex); recompute() }
-    })
-    shapes.current.push({ id: ++shapeId.current, section, polygon })
+    registerShape(section, polygon)
     currentPath.current = []
     snapActive.current = false
     if (preview.current) { preview.current.setMap(null); preview.current = null }
     redrawVertexMarkers()
+    recompute()
+  }
+
+  // Build the persistable boundary (section-tagged {lat,lng} rings) from the
+  // finished shapes — what we save to properties.lawn_polygon + the snapshot.
+  function currentPolygon(): LawnPolygon {
+    return shapes.current
+      .map(s => ({
+        section: s.section as string,
+        ring: (s.polygon.getPath().getArray() as any[]).map(ll => ({ lat: ll.lat(), lng: ll.lng() })),
+      }))
+      .filter(p => p.ring.length >= 3)
+  }
+
+  // Redraw the property's SAVED boundary when the tool opens, so a measured
+  // property shows its exact shape + total without re-tracing. No-op if nothing
+  // was traced yet or the user has already started drawing.
+  function loadSavedPolygons() {
+    const g = window.google
+    if (!gmap.current || shapes.current.length > 0) return
+    const saved = Array.isArray(property.lawn_polygon) ? (property.lawn_polygon as LawnPolygon) : null
+    if (!saved || saved.length === 0) return
+    const bounds = new g.maps.LatLngBounds()
+    for (const sec of saved) {
+      if (!Array.isArray(sec.ring) || sec.ring.length < 3) continue
+      const section = (SECTIONS.find(s => s.key === sec.section)?.key ?? 'other') as SectionKey
+      const color = sectionDef(section).color
+      const polygon = new g.maps.Polygon({
+        paths: sec.ring, strokeColor: color, strokeWeight: 2,
+        fillColor: color, fillOpacity: 0.32, editable: false, clickable: false, map: gmap.current,
+      })
+      registerShape(section, polygon)
+      sec.ring.forEach(pt => bounds.extend(pt))
+    }
+    if (!bounds.isEmpty()) gmap.current.fitBounds(bounds, 40)
     recompute()
   }
 
@@ -424,6 +472,8 @@ export function MeasureTool({ property }: { property: Property }) {
           onMouseMove(e.latLng)
         })
         setReady(true)
+        // Redraw the saved boundary so a measured property is viewable as-is.
+        loadSavedPolygons()
         loadTravelAndDensity(center)
       } catch (e) {
         if (!cancelled) setLoadError(e instanceof Error ? e.message : 'Map failed to load')
@@ -494,26 +544,38 @@ export function MeasureTool({ property }: { property: Property }) {
     const sections = currentSections()
     const sectionsTotal = Math.round(Object.values(sections).reduce((a, b) => a + b, 0))
     const total = sectionsTotal > 0 ? sectionsTotal : Math.round(overrideRef.current || 0)
-    const baseSave = pricingPackage(total, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood })
     const estMin = estimateVisitMinutes(total, prospect?.observedMinPer1000)
-    const scoreSave = prospect
-      ? assessProspect(baseSave, prospect, { distanceKm, travelFee: effectiveTravel, neighborhoodName: property.neighborhood, estimatedMinutes: estMin, timedJobs: prospect.timedJobs }).score
+    // ONE composed result (gradedProspectPricing) — the saved recurring prices and
+    // the saved score come from the SAME grade-adjusted package.
+    const gradedSave = prospect
+      ? gradedProspectPricing(total, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood }, prospect,
+          { distanceKm, travelFee: effectiveTravel, neighborhoodName: property.neighborhood, estimatedMinutes: estMin, timedJobs: prospect.timedJobs })
       : null
-    // Save the grade-adjusted package so stored recurring prices reflect value.
-    const pkgSave = pricingPackage(total, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood, valueGrade: scoreSave })
+    const scoreSave = gradedSave?.assessment.score ?? null
+    const pkgSave = gradedSave?.pkg ?? pricingPackage(total, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood })
+    // Permanent boundary + how the area was captured (traced shapes win; else the
+    // accepted auto estimate; else a typed figure).
+    const polygon = currentPolygon()
+    const source = polygon.length > 0 ? 'traced' : (overrideRef.current > 0 ? 'auto' : 'manual')
     const snapshot: MeasurementSnapshot = {
       date: new Date().toISOString(),
       total_sqft: total,
       sections,
       recommendation: total > 0 ? buildSavedRecommendation(pkgSave, estMin, { score: scoreSave, hood: property.neighborhood }) : null,
       rate_per_1000: cfg.mowRatePer1000,
+      polygon: polygon.length > 0 ? polygon : null,
+      source,
     }
     // Append from the ref (synchronous) so back-to-back saves can't drop a
     // snapshot; keep the baseline + most recent 20 so the blob stays bounded.
     const appended = [...historyRef.current, snapshot]
     const nextHistory = appended.length > 21 ? [appended[0], ...appended.slice(-20)] : appended
     historyRef.current = nextHistory
-    await supabase.from('properties').update({ lawn_sqft: total, measurement_history: nextHistory }).eq('id', property.id)
+    // Update the CURRENT boundary only when this save actually traced one, so an
+    // auto/manual re-save never wipes a previously-saved shape.
+    const propUpdate: Record<string, unknown> = { lawn_sqft: total, measurement_history: nextHistory }
+    if (polygon.length > 0) propUpdate.lawn_polygon = polygon
+    await supabase.from('properties').update(propUpdate).eq('id', property.id)
     setHistory(nextHistory)
     setSavedSqft(total)
     // Record auto vs accepted so the estimate self-calibrates per neighborhood.
@@ -703,6 +765,10 @@ export function MeasureTool({ property }: { property: Property }) {
         </div>
       </div>
 
+      {/* Pricing appears only when measuring AS PART OF a quote workflow
+          (mode 'quote'). On the standalone Measurements page the focus stays on
+          the measurement; create a quote to price it. */}
+      {showPricing && (<>
       {/* Auto pricing tiers (job only) */}
       <div className="bg-bg-secondary border border-border rounded-xl px-4 py-3 space-y-3">
         <div className="flex items-center justify-between flex-wrap gap-3">
@@ -737,16 +803,18 @@ export function MeasureTool({ property }: { property: Property }) {
       {/* Pricing recommendation package — cadence prices, season value, verdict.
           "Use X" creates the quote with that structure in one tap. */}
       {totalSqft > 0 && (() => {
-        const basePkg = pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood })
-        const assessment = prospect
-          ? assessProspect(basePkg, prospect, {
+        // ONE composed result (gradedProspectPricing): the assessment is re-run
+        // against the grade-adjusted package, so the hero price, CTA, Pricing
+        // Details and Guidance all display the same recommended value.
+        const graded = prospect
+          ? gradedProspectPricing(totalSqft, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood }, prospect, {
               distanceKm, travelFee: effectiveTravel, neighborhoodName: property.neighborhood,
               estimatedMinutes: estimateVisitMinutes(totalSqft, prospect.observedMinPer1000),
               timedJobs: prospect.timedJobs, crewCostPerHour: crewCost,
             })
           : null
-        // Grade-adjusted recurring pricing (business value, not just size).
-        const pkg = pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood, valueGrade: assessment?.score ?? null })
+        const assessment = graded?.assessment ?? null
+        const pkg = graded?.pkg ?? pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood })
         return (
           <div className="bg-bg-secondary border border-border rounded-xl px-4 py-3 space-y-3">
             <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Pricing recommendation</span>
@@ -826,6 +894,26 @@ export function MeasureTool({ property }: { property: Property }) {
             </Button>
             {savedSqft != null && <span className="text-xs text-ink-faint">Saved: {savedSqft.toLocaleString()} sq ft</span>}
           </div>
+        </div>
+      )}
+      </>)}
+
+      {/* Measurement-focused actions (standalone Measurements page). Saving keeps
+          the boundary permanently; a quote is one tap away when ready to price. */}
+      {!showPricing && totalSqft > 0 && (
+        <div className="bg-bg-secondary border border-accent/30 rounded-xl px-4 py-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Measured area</span>
+            <span className="text-2xl font-bold text-accent">{totalSqft.toLocaleString()} ft²</span>
+          </div>
+          <Button onClick={save} loading={saving} size="lg" className="w-full">
+            <Check className="w-4 h-4" /> Save measurement
+          </Button>
+          <button type="button" onClick={() => createQuote()} disabled={creating}
+            className="w-full text-center text-sm font-medium text-accent hover:underline disabled:opacity-50">
+            Create a quote from this measurement →
+          </button>
+          {savedSqft != null && <p className="text-center text-xs text-ink-faint">Saved: {savedSqft.toLocaleString()} sq ft</p>}
         </div>
       )}
 

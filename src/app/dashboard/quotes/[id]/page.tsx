@@ -72,7 +72,9 @@ export default function QuoteDetailPage() {
 
   useEffect(() => {
     async function load() {
-      const { data: { user } } = await supabase.auth.getUser()
+      // Local session read — no auth round-trip before the batch below.
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
       const [qRes, svcRes, cRes, tRes, tierRes, sRes] = await Promise.all([
         supabase.from('quotes').select('*').eq('id', id).eq('user_id', user!.id).single(),
         supabase.from('quote_services').select('*').eq('quote_id', id).order('sort_order'),

@@ -9,6 +9,7 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { CHANNELS, channel as channelDef } from '@/lib/marketing/channels'
 import { listPieces, toggleFavorite, duplicatePiece, setArchived } from '@/lib/marketing/library'
+import { captionFor, parseHashtags } from '@/lib/marketing/publishQueue'
 import { cn } from '@/lib/utils'
 import { Search, Star, Copy, Check, ExternalLink, CopyPlus, Archive, ArchiveRestore, Pencil, LayoutGrid, X } from 'lucide-react'
 import type { ContentPiece, ContentStatus, MarketingCampaign, MarketingChannel, PostFilters, Season } from '@/lib/marketing/types'
@@ -17,6 +18,10 @@ const STATUSES: ContentStatus[] = ['draft', 'scheduled', 'published', 'failed']
 const SEASONS: Season[] = ['spring', 'summer', 'fall', 'winter']
 const STATUS_TONE: Record<ContentStatus, string> = {
   draft: 'text-ink-muted', approved: 'text-sky-300', scheduled: 'text-accent', published: 'text-emerald-300', failed: 'text-red-300',
+}
+// Same words the calendar uses for a content piece ("Posted", not "Published").
+const STATUS_LABEL: Record<ContentStatus, string> = {
+  draft: 'Draft', approved: 'Ready', scheduled: 'Scheduled', published: 'Posted', failed: 'Failed',
 }
 
 export function PostsManager({ userId, initialPieces, initialHasMore, campaigns, initialCampaignId }: {
@@ -120,7 +125,9 @@ export function PostsManager({ userId, initialPieces, initialHasMore, campaigns,
       ) : pieces.length === 0 ? (
         <EmptyState icon={LayoutGrid} title="No posts found" description="Adjust the filters, or generate posts in Compose, Campaigns, or the calendar." />
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        // Dim while a filter/search reload is in flight, so the change registers instead
+        // of the stale list just sitting there.
+        <div className={cn('grid gap-3 sm:grid-cols-2 lg:grid-cols-3 transition-opacity', loading && 'opacity-50')}>
           {pieces.map(p => (
             <PostCard key={p.id} piece={p} campaignName={campaignName(p.campaign_id)} supabase={supabase}
               onFavorite={() => favorite(p)} onDuplicate={() => duplicate(p)} onArchive={() => archive(p)} onUpdate={onLocalUpdate} />
@@ -159,12 +166,11 @@ function PostCard({ piece, campaignName, supabase, onFavorite, onDuplicate, onAr
   const [saving, setSaving] = useState(false)
 
   function copy() {
-    const text = [piece.body, piece.hashtags.map(h => `#${h}`).join(' ')].filter(Boolean).join('\n\n')
-    navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) })
+    navigator.clipboard?.writeText(captionFor(piece)).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) })
   }
   async function save() {
     setSaving(true)
-    const hashtags = Array.from(new Set(tags.split(/[\s,]+/).map(t => t.replace(/^#/, '').trim()).filter(Boolean))).slice(0, 8)
+    const hashtags = parseHashtags(tags)
     const { data } = await supabase.from('content_pieces').update({ title: title.trim() || null, body: body.trim(), hashtags }).eq('id', piece.id).select('*').maybeSingle()
     setSaving(false)
     if (data) { onUpdate(data as ContentPiece); setEditing(false) }
@@ -175,7 +181,7 @@ function PostCard({ piece, campaignName, supabase, onFavorite, onDuplicate, onAr
       <div className="flex items-center gap-2">
         <def.icon className="w-3.5 h-3.5 text-ink-muted shrink-0" />
         <span className="text-xs font-semibold text-ink">{def.label}</span>
-        <span className={cn('text-[10px] capitalize', STATUS_TONE[piece.status])}>· {piece.status}</span>
+        <span className={cn('text-[10px]', STATUS_TONE[piece.status])}>· {STATUS_LABEL[piece.status]}</span>
         <button onClick={onFavorite} className="ml-auto shrink-0" title="Favorite">
           <Star className={cn('w-4 h-4', piece.favorite ? 'fill-amber-400 text-amber-400' : 'text-ink-faint hover:text-ink')} />
         </button>
@@ -202,10 +208,11 @@ function PostCard({ piece, campaignName, supabase, onFavorite, onDuplicate, onAr
       <div className="flex items-center gap-1 flex-wrap pt-1 border-t border-border/60">
         {campaignName && <span className="text-[9px] text-ink-faint truncate max-w-[90px]" title={campaignName}>◆ {campaignName}</span>}
         <div className="ml-auto flex items-center gap-0.5">
-          <IconBtn title="Copy" onClick={copy}>{copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}</IconBtn>
+          <IconBtn title="Copy caption" onClick={copy}>{copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}</IconBtn>
           <IconBtn title="Edit" onClick={() => setEditing(e => !e)}><Pencil className="w-3.5 h-3.5" /></IconBtn>
           <IconBtn title="Duplicate" onClick={onDuplicate}><CopyPlus className="w-3.5 h-3.5" /></IconBtn>
-          <IconBtn title="Open platform" onClick={() => window.open(def.openUrl, '_blank')}><ExternalLink className="w-3.5 h-3.5" /></IconBtn>
+          {/* Copy the caption in the same gesture as opening the platform — one tap to post. */}
+          <IconBtn title="Copy caption & open platform" onClick={() => { copy(); window.open(def.openUrl, '_blank') }}><ExternalLink className="w-3.5 h-3.5" /></IconBtn>
           <IconBtn title={piece.archived_at ? 'Restore' : 'Archive'} onClick={onArchive}>{piece.archived_at ? <ArchiveRestore className="w-3.5 h-3.5" /> : <Archive className="w-3.5 h-3.5" />}</IconBtn>
         </div>
       </div>

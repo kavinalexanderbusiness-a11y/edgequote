@@ -7,10 +7,13 @@ import { Banner } from '@/components/ui/Banner'
 import { ChannelPreview } from './ChannelPreview'
 import { RewriteToolbar } from './RewriteToolbar'
 import { PublishPanel } from './PublishPanel'
+import { downloadForPlatform } from '@/lib/marketing/platformImage'
 import { channel as channelDef } from '@/lib/marketing/channels'
 import { lengthChars } from '@/lib/marketing/prompt'
+import { parseHashtags } from '@/lib/marketing/publishQueue'
+import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
-import { Sparkles, RefreshCw, ImageOff, Lock, Loader2, Gauge } from 'lucide-react'
+import { Sparkles, RefreshCw, ImageOff, Lock, Loader2, Gauge, Pencil, Eye } from 'lucide-react'
 import { DEFAULT_POST_OPTIONS, type ContentPiece, type MarketingCandidate, type MarketingChannel, type PostOptions, type PostText, type QualityScore, type RewriteAction, type RewriteResponse } from '@/lib/marketing/types'
 
 // The deterministic quality score lives on the saved piece's meta.
@@ -23,27 +26,6 @@ function scoreTone(total: number): string {
   if (total >= 85) return 'text-emerald-400'
   if (total >= 72) return 'text-accent'
   return 'text-amber-400'
-}
-
-function parseHashtags(text: string): string[] {
-  return Array.from(new Set(
-    text.split(/[\s,]+/).map(t => t.replace(/^#/, '').trim()).filter(Boolean),
-  )).slice(0, 8)
-}
-
-// Force a real file download even cross-origin (the public bucket allows GET).
-async function downloadImage(url: string, filename: string) {
-  try {
-    const res = await fetch(url)
-    const blob = await res.blob()
-    const obj = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = obj; a.download = filename
-    document.body.appendChild(a); a.click(); a.remove()
-    URL.revokeObjectURL(obj)
-  } catch {
-    window.open(url, '_blank') // fall back to opening it
-  }
 }
 
 export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName, logoUrl, userId, options = DEFAULT_POST_OPTIONS, onDraftChange, onGrantConsent }: {
@@ -113,6 +95,9 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
 
   // Stream the post in live (the "watch it write" path).
   async function runGenerate() {
+    // Regenerating over hand-edited text would wipe it — snapshot first and offer a
+    // one-tap Undo (the app's confirm→undo convention) once the new draft lands.
+    const prior = body.trim() ? { title, body, hashtagsText } : null
     setGenError(null); setStreaming(true); setPolishing(false)
     setTitle(''); setBody(''); setHashtagsText('')
     try {
@@ -157,6 +142,10 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
       if (!await fallbackGenerate()) setGenError('Could not reach the generator. Try again.')
     } finally {
       setStreaming(false); setPolishing(false)
+      if (prior) toast.undo('Replaced your caption.', () => {
+        setTitle(prior.title); setBody(prior.body); setHashtagsText(prior.hashtagsText)
+        persist({ title: prior.title.trim() || null, body: prior.body.trim(), hashtags: parseHashtags(prior.hashtagsText) })
+      })
     }
   }
 
@@ -220,8 +209,16 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
 
   return (
     <div className="space-y-4">
-      {/* Editor */}
-      <div className="space-y-3">
+      {/* Editor — the ONE editable place. Everything below the preview header is
+          a read-only mock, so the caption only ever lives here. */}
+      <div className="space-y-3 rounded-card border border-accent/30 bg-accent/[0.03] p-3">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-bold uppercase tracking-wide text-accent inline-flex items-center gap-1.5">
+            <Pencil className="w-3.5 h-3.5" /> Your caption
+          </span>
+          <span className="text-[11px] text-ink-faint">{def.label}</span>
+        </div>
+        <p className="text-[11px] text-ink-muted -mt-1.5">{def.why}</p>
         {def.usesTitle && (
           <input
             value={title}
@@ -289,16 +286,26 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
         )}
       </div>
 
-      {/* Live preview */}
-      <ChannelPreview
-        ch={ch}
-        businessName={businessName}
-        logoUrl={logoUrl}
-        title={def.usesTitle ? title : null}
-        body={body}
-        hashtags={showHashtagField ? hashtags : []}
-        imageUrl={canUsePhoto ? imageUrl : null}
-      />
+      {/* Live preview — read-only mock of the published post (not editable) */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wide text-ink-muted inline-flex items-center gap-1.5">
+            <Eye className="w-3.5 h-3.5" /> Live preview
+          </span>
+          <span className="text-[11px] text-ink-faint inline-flex items-center gap-1">
+            <Lock className="w-3 h-3" /> Read-only{canUsePhoto ? ` · photo auto-cropped for ${def.label}` : ''}
+          </span>
+        </div>
+        <ChannelPreview
+          ch={ch}
+          businessName={businessName}
+          logoUrl={logoUrl}
+          title={def.usesTitle ? title : null}
+          body={body}
+          hashtags={showHashtagField ? hashtags : []}
+          imageUrl={canUsePhoto ? imageUrl : null}
+        />
+      </div>
 
       {genError && <Banner tone="danger" onDismiss={() => setGenError(null)}>{genError}</Banner>}
 
@@ -328,7 +335,7 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
             ch={ch}
             userId={userId}
             hasPhoto={canUsePhoto}
-            onSavePhoto={canUsePhoto ? () => downloadImage(imageUrl!, `${(candidate.serviceType || 'post').replace(/\s+/g, '-').toLowerCase()}-${ch}.jpg`) : undefined}
+            onSavePhoto={canUsePhoto ? () => downloadForPlatform(imageUrl!, ch, `${(candidate.serviceType || 'post').replace(/\s+/g, '-').toLowerCase()}-${ch}.jpg`) : undefined}
             beforePublish={async () => { await persist({ title: title.trim() || null, body: body.trim(), hashtags }) }}
             onPieceUpdate={p => onDraftChange?.(p)}
           />

@@ -1,6 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
 import { PageHeader } from '@/components/layout/PageHeader'
-import { MarketingSubnav } from '@/components/grow/marketing/MarketingSubnav'
 import { IdeasClient } from '@/components/grow/marketing/IdeasClient'
 import { listCandidates } from '@/lib/marketing/data'
 import { listRecentPieces } from '@/lib/marketing/library'
@@ -57,8 +56,7 @@ export default async function IdeasPage() {
 
   return (
     <div className="space-y-5">
-      <MarketingSubnav />
-      <PageHeader title="Marketing Ideas" description="Timely suggestions and ways to reuse what you’ve already made — based on your jobs, reviews, the season and the weather." />
+      <PageHeader title="Marketing Ideas" description="Timely suggestions and ways to reuse what you’ve already made — from your jobs, reviews, season and weather." />
       <IdeasClient ideas={ideas} pieces={pieces} />
     </div>
   )

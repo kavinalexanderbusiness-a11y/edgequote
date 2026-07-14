@@ -5,6 +5,7 @@ import { sendSms, sendEmail, commsEnabled } from '@/lib/comms/send'
 import { getOrCreateConversation } from '@/lib/comms/conversation'
 import { SKIP_REASON } from '@/lib/comms/skipReasons'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
+import { claimSend, finalizeSend } from '@/lib/comms/idempotency'
 
 // Manual send — fired by an owner action (Day Ops one-tap buttons, the editable
 // scheduler composer, Weather Ops notifications, quote/invoice send). Uses the
@@ -26,6 +27,10 @@ export async function POST(req: NextRequest) {
   // used for the subject, logging, dedupe and the on-my-way stamp.
   const bodyOverride = typeof body.bodyOverride === 'string' ? body.bodyOverride.trim() : ''
   const vars: { eta?: string | number; dateLabel?: string; amount?: string; timeWindow?: string; oldDateLabel?: string; address?: string } = body.vars || {}
+  // Idempotency key: the client generates this once per logical send and reuses it
+  // across retries / concurrent tabs / double-clicks. Optional → legacy callers keep
+  // working. See lib/comms/idempotency.
+  const clientMessageId = (typeof body.clientMessageId === 'string' && body.clientMessageId) ? body.clientMessageId : null
   if (!customerId || !(template in MSG_LABELS)) return NextResponse.json({ error: 'bad request' }, { status: 400 })
 
   const { data: cust } = await supabase.from('customers')
@@ -38,6 +43,15 @@ export async function POST(req: NextRequest) {
   if (body.dedupe && jobId) {
     const { data: prior } = await supabase.from('notification_log').select('id').eq('user_id', user.id).eq('job_id', jobId).eq('template', template).eq('status', 'sent').limit(1)
     if (prior && prior.length) return NextResponse.json({ enabled: commsEnabled(), results: {}, skipped: 'duplicate' })
+  }
+
+  // Reserve this send exactly once BEFORE dispatching any SMS/email (skipped for a
+  // preview, which never sends). A retry / concurrent tab with the same
+  // clientMessageId loses the atomic claim and returns without resending → no
+  // duplicate SMS AND no duplicate email.
+  if (clientMessageId && !body.previewOnly) {
+    const { claimed } = await claimSend(supabase, user.id, clientMessageId, channels.join('+'))
+    if (!claimed) return NextResponse.json({ enabled: commsEnabled(), results: {}, deduped: true })
   }
 
   const { data: bizRow } = await supabase.from('business_settings')
@@ -126,6 +140,7 @@ export async function POST(req: NextRequest) {
   for (const a of attempts) {
     await logSend(supabase, { userId: user.id, customerId, jobId, channel: a.channel, template, status: a.status, detail: a.detail, messageId: a.sent ? messageId : null })
   }
+  await finalizeSend(supabase, user.id, clientMessageId, sentChannels.length ? 'sent' : 'skipped')
 
   return NextResponse.json({ enabled, results, preview: outText, threaded: !!messageId })
 }

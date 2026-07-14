@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { InstallPrompt } from '@/components/pwa/InstallPrompt'
 import { CommandPalette } from '@/components/command/CommandPalette'
+import { OfflineStatus } from '@/components/pwa/OfflineStatus'
 import { Toaster } from '@/components/ui/Toaster'
 import { ConfirmHost } from '@/components/ui/ConfirmHost'
 import { UploadQueueWidget } from '@/components/photos/UploadQueueWidget'
@@ -21,6 +22,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       </main>
       <InstallPrompt />
       <CommandPalette />
+      <OfflineStatus />
       <Toaster />
       <ConfirmHost />
       <UploadQueueWidget />

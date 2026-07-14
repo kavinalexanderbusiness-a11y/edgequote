@@ -21,7 +21,9 @@ export function AcquisitionInsights() {
 
   useEffect(() => {
     async function load() {
-      const { data: { user } } = await supabase.auth.getUser()
+      // Local session read — no auth round-trip before this RLS-scoped query.
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
       const { data } = await supabase
         .from('customers')
         .select('id, name, acquisition_source, referred_by_customer_id')

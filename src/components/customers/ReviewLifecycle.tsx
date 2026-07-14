@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
 import { Customer } from '@/types'
 import { reviewStatus, REVIEW_STATUS_META, REVIEW_SOURCES } from '@/lib/crm/reviews'
+import { newClientMessageId } from '@/lib/comms/idempotency'
 import { formatDate } from '@/lib/utils'
 import { Star, Send, ThumbsDown, RotateCcw, Loader2, Check } from 'lucide-react'
 
@@ -37,10 +38,12 @@ export function ReviewLifecycle({ customer, onChange }: {
 
   async function sendRequest() {
     setSending(true); setSendNote(null)
+    // One id per click → a double-tap can't fire two review requests.
+    const clientMessageId = newClientMessageId()
     try {
       const res = await fetch('/api/comms/send', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ customerId: customer.id, template: 'review_request', channels: ['sms', 'email'] }),
+        body: JSON.stringify({ customerId: customer.id, template: 'review_request', channels: ['sms', 'email'], clientMessageId }),
       })
       const data = await res.json().catch(() => ({}))
       const sent = data?.results && Object.values(data.results).some((r) => (r as { sent?: boolean })?.sent)

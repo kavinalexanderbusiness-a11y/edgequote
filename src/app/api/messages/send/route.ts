@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { sendSms } from '@/lib/comms/send'
 import { getOrCreateConversation } from '@/lib/comms/conversation'
+import { claimSend, finalizeSend } from '@/lib/comms/idempotency'
 
 export const dynamic = 'force-dynamic'
 
@@ -17,7 +18,19 @@ export async function POST(req: NextRequest) {
   const customerId = String(body.customerId || '')
   const text = String(body.body || '').trim()
   const internal = !!body.internal
+  // Idempotency key: the client generates this once per logical send and reuses it
+  // across retries / offline replay / concurrent tabs. Optional → legacy callers are
+  // unaffected. See lib/comms/idempotency.
+  const clientMessageId = (typeof body.clientMessageId === 'string' && body.clientMessageId) ? body.clientMessageId : null
   if (!customerId || !text) return NextResponse.json({ error: 'bad request' }, { status: 400 })
+
+  // Reserve this send exactly once BEFORE any SMS is dispatched. A duplicate request
+  // (retry / offline replay / another tab flushing the same queued op) loses the atomic
+  // claim and returns here WITHOUT resending → no duplicate SMS, no duplicate note bubble.
+  if (clientMessageId) {
+    const { claimed } = await claimSend(supabase, user.id, clientMessageId, internal ? 'internal' : 'sms')
+    if (!claimed) return NextResponse.json({ ok: true, deduped: true })
+  }
 
   // Get-or-create the one conversation per customer (shared, race-safe helper).
   const convoId = await getOrCreateConversation(supabase, user.id, customerId)
@@ -25,6 +38,7 @@ export async function POST(req: NextRequest) {
 
   if (internal) {
     await supabase.from('messages').insert({ user_id: user.id, conversation_id: convoId, customer_id: customerId, direction: 'internal', channel: 'internal', body: text, status: 'note' })
+    await finalizeSend(supabase, user.id, clientMessageId, 'note')
     return NextResponse.json({ ok: true, internal: true })
   }
 
@@ -35,6 +49,7 @@ export async function POST(req: NextRequest) {
   const r = await sendSms(phone, text)
   await supabase.from('messages').insert({ user_id: user.id, conversation_id: convoId, customer_id: customerId, direction: 'outbound', channel: 'sms', body: text, status: r.reason })
   await supabase.from('notification_log').insert({ user_id: user.id, customer_id: customerId, channel: 'sms', template: 'reply', status: r.reason, detail: r.error ?? null })
+  await finalizeSend(supabase, user.id, clientMessageId, r.reason)
 
   const error = r.reason === 'disabled' ? 'SMS isn’t set up yet (add your Twilio keys).' : r.reason === 'error' ? 'The message could not be sent.' : undefined
   return NextResponse.json({ ok: r.sent, reason: r.reason, error })
