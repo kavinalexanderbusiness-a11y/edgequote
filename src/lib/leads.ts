@@ -40,6 +40,8 @@ export interface WebsiteLead {
   frequency: string | null
   yard_condition: string | null
   website_estimated_price: number | null
+  budget: string | null
+  preferred_schedule: string | null
   notes: string | null
 }
 

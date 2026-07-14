@@ -11,6 +11,8 @@ import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { custCacheKey, type CustomerPrefetch } from '@/lib/prefetch'
 import { Customer, Property, Quote, Job, Invoice, JobRecurrence } from '@/types'
+import { WebsiteLead } from '@/lib/leads'
+import { LeadSummary } from '@/components/leads/LeadSummary'
 import { needsFollowUp, daysSince } from '@/lib/followup'
 import { recurrenceLabel, recurringCustomerLabel, buildServicePlans, ServicePlan } from '@/lib/recurrence'
 import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
@@ -92,6 +94,7 @@ export default function CustomerDetailPage() {
   const [jobs, setJobs] = useState<Job[]>([])
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [recurrences, setRecurrences] = useState<JobRecurrence[]>([])
+  const [lead, setLead] = useState<WebsiteLead | null>(null)
   const [extraTimeline, setExtraTimeline] = useState<TimelineEvent[]>([])
   const [seasons, setSeasons] = useState<ServiceSeasons>(DEFAULT_SEASONS)
   const [gstPercent, setGstPercent] = useState(0)
@@ -152,7 +155,7 @@ export default function CustomerDetailPage() {
       // realtime refresh.
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
-      const [cRes, pRes, qRes, jRes, iRes, refRes, recRes, mRes, payRes, srRes, setRes] = await Promise.all([
+      const [cRes, pRes, qRes, jRes, iRes, refRes, recRes, mRes, payRes, srRes, setRes, lRes] = await Promise.all([
         supabase.from('customers').select('*').eq('id', id).eq('user_id', user!.id).single(),
         supabase.from('properties').select('*').eq('customer_id', id).order('is_primary', { ascending: false }),
         supabase.from('quotes').select('*').eq('customer_id', id).order('created_at', { ascending: false }),
@@ -167,6 +170,8 @@ export default function CustomerDetailPage() {
         supabase.from('payments').select('amount, status, kind, method, notes, created_at').eq('customer_id', id),
         supabase.from('service_requests').select('message, created_at').eq('customer_id', id),
         supabase.from('business_settings').select('service_seasons, gst_percent').eq('user_id', user!.id).maybeSingle(),
+        // Newest website lead — the full intake detail (service/address/budget/schedule/contact/source).
+        supabase.from('website_leads').select('*').eq('customer_id', id).order('created_at', { ascending: false }).limit(1).maybeSingle(),
       ])
       // A transient/network error must NOT render as "Customer not found." Only a
       // genuine no-rows result (.single() → PGRST116) means the customer is truly gone.
@@ -186,6 +191,7 @@ export default function CustomerDetailPage() {
       })
 
       if (recRes.data) setRecurrences(recRes.data as JobRecurrence[])
+      setLead((lRes.data as WebsiteLead | null) ?? null)
       setSeasons(settingsToSeasons((setRes.data as { service_seasons: unknown } | null)?.service_seasons))
       setGstPercent(Number((setRes.data as { gst_percent?: number | null } | null)?.gst_percent) || 0)
 
@@ -210,7 +216,9 @@ export default function CustomerDetailPage() {
         }
       }
       for (const sr of (srRes.data as { message: string; created_at: string }[]) || []) {
-        extra.push({ at: sr.created_at, kind: 'portal_request', title: 'Portal service request', sub: (sr.message || '').slice(0, 90), href: '/dashboard/messages' })
+        const msg = sr.message || ''
+        const isLead = /^new .* lead/i.test(msg)
+        extra.push({ at: sr.created_at, kind: 'portal_request', title: isLead ? 'Website lead' : 'Portal service request', sub: msg.slice(0, 160), href: '/dashboard/messages' })
       }
       setExtraTimeline(extra)
 
@@ -546,6 +554,10 @@ export default function CustomerDetailPage() {
             customerId={customer.id} customerName={customer.name} />
         </CardBody>
       </Card>
+
+      {/* Website lead — the full intake detail (service · address · budget · schedule
+          · contact · source), shown identically to the Messages inbox card. */}
+      {lead && <LeadSummary lead={lead} />}
 
       {/* Open items — "what needs action for this customer" comes FIRST, right under
           the identity card (it was buried five cards deep). */}

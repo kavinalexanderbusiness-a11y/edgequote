@@ -475,14 +475,15 @@ export interface Payment {
 
 // Manual payment methods the owner can record (Stripe rows come from the webhook;
 // 'card' = a card charged outside EdgeQuote, e.g. a terminal or another processor).
+// The picker offers Card / E-transfer / Cash — the three ways customers actually pay.
+// Retired methods (cheque/debit/other) still LABEL correctly on legacy rows via the
+// fallback in paymentMethodLabel; 'credit' stays for labeling but is filtered out of
+// the picker (customer credit is applied by the ledger, never chosen here).
 export const PAYMENT_METHODS: { value: string; label: string }[] = [
-  { value: 'cash', label: 'Cash' },
+  { value: 'card', label: 'Card' },
   { value: 'etransfer', label: 'E-transfer' },
-  { value: 'cheque', label: 'Cheque' },
-  { value: 'card', label: 'Credit card' },
-  { value: 'debit', label: 'Debit' },
+  { value: 'cash', label: 'Cash' },
   { value: 'credit', label: 'Customer credit' },
-  { value: 'other', label: 'Other' },
 ]
 
 // Human label for any payment method value (ledger rows may also carry 'stripe'
@@ -748,6 +749,7 @@ export interface BusinessSettings {
   payment_fee_strategy: PaymentFeeStrategy | null
   fee_recovery_percent: number | null        // markup % baked into new quotes
   etransfer_discount_percent: number | null  // future: % off for non-card pay (off by default)
+  etransfer_email: string | null             // Interac e-transfer recipient shown in the portal's "Ways to pay"
   gst_percent: number | null                 // GST shown/charged only when > 0 (Alberta = 5 when registered)
   // ── Recurring AutoPay ── business-wide default charge mode (a customer may
   // override). 'auto' = charge a saved card the moment a recurring visit completes;
@@ -838,6 +840,7 @@ export interface BusinessSettingsFormValues {
   payment_fee_strategy: PaymentFeeStrategy
   fee_recovery_percent: number
   etransfer_discount_percent: number
+  etransfer_email: string
   gst_percent: number
   autopay_charge_mode: 'auto' | 'manual_review'
   autopay_variance_pct: number

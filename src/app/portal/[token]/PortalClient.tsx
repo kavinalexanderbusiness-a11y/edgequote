@@ -15,7 +15,7 @@ import { receiptNumberFor } from '@/lib/payments/ledger'
 import {
   Home, History, Image as ImageIcon, FileText, Receipt, MessageSquarePlus, Check, Loader2,
   Phone, Globe, Mail, Leaf, CheckCircle2, Navigation, Play, CalendarClock, Repeat, MapPin, Ruler, Sparkles, CreditCard, MessageSquare,
-  Eye, Download, Printer, FolderOpen, Search, ArrowUpDown, Activity, Wallet, Star, Zap, ShieldCheck, Trash2, X,
+  Eye, Download, Printer, FolderOpen, Search, ArrowUpDown, Activity, Wallet, Star, Zap, ShieldCheck, Trash2, X, Copy,
 } from 'lucide-react'
 
 // ── Premium Customer Portal ─────────────────────────────────────────────────────
@@ -33,7 +33,7 @@ interface PortalPayment { id: string; amount: number; status: string; paid_at: s
 interface PortalCard { brand: string | null; last4: string | null; exp_month: number | null; exp_year: number | null }
 interface PortalData {
   customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null; city: string | null; sms_opt_in?: boolean | null; email_opt_in?: boolean | null; reviewed_at?: string | null; autopay_enabled?: boolean | null }
-  business: { company_name: string | null; owner_name: string | null; phone: string | null; email_primary: string | null; email_secondary: string | null; website: string | null; logo_url: string | null; logo_scale: number | null; base_address: string | null; terms_text: string | null; review_url?: string | null; gst_percent?: number | null } | null
+  business: { company_name: string | null; owner_name: string | null; phone: string | null; email_primary: string | null; email_secondary: string | null; website: string | null; logo_url: string | null; logo_scale: number | null; base_address: string | null; terms_text: string | null; review_url?: string | null; etransfer_email?: string | null; gst_percent?: number | null } | null
   property: { address: string | null; city: string | null; province: string | null; lawn_sqft: number | null; fence_length: number | null; neighborhood: string | null; notes: string | null } | null
   quotes: PortalQuote[]; invoices: PortalInvoice[]; jobs: PortalJob[]; recurrences: PortalRec[]; photos: PortalPhoto[]; payments: PortalPayment[]
   payment_method?: PortalCard | null
@@ -863,7 +863,6 @@ function paymentMethodLabel(provider: string): string {
     case 'stripe': return 'Card'
     case 'etransfer': return 'E-transfer'
     case 'cash': return 'Cash'
-    case 'cheque': return 'Cheque'
     default: return provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : 'Payment'
   }
 }
@@ -888,6 +887,16 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
   const receipts = payments.filter(p => p.kind !== 'credit')
   const totalPaid = receipts.reduce((s, p) => s + Number(p.amount || 0), 0)
   const availableCredit = Math.round(payments.filter(p => p.kind === 'credit').reduce((s, p) => s + Number(p.amount || 0), 0) * 100) / 100
+
+  // ── Ways to pay ── copy-to-clipboard for the e-transfer details. The recipient
+  // is the business-configured Interac email (Settings → Payments & Fees), falling
+  // back to the primary business email so there's almost always something to show.
+  const [copied, setCopied] = useState<string | null>(null)
+  async function copyText(key: string, text: string) {
+    try { await navigator.clipboard.writeText(text); setCopied(key); setTimeout(() => setCopied(null), 2000) } catch { /* clipboard blocked — button just no-ops */ }
+  }
+  const etransferEmail = (business?.etransfer_email || business?.email_primary || '').trim()
+  const owingNums = invoices.filter(i => ['sent', 'unpaid', 'partial', 'overdue'].includes(i.status)).map(i => i.invoice_number)
   return (
     <div className="space-y-3">
       {paymentsEnabled && <AutoPayCard token={token} card={card} autopayEnabled={autopayEnabled} onChanged={onChanged} />}
@@ -907,6 +916,56 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
           <p className={cn('text-lg font-bold mt-1', outstanding > 0 ? 'text-amber-400' : 'text-emerald-400')}>{formatCurrency(outstanding)}</p>
         </div>
       </div>
+
+      {/* ── Ways to pay ── Card / E-transfer / Cash, with copy-ready e-transfer details */}
+      <div className="rounded-card border border-border bg-bg-secondary p-4 space-y-3">
+        <p className="text-sm font-semibold text-ink flex items-center gap-2"><Wallet className="w-4 h-4 text-accent" /> Ways to pay</p>
+
+        <div className="flex items-start gap-3">
+          <span className="text-lg leading-none mt-0.5" aria-hidden>💳</span>
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-ink">Card</p>
+            <p className="text-xs text-ink-muted">{paymentsEnabled ? 'Pay any invoice securely online with the Pay button above.' : 'Ask us for a secure card payment link.'}</p>
+          </div>
+        </div>
+
+        <div className="flex items-start gap-3">
+          <span className="text-lg leading-none mt-0.5" aria-hidden>🏦</span>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-ink">Interac e-transfer</p>
+            {etransferEmail ? (
+              <div className="mt-1 space-y-2">
+                {business?.company_name && <p className="text-xs text-ink-muted">Recipient: <span className="text-ink">{business.company_name}</span></p>}
+                <p className="text-xs text-ink-muted">Send payment to: <span className="text-ink font-medium break-all">{etransferEmail}</span></p>
+                {owingNums.length > 0 && <p className="text-xs text-ink-faint">Please include your invoice number ({owingNums[0]}) in the message so we can match your payment.</p>}
+                <div className="flex flex-wrap gap-2 pt-0.5">
+                  <button type="button" onClick={() => copyText('email', etransferEmail)}
+                    className="inline-flex items-center gap-1.5 text-xs font-medium rounded-lg border border-border-strong bg-bg-tertiary px-2.5 py-1.5 text-ink hover:border-accent transition-colors">
+                    {copied === 'email' ? <><Check className="w-3.5 h-3.5 text-emerald-400" /> Copied</> : <><Mail className="w-3.5 h-3.5 text-ink-faint" /> Copy email</>}
+                  </button>
+                  {outstanding > 0 && (
+                    <button type="button" onClick={() => copyText('amount', outstanding.toFixed(2))}
+                      className="inline-flex items-center gap-1.5 text-xs font-medium rounded-lg border border-border-strong bg-bg-tertiary px-2.5 py-1.5 text-ink hover:border-accent transition-colors">
+                      {copied === 'amount' ? <><Check className="w-3.5 h-3.5 text-emerald-400" /> Copied</> : <><Copy className="w-3.5 h-3.5 text-ink-faint" /> Copy amount ({formatCurrency(outstanding)})</>}
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-ink-muted">Contact us and we'll send you the e-transfer details.</p>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-start gap-3">
+          <span className="text-lg leading-none mt-0.5" aria-hidden>💵</span>
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-ink">Cash</p>
+            <p className="text-xs text-ink-muted">Pay in person at your next visit — we'll record it and send your receipt.</p>
+          </div>
+        </div>
+      </div>
+
       {receipts.length === 0 ? (
         <Empty text="No payments yet. Your payments will appear here." />
       ) : receipts.map(p => {
