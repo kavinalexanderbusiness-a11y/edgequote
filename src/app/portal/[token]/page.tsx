@@ -903,23 +903,26 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
       ) : receipts.map(p => {
         const inv = p.invoice_id ? invById.get(p.invoice_id) : null
         return (
-          <div key={p.id} className="rounded-card border border-border bg-bg-secondary p-4 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3 min-w-0">
-              <div className={cn('w-9 h-9 rounded-lg border flex items-center justify-center shrink-0', Number(p.amount) < 0 ? 'border-red-500/25 bg-red-500/10' : 'border-emerald-500/25 bg-emerald-500/10')}><CheckCircle2 className={cn('w-4 h-4', Number(p.amount) < 0 ? 'text-red-400' : 'text-emerald-400')} /></div>
-              <div className="min-w-0">
-                <p className="text-sm font-semibold text-ink">{Number(p.amount) < 0 ? '−' : ''}{formatCurrency(Math.abs(Number(p.amount)))}</p>
-                <p className="text-xs text-ink-muted truncate">{p.paid_at ? formatDate(p.paid_at) : formatDate(p.created_at)}{inv ? ` · ${inv.invoice_number}` : ''} · {Number(p.amount) < 0 ? 'Refund' : paymentMethodLabel(p.provider)}</p>
+          <div key={p.id} className="rounded-card border border-border bg-bg-secondary p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+            {/* Details + status — the badge stays with the details on every width. */}
+            <div className="flex items-center justify-between gap-3 min-w-0 flex-1">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className={cn('w-9 h-9 rounded-lg border flex items-center justify-center shrink-0', Number(p.amount) < 0 ? 'border-red-500/25 bg-red-500/10' : 'border-emerald-500/25 bg-emerald-500/10')}><CheckCircle2 className={cn('w-4 h-4', Number(p.amount) < 0 ? 'text-red-400' : 'text-emerald-400')} /></div>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-ink">{Number(p.amount) < 0 ? '−' : ''}{formatCurrency(Math.abs(Number(p.amount)))}</p>
+                  <p className="text-xs text-ink-muted truncate">{p.paid_at ? formatDate(p.paid_at) : formatDate(p.created_at)}{inv ? ` · ${inv.invoice_number}` : ''} · {Number(p.amount) < 0 ? 'Refund' : paymentMethodLabel(p.provider)}</p>
+                </div>
               </div>
+              <span className={cn('shrink-0 text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', Number(p.amount) < 0 ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10')}>{Number(p.amount) < 0 ? 'Refunded' : 'Paid'}</span>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', Number(p.amount) < 0 ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10')}>{Number(p.amount) < 0 ? 'Refunded' : 'Paid'}</span>
-              {inv && (
-                <button onClick={() => downloadReceipt(p, inv)} disabled={receiptBusy === p.id}
-                  className="text-ink-faint hover:text-accent transition-colors p-1.5 -m-1" aria-label={Number(p.amount) < 0 ? 'Download refund receipt' : 'Download receipt'} title={Number(p.amount) < 0 ? 'Download refund receipt (PDF)' : 'Download receipt (PDF)'}>
-                  {receiptBusy === p.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                </button>
-              )}
-            </div>
+            {/* Receipt download is a PRIMARY action — labeled button, full-width on
+                mobile, right-aligned on desktop. One per payment row. */}
+            {inv && (
+              <Button size="sm" variant="secondary" className="w-full sm:w-auto shrink-0"
+                onClick={() => downloadReceipt(p, inv)} loading={receiptBusy === p.id}>
+                <FileText className="w-4 h-4" /> Download {Number(p.amount) < 0 ? 'Refund ' : ''}Receipt
+              </Button>
+            )}
           </div>
         )
       })}

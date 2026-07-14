@@ -157,6 +157,13 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
     onChanged()
   }
 
+  // Nothing to show, nothing to do → render nothing at all. An unpaid invoice
+  // with no ledger rows gets the Record-payment action but never an empty
+  // receipt area; a cancelled invoice with no history adds zero chrome.
+  const canRecord = invoice.status !== 'paid' && invoice.status !== 'cancelled' && balance > 0
+  const hasContent = payments.length > 0 || paid > 0 || balance !== total || overpaid > 0 || canRecord || !!lastPayment
+  if (!hasContent) return null
+
   return (
     <div className="mt-3 pt-3 border-t border-border space-y-2.5">
       {/* Summary — only once money is involved (drafts/unpaid stay quiet) */}
@@ -183,7 +190,8 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
                   <span className={`font-semibold ${negative ? 'text-red-400' : 'text-emerald-400'}`}>
                     {negative ? '−' : ''}{formatCurrency(Math.abs(Number(p.amount)))}
                   </span>
-                  <span className="text-ink-faint"> · {new Date(p.paid_at || p.created_at).toLocaleDateString()} · {negative ? 'Refund' : paymentMethodLabel(p.method || p.provider)}</span>
+                  <span className="text-ink-faint"> · {negative ? 'Refund' : paymentMethodLabel(p.method || p.provider)} · {new Date(p.paid_at || p.created_at).toLocaleDateString()}</span>
+                  <span className="block font-mono text-[10px] text-ink-faint mt-0.5">{receiptNumberFor(p.id)}</span>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   <button onClick={() => downloadRowReceipt(p)} disabled={rowBusy === p.id}
@@ -192,6 +200,13 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
                     title={`Download ${negative ? 'refund receipt' : 'receipt'} ${receiptNumberFor(p.id)}`}>
                     <FileDown className="w-3.5 h-3.5" />
                   </button>
+                  {invoice.customers?.phone && (
+                    <button onClick={() => sendReceipt(p, 'sms')} disabled={rowBusy === p.id || sendingReceipt !== null}
+                      className="p-1.5 text-ink-faint hover:text-accent transition-colors"
+                      aria-label="Text this receipt to the customer" title={`Text ${negative ? 'refund receipt' : 'receipt'} ${receiptNumberFor(p.id)} to the customer`}>
+                      <MessageSquare className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                   {revertable && (
                     <button onClick={() => revertPayment(p)} disabled={rowBusy === p.id}
                       className="p-1.5 text-ink-faint hover:text-red-400 transition-colors"
@@ -226,7 +241,7 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
       )}
 
       {/* Actions */}
-      {invoice.status !== 'paid' && balance > 0 && (
+      {canRecord && (
         <div className="flex flex-wrap items-center gap-2">
           <Button size="sm" variant="secondary" onClick={() => { setAmount(balance > 0 ? String(balance) : ''); setOpen(o => !o) }}>
             <Plus className="w-3.5 h-3.5" /> Record payment
