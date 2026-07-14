@@ -93,6 +93,21 @@ export function DecisionSummary({
           </div>
         </div>
 
+        {/* Why this recommendation? — the top signals behind the grade, straight
+            from the SAME engine (decision.reasons; presentation only). Positive
+            drivers lead; a weak verdict honestly leads with what's dragging it. */}
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint">Why this recommendation?</p>
+          <ul className="mt-1 space-y-0.5">
+            {[...d.reasons].sort((x, y) => Number(y.good) - Number(x.good)).slice(0, 4).map((r, i) => (
+              <li key={i} className="text-[11px] text-ink-muted flex items-center gap-1.5">
+                <span className={cn('font-bold shrink-0', r.good ? 'text-emerald-400' : 'text-amber-400')}>{r.good ? '✓' : '✗'}</span>
+                {r.text}
+              </li>
+            ))}
+          </ul>
+        </div>
+
         {/* Q4 frequency + Q2 charge, front and centre — the plan to pitch */}
         <div>
           <div className="mb-2">
