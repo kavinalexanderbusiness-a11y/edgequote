@@ -55,13 +55,14 @@ export async function GET(req: NextRequest) {
   const { data: campaignRows } = await supabase.from('crm_campaigns').select('*').eq('enabled', true)
   const campaigns = (campaignRows as CampaignRow[]) || []
 
-  // Per-owner business info cache (company name, review link, custom templates).
-  const bizCache: Record<string, { name: string; templates: Partial<Record<MsgType, string>> | null; reviewUrl: string | null }> = {}
+  // Per-owner business info cache (company name, review link, custom templates,
+  // email-shell branding).
+  const bizCache: Record<string, { name: string; templates: Partial<Record<MsgType, string>> | null; reviewUrl: string | null; logoUrl: string | null; website: string | null; phone: string | null }> = {}
   async function bizInfo(userId: string) {
     if (bizCache[userId]) return bizCache[userId]
-    const { data } = await supabase.from('business_settings').select('company_name, review_url, message_templates').eq('user_id', userId).maybeSingle()
-    const d = data as { company_name: string | null; review_url: string | null; message_templates: Partial<Record<MsgType, string>> | null } | null
-    return (bizCache[userId] = { name: d?.company_name || 'Edge Property Services', templates: d?.message_templates ?? null, reviewUrl: d?.review_url ?? null })
+    const { data } = await supabase.from('business_settings').select('company_name, phone, website, logo_url, review_url, message_templates').eq('user_id', userId).maybeSingle()
+    const d = data as { company_name: string | null; phone: string | null; website: string | null; logo_url: string | null; review_url: string | null; message_templates: Partial<Record<MsgType, string>> | null } | null
+    return (bizCache[userId] = { name: d?.company_name || 'Edge Property Services', templates: d?.message_templates ?? null, reviewUrl: d?.review_url ?? null, logoUrl: d?.logo_url ?? null, website: d?.website ?? null, phone: d?.phone ?? null })
   }
 
   let processed = 0, sent = 0
@@ -131,6 +132,7 @@ export async function GET(req: NextRequest) {
       const portalLink = needsPortal ? (await ensurePortalToken(supabase, camp.user_id, c.id).then(t => t ? portalUrl(t) : undefined)) : undefined
       const rendered = renderMessage(templateKey, customOverride, {
         firstName: c.name, businessName: biz.name, reviewLink: biz.reviewUrl || undefined, portalLink,
+        directPhone: biz.phone || undefined, logoUrl: biz.logoUrl || undefined, website: biz.website || undefined,
       })
       const res = await dispatchToCustomer(supabase, {
         userId: camp.user_id,

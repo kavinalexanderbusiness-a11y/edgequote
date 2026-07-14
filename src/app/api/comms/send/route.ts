@@ -55,8 +55,8 @@ export async function POST(req: NextRequest) {
   }
 
   const { data: bizRow } = await supabase.from('business_settings')
-    .select('company_name, phone, review_url, message_templates').eq('user_id', user.id).maybeSingle()
-  const biz = bizRow as { company_name: string | null; phone: string | null; review_url: string | null; message_templates: Partial<Record<MsgType, string>> | null } | null
+    .select('company_name, phone, website, logo_url, review_url, message_templates').eq('user_id', user.id).maybeSingle()
+  const biz = bizRow as { company_name: string | null; phone: string | null; website: string | null; logo_url: string | null; review_url: string | null; message_templates: Partial<Record<MsgType, string>> | null } | null
 
   // "On my way" also stamps the job so the customer portal can show a live status.
   if (template === 'on_my_way' && jobId) {
@@ -79,6 +79,8 @@ export async function POST(req: NextRequest) {
     oldDateLabel: vars.oldDateLabel,
     address: vars.address,
     directPhone: biz?.phone || undefined,
+    logoUrl: biz?.logo_url || undefined,
+    website: biz?.website || undefined,
   }
   const rendered = renderMessage(template, biz?.message_templates, msgVars)
   // The text we actually send: the owner's edit (or a caller-supplied body such

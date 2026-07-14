@@ -35,12 +35,12 @@ export async function GET(req: NextRequest) {
 
   const tomorrow = format(addDays(new Date(), 1), 'yyyy-MM-dd')
   const yesterday = format(addDays(new Date(), -1), 'yyyy-MM-dd')
-  const bizCache: Record<string, { name: string; templates: Partial<Record<MsgType, string>> | null; reviewUrl: string | null; automations: Automations }> = {}
+  const bizCache: Record<string, { name: string; templates: Partial<Record<MsgType, string>> | null; reviewUrl: string | null; logoUrl: string | null; website: string | null; phone: string | null; automations: Automations }> = {}
   async function bizInfo(userId: string) {
     if (bizCache[userId]) return bizCache[userId]
-    const { data } = await supabase.from('business_settings').select('company_name, review_url, message_templates, automations').eq('user_id', userId).maybeSingle()
-    const d = data as { company_name: string | null; review_url: string | null; message_templates: Partial<Record<MsgType, string>> | null; automations: unknown } | null
-    return (bizCache[userId] = { name: d?.company_name || 'Edge Property Services', templates: d?.message_templates ?? null, reviewUrl: d?.review_url ?? null, automations: resolveAutomations(d?.automations) })
+    const { data } = await supabase.from('business_settings').select('company_name, phone, website, logo_url, review_url, message_templates, automations').eq('user_id', userId).maybeSingle()
+    const d = data as { company_name: string | null; phone: string | null; website: string | null; logo_url: string | null; review_url: string | null; message_templates: Partial<Record<MsgType, string>> | null; automations: unknown } | null
+    return (bizCache[userId] = { name: d?.company_name || 'Edge Property Services', templates: d?.message_templates ?? null, reviewUrl: d?.review_url ?? null, logoUrl: d?.logo_url ?? null, website: d?.website ?? null, phone: d?.phone ?? null, automations: resolveAutomations(d?.automations) })
   }
   async function alreadySent(userId: string, jobId: string, template: string): Promise<boolean> {
     // Only a SUCCESSFUL prior send blocks a resend — otherwise a failed attempt
@@ -62,7 +62,7 @@ export async function GET(req: NextRequest) {
       if (template === 'review_request' && (c.reviewed_at || c.review_declined_at)) continue  // already reviewed or opted out — don't ask again
       if (!prefAllows(c.message_prefs, template)) continue  // customer declined this category of message
       const token = await ensurePortalToken(supabase, j.user_id, j.customer_id)
-      const msg = renderMessage(template, info.templates, { firstName: c.name, businessName: info.name, dateLabel, portalLink: token ? portalUrl(token) : undefined, reviewLink: info.reviewUrl || undefined })
+      const msg = renderMessage(template, info.templates, { firstName: c.name, businessName: info.name, dateLabel, portalLink: token ? portalUrl(token) : undefined, reviewLink: info.reviewUrl || undefined, directPhone: info.phone || undefined, logoUrl: info.logoUrl || undefined, website: info.website || undefined })
       if (c.sms_opt_in && c.phone) { const r = await sendSms(c.phone, msg.sms); await supabase.from('notification_log').insert({ user_id: j.user_id, customer_id: j.customer_id, job_id: j.id, channel: 'sms', template, status: r.reason, detail: r.error ?? null }); if (r.sent) sent++ }
       if (c.email_opt_in && c.email) { const r = await sendEmail(c.email, msg.subject, msg.html, msg.text); await supabase.from('notification_log').insert({ user_id: j.user_id, customer_id: j.customer_id, job_id: j.id, channel: 'email', template, status: r.reason, detail: r.error ?? null }); if (r.sent) sent++ }
     }

@@ -307,6 +307,9 @@ export interface MsgVars {
   oldDateLabel?: string
   address?: string
   directPhone?: string
+  // Email-shell branding — straight from Business Settings (logo_url / website).
+  logoUrl?: string
+  website?: string
 }
 
 export interface RenderedMessage { sms: string; subject: string; html: string; text: string }
@@ -340,8 +343,35 @@ export function renderBody(rawBody: string, vars: MsgVars, subject: string): Ren
   const raw = interpolate(rawBody, vars)
   // SMS/plain: strip the **bold** markers. Email: render them as <strong>.
   const sms = raw.replace(/\*\*(.+?)\*\*/g, '$1')
-  const htmlBody = raw.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>')
-  const html = `<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;font-size:15px;line-height:1.55;color:#1A2333">${htmlBody}</div>`
+  const htmlBody = raw
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    // Bare URLs (portal / quote / review links) become real, tappable links —
+    // brand-toned, and break-anywhere so long tokens never overflow on phones.
+    .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" style="color:#0B8C68;font-weight:600;text-decoration:underline;word-break:break-all">$1</a>')
+    .replace(/\n/g, '<br>')
+  // One email shell for EVERY message the app sends (templates, owner-edited
+  // sends, receipts): the business logo (when configured) above the business
+  // name, a quiet centered card, and a contact footer — email-safe inline CSS
+  // only. Branding values come straight from Business Settings, threaded in via
+  // MsgVars by the server senders; nothing is duplicated here.
+  const business = vars.businessName || 'Your service provider'
+  const logo = (vars.logoUrl || '').trim()
+  const header = `${logo ? `<img src="${logo}" alt="${business}" style="display:block;max-height:44px;max-width:200px;margin:0 0 6px" />\n    ` : ''}<p style="margin:0 0 10px;padding:0;font-size:13px;font-weight:700;letter-spacing:.02em;color:#5B6672">${business}</p>`
+  const site = (vars.website || '').trim()
+  const siteHref = site ? (site.startsWith('http') ? site : `https://${site}`) : ''
+  const contactBits = [
+    (vars.directPhone || '').trim(),
+    site ? `<a href="${siteHref}" style="color:#5B6672;text-decoration:underline">${site.replace(/^https?:\/\//, '')}</a>` : '',
+  ].filter(Boolean).join(' &nbsp;·&nbsp; ')
+  const footer = `${contactBits ? `<p style="margin:12px 0 0;padding:0 6px;font-size:12px;line-height:1.5;color:#8A94A0">${business} &nbsp;·&nbsp; ${contactBits}</p>` : ''}
+    <p style="margin:${contactBits ? '4px' : '12px'} 0 0;padding:0 6px;font-size:12px;line-height:1.5;color:#8A94A0">Reply directly to this email if you have any questions.</p>`
+  const html = `<div style="background:#F4F6F5;padding:24px 12px;font-family:system-ui,'Segoe UI',Arial,sans-serif">
+  <div style="max-width:560px;margin:0 auto">
+    <div style="padding:0 6px">${header}</div>
+    <div style="background:#FFFFFF;border:1px solid #E4E8E6;border-radius:12px;padding:24px 26px;font-size:15px;line-height:1.65;color:#1A2333">${htmlBody}</div>
+    ${footer}
+  </div>
+</div>`
   return { sms, subject, html, text: sms }
 }
 
