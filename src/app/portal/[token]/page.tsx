@@ -34,7 +34,7 @@ interface PortalPayment { id: string; amount: number; status: string; paid_at: s
 interface PortalCard { brand: string | null; last4: string | null; exp_month: number | null; exp_year: number | null }
 interface PortalData {
   customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null; city: string | null; sms_opt_in?: boolean | null; email_opt_in?: boolean | null; reviewed_at?: string | null; autopay_enabled?: boolean | null }
-  business: { company_name: string | null; owner_name: string | null; phone: string | null; email_primary: string | null; email_secondary: string | null; website: string | null; logo_url: string | null; logo_scale: number | null; base_address: string | null; terms_text: string | null; review_url?: string | null; gst_percent?: number | null } | null
+  business: { company_name: string | null; owner_name: string | null; phone: string | null; email_primary: string | null; email_secondary: string | null; website: string | null; logo_url: string | null; logo_scale: number | null; base_address: string | null; terms_text: string | null; review_url?: string | null; gst_percent?: number | null; etransfer_email?: string | null } | null
   property: { address: string | null; city: string | null; province: string | null; lawn_sqft: number | null; fence_length: number | null; neighborhood: string | null; notes: string | null } | null
   quotes: PortalQuote[]; invoices: PortalInvoice[]; jobs: PortalJob[]; recurrences: PortalRec[]; photos: PortalPhoto[]; payments: PortalPayment[]
   payment_method?: PortalCard | null
@@ -876,11 +876,70 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
   const invById = new Map(invoices.map(i => [i.id, i]))
   // Receipts (money movements) vs the customer-credit ledger — kept apart so totals
   // and history stay honest.
+  // Copy-to-clipboard with a brief confirmation — for the e-transfer details.
+  const [copied, setCopied] = useState<string | null>(null)
+  async function copyText(key: string, text: string) {
+    try { await navigator.clipboard.writeText(text); setCopied(key); setTimeout(() => setCopied(null), 2000) } catch { /* ignore */ }
+  }
+  const etransferEmail = (business?.etransfer_email || '').trim()
+  // Which invoice(s) an e-transfer should reference — exact number when there's
+  // one owing invoice, generic guidance when several.
+  const owingNums = invoices.filter(i => i.status === 'unpaid' || i.status === 'sent' || i.status === 'partial').map(i => i.invoice_number)
   const receipts = payments.filter(p => p.kind !== 'credit')
   const totalPaid = receipts.reduce((s, p) => s + Number(p.amount || 0), 0)
   const availableCredit = Math.round(payments.filter(p => p.kind === 'credit').reduce((s, p) => s + Number(p.amount || 0), 0) * 100) / 100
   return (
     <div className="space-y-3">
+      {/* ── Ways to pay — Card / E-transfer / Cash (cheque retired). E-transfer
+          details come from Business Settings (one source of truth). ── */}
+      <div className="rounded-card border border-border bg-bg-secondary p-4 space-y-3">
+        <p className="text-[10px] uppercase tracking-wide text-ink-faint font-semibold">Ways to pay</p>
+        <div className="flex items-start gap-3">
+          <span className="text-lg leading-none" aria-hidden>💳</span>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-ink">Card</p>
+            <p className="text-xs text-ink-muted">{paymentsEnabled ? 'Pay any invoice securely online with the Pay button.' : 'Ask us for a secure card payment link.'}</p>
+          </div>
+        </div>
+        <div className="flex items-start gap-3 border-t border-border pt-3">
+          <span className="text-lg leading-none" aria-hidden>🏦</span>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold text-ink">E-transfer</p>
+            {etransferEmail ? (
+              <>
+                <p className="text-xs text-ink-muted">Recipient: <span className="font-medium text-ink">{business?.company_name || 'Your service provider'}</span></p>
+                <p className="text-xs text-ink-muted mt-1">Send payment to:</p>
+                <p className="text-sm font-semibold text-accent break-all">{etransferEmail}</p>
+                {owingNums.length === 1 && (
+                  <p className="text-xs text-ink-muted mt-1">Please include invoice number <span className="font-semibold text-ink">{owingNums[0]}</span> in the e-transfer message.</p>
+                )}
+                {owingNums.length > 1 && (
+                  <p className="text-xs text-ink-muted mt-1">Please include your invoice number (e.g. <span className="font-semibold text-ink">{owingNums[0]}</span>) in the e-transfer message.</p>
+                )}
+                <div className="flex flex-wrap gap-2 mt-2">
+                  <Button size="sm" variant="secondary" onClick={() => copyText('email', etransferEmail)}>
+                    {copied === 'email' ? <Check className="w-3.5 h-3.5" /> : null} {copied === 'email' ? 'Copied' : 'Copy email'}
+                  </Button>
+                  {outstanding > 0 && (
+                    <Button size="sm" variant="secondary" onClick={() => copyText('amount', outstanding.toFixed(2))}>
+                      {copied === 'amount' ? <Check className="w-3.5 h-3.5" /> : null} {copied === 'amount' ? 'Copied' : `Copy amount (${formatCurrency(outstanding)})`}
+                    </Button>
+                  )}
+                </div>
+              </>
+            ) : (
+              <p className="text-xs text-amber-400">E-transfer email not configured — set it in Settings → Payments &amp; Fees.</p>
+            )}
+          </div>
+        </div>
+        <div className="flex items-start gap-3 border-t border-border pt-3">
+          <span className="text-lg leading-none" aria-hidden>💵</span>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-ink">Cash</p>
+            <p className="text-xs text-ink-muted">Pay in person at your next visit — we&rsquo;ll record it and send your receipt.</p>
+          </div>
+        </div>
+      </div>
       {paymentsEnabled && <AutoPayCard token={token} card={card} autopayEnabled={autopayEnabled} onChanged={onChanged} />}
       {availableCredit > 0 && (
         <div className="rounded-card border border-accent/25 bg-accent/[0.06] p-3.5 flex items-center justify-between gap-3">
