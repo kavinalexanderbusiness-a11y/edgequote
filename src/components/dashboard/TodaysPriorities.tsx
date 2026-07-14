@@ -182,8 +182,24 @@ export function TodaysPriorities() {
   }, [supabase])
 
   // Reserve the top slot while loading — this card always renders once ready, so
-  // returning null here made the whole page jump down when it popped in.
-  if (loading) return <SkeletonRows count={4} />
+  // returning null here made the whole page jump down when it popped in. The
+  // skeleton keeps the hero shell + header so the page anchor never changes
+  // identity when the data lands.
+  if (loading) {
+    return (
+      <div className="rounded-card border border-accent/20 hero-aurora overflow-hidden">
+        <div className="px-4 sm:px-5 py-3.5 border-b border-border flex items-center gap-2.5">
+          <span className="w-7 h-7 rounded-lg bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
+            <ListChecks className="w-4 h-4 text-accent" />
+          </span>
+          <h2 className="text-sm font-bold tracking-tight text-ink">Today&rsquo;s Priorities</h2>
+        </div>
+        <div className="px-4 sm:px-5 py-3">
+          <SkeletonRows count={4} />
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="rounded-card border border-accent/20 hero-aurora overflow-hidden">
@@ -192,9 +208,6 @@ export function TodaysPriorities() {
           <ListChecks className="w-4 h-4 text-accent" />
         </span>
         <h2 className="text-sm font-bold tracking-tight text-ink">Today&rsquo;s Priorities</h2>
-        {items.length > 0 && (
-          <span className="text-xs font-semibold text-accent bg-accent/10 border border-accent/20 rounded-full px-2 py-0.5 tabular-nums">{items.length}</span>
-        )}
       </div>
 
       {items.length === 0 ? (

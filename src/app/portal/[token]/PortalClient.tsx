@@ -15,7 +15,7 @@ import { receiptNumberFor } from '@/lib/payments/ledger'
 import {
   Home, History, Image as ImageIcon, FileText, Receipt, MessageSquarePlus, Check, Loader2,
   Phone, Globe, Mail, Leaf, CheckCircle2, Navigation, Play, CalendarClock, Repeat, MapPin, Ruler, Sparkles, CreditCard, MessageSquare,
-  Eye, Download, Printer, FolderOpen, Search, ArrowUpDown, Activity, Wallet, Star, Zap, ShieldCheck, Trash2, X,
+  Eye, Download, Printer, FolderOpen, Search, ArrowUpDown, Activity, Wallet, Star, Zap, ShieldCheck, Trash2, X, Landmark, Banknote, Copy,
 } from 'lucide-react'
 
 // ── Premium Customer Portal ─────────────────────────────────────────────────────
@@ -285,7 +285,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
           {/* eslint-disable-next-line @next/next/no-img-element */}
           {biz?.logo_url ? <img src={biz.logo_url} alt="" className="h-10 w-auto object-contain" /> : <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center"><Leaf className="w-5 h-5 text-accent" /></div>}
           <div className="min-w-0">
-            <p className="text-base font-bold text-ink truncate">{biz?.company_name || 'Your Service Provider'}</p>
+            <p className="text-base font-bold text-ink truncate tracking-tight">{biz?.company_name || 'Your Service Provider'}</p>
             {/* Plain "Welcome" — a first-time quote recipient has never been here. */}
             <p className="text-xs text-ink-muted">Welcome, {first}</p>
           </div>
@@ -296,7 +296,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
           <div className="flex gap-1.5 overflow-x-auto">
             {TABS.map(t => (
               <button key={t.key} onClick={() => { if (t.key === 'documents') setDocsCat('all'); setTab(t.key) }}
-                className={cn('shrink-0 flex items-center gap-1.5 text-xs font-medium rounded-full px-3 py-2 border transition-colors',
+                className={cn('shrink-0 flex items-center gap-1.5 text-xs font-medium rounded-full px-3 py-2 border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
                   tab === t.key ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
                 <t.icon className="w-3.5 h-3.5" /> {t.label}{t.n != null && t.n > 0 && <span className="opacity-70">{t.n}</span>}
               </button>
@@ -406,7 +406,7 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
       {/* Quote awaiting approval — one tap to the Documents tab, pre-filtered to quotes */}
       {awaiting.length > 0 && (
         <button type="button" onClick={onReviewQuotes}
-          className="w-full text-left rounded-card border border-amber-500/30 bg-amber-500/10 p-4 hover:border-amber-500/50 transition-colors">
+          className="w-full text-left rounded-card border border-amber-500/30 bg-amber-500/10 p-4 hover:border-amber-500/50 transition-colors card-lift">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-9 h-9 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-400 flex items-center justify-center shrink-0"><FileText className="w-4 h-4" /></div>
@@ -428,12 +428,12 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
 
       {/* Next service hero (hidden for a pure prospect — the quote card above is their whole visit) */}
       {!prospect && (
-      <div className="rounded-card border border-accent/20 bg-gradient-to-br from-accent/[0.08] to-transparent p-4">
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-accent mb-1">Next service</p>
+      <div className="rounded-card border border-accent/20 hero-aurora p-4">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-accent mb-1">Next service</p>
         {next ? (
           <>
             <div className="flex items-center justify-between gap-2">
-              <p className="text-lg font-bold text-ink">{next.service_type || next.title}</p>
+              <p className="text-lg font-bold text-ink tracking-tight">{next.service_type || next.title}</p>
               <StatusPill s={liveStatusOf(next)} />
             </div>
             <p className="text-sm text-ink-muted mt-0.5">{formatDate(next.scheduled_date)}</p>
@@ -463,9 +463,9 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
       <div className="grid grid-cols-2 gap-3">
         {derived.outstanding > 0 ? (
           <button type="button" onClick={payOutstanding} disabled={payingId !== null}
-            className="text-left rounded-card border border-amber-500/30 bg-amber-500/[0.06] p-3.5 transition-colors hover:border-amber-500/50 active:scale-[0.99] disabled:opacity-60">
-            <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1"><Receipt className="w-3 h-3" /> Outstanding balance</p>
-            <p className="text-lg font-bold mt-1 text-amber-400">{formatCurrency(derived.outstanding)}</p>
+            className="text-left rounded-card border border-amber-500/30 bg-amber-500/[0.06] p-3.5 transition-colors hover:border-amber-500/50 active:scale-[0.99] disabled:opacity-60 card-lift">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint flex items-center gap-1"><Receipt className="w-3 h-3" /> Outstanding balance</p>
+            <p className="text-lg font-bold mt-1 text-amber-400 tabular-nums">{formatCurrency(derived.outstanding)}</p>
             <span className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-accent">
               {payingId ? <Loader2 className="w-3 h-3 animate-spin" /> : <CreditCard className="w-3 h-3" />}
               {paymentsEnabled ? (owing.length === 1 ? 'Pay now' : 'View & pay') : 'View invoices'}
@@ -481,7 +481,7 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
       {/* Active plan */}
       {derived.plans.length > 0 && (
         <div className="rounded-card border border-border bg-bg-secondary p-4">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-2">Active plan{derived.plans.length !== 1 ? 's' : ''}</p>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint mb-2">Active plan{derived.plans.length !== 1 ? 's' : ''}</p>
           <div className="space-y-1.5">
             {derived.plans.map(p => (
               <div key={p.id} className="flex items-center gap-2 text-sm">
@@ -497,7 +497,7 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
       {/* Property summary */}
       {data.property && (data.property.address || data.property.lawn_sqft) && (
         <div className="rounded-card border border-border bg-bg-secondary p-4">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-2">Your property</p>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint mb-2">Your property</p>
           {data.property.address && <p className="text-sm text-ink flex items-center gap-1.5"><MapPin className="w-3.5 h-3.5 text-ink-faint" /> {data.property.address}{data.property.city ? `, ${data.property.city}` : ''}</p>}
           <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1.5 text-xs text-ink-muted">
             {data.property.neighborhood && <span>{data.property.neighborhood}</span>}
@@ -521,8 +521,8 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
 function StatCard({ label, value, tone, icon: Icon }: { label: string; value: string; tone?: string; icon: typeof Receipt }) {
   return (
     <div className="rounded-card border border-border bg-bg-secondary p-3.5">
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1"><Icon className="w-3 h-3" /> {label}</p>
-      <p className={cn('text-lg font-bold mt-1', tone || 'text-ink')}>{value}</p>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint flex items-center gap-1"><Icon className="w-3 h-3" /> {label}</p>
+      <p className={cn('text-lg font-bold mt-1 tabular-nums', tone || 'text-ink')}>{value}</p>
     </div>
   )
 }
@@ -538,7 +538,7 @@ function ServiceTab({ completed, photosByJob, invoiceByJob, photoUrl, gstPct }: 
         return (
           <div key={j.id} className="rounded-card border border-border bg-bg-secondary p-4">
             <div className="flex items-center justify-between gap-2">
-              <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> {j.service_type || j.title}</p>
+              <p className="text-sm font-semibold text-ink tracking-tight flex items-center gap-1.5"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> {j.service_type || j.title}</p>
               <span className="text-xs text-ink-muted">{formatDate(j.scheduled_date)}</span>
             </div>
             {photos.length > 0 && (
@@ -581,7 +581,7 @@ function GalleryTab({ photosByJob, jobs, photoUrl }: { photosByJob: Map<string, 
         const hasBA = before.length > 0 && after.length > 0
         return (
           <div key={jobId} className="rounded-card border border-border bg-bg-secondary p-4">
-            <p className="text-sm font-semibold text-ink">{j?.service_type || j?.title || 'Visit'}</p>
+            <p className="text-sm font-semibold text-ink tracking-tight">{j?.service_type || j?.title || 'Visit'}</p>
             <p className="text-xs text-ink-faint mb-2.5">{j ? formatDate(j.scheduled_date) : ''}</p>
             {hasBA ? (
               <div className="grid grid-cols-2 gap-2">
@@ -712,7 +712,7 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, busines
       <div className="flex flex-wrap gap-1.5">
         {CATS.map(c => (
           <button key={c.key} onClick={() => setCat(c.key)} type="button"
-            className={cn('text-xs font-medium rounded-full px-3 py-1.5 border transition-colors',
+            className={cn('text-xs font-medium rounded-full px-3 py-1.5 border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
               cat === c.key ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
             {c.label}{c.n > 0 && <span className="opacity-70"> {c.n}</span>}
           </button>
@@ -726,10 +726,9 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, busines
           <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search documents…"
             className="w-full h-10 pl-9 pr-3 rounded-xl bg-bg-tertiary border border-border text-sm text-ink outline-none focus:border-accent" />
         </div>
-        <button type="button" onClick={() => setSort(s => s === 'newest' ? 'oldest' : 'newest')}
-          className="h-10 px-3 rounded-xl border border-border bg-bg-tertiary text-sm font-medium text-ink flex items-center gap-1.5 shrink-0 hover:border-border-strong">
+        <Button variant="secondary" size="sm" className="shrink-0" onClick={() => setSort(s => s === 'newest' ? 'oldest' : 'newest')}>
           <ArrowUpDown className="w-4 h-4 text-ink-muted" /> {sort === 'newest' ? 'Newest' : 'Oldest'}
-        </button>
+        </Button>
       </div>
 
       {/* List */}
@@ -752,17 +751,17 @@ function DocRow({ d, paymentsEnabled, pay, payingId, accept, accepting }: {
   const canAccept = d.kind === 'quote' && d.status === 'sent'
   const canPay = d.kind === 'invoice' && paymentsEnabled && d.balance > 0 && d.status !== 'draft' && d.status !== 'cancelled'
   return (
-    <div className="rounded-card border border-border bg-bg-secondary p-4">
+    <div className="rounded-card border border-border bg-bg-secondary p-4 card-lift">
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-start gap-3 min-w-0">
           <div className={cn('w-9 h-9 rounded-lg border flex items-center justify-center shrink-0', m.tone)}><m.icon className="w-4 h-4" /></div>
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-ink truncate">{d.title}</p>
+            <p className="text-sm font-semibold text-ink truncate tracking-tight">{d.title}</p>
             <p className="text-xs text-ink-muted">{m.label} · {d.number} · {formatDate(d.date)}</p>
           </div>
         </div>
         <div className="text-right shrink-0">
-          <p className="text-sm font-bold text-ink">{formatCurrency(d.amount)}</p>
+          <p className="text-sm font-bold text-ink tabular-nums">{formatCurrency(d.amount)}</p>
           {d.kind === 'quote' ? <QuoteStatusPill status={d.status} /> : <InvoiceStatusPill status={d.status} />}
         </div>
       </div>
@@ -779,10 +778,10 @@ function DocRow({ d, paymentsEnabled, pay, payingId, accept, accepting }: {
       {(canAccept || canPay) && (
         <div className="mt-3">
           {canAccept && (
-            <Button size="sm" onClick={() => accept(d.rawId)} loading={accepting === d.rawId}><Check className="w-4 h-4" /> Accept this quote</Button>
+            <Button className="w-full sm:w-auto" onClick={() => accept(d.rawId)} loading={accepting === d.rawId}><Check className="w-4 h-4" /> Accept this quote</Button>
           )}
           {canPay && (
-            <Button size="sm" onClick={() => pay(d.rawId)} loading={payingId === d.rawId}><CreditCard className="w-4 h-4" /> Pay {formatCurrency(d.balance)}</Button>
+            <Button className="w-full sm:w-auto" onClick={() => pay(d.rawId)} loading={payingId === d.rawId}><CreditCard className="w-4 h-4" /> Pay {formatCurrency(d.balance)}</Button>
           )}
         </div>
       )}
@@ -838,7 +837,7 @@ function PropertyTab({ property }: { property: PortalData['property'] }) {
   return (
     <div className="space-y-3">
       <div className="rounded-card border border-border bg-bg-secondary p-4">
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-2">Your property</p>
+        <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint mb-2">Your property</p>
         {property.address && (
           <p className="text-sm text-ink flex items-start gap-1.5"><MapPin className="w-4 h-4 text-ink-faint shrink-0 mt-0.5" /> <span>{property.address}{property.city ? `, ${property.city}` : ''}{property.province ? `, ${property.province}` : ''}</span></p>
         )}
@@ -850,7 +849,7 @@ function PropertyTab({ property }: { property: PortalData['property'] }) {
       </div>
       {property.notes && (
         <div className="rounded-card border border-border bg-bg-secondary p-4">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-1.5">Notes from your provider</p>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint mb-1.5">Notes from your provider</p>
           <p className="text-sm text-ink-muted whitespace-pre-wrap">{property.notes}</p>
         </div>
       )}
@@ -905,9 +904,9 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
       {/* ── Ways to pay — Card / E-transfer / Cash (cheque retired). E-transfer
           details come from Business Settings (one source of truth). ── */}
       <div className="rounded-card border border-border bg-bg-secondary p-4 space-y-3">
-        <p className="text-[10px] uppercase tracking-wide text-ink-faint font-semibold">Ways to pay</p>
+        <p className="text-[10px] uppercase tracking-[0.14em] text-ink-faint font-semibold">Ways to pay</p>
         <div className="flex items-start gap-3">
-          <span className="text-lg leading-none" aria-hidden>💳</span>
+          <span className="text-lg leading-none" aria-hidden><CreditCard className="w-4 h-4" /></span>
           <div className="min-w-0">
             <p className="text-sm font-semibold text-ink">Card</p>
             <p className="text-xs text-ink-muted">{paymentsEnabled ? 'Pay any invoice securely online with the Pay button.' : 'Ask us for a secure card payment link.'}</p>
@@ -917,7 +916,7 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
             never show a customer owner-facing setup instructions. */}
         {etransferEmail && (
         <div className="flex items-start gap-3 border-t border-border pt-3">
-          <span className="text-lg leading-none" aria-hidden>🏦</span>
+          <span className="text-lg leading-none" aria-hidden><Landmark className="w-4 h-4" /></span>
           <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold text-ink">E-transfer</p>
             <p className="text-xs text-ink-muted">Recipient: <span className="font-medium text-ink">{business?.company_name || 'Your service provider'}</span></p>
@@ -931,11 +930,11 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
             )}
             <div className="flex flex-wrap gap-2 mt-2">
               <Button size="sm" variant="secondary" onClick={() => copyText('email', etransferEmail)}>
-                {copied === 'email' ? <Check className="w-3.5 h-3.5" /> : null} {copied === 'email' ? 'Copied' : 'Copy email'}
+                {copied === 'email' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />} {copied === 'email' ? 'Copied' : 'Copy email'}
               </Button>
               {outstanding > 0 && (
                 <Button size="sm" variant="secondary" onClick={() => copyText('amount', outstanding.toFixed(2))}>
-                  {copied === 'amount' ? <Check className="w-3.5 h-3.5" /> : null} {copied === 'amount' ? 'Copied' : `Copy amount (${formatCurrency(outstanding)})`}
+                  {copied === 'amount' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />} {copied === 'amount' ? 'Copied' : `Copy amount (${formatCurrency(outstanding)})`}
                 </Button>
               )}
             </div>
@@ -943,7 +942,7 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
         </div>
         )}
         <div className="flex items-start gap-3 border-t border-border pt-3">
-          <span className="text-lg leading-none" aria-hidden>💵</span>
+          <span className="text-lg leading-none" aria-hidden><Banknote className="w-4 h-4" /></span>
           <div className="min-w-0">
             <p className="text-sm font-semibold text-ink">Cash</p>
             <p className="text-xs text-ink-muted">Pay in person at your next visit — we&rsquo;ll record it and send your receipt.</p>
@@ -953,18 +952,18 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
       {paymentsEnabled && <AutoPayCard token={token} card={card} autopayEnabled={autopayEnabled} onChanged={onChanged} />}
       {availableCredit > 0 && (
         <div className="rounded-card border border-accent/25 bg-accent/[0.06] p-3.5 flex items-center justify-between gap-3">
-          <p className="text-[10px] uppercase tracking-wide text-accent font-semibold flex items-center gap-1"><Wallet className="w-3 h-3" /> Available credit</p>
-          <p className="text-lg font-bold text-accent">{formatCurrency(availableCredit)}</p>
+          <p className="text-[10px] uppercase tracking-[0.14em] text-accent font-semibold flex items-center gap-1"><Wallet className="w-3 h-3" /> Available credit</p>
+          <p className="text-lg font-bold text-accent tabular-nums">{formatCurrency(availableCredit)}</p>
         </div>
       )}
       <div className="grid grid-cols-2 gap-3">
         <div className="rounded-card border border-emerald-500/20 bg-emerald-500/[0.06] p-3.5">
-          <p className="text-[10px] uppercase tracking-wide text-emerald-400 font-semibold flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Total paid</p>
-          <p className="text-lg font-bold text-ink mt-1">{formatCurrency(totalPaid)}</p>
+          <p className="text-[10px] uppercase tracking-[0.14em] text-emerald-400 font-semibold flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Total paid</p>
+          <p className="text-lg font-bold text-ink mt-1 tabular-nums">{formatCurrency(totalPaid)}</p>
         </div>
         <div className="rounded-card border border-border bg-bg-secondary p-3.5">
-          <p className="text-[10px] uppercase tracking-wide text-ink-faint font-semibold flex items-center gap-1"><Receipt className="w-3 h-3" /> Outstanding</p>
-          <p className={cn('text-lg font-bold mt-1', outstanding > 0 ? 'text-amber-400' : 'text-emerald-400')}>{formatCurrency(outstanding)}</p>
+          <p className="text-[10px] uppercase tracking-[0.14em] text-ink-faint font-semibold flex items-center gap-1"><Receipt className="w-3 h-3" /> Outstanding</p>
+          <p className={cn('text-lg font-bold mt-1 tabular-nums', outstanding > 0 ? 'text-amber-400' : 'text-emerald-400')}>{formatCurrency(outstanding)}</p>
         </div>
       </div>
 
@@ -979,18 +978,18 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
               <div className="flex items-center gap-3 min-w-0">
                 <div className={cn('w-9 h-9 rounded-lg border flex items-center justify-center shrink-0', Number(p.amount) < 0 ? 'border-red-500/25 bg-red-500/10' : 'border-emerald-500/25 bg-emerald-500/10')}><CheckCircle2 className={cn('w-4 h-4', Number(p.amount) < 0 ? 'text-red-400' : 'text-emerald-400')} /></div>
                 <div className="min-w-0">
-                  <p className="text-sm font-semibold text-ink">{Number(p.amount) < 0 ? '−' : ''}{formatCurrency(Math.abs(Number(p.amount)))}</p>
+                  <p className="text-sm font-semibold text-ink tabular-nums">{Number(p.amount) < 0 ? '−' : ''}{formatCurrency(Math.abs(Number(p.amount)))}</p>
                   <p className="text-xs text-ink-muted truncate">{p.paid_at ? formatDate(p.paid_at) : formatDate(p.created_at)}{inv ? ` · ${inv.invoice_number}` : ''} · {Number(p.amount) < 0 ? 'Refund' : paymentMethodLabel(p.provider)}</p>
                 </div>
               </div>
               <span className={cn('shrink-0 text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', Number(p.amount) < 0 ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10')}>{Number(p.amount) < 0 ? 'Refunded' : 'Paid'}</span>
             </div>
-            {/* Receipt download is THE primary action on a payment row — labeled,
-                accent-filled, full-width on mobile, right-aligned on desktop. */}
+            {/* Receipt download — a quiet utility action (the paid status is the
+                story), full-width on mobile, right-aligned on desktop. */}
             {inv && (
-              <Button size="sm" className="w-full sm:w-auto shrink-0"
+              <Button size="sm" variant="secondary" className="w-full sm:w-auto shrink-0"
                 onClick={() => downloadReceipt(p, inv)} loading={receiptBusy === p.id}>
-                <FileText className="w-4 h-4" /> Download {Number(p.amount) < 0 ? 'Refund ' : ''}Receipt
+                <Download className="w-4 h-4" /> Download {Number(p.amount) < 0 ? 'refund ' : ''}receipt
               </Button>
             )}
           </div>
@@ -1052,18 +1051,18 @@ function AutoPayCard({ token, card, autopayEnabled, onChanged }: {
           </span>
           <div className="flex items-center gap-3 shrink-0">
             <button onClick={addCard} disabled={busy !== null} className="text-xs font-medium text-accent hover:underline disabled:opacity-50">Replace</button>
-            <button onClick={removeCard} disabled={busy !== null} className="text-xs font-medium text-ink-muted hover:text-red-400 disabled:opacity-50 flex items-center gap-1"><Trash2 className="w-3.5 h-3.5" /> Remove</button>
+            <button onClick={removeCard} disabled={busy !== null} className="text-xs font-medium text-red-400/70 hover:text-red-400 disabled:opacity-50 flex items-center gap-1"><Trash2 className="w-3.5 h-3.5" /> Remove</button>
           </div>
         </div>
       ) : (
-        <button onClick={addCard} disabled={busy !== null} className="w-full h-10 rounded-xl bg-accent text-black text-sm font-semibold flex items-center justify-center gap-1.5 disabled:opacity-60">
-          {busy === 'card' ? <Loader2 className="w-4 h-4 animate-spin" /> : <CreditCard className="w-4 h-4" />} Add a card
-        </button>
+        <Button className="w-full" onClick={addCard} disabled={busy !== null} loading={busy === 'card'}>
+          <CreditCard className="w-4 h-4" /> Add a card
+        </Button>
       )}
       <div className="flex items-center justify-between gap-3 mt-3 rounded-lg border border-border bg-bg-tertiary px-3 py-2.5">
         <span className="text-sm text-ink flex items-center gap-2"><Zap className="w-4 h-4 text-accent" /> AutoPay recurring invoices</span>
-        <button onClick={toggle} disabled={!card && !autopay} aria-pressed={autopay}
-          className={cn('relative w-11 h-6 rounded-full transition-colors shrink-0', autopay ? 'bg-accent' : 'bg-border-strong', (!card && !autopay) && 'opacity-40 cursor-not-allowed')}>
+        <button onClick={toggle} disabled={!card && !autopay} aria-pressed={autopay} aria-label="AutoPay recurring invoices"
+          className={cn('relative w-11 h-6 rounded-full transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50', autopay ? 'bg-accent' : 'bg-border-strong', (!card && !autopay) && 'opacity-40 cursor-not-allowed')}>
           <span className={cn('absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform', autopay && 'translate-x-5')} />
         </button>
       </div>
@@ -1089,7 +1088,7 @@ function RequestTab({ presets, reqMsg, setReqMsg, request, reqBusy, reqSent, biz
             const sent = reqSent === key
             return (
               <button key={p} onClick={() => request(`Service request: ${p} quote`, key)} disabled={reqBusy !== null || sent}
-                className={cn('h-11 rounded-xl border text-sm font-medium flex items-center justify-center gap-1.5 transition-colors disabled:opacity-60',
+                className={cn('h-11 rounded-xl border text-sm font-medium flex items-center justify-center gap-1.5 transition-colors disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
                   sent ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400' : 'border-border bg-bg-tertiary text-ink hover:border-accent/40')}>
                 {reqBusy === key ? <Loader2 className="w-4 h-4 animate-spin" /> : sent ? <Check className="w-4 h-4" /> : null}
                 {sent ? 'Requested' : p}
@@ -1132,13 +1131,12 @@ function ReviewCard({ reviewUrl, businessName, reviewed, onReviewed }: { reviewU
       <p className="text-xs text-ink-muted mt-0.5 mb-3">A quick Google review helps {businessName || 'us'} a lot — thank you!</p>
       <div className="flex flex-wrap gap-2">
         <a href={href} target="_blank" rel="noopener noreferrer"
-          className="flex-1 min-w-[140px] h-10 rounded-xl bg-accent text-black text-sm font-semibold flex items-center justify-center gap-1.5">
+          className="flex-1 min-w-[140px] inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-accent text-black hover:bg-accent-hover active:scale-[0.98] shadow-sm px-4 py-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
           <Star className="w-4 h-4" /> Leave a review
         </a>
-        <button onClick={onReviewed}
-          className="flex-1 min-w-[140px] h-10 rounded-xl border border-border bg-bg-tertiary text-sm font-medium text-ink flex items-center justify-center gap-1.5">
+        <Button variant="secondary" className="flex-1 min-w-[140px]" onClick={onReviewed}>
           <Check className="w-4 h-4" /> I’ve left my review
-        </button>
+        </Button>
       </div>
     </div>
   )
@@ -1180,7 +1178,7 @@ function ConsentCard({ token, consent, onSave }: { token: string; consent: { sms
       </div>
       {prefs !== null && (consent.sms || consent.email) && (
         <div className="mt-3 pt-3 border-t border-border space-y-2">
-          <p className="text-[10px] uppercase tracking-wide text-ink-faint">What we message you about</p>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">What we message you about</p>
           {CATS.map(([k, label]) => (
             <PrefRow key={k} label={label} icon={MessageSquare} on={prefs[k] !== false} onChange={() => toggleCat(k)} />
           ))}
@@ -1193,8 +1191,8 @@ function PrefRow({ label, icon: Icon, on, onChange }: { label: string; icon: typ
   return (
     <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-bg-tertiary px-3 py-2.5">
       <span className="text-sm text-ink flex items-center gap-2"><Icon className="w-4 h-4 text-ink-muted" /> {label}</span>
-      <button onClick={() => onChange(!on)} aria-pressed={on}
-        className={cn('relative w-11 h-6 rounded-full transition-colors shrink-0', on ? 'bg-emerald-500' : 'bg-border-strong')}>
+      <button onClick={() => onChange(!on)} aria-pressed={on} aria-label={label}
+        className={cn('relative w-11 h-6 rounded-full transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50', on ? 'bg-accent' : 'bg-border-strong')}>
         <span className={cn('absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform', on && 'translate-x-5')} />
       </button>
     </div>
@@ -1228,13 +1226,13 @@ function DocActions({ getBlob, filename }: { getBlob: () => Promise<Blob>; filen
     </div>
   )
 }
+// Compact utility row — quiet on purpose, so it never outweighs the Accept/Pay
+// CTA above it. Download PDF gets a secondary tint; View/Print stay ghost.
 function DocBtn({ icon: Icon, label, loading, disabled, onClick, primary }: { icon: typeof Eye; label: string; loading?: boolean; disabled?: boolean; onClick: () => void; primary?: boolean }) {
   return (
-    <button onClick={onClick} disabled={disabled} type="button"
-      className={cn('flex-1 min-w-[92px] h-10 rounded-xl border text-sm font-semibold flex items-center justify-center gap-1.5 transition-colors disabled:opacity-60',
-        primary ? 'border-accent/40 bg-accent/10 text-accent hover:bg-accent/15' : 'border-border bg-bg-tertiary text-ink hover:border-border-strong')}>
-      {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Icon className="w-4 h-4" />} {label}
-    </button>
+    <Button size="sm" variant={primary ? 'secondary' : 'ghost'} loading={loading} disabled={disabled} onClick={onClick} className="flex-1 min-w-[92px]">
+      {!loading && <Icon className="w-4 h-4" />} {label}
+    </Button>
   )
 }
 

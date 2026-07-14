@@ -21,7 +21,7 @@ import { getPropertyContexts } from '@/lib/ai/propertyContext'
 import { LocatedJob, fetchLocatedUpcomingJobs, nearbyJobCount } from '@/lib/geo'
 import { JobPhotos } from '@/components/photos/JobPhotos'
 import { listPhotosForProperties, type JobPhotoView } from '@/lib/photos'
-import { MapPin, Home, User, Ruler, History, RefreshCw, Trophy, DollarSign, CheckCircle2, Receipt, Timer, CalendarClock, AlertTriangle, Repeat, Camera, FileText, Clock, StickyNote, ShieldCheck, CalendarPlus, Lightbulb } from 'lucide-react'
+import { MapPin, Home, User, Ruler, History, RefreshCw, Trophy, DollarSign, CheckCircle2, Receipt, Timer, CalendarClock, AlertTriangle, Repeat, Camera, FileText, Clock, StickyNote, ShieldCheck, CalendarPlus, Lightbulb, Heart } from 'lucide-react'
 
 // Quote statuses that count as a "won" price — the accepted-price memory.
 const QUOTE_WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
@@ -228,7 +228,7 @@ export default function PropertiesPage() {
     <div className="max-w-4xl space-y-6">
       <PageHeader
         title="Properties"
-        description={`${properties.length} propert${properties.length !== 1 ? 'ies' : 'y'} on file`}
+        description={`${properties.length} propert${properties.length !== 1 ? 'ies' : 'y'} on file${properties.length > 0 ? ' — created automatically from customers and quotes' : ''}`}
       />
 
       {loading ? (
@@ -297,8 +297,19 @@ export default function PropertiesPage() {
             const actionHref = health.action === 'quote' ? `/dashboard/quotes/new?customer=${property.customer_id}&property=${property.id}`
               : health.action === 'schedule' ? `/dashboard/schedule?customer=${property.customer_id}&property=${property.id}`
               : measureHref
-            return (
-            <Card key={property.id}>
+            return { property, hist, last, saved, stale, perf, hasPerf, lastQuote, lastInvoice, plans, prefText, nextVisit, qp, confidence, estMin, estFromActual, activePlan, estDur, durDelta, recOneTime, drift, driftBig, health, measureHref, actionHref }
+          })
+          // Attention first: warn-tone cards float to the top (worst health first);
+          // everything else keeps recency order. Display sort only — same data,
+          // so "which property needs me" is answered without scroll-hunting.
+          .sort((a, b) => {
+            const aw = a.health.tone === 'warn' ? 0 : 1
+            const bw = b.health.tone === 'warn' ? 0 : 1
+            if (aw !== bw) return aw - bw
+            return aw === 0 ? a.health.score - b.health.score : 0
+          })
+          .map(({ property, hist, last, saved, stale, perf, hasPerf, lastQuote, lastInvoice, plans, prefText, nextVisit, qp, confidence, estMin, estFromActual, activePlan, estDur, durDelta, recOneTime, drift, driftBig, health, measureHref, actionHref }) => (
+            <Card key={property.id} className="card-lift">
               <CardBody>
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex items-start gap-3 min-w-0">
@@ -325,7 +336,7 @@ export default function PropertiesPage() {
                             : health.tone === 'warn' ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
                             : health.tone === 'new' ? 'border-sky-500/30 bg-sky-500/10 text-sky-300'
                             : 'border-accent/20 bg-accent/10 text-accent'}`}>
-                          ♥ {health.score} · {health.label}
+                          <Heart className="w-2.5 h-2.5" /> {health.score} · {health.label}
                         </span>
                       </div>
                       {(property.city || property.province) && (
@@ -385,13 +396,14 @@ export default function PropertiesPage() {
                         <RefreshCw className="w-3.5 h-3.5" /> {health.actionLabel}
                       </Button>
                     ) : (
-                      <Link href={actionHref}>
-                        <Button size="sm" className="w-full">
-                          {health.action === 'quote' ? <FileText className="w-3.5 h-3.5" />
-                            : health.action === 'schedule' ? <CalendarPlus className="w-3.5 h-3.5" />
-                            : <Ruler className="w-3.5 h-3.5" />}
-                          {health.actionLabel}
-                        </Button>
+                      // The Link IS the button (no nested <Button>) — one focusable
+                      // element, styled with the shared primary sm recipe.
+                      <Link href={actionHref}
+                        className="w-full inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-accent text-black hover:bg-accent-hover active:scale-[0.98] shadow-sm px-3.5 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+                        {health.action === 'quote' ? <FileText className="w-3.5 h-3.5" />
+                          : health.action === 'schedule' ? <CalendarPlus className="w-3.5 h-3.5" />
+                          : <Ruler className="w-3.5 h-3.5" />}
+                        {health.actionLabel}
                       </Link>
                     )}
                     {/* Quiet utility — re-measuring is always one tap away, but never competes as the primary. */}
@@ -399,7 +411,7 @@ export default function PropertiesPage() {
                       <Link href={measureHref} className="text-[11px] text-ink-faint hover:text-ink text-right">Re-measure</Link>
                     )}
                     {property.lat && property.lng ? (
-                      <p className="text-xs text-accent font-medium text-right">📍 Located</p>
+                      <p className="text-xs text-accent font-medium text-right flex items-center justify-end gap-1"><MapPin className="w-3 h-3" /> Located</p>
                     ) : (
                       <p className="text-xs text-ink-faint text-right">No coords yet</p>
                     )}
@@ -438,7 +450,7 @@ export default function PropertiesPage() {
                         {property.customer_id && (
                           <Link href={`/dashboard/schedule?focus=${plan.recurrenceId}`}
                             className="text-[11px] font-medium px-2 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong transition-colors shrink-0">
-                            View
+                            View schedule
                           </Link>
                         )}
                       </div>
@@ -449,7 +461,7 @@ export default function PropertiesPage() {
                 {/* Performance — this property as a business asset */}
                 {hasPerf && (
                   <div className="mt-3 rounded-xl border border-border bg-bg-tertiary px-3 py-2.5">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted mb-1.5">Performance</p>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-muted mb-1.5">Performance</p>
                     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
                       <PerfStat icon={DollarSign} label="Lifetime revenue" value={formatCurrency(perf.lifetimeRevenue)} tone="text-accent" />
                       <PerfStat icon={CheckCircle2} label="Completed visits" value={String(perf.completedVisits)} />
@@ -484,7 +496,7 @@ export default function PropertiesPage() {
                     before (the real signal for what they'll pay next time). */}
                 {qp && qp.quoted > 0 && (
                   <div className="mt-3 rounded-xl border border-border bg-bg-tertiary px-3 py-2 flex items-center gap-x-3 gap-y-1 flex-wrap text-xs">
-                    <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint">Pricing memory</span>
+                    <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">Pricing memory</span>
                     {qp.lastAccepted ? (
                       <span className="text-emerald-400 font-medium inline-flex items-center gap-1">
                         <CheckCircle2 className="w-3 h-3" /> Last accepted {formatCurrency(qp.lastAccepted.total)} · {qp.lastAccepted.quote_number}
@@ -505,18 +517,32 @@ export default function PropertiesPage() {
                 {saved && (
                   <div className="mt-3 rounded-xl border border-accent/20 bg-accent/5 px-3 py-2.5">
                     <div className="flex items-center justify-between gap-2 flex-wrap">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-accent">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-accent">
                         Latest measurement · {saved.sqft.toLocaleString()} ft² · Calculated {formatDate(saved.date)}
                       </p>
-                      <Button variant="ghost" size="sm" loading={recalcId === property.id} onClick={() => recalculate(property)} title="Re-run pricing with today's rates and route context">
-                        <RefreshCw className="w-3.5 h-3.5" /> Recalculate
-                      </Button>
+                      <div className="flex items-center gap-1">
+                        {/* Prices need a way to become money — hidden when the
+                            card's primary action is already Create quote. */}
+                        {health.action !== 'quote' && property.customer_id && (
+                          <Link href={`/dashboard/quotes/new?customer=${property.customer_id}&property=${property.id}`}
+                            className="text-[11px] font-medium text-accent hover:underline px-1.5 py-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                            Quote this →
+                          </Link>
+                        )}
+                        {/* Hidden when the card's top primary action is already
+                            Recalculate — one recalc affordance per card. */}
+                        {health.action !== 'recalc' && (
+                          <Button variant="ghost" size="sm" loading={recalcId === property.id} onClick={() => recalculate(property)} title="Re-run pricing with today's rates and route context">
+                            <RefreshCw className="w-3.5 h-3.5" /> Recalculate
+                          </Button>
+                        )}
+                      </div>
                     </div>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-1.5">
                       {([['One-Time', saved.rec.one_time, 'one_time'], ['Weekly', saved.rec.weekly, 'weekly'], ['Bi-Weekly', saved.rec.biweekly, 'biweekly'], ['Monthly', saved.rec.monthly, 'monthly']] as const).map(([label, price, key]) => (
                         <div key={label} className={`rounded-lg border px-2 py-1.5 ${saved.rec.cadence === key ? 'border-accent/50 bg-accent/10' : 'border-border bg-bg-tertiary'}`}>
                           <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1">{label}{saved.rec.cadence === key && <Trophy className="w-2.5 h-2.5 text-accent" />}</p>
-                          <p className="text-sm font-bold text-ink">${price}</p>
+                          <p className="text-sm font-bold text-ink tabular-nums">${price}</p>
                         </div>
                       ))}
                     </div>
@@ -554,8 +580,7 @@ export default function PropertiesPage() {
                 </div>
               </CardBody>
             </Card>
-            )
-          })}
+          ))}
         </div>
       )}
     </div>
@@ -568,7 +593,7 @@ function PerfStat({ icon: Icon, label, value, tone }: { icon: typeof DollarSign;
       <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1">
         <Icon className="w-3 h-3" /> {label}
       </p>
-      <p className={`text-sm font-bold ${tone || 'text-ink'}`}>{value}</p>
+      <p className={`text-sm font-bold tabular-nums ${tone || 'text-ink'}`}>{value}</p>
     </div>
   )
 }

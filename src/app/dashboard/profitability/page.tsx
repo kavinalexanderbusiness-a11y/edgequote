@@ -15,8 +15,10 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { InlineEmpty } from '@/components/ui/EmptyState'
 import { SkeletonTiles } from '@/components/ui/Skeleton'
+import { StatTile } from '@/components/ui/StatTile'
+import { Tone } from '@/lib/tone'
 import { parseISO, startOfWeek, format } from 'date-fns'
-import { TrendingUp, TrendingDown, Navigation, Clock, DollarSign, MapPin, Lightbulb, Trophy, AlertTriangle } from 'lucide-react'
+import { TrendingUp, TrendingDown, Navigation, Clock, DollarSign, MapPin, Lightbulb, Trophy, AlertTriangle, ChevronDown } from 'lucide-react'
 
 type Period = 'day' | 'week' | 'month'
 
@@ -147,11 +149,16 @@ export default function ProfitabilityPage() {
       .map(j => ({ lat: j.lat as number, lng: j.lng as number, grade: gradeByDate[j.scheduled_date] ?? 'C', title: formatDate(j.scheduled_date) }))
   }, [jobs, routes])
 
-  if (loading) return <SkeletonTiles count={4} />
+  if (loading) return (
+    <div className="max-w-4xl space-y-6">
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Route Profitability" description="Which routes, days and neighborhoods make the most per hour." />
+      <SkeletonTiles count={4} />
+    </div>
+  )
 
   return (
     <div className="max-w-4xl space-y-6">
-      <PageHeader title="Route Profitability" description="Which routes, days and neighborhoods make the most per hour" />
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Route Profitability" description="Which routes, days and neighborhoods make the most per hour." />
 
       {loadError && (
         <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5">
@@ -171,22 +178,22 @@ export default function ProfitabilityPage() {
 
       {/* Opportunity detection */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <OppCard icon={Trophy} tone="text-emerald-400" label="Top booked day"
+        <OppCard icon={Trophy} tone="success" label="Top booked day"
           value={opp.topRevenue ? formatCurrency(opp.topRevenue.revenue) : '—'}
           sub={opp.topRevenue ? `${formatDate(opp.topRevenue.date)} · grade ${opp.topRevenue.grade}` : ''} />
-        <OppCard icon={TrendingUp} tone="text-accent" label="Best revenue/hour"
+        <OppCard icon={TrendingUp} tone="accent" label="Best revenue/hour"
           value={opp.bestPerHour ? `$${opp.bestPerHour.revPerHour}/h` : '—'}
           sub={opp.bestPerHour ? formatDate(opp.bestPerHour.date) : ''} />
-        <OppCard icon={MapPin} tone="text-emerald-400" label="Best neighborhood"
+        <OppCard icon={MapPin} tone="success" label="Best neighborhood"
           value={opp.bestHood ? opp.bestHood.key : '—'}
           sub={opp.bestHood ? `${formatCurrency(opp.bestHood.revenue)} · ${opp.bestHood.customers} cust` : ''} />
-        <OppCard icon={TrendingDown} tone="text-amber-400" label="Lowest booked day"
+        <OppCard icon={TrendingDown} tone="warn" label="Lowest booked day"
           value={opp.lowRevenue ? formatCurrency(opp.lowRevenue.revenue) : '—'}
           sub={opp.lowRevenue ? `${formatDate(opp.lowRevenue.date)} · grade ${opp.lowRevenue.grade}` : ''} />
-        <OppCard icon={AlertTriangle} tone="text-red-400" label="Worst revenue/hour"
+        <OppCard icon={AlertTriangle} tone="danger" label="Worst revenue/hour"
           value={opp.worstPerHour ? `$${opp.worstPerHour.revPerHour}/h` : '—'}
           sub={opp.worstPerHour ? formatDate(opp.worstPerHour.date) : ''} />
-        <OppCard icon={MapPin} tone="text-red-400" label="Worst neighborhood"
+        <OppCard icon={MapPin} tone="danger" label="Worst neighborhood"
           value={opp.worstHood ? opp.worstHood.key : '—'}
           sub={opp.worstHood ? `${formatCurrency(opp.worstHood.revenue)} · ${opp.worstHood.customers} cust` : ''} />
       </div>
@@ -194,7 +201,7 @@ export default function ProfitabilityPage() {
       {/* Period toggle */}
       <div className="flex items-center gap-1 bg-bg-secondary border border-border rounded-xl p-1 w-fit">
         {(['day', 'week', 'month'] as Period[]).map(p => (
-          <button key={p} onClick={() => setPeriod(p)}
+          <button key={p} onClick={() => setPeriod(p)} aria-pressed={period === p}
             className={cn('px-4 py-1.5 rounded-lg text-sm font-medium capitalize transition-all', period === p ? 'bg-accent text-black' : 'text-ink-muted hover:text-ink')}>
             {p}
           </button>
@@ -207,33 +214,43 @@ export default function ProfitabilityPage() {
       ) : period === 'day' ? (
         <div className="space-y-3">
           {upcomingRoutes.length > 0 && (
-            <button onClick={() => setShowUpcoming(v => !v)}
-              className="w-full text-left rounded-xl border border-border bg-bg-secondary px-4 py-2.5 text-sm text-ink-muted hover:text-ink transition-colors">
-              {showUpcoming ? '▾' : '▸'} {upcomingRoutes.length} upcoming booked day{upcomingRoutes.length !== 1 ? 's' : ''} · {formatCurrency(upcomingRoutes.reduce((s, r) => s + r.revenue, 0))} on the books
+            <button onClick={() => setShowUpcoming(v => !v)} aria-expanded={showUpcoming}
+              className="w-full text-left rounded-xl border border-border bg-bg-secondary px-4 py-2.5 text-sm text-ink-muted hover:text-ink transition-colors flex items-center gap-1.5">
+              <ChevronDown className={cn('w-3.5 h-3.5 shrink-0 transition-transform', !showUpcoming && '-rotate-90')} />
+              <span>{upcomingRoutes.length} upcoming booked day{upcomingRoutes.length !== 1 ? 's' : ''} · {formatCurrency(upcomingRoutes.reduce((s, r) => s + r.revenue, 0))} on the books</span>
             </button>
           )}
-          {showUpcoming && upcomingRoutes.slice(0, 30).map(r => <RouteCard key={r.date} r={r} />)}
+          {showUpcoming && upcomingRoutes.slice(0, 30).map((r, i) => (
+            <div key={r.date} className={cn('animate-rise', i < 6 && `stagger-${i + 1}`)}><RouteCard r={r} /></div>
+          ))}
           {pastRoutes.length === 0 ? (
             <Card><InlineEmpty>No completed days yet — past routes appear here once you work them.</InlineEmpty></Card>
-          ) : pastRoutes.slice(0, 60).map(r => <RouteCard key={r.date} r={r} />)}
+          ) : pastRoutes.slice(0, 60).map((r, i) => (
+            <div key={r.date} className={cn('animate-rise', i < 6 && `stagger-${i + 1}`)}><RouteCard r={r} /></div>
+          ))}
         </div>
       ) : (
         <div className="space-y-2">
-          {(period === 'week' ? weeks : months).map(a => <AggCard key={a.key} a={a} />)}
+          {(period === 'week' ? weeks : months).map((a, i) => (
+            <div key={a.key} className={cn('animate-rise', i < 6 && `stagger-${i + 1}`)}><AggCard a={a} /></div>
+          ))}
         </div>
       )}
 
       {/* Historical trends (monthly) */}
       {trends.length > 0 && (
         <Card>
-          <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-            <Clock className="w-4 h-4 text-accent" />
-            <h2 className="text-sm font-semibold text-ink">Monthly trends</h2>
+          <div className="px-4 py-3 border-b border-border flex items-center gap-2.5">
+            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
+              <Clock className="w-3.5 h-3.5 text-accent" />
+            </span>
+            <h2 className="text-sm font-bold tracking-tight text-ink">Monthly trends</h2>
+            <span className="flex-1 h-px bg-border" aria-hidden />
           </div>
           <CardBody className="overflow-x-auto p-0">
             <table className="w-full text-sm">
               <thead>
-                <tr className="text-[11px] uppercase tracking-wide text-ink-faint border-b border-border">
+                <tr className="text-[10px] uppercase tracking-[0.14em] text-ink-faint border-b border-border">
                   <th className="text-left font-semibold px-4 py-2">Month</th>
                   <th className="text-right font-semibold px-3 py-2">Revenue</th>
                   <th className="text-right font-semibold px-3 py-2">$/hr</th>
@@ -246,11 +263,11 @@ export default function ProfitabilityPage() {
                 {trends.map(t => (
                   <tr key={t.month} className="border-b border-border last:border-0">
                     <td className="px-4 py-2 text-ink font-medium">{format(parseISO(t.month + '-01'), 'MMM yyyy')}</td>
-                    <td className="px-3 py-2 text-right text-ink font-semibold">{formatCurrency(t.revenue)}</td>
-                    <td className="px-3 py-2 text-right text-ink-muted">${t.revPerHour}</td>
-                    <td className="px-3 py-2 text-right text-ink-muted">${t.revPerKm}</td>
-                    <td className="px-3 py-2 text-right text-ink-muted">{Math.round(t.driveMinutes / 60 * 10) / 10}h</td>
-                    <td className="px-4 py-2 text-right text-ink-muted">{Math.round(t.laborMinutes / 60 * 10) / 10}h</td>
+                    <td className="px-3 py-2 text-right text-ink font-semibold tabular-nums">{formatCurrency(t.revenue)}</td>
+                    <td className="px-3 py-2 text-right text-ink-muted tabular-nums">${t.revPerHour}</td>
+                    <td className="px-3 py-2 text-right text-ink-muted tabular-nums">${t.revPerKm}</td>
+                    <td className="px-3 py-2 text-right text-ink-muted tabular-nums">{Math.round(t.driveMinutes / 60 * 10) / 10}h</td>
+                    <td className="px-4 py-2 text-right text-ink-muted tabular-nums">{Math.round(t.laborMinutes / 60 * 10) / 10}h</td>
                   </tr>
                 ))}
               </tbody>
@@ -262,7 +279,13 @@ export default function ProfitabilityPage() {
       {/* Profitability map */}
       {mapPoints.length > 0 && (
         <div className="space-y-2">
-          <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><MapPin className="w-4 h-4 text-accent" /> Profitability map</h2>
+          <div className="flex items-center gap-2.5">
+            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
+              <MapPin className="w-3.5 h-3.5 text-accent" />
+            </span>
+            <h2 className="text-sm font-bold tracking-tight text-ink">Profitability map</h2>
+            <span className="flex-1 h-px bg-border" aria-hidden />
+          </div>
           <ProfitMap points={mapPoints} />
         </div>
       )}
@@ -279,16 +302,9 @@ function GradeBadge({ grade }: { grade: Grade }) {
   )
 }
 
-function OppCard({ icon: Icon, label, value, sub, tone }: { icon: typeof Trophy; label: string; value: string; sub: string; tone: string }) {
-  return (
-    <Card className="p-3.5">
-      <div className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-muted uppercase tracking-wide">
-        <Icon className={cn('w-3.5 h-3.5', tone)} /> {label}
-      </div>
-      <p className={cn('text-lg font-bold mt-1', tone)}>{value}</p>
-      {sub && <p className="text-xs text-ink-faint mt-0.5 truncate">{sub}</p>}
-    </Card>
-  )
+// Thin adapter over the ONE shared KPI tile (no local tile styles to drift).
+function OppCard({ icon, label, value, sub, tone }: { icon: typeof Trophy; label: string; value: string; sub: string; tone: Tone }) {
+  return <StatTile icon={icon} label={label} value={value} sub={sub || undefined} tone={tone} />
 }
 
 function RouteCard({ r }: { r: RouteProfit }) {
@@ -304,7 +320,7 @@ function RouteCard({ r }: { r: RouteProfit }) {
                 {formatDate(r.date)}
                 {r.future && <span className="text-[10px] font-semibold uppercase tracking-wide text-blue-400 border border-blue-500/30 rounded px-1.5 py-0.5">Booked</span>}
               </p>
-              <p className="text-lg font-bold text-accent">{formatCurrency(r.revenue)}</p>
+              <p className="text-lg font-bold text-accent tabular-nums">{formatCurrency(r.revenue)}</p>
             </div>
             <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mt-2 text-xs">
               <Metric label={r.hasDriveData ? '$/hr' : '$/hr*'} value={`$${r.revPerHour}`} />
@@ -323,7 +339,7 @@ function RouteCard({ r }: { r: RouteProfit }) {
         </div>
         {tips.length > 0 && (
           <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 space-y-1">
-            <p className="text-[11px] font-semibold text-amber-400 flex items-center gap-1 uppercase tracking-wide"><Lightbulb className="w-3 h-3" /> Improve this route</p>
+            <p className="text-[10px] font-semibold text-amber-400 flex items-center gap-1 uppercase tracking-[0.14em]"><Lightbulb className="w-3 h-3" /> Improve this route</p>
             {tips.map((t, i) => <p key={i} className="text-xs text-ink-muted">• {t}</p>)}
           </div>
         )}
@@ -341,7 +357,7 @@ function AggCard({ a }: { a: AggRow }) {
           <div className="min-w-0 flex-1">
             <div className="flex items-center justify-between gap-2">
               <p className="text-sm font-bold text-ink">{a.label}</p>
-              <p className="text-lg font-bold text-accent">{formatCurrency(a.revenue)}</p>
+              <p className="text-lg font-bold text-accent tabular-nums">{formatCurrency(a.revenue)}</p>
             </div>
             <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mt-1.5 text-xs">
               <Metric label="$/hr" value={`$${a.revPerHour}`} />
@@ -360,8 +376,8 @@ function AggCard({ a }: { a: AggRow }) {
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-border bg-bg-tertiary px-2 py-1.5">
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className="text-sm font-bold text-ink mt-0.5">{value}</p>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">{label}</p>
+      <p className="text-sm font-bold text-ink mt-0.5 tabular-nums">{value}</p>
     </div>
   )
 }

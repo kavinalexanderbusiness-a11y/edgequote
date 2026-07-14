@@ -9,6 +9,7 @@ import { Menu } from '@/components/ui/Menu'
 import { Toggle } from '@/components/ui/Toggle'
 import { Input } from '@/components/ui/Input'
 import { Textarea } from '@/components/ui/Textarea'
+import { FilterPill } from '@/components/ui/FilterPill'
 import { InlineEmpty } from '@/components/ui/EmptyState'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { CrmCampaign, CampaignKind } from '@/types'
@@ -157,7 +158,7 @@ export function CampaignManager() {
             onSelect: () => createFromPreset(i),
           }))}>
           {({ open, toggle, triggerProps }) => (
-            <Button size="sm" onClick={toggle} loading={creating} {...triggerProps}><Plus className="w-3.5 h-3.5" /> New</Button>
+            <Button size="sm" onClick={toggle} loading={creating} {...triggerProps}><Plus className="w-3.5 h-3.5" /> New automation</Button>
           )}
         </Menu>
       </div>
@@ -173,7 +174,7 @@ export function CampaignManager() {
           ))}
         </div>
       ) : campaigns.length === 0 ? (
-        <InlineEmpty icon={Megaphone}>No automated messages yet. Tap <span className="text-ink font-medium">New</span> to add a birthday greeting, anniversary thank-you, win-back, or recurring check-in.</InlineEmpty>
+        <InlineEmpty icon={Megaphone}>No automated messages yet. Tap <span className="text-ink font-medium">New automation</span> to add a birthday greeting, anniversary thank-you, win-back, or recurring check-in.</InlineEmpty>
       ) : (
         <div className="divide-y divide-border">
           {campaigns.map(c => {
@@ -238,10 +239,9 @@ export function CampaignManager() {
                       <span className="text-[11px] font-semibold text-ink-faint uppercase tracking-wide">Send by</span>
                       <div className="flex gap-2">
                         {['sms', 'email'].map(ch => (
-                          <button key={ch} onClick={() => toggleChannel(ch)} aria-pressed={draft.channels.includes(ch)}
-                            className={cn('text-xs font-semibold rounded-full px-3 py-1.5 border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40', draft.channels.includes(ch) ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
+                          <FilterPill key={ch} active={draft.channels.includes(ch)} onClick={() => toggleChannel(ch)}>
                             {ch === 'sms' ? 'SMS' : 'Email'}
-                          </button>
+                          </FilterPill>
                         ))}
                       </div>
                     </div>
@@ -263,7 +263,7 @@ export function CampaignManager() {
                     <div className="flex items-center gap-2 pt-1">
                       <Button size="sm" onClick={() => saveDraft(c)} loading={saving}>Save</Button>
                       <Button size="sm" variant="ghost" onClick={() => { setEditingId(null); setDraft(null) }}>Cancel</Button>
-                      <button onClick={() => del(c)} aria-label={`Delete ${c.name}`} className="ml-auto p-2 rounded-lg text-ink-faint hover:text-red-400 hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" title="Delete campaign"><Trash2 className="w-4 h-4" /></button>
+                      <Button size="sm" variant="ghost" className="ml-auto text-red-400/70 hover:text-red-400" onClick={() => del(c)} aria-label="Delete automation" title="Delete"><Trash2 className="w-4 h-4" /></Button>
                     </div>
                   </div>
                 )}

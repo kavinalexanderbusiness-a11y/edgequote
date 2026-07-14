@@ -41,7 +41,7 @@ export function AssetCard({ candidate, selected, onClick }: {
             <p className="text-sm font-semibold text-ink truncate">
               {candidate.serviceType || 'Completed job'}
             </p>
-            <span title="Post potential score (0–100)" className={cn('shrink-0 text-[10px] font-bold rounded-full px-1.5 py-0.5 border', toneSoft[scoreTone(candidate.score)])}>
+            <span title="Post potential score (0–100)" className={cn('shrink-0 text-[10px] font-bold tabular-nums rounded-full px-1.5 py-0.5 border', toneSoft[scoreTone(candidate.score)])}>
               {candidate.score}
             </span>
           </div>

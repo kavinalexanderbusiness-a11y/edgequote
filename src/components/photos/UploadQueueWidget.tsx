@@ -39,8 +39,8 @@ export function UploadQueueWidget() {
           <span className="text-ink-faint font-normal"> · {done}/{items.length}</span>
         </span>
         {failed > 0 && <button onClick={retryAllFailed} className="text-[11px] font-semibold text-accent hover:underline">Retry all</button>}
-        <button onClick={() => setCollapsed(c => !c)} className="text-ink-faint hover:text-ink">{collapsed ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}</button>
-        {allDone && <button onClick={() => clearDone()} className="text-ink-faint hover:text-ink"><X className="w-4 h-4" /></button>}
+        <button onClick={() => setCollapsed(c => !c)} aria-expanded={!collapsed} aria-label={collapsed ? 'Expand uploads' : 'Collapse uploads'} className="text-ink-faint hover:text-ink">{collapsed ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}</button>
+        {allDone && <button onClick={() => clearDone()} aria-label="Clear finished uploads" title="Clear finished" className="text-ink-faint hover:text-ink"><X className="w-4 h-4" /></button>}
       </div>
 
       {offline && (
@@ -73,13 +73,13 @@ function Thumb({ it }: { it: QueueItem }) {
         {it.status === 'paused' && <WifiOff className="w-3.5 h-3.5 text-amber-300" />}
         {it.status === 'done' && <Check className="w-4 h-4 text-emerald-300 drop-shadow" />}
         {it.status === 'error' && (
-          <button onClick={() => retryUpload(it.id)} title={it.error || 'Retry'} className="h-5 w-5 rounded-full bg-red-500/80 text-white flex items-center justify-center">
+          <button onClick={() => retryUpload(it.id)} aria-label="Retry upload" title={it.error || 'Retry'} className="h-5 w-5 rounded-full bg-red-500/80 text-white flex items-center justify-center">
             <RotateCw className="w-3 h-3" />
           </button>
         )}
       </span>
       {(it.status === 'error' || it.status === 'done') && (
-        <button onClick={() => dismissUpload(it.id)} className="absolute top-0.5 right-0.5 h-3.5 w-3.5 rounded-full bg-black/60 text-white flex items-center justify-center opacity-0 group-hover:opacity-100">
+        <button onClick={() => dismissUpload(it.id)} aria-label="Dismiss upload" className="absolute top-0.5 right-0.5 h-3.5 w-3.5 rounded-full bg-black/60 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 focus-visible:opacity-100">
           <X className="w-2 h-2" />
         </button>
       )}

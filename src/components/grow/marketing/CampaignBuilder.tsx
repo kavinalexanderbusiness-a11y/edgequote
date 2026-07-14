@@ -108,7 +108,7 @@ export function CampaignBuilder({ aiEnabled, initialCampaigns, initialKind, init
 
       {/* Pick a campaign */}
       <div>
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-2">Choose a campaign</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-faint mb-2">Choose a campaign</p>
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
           {CAMPAIGN_DEFS.map(c => {
             const Icon = c.icon
@@ -141,7 +141,7 @@ export function CampaignBuilder({ aiEnabled, initialCampaigns, initialKind, init
 
         <div>
           <div className="flex items-center justify-between mb-1.5">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Platforms · {count} selected</p>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-faint">Platforms · {count} selected</p>
             <button type="button" onClick={allSelected ? clearAll : selectAll} className="text-[11px] text-accent hover:underline">
               {allSelected ? 'Clear all' : 'Select all'}
             </button>
@@ -188,7 +188,7 @@ export function CampaignBuilder({ aiEnabled, initialCampaigns, initialKind, init
 
       {/* Existing campaigns */}
       <div>
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-2">Your campaigns · {campaigns.length}</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-faint mb-2">Your campaigns · {campaigns.length}</p>
         {campaigns.length === 0 ? (
           <EmptyState icon={Megaphone} title="No campaigns yet" description="Pick a theme above and generate your first multi-platform campaign." />
         ) : (
@@ -196,14 +196,14 @@ export function CampaignBuilder({ aiEnabled, initialCampaigns, initialKind, init
             {campaigns.map(c => {
               const cd = campaignDef(c.kind)
               return (
-                <Card key={c.id} className="p-3 flex items-center gap-3">
+                <Card key={c.id} className="group p-3 flex items-center gap-3 card-lift">
                   <cd.icon className="w-4 h-4 text-ink-muted shrink-0" />
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-semibold text-ink truncate">{c.name}</p>
                     <p className="text-xs text-ink-muted">{cd.label} · {c.channels.length} platform{c.channels.length === 1 ? '' : 's'} · {c.status}</p>
                   </div>
                   <Link href={`/dashboard/grow/posts?campaign=${c.id}`} className="text-xs text-accent inline-flex items-center gap-1 hover:underline shrink-0">
-                    View posts <ArrowRight className="w-3 h-3" />
+                    View posts <ArrowRight className="w-3 h-3 transition-transform group-hover:translate-x-0.5" />
                   </Link>
                   <button onClick={() => archive(c)} className="text-ink-faint hover:text-ink shrink-0" title="Archive"><Archive className="w-4 h-4" /></button>
                 </Card>

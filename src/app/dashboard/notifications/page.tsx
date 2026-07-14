@@ -118,7 +118,7 @@ export default function NotificationsPage() {
         )}
         <button onClick={() => dismiss(g.ids)} title={supportsManage ? 'Dismiss' : 'Mark read'} aria-label="Dismiss"
           className="h-7 w-7 rounded-lg text-ink-faint hover:text-ink hover:bg-surface flex items-center justify-center">
-          {compact ? <X className="w-3.5 h-3.5" /> : <X className="w-3.5 h-3.5" />}
+          <X className="w-3.5 h-3.5" />
         </button>
       </div>
     )
@@ -152,14 +152,14 @@ export default function NotificationsPage() {
         <div className="space-y-4">
           {/* Needs attention — money/trust problems, never grouped, never buried */}
           {actionNeeded.length > 0 && (
-            <section className="space-y-1.5">
+            <section className="space-y-1.5 animate-rise">
               <h2 className="text-xs font-semibold uppercase tracking-wide text-amber-400 flex items-center gap-1.5"><AlertTriangle className="w-3.5 h-3.5" /> Needs attention</h2>
               <div className="rounded-card border border-amber-500/30 bg-amber-500/[0.04] divide-y divide-border overflow-hidden">
                 {actionNeeded.map(g => {
                   const Icon = ICON[g.type] || Bell
                   return (
                     <div key={g.key} className={cn('px-4 py-3 flex items-start gap-3', g.unread && 'bg-amber-500/[0.06]')}>
-                      <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border border-amber-500/30 bg-amber-500/10 text-amber-300"><Icon className="w-4.5 h-4.5" /></div>
+                      <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border border-amber-500/30 bg-amber-500/10 text-amber-300"><Icon className="w-4 h-4" /></div>
                       <button onClick={() => openItem(g.items[0])} className="min-w-0 flex-1 text-left">
                         <p className={cn('text-sm', g.unread ? 'font-semibold text-ink' : 'text-ink-muted')}>{g.title}</p>
                         {g.body && <p className="text-xs text-ink-muted mt-0.5">{g.body}</p>}
@@ -175,7 +175,7 @@ export default function NotificationsPage() {
 
           {/* Recent activity — wins & chatter, grouped by type, expandable */}
           {activity.length > 0 && (
-            <section className="space-y-1.5">
+            <section className="space-y-1.5 animate-rise stagger-1">
               <div className="flex items-center justify-between">
                 <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Recent activity</h2>
                 {snoozedCount > 0 && <span className="text-[10px] text-ink-faint flex items-center gap-1"><Clock className="w-3 h-3" /> {snoozedCount} snoozed</span>}
@@ -188,7 +188,7 @@ export default function NotificationsPage() {
                   return (
                     <div key={g.key}>
                       <div className={cn('px-4 py-3.5 flex items-start gap-3', g.unread && 'bg-accent/[0.04]')}>
-                        <div className={cn('w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border', g.unread ? 'border-accent/30 bg-accent/10 text-accent' : 'border-border text-ink-muted')}><Icon className="w-4.5 h-4.5" /></div>
+                        <div className={cn('w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border', g.unread ? 'border-accent/30 bg-accent/10 text-accent' : 'border-border text-ink-muted')}><Icon className="w-4 h-4" /></div>
                         <button onClick={onMain} className="min-w-0 flex-1 text-left">
                           <p className={cn('text-sm flex items-center gap-2', g.unread ? 'font-semibold text-ink' : 'text-ink-muted')}>
                             {g.title}
@@ -197,7 +197,7 @@ export default function NotificationsPage() {
                           {g.body && <p className="text-xs text-ink-muted mt-0.5 truncate">{g.body}</p>}
                           <p className="text-[10px] text-ink-faint mt-0.5">{timeAgo(g.latestAt)}</p>
                         </button>
-                        {g.count > 1 && <ChevronDown className={cn('w-4 h-4 text-ink-faint shrink-0 mt-1.5 transition-transform cursor-pointer', isOpen && 'rotate-180')} onClick={onMain} />}
+                        {g.count > 1 && <ChevronDown aria-hidden="true" className={cn('w-4 h-4 text-ink-faint shrink-0 mt-1.5 transition-transform', isOpen && 'rotate-180')} />}
                         <Controls g={g} compact />
                       </div>
                       {isOpen && g.count > 1 && (
@@ -211,8 +211,8 @@ export default function NotificationsPage() {
                               </button>
                               <div className="flex items-center gap-1 shrink-0">
                                 {n.href && <button onClick={() => openItem(n)} className="text-[11px] font-semibold text-accent hover:underline px-1.5 py-1">{notificationActionLabel(n.type)}</button>}
-                                {supportsManage && <button onClick={() => snooze([n.id])} title="Remind me tomorrow" className="h-6 w-6 rounded-lg text-ink-faint hover:text-ink hover:bg-surface flex items-center justify-center"><Clock className="w-3 h-3" /></button>}
-                                <button onClick={() => dismiss([n.id])} title={supportsManage ? 'Dismiss' : 'Mark read'} className="h-6 w-6 rounded-lg text-ink-faint hover:text-ink hover:bg-surface flex items-center justify-center"><X className="w-3 h-3" /></button>
+                                {supportsManage && <button onClick={() => snooze([n.id])} title="Remind me tomorrow" aria-label="Snooze" className="h-6 w-6 rounded-lg text-ink-faint hover:text-ink hover:bg-surface flex items-center justify-center"><Clock className="w-3 h-3" /></button>}
+                                <button onClick={() => dismiss([n.id])} title={supportsManage ? 'Dismiss' : 'Mark read'} aria-label="Dismiss" className="h-6 w-6 rounded-lg text-ink-faint hover:text-ink hover:bg-surface flex items-center justify-center"><X className="w-3 h-3" /></button>
                               </div>
                             </div>
                           ))}

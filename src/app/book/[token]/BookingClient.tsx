@@ -252,7 +252,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
           {/* eslint-disable-next-line @next/next/no-img-element */}
           {biz.logo_url ? <img src={biz.logo_url} alt="" className="h-10 w-auto object-contain" /> : <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center"><Leaf className="w-5 h-5 text-accent" /></div>}
           <div className="min-w-0">
-            <p className="text-base font-bold text-ink truncate">{biz.company_name || 'Get an instant quote'}</p>
+            <p className="text-base font-bold text-ink truncate tracking-tight">{biz.company_name || 'Get an instant quote'}</p>
             <p className="text-xs text-ink-muted">Instant lawn-care quote · book in minutes</p>
           </div>
         </div>
@@ -271,7 +271,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
           <Section title="Where's your lawn?" sub="Enter your address to get an instant price.">
             <AddressAutocomplete label="Property address" value={addressText} onChange={setAddressText}
               onSelect={p => { setParsed(p); setAddressText(p.formatted); setAutoResult(undefined); setShowTracer(false); setSqft(0) }} placeholder="Start typing your address…" />
-            <Button className="w-full mt-4" disabled={!parsed?.lat} onClick={() => setStep('measure')}>
+            <Button size="lg" className="w-full mt-4" disabled={!parsed?.lat} onClick={() => setStep('measure')}>
               Next <ArrowRight className="w-4 h-4" />
             </Button>
           </Section>
@@ -285,21 +285,21 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
             ) : !showTracer && autoResult ? (
               <div className="space-y-3">
                 {/* The property, from above — confirmation that we're quoting the right home */}
-                <div className="rounded-xl overflow-hidden border border-border-strong">
+                <div className="rounded-card overflow-hidden border border-border-strong">
                   <div ref={previewEl} className="w-full h-56 bg-bg-tertiary" />
                   <div className="px-4 py-2.5 bg-bg-secondary border-t border-border flex items-center gap-2">
                     <MapPin className="w-3.5 h-3.5 text-accent shrink-0" />
                     <p className="text-xs text-ink truncate">{parsed?.formatted || parsed?.address}</p>
                   </div>
                 </div>
-                <div className="rounded-xl border border-accent/30 bg-accent/5 px-4 py-4">
+                <div className="rounded-card border border-accent/30 bg-accent/5 px-4 py-4">
                   <div className="flex items-center justify-between gap-3">
                     <span className="text-sm text-ink-muted flex items-center gap-2"><Ruler className="w-4 h-4 text-accent" /> Estimated lawn size</span>
                     <ConfidenceBadge confidence={autoResult.confidence} />
                   </div>
                   <div className="flex items-end gap-2 mt-2">
                     <input type="number" value={sqft || ''} onChange={e => setSqft(Number(e.target.value) || 0)} aria-label="Lawn size in square feet"
-                      className="w-32 bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-xl font-bold text-ink outline-none focus:border-accent" />
+                      className="w-32 bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-xl font-bold text-ink tabular-nums outline-none focus:border-accent" />
                     <span className="text-sm text-ink-muted pb-2">sq ft</span>
                   </div>
                   <p className="text-[11px] text-ink-faint mt-1">Not quite right? Edit the number, or measure it exactly on the map.</p>
@@ -323,7 +323,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
               <>
                 <div ref={mapEl} className="w-full h-72 rounded-xl overflow-hidden border border-border-strong bg-bg-tertiary" />
                 <div className="flex items-center justify-between mt-3">
-                  <div className="flex items-center gap-2 text-sm text-ink">
+                  <div className="flex items-center gap-2 text-sm text-ink tabular-nums">
                     <Ruler className="w-4 h-4 text-accent" /> {sqft > 0 ? `${sqft.toLocaleString()} sq ft` : 'Tap 3+ corners to start'}
                   </div>
                   <div className="flex items-center gap-1.5">
@@ -331,12 +331,12 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
                     <Button variant="ghost" size="sm" onClick={clearTrace} title="Clear"><Trash2 className="w-4 h-4" /></Button>
                   </div>
                 </div>
-                <button onClick={() => setMapErr('manual')} className="text-xs text-ink-faint hover:text-ink mt-2 underline">Enter size manually instead</button>
+                <button onClick={() => setMapErr('manual')} className="text-xs text-ink-faint hover:text-ink mt-2 underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">Enter size manually instead</button>
               </>
             )}
             <div className="flex gap-2 mt-4">
-              <Button variant="secondary" onClick={() => setStep('address')}><ArrowLeft className="w-4 h-4" /></Button>
-              <Button className="flex-1" disabled={sqft <= 0} onClick={() => setStep('plan')}>See my price <ArrowRight className="w-4 h-4" /></Button>
+              <Button variant="secondary" aria-label="Back" onClick={() => setStep('address')}><ArrowLeft className="w-4 h-4" /></Button>
+              <Button size="lg" className="flex-1" disabled={sqft <= 0} onClick={() => setStep('plan')}>See my price <ArrowRight className="w-4 h-4" /></Button>
             </div>
           </Section>
         )}
@@ -347,14 +347,14 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
             <div className="space-y-2">
               {plans.map(p => (
                 <button key={p.key} onClick={() => setPlan(p)}
-                  className={cn('w-full text-left rounded-xl border px-4 py-3 transition-all flex items-center justify-between gap-3',
+                  className={cn('w-full text-left rounded-card border px-4 py-3 transition-all flex items-center justify-between gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
                     plan?.key === p.key ? 'border-accent bg-accent/10' : 'border-border hover:border-accent/40')}>
                   <div>
-                    <p className="text-sm font-semibold text-ink flex items-center gap-2">{p.label}{p.recommended && <span className="text-[10px] uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5">Best value</span>}</p>
-                    {p.annual ? <p className="text-xs text-ink-faint mt-0.5">{formatCurrency(p.price)}/visit · ~{formatCurrency(p.annual)}/season</p> : <p className="text-xs text-ink-faint mt-0.5">single visit</p>}
+                    <p className="text-sm font-semibold text-ink flex items-center gap-2">{p.label}{p.recommended && <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-accent border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5">Best value</span>}</p>
+                    {p.annual ? <p className="text-xs text-ink-faint mt-0.5 tabular-nums">{formatCurrency(p.price)}/visit · ~{formatCurrency(p.annual)}/season</p> : <p className="text-xs text-ink-faint mt-0.5">single visit</p>}
                   </div>
                   <div className="text-right shrink-0">
-                    <p className="text-lg font-bold text-ink">{formatCurrency(p.price)}</p>
+                    <p className="text-lg font-bold text-ink tabular-nums">{formatCurrency(p.price)}</p>
                     <p className="text-[10px] text-ink-faint">{p.key === 'one_time' ? 'one-time' : 'per visit'}</p>
                   </div>
                 </button>
@@ -362,8 +362,8 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
             </div>
             {gst > 0 && <p className="text-[11px] text-ink-faint mt-2">Prices shown before {gst}% GST.</p>}
             <div className="flex gap-2 mt-4">
-              <Button variant="secondary" onClick={() => setStep('measure')}><ArrowLeft className="w-4 h-4" /></Button>
-              <Button className="flex-1" disabled={!plan} onClick={() => setStep('contact')}>Continue <ArrowRight className="w-4 h-4" /></Button>
+              <Button variant="secondary" aria-label="Back" onClick={() => setStep('measure')}><ArrowLeft className="w-4 h-4" /></Button>
+              <Button size="lg" className="flex-1" disabled={!plan} onClick={() => setStep('contact')}>Continue <ArrowRight className="w-4 h-4" /></Button>
             </div>
           </Section>
         )}
@@ -400,7 +400,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
 
               {/* Stay in the loop — synced straight into the business's messaging
                   preferences (channel opt-ins + per-category prefs). */}
-              <div className="rounded-xl border border-border bg-bg-secondary px-4 py-3 space-y-2">
+              <div className="rounded-card border border-border bg-bg-secondary px-4 py-3 space-y-2">
                 <p className="text-xs font-semibold text-ink-muted">Keep me updated by text & email about…</p>
                 {([
                   ['reminders', 'Appointment reminders & service updates'],
@@ -419,9 +419,9 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
               </div>
             </div>
             {plan && (
-              <div className="mt-4 rounded-xl border border-border bg-bg-secondary px-4 py-3 flex items-center justify-between">
+              <div className="mt-4 rounded-card border border-border bg-bg-secondary px-4 py-3 flex items-center justify-between">
                 <span className="text-sm text-ink-muted">{plan.label}</span>
-                <span className="text-base font-bold text-ink">{formatCurrency(plan.price)}{plan.key !== 'one_time' ? '/visit' : ''}</span>
+                <span className="text-base font-bold text-ink tabular-nums">{formatCurrency(plan.price)}{plan.key !== 'one_time' ? '/visit' : ''}</span>
               </div>
             )}
             {error && <p className="text-sm text-red-400 mt-3">{error}</p>}
@@ -436,8 +436,8 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
               </p>
             )}
             <div className="flex gap-2 mt-4">
-              <Button variant="secondary" onClick={() => setStep('plan')}><ArrowLeft className="w-4 h-4" /></Button>
-              <Button className="flex-1" loading={submitting} disabled={!name.trim() || !(email.trim() || phone.trim())} onClick={submit}>Book my service <Check className="w-4 h-4" /></Button>
+              <Button variant="secondary" aria-label="Back" onClick={() => setStep('plan')}><ArrowLeft className="w-4 h-4" /></Button>
+              <Button size="lg" className="flex-1" loading={submitting} disabled={!name.trim() || !(email.trim() || phone.trim())} onClick={submit}>Book my service <Check className="w-4 h-4" /></Button>
             </div>
           </Section>
         )}
@@ -467,8 +467,8 @@ function Center({ children }: { children: ReactNode }) {
 function Section({ title, sub, children }: { title: string; sub?: string; children: ReactNode }) {
   return (
     <div>
-      <h1 className="text-lg font-bold text-ink">{title}</h1>
-      {sub && <p className="text-sm text-ink-muted mt-1 mb-4">{sub}</p>}
+      <h1 className="text-lg font-bold text-ink tracking-tight">{title}</h1>
+      {sub && <p className="text-sm text-ink-muted mt-1 mb-4 tabular-nums">{sub}</p>}
       {children}
     </div>
   )
@@ -478,9 +478,9 @@ function ConfidenceBadge({ confidence }: { confidence?: string }) {
   // the conversion moment. High reads as verified; anything else reads as an
   // editable estimate (which it is — the field right beside it).
   if (confidence === 'high') {
-    return <span className="text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border text-emerald-400 border-emerald-500/30 bg-emerald-500/10">Verified estimate</span>
+    return <span className="text-[10px] font-semibold uppercase tracking-[0.14em] rounded-full px-2 py-0.5 border text-emerald-400 border-emerald-500/30 bg-emerald-500/10">Verified estimate</span>
   }
-  return <span className="text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border text-ink-muted border-border bg-bg-tertiary">Estimated</span>
+  return <span className="text-[10px] font-semibold uppercase tracking-[0.14em] rounded-full px-2 py-0.5 border text-ink-muted border-border bg-bg-tertiary">Estimated</span>
 }
 function Field({ label, value, onChange, placeholder, type, autoFocus }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string; autoFocus?: boolean }) {
   return (

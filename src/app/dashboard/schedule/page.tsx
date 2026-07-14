@@ -17,6 +17,7 @@ import { resolveAutomations, Automations } from '@/lib/comms/automations'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { Skeleton, SkeletonRows } from '@/components/ui/Skeleton'
 import { cn, minutesBetween } from '@/lib/utils'
 import { toast } from '@/lib/toast'
 import { format, addMonths, addWeeks, addDays, subMonths, subWeeks, subDays, parseISO, getDay } from 'date-fns'
@@ -1460,10 +1461,11 @@ export default function SchedulePage() {
     setShowForm(true)
   }
 
+  // Day view leads with the WEEKDAY — it's the datum you're paging by.
   const headingLabel =
     view === 'month' ? format(cursor, 'MMMM yyyy')
     : view === 'week' ? `Week of ${format(cursor, 'MMM d, yyyy')}`
-    : format(cursor, 'MMMM d, yyyy')
+    : format(cursor, 'EEEE, MMM d, yyyy')
 
   const viewButtons: CalendarView[] = ['month', 'week', 'day']
 
@@ -1503,14 +1505,14 @@ export default function SchedulePage() {
       {/* Controls */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-2 flex-wrap">
-          <Button variant="secondary" size="sm" onClick={() => navigate(-1)}>
+          <Button variant="secondary" size="sm" aria-label="Previous period" onClick={() => navigate(-1)}>
             <ChevronLeft className="w-4 h-4" />
           </Button>
           <Button variant="secondary" size="sm" onClick={() => setCursor(new Date())}>Today</Button>
-          <Button variant="secondary" size="sm" onClick={() => navigate(1)}>
+          <Button variant="secondary" size="sm" aria-label="Next period" onClick={() => navigate(1)}>
             <ChevronRight className="w-4 h-4" />
           </Button>
-          <span className="text-sm font-semibold text-ink ml-2">{headingLabel}</span>
+          <span className="text-base font-bold tracking-tight text-ink ml-2">{headingLabel}</span>
         </div>
         <div className="flex items-center gap-1 bg-bg-secondary border border-border rounded-xl p-1">
           {viewButtons.map(v => (
@@ -1600,7 +1602,7 @@ export default function SchedulePage() {
                 )}
               </div>
               <button onClick={() => setDismissedSuggestions(prev => new Set(prev).add(s.id))}
-                className="text-ink-faint hover:text-ink shrink-0" title="Dismiss">
+                className="text-ink-faint hover:text-ink shrink-0" title="Dismiss" aria-label="Dismiss suggestion">
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
@@ -1617,11 +1619,11 @@ export default function SchedulePage() {
             <h2 className="text-sm font-semibold text-ink">{editing ? 'Edit Job' : 'New Job'}</h2>
             <div className="flex items-center gap-2">
               {editing && (
-                <button onClick={handleDelete} className="text-ink-faint hover:text-red-400 transition-colors" title="Delete job">
+                <button onClick={handleDelete} className="text-red-400/70 hover:text-red-400 transition-colors" title="Delete job" aria-label="Delete job">
                   <Trash2 className="w-4 h-4" />
                 </button>
               )}
-              <button onClick={closeForm} className="text-ink-faint hover:text-ink transition-colors">
+              <button onClick={closeForm} className="text-ink-faint hover:text-ink transition-colors" aria-label="Close">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -1701,7 +1703,12 @@ export default function SchedulePage() {
       )}
 
       {loading ? (
-        <div className="text-center py-16 text-sm text-ink-muted">Loading schedule...</div>
+        // Shimmer in the shape of the day view (settings bar + job rows) — the
+        // shared skeleton language instead of a bare "Loading…" line.
+        <div className="space-y-3">
+          <Skeleton className="h-12 w-full rounded-card" />
+          <SkeletonRows count={5} />
+        </div>
       ) : view === 'day' ? (
         <>
         <DaySettingsBar
@@ -1849,15 +1856,12 @@ export default function SchedulePage() {
       {selectedDays.size > 0 && (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[55] flex items-center gap-2 rounded-2xl border border-border bg-bg-secondary/95 backdrop-blur px-4 py-2.5 shadow-2xl">
           <span className="text-sm font-semibold text-ink">{selectedDays.size} day{selectedDays.size !== 1 ? 's' : ''} selected</span>
-          <button
-            onClick={() => setDayMenu({ dates: Array.from(selectedDays), current: null, x: window.innerWidth / 2 - 124, y: Math.max(60, window.innerHeight / 2 - 200) })}
-            className="px-3 py-1.5 rounded-lg bg-accent text-black text-xs font-semibold hover:bg-accent/90 transition-colors">Set status</button>
-          <button
-            onClick={() => clearDayStatusFor(Array.from(selectedDays))}
-            className="px-3 py-1.5 rounded-lg border border-border text-xs font-medium text-ink-muted hover:text-ink transition-colors">Clear</button>
-          <button
-            onClick={() => setSelectedDays(new Set())}
-            className="px-2 py-1.5 rounded-lg text-xs font-medium text-ink-faint hover:text-ink transition-colors">Done</button>
+          <Button size="sm"
+            onClick={() => setDayMenu({ dates: Array.from(selectedDays), current: null, x: window.innerWidth / 2 - 124, y: Math.max(60, window.innerHeight / 2 - 200) })}>
+            Set status
+          </Button>
+          <Button size="sm" variant="secondary" onClick={() => clearDayStatusFor(Array.from(selectedDays))}>Clear status</Button>
+          <Button size="sm" variant="ghost" onClick={() => setSelectedDays(new Set())}>Cancel</Button>
         </div>
       )}
     </div>

@@ -119,13 +119,14 @@ export function CommunicationsTest() {
             {/* Test sender */}
             <div className="border-t border-border pt-3">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-1.5">Send a test SMS</p>
-              <div className="flex flex-col sm:flex-row gap-2 sm:items-end">
+              <form onSubmit={e => { e.preventDefault(); if (to.trim() && !sending) sendTest() }}
+                className="flex flex-col sm:flex-row gap-2 sm:items-start">
                 <div className="flex-1">
-                  <Input label="Your phone number" placeholder="+15875551234" value={to} onChange={e => setTo(e.target.value)} />
+                  <Input label="Your phone number" type="tel" placeholder="+15875551234" value={to} onChange={e => setTo(e.target.value)}
+                    hint="Use E.164 format (e.g. +1 then the 10-digit number)." />
                 </div>
-                <Button variant="secondary" onClick={sendTest} loading={sending} disabled={!to.trim()}>Send test SMS</Button>
-              </div>
-              <p className="text-[10px] text-ink-faint mt-1">Use E.164 format (e.g. +1 then the 10-digit number).</p>
+                <Button type="submit" variant="secondary" className="sm:mt-6" loading={sending} disabled={!to.trim()}>Send test SMS</Button>
+              </form>
 
               {result && (
                 result.sent ? (
@@ -145,13 +146,14 @@ export function CommunicationsTest() {
             {/* Test email */}
             <div className="border-t border-border pt-3">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-1.5">Send a test email</p>
-              <div className="flex flex-col sm:flex-row gap-2 sm:items-end">
+              <form onSubmit={e => { e.preventDefault(); if (emailTo.trim() && !emailSending) sendTestEmail() }}
+                className="flex flex-col sm:flex-row gap-2 sm:items-start">
                 <div className="flex-1">
-                  <Input label="Your email address" type="email" placeholder="you@example.com" value={emailTo} onChange={e => setEmailTo(e.target.value)} />
+                  <Input label="Your email address" type="email" placeholder="you@example.com" value={emailTo} onChange={e => setEmailTo(e.target.value)}
+                    hint={`Sent from ${diag.resendFrom || 'your RESEND_FROM address'} — must be on a domain verified in Resend.`} />
                 </div>
-                <Button variant="secondary" onClick={sendTestEmail} loading={emailSending} disabled={!emailTo.trim()}>Send test email</Button>
-              </div>
-              <p className="text-[10px] text-ink-faint mt-1">Sent from {diag.resendFrom || 'your RESEND_FROM address'} — must be on a domain verified in Resend.</p>
+                <Button type="submit" variant="secondary" className="sm:mt-6" loading={emailSending} disabled={!emailTo.trim()}>Send test email</Button>
+              </form>
 
               {emailResult && (
                 emailResult.sent ? (

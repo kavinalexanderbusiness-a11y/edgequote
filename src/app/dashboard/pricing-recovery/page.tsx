@@ -266,14 +266,14 @@ export default function PricingRecoveryPage() {
 
   return (
     <div className="max-w-4xl space-y-6">
-      <PageHeader title="Pricing Recovery" description="Find unpriced work so reports and growth features run on real revenue" />
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Pricing Recovery" description="Find unpriced work so reports and growth features run on real revenue." />
 
       {/* Data Quality Score */}
       <Card>
         <CardBody className="flex items-center gap-5">
           <div className="text-center shrink-0">
             <Gauge className={`w-6 h-6 mx-auto ${scoreTone}`} />
-            <p className={`text-4xl font-black tracking-tight ${scoreTone}`}>{m.score}%</p>
+            <p className={`text-4xl font-black tracking-tight tabular-nums ${scoreTone}`}>{m.score}%</p>
             <p className="text-[10px] uppercase tracking-wide text-ink-faint">Data quality</p>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 flex-1">
@@ -299,11 +299,11 @@ export default function PricingRecoveryPage() {
       {/* Unpriced recurring series — highest leverage */}
       {m.unpricedSeries.length > 0 && (
         <Section title="Unpriced recurring series" sub={`${m.unpricedSeries.length} series with no price — one click prices every visit`} icon={Repeat}>
-          {m.unpricedSeries.map(s => {
+          {m.unpricedSeries.map((s, i) => {
             const key = `new-${s.recId}`
             const price = priceFor(key, s.suggestion.price)
             return (
-              <RecoveryRow key={s.recId}
+              <RecoveryRow key={s.recId} rise={i}
                 title={s.sample.customerName} sub={`${cadenceLabel(s.cadence)} · ${s.visits} visits · ${s.sample.address || s.sample.service_type || ''}`}
                 source={s.suggestion.source} price={price} onPrice={v => setEdits(e => ({ ...e, [key]: v }))}
                 missing={formatCurrency(price * s.visits)}
@@ -318,11 +318,11 @@ export default function PricingRecoveryPage() {
       {/* Recurring with a quote but no recurring price */}
       {m.mispricedSeries.length > 0 && (
         <Section title="Recurring without recurring pricing" sub={`${m.mispricedSeries.length} series billing each visit at the first-visit price`} icon={AlertTriangle}>
-          {m.mispricedSeries.map(s => {
+          {m.mispricedSeries.map((s, i) => {
             const key = `fix-${s.recId}`
             const price = priceFor(key, s.suggestion.price)
             return (
-              <RecoveryRow key={s.recId}
+              <RecoveryRow key={s.recId} rise={i}
                 title={s.sample.customerName} sub={`${cadenceLabel(s.cadence)} · ${s.visits} visits · currently ${formatCurrency(s.current)}/visit (first-visit price)`}
                 source={s.suggestion.source} price={price} onPrice={v => setEdits(e => ({ ...e, [key]: v }))}
                 missing={`${formatCurrency((price - s.current) * s.visits)} delta`}
@@ -336,11 +336,11 @@ export default function PricingRecoveryPage() {
       {/* Priced below the measured-lawn recommendation — recurring upside */}
       {m.underpricedSeries.length > 0 && (
         <Section title="Priced below recommended" sub={`${m.underpricedSeries.length} series under the measured-lawn rate · +${formatCurrency(m.upside)} upside`} icon={TrendingUp}>
-          {m.underpricedSeries.map(s => {
+          {m.underpricedSeries.map((s, i) => {
             const key = `up-${s.recId}`
             const price = priceFor(key, s.recommended)
             return (
-              <RecoveryRow key={s.recId}
+              <RecoveryRow key={s.recId} rise={i}
                 title={s.sample.customerName} sub={`${cadenceLabel(s.cadence)} · ${s.futureVisits} upcoming visit${s.futureVisits !== 1 ? 's' : ''} · now ${formatCurrency(s.current)}/visit`}
                 source={`measured lawn → recommended ${formatCurrency(s.recommended)}/visit`}
                 price={price} onPrice={v => setEdits(e => ({ ...e, [key]: v }))}
@@ -355,10 +355,10 @@ export default function PricingRecoveryPage() {
       {/* One-time unpriced jobs */}
       {m.oneTimeGroups.length > 0 && (
         <Section title="Unpriced one-off jobs" sub={`${m.oneTimeGroups.reduce((s, g) => s + g.jobs.length, 0)} jobs with no price`} icon={DollarSign}>
-          {m.oneTimeGroups.map(g => {
+          {m.oneTimeGroups.map((g, i) => {
             const key = `ot-${g.customerId ?? 'none'}`
             return (
-              <RecoveryRow key={key}
+              <RecoveryRow key={key} rise={i}
                 title={g.sample.customerName} sub={`${g.jobs.length} job${g.jobs.length !== 1 ? 's' : ''} · ${g.sample.service_type || ''}`}
                 source={g.matchQuoteId ? 'existing quote match' : g.suggestion.source}
                 price={g.matchQuoteId ? g.matchValue : g.suggestion.price} onPrice={undefined}
@@ -383,23 +383,27 @@ function Section({ title, sub, icon: Icon, children }: { title: string; sub: str
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2">
-        <Icon className="w-4 h-4 text-accent" />
-        <h2 className="text-sm font-bold text-ink">{title}</h2>
+        <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
+          <Icon className="w-3.5 h-3.5 text-accent" />
+        </span>
+        <h2 className="text-sm font-semibold text-ink tracking-tight">{title}</h2>
         <span className="text-xs text-ink-faint">{sub}</span>
+        <span className="flex-1 h-px bg-border" aria-hidden />
       </div>
       <div className="space-y-2">{children}</div>
     </div>
   )
 }
 
-function RecoveryRow({ title, sub, source, price, onPrice, missing, primary, secondary }: {
+function RecoveryRow({ title, sub, source, price, onPrice, missing, primary, secondary, rise }: {
   title: string; sub: string; source: string; price: number; onPrice?: (v: number) => void; missing: string
   primary: { label: string; loading: boolean; onClick: () => void; icon: typeof Check }
   secondary?: { label: string; onClick: () => void; icon: typeof FileText }
+  rise?: number
 }) {
   const PIcon = primary.icon
   return (
-    <Card>
+    <Card className={rise != null ? `animate-rise stagger-${Math.min(rise + 1, 6)}` : undefined}>
       <CardBody className="space-y-2.5">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -409,7 +413,7 @@ function RecoveryRow({ title, sub, source, price, onPrice, missing, primary, sec
           </div>
           <div className="text-right shrink-0">
             <p className="text-[10px] uppercase tracking-wide text-ink-faint">At risk</p>
-            <p className="text-base font-bold text-amber-400">{missing}</p>
+            <p className="text-base font-bold text-amber-400 tabular-nums">{missing}</p>
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -430,10 +434,10 @@ function RecoveryRow({ title, sub, source, price, onPrice, missing, primary, sec
 function Metric({ icon: Icon, label, value, sub, tone }: { icon: typeof DollarSign; label: string; value: string; sub: string; tone: string }) {
   return (
     <Card className="p-4">
-      <div className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-muted uppercase tracking-wide">
+      <div className="flex items-center gap-1.5 text-[10px] font-semibold text-ink-muted uppercase tracking-[0.14em]">
         <Icon className={`w-3.5 h-3.5 ${tone}`} /> {label}
       </div>
-      <p className={`text-2xl font-bold tracking-tight mt-1 ${tone}`}>{value}</p>
+      <p className={`text-2xl font-bold tracking-tight mt-1 tabular-nums ${tone}`}>{value}</p>
       <p className="text-xs text-ink-faint mt-0.5">{sub}</p>
     </Card>
   )
@@ -443,7 +447,7 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: str
   return (
     <div className="rounded-lg border border-border bg-bg-tertiary px-2.5 py-1.5">
       <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className={`text-base font-bold mt-0.5 ${tone || 'text-ink'}`}>{value}</p>
+      <p className={`text-base font-bold mt-0.5 tabular-nums ${tone || 'text-ink'}`}>{value}</p>
     </div>
   )
 }

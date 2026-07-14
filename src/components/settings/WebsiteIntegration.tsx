@@ -243,8 +243,8 @@ export function WebsiteIntegration() {
               {/* Test panel */}
               <div className="rounded-card border border-border p-3.5 space-y-3">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <Button size="sm" variant="secondary" onClick={sendTest} disabled={test.status === 'sending'}>
-                    {test.status === 'sending' ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Sending…</> : <><Send className="w-3.5 h-3.5" /> Send test submission</>}
+                  <Button size="sm" variant="secondary" onClick={sendTest} loading={test.status === 'sending'}>
+                    {test.status === 'sending' ? 'Sending…' : <><Send className="w-3.5 h-3.5" /> Send test submission</>}
                   </Button>
                   <Button size="sm" variant="ghost" onClick={() => copy('curl', curl)}>
                     {copiedKey === 'curl' ? <><Check className="w-3.5 h-3.5" /> Copied</> : <><Terminal className="w-3.5 h-3.5" /> Copy cURL test</>}
@@ -397,8 +397,13 @@ function CopyRow({ label, value, copied, onCopy, hint, icon: Icon, openHref }: {
       <div className="flex items-center gap-2">
         <input readOnly value={value} onFocus={e => e.currentTarget.select()}
           className="flex-1 min-w-0 bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-xs text-ink-muted font-mono outline-none" />
-        <Button size="sm" variant="secondary" onClick={onCopy}>{copied ? <><Check className="w-3.5 h-3.5" /> Copied</> : <><Copy className="w-3.5 h-3.5" /> Copy</>}</Button>
-        {openHref && <a href={openHref} target="_blank" rel="noopener noreferrer"><Button size="sm" variant="ghost"><ExternalLink className="w-3.5 h-3.5" /></Button></a>}
+        <Button size="sm" variant="ghost" onClick={onCopy}>{copied ? <><Check className="w-3.5 h-3.5" /> Copied</> : <><Copy className="w-3.5 h-3.5" /> Copy</>}</Button>
+        {openHref && (
+          <a href={openHref} target="_blank" rel="noopener noreferrer" aria-label="Open booking link in new tab"
+            className="inline-flex items-center justify-center rounded-xl text-ink-muted hover:text-ink hover:bg-surface px-3.5 py-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            <ExternalLink className="w-3.5 h-3.5" />
+          </a>
+        )}
       </div>
       {hint && <p className="text-[11px] mt-1">{hint}</p>}
     </div>

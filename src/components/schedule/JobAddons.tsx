@@ -86,7 +86,7 @@ export function JobAddons({ baseValue, items, isRecurring, onAdd, onDelete, prev
                 {it.recurring && <Repeat className="w-3 h-3 shrink-0 text-accent" />}{it.description}
               </span>
               <span className="font-semibold text-ink shrink-0">{formatCurrency(Number(it.amount))}</span>
-              <button onClick={() => remove(it)} disabled={deletingId === it.id} title="Remove add-on"
+              <button type="button" onClick={() => remove(it)} disabled={deletingId === it.id} title="Remove add-on"
                 className="h-8 w-8 rounded-md border border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20 flex items-center justify-center shrink-0 disabled:opacity-50">
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
@@ -97,7 +97,7 @@ export function JobAddons({ baseValue, items, isRecurring, onAdd, onDelete, prev
 
       {/* One-tap: copy the previous visit's add-ons onto this visit */}
       {copyable.length > 0 && onCopyPrevious && (
-        <button onClick={copyPrev} disabled={copyBusy}
+        <button type="button" onClick={copyPrev} disabled={copyBusy}
           className="w-full flex items-center gap-2 rounded-lg border border-accent/30 bg-accent/5 px-2.5 py-1.5 text-left hover:bg-accent/10 transition-colors disabled:opacity-50">
           <Copy className="w-3.5 h-3.5 text-accent shrink-0" />
           <span className="text-xs text-ink min-w-0 flex-1">
@@ -111,7 +111,7 @@ export function JobAddons({ baseValue, items, isRecurring, onAdd, onDelete, prev
       {/* Quick-add template chips */}
       <div className="flex flex-wrap gap-1.5">
         {ADDON_TEMPLATES.map(t => (
-          <button key={t.key} onClick={() => choose(t)}
+          <button key={t.key} type="button" onClick={() => choose(t)}
             className={cn('text-[11px] font-medium rounded-full px-2.5 py-1 border transition-colors',
               picked?.key === t.key ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink hover:border-border-strong')}>
             {t.label}
@@ -126,7 +126,7 @@ export function JobAddons({ baseValue, items, isRecurring, onAdd, onDelete, prev
           <div className="flex items-center gap-2">
             {picked.key === 'custom' ? (
               <input autoFocus value={desc} onChange={e => setDesc(e.target.value)} placeholder="Service name"
-                className="flex-1 min-w-0 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none focus:border-accent" />
+                className="flex-1 min-w-0 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
             ) : (
               <span className="flex-1 min-w-0 text-sm font-medium text-ink truncate">{picked.label}</span>
             )}
@@ -134,7 +134,7 @@ export function JobAddons({ baseValue, items, isRecurring, onAdd, onDelete, prev
               <span className="absolute left-2 top-1/2 -translate-y-1/2 text-ink-faint text-sm">$</span>
               <input type="number" min="0" step="5" autoFocus={picked.key !== 'custom'} value={amount} onChange={e => setAmount(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') submit() }} placeholder="0"
-                className="w-24 bg-bg-tertiary border border-border-strong rounded-lg pl-5 pr-2 py-1.5 text-sm text-ink outline-none focus:border-accent" />
+                className="w-24 bg-bg-tertiary border border-border-strong rounded-lg pl-5 pr-2 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
             </div>
           </div>
 
@@ -142,7 +142,7 @@ export function JobAddons({ baseValue, items, isRecurring, onAdd, onDelete, prev
           {isRecurring && (
             <div className="flex items-center gap-1.5 flex-wrap">
               {SCOPES.map(s => (
-                <button key={s.scope} onClick={() => setScope(s.scope)}
+                <button key={s.scope} type="button" onClick={() => setScope(s.scope)}
                   className={cn('text-[11px] font-medium rounded-lg px-2 py-1 border transition-colors',
                     scope === s.scope ? 'bg-accent/15 text-accent border-accent/40' : 'border-border text-ink-muted hover:text-ink')}>
                   {s.label}
@@ -160,7 +160,7 @@ export function JobAddons({ baseValue, items, isRecurring, onAdd, onDelete, prev
             <Button size="sm" onClick={submit} loading={busy} disabled={!effectiveDesc || !(Number(amount) > 0)}>
               <Plus className="w-3.5 h-3.5" /> Add service
             </Button>
-            <button onClick={() => { setPicked(null); setDesc(''); setAmount('') }} className="text-xs text-ink-faint hover:text-ink">Cancel</button>
+            <Button size="sm" variant="ghost" onClick={() => { setPicked(null); setDesc(''); setAmount('') }}>Cancel</Button>
           </div>
         </div>
       )}

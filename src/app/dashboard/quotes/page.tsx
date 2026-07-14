@@ -10,7 +10,6 @@ import { Quote } from '@/types'
 import { QuoteList } from '@/components/quotes/QuoteList'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { PageHeader } from '@/components/layout/PageHeader'
-import { Button } from '@/components/ui/Button'
 import { Plus } from 'lucide-react'
 
 export default function QuotesPage() {
@@ -76,8 +75,11 @@ export default function QuotesPage() {
         title="Quotes"
         description={`${quotes.length} quote${quotes.length !== 1 ? 's' : ''} total`}
         action={
-          <Link href="/dashboard/quotes/new">
-            <Button><Plus className="w-4 h-4" /> New Quote</Button>
+          <Link
+            href="/dashboard/quotes/new"
+            className="inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-accent text-black hover:bg-accent-hover active:scale-[0.98] shadow-sm px-4 py-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+          >
+            <Plus className="w-4 h-4" /> New quote
           </Link>
         }
       />

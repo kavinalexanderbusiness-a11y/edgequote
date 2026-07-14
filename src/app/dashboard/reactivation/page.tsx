@@ -9,8 +9,10 @@ import { seasonForService, isWithinSeason, settingsToSeasons, ServiceSeasons } f
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
+import { StatTile } from '@/components/ui/StatTile'
 import { EmptyState } from '@/components/ui/EmptyState'
-import { Phone, MessageSquare, FileText, CalendarPlus, HeartPulse, DollarSign, Percent, TrendingUp, AlertTriangle, Repeat, Star } from 'lucide-react'
+import { Skeleton } from '@/components/ui/Skeleton'
+import { Phone, MessageSquare, FileText, CalendarPlus, HeartPulse, DollarSign, Percent, TrendingUp, AlertTriangle, Repeat } from 'lucide-react'
 
 interface JobLite { customer_id: string | null; scheduled_date: string; status: string; service_type: string | null; quote_id: string | null; recurrence_id: string | null; price: number | null }
 interface QuoteLite { id: string; customer_id: string | null; status: string; total: number | null; service_type: string; created_at: string; initial_price: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null }
@@ -228,36 +230,39 @@ export default function ReactivationPage() {
   if (loading) {
     return (
       <div className="max-w-4xl space-y-6">
-        <PageHeader title="Customer Reactivation" description="Win back customers you already paid to acquire" />
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4" aria-hidden>
-          {[0, 1, 2, 3].map(i => <Card key={i} className="p-4"><div className="h-3 w-20 rounded bg-bg-tertiary animate-pulse" /><div className="h-7 w-16 rounded bg-bg-tertiary animate-pulse mt-2" /></Card>)}
+        <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Customer Reactivation" description="Win back customers you already paid to acquire." />
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3" aria-hidden>
+          {[0, 1, 2, 3].map(i => <Card key={i} className="p-4"><Skeleton className="h-3 w-20" /><Skeleton className="h-7 w-16 mt-2" /></Card>)}
         </div>
-        <Card className="p-5"><div className="h-4 w-48 rounded bg-bg-tertiary animate-pulse" /><div className="h-3 w-72 rounded bg-bg-tertiary animate-pulse mt-2.5" /></Card>
+        <Card className="p-5"><Skeleton className="h-4 w-48" /><Skeleton className="h-3 w-72 mt-2.5" /></Card>
       </div>
     )
   }
 
   return (
     <div className="max-w-4xl space-y-6">
-      <PageHeader title="Customer Reactivation" description="Win back customers you already paid to acquire" />
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Customer Reactivation" description="Win back customers you already paid to acquire." />
 
       {/* Headline metrics */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 animate-rise">
-        <Metric icon={AlertTriangle} label="At risk" value={String(metrics.atRisk)} tone="text-amber-400" />
-        <Metric icon={DollarSign} label="Potential recovery" value={formatCurrency(metrics.potential)} tone="text-accent" />
-        <Metric icon={Percent} label="Reactivation rate" value={`${metrics.reactivationRate}%`} />
-        <Metric icon={TrendingUp} label="Recovered (1y)" value={formatCurrency(metrics.revenueRecovered)} tone="text-emerald-400" />
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 animate-rise">
+        <StatTile icon={AlertTriangle} label="At risk" value={String(metrics.atRisk)} tone="warn" />
+        <StatTile icon={DollarSign} label="Potential recovery" value={formatCurrency(metrics.potential)} tone="accent" />
+        <StatTile icon={Percent} label="Reactivation rate" value={`${metrics.reactivationRate}%`} />
+        <StatTile icon={TrendingUp} label="Recovered (1y)" value={formatCurrency(metrics.revenueRecovered)} tone="success" />
       </div>
 
       {/* Recurring series ran out — the urgent re-book queue (any days-since) */}
       {ranOut.length > 0 && (
         <div className="space-y-3">
           <div className="flex items-center gap-2 flex-wrap">
-            <Repeat className="w-4 h-4 text-red-400" />
-            <h2 className="text-sm font-bold text-red-400">Recurring series ran out</h2>
-            <span className="text-xs text-ink-faint">No next visit booked · {ranOut.length} customer{ranOut.length !== 1 ? 's' : ''} · {formatCurrency(ranOut.reduce((s, r) => s + r.perVisit, 0))}/visit at stake</span>
+            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
+              <Repeat className="w-3.5 h-3.5 text-accent" />
+            </span>
+            <h2 className="text-sm font-semibold text-ink tracking-tight">Recurring series ran out</h2>
+            <span className="text-xs text-ink-faint tabular-nums">No next visit booked · {ranOut.length} customer{ranOut.length !== 1 ? 's' : ''} · {formatCurrency(ranOut.reduce((s, r) => s + r.perVisit, 0))}/visit at stake</span>
+            <span className="flex-1 h-px bg-border" aria-hidden />
           </div>
-          {ranOut.map(r => <RanOutCard key={r.customer.id} r={r} />)}
+          {ranOut.map((r, i) => <div key={r.customer.id} className={`animate-rise stagger-${Math.min(i + 1, 6)}`}><RanOutCard r={r} /></div>)}
         </div>
       )}
 
@@ -270,10 +275,11 @@ export default function ReactivationPage() {
         return (
           <div key={b.key} className="space-y-3">
             <div className="flex items-center gap-2">
-              <h2 className={`text-sm font-bold ${b.tone}`}>{b.label}</h2>
-              <span className="text-xs text-ink-faint">{b.sub} · {list.length} customer{list.length !== 1 ? 's' : ''} · {formatCurrency(list.reduce((s, r) => s + r.potentialRecovery, 0))} potential</span>
+              <h2 className={`text-sm font-semibold tracking-tight ${b.tone}`}>{b.label}</h2>
+              <span className="text-xs text-ink-faint tabular-nums">{b.sub} · {list.length} customer{list.length !== 1 ? 's' : ''} · {formatCurrency(list.reduce((s, r) => s + r.potentialRecovery, 0))} potential</span>
+              <span className="flex-1 h-px bg-border" aria-hidden />
             </div>
-            {list.map(r => <RiskCard key={r.customer.id} r={r} />)}
+            {list.map((r, i) => <div key={r.customer.id} className={`animate-rise stagger-${Math.min(i + 1, 6)}`}><RiskCard r={r} /></div>)}
           </div>
         )
       })}
@@ -281,16 +287,6 @@ export default function ReactivationPage() {
   )
 }
 
-function Metric({ icon: Icon, label, value, tone }: { icon: typeof DollarSign; label: string; value: string; tone?: string }) {
-  return (
-    <Card className="p-4">
-      <div className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-muted uppercase tracking-wide">
-        <Icon className="w-3.5 h-3.5" /> {label}
-      </div>
-      <p className={`text-2xl font-bold tracking-tight tabular-nums mt-1 ${tone || 'text-ink'}`}>{value}</p>
-    </Card>
-  )
-}
 
 function RiskCard({ r }: { r: RiskCustomer }) {
   const c = r.customer
@@ -310,8 +306,8 @@ function RiskCard({ r }: { r: RiskCustomer }) {
             </p>
           </div>
           <div className="text-right shrink-0">
-            <p className="text-[10px] uppercase tracking-wide text-ink-faint">Potential</p>
-            <p className="text-lg font-bold text-accent">{formatCurrency(r.potentialRecovery)}</p>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">Potential</p>
+            <p className="text-lg font-bold text-accent tabular-nums">{formatCurrency(r.potentialRecovery)}</p>
           </div>
         </div>
 
@@ -348,16 +344,16 @@ function RiskCard({ r }: { r: RiskCustomer }) {
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-border bg-bg-tertiary px-2.5 py-1.5">
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint truncate">{label}</p>
-      <p className="text-sm font-bold text-ink mt-0.5 truncate">{value}</p>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint truncate">{label}</p>
+      <p className="text-sm font-bold text-ink mt-0.5 truncate tabular-nums">{value}</p>
     </div>
   )
 }
 
 function VipChip() {
   return (
-    <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-amber-300 border border-amber-400/40 bg-amber-400/10 rounded px-1.5 py-0.5 shrink-0">
-      <Star className="w-3 h-3" /> VIP
+    <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-ink-muted shrink-0">
+      <span className="w-1.5 h-1.5 rounded-full bg-accent" /> VIP
     </span>
   )
 }
@@ -380,8 +376,8 @@ function RanOutCard({ r }: { r: RanOutCustomer }) {
             </p>
           </div>
           <div className="text-right shrink-0">
-            <p className="text-[10px] uppercase tracking-wide text-ink-faint">Per visit</p>
-            <p className="text-lg font-bold text-accent">{r.perVisit > 0 ? formatCurrency(r.perVisit) : '—'}</p>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">Per visit</p>
+            <p className="text-lg font-bold text-accent tabular-nums">{r.perVisit > 0 ? formatCurrency(r.perVisit) : '—'}</p>
           </div>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">

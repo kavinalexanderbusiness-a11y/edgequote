@@ -63,7 +63,7 @@ export function DayStatusMenu({ dates, current, pos, onPick, onClear, onClose }:
           <p className="text-xs font-bold text-ink truncate">{heading}</p>
           <p className="text-[10px] text-ink-faint truncate">{sub}</p>
         </div>
-        <button onClick={onClose} aria-label="Close" className="shrink-0 text-ink-faint hover:text-ink"><X className="w-3.5 h-3.5" /></button>
+        <button type="button" onClick={onClose} aria-label="Close" className="shrink-0 h-6 w-6 rounded-md flex items-center justify-center text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><X className="w-3.5 h-3.5" /></button>
       </div>
       <div className="p-1.5 grid grid-cols-2 gap-1">
         {DAY_STATUSES.map(s => {
@@ -74,7 +74,7 @@ export function DayStatusMenu({ dates, current, pos, onPick, onClear, onClose }:
               key={s}
               role="menuitem"
               onClick={() => onPick(s as DayStatus)}
-              className={cn('flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-left text-xs transition-colors',
+              className={cn('flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
                 isCurrent ? 'bg-accent/10 text-ink ring-1 ring-accent/40' : 'text-ink-muted hover:bg-surface hover:text-ink')}>
               <span className="shrink-0 text-sm leading-none">{meta.emoji}</span>
               <span className="truncate">{meta.label}</span>
@@ -87,7 +87,7 @@ export function DayStatusMenu({ dates, current, pos, onPick, onClear, onClose }:
           <button
             role="menuitem"
             onClick={onClear}
-            className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs font-medium text-ink-muted hover:bg-surface hover:text-ink transition-colors">
+            className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs font-medium text-ink-muted hover:bg-surface hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
             <RotateCcw className="w-3.5 h-3.5" /> Clear status (back to Normal)
           </button>
         </div>

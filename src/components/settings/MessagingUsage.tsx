@@ -112,7 +112,7 @@ export function MessagingUsage() {
           <Button size="sm" onClick={save} loading={saving}>
             {saved && <Check className="w-3.5 h-3.5" />}{saved ? 'Saved' : 'Save pricing'}
           </Button>
-          {err && <span className="text-[11px] text-amber-400 animate-fade">{err}</span>}
+          {err && <span className="text-xs text-red-400 animate-fade">{err}</span>}
         </div>
 
         {/* Usage stats */}
@@ -148,7 +148,7 @@ const inputCls = 'w-full bg-bg-tertiary border border-border-strong rounded-lg p
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <label className="flex flex-col gap-1 min-w-0">
-      <span className="text-[10px] font-semibold text-ink-faint uppercase tracking-wide truncate">{label}{hint && <span className="normal-case font-normal text-ink-faint"> · {hint}</span>}</span>
+      <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide truncate">{label}{hint && <span className="normal-case font-normal text-ink-faint"> · {hint}</span>}</span>
       {children}
     </label>
   )

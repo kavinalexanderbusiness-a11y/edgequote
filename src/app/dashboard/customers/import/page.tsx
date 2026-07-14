@@ -120,7 +120,10 @@ export default function ImportCustomersPage() {
 
   return (
     <div className="max-w-3xl space-y-6">
-      <Link href="/dashboard/customers" className="text-sm text-ink-muted hover:text-ink flex items-center gap-1.5"><ArrowLeft className="w-4 h-4" /> Back to customers</Link>
+      {/* Hidden in the success state — the done card renders its own "Back to customers" CTA. */}
+      {done == null && (
+        <Link href="/dashboard/customers" className="text-sm text-ink-muted hover:text-ink flex items-center gap-1.5"><ArrowLeft className="w-4 h-4" /> Back to customers</Link>
+      )}
       <PageHeader title="Import Customers" description="Paste or upload a CSV. Optional columns: sms_opt_in, email_opt_in." />
 
       {done != null ? (
@@ -137,9 +140,9 @@ export default function ImportCustomersPage() {
             <CardBody className="space-y-3">
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <p className="text-xs text-ink-muted">Columns: <span className="text-ink">name</span> (required), email, phone, address, city, province, postal_code, notes, sms_opt_in, email_opt_in</p>
-                <label className="inline-flex items-center gap-1.5 text-xs font-medium text-accent cursor-pointer">
+                <label className="inline-flex items-center gap-1.5 text-xs font-medium text-accent cursor-pointer rounded-md focus-within:ring-2 focus-within:ring-accent/40">
                   <Upload className="w-3.5 h-3.5" /> Upload CSV file
-                  <input type="file" accept=".csv,text/csv" onChange={onFile} className="hidden" />
+                  <input type="file" accept=".csv,text/csv" onChange={onFile} className="sr-only" />
                 </label>
               </div>
               <textarea
@@ -147,16 +150,16 @@ export default function ImportCustomersPage() {
                 onChange={e => preview(e.target.value)}
                 rows={8}
                 placeholder={'name,email,phone,city,sms_opt_in,email_opt_in\nJane Doe,jane@example.com,403-555-0100,Calgary,false,true'}
-                className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm font-mono text-ink outline-none focus:border-accent"
+                className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm font-mono text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20"
               />
-              {parseError && <p className="text-sm text-red-400">{parseError}</p>}
+              {parseError && <p className="text-xs text-red-400">{parseError}</p>}
             </CardBody>
           </Card>
 
           {rows.length > 0 && (
             <Card>
               <CardBody className="space-y-3">
-                <p className="text-sm font-semibold text-ink">{rows.length} customer{rows.length !== 1 ? 's' : ''} ready · {emailCount} email opt-in · {smsCount} SMS opt-in</p>
+                <p className="text-sm font-semibold text-ink tabular-nums">{rows.length} customer{rows.length !== 1 ? 's' : ''} ready · {emailCount} email opt-in · {smsCount} SMS opt-in</p>
                 <div className="max-h-48 overflow-auto rounded-lg border border-border divide-y divide-border">
                   {rows.slice(0, 25).map((r, i) => (
                     <div key={i} className="flex items-center gap-3 px-3 py-1.5 text-xs">

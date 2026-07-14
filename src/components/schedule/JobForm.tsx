@@ -404,7 +404,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     >
       <Controller name="customer_id" control={control}
         render={({ field }) => (
-          <Select label="Customer" options={customerOptions} {...field} />
+          <Select label="Customer" autoFocus options={customerOptions} {...field} />
         )} />
 
       <Input label="Service Type" placeholder="e.g. Lawn Mowing"
@@ -418,7 +418,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
           {...register('price', { min: 0 })} />
         {measuredPrice != null && measuredPrice > 0 && (
           <button type="button" onClick={() => setValue('price', measuredPrice)}
-            className="text-xs text-accent hover:underline mt-1.5">
+            className="text-xs text-accent hover:underline mt-1.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
             Use measured price ({formatCurrency(measuredPrice)})
           </button>
         )}
@@ -564,15 +564,15 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
                 </p>
                 <div className="flex flex-wrap gap-2">
                   <a href={`/dashboard/customers/${customerId}`} target="_blank" rel="noopener noreferrer"
-                    className="text-xs font-medium px-2.5 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong">
+                    className="text-xs font-medium px-2.5 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                     View existing schedule
                   </a>
                   <button type="button" onClick={() => { setPreset('none'); setDupAck(true) }}
-                    className="text-xs font-medium px-2.5 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong">
+                    className="text-xs font-medium px-2.5 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                     Add one-time visit instead
                   </button>
                   <button type="button" onClick={() => setDupAck(true)}
-                    className="text-xs font-medium px-2.5 py-1 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20">
+                    className="text-xs font-medium px-2.5 py-1 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                     Create another schedule anyway
                   </button>
                 </div>
@@ -596,58 +596,50 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
                 { kind: 'monthly', label: 'Monthly Service' },
               ] as const).map(p => (
                 <button key={p.kind} type="button" onClick={() => applyLawnPreset(p.kind)}
-                  className="text-xs font-medium px-3 py-1.5 rounded-lg border border-accent/30 bg-accent/10 text-accent hover:bg-accent/20 transition-colors">
+                  className="text-xs font-medium px-3 py-1.5 rounded-lg border border-accent/30 bg-accent/10 text-accent hover:bg-accent/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                   {p.label}
                 </button>
               ))}
             </div>
             )}
 
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Repeats</label>
-              <select
-                value={preset}
-                onChange={(e) => setPreset(e.target.value as RepeatPreset)}
-                className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
-              >
-                {PRESET_OPTIONS.map(o => <option key={o.value} value={o.value} className="bg-bg-secondary">{o.label}</option>)}
-              </select>
-            </div>
+            <Select
+              label="Repeats"
+              value={preset}
+              onChange={(e) => setPreset(e.target.value as RepeatPreset)}
+              options={PRESET_OPTIONS.map(o => ({ value: o.value, label: o.label }))}
+            />
 
             {preset === 'custom' && (
               <div className="grid grid-cols-2 gap-4">
                 <Input label="Every" type="number" min="1" value={customCount}
                   onChange={(e) => setCustomCount(Math.max(1, Number(e.target.value) || 1))} />
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Unit</label>
-                  <select
-                    value={customUnit}
-                    onChange={(e) => setCustomUnit(e.target.value as RecurUnit)}
-                    className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
-                  >
-                    <option value="day" className="bg-bg-secondary">Days</option>
-                    <option value="week" className="bg-bg-secondary">Weeks</option>
-                    <option value="month" className="bg-bg-secondary">Months</option>
-                  </select>
-                </div>
+                <Select
+                  label="Unit"
+                  value={customUnit}
+                  onChange={(e) => setCustomUnit(e.target.value as RecurUnit)}
+                  options={[
+                    { value: 'day', label: 'Days' },
+                    { value: 'week', label: 'Weeks' },
+                    { value: 'month', label: 'Months' },
+                  ]}
+                />
               </div>
             )}
 
             {preset !== 'none' && (
               <>
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Ends</label>
-                  <select
-                    value={endMode}
-                    onChange={(e) => { endTouched.current = true; setEndMode(e.target.value as EndMode) }}
-                    className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
-                  >
-                    {serviceSeason && <option value="season" className="bg-bg-secondary">Season end (recommended)</option>}
-                    <option value="on" className="bg-bg-secondary">Specific date</option>
-                    <option value="after" className="bg-bg-secondary">Number of visits</option>
-                    <option value="never" className="bg-bg-secondary">Never ends</option>
-                  </select>
-                </div>
+                <Select
+                  label="Ends"
+                  value={endMode}
+                  onChange={(e) => { endTouched.current = true; setEndMode(e.target.value as EndMode) }}
+                  options={[
+                    ...(serviceSeason ? [{ value: 'season', label: 'Season end (recommended)' }] : []),
+                    { value: 'on', label: 'Specific date' },
+                    { value: 'after', label: 'Number of visits' },
+                    { value: 'never', label: 'Never ends' },
+                  ]}
+                />
                 {endMode === 'season' && (
                   <div className="rounded-xl border border-accent/20 bg-accent/5 px-3 py-2 flex items-center gap-2">
                     <CalendarRange className="w-4 h-4 text-accent shrink-0" />
@@ -680,7 +672,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
       {/* Sticky save — reachable one-handed without scrolling past the form. */}
       <div className="sticky bottom-0 -mx-1 px-1 pt-2 pb-1 bg-bg-secondary/95 backdrop-blur border-t border-border flex items-center gap-2 flex-wrap">
         <Button type="submit" loading={isSubmitting} onClick={() => { addAnotherRef.current = false }}>
-          {isEdit ? 'Update Job' : 'Add Job'}
+          {isEdit ? 'Update job' : 'Add job'}
         </Button>
         {allowAddAnother && (
           <Button type="submit" variant="secondary" onClick={() => { addAnotherRef.current = true }}>

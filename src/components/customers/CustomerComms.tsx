@@ -111,8 +111,8 @@ export function CustomerComms({ customerId, smsOptIn, emailOptIn }: { customerId
 
 function OptToggle({ label, icon: Icon, on, onChange }: { label: string; icon: typeof MessageSquare; on: boolean; onChange: (v: boolean) => void }) {
   return (
-    <button onClick={() => onChange(!on)}
-      className={cn('flex items-center gap-1.5 text-xs font-medium rounded-full px-3 py-1.5 border transition-colors',
+    <button onClick={() => onChange(!on)} aria-pressed={on}
+      className={cn('flex items-center gap-1.5 text-xs font-medium rounded-full px-3 py-1.5 border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
         on ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : 'text-ink-muted border-border bg-bg-tertiary hover:text-ink')}>
       <Icon className="w-3.5 h-3.5" /> {label}: {on ? <span className="inline-flex items-center gap-0.5">On <Check className="w-3 h-3" /></span> : 'Off'}
     </button>

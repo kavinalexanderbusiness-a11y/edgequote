@@ -6,7 +6,7 @@ import { Skeleton } from '@/components/ui/Skeleton'
 // freeze while the query resolves.
 export default function LibraryLoading() {
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <PageHeader title="Content Library" description="Every completed job, ready to reuse as marketing." />
       <Skeleton className="h-11 w-full rounded-xl" />
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">

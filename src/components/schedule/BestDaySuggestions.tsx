@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Coord, DaySuggestion, LocatedJob, geocodeAddress, suggestBestDays, fetchLocatedUpcomingJobs, todayLocalISO } from '@/lib/geo'
 import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
+import { Button } from '@/components/ui/Button'
 import { Sparkles, MapPin, Clock, Navigation, Loader2 } from 'lucide-react'
 
 interface Props {
@@ -97,13 +98,9 @@ export function BestDaySuggestions({ coord, address, excludeJobId, onPick, onTop
             <Sparkles className="w-3.5 h-3.5 text-accent" /> Recommended: {best.weekday}
           </span>
           {onPick && (
-            <button
-              type="button"
-              onClick={() => onPick(best.date, best)}
-              className="shrink-0 h-8 px-3 rounded-lg bg-accent text-black text-xs font-semibold hover:opacity-90 active:scale-95 transition-transform"
-            >
-              Use This Day
-            </button>
+            <Button size="sm" className="shrink-0" onClick={() => onPick(best.date, best)}>
+              Use {best.weekday}
+            </Button>
           )}
         </div>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1.5 text-xs text-ink-muted">

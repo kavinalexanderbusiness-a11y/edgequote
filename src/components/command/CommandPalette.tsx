@@ -27,7 +27,7 @@ const NAV: { label: string; href: string; icon: Icon }[] = [
   { label: 'Messages', href: '/dashboard/messages', icon: MessageSquare },
   { label: 'Routes', href: '/dashboard/routes', icon: Navigation },
   { label: 'Grow', href: '/dashboard/grow', icon: Sprout },
-  { label: 'AI Vision', href: '/dashboard/grow/vision', icon: Eye },
+  { label: 'Measurement Accuracy', href: '/dashboard/measurements', icon: Eye },
   { label: 'Settings', href: '/dashboard/settings', icon: Settings },
 ]
 
@@ -207,9 +207,11 @@ export function CommandPalette() {
       })) })
 
       const vRows = (vision.data as { id: string; summary: string | null; customer_id: string | null; mowing_difficulty: string | null }[]) || []
+      // Property analyses land on the customer they belong to — /dashboard/grow/vision
+      // doesn't exist on this branch, so it must never be a nav target here.
       if (vRows.length) sections.push({ title: 'AI Vision', items: vRows.map(v => ({
         id: `v-${v.id}`, label: (v.summary || 'Property analysis').slice(0, 60), sub: v.mowing_difficulty ? `Difficulty: ${v.mowing_difficulty}` : undefined,
-        icon: Eye, run: () => go('/dashboard/grow/vision'),
+        icon: Eye, run: () => go(v.customer_id ? `/dashboard/customers/${v.customer_id}` : '/dashboard/properties'),
       })) })
 
       // Supabase types the joined `customers` row as object-or-array depending on
@@ -255,11 +257,11 @@ export function CommandPalette() {
 
   let idx = -1   // running index so each row knows its position in `flat`
   const overlay = (
-    <div className="fixed inset-0 z-[200] flex items-start justify-center px-4 pt-[14vh] sm:pt-[12vh] motion-safe:animate-[fadeIn_120ms_ease-out]"
+    <div className="fixed inset-0 z-[200] flex items-start justify-center px-4 pt-[14vh] sm:pt-[12vh] animate-fade"
       onMouseDown={close}>
       <div className="absolute inset-0 bg-black/50 backdrop-blur-[2px]" />
       <div role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={e => e.stopPropagation()}
-        className="relative w-full max-w-xl rounded-2xl border border-border bg-bg-secondary shadow-2xl overflow-hidden flex flex-col max-h-[70vh] motion-safe:animate-[popIn_140ms_ease-out]">
+        className="relative w-full max-w-xl rounded-2xl border border-border bg-bg-secondary shadow-2xl overflow-hidden flex flex-col max-h-[70vh] animate-panel">
         <div className="flex items-center gap-2.5 px-4 border-b border-border shrink-0">
           <Search className="w-4 h-4 text-ink-faint shrink-0" />
           <input

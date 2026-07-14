@@ -33,14 +33,14 @@ export function PricePackagePanel({ pkg, onUse }: { pkg: PricingPackage; onUse: 
   ]
 
   return (
-    <div className="space-y-3 motion-safe:animate-[fadeIn_140ms_ease-out]">
+    <div className="space-y-3 animate-fade">
       {/* Cadence prices — tap to use on the quote */}
       <div className="grid grid-cols-2 gap-2">
         {cards.map(c => {
           const isRec = c.cadence === pkg.recommended.cadence
           return (
             <button key={c.cadence} type="button" onClick={() => onUse({ cadence: c.cadence, price: c.price })}
-              className={cn('text-left rounded-xl border px-3 py-2.5 transition-all hover:border-accent',
+              className={cn('text-left rounded-xl border px-3 py-2.5 transition-all hover:border-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
                 isRec ? 'border-accent/50 bg-accent/10' : 'border-border')}>
               <p className="text-[11px] uppercase tracking-wide text-ink-faint flex items-center gap-1">
                 {CADENCE_LABELS[c.cadence]}{isRec && <Trophy className="w-3 h-3 text-accent" />}

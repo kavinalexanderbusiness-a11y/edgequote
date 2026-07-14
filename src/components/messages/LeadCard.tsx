@@ -42,7 +42,7 @@ export function LeadCard({ customerId }: { customerId: string }) {
     <LeadSummary lead={lead} className="mb-3" footer={
       <>
         <Button size="sm" onClick={buildQuote} className="w-full sm:w-auto">
-          <FileText className="w-4 h-4" /> Build Quote
+          <FileText className="w-4 h-4" /> Build quote
         </Button>
         <p className="text-[10px] text-ink-faint mt-1.5">Opens the Quote Builder pre-filled — review, adjust the price, and create.</p>
       </>

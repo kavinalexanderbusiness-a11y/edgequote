@@ -364,11 +364,15 @@ export function BeforeAfterUploader({
 
       {/* ── Drop zone ── */}
       <label
+        role="button"
+        tabIndex={0}
         onDragOver={e => { e.preventDefault(); setDragOver(true) }}
         onDragLeave={() => setDragOver(false)}
         onDrop={onDrop}
         onClick={() => fileRef.current?.click()}
+        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileRef.current?.click() } }}
         className={cn('flex flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed p-6 cursor-pointer transition-colors',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
           dragOver ? 'border-accent bg-accent/10' : 'border-border hover:border-border-strong bg-bg-tertiary')}>
         <UploadCloud className={cn('w-6 h-6', dragOver ? 'text-accent' : 'text-ink-faint')} />
         <p className="text-sm font-medium text-ink">Drag photos here, or click to choose</p>
@@ -382,9 +386,9 @@ export function BeforeAfterUploader({
             <CopyX className="w-3.5 h-3.5 shrink-0" />
             Existing match found — {dups.length} photo{dups.length !== 1 ? 's look' : ' looks'} already uploaded.
           </p>
-          <button type="button" onClick={() => setIncludeDups(v => !v)}
+          <button type="button" onClick={() => setIncludeDups(v => !v)} aria-pressed={includeDups}
             className={cn('text-[11px] font-semibold rounded-lg px-2 py-1 border shrink-0', includeDups ? 'border-accent bg-accent/10 text-accent' : 'border-border text-ink-muted hover:text-ink')}>
-            {includeDups ? 'Uploading anyway' : 'Upload anyway?'}
+            {includeDups ? 'Including duplicates' : 'Include duplicates'}
           </button>
         </div>
       )}
@@ -474,6 +478,7 @@ function StagedThumb({ s, uploading, onFlip, onRemove, large }: {
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={s.url} alt="" className={cn('w-full h-full object-cover', s.dup && 'opacity-50')} />
       <button type="button" onClick={() => onFlip(s.id)} disabled={uploading}
+        title={`Switch to ${s.kind === 'before' ? 'after' : 'before'}`} aria-label={`Switch to ${s.kind === 'before' ? 'after' : 'before'}`}
         className={cn('absolute top-1 left-1 inline-flex items-center gap-0.5 font-bold uppercase tracking-wide rounded px-1 py-0.5 border', large ? 'text-[9px]' : 'text-[8px]',
           s.kind === 'before' ? 'bg-amber-500/80 text-white border-amber-300' : 'bg-emerald-500/80 text-white border-emerald-300')}>
         <ArrowLeftRight className={large ? 'w-2.5 h-2.5' : 'w-2 h-2'} /> {s.kind}
@@ -482,7 +487,7 @@ function StagedThumb({ s, uploading, onFlip, onRemove, large }: {
         <span title={PHOTO_MATCH_LABEL[s.dup]} className="absolute bottom-1 left-1 text-[8px] font-bold uppercase rounded px-1 py-0.5 bg-amber-500/90 text-white">dup</span>
       )}
       {!uploading && (
-        <button type="button" onClick={() => onRemove(s.id)} className="absolute top-1 right-1 h-4 w-4 rounded-full bg-black/60 text-white flex items-center justify-center opacity-0 group-hover:opacity-100"><X className="w-2.5 h-2.5" /></button>
+        <button type="button" onClick={() => onRemove(s.id)} aria-label="Remove photo" className="absolute top-1 right-1 h-4 w-4 rounded-full bg-black/60 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 focus-visible:opacity-100"><X className="w-2.5 h-2.5" /></button>
       )}
     </div>
   )

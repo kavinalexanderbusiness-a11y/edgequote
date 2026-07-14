@@ -5,7 +5,6 @@ import { createClient } from '@/lib/supabase/server'
 import { invoiceBalance } from '@/lib/payments/ledger'
 import { PageHeader } from '@/components/layout/PageHeader'
 import Link from 'next/link'
-import { Button } from '@/components/ui/Button'
 import { Plus } from 'lucide-react'
 
 // The 7:00-AM owner view — answers both halves of the morning:
@@ -59,10 +58,9 @@ export default async function DashboardPage() {
         title={greeting}
         description={`${dateLine} — your day, and how the business is doing.`}
         action={
-          <Link href="/dashboard/quotes/new">
-            <Button>
-              <Plus className="w-4 h-4" /> New Quote
-            </Button>
+          <Link href="/dashboard/quotes/new"
+            className="inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-accent text-black hover:bg-accent-hover active:scale-[0.98] shadow-sm px-4 py-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+            <Plus className="w-4 h-4" /> New quote
           </Link>
         }
       />

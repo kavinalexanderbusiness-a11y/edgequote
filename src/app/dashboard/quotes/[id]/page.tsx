@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Quote, Customer, QuoteFormValues, QuoteService, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS, CONFIDENCE_COLORS } from '@/types'
+import { Quote, Customer, QuoteFormValues, QuoteService, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS } from '@/types'
 import { sumServiceLines, serviceLineTotals, splitServices } from '@/lib/quoteServices'
 import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
 import { JobPhotos } from '@/components/photos/JobPhotos'
@@ -552,7 +552,11 @@ export default function QuoteDetailPage() {
           </button>
           <div className="min-w-0">
             <h1 className="text-xl font-bold text-ink tracking-tight truncate">{quote.quote_number}</h1>
-            <p className="text-sm text-ink-muted mt-0.5">Created {formatDate(quote.created_at)}</p>
+            {/* The customer IS the quote's identity — surface it in the header
+                instead of leaving it buried cards below the fold. */}
+            <p className="text-sm text-ink-muted mt-0.5 truncate">
+              {quote.customer_name ? <><span className="text-ink font-medium">{quote.customer_name}</span> · </> : null}Created {formatDate(quote.created_at)}
+            </p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 lg:justify-end lg:shrink-0">
@@ -564,7 +568,7 @@ export default function QuoteDetailPage() {
               <FileDown className="w-3.5 h-3.5" /> Download PDF + mark sent
             </Button>
           ) : (
-            <Button onClick={handleOpenPdf} size="sm" loading={pdfLoading}>
+            <Button onClick={handleOpenPdf} variant="secondary" size="sm" loading={pdfLoading}>
               <FileDown className="w-3.5 h-3.5" /> Open PDF
             </Button>
           )}
@@ -584,15 +588,17 @@ export default function QuoteDetailPage() {
             </Button>
           )}
           {canInvoice && (
-            <Button onClick={handleConvertToInvoice} variant="secondary" size="sm" loading={converting}>
-              <FileText className="w-3.5 h-3.5" /> Convert to Invoice
+            // Completed = converting is THE stage action, so it takes the one
+            // primary slot; other stages have their own primary elsewhere.
+            <Button onClick={handleConvertToInvoice} variant={quote.status === 'completed' ? 'primary' : 'secondary'} size="sm" loading={converting}>
+              <FileText className="w-3.5 h-3.5" /> Convert to invoice
             </Button>
           )}
           <Button onClick={() => setEditing(true)} variant="ghost" size="sm">
             <Edit2 className="w-3.5 h-3.5" /> Edit
           </Button>
-          <Button onClick={handleDuplicate} variant="ghost" size="sm" loading={duplicating}>
-            <Copy className="w-3.5 h-3.5" /> Duplicate
+          <Button onClick={handleDuplicate} variant="secondary" size="sm" loading={duplicating} aria-label="Duplicate quote" title="Duplicate quote">
+            <Copy className="w-4 h-4" />
           </Button>
         </div>
       </div>
@@ -674,14 +680,14 @@ export default function QuoteDetailPage() {
           <span className="flex items-center gap-2 text-emerald-300">
             <Check className="w-4 h-4 shrink-0" /> {savedCustomerMsg}
           </span>
-          <button onClick={() => setSavedCustomerMsg(null)} className="text-ink-faint hover:text-ink shrink-0">✕</button>
+          <button onClick={() => setSavedCustomerMsg(null)} aria-label="Dismiss" className="shrink-0 h-7 w-7 rounded-lg flex items-center justify-center text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><X className="w-4 h-4" /></button>
         </div>
       )}
 
       {dupMsg && (
         <div className="flex items-center justify-between gap-3 text-sm bg-accent/10 border border-accent/20 rounded-xl px-4 py-3">
           <span className="flex items-center gap-2 text-ink"><Copy className="w-4 h-4 shrink-0 text-accent" /> {dupMsg}</span>
-          <button onClick={() => setDupMsg(null)} className="text-ink-faint hover:text-ink shrink-0">✕</button>
+          <button onClick={() => setDupMsg(null)} aria-label="Dismiss" className="shrink-0 h-7 w-7 rounded-lg flex items-center justify-center text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><X className="w-4 h-4" /></button>
         </div>
       )}
 
@@ -715,35 +721,35 @@ export default function QuoteDetailPage() {
               <a
                 href={customerPhone ? `tel:${customerPhone}` : undefined}
                 aria-disabled={!customerPhone}
-                className={`h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border transition-colors ${customerPhone ? 'bg-accent/10 border-accent/20 text-accent hover:bg-accent/20' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}
+                className={`h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${customerPhone ? 'bg-accent/10 border-accent/20 text-accent hover:bg-accent/20' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}
               >
                 <Phone className="w-4 h-4" /> Call
               </a>
               <a
                 href={customerPhone ? `sms:${customerPhone}` : undefined}
                 aria-disabled={!customerPhone}
-                className={`h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border transition-colors ${customerPhone ? 'bg-surface border-border text-ink hover:border-border-strong' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}
+                className={`h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${customerPhone ? 'bg-surface border-border text-ink hover:border-border-strong' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}
               >
                 <MessageSquare className="w-4 h-4" /> Text
               </a>
               <button
                 onClick={logFollowUp}
                 disabled={actionBusy}
-                className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border border-border bg-surface text-ink hover:border-border-strong transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border border-border bg-surface text-ink hover:border-border-strong transition-colors disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
               >
                 <RotateCw className="w-4 h-4" /> Followed up
               </button>
               <button
                 onClick={markWon}
                 disabled={actionBusy}
-                className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border border-emerald-500/25 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border border-emerald-500/25 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
               >
                 <Check className="w-4 h-4" /> Won
               </button>
               <button
                 onClick={markLost}
                 disabled={actionBusy}
-                className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border border-border bg-surface text-ink-muted hover:text-red-400 transition-colors col-span-2 sm:col-span-1 disabled:opacity-50 disabled:pointer-events-none"
+                className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border border-red-500/25 bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors col-span-2 sm:col-span-1 disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
               >
                 <X className="w-4 h-4" /> Lost
               </button>
@@ -754,37 +760,37 @@ export default function QuoteDetailPage() {
 
       <Card>
         <div className="p-6 border-b border-border bg-gradient-to-r from-accent/5 to-transparent">
-          <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-1">Customer</p>
+          <p className="text-[10px] font-semibold text-ink-muted uppercase tracking-wide mb-1">Customer</p>
           <p className="text-lg font-bold text-ink">{quote.customer_name}</p>
           <p className="text-sm text-ink-muted mt-0.5">{quote.address}</p>
         </div>
         <CardBody className="space-y-3">
           <div className="grid grid-cols-2 gap-4 text-sm">
             <div>
-              <p className="text-xs text-ink-faint uppercase tracking-wide font-semibold mb-1">Service</p>
+              <p className="text-[10px] text-ink-faint uppercase tracking-wide font-semibold mb-1">Service</p>
               <p className="text-ink font-medium">{quote.service_type}</p>
             </div>
             {quote.measured_sqft ? (
               <div>
-                <p className="text-xs text-ink-faint uppercase tracking-wide font-semibold mb-1">Lawn Size</p>
-                <p className="text-ink font-medium">{Number(quote.measured_sqft).toLocaleString()} ft²</p>
+                <p className="text-[10px] text-ink-faint uppercase tracking-wide font-semibold mb-1">Lawn Size</p>
+                <p className="text-ink font-medium tabular-nums">{Number(quote.measured_sqft).toLocaleString()} ft²</p>
               </div>
             ) : null}
             <div>
-              <p className="text-xs text-ink-faint uppercase tracking-wide font-semibold mb-1">Hours</p>
-              <p className="text-ink font-medium">{quote.hours} hrs</p>
+              <p className="text-[10px] text-ink-faint uppercase tracking-wide font-semibold mb-1">Hours</p>
+              <p className="text-ink font-medium tabular-nums">{quote.hours} hrs</p>
             </div>
             <div>
-              <p className="text-xs text-ink-faint uppercase tracking-wide font-semibold mb-1">Crew Size</p>
-              <p className="text-ink font-medium">{quote.crew_size} worker{quote.crew_size > 1 ? 's' : ''}</p>
+              <p className="text-[10px] text-ink-faint uppercase tracking-wide font-semibold mb-1">Crew Size</p>
+              <p className="text-ink font-medium tabular-nums">{quote.crew_size} worker{quote.crew_size > 1 ? 's' : ''}</p>
             </div>
             <div>
-              <p className="text-xs text-ink-faint uppercase tracking-wide font-semibold mb-1">Rate</p>
-              <p className="text-ink font-medium">{formatCurrency(quote.rate)}/crew hr</p>
+              <p className="text-[10px] text-ink-faint uppercase tracking-wide font-semibold mb-1">Rate</p>
+              <p className="text-ink font-medium tabular-nums">{formatCurrency(quote.rate)}/crew hr</p>
             </div>
             {quote.overgrowth_multiplier && quote.overgrowth_multiplier !== 1 && (
               <div>
-                <p className="text-xs text-ink-faint uppercase tracking-wide font-semibold mb-1">Overgrowth</p>
+                <p className="text-[10px] text-ink-faint uppercase tracking-wide font-semibold mb-1">Overgrowth</p>
                 <p className="text-ink font-medium">{quote.overgrowth_multiplier}×</p>
               </div>
             )}
@@ -792,7 +798,7 @@ export default function QuoteDetailPage() {
 
           {quote.notes && (
             <div className="pt-3 border-t border-border">
-              <p className="text-xs text-ink-faint uppercase tracking-wide font-semibold mb-1">Notes</p>
+              <p className="text-[10px] text-ink-faint uppercase tracking-wide font-semibold mb-1">Notes</p>
               <p className="text-sm text-ink-muted whitespace-pre-wrap">{quote.notes}</p>
             </div>
           )}
@@ -815,7 +821,7 @@ export default function QuoteDetailPage() {
                         {t.discountAmount > 0 && <span className="text-emerald-400 text-xs"> (−{formatCurrency(t.discountAmount)})</span>}
                         {s.notes && <span className="block text-xs text-ink-faint truncate">{s.notes}</span>}
                       </span>
-                      <span className="text-ink font-medium shrink-0">{formatCurrency(t.net)}</span>
+                      <span className="text-ink font-medium shrink-0 tabular-nums">{formatCurrency(t.net)}</span>
                     </div>
                   )
                 })}
@@ -823,30 +829,30 @@ export default function QuoteDetailPage() {
             ) : (
               <div className="flex justify-between text-sm">
                 <span className="text-ink-muted">First visit</span>
-                <span className="text-ink font-medium">{formatCurrency(quote.initial_price ?? quote.subtotal)}</span>
+                <span className="text-ink font-medium tabular-nums">{formatCurrency(quote.initial_price ?? quote.subtotal)}</span>
               </div>
             )}
             {quote.travel_fee > 0 && (
               <div className="flex justify-between text-sm">
                 <span className="text-ink-muted">Travel Fee {quote.show_travel_separately ? '(shown to customer)' : '(included in total)'}</span>
-                <span className="text-ink font-medium">{formatCurrency(quote.travel_fee)}</span>
+                <span className="text-ink font-medium tabular-nums">{formatCurrency(quote.travel_fee)}</span>
               </div>
             )}
             <div className="flex justify-between items-center pt-2 border-t border-border">
               <span className="text-sm font-semibold text-ink">{(quote.weekly_price || quote.biweekly_price || quote.monthly_price) ? 'First Visit Total' : 'Quote Total'}</span>
-              <span className="text-3xl font-bold text-accent">{formatCurrency(quote.total)}</span>
+              <span className="text-3xl font-bold text-accent tabular-nums">{formatCurrency(quote.total)}</span>
             </div>
             {(quote.weekly_price || quote.biweekly_price || quote.monthly_price) ? (
               <div className="pt-3 border-t border-border space-y-1.5">
-                <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Ongoing maintenance options</p>
+                <p className="text-[10px] font-semibold text-ink-muted uppercase tracking-wide">Ongoing maintenance options</p>
                 {quote.weekly_price ? (
-                  <div className="flex justify-between text-sm"><span className="text-ink-muted">Weekly</span><span className="text-ink font-medium">{formatCurrency(quote.weekly_price)}/visit</span></div>
+                  <div className="flex justify-between text-sm"><span className="text-ink-muted">Weekly</span><span className="text-ink font-medium tabular-nums">{formatCurrency(quote.weekly_price)}/visit</span></div>
                 ) : null}
                 {quote.biweekly_price ? (
-                  <div className="flex justify-between text-sm"><span className="text-ink-muted">Bi-Weekly</span><span className="text-ink font-medium">{formatCurrency(quote.biweekly_price)}/visit</span></div>
+                  <div className="flex justify-between text-sm"><span className="text-ink-muted">Bi-Weekly</span><span className="text-ink font-medium tabular-nums">{formatCurrency(quote.biweekly_price)}/visit</span></div>
                 ) : null}
                 {quote.monthly_price ? (
-                  <div className="flex justify-between text-sm"><span className="text-ink-muted">Monthly</span><span className="text-ink font-medium">{formatCurrency(quote.monthly_price)}/visit</span></div>
+                  <div className="flex justify-between text-sm"><span className="text-ink-muted">Monthly</span><span className="text-ink font-medium tabular-nums">{formatCurrency(quote.monthly_price)}/visit</span></div>
                 ) : null}
               </div>
             ) : null}
@@ -860,18 +866,18 @@ export default function QuoteDetailPage() {
           <CardBody className="space-y-4">
             {hasMeasurement && (
               <div>
-                <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-2">Measurements</p>
+                <p className="text-[10px] font-semibold text-ink-muted uppercase tracking-wide mb-2">Measurements</p>
                 <div className="space-y-1.5">
                   {measSections.map(s => (
                     <div key={s.label} className="flex justify-between text-sm">
                       <span className="text-ink-muted">{s.label}</span>
-                      <span className="text-ink font-medium">{Number(s.v).toLocaleString()} sq ft</span>
+                      <span className="text-ink font-medium tabular-nums">{Number(s.v).toLocaleString()} sq ft</span>
                     </div>
                   ))}
                   {quote.measured_sqft != null && Number(quote.measured_sqft) > 0 && (
                     <div className="flex justify-between text-sm pt-1.5 border-t border-border">
                       <span className="text-sm font-semibold text-ink">Total</span>
-                      <span className="text-ink font-bold">{Number(quote.measured_sqft).toLocaleString()} sq ft</span>
+                      <span className="text-ink font-bold tabular-nums">{Number(quote.measured_sqft).toLocaleString()} sq ft</span>
                     </div>
                   )}
                 </div>
@@ -881,9 +887,10 @@ export default function QuoteDetailPage() {
             {suggestedPrice != null && (
               <div className={hasMeasurement ? 'pt-4 border-t border-border' : ''}>
                 <div className="flex items-center justify-between mb-2">
-                  <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Pricing analysis</p>
-                  {quote.pricing_confidence && CONFIDENCE_COLORS[quote.pricing_confidence] && (
-                    <span className={`inline-flex items-center text-[10px] font-semibold border rounded-full px-2 py-0.5 ${CONFIDENCE_COLORS[quote.pricing_confidence]}`}>
+                  <p className="text-[10px] font-semibold text-ink-muted uppercase tracking-wide">Pricing analysis</p>
+                  {quote.pricing_confidence && CONFIDENCE_LABELS[quote.pricing_confidence] && (
+                    <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-ink-muted">
+                      <span className={`w-1.5 h-1.5 rounded-full ${quote.pricing_confidence === 'high' ? 'bg-emerald-400' : quote.pricing_confidence === 'medium' ? 'bg-amber-400' : 'bg-ink-faint'}`} />
                       {CONFIDENCE_LABELS[quote.pricing_confidence]}
                     </span>
                   )}
@@ -891,14 +898,14 @@ export default function QuoteDetailPage() {
                 <div className="space-y-1.5">
                   <div className="flex justify-between text-sm">
                     <span className="text-ink-muted">Suggested price</span>
-                    <span className="text-ink font-medium">{formatCurrency(suggestedPrice)}</span>
+                    <span className="text-ink font-medium tabular-nums">{formatCurrency(suggestedPrice)}</span>
                   </div>
                   {/* "Actual quote price" row removed — it just repeated the First Invoice
                       Total shown prominently above; the difference below conveys the rest. */}
                   {priceDiff != null && (
                     <div className="flex justify-between text-sm pt-1.5 border-t border-border">
                       <span className="text-ink-muted">Your price vs suggested</span>
-                      <span className={`font-semibold ${priceDiff >= 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      <span className={`font-semibold tabular-nums ${priceDiff >= 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
                         {priceDiff >= 0 ? '+' : '−'}{formatCurrency(Math.abs(priceDiff))}
                         <span className="text-ink-faint font-normal"> {priceDiff >= 0 ? 'above' : 'below'} suggested</span>
                       </span>

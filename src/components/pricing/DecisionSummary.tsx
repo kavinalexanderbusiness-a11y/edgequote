@@ -84,7 +84,7 @@ export function DecisionSummary({
   const tags = buildTags(a, pkg)
 
   return (
-    <div className="space-y-3 motion-safe:animate-[fadeIn_140ms_ease-out]">
+    <div className="space-y-3 animate-fade">
       {/* ── DECISION SUMMARY — answers only: take? charge? minimum? freq? why? */}
       <div className={cn('rounded-xl border p-4 space-y-3', c.cls)}>
         {/* Q1 — should I take this customer? */}
@@ -140,7 +140,7 @@ export function DecisionSummary({
         type="button"
         disabled={busy}
         onClick={() => onUse({ cadence: recCadence, price: d.recommendedPrice })}
-        className={cn('w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold transition-colors disabled:opacity-60 disabled:pointer-events-none', c.btn)}
+        className={cn('w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold transition-colors disabled:opacity-60 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50', c.btn)}
       >
         {busy ? 'Creating quote…' : <>Use {recLabel} — ${d.recommendedPrice}</>}
         {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
@@ -149,8 +149,9 @@ export function DecisionSummary({
       {/* ── FULL ANALYSIS — folded away until asked for ──────────────────── */}
       <button
         type="button"
+        aria-expanded={showFull}
         onClick={() => setShowFull(s => !s)}
-        className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold text-ink-muted hover:text-ink hover:bg-bg-tertiary transition-colors"
+        className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold text-ink-muted hover:text-ink hover:bg-bg-tertiary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       >
         <BarChart3 className="w-3.5 h-3.5" />
         {showFull ? 'Hide full analysis' : 'View full analysis'}
@@ -158,7 +159,7 @@ export function DecisionSummary({
       </button>
 
       {showFull && (
-        <div className="space-y-2 motion-safe:animate-[fadeIn_140ms_ease-out]">
+        <div className="space-y-2 animate-fade">
           {/* Pricing Details — the one home for cadence prices + guidance */}
           <Collapsible title="Pricing Details" icon={DollarSign}
             summary={`One-time $${pkg.oneTime} · ${recLabel} $${d.recommendedPrice}`}>

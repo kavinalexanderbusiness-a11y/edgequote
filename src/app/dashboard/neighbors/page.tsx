@@ -17,10 +17,11 @@ import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { Menu } from '@/components/ui/Menu'
 import { InlineEmpty } from '@/components/ui/EmptyState'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
-import { Target, MapPin, Plus, Phone, FileText, Check, X, Trash2, Sprout, UserPlus } from 'lucide-react'
+import { Target, MapPin, Plus, Phone, FileText, Check, X, Trash2, Sprout, UserPlus, User, MoreHorizontal } from 'lucide-react'
 
 type LeadStatus = 'prospect' | 'contacted' | 'quoted' | 'won' | 'lost'
 
@@ -217,19 +218,19 @@ export default function NeighborsPage() {
 
   return (
     <div className="max-w-4xl space-y-6">
-      <PageHeader title="Neighbor Leads" description="Turn strong routes into denser routes — knock the doors next to your best customers" />
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Neighbor Leads" description="Turn strong routes into denser routes — knock the doors next to your best customers." />
 
       {/* Funnel metrics */}
       <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
         {(Object.keys(STATUS_META) as LeadStatus[]).map(s => (
           <div key={s} className="rounded-lg border border-border bg-bg-tertiary px-3 py-2">
-            <p className="text-[10px] uppercase tracking-wide text-ink-faint">{STATUS_META[s].label}</p>
-            <p className="text-lg font-bold text-ink">{counts[s]}</p>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">{STATUS_META[s].label}</p>
+            <p className="text-lg font-bold text-ink tabular-nums">{counts[s]}</p>
           </div>
         ))}
         <div className="rounded-lg border border-border bg-bg-tertiary px-3 py-2">
-          <p className="text-[10px] uppercase tracking-wide text-ink-faint">Conversion</p>
-          <p className="text-lg font-bold text-accent">{counts.conversion}%</p>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">Conversion</p>
+          <p className="text-lg font-bold text-accent tabular-nums">{counts.conversion}%</p>
         </div>
       </div>
 
@@ -237,8 +238,11 @@ export default function NeighborsPage() {
       {targets.length > 0 && (
         <Card>
           <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-            <Sprout className="w-4 h-4 text-violet-300" />
-            <h2 className="text-sm font-semibold text-ink">Where to knock next</h2>
+            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
+              <Sprout className="w-3.5 h-3.5 text-accent" />
+            </span>
+            <h2 className="text-sm font-semibold text-ink tracking-tight">Where to knock next</h2>
+            <span className="flex-1 h-px bg-border" aria-hidden />
           </div>
           <CardBody className="space-y-2">
             {targets.map(t => (
@@ -252,7 +256,7 @@ export default function NeighborsPage() {
                     {t.kind === 'warm' ? `${t.pending} pending quote${t.pending !== 1 ? 's' : ''} — warm` : t.kind === 'expand' ? 'Expand here' : 'Dominate it'}
                   </span>
                 </div>
-                <p className="text-xs text-ink-muted mt-1">
+                <p className="text-xs text-ink-muted mt-1 tabular-nums">
                   {t.customers} customer{t.customers !== 1 ? 's' : ''} · {formatCurrency(t.revenue)} booked · {formatCurrency(t.revPerJob)}/job
                   {t.anchor && <> · knock around <span className="text-ink font-medium">{customerName(t.anchor.customer_id) || t.anchor.address}</span></>}
                 </p>
@@ -285,11 +289,11 @@ export default function NeighborsPage() {
         <Card><InlineEmpty icon={UserPlus}>No leads yet. After a job, knock the two doors either side and add them here — the truck is already parked.</InlineEmpty></Card>
       ) : (
         <div className="space-y-2">
-          {leads.map(l => {
+          {leads.map((l, i) => {
             const src = customerName(l.source_customer_id)
             const busy = working === l.id
             return (
-              <Card key={l.id}>
+              <Card key={l.id} className={`animate-rise stagger-${Math.min(i + 1, 6)}`}>
                 <CardBody className="space-y-2.5">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -322,7 +326,7 @@ export default function NeighborsPage() {
                   <div className="flex items-center gap-1.5 flex-wrap">
                     {l.status === 'prospect' && (
                       <Button size="sm" variant="secondary" disabled={busy} onClick={() => setStatus(l, 'contacted')}>
-                        <Phone className="w-3.5 h-3.5" /> Contacted
+                        <Phone className="w-3.5 h-3.5" /> Mark contacted
                       </Button>
                     )}
                     {(l.status === 'prospect' || l.status === 'contacted') && (
@@ -337,26 +341,45 @@ export default function NeighborsPage() {
                     )}
                     {l.status === 'quoted' && l.converted_customer_id && (
                       <Button size="sm" variant="secondary" disabled={busy} onClick={() => setStatus(l, 'won')}>
-                        <Check className="w-3.5 h-3.5" /> Won
+                        <Check className="w-3.5 h-3.5" /> Mark won
                       </Button>
                     )}
                     {l.status !== 'won' && l.status !== 'lost' && (
                       <Button size="sm" variant="ghost" disabled={busy} onClick={() => setStatus(l, 'lost')}>
-                        <X className="w-3.5 h-3.5" /> Lost
+                        <X className="w-3.5 h-3.5" /> Mark lost
                       </Button>
                     )}
-                    {l.converted_customer_id && (
-                      <Button size="sm" variant="ghost" onClick={() => router.push(`/dashboard/customers/${l.converted_customer_id}`)}>
-                        Open customer
-                      </Button>
-                    )}
-                    <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(l.address)}`} target="_blank" rel="noopener noreferrer"
-                      className="h-8 px-2.5 rounded-lg border border-border text-xs font-medium flex items-center gap-1 text-ink-muted hover:text-ink">
-                      <MapPin className="w-3.5 h-3.5" /> Map
-                    </a>
-                    <Button size="sm" variant="ghost" className="ml-auto hover:text-red-400" onClick={() => deleteLead(l)} title="Delete lead">
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </Button>
+                    <Menu
+                      align="end"
+                      className="ml-auto"
+                      ariaLabel="Lead actions"
+                      items={[
+                        ...(l.converted_customer_id ? [{
+                          key: 'open-customer',
+                          label: 'Open customer',
+                          icon: User,
+                          onSelect: () => router.push(`/dashboard/customers/${l.converted_customer_id}`),
+                        }] : []),
+                        {
+                          key: 'open-maps',
+                          label: 'Open in Maps',
+                          icon: MapPin,
+                          onSelect: () => window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(l.address)}`, '_blank', 'noopener,noreferrer'),
+                        },
+                        {
+                          key: 'delete',
+                          label: 'Delete lead',
+                          icon: Trash2,
+                          danger: true,
+                          onSelect: () => deleteLead(l),
+                        },
+                      ]}>
+                      {({ toggle, triggerProps }) => (
+                        <Button size="sm" variant="ghost" onClick={toggle} aria-label="More actions" title="More actions" {...triggerProps}>
+                          <MoreHorizontal className="w-4 h-4" />
+                        </Button>
+                      )}
+                    </Menu>
                   </div>
                 </CardBody>
               </Card>

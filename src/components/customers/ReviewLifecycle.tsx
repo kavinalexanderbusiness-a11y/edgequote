@@ -117,7 +117,7 @@ export function ReviewLifecycle({ customer, onChange }: {
         {status === 'declined' && (
           <div className="flex items-center justify-between gap-3">
             <p className="text-sm text-ink-muted">Opted out of review requests{customer.review_declined_at ? ` · ${formatDate(customer.review_declined_at)}` : ''}.</p>
-            <Button size="sm" variant="ghost" onClick={reset}><RotateCcw className="w-3.5 h-3.5" /> Reset</Button>
+            <Button size="sm" variant="ghost" onClick={reset}><RotateCcw className="w-3.5 h-3.5" /> Clear review status</Button>
           </div>
         )}
 
@@ -136,7 +136,7 @@ export function ReviewLifecycle({ customer, onChange }: {
               <Button size="sm" variant="secondary" onClick={() => { setEditing(true); setRating(5) }}>
                 <Check className="w-3.5 h-3.5" /> Mark reviewed
               </Button>
-              <Button size="sm" variant="ghost" onClick={markDeclined}><ThumbsDown className="w-3.5 h-3.5" /> Declined</Button>
+              <Button size="sm" variant="ghost" onClick={markDeclined}><ThumbsDown className="w-3.5 h-3.5" /> Mark declined</Button>
             </div>
             <p role="status" aria-live="polite" className="min-h-0 text-xs text-ink-faint empty:hidden flex items-center gap-1.5">
               {sending && <Loader2 className="w-3 h-3 animate-spin" />}{sendNote}
@@ -162,7 +162,7 @@ export function ReviewLifecycle({ customer, onChange }: {
             <div className="flex items-center gap-2">
               <Button size="sm" onClick={saveReviewed} loading={saving}>Save review</Button>
               <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>
-              {status === 'reviewed' && <Button size="sm" variant="ghost" className="ml-auto hover:text-red-400" onClick={reset}>Clear</Button>}
+              {status === 'reviewed' && <Button size="sm" variant="danger" className="ml-auto" onClick={reset}>Clear review status</Button>}
             </div>
           </div>
         )}

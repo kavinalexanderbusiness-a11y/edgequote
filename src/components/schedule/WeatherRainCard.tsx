@@ -1,8 +1,9 @@
 'use client'
 
 import { format } from 'date-fns'
-import { cn, formatCurrency } from '@/lib/utils'
-import { CloudRain, Check, Wand2, CalendarX2, Loader2, X, ArrowRight } from 'lucide-react'
+import { formatCurrency } from '@/lib/utils'
+import { Button } from '@/components/ui/Button'
+import { CloudRain, Check, Wand2, CalendarX2, X, ArrowRight } from 'lucide-react'
 
 export interface RainMoveSummary {
   date: string
@@ -60,7 +61,7 @@ export function WeatherRainCard(props: Props) {
                   {summary.unmovable > 0 && (
                     <p className="text-[11px] text-amber-400/90">{summary.unmovable} couldn’t be moved (locked/billed) — review them manually.</p>
                   )}
-                  <p className="text-xs font-semibold text-emerald-300 pt-1">Revenue protected: {formatCurrency(summary.revenueProtected)}</p>
+                  <p className="text-xs font-semibold text-emerald-300 pt-1">Revenue protected: <span className="tabular-nums">{formatCurrency(summary.revenueProtected)}</span></p>
                 </div>
               ) : (
                 <p className="text-xs text-ink-muted mt-1">No movable jobs needed relocating — the day is clear.</p>
@@ -83,39 +84,30 @@ export function WeatherRainCard(props: Props) {
             <CloudRain className="w-4.5 h-4.5" />
           </span>
           <div className="min-w-0">
-            <p className="text-sm font-bold text-ink flex items-center gap-2">
-              ⚠️ {dayShort(date)}
+            <p className="text-sm font-bold tracking-tight text-ink">
+              {dayShort(date)}
             </p>
             <p className="text-xs text-ink-muted mt-0.5">{rainLabel}</p>
-            <p className="text-xs text-ink mt-1.5">
+            <p className="text-xs text-ink mt-1.5 tabular-nums">
               <span className="font-semibold">{jobsAffected} job{jobsAffected !== 1 ? 's' : ''} affected</span>
               {revenue > 0 && <span className="text-ink-faint"> · {formatCurrency(revenue)} at risk</span>}
             </p>
             <p className="text-[11px] text-ink-faint mt-1.5">Recommendation: mark this day unavailable due to rain and move the work to the best open days.</p>
           </div>
         </div>
-        <button onClick={props.onLater} aria-label="Dismiss" className="shrink-0 text-ink-faint hover:text-ink"><X className="w-4 h-4" /></button>
+        <button onClick={props.onLater} aria-label="Decide later" title="Decide later" className="shrink-0 text-ink-faint hover:text-ink"><X className="w-4 h-4" /></button>
       </div>
 
       <div className="flex flex-wrap items-center gap-2 mt-3.5">
-        <button onClick={props.onDisableAndOptimize} disabled={busy}
-          className={cn('px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50',
-            'bg-accent text-black hover:bg-accent/90')}>
-          {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5" />}
-          Disable Day &amp; Auto Optimize
-        </button>
-        <button onClick={props.onDisableOnly} disabled={busy}
-          className="px-3 py-2 rounded-lg text-xs font-medium border border-border bg-surface text-ink-muted hover:text-ink transition-colors disabled:opacity-50 flex items-center gap-1.5">
-          <CalendarX2 className="w-3.5 h-3.5" /> Disable Day Only
-        </button>
-        <button onClick={props.onOptimizeOnly} disabled={busy}
-          className="px-3 py-2 rounded-lg text-xs font-medium border border-border bg-surface text-ink-muted hover:text-ink transition-colors disabled:opacity-50">
-          Auto Optimize Only
-        </button>
-        <button onClick={props.onLater} disabled={busy}
-          className="px-3 py-2 rounded-lg text-xs font-medium text-ink-faint hover:text-ink transition-colors disabled:opacity-50">
-          I’ll Decide Later
-        </button>
+        <Button size="sm" onClick={props.onDisableAndOptimize} loading={busy}>
+          <Wand2 className="w-3.5 h-3.5" /> Disable day &amp; auto-optimize
+        </Button>
+        <Button size="sm" variant="secondary" onClick={props.onDisableOnly} disabled={busy}>
+          <CalendarX2 className="w-3.5 h-3.5" /> Disable day only
+        </Button>
+        <Button size="sm" variant="secondary" onClick={props.onOptimizeOnly} disabled={busy}>
+          <Wand2 className="w-3.5 h-3.5" /> Auto-optimize only
+        </Button>
       </div>
     </div>
   )

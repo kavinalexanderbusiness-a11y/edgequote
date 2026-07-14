@@ -2,6 +2,7 @@
 
 import { HealthIssue } from '@/lib/scheduleHealth'
 import { Card, CardBody } from '@/components/ui/Card'
+import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import { ShieldCheck, ShieldAlert, AlertTriangle, Repeat, Eye, Trash2, GitMerge, EyeOff, CheckCircle2 } from 'lucide-react'
 
@@ -70,17 +71,24 @@ export function ScheduleHealthCard({ issues, busyKey, onReview, onDelete, onMerg
                         )}
                         <div className="flex flex-wrap items-center gap-1.5 mt-2">
                           {issue.actions.includes('review') && (
-                            <HealthBtn onClick={() => onReview(issue)} icon={Eye} label="Review" disabled={busy} />
+                            <Button size="sm" variant="secondary" onClick={() => onReview(issue)} disabled={busy}>
+                              <Eye className="w-3.5 h-3.5" /> Review
+                            </Button>
                           )}
                           {issue.actions.includes('delete') && (
-                            <HealthBtn onClick={() => onDelete(issue)} icon={Trash2} tone="red" loading={busy}
-                              label={issue.kind === 'duplicate-day' ? `Delete duplicate${issue.removableJobIds.length > 1 ? 's' : ''}` : 'Delete extra visit'} />
+                            <Button size="sm" variant="danger" onClick={() => onDelete(issue)} loading={busy}>
+                              <Trash2 className="w-3.5 h-3.5" /> {issue.kind === 'duplicate-day' ? `Delete duplicate${issue.removableJobIds.length > 1 ? 's' : ''}` : 'Delete extra visit'}
+                            </Button>
                           )}
                           {issue.actions.includes('merge') && (
-                            <HealthBtn onClick={() => onMerge(issue)} icon={GitMerge} tone="accent" loading={busy} label="Merge plans" />
+                            <Button size="sm" variant="secondary" onClick={() => onMerge(issue)} loading={busy}>
+                              <GitMerge className="w-3.5 h-3.5" /> Merge plans
+                            </Button>
                           )}
                           {issue.actions.includes('ignore') && (
-                            <HealthBtn onClick={() => onIgnore(issue)} icon={EyeOff} label="Ignore" disabled={busy} />
+                            <Button size="sm" variant="secondary" onClick={() => onIgnore(issue)} disabled={busy}>
+                              <EyeOff className="w-3.5 h-3.5" /> Ignore
+                            </Button>
                           )}
                         </div>
                       </div>
@@ -93,19 +101,5 @@ export function ScheduleHealthCard({ issues, busyKey, onReview, onDelete, onMerg
         )}
       </CardBody>
     </Card>
-  )
-}
-
-function HealthBtn({ onClick, icon: Icon, label, tone, disabled, loading }: {
-  onClick: () => void; icon: typeof Eye; label: string; tone?: 'red' | 'accent'; disabled?: boolean; loading?: boolean
-}) {
-  return (
-    <button onClick={onClick} disabled={disabled || loading}
-      className={cn('h-8 px-2.5 rounded-lg border text-xs font-medium flex items-center gap-1 active:scale-95 transition-transform disabled:opacity-50',
-        tone === 'red' ? 'border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/20'
-          : tone === 'accent' ? 'border-accent/30 bg-accent/10 text-accent hover:bg-accent/20'
-          : 'border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong')}>
-      <Icon className={cn('w-3.5 h-3.5', loading && 'animate-pulse')} /> {label}
-    </button>
   )
 }

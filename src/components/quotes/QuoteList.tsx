@@ -12,6 +12,7 @@ import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
+import { FilterPill } from '@/components/ui/FilterPill'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from '@/lib/toast'
 import { useBulkSelect } from '@/hooks/useBulkSelect'
@@ -233,30 +234,26 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
         {/* One scrollable row on phones (the wrap made a 3-row wall of pills
             before any quotes); wraps normally on desktop. */}
         <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto sm:flex-wrap sm:overflow-visible pb-1 sm:pb-0">
+          {/* Follow-up queue toggle — FilterPill geometry, but it keeps its amber
+              identity (amber = follow-up everywhere), so no accent pill-glow. */}
           {followUpCount > 0 && (
             <button
+              type="button"
               onClick={() => setFollowUpOnly(v => !v)}
-              className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+              aria-pressed={followUpOnly}
+              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium border transition-all whitespace-nowrap active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
                 followUpOnly
-                  ? 'bg-amber-400 text-black'
-                  : 'bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20'
+                  ? 'bg-amber-400 text-black border-amber-400'
+                  : 'bg-amber-500/10 border-amber-500/30 text-amber-400 hover:bg-amber-500/20'
               }`}
             >
-              <Bell className="w-3 h-3" /> Follow up ({followUpCount})
+              <Bell className="w-3 h-3" /> Follow up <span className="tabular-nums">({followUpCount})</span>
             </button>
           )}
           {STATUS_FILTERS.map(f => (
-            <button
-              key={f.value}
-              onClick={() => setStatusFilter(f.value)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                statusFilter === f.value
-                  ? 'bg-accent text-black'
-                  : 'bg-surface border border-border-strong text-ink-muted hover:text-ink'
-              }`}
-            >
+            <FilterPill key={f.value} active={statusFilter === f.value} onClick={() => setStatusFilter(f.value)}>
               {f.label}
-            </button>
+            </FilterPill>
           ))}
         </div>
       </div>
@@ -272,7 +269,7 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
           <Card>
             <EmptyState icon={FileText} title="No quotes yet"
               description="Create your first quote — measure the lawn, pick a service, and send it in minutes."
-              action={{ label: 'New Quote', onClick: () => router.push('/dashboard/quotes/new') }} />
+              action={{ label: 'New quote', onClick: () => router.push('/dashboard/quotes/new') }} />
           </Card>
         ) : (
           <Card><InlineEmpty>No quotes match your filters.</InlineEmpty></Card>
@@ -316,7 +313,7 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
                       )}
                     </td>
                     <td className="px-3 sm:px-5 py-3.5 text-ink-muted hidden md:table-cell">{q.service_type}</td>
-                    <td className="px-3 sm:px-5 py-3.5 font-semibold text-ink">{formatCurrency(q.total)}</td>
+                    <td className="px-3 sm:px-5 py-3.5 font-semibold text-ink tabular-nums">{formatCurrency(q.total)}</td>
                     <td className="px-3 sm:px-5 py-3.5" onClick={e => e.stopPropagation()}><QuoteStatusControl quoteId={q.id} status={q.status} followUpCount={q.follow_up_count} /></td>
                     <td className="px-3 sm:px-5 py-3.5 text-ink-faint hidden lg:table-cell">{formatDate(q.created_at)}</td>
                     <td className="px-3 sm:px-5 py-3.5" onClick={e => e.stopPropagation()}>
@@ -327,6 +324,7 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
                           onClick={() => handleDelete(q.id)}
                           loading={deleting === q.id}
                           title="Delete quote"
+                          aria-label="Delete quote"
                           className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
                         >
                           <Trash2 className="w-3.5 h-3.5" />

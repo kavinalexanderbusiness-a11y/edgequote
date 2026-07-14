@@ -133,7 +133,7 @@ export function PaymentMethodCard({ customer, onCustomerChange }: {
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <Button size="sm" variant="secondary" onClick={saveCard} loading={busy === 'save'} disabled={!paymentsEnabled} title={!paymentsEnabled ? "Connect Stripe in Settings to enable card payments" : undefined}>Replace</Button>
-              <Button size="sm" variant="ghost" onClick={removeCard} loading={busy === 'remove'} className="hover:text-red-400" title="Remove card">
+              <Button size="sm" variant="ghost" onClick={removeCard} loading={busy === 'remove'} className="text-red-400/70 hover:text-red-400" aria-label="Remove card" title="Remove card">
                 <Trash2 className="w-3.5 h-3.5" />
               </Button>
             </div>
@@ -157,7 +157,8 @@ export function PaymentMethodCard({ customer, onCustomerChange }: {
             onClick={toggleAutopay}
             disabled={!card && !autopay}
             aria-pressed={autopay}
-            className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${autopay ? 'bg-accent' : 'bg-surface border border-border-strong'} ${(!card && !autopay) ? 'opacity-40 cursor-not-allowed' : ''}`}
+            aria-label="AutoPay recurring invoices"
+            className={`relative w-11 h-6 rounded-full transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${autopay ? 'bg-accent' : 'bg-surface border border-border-strong'} ${(!card && !autopay) ? 'opacity-40 cursor-not-allowed' : ''}`}
           >
             <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${autopay ? 'translate-x-5' : ''}`} />
           </button>
@@ -173,7 +174,7 @@ export function PaymentMethodCard({ customer, onCustomerChange }: {
             <select
               value={mode}
               onChange={e => changeMode(e.target.value as Mode)}
-              className="text-xs rounded-lg border border-border-strong bg-surface text-ink px-2 py-1.5 outline-none focus:border-accent shrink-0"
+              className="text-xs rounded-lg border border-border-strong bg-surface text-ink px-2 py-1.5 outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20 shrink-0"
             >
               <option value="inherit">Use business default</option>
               <option value="auto">Charge on completion</option>
