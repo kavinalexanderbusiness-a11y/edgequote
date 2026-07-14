@@ -1,8 +1,7 @@
 import type { ReactNode } from 'react'
 import { WebsiteLead } from '@/lib/leads'
 import { formatCurrency } from '@/lib/utils'
-import { JobPhotos } from '@/components/photos/JobPhotos'
-import { Globe, Ruler, Sparkles, MapPin, Phone, Mail, Repeat, DollarSign, CalendarClock, MessageCircle, Camera } from 'lucide-react'
+import { Globe, Ruler, Sparkles, MapPin, Phone, Mail, Repeat, DollarSign, CalendarClock, MessageCircle } from 'lucide-react'
 
 const FREQ_LABEL: Record<string, string> = { weekly: 'Weekly', biweekly: 'Bi-weekly', monthly: 'Monthly', one_time: 'One-time' }
 
@@ -68,17 +67,6 @@ export function LeadSummary({ lead, footer, className }: { lead: WebsiteLead; fo
       )}
 
       {lead.notes && <p className="text-xs text-ink-muted mt-2 whitespace-pre-wrap border-l-2 border-border pl-2">{lead.notes}</p>}
-
-      {/* Photos the customer uploaded with the lead — reuses the SAME gallery +
-          lightbox as the rest of the app (read-only: view + enlarge + download). */}
-      {(lead.photo_count ?? 0) > 0 && lead.customer_id && (
-        <div className="mt-3 pt-3 border-t border-border/60">
-          <p className="text-[11px] uppercase tracking-wide text-ink-faint flex items-center gap-1.5 mb-1.5">
-            <Camera className="w-3 h-3" /> Customer photos
-          </p>
-          <JobPhotos customerId={lead.customer_id} propertyId={null} variant="gallery" readOnly />
-        </div>
-      )}
 
       {footer && <div className="mt-3">{footer}</div>}
     </div>

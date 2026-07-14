@@ -38,21 +38,18 @@ function withUrl(supabase: SupabaseClient, rows: JobPhoto[]): JobPhotoView[] {
   return rows.map(r => ({ ...r, url: publicUrl(supabase, r.storage_path) }))
 }
 
-// List photos for a single visit (when jobId is given), the whole property (its
-// full visual service history), or everything for a customer (across their
-// properties — e.g. a website lead's uploads on the customer profile / lead card).
-// Scope precedence: job → property → customer. Newest first. `limit` bounds the
-// pull so a big history doesn't fetch it all (and silently hit Supabase's 1000-row
-// ceiling) on open.
+// List photos for a single visit (when jobId is given) or for the whole
+// property (its full visual service history). Newest first. `limit` bounds the
+// pull so a property with hundreds of photos doesn't fetch its entire history
+// (and silently hit Supabase's 1000-row ceiling) on open.
 export async function listPhotos(
   supabase: SupabaseClient,
   userId: string,
-  scope: { jobId?: string | null; propertyId?: string | null; customerId?: string | null; limit?: number },
+  scope: { jobId?: string | null; propertyId?: string | null; limit?: number },
 ): Promise<JobPhotoView[]> {
   let q = supabase.from('job_photos').select('*').eq('user_id', userId)
   if (scope.jobId) q = q.eq('job_id', scope.jobId)
   else if (scope.propertyId) q = q.eq('property_id', scope.propertyId)
-  else if (scope.customerId) q = q.eq('customer_id', scope.customerId)
   else return []
   q = q.order('taken_at', { ascending: false })
   if (scope.limit) q = q.limit(scope.limit)

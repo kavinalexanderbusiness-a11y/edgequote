@@ -23,8 +23,8 @@ interface Props {
   // don't each fire a round-trip.
   initialPhotos?: JobPhotoView[]
   // Read-only viewer: hides capture/delete/retag/caption controls — just
-  // thumbnails + the lightbox (with Download). Used to SHOW a customer's uploaded
-  // photos (website lead card, customer profile) without offering edit actions.
+  // thumbnails + the lightbox (with Download). Used to SHOW customer-attached
+  // photos (booking photos on the profile / draft quote) without edit actions.
   readOnly?: boolean
   className?: string
 }
@@ -69,16 +69,13 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
       userIdRef.current = uid
       if (!uid) { if (alive) setLoading(false); return }
       if (initialPhotos) return // seeded by the parent — no child fetch needed
-      // Fall back to a customer-wide scope (across their properties) when neither a
-      // job nor a property is pinned — the lead card / profile show a customer's uploads.
-      const custScope = !jobId && !propertyId ? customerId : undefined
-      const rows = await listPhotos(supabase, uid, { jobId, propertyId, customerId: custScope, limit: variant === 'gallery' ? GALLERY_FETCH_LIMIT : undefined })
+      const rows = await listPhotos(supabase, uid, { jobId, propertyId, limit: variant === 'gallery' ? GALLERY_FETCH_LIMIT : undefined })
       if (alive) { setPhotos(rows); setLoading(false) }
     }
     load()
     return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobId, propertyId, customerId])
+  }, [jobId, propertyId])
 
   // Free any preview blob URLs on unmount so a big session doesn't leak memory.
   useEffect(() => () => { for (const u of objectUrls.current) URL.revokeObjectURL(u) }, [])
@@ -239,7 +236,7 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
       <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={onFiles} />
 
       {/* Capture buttons — never disabled during upload, so you can keep adding.
-          Hidden in read-only mode (a pure viewer for a customer's uploads). */}
+          Hidden in read-only mode (a pure viewer for customer-attached photos). */}
       <div className="flex items-center gap-2 flex-wrap">
         {!readOnly && <>
           <CaptureBtn label="Before" icon={Camera} busy={busyOf('before')} onClick={() => pick('before')} tone="amber" />

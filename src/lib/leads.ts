@@ -42,7 +42,6 @@ export interface WebsiteLead {
   website_estimated_price: number | null
   budget: string | null
   preferred_schedule: string | null
-  photo_count: number | null
   notes: string | null
 }
 
