@@ -9,7 +9,9 @@ import { loadGoogleMaps } from '@/lib/googleMaps'
 import { AddressAutocomplete, ParsedAddress } from '@/components/ui/AddressAutocomplete'
 import { Button } from '@/components/ui/Button'
 import { formatCurrency, cn } from '@/lib/utils'
-import { Leaf, Loader2, Undo2, Trash2, Check, ArrowRight, ArrowLeft, Ruler, CheckCircle2, Phone, Mail, Camera, MapPin } from 'lucide-react'
+import { Leaf, Loader2, Undo2, Trash2, Check, ArrowRight, ArrowLeft, Ruler, CheckCircle2, Phone, Mail, Camera, MapPin, X } from 'lucide-react'
+
+const STEP_LABELS: Record<string, string> = { address: 'Your address', measure: 'Confirm lawn size', plan: 'Choose a plan', contact: 'Your details' }
 
 // ── Public instant-quote + booking funnel ───────────────────────────────────
 // No login. A prospect enters their address, traces their lawn on satellite for
@@ -52,6 +54,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
   const [referralCode, setReferralCode] = useState('')
   const [photoUrls, setPhotoUrls] = useState<string[]>([])
   const [uploadingPhotos, setUploadingPhotos] = useState(false)
+  const [photoError, setPhotoError] = useState<string | null>(null)
   const [utm, setUtm] = useState<Record<string, string>>({})
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -85,18 +88,25 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
   // Best-effort photo upload — a failed upload (e.g. bucket not yet created) never blocks the booking.
   async function addPhotos(e: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files || [])
+    e.target.value = '' // allow re-picking the same file after a remove
     if (!files.length) return
-    setUploadingPhotos(true)
+    setUploadingPhotos(true); setPhotoError(null)
+    const room = Math.max(0, 6 - photoUrls.length)
     const added: string[] = []
-    for (const f of files.slice(0, 6)) {
+    let failed = 0
+    for (const f of files.slice(0, room)) {
       const safe = f.name.replace(/[^a-zA-Z0-9.\-_]/g, '_')
       const path = `${token}/${crypto.randomUUID()}-${safe}`
       const { error: upErr } = await supabase.storage.from('booking-uploads').upload(path, f, { upsert: false })
       if (!upErr) added.push(supabase.storage.from('booking-uploads').getPublicUrl(path).data.publicUrl)
+      else failed++
     }
     setPhotoUrls(prev => [...prev, ...added])
+    if (failed > 0) setPhotoError(`Couldn't upload ${failed} photo${failed !== 1 ? 's' : ''} — you can try again, or just skip it.`)
+    else if (files.length > room) setPhotoError('You can attach up to 6 photos.')
     setUploadingPhotos(false)
   }
+  function removePhoto(url: string) { setPhotoUrls(prev => prev.filter(u => u !== url)); setPhotoError(null) }
 
   // ── Pricing (owner's real engine, with fee recovery baked in for display) ──
   const plans: Plan[] = useMemo(() => {
@@ -233,12 +243,17 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
     setStep('done')
   }
 
-  if (loading) return <Center><Loader2 className="w-5 h-5 animate-spin text-ink-muted" /></Center>
+  if (loading) return (
+    <Center>
+      <div className="w-11 h-11 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center mb-3"><Leaf className="w-5 h-5 text-accent" /></div>
+      <p className="text-sm text-ink-muted flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading your instant quote…</p>
+    </Center>
+  )
   if (!biz) return (
     <Center>
       <Leaf className="w-10 h-10 text-ink-faint mb-3" />
-      <p className="text-lg font-semibold text-ink">Booking isn’t available</p>
-      <p className="text-sm text-ink-muted mt-1">This link may be inactive. Please contact the business directly.</p>
+      <p className="text-lg font-semibold text-ink">This booking link isn’t active</p>
+      <p className="text-sm text-ink-muted mt-1 max-w-xs">The link may be incorrect or no longer active. Please double-check it, or reach out to the company that sent it to you for a fresh one.</p>
     </Center>
   )
 
@@ -259,10 +274,13 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
 
         {/* Progress */}
         {step !== 'done' && (
-          <div className="flex items-center gap-1.5 mb-4">
-            {(['address', 'measure', 'plan', 'contact'] as Step[]).map((s, i) => (
-              <div key={s} className={cn('h-1.5 flex-1 rounded-full', ['address', 'measure', 'plan', 'contact'].indexOf(step) >= i ? 'bg-accent' : 'bg-border')} />
-            ))}
+          <div className="mb-4">
+            <p className="text-[11px] font-medium text-ink-faint mb-1.5">Step {['address', 'measure', 'plan', 'contact'].indexOf(step) + 1} of 4 · {STEP_LABELS[step]}</p>
+            <div className="flex items-center gap-1.5">
+              {(['address', 'measure', 'plan', 'contact'] as Step[]).map((s, i) => (
+                <div key={s} className={cn('h-1.5 flex-1 rounded-full transition-colors', ['address', 'measure', 'plan', 'contact'].indexOf(step) >= i ? 'bg-accent' : 'bg-border')} />
+              ))}
+            </div>
           </div>
         )}
 
@@ -370,13 +388,13 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
 
         {/* STEP: contact */}
         {step === 'contact' && (
-          <Section title="Almost done" sub={`Book your ${plan?.label.toLowerCase()} service. ${biz.company_name || 'We'}'ll confirm and schedule your first visit.`}>
+          <Section title="Almost done" sub={`Just your details, then ${biz.company_name || 'we'} will confirm your price and schedule your first visit.`}>
             <div className="space-y-3">
               <Field label="Your name" value={name} onChange={setName} placeholder="Jane Doe" autoFocus />
               <Field label="Email" value={email} onChange={setEmail} placeholder="jane@example.com" type="email" />
               <Field label="Phone" value={phone} onChange={setPhone} placeholder="(403) 555-0100" type="tel" />
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold text-ink-muted">How did you hear about us?</label>
+                <label className="text-xs font-semibold text-ink-muted">How did you hear about us? <span className="font-normal text-ink-faint">(optional)</span></label>
                 <select value={hearAbout} onChange={e => setHearAbout(e.target.value)}
                   className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent">
                   <option value="">Select…</option>
@@ -390,12 +408,25 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
                   className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent" />
               </div>
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold text-ink-muted">Photos (optional)</label>
-                <label className="inline-flex items-center gap-1.5 text-xs font-medium text-accent cursor-pointer">
-                  <Camera className="w-3.5 h-3.5" /> {uploadingPhotos ? 'Uploading…' : 'Add photos of your lawn'}
-                  <input type="file" accept="image/*" multiple onChange={addPhotos} className="hidden" disabled={uploadingPhotos} />
+                <label className="text-xs font-semibold text-ink-muted">Photos <span className="font-normal text-ink-faint">(optional)</span></label>
+                <p className="text-[11px] text-ink-faint -mt-0.5">Show us gates, slopes, or problem areas so we can quote accurately. Up to 6.</p>
+                <label className={cn('inline-flex items-center gap-1.5 text-xs font-medium w-fit', photoUrls.length >= 6 ? 'text-ink-faint cursor-not-allowed' : 'text-accent cursor-pointer')}>
+                  {uploadingPhotos ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Camera className="w-3.5 h-3.5" />} {uploadingPhotos ? 'Uploading…' : photoUrls.length >= 6 ? 'Maximum 6 photos added' : 'Add photos of your lawn'}
+                  <input type="file" accept="image/*" multiple onChange={addPhotos} className="hidden" disabled={uploadingPhotos || photoUrls.length >= 6} />
                 </label>
-                {photoUrls.length > 0 && <p className="text-[11px] text-emerald-400">{photoUrls.length} photo{photoUrls.length !== 1 ? 's' : ''} attached</p>}
+                {photoUrls.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mt-1">
+                    {photoUrls.map(u => (
+                      <div key={u} className="relative w-14 h-14 rounded-lg overflow-hidden border border-border-strong">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={u} alt="Lawn photo" className="w-full h-full object-cover" />
+                        <button type="button" onClick={() => removePhoto(u)} aria-label="Remove photo"
+                          className="absolute top-0.5 right-0.5 w-5 h-5 rounded-full bg-black/60 text-white flex items-center justify-center hover:bg-black/80"><X className="w-3 h-3" /></button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {photoError && <p className="text-[11px] text-amber-400">{photoError}</p>}
               </div>
 
               {/* Stay in the loop — synced straight into the business's messaging
@@ -424,6 +455,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
                 <span className="text-base font-bold text-ink tabular-nums">{formatCurrency(plan.price)}{plan.key !== 'one_time' ? '/visit' : ''}</span>
               </div>
             )}
+            <p className="text-[11px] text-ink-faint mt-2 text-center">No charge today — booking is free, and {biz.company_name || 'we'} will confirm your price with you first.{plan && plan.key !== 'one_time' ? ' Recurring plans can be changed or cancelled anytime.' : ''}</p>
             {error && <p className="text-sm text-red-400 mt-3">{error}</p>}
             {name.trim() && !email.trim() && !phone.trim() && (
               <p className="text-xs text-ink-muted mt-3">Add an email or phone number so {biz.company_name || 'we'} can confirm your visit.</p>
@@ -437,21 +469,46 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
             )}
             <div className="flex gap-2 mt-4">
               <Button variant="secondary" aria-label="Back" onClick={() => setStep('plan')}><ArrowLeft className="w-4 h-4" /></Button>
-              <Button size="lg" className="flex-1" loading={submitting} disabled={!name.trim() || !(email.trim() || phone.trim())} onClick={submit}>Book my service <Check className="w-4 h-4" /></Button>
+              <Button size="lg" className="flex-1" loading={submitting} disabled={!name.trim() || !(email.trim() || phone.trim())} onClick={submit}>{submitting ? 'Booking your service…' : <>Book my service <Check className="w-4 h-4" /></>}</Button>
             </div>
           </Section>
         )}
 
         {/* STEP: done */}
         {step === 'done' && (
-          <div className="text-center py-10 space-y-3">
-            <CheckCircle2 className="w-14 h-14 text-emerald-400 mx-auto" />
-            <p className="text-xl font-bold text-ink">You’re all set! 🎉</p>
-            <p className="text-sm text-ink-muted">Thanks, {name.split(' ')[0]}. {biz.company_name || 'We'} received your request{quoteNumber ? ` (${quoteNumber})` : ''} and will reach out shortly to confirm your first visit.</p>
-            <div className="flex flex-col items-center gap-1.5 pt-3">
-              {biz.phone && <a href={`tel:${biz.phone}`} className="text-sm text-accent flex items-center gap-1.5"><Phone className="w-4 h-4" /> {biz.phone}</a>}
-              {biz.email_primary && <a href={`mailto:${biz.email_primary}`} className="text-sm text-ink-muted flex items-center gap-1.5"><Mail className="w-4 h-4" /> {biz.email_primary}</a>}
+          <div className="py-8 space-y-5">
+            <div className="text-center space-y-2">
+              <CheckCircle2 className="w-14 h-14 text-emerald-400 mx-auto" />
+              <p className="text-xl font-bold text-ink">You’re all set! 🎉</p>
+              <p className="text-sm text-ink-muted">Thanks, {name.split(' ')[0]} — here’s what you requested:</p>
             </div>
+
+            {/* Order summary — echo the request back so the customer feels confident. */}
+            <div className="rounded-xl border border-border bg-bg-secondary divide-y divide-border text-sm">
+              {(parsed?.formatted || parsed?.address) && <SummaryRow label="Address" value={parsed.formatted || parsed.address || ''} />}
+              {plan && <SummaryRow label="Plan" value={`${plan.label} · ${formatCurrency(plan.price)}${plan.key !== 'one_time' ? '/visit' : ''}`} />}
+              {sqft > 0 && <SummaryRow label="Lawn size" value={`~${sqft.toLocaleString()} sq ft`} />}
+              {quoteNumber && <SummaryRow label="Confirmation #" value={quoteNumber} />}
+            </div>
+            {quoteNumber && <p className="text-[11px] text-ink-faint text-center -mt-2">Keep your confirmation number for your records.</p>}
+
+            {/* What happens next — the #1 anxiety point, answered with a concrete SLA. */}
+            <div className="rounded-xl border border-accent/25 bg-accent/[0.06] px-4 py-3.5">
+              <p className="text-xs font-semibold text-ink mb-1.5">What happens next</p>
+              <p className="text-xs text-ink-muted leading-relaxed">
+                {biz.company_name || 'We'} will review your request and confirm your price and first visit — usually within one business day.{(email.trim() || phone.trim()) ? ` We’ll reach you by ${phone.trim() && email.trim() ? 'text and email' : phone.trim() ? 'text' : 'email'}.` : ''}
+              </p>
+            </div>
+
+            {(biz.phone || biz.email_primary) && (
+              <div className="text-center">
+                <p className="text-xs text-ink-faint mb-1.5">Questions before then?</p>
+                <div className="flex flex-col items-center gap-1.5">
+                  {biz.phone && <a href={`tel:${biz.phone}`} className="text-sm text-accent flex items-center gap-1.5"><Phone className="w-4 h-4" /> {biz.phone}</a>}
+                  {biz.email_primary && <a href={`mailto:${biz.email_primary}`} className="text-sm text-ink-muted flex items-center gap-1.5"><Mail className="w-4 h-4" /> {biz.email_primary}</a>}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -463,6 +520,14 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
 
 function Center({ children }: { children: ReactNode }) {
   return <div className="min-h-screen flex flex-col items-center justify-center p-8 text-center">{children}</div>
+}
+function SummaryRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-start justify-between gap-3 px-4 py-2.5">
+      <span className="text-ink-faint shrink-0">{label}</span>
+      <span className="text-ink font-medium text-right min-w-0 break-words">{value}</span>
+    </div>
+  )
 }
 function Section({ title, sub, children }: { title: string; sub?: string; children: ReactNode }) {
   return (

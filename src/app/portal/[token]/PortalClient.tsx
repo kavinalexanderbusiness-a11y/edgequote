@@ -163,6 +163,18 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
 
   async function accept(qid: string) {
     if (accepting) return                      // double-click guard
+    // Approving commits the customer to a quote value — mirror the confirm we ask
+    // before removing a card, so a stray tap can't accept a job by accident.
+    const q = data?.quotes.find(x => x.id === qid)
+    const svc = (q?.service_type || '').trim()
+    const confirmed = await confirmDialog({
+      title: 'Approve this quote?',
+      message: svc
+        ? `You're approving ${svc}. We'll follow up to schedule your first visit.`
+        : `We'll follow up to schedule your first visit once you approve.`,
+      confirmLabel: 'Approve quote',
+    })
+    if (!confirmed) return
     setAccepting(qid)
     setActionError(null)
     const { data: ok } = await supabase.rpc('portal_accept_quote', { p_token: token, p_quote_id: qid })
@@ -235,7 +247,12 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     return { upcoming, completed, nextService, lastCompleted, outstanding, plans }
   }, [data])
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center text-ink-muted"><Loader2 className="w-5 h-5 animate-spin" /></div>
+  if (loading) return (
+    <div className="min-h-screen flex flex-col items-center justify-center gap-3 text-center px-8">
+      <div className="w-11 h-11 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center"><Leaf className="w-5 h-5 text-accent" /></div>
+      <p className="text-sm text-ink-muted flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading your account…</p>
+    </div>
+  )
   if (!data || !derived) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center p-8 text-center">
@@ -306,13 +323,22 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
 
         <div className="mt-4">
           {justPaid && (
-            <div className="mb-3 rounded-card border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-sm font-medium px-4 py-3 flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4" /> Payment received — thank you! Your invoice will update shortly.
+            <div className="mb-3 rounded-card border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-sm px-4 py-3 flex items-start justify-between gap-3">
+              <span className="flex items-start gap-2 font-medium">
+                <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>Payment received — thank you!{' '}
+                  {data.payments.length > 0
+                    ? <button onClick={() => setTab('payments')} className="underline underline-offset-2 hover:opacity-80">View your receipt →</button>
+                    : <span className="font-normal">Your receipt will be ready here shortly.</span>}
+                </span>
+              </span>
+              <button onClick={() => setJustPaid(false)} aria-label="Dismiss" className="shrink-0 opacity-70 hover:opacity-100"><X className="w-4 h-4" /></button>
             </div>
           )}
           {justAccepted && (
-            <div className="mb-3 rounded-card border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-sm font-medium px-4 py-3 flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4" /> Quote approved — thank you! We’ll be in touch to schedule your service.
+            <div className="mb-3 rounded-card border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-sm font-medium px-4 py-3 flex items-start justify-between gap-3">
+              <span className="flex items-start gap-2"><CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" /> Quote approved — thank you! We’ll be in touch to schedule your service.</span>
+              <button onClick={() => setJustAccepted(false)} aria-label="Dismiss" className="shrink-0 opacity-70 hover:opacity-100"><X className="w-4 h-4" /></button>
             </div>
           )}
           {actionError && (
@@ -529,7 +555,7 @@ function StatCard({ label, value, tone, icon: Icon }: { label: string; value: st
 
 // ── Service timeline (grouped by visit) ──
 function ServiceTab({ completed, photosByJob, invoiceByJob, photoUrl, gstPct }: { completed: PortalJob[]; photosByJob: Map<string, PortalPhoto[]>; invoiceByJob: Map<string, PortalInvoice>; photoUrl: (p: string) => string; gstPct: number }) {
-  if (completed.length === 0) return <Empty text="No completed visits yet." />
+  if (completed.length === 0) return <Empty icon={History} text="No completed visits yet — your service history will appear here after your first visit." />
   return (
     <div className="space-y-3">
       {completed.map(j => {
@@ -570,7 +596,7 @@ function GalleryTab({ photosByJob, jobs, photoUrl }: { photosByJob: Map<string, 
   const jobById = new Map(jobs.map(j => [j.id, j]))
   const groups = [...photosByJob.entries()].filter(([, ps]) => ps.length > 0)
     .sort((a, b) => (b[1][0]?.taken_at || '').localeCompare(a[1][0]?.taken_at || ''))
-  if (groups.length === 0) return <Empty text="No photos yet — your before & after shots will appear here." />
+  if (groups.length === 0) return <Empty icon={ImageIcon} text="No photos yet — your before & after shots will appear here." />
   return (
     <div className="space-y-4">
       {groups.map(([jobId, ps]) => {
@@ -733,7 +759,7 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, busines
 
       {/* List */}
       {filtered.length === 0 ? (
-        <Empty text={docs.length === 0 ? 'No documents yet. Your quotes and invoices will appear here.' : 'No documents match your search.'} />
+        <Empty icon={docs.length === 0 ? FolderOpen : Search} text={docs.length === 0 ? 'No documents yet — your quotes and invoices will appear here.' : 'No documents match your search.'} />
       ) : (
         <div className="space-y-3">{filtered.map(d => <DocRow key={d.id} d={d} paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} accept={accept} accepting={accepting} />)}</div>
       )}
@@ -781,7 +807,10 @@ function DocRow({ d, paymentsEnabled, pay, payingId, accept, accepting }: {
             <Button className="w-full sm:w-auto" onClick={() => accept(d.rawId)} loading={accepting === d.rawId}><Check className="w-4 h-4" /> Accept this quote</Button>
           )}
           {canPay && (
-            <Button className="w-full sm:w-auto" onClick={() => pay(d.rawId)} loading={payingId === d.rawId}><CreditCard className="w-4 h-4" /> Pay {formatCurrency(d.balance)}</Button>
+            <>
+              <Button className="w-full sm:w-auto" onClick={() => pay(d.rawId)} loading={payingId === d.rawId}><CreditCard className="w-4 h-4" /> Pay {formatCurrency(d.balance)}</Button>
+              <p className="text-[11px] text-ink-faint mt-1.5 flex items-center gap-1"><ShieldCheck className="w-3 h-3 text-emerald-400 shrink-0" /> Secure checkout by Stripe — you&rsquo;ll confirm on the next screen.</p>
+            </>
           )}
         </div>
       )}
@@ -810,7 +839,7 @@ function TimelineTab({ data, photosByJob }: { data: PortalData; photosByJob: Map
     return ev.filter(e => e.at).sort((a, b) => b.at.localeCompare(a.at))
   }, [data, photosByJob])
 
-  if (events.length === 0) return <Empty text="No activity yet — your quotes, visits, and payments will appear here." />
+  if (events.length === 0) return <Empty icon={Activity} text="No activity yet — your quotes, visits, and payments will appear here." />
   return (
     <div className="relative pl-7">
       <div className="absolute left-[11px] top-1.5 bottom-1.5 w-px bg-border" />
@@ -832,7 +861,7 @@ function TimelineTab({ data, photosByJob }: { data: PortalData; photosByJob: Map
 // ── Property details ──
 function PropertyTab({ property }: { property: PortalData['property'] }) {
   if (!property || (!property.address && !property.lawn_sqft && !property.fence_length && !property.neighborhood)) {
-    return <Empty text="No property details on file yet." />
+    return <Empty icon={MapPin} text="No property details on file yet — we'll add them after your first visit or measurement." />
   }
   return (
     <div className="space-y-3">
@@ -910,6 +939,7 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
           <div className="min-w-0">
             <p className="text-sm font-semibold text-ink">Card</p>
             <p className="text-xs text-ink-muted">{paymentsEnabled ? 'Pay any invoice securely online with the Pay button.' : 'Ask us for a secure card payment link.'}</p>
+            {paymentsEnabled && <p className="text-[11px] text-ink-faint mt-1 flex items-center gap-1"><ShieldCheck className="w-3 h-3 text-emerald-400 shrink-0" /> Secure checkout by Stripe — your card details never touch us.</p>}
           </div>
         </div>
         {/* Only advertise e-transfer once the business has set its address —
@@ -938,6 +968,7 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
                 </Button>
               )}
             </div>
+            <p className="text-[11px] text-ink-faint mt-2">E-transfers are usually received within a few hours — your balance updates here once we accept it.</p>
           </div>
         </div>
         )}
@@ -968,7 +999,7 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
       </div>
 
       {receipts.length === 0 ? (
-        <Empty text="No payments yet. Your payments will appear here." />
+        <Empty icon={Receipt} text="No payments yet — once you pay an invoice, your receipts will live here." />
       ) : receipts.map(p => {
         const inv = p.invoice_id ? invById.get(p.invoice_id) : null
         return (
@@ -1128,7 +1159,7 @@ function ReviewCard({ reviewUrl, businessName, reviewed, onReviewed }: { reviewU
   return (
     <div className="rounded-card border border-amber-400/30 bg-amber-400/[0.06] p-4 mt-3">
       <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><Star className="w-4 h-4 text-amber-400" /> Enjoying the service?</p>
-      <p className="text-xs text-ink-muted mt-0.5 mb-3">A quick Google review helps {businessName || 'us'} a lot — thank you!</p>
+      <p className="text-xs text-ink-muted mt-0.5 mb-3">A quick review helps {businessName || 'your service provider'} a lot — thank you!</p>
       <div className="flex flex-wrap gap-2">
         <a href={href} target="_blank" rel="noopener noreferrer"
           className="flex-1 min-w-[140px] inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-accent text-black hover:bg-accent-hover active:scale-[0.98] shadow-sm px-4 py-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
@@ -1237,7 +1268,14 @@ function DocBtn({ icon: Icon, label, loading, disabled, onClick, primary }: { ic
 }
 
 // ── shared bits ──
-function Empty({ text }: { text: string }) { return <p className="text-center text-sm text-ink-muted py-12">{text}</p> }
+function Empty({ text, icon: Icon = Sparkles }: { text: string; icon?: typeof Home }) {
+  return (
+    <div className="rounded-card border border-dashed border-border bg-bg-secondary/40 py-10 px-6 text-center">
+      <Icon className="w-7 h-7 text-ink-faint mx-auto mb-2.5" />
+      <p className="text-sm text-ink-muted max-w-xs mx-auto">{text}</p>
+    </div>
+  )
+}
 function PriceChip({ label, v }: { label: string; v: number }) {
   return <span className="text-xs rounded-lg border border-border bg-bg-tertiary px-2 py-1"><span className="text-ink-faint">{label}</span> <span className="font-semibold text-ink">{formatCurrency(Number(v))}</span></span>
 }

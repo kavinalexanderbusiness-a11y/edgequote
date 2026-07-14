@@ -113,15 +113,17 @@ See you soon!
 
   running_late: `Hi {{first_name}},
 
-I just wanted to let you know I'm running a little behind schedule today.
+This is {{business_name}} — I just wanted to let you know I'm running a little behind schedule today.
 
 My updated arrival time is approximately **{{eta}} minutes**.
 
-Thank you for your patience—I appreciate your understanding and I'll be there as soon as possible.`,
+Thank you for your patience—I appreciate your understanding and I'll be there as soon as possible.
+
+— {{business_name}}`,
 
   arrived: `Hi {{first_name}},
 
-I've just arrived at your property and will be getting started shortly.
+This is {{business_name}} — I've just arrived at your property and will be getting started shortly.
 
 If there's anything you'd like me to know before I begin, just let me know.
 
@@ -129,7 +131,7 @@ Thanks!`,
 
   early_arrival: `Hi {{first_name}},
 
-My schedule opened up earlier than expected today.
+This is {{business_name}}. My schedule opened up earlier than expected today.
 
 If it works for you, I can arrive earlier than originally planned.
 
@@ -137,11 +139,13 @@ Just reply to this message and let me know.`,
 
   rescheduled: `Hi {{first_name}},
 
-Your service has been rescheduled to **{{date}}**.
+Your service with {{business_name}} has been rescheduled to **{{date}}**.
 
 If this new date doesn't work for you, simply reply to this message and we'll be happy to arrange another time.
 
-Thank you for your understanding!`,
+Thank you for your understanding!
+
+— {{business_name}}`,
 
   rain_delay: `Hi {{first_name}},
 
@@ -175,7 +179,7 @@ Have a wonderful day!`,
 
 Thank you for choosing {{business_name}}!
 
-If you were happy with today's service, we'd really appreciate a quick Google review.
+If you were happy with today's service, we'd really appreciate a quick review.
 
 Your feedback helps our small business grow and helps other homeowners choose a company they can trust.
 
@@ -195,7 +199,7 @@ If you have any questions about the quote, simply reply to this message and we'l
 
   invoice: `Hi {{first_name}},
 
-Your invoice from {{business_name}} is now ready{{amount}}.
+Your invoice from {{business_name}}{{amount}} is ready.
 
 You can securely view and pay it anytime using the link below:
 
@@ -205,19 +209,21 @@ Thank you for choosing {{business_name}}. We appreciate your business!`,
 
   estimate_reminder: `Hi {{first_name}},
 
-This is a reminder about your upcoming estimate on **{{date}}**.
+This is a reminder from {{business_name}} about your upcoming estimate on **{{date}}**.
 
 We look forward to meeting with you. If you need to reschedule, simply reply to this message.`,
 
   payment_reminder: `Hi {{first_name}},
 
-This is a friendly reminder that your invoice is still outstanding.
+This is a friendly reminder from {{business_name}} that your invoice is still outstanding.
 
 You can securely view and pay it here:
 
 {{invoice_link}}
 
-If you've already made payment, please disregard this message. Thank you!`,
+If you've already made payment, please disregard this message. Thank you!
+
+— {{business_name}}`,
 
   estimate_followup: `Hi {{first_name}},
 
@@ -317,7 +323,7 @@ export interface RenderedMessage { sms: string; subject: string; html: string; t
 function interpolate(tpl: string, v: MsgVars): string {
   const sub: Record<string, string> = {
     first_name: (v.firstName || '').trim().split(/\s+/)[0] || 'there',
-    business_name: v.businessName || 'us',
+    business_name: v.businessName || 'your service provider',
     eta: String(v.eta ?? '15'),
     review_link: v.reviewLink || '',
     portal_link: v.portalLink || '',
@@ -356,7 +362,7 @@ export function renderBody(rawBody: string, vars: MsgVars, subject: string): Ren
   // MsgVars by the server senders; nothing is duplicated here.
   const business = vars.businessName || 'Your service provider'
   const logo = (vars.logoUrl || '').trim()
-  const header = `${logo ? `<img src="${logo}" alt="${business}" style="display:block;max-height:44px;max-width:200px;margin:0 0 6px" />\n    ` : ''}<p style="margin:0 0 10px;padding:0;font-size:13px;font-weight:700;letter-spacing:.02em;color:#5B6672">${business}</p>`
+  const header = `${logo ? `<img src="${logo}" alt="${business}" style="display:block;max-height:48px;max-width:220px;margin:0 0 8px" />\n    ` : ''}<p style="margin:0 0 12px;padding:0;font-size:17px;font-weight:700;letter-spacing:.01em;color:#1A2333">${business}</p>`
   const site = (vars.website || '').trim()
   const siteHref = site ? (site.startsWith('http') ? site : `https://${site}`) : ''
   const contactBits = [
@@ -368,7 +374,7 @@ export function renderBody(rawBody: string, vars: MsgVars, subject: string): Ren
   const html = `<div style="background:#F4F6F5;padding:24px 12px;font-family:system-ui,'Segoe UI',Arial,sans-serif">
   <div style="max-width:560px;margin:0 auto">
     <div style="padding:0 6px">${header}</div>
-    <div style="background:#FFFFFF;border:1px solid #E4E8E6;border-radius:12px;padding:24px 26px;font-size:15px;line-height:1.65;color:#1A2333">${htmlBody}</div>
+    <div style="background:#FFFFFF;border:1px solid #E4E8E6;border-top:3px solid #0B8C68;border-radius:12px;padding:24px 26px;font-size:15px;line-height:1.65;color:#1A2333">${htmlBody}</div>
     ${footer}
   </div>
 </div>`
