@@ -164,7 +164,7 @@ export function SendMessageDialog({
         if (out.ok) sent++; else skipped++
       } catch (e) {
         skipped++
-        if (!bulk) single = { ok: false, text: e instanceof Error ? e.message : 'Failed to send.' }
+        if (!bulk) single = { ok: false, text: e instanceof Error ? e.message : 'Could not send the message.' }
       }
       setProgress(i + 1)
     }

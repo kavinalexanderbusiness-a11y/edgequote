@@ -17,7 +17,7 @@ import type { MsgType } from '@/lib/comms/templates'
 import { exportRowsToCsv } from '@/lib/csv'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
-import { EmptyState } from '@/components/ui/EmptyState'
+import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { Edit2, Trash2, Phone, Mail, FileText, Search, Link2, Check, MessageSquare, ShieldAlert, Archive, Download, Send, Users } from 'lucide-react'
 
 type ConsentFilter = '' | 'sms_in' | 'sms_out' | 'email_in' | 'email_out' | 'both' | 'neither'
@@ -216,7 +216,7 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
               action={onAdd ? { label: 'Add Customer', onClick: onAdd } : { label: 'Import customers', onClick: () => router.push('/dashboard/customers/import') }} />
           </Card>
         ) : (
-          <Card className="py-14 text-center text-sm text-ink-muted">No customers match your filters.</Card>
+          <Card><InlineEmpty>No customers match your filters.</InlineEmpty></Card>
         )
       ) : (
         <div className="grid gap-3">

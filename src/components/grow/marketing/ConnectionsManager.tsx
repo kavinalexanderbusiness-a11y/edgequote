@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/Button'
 import { Banner } from '@/components/ui/Banner'
+import { SkeletonRows } from '@/components/ui/Skeleton'
 import { CHANNELS } from '@/lib/marketing/channels'
 import { PROVIDERS, canConnectApi } from '@/lib/marketing/providers'
 import { listConnections, connectManual, disconnect, connectionsByPlatform } from '@/lib/marketing/connections'
@@ -50,7 +51,7 @@ export function ConnectionsManager({ userId }: { userId: string }) {
     })
   }
 
-  if (loading) return <div className="h-32 flex items-center justify-center text-ink-faint"><Loader2 className="w-5 h-5 animate-spin" /></div>
+  if (loading) return <SkeletonRows count={3} />
 
   return (
     <div className="space-y-3">

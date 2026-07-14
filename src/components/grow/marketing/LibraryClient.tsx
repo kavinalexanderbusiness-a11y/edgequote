@@ -103,7 +103,7 @@ export function LibraryClient({ candidates }: { candidates: MarketingCandidate[]
       </div>
 
       {filtered.length === 0 ? (
-        <InlineEmpty icon={Search}>No jobs match those filters.</InlineEmpty>
+        <InlineEmpty icon={Search}>No jobs match your filters.</InlineEmpty>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {filtered.map(c => {

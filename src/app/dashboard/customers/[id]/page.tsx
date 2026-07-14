@@ -22,6 +22,7 @@ import { SchedulePrefsFields, PrefsDraft, EMPTY_DRAFT, toDraft, draftToRow } fro
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { InlineEmpty } from '@/components/ui/EmptyState'
 import { Button } from '@/components/ui/Button'
 import { SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
 import { formatCurrency, formatDate, getInitials } from '@/lib/utils'
@@ -569,7 +570,7 @@ export default function CustomerDetailPage() {
         </CardHeader>
         <CardBody className="p-0">
           {openItems.length === 0 ? (
-            <p className="px-5 py-6 text-center text-sm text-ink-muted">Nothing needs action right now. 🎉</p>
+            <InlineEmpty className="py-6">Nothing needs action right now.</InlineEmpty>
           ) : (
             <div className="divide-y divide-border">
               {openItems.map(item => {
@@ -773,7 +774,7 @@ export default function CustomerDetailPage() {
           <CardHeader><h2 className="text-sm font-semibold text-ink">Timeline</h2></CardHeader>
           <CardBody>
             {events.length === 0 ? (
-              <p className="text-sm text-ink-muted">No history yet.</p>
+              <InlineEmpty className="py-6">No history yet.</InlineEmpty>
             ) : (
               <div className="space-y-3">
                 {events.map((e, i) => {

@@ -10,6 +10,7 @@ import { invoiceBalance, displayInvoiceStatus, cancelInvoice, reactivateInvoice 
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { SkeletonRows } from '@/components/ui/Skeleton'
+import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Textarea } from '@/components/ui/Textarea'
@@ -351,11 +352,10 @@ export default function InvoicesPage() {
       {loading ? (
         <SkeletonRows count={6} />
       ) : loadError ? null : invoices.length === 0 ? (
-        <div className="text-center py-16 text-sm text-ink-muted">
-          No invoices yet. Completing a recurring visit drafts one automatically — or open an accepted quote and click <span className="font-medium text-ink">Convert to Invoice</span>.
-        </div>
+        <EmptyState icon={FileText} title="No invoices yet"
+          description={<>Completing a recurring visit drafts one automatically — or open an accepted quote and click <span className="font-medium text-ink">Convert to Invoice</span>.</>} />
       ) : visible.length === 0 ? (
-        <div className="text-center py-12 text-sm text-ink-muted">No {filter} invoices.</div>
+        <InlineEmpty>No {filter} invoices.</InlineEmpty>
       ) : (
         <div className="space-y-3">
           {visible.map(inv => (

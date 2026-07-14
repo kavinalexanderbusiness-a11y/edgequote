@@ -14,6 +14,7 @@ import { SmsCost } from '@/components/comms/SmsCost'
 import { Send, StickyNote, Clock, Mail, MessageSquare } from 'lucide-react'
 import { format } from 'date-fns'
 import { Skeleton } from '@/components/ui/Skeleton'
+import { EmptyState } from '@/components/ui/EmptyState'
 
 interface Msg { id: string; created_at: string; direction: string; channel: string; body: string; status: string | null }
 interface Log { id: string; created_at: string; channel: string; template: string; status: string; message_id: string | null; detail: string | null }
@@ -151,10 +152,9 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
             ))}
           </div>
         ) : items.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-center py-10">
-            <MessageSquare className="w-8 h-8 text-ink-faint mb-2" />
-            <p className="text-sm font-medium text-ink">No messages yet</p>
-            <p className="text-xs text-ink-muted mt-0.5">Send the first message below — it’ll save to this customer’s history.</p>
+          <div className="h-full flex items-center justify-center">
+            <EmptyState icon={MessageSquare} className="py-10" title="No messages yet"
+              description="Send the first message below — it’ll save to this customer’s history." />
           </div>
         ) : items.map(it => <Bubble key={it.id} it={it} customerId={customerId} />)}
         <div ref={endRef} />

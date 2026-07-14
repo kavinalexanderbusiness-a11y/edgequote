@@ -5,6 +5,8 @@ import { createClient } from '@/lib/supabase/client'
 import { measurementStats, MeasureStats } from '@/lib/autoMeasure'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { SkeletonTiles } from '@/components/ui/Skeleton'
 import { cn } from '@/lib/utils'
 import { Ruler, TrendingUp, Target, MapPin, Gauge } from 'lucide-react'
 
@@ -33,11 +35,10 @@ export default function MeasurementsPage() {
       <PageHeader title="Measurement Accuracy" description="How well auto-measure performs — and how it's learning your neighborhoods." />
 
       {loading ? (
-        <div className="text-center py-16 text-sm text-ink-muted">Loading…</div>
+        <SkeletonTiles count={4} />
       ) : !stats || stats.autoTotal === 0 ? (
-        <Card><CardBody className="text-center py-14 text-sm text-ink-muted">
-          No auto-measurements yet. As you measure quotes and properties, the accuracy and per-neighborhood learning will show up here.
-        </CardBody></Card>
+        <Card><EmptyState icon={Ruler} title="No auto-measurements yet"
+          description="As you measure quotes and properties, the accuracy and per-neighborhood learning will show up here." /></Card>
       ) : (
         <>
           {/* Headline stats */}

@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { MsgType, renderMessage } from '@/lib/comms/templates'
 import { SmsCost } from '@/components/comms/SmsCost'
 import { Button } from '@/components/ui/Button'
+import { InlineEmpty } from '@/components/ui/EmptyState'
 import { cn } from '@/lib/utils'
 import type { Job } from '@/types'
 import {
@@ -130,7 +131,7 @@ export function DayBulkMessage({ date, jobs, onClose }: { date: string; jobs: Jo
         </div>
 
         {recipients.length === 0 ? (
-          <div className="p-8 text-center text-sm text-ink-muted">No customers scheduled today.</div>
+          <InlineEmpty>No customers scheduled today.</InlineEmpty>
         ) : (
           <div className="p-4 space-y-3 max-h-[70vh] overflow-y-auto">
             {/* Recipients — everyone selected by default; deselect anyone */}

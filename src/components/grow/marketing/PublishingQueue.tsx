@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/Button'
 import { InlineEmpty } from '@/components/ui/EmptyState'
+import { SkeletonRows } from '@/components/ui/Skeleton'
 import { channel as channelDef } from '@/lib/marketing/channels'
 import { listJobs, cancelJob, retryJob, clearHistory, markManualPublished, captionFor } from '@/lib/marketing/publishQueue'
 import { listConnections } from '@/lib/marketing/connections'
@@ -130,7 +131,7 @@ export function PublishingQueue({ userId }: { userId: string }) {
   // so counting it here would make the button look like it did nothing.
   const readyCount = jobs.filter(j => j.status === 'scheduled' || (j.status === 'queued' && j.mode === 'api')).length
 
-  if (loading) return <div className="h-32 flex items-center justify-center text-ink-faint"><Loader2 className="w-5 h-5 animate-spin" /></div>
+  if (loading) return <SkeletonRows count={3} />
   if (!jobs.length) return <InlineEmpty icon={ListChecks}>No publishes yet. Schedule or publish a post and it’ll show up here.</InlineEmpty>
 
   const Row = ({ j }: { j: PublishJob }) => {
@@ -204,7 +205,7 @@ export function PublishingQueue({ userId }: { userId: string }) {
       </div>
 
       {filtered.length === 0 ? (
-        <InlineEmpty icon={Search}>No posts match those filters.</InlineEmpty>
+        <InlineEmpty icon={Search}>No posts match your filters.</InlineEmpty>
       ) : (
         <>
           {active.length > 0 && (

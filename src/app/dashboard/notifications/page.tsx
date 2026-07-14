@@ -9,8 +9,10 @@ import { MorningBriefing } from '@/components/notifications/MorningBriefing'
 import { groupNotifications, notificationActionLabel, type NotifGroup } from '@/lib/notifications'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { SkeletonRows } from '@/components/ui/Skeleton'
 import { cn } from '@/lib/utils'
-import { Bell, Check, FileText, DollarSign, Loader2, MessageSquare, Globe, Star, CreditCard, AlertTriangle, RotateCcw, ShieldAlert, ChevronDown, Clock, X, Archive } from 'lucide-react'
+import { Bell, Check, FileText, DollarSign, MessageSquare, Globe, Star, CreditCard, AlertTriangle, RotateCcw, ShieldAlert, ChevronDown, Clock, X, Archive } from 'lucide-react'
 
 const ICON: Record<string, typeof FileText> = {
   quote_accepted: FileText, invoice_paid: DollarSign,
@@ -123,7 +125,7 @@ export default function NotificationsPage() {
   }
 
   return (
-    <div className="max-w-3xl space-y-4">
+    <div className="max-w-3xl space-y-6">
       <PageHeader title="Notifications" description="Grouped and prioritized — only what needs you."
         action={(totalUnread > 0 || readVisible.length > 0) ? (
           <div className="flex items-center gap-2">
@@ -141,14 +143,11 @@ export default function NotificationsPage() {
       )}
 
       {loading ? (
-        <div className="py-12 text-center text-sm text-ink-muted flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading…</div>
+        <SkeletonRows count={5} />
       ) : loadError ? null : visible.length === 0 ? (
-        <div className="py-12 text-center">
-          <Bell className="w-10 h-10 text-ink-faint mx-auto mb-3" />
-          <p className="text-sm font-medium text-ink">You&apos;re all caught up</p>
-          <p className="text-xs text-ink-muted mt-1">Quote accepted, invoice paid, customer replies and alerts will appear here — grouped.</p>
-          {snoozedCount > 0 && <p className="text-[11px] text-ink-faint mt-2">{snoozedCount} snoozed for later</p>}
-        </div>
+        <EmptyState icon={Bell} tone="positive" className="py-16" title="You're all caught up"
+          description={<>Quote accepted, invoice paid, customer replies and alerts will appear here — grouped.
+            {snoozedCount > 0 && <span className="block text-[11px] text-ink-faint mt-2">{snoozedCount} snoozed for later</span>}</>} />
       ) : (
         <div className="space-y-4">
           {/* Needs attention — money/trust problems, never grouped, never buried */}

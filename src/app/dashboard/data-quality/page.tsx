@@ -7,6 +7,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Customer } from '@/types'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
+import { SkeletonTiles } from '@/components/ui/Skeleton'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import { format } from 'date-fns'
@@ -245,7 +246,7 @@ export default function DataQualityPage() {
     } finally { setWorking(null) }
   }
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Checking data quality…</div>
+  if (loading) return <SkeletonTiles count={4} />
 
   const allClean = m.quotesNoCustomer.length === 0 && m.quotesNoProperty.length === 0 && m.jobsNoCustomer.length === 0 && m.jobsNoPrice === 0 && m.jobsNoQuote === 0 && m.propsUngeocoded.length === 0 && m.propsUnnamed.length === 0
 

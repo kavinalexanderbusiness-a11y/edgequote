@@ -10,7 +10,7 @@ import { needsFollowUp, daysSince, compareFollowUp } from '@/lib/followup'
 import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
-import { EmptyState } from '@/components/ui/EmptyState'
+import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from '@/lib/toast'
 import { useBulkSelect } from '@/hooks/useBulkSelect'
@@ -269,7 +269,7 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
               action={{ label: 'New Quote', onClick: () => router.push('/dashboard/quotes/new') }} />
           </Card>
         ) : (
-          <Card className="py-14 text-center text-sm text-ink-muted">No quotes match your filters.</Card>
+          <Card><InlineEmpty>No quotes match your filters.</InlineEmpty></Card>
         )
       ) : (
         <Card className="overflow-hidden">

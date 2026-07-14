@@ -206,7 +206,7 @@ export function NotificationBell() {
       </div>
       <div className="flex-1 overflow-y-auto divide-y divide-border overscroll-contain">
         {items.length === 0 ? (
-          <InlineEmpty icon={Bell}>You&apos;re all caught up — no notifications.</InlineEmpty>
+          <InlineEmpty icon={Bell}>You&apos;re all caught up.</InlineEmpty>
         ) : items.map(n => {
           const Icon = ICON[n.type] || Bell
           const canScheduleNow = n.type === 'quote_accepted' && !!n.entity_id

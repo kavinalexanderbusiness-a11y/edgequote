@@ -14,6 +14,7 @@ import {
 import { needsFollowUp } from '@/lib/followup'
 import { localTodayISO, formatCurrency, formatDate, cn } from '@/lib/utils'
 import { PageHeader } from '@/components/layout/PageHeader'
+import { SkeletonTiles } from '@/components/ui/Skeleton'
 import { Card, CardBody } from '@/components/ui/Card'
 import {
   CalendarCheck, DollarSign, Gauge, MapPin, Bell, HeartPulse, Sprout, ArrowRight, TrendingUp, TrendingDown,
@@ -122,7 +123,7 @@ export default function WeeklyReviewPage() {
     return { weekStart, today, revenue, completedCount: completed.length, missed, dayRoutes, avgGrade, best, worst, followUps: followUps.length, followUpValue, pending: pending.length, pendingValue, growth }
   }, [jobs, quotes, ctx])
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Building your weekly review…</div>
+  if (loading) return <SkeletonTiles count={4} />
 
   return (
     <div className="max-w-3xl space-y-6">

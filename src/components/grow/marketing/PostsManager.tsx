@@ -123,7 +123,7 @@ export function PostsManager({ userId, initialPieces, initialHasMore, campaigns,
           ))}
         </div>
       ) : pieces.length === 0 ? (
-        <EmptyState icon={LayoutGrid} title="No posts found" description="Adjust the filters, or generate posts in Compose, Campaigns, or the calendar." />
+        <EmptyState icon={LayoutGrid} title="No posts match your filters" description="Adjust the filters, or generate posts in Compose, Campaigns, or the calendar." />
       ) : (
         // Dim while a filter/search reload is in flight, so the change registers instead
         // of the stale list just sitting there.
