@@ -2545,6 +2545,8 @@ create table if not exists public.website_leads (
   frequency               text,
   yard_condition          text,
   website_estimated_price numeric,
+  budget                  text,
+  preferred_schedule      text,
   notes                   text
 );
 alter table public.website_leads enable row level security;
@@ -3413,3 +3415,178 @@ where i.status = 'paid'
     where p.invoice_id = i.id and p.kind = 'payment'
   )
 on conflict (stripe_session_id) do nothing;
+
+-- ── E-transfer recipient email for the portal's "Ways to pay" (2026-07-09) ─────
+-- See supabase/RUN-2026-07-09-etransfer-email.sql. Additive + idempotent.
+alter table public.business_settings
+  add column if not exists etransfer_email text;
+
+create or replace function public.get_portal_data(p_token text)
+returns json language plpgsql security definer set search_path = public as $$
+declare v_customer uuid; v_user uuid; result json;
+begin
+  select customer_id, user_id into v_customer, v_user
+    from public.customer_portal_tokens where token = p_token and not revoked;
+  if v_customer is null then return null; end if;
+  select json_build_object(
+    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code, sms_opt_in, email_opt_in, reviewed_at, autopay_enabled from public.customers where id = v_customer) c),
+    'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, email_secondary, website, logo_url, logo_scale, base_address, terms_text, review_url, etransfer_email, coalesce(gst_percent,0) as gst_percent from public.business_settings where user_id = v_user) b),
+    'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood, notes from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
+    'quotes', coalesce((select json_agg(q order by q.created_at desc) from (
+      select qt.id, qt.quote_number, qt.service_type, qt.address, qt.total, qt.initial_price, qt.subtotal,
+             qt.weekly_price, qt.biweekly_price, qt.monthly_price, qt.notes, qt.status, qt.created_at,
+             qt.issued_date, qt.crew_size, qt.hours, qt.travel_fee,
+             coalesce((select json_agg(s order by s.sort_order) from (
+               select qs.service_type, qs.quantity, qs.unit, qs.unit_price, qs.est_minutes,
+                      qs.discount_type, qs.discount_value, qs.notes, qs.sort_order
+               from public.quote_services qs where qs.quote_id = qt.id
+             ) s), '[]'::json) as services
+      from public.quotes qt where qt.customer_id = v_customer and qt.status <> 'draft') q), '[]'::json),
+    'invoices', coalesce((select json_agg(i order by i.created_at desc) from (select id, invoice_number, service_type, amount, amount_paid, status, issued_date, due_date, notes, address, line_items, job_id, created_at, discount_type, discount_value from public.invoices where customer_id = v_customer) i), '[]'::json),
+    'payments', coalesce((select json_agg(pm order by pm.paid_at desc nulls last) from (select id, amount, status, paid_at, provider, kind, invoice_id, created_at from public.payments where customer_id = v_customer and status = 'paid') pm), '[]'::json),
+    'jobs', coalesce((select json_agg(j order by j.scheduled_date desc) from (select id, recurrence_id, service_type, title, scheduled_date, status, on_my_way_at, started_at, completed_at, notes from public.jobs where customer_id = v_customer and status <> 'cancelled' order by scheduled_date desc limit 200) j), '[]'::json),
+    'recurrences', coalesce((select json_agg(r) from (select id, freq, interval_unit, interval_count, end_date from public.job_recurrences where customer_id = v_customer) r), '[]'::json),
+    'photos', coalesce((select json_agg(p order by p.taken_at desc) from (select id, job_id, storage_path, kind, caption, taken_at from public.job_photos where customer_id = v_customer) p), '[]'::json),
+    'payment_method', (select to_json(pm) from (select brand, last4, exp_month, exp_year from public.payment_methods where customer_id = v_customer and is_default order by created_at desc limit 1) pm)
+  ) into result;
+  return result;
+end; $$;
+grant execute on function public.get_portal_data(text) to anon, authenticated;
+
+-- ── Website leads: Budget + Preferred schedule + richer summary (2026-07-13) ──
+-- See supabase/RUN-2026-07-13-lead-details.sql. Additive + idempotent. Drops the
+-- stale 2-arg overload so only the current 3-arg intake function remains.
+alter table public.website_leads
+  add column if not exists budget             text,
+  add column if not exists preferred_schedule text;
+
+drop function if exists public.submit_website_lead(text, jsonb);
+
+create or replace function public.submit_website_lead(p_token text, p_payload jsonb, p_source text default 'Website')
+returns json language plpgsql security definer set search_path = public as $$
+declare
+  v_user uuid; v_customer uuid; v_prop uuid; v_lead uuid; v_convo uuid;
+  v_phone text; v_email text; v_name text; v_first text; v_last text; v_address text;
+  v_digits text; v_summary text; v_services text;
+  v_budget text; v_schedule text; v_contact text;
+  v_limit int; v_recent int;
+  v_source text := coalesce(nullif(trim(p_source), ''), 'Website');
+begin
+  select user_id into v_user from public.business_settings where booking_token = p_token and booking_enabled = true;
+  if v_user is null then return null; end if;
+
+  select coalesce(website_lead_hourly_limit, 30) into v_limit from public.business_settings where user_id = v_user;
+  if coalesce(v_limit, 0) > 0 then
+    select count(*) into v_recent from public.website_leads where user_id = v_user and created_at > now() - interval '1 hour';
+    if v_recent >= v_limit then
+      raise log 'submit_website_lead: rate limit reached for user % (% leads in last hour, limit %)', v_user, v_recent, v_limit;
+      return json_build_object('error', 'rate_limited');
+    end if;
+  end if;
+
+  v_first    := nullif(trim(coalesce(p_payload->>'firstName', p_payload->>'first_name', '')), '');
+  v_last     := nullif(trim(coalesce(p_payload->>'lastName',  p_payload->>'last_name',  '')), '');
+  v_name     := nullif(trim(coalesce(p_payload->>'fullName',  p_payload->>'name', concat_ws(' ', v_first, v_last))), '');
+  v_phone    := nullif(trim(coalesce(p_payload->>'phone', '')), '');
+  v_email    := lower(nullif(trim(coalesce(p_payload->>'email', '')), ''));
+  v_address  := nullif(trim(coalesce(p_payload->>'address', p_payload->>'serviceAddress', '')), '');
+  v_services := nullif(trim(coalesce(p_payload->>'requestedServices', p_payload->>'services', p_payload->>'serviceType', '')), '');
+  v_budget   := nullif(trim(coalesce(p_payload->>'budget', p_payload->>'budgetRange', '')), '');
+  v_schedule := nullif(trim(coalesce(p_payload->>'preferredSchedule', p_payload->>'preferred_schedule', p_payload->>'schedule', p_payload->>'timeline', '')), '');
+  v_contact  := nullif(trim(coalesce(p_payload->>'preferredContact', p_payload->>'preferred_contact', p_payload->>'contactMethod', '')), '');
+
+  v_digits := right(regexp_replace(coalesce(v_phone, ''), '\D', '', 'g'), 10);
+  if length(v_digits) = 10 then
+    select id into v_customer from public.customers
+      where user_id = v_user and phone is not null
+        and right(regexp_replace(phone, '\D', '', 'g'), 10) = v_digits
+      order by created_at desc limit 1;
+  end if;
+  if v_customer is null and v_email is not null then
+    select id into v_customer from public.customers
+      where user_id = v_user and lower(coalesce(email, '')) = v_email order by created_at desc limit 1;
+  end if;
+  if v_customer is null and v_address is not null then
+    select id into v_customer from public.customers
+      where user_id = v_user and lower(coalesce(address, '')) = lower(v_address) order by created_at desc limit 1;
+  end if;
+
+  if v_customer is null then
+    insert into public.customers (user_id, name, email, phone, address, city, province, postal_code, acquisition_source)
+    values (v_user, coalesce(v_name, v_source || ' lead'), v_email, v_phone, v_address,
+            nullif(p_payload->>'city', ''), coalesce(nullif(p_payload->>'province', ''), 'AB'),
+            nullif(coalesce(p_payload->>'postalCode', p_payload->>'postal_code'), ''),
+            v_source)
+    returning id into v_customer;
+  else
+    update public.customers set
+      phone = coalesce(phone, v_phone),
+      email = coalesce(email, v_email)
+    where id = v_customer;
+  end if;
+
+  select id into v_prop from public.properties
+    where customer_id = v_customer and v_address is not null and lower(coalesce(address, '')) = lower(v_address)
+    order by is_primary desc nulls last, created_at asc limit 1;
+  if v_prop is null then
+    insert into public.properties (
+      customer_id, user_id, address, city, province, postal_code, lat, lng,
+      lawn_sqft, lawn_polygon, google_place_id, maps_url, property_travel_distance_km, property_travel_fee, is_primary
+    ) values (
+      v_customer, v_user, coalesce(v_address, v_source || ' lead'),
+      nullif(p_payload->>'city', ''), coalesce(nullif(p_payload->>'province', ''), 'AB'),
+      nullif(coalesce(p_payload->>'postalCode', p_payload->>'postal_code'), ''),
+      nullif(p_payload->>'lat', '')::double precision, nullif(p_payload->>'lng', '')::double precision,
+      nullif(coalesce(p_payload->>'lawnSqft', p_payload->>'lawn_sqft'), '')::numeric,
+      p_payload->'polygon',
+      nullif(coalesce(p_payload->>'placeId', p_payload->>'place_id'), ''),
+      nullif(coalesce(p_payload->>'mapsUrl', p_payload->>'maps_url'), ''),
+      nullif(coalesce(p_payload->>'travelDistanceKm', p_payload->>'travel_distance_km'), '')::numeric,
+      nullif(coalesce(p_payload->>'travelFee', p_payload->>'travel_fee'), '')::numeric,
+      not exists (select 1 from public.properties where customer_id = v_customer)
+    ) returning id into v_prop;
+  end if;
+
+  insert into public.website_leads (
+    user_id, customer_id, status, raw_submission, submitted_at,
+    contact_first, contact_last, contact_name, phone, email, preferred_contact,
+    address, city, province, postal_code, place_id, maps_url, lat, lng,
+    lawn_sqft, lawn_polygon, sections, travel_distance_km, travel_fee,
+    requested_services, frequency, yard_condition, website_estimated_price,
+    budget, preferred_schedule, notes
+  ) values (
+    v_user, v_customer, 'new', p_payload, nullif(p_payload->>'submittedAt', '')::timestamptz,
+    v_first, v_last, v_name, v_phone, v_email, v_contact,
+    v_address, nullif(p_payload->>'city', ''), coalesce(nullif(p_payload->>'province', ''), 'AB'),
+    nullif(coalesce(p_payload->>'postalCode', p_payload->>'postal_code'), ''),
+    nullif(coalesce(p_payload->>'placeId', p_payload->>'place_id'), ''),
+    nullif(coalesce(p_payload->>'mapsUrl', p_payload->>'maps_url'), ''),
+    nullif(p_payload->>'lat', '')::double precision, nullif(p_payload->>'lng', '')::double precision,
+    nullif(coalesce(p_payload->>'lawnSqft', p_payload->>'lawn_sqft'), '')::numeric,
+    p_payload->'polygon', p_payload->'sections',
+    nullif(coalesce(p_payload->>'travelDistanceKm', p_payload->>'travel_distance_km'), '')::numeric,
+    nullif(coalesce(p_payload->>'travelFee', p_payload->>'travel_fee'), '')::numeric,
+    v_services, nullif(p_payload->>'frequency', ''), nullif(p_payload->>'yardCondition', ''),
+    nullif(p_payload->>'estimatedPrice', '')::numeric,
+    v_budget, v_schedule, nullif(p_payload->>'notes', '')
+  ) returning id into v_lead;
+
+  v_summary := 'New ' || v_source || ' lead'
+    || case when v_services is not null then ' — ' || v_services else '' end
+    || case when v_address is not null then ' · ' || v_address else '' end
+    || case when v_budget is not null then ' · Budget: ' || v_budget else '' end
+    || case when v_schedule is not null then ' · Prefers ' || v_schedule else '' end
+    || case when v_contact is not null then ' · via ' || v_contact else '' end
+    || case when nullif(p_payload->>'lawnSqft', '') is not null then ' · ' || (p_payload->>'lawnSqft') || ' ft² lawn' else '' end
+    || case when nullif(p_payload->>'estimatedPrice', '') is not null then ' · est. $' || (p_payload->>'estimatedPrice') else '' end;
+  insert into public.service_requests (user_id, customer_id, message, status)
+    values (v_user, v_customer, v_summary, 'new');
+
+  update public.conversations set lead_status = 'new'
+    where user_id = v_user and customer_id = v_customer;
+  select id into v_convo from public.conversations where user_id = v_user and customer_id = v_customer limit 1;
+  update public.website_leads set conversation_id = v_convo where id = v_lead;
+
+  return json_build_object('lead_id', v_lead, 'customer_id', v_customer, 'source', v_source);
+end; $$;
+grant execute on function public.submit_website_lead(text, jsonb, text) to anon, authenticated;

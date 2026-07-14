@@ -93,6 +93,7 @@ export default function SettingsPage() {
         payment_fee_strategy: settings.payment_fee_strategy ?? 'global_price_increase',
         fee_recovery_percent: settings.fee_recovery_percent ?? 3,
         etransfer_discount_percent: settings.etransfer_discount_percent ?? 0,
+        etransfer_email: settings.etransfer_email || '',
         gst_percent: settings.gst_percent ?? 0,
         autopay_charge_mode: settings.autopay_charge_mode ?? 'auto',
         autopay_variance_pct: settings.autopay_variance_pct ?? 40,
@@ -148,6 +149,7 @@ export default function SettingsPage() {
         payment_fee_strategy: values.payment_fee_strategy || 'global_price_increase',
         fee_recovery_percent: Number(values.fee_recovery_percent) >= 0 ? Number(values.fee_recovery_percent) : 3,
         etransfer_discount_percent: Number(values.etransfer_discount_percent) >= 0 ? Number(values.etransfer_discount_percent) : 0,
+        etransfer_email: values.etransfer_email?.trim() || null,
         gst_percent: Number(values.gst_percent) >= 0 ? Number(values.gst_percent) : 0,
         autopay_charge_mode: values.autopay_charge_mode === 'manual_review' ? 'manual_review' : 'auto',
         autopay_variance_pct: Number(values.autopay_variance_pct) >= 0 ? Number(values.autopay_variance_pct) : 40,
@@ -364,6 +366,9 @@ export default function SettingsPage() {
                 hint="Alberta GST is 5%. Leave 0 if you're not GST-registered — no GST line will be shown."
                 {...register('gst_percent')} />
             </div>
+            <Input label="E-transfer email" type="email" placeholder="pay@yourbusiness.com"
+              hint="The email registered with your bank for Interac e-transfers (often your business email). Shown to customers in the portal's Ways to pay."
+              {...register('etransfer_email')} />
 
             {/* ── Recurring AutoPay ── */}
             <div className="pt-4 mt-2 border-t border-border">
