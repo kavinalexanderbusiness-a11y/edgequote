@@ -136,13 +136,16 @@ export function CampaignBuilder({ aiEnabled, initialCampaigns, initialKind, init
           {initialHoliday && <span className="text-xs text-ink-muted">· {initialHoliday}</span>}
         </div>
 
-        <input value={name} onChange={e => setName(e.target.value)} placeholder={def.defaultName}
-          className="w-full bg-bg-tertiary border border-border rounded-xl px-3.5 py-2.5 text-sm text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/50" />
+        <label className="block">
+          <span className="block text-xs font-semibold uppercase tracking-wide text-ink-muted mb-1.5">Campaign name</span>
+          <input value={name} onChange={e => setName(e.target.value)} placeholder={def.defaultName}
+            className="w-full bg-bg-tertiary border border-border rounded-xl px-3.5 py-2.5 text-sm text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/50" />
+        </label>
 
         <div>
           <div className="flex items-center justify-between mb-1.5">
             <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-faint">Platforms · {count} selected</p>
-            <button type="button" onClick={allSelected ? clearAll : selectAll} className="text-[11px] text-accent hover:underline">
+            <button type="button" onClick={allSelected ? clearAll : selectAll} className="text-[11px] text-accent hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
               {allSelected ? 'Clear all' : 'Select all'}
             </button>
           </div>
@@ -162,10 +165,10 @@ export function CampaignBuilder({ aiEnabled, initialCampaigns, initialKind, init
           {schedule && (
             <>
               <label className="text-xs text-ink-muted">From
-                <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="ml-1.5 bg-bg-tertiary border border-border rounded-lg px-2 py-1 text-sm text-ink" />
+                <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="ml-1.5 bg-bg-tertiary border border-border rounded-lg px-2 py-1 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
               </label>
               <label className="text-xs text-ink-muted">every
-                <input type="number" min={1} max={14} value={everyDays} onChange={e => setEveryDays(Math.max(1, Math.min(14, Number(e.target.value) || 1)))} className="mx-1.5 w-16 bg-bg-tertiary border border-border rounded-lg px-2 py-1 text-sm text-ink" />
+                <input type="number" min={1} max={14} value={everyDays} onChange={e => setEveryDays(Math.max(1, Math.min(14, Number(e.target.value) || 1)))} className="mx-1.5 w-16 bg-bg-tertiary border border-border rounded-lg px-2 py-1 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
                 days
               </label>
             </>

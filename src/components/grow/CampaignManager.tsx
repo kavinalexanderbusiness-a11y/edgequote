@@ -204,7 +204,7 @@ export function CampaignManager() {
 
                     {/* Schedule — depends on kind */}
                     <div className="flex flex-col gap-1.5">
-                      <span className="text-[11px] font-semibold text-ink-faint uppercase tracking-wide">When it sends</span>
+                      <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">When it sends</span>
                       {(c.kind === 'birthday' || c.kind === 'anniversary') && (
                         <div className="flex flex-wrap items-center gap-2 text-sm text-ink-muted">
                           <input type="number" inputMode="numeric" min={0} max={30} aria-label="Days before" value={draft.schedule.lead_days ?? 0} onChange={e => setSchedule({ lead_days: Math.max(0, Number(e.target.value) || 0) })}
@@ -236,7 +236,7 @@ export function CampaignManager() {
 
                     {/* Channels */}
                     <div className="flex flex-col gap-1.5">
-                      <span className="text-[11px] font-semibold text-ink-faint uppercase tracking-wide">Send by</span>
+                      <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Send by</span>
                       <div className="flex gap-2">
                         {['sms', 'email'].map(ch => (
                           <FilterPill key={ch} active={draft.channels.includes(ch)} onClick={() => toggleChannel(ch)}>

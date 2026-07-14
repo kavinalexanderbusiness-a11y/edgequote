@@ -290,7 +290,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
             <AddressAutocomplete label="Property address" value={addressText} onChange={setAddressText}
               onSelect={p => { setParsed(p); setAddressText(p.formatted); setAutoResult(undefined); setShowTracer(false); setSqft(0) }} placeholder="Start typing your address…" />
             <Button size="lg" className="w-full mt-4" disabled={!parsed?.lat} onClick={() => setStep('measure')}>
-              Next <ArrowRight className="w-4 h-4" />
+              Continue <ArrowRight className="w-4 h-4" />
             </Button>
           </Section>
         )}
@@ -316,8 +316,8 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
                     <ConfidenceBadge confidence={autoResult.confidence} />
                   </div>
                   <div className="flex items-end gap-2 mt-2">
-                    <input type="number" value={sqft || ''} onChange={e => setSqft(Number(e.target.value) || 0)} aria-label="Lawn size in square feet"
-                      className="w-32 bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-xl font-bold text-ink tabular-nums outline-none focus:border-accent" />
+                    <input type="number" inputMode="numeric" value={sqft || ''} onChange={e => setSqft(Number(e.target.value) || 0)} aria-label="Lawn size in square feet"
+                      className="w-32 bg-bg-tertiary border border-border-strong rounded-xl px-3 py-2 text-xl font-bold text-ink tabular-nums outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
                     <span className="text-sm text-ink-muted pb-2">sq ft</span>
                   </div>
                   <p className="text-[11px] text-ink-faint mt-1">Not quite right? Edit the number, or measure it exactly on the map.</p>
@@ -327,15 +327,21 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
             ) : mapErr && mapErr !== 'manual' ? (
               <div className="space-y-3">
                 <p className="text-sm text-amber-400">{mapErr}</p>
-                <label className="text-xs text-ink-muted">Approximate lawn size (sq ft)</label>
-                <input type="number" autoFocus value={manualSqft} onChange={e => { setManualSqft(e.target.value); setSqft(Number(e.target.value) || 0) }}
-                  placeholder="e.g. 3000" className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent" />
+                <label className="flex flex-col gap-1.5">
+                  <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Approximate lawn size (sq ft)</span>
+                  <input type="number" inputMode="numeric" autoFocus value={manualSqft} onChange={e => { setManualSqft(e.target.value); setSqft(Number(e.target.value) || 0) }}
+                    placeholder="e.g. 3000" className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+                </label>
+                <p className="text-[11px] text-ink-faint">Rough is fine — we&rsquo;ll confirm on site.</p>
               </div>
             ) : mapErr === 'manual' ? (
               <div className="space-y-3">
-                <label className="text-xs text-ink-muted">Approximate lawn size (sq ft)</label>
-                <input type="number" autoFocus value={manualSqft} onChange={e => { setManualSqft(e.target.value); setSqft(Number(e.target.value) || 0) }}
-                  placeholder="e.g. 3000" className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent" />
+                <label className="flex flex-col gap-1.5">
+                  <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Approximate lawn size (sq ft)</span>
+                  <input type="number" inputMode="numeric" autoFocus value={manualSqft} onChange={e => { setManualSqft(e.target.value); setSqft(Number(e.target.value) || 0) }}
+                    placeholder="e.g. 3000" className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+                </label>
+                <p className="text-[11px] text-ink-faint">Rough is fine — we&rsquo;ll confirm on site.</p>
               </div>
             ) : (
               <>
@@ -389,30 +395,31 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
         {/* STEP: contact */}
         {step === 'contact' && (
           <Section title="Almost done" sub={`Just your details, then ${biz.company_name || 'we'} will confirm your price and schedule your first visit.`}>
-            <div className="space-y-3">
-              <Field label="Your name" value={name} onChange={setName} placeholder="Jane Doe" autoFocus />
-              <Field label="Email" value={email} onChange={setEmail} placeholder="jane@example.com" type="email" />
-              <Field label="Phone" value={phone} onChange={setPhone} placeholder="(403) 555-0100" type="tel" />
+            <form onSubmit={e => { e.preventDefault(); if (name.trim() && (email.trim() || phone.trim()) && !submitting) submit() }}>
+            <div className="space-y-4">
+              <Field label="Your name *" value={name} onChange={setName} placeholder="Jane Doe" autoFocus autoComplete="name" />
+              <Field label="Email" value={email} onChange={setEmail} placeholder="jane@example.com" type="email" autoComplete="email" inputMode="email" />
+              <Field label="Phone" value={phone} onChange={setPhone} placeholder="(403) 555-0100" type="tel" autoComplete="tel" inputMode="tel" />
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold text-ink-muted">How did you hear about us? <span className="font-normal text-ink-faint">(optional)</span></label>
+                <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">How did you hear about us? <span className="font-normal text-ink-faint normal-case">(optional)</span></label>
                 <select value={hearAbout} onChange={e => setHearAbout(e.target.value)}
-                  className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent">
+                  className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20">
                   <option value="">Select…</option>
                   {HEAR_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
                 </select>
               </div>
-              <Field label="Referral code (optional)" value={referralCode} onChange={setReferralCode} placeholder="e.g. JANE20" />
+              <Field label="Referral code" value={referralCode} onChange={setReferralCode} placeholder="e.g. JANE20" />
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold text-ink-muted">Additional notes (optional)</label>
+                <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Additional notes</label>
                 <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3} placeholder="Gate code, dog in the yard, problem areas…"
-                  className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent" />
+                  className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
               </div>
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold text-ink-muted">Photos <span className="font-normal text-ink-faint">(optional)</span></label>
+                <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Photos <span className="font-normal text-ink-faint normal-case">(optional)</span></label>
                 <p className="text-[11px] text-ink-faint -mt-0.5">Show us gates, slopes, or problem areas so we can quote accurately. Up to 6.</p>
-                <label className={cn('inline-flex items-center gap-1.5 text-xs font-medium w-fit', photoUrls.length >= 6 ? 'text-ink-faint cursor-not-allowed' : 'text-accent cursor-pointer')}>
+                <label className={cn('inline-flex items-center gap-1.5 text-xs font-medium w-fit rounded-md focus-within:ring-2 focus-within:ring-accent/50', photoUrls.length >= 6 ? 'text-ink-faint cursor-not-allowed' : 'text-accent cursor-pointer')}>
                   {uploadingPhotos ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Camera className="w-3.5 h-3.5" />} {uploadingPhotos ? 'Uploading…' : photoUrls.length >= 6 ? 'Maximum 6 photos added' : 'Add photos of your lawn'}
-                  <input type="file" accept="image/*" multiple onChange={addPhotos} className="hidden" disabled={uploadingPhotos || photoUrls.length >= 6} />
+                  <input type="file" accept="image/*" multiple onChange={addPhotos} className="sr-only" disabled={uploadingPhotos || photoUrls.length >= 6} />
                 </label>
                 {photoUrls.length > 0 && (
                   <div className="flex flex-wrap gap-2 mt-1">
@@ -421,7 +428,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img src={u} alt="Lawn photo" className="w-full h-full object-cover" />
                         <button type="button" onClick={() => removePhoto(u)} aria-label="Remove photo"
-                          className="absolute top-0.5 right-0.5 w-5 h-5 rounded-full bg-black/60 text-white flex items-center justify-center hover:bg-black/80"><X className="w-3 h-3" /></button>
+                          className="absolute top-0.5 right-0.5 w-5 h-5 rounded-full bg-black/60 text-white flex items-center justify-center hover:bg-black/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><X className="w-3 h-3" /></button>
                       </div>
                     ))}
                   </div>
@@ -456,7 +463,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
               </div>
             )}
             <p className="text-[11px] text-ink-faint mt-2 text-center">No charge today — booking is free, and {biz.company_name || 'we'} will confirm your price with you first.{plan && plan.key !== 'one_time' ? ' Recurring plans can be changed or cancelled anytime.' : ''}</p>
-            {error && <p className="text-sm text-red-400 mt-3">{error}</p>}
+            {error && <p className="text-xs text-red-400 mt-3">{error}</p>}
             {name.trim() && !email.trim() && !phone.trim() && (
               <p className="text-xs text-ink-muted mt-3">Add an email or phone number so {biz.company_name || 'we'} can confirm your visit.</p>
             )}
@@ -469,8 +476,9 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
             )}
             <div className="flex gap-2 mt-4">
               <Button variant="secondary" aria-label="Back" onClick={() => setStep('plan')}><ArrowLeft className="w-4 h-4" /></Button>
-              <Button size="lg" className="flex-1" loading={submitting} disabled={!name.trim() || !(email.trim() || phone.trim())} onClick={submit}>{submitting ? 'Booking your service…' : <>Book my service <Check className="w-4 h-4" /></>}</Button>
+              <Button size="lg" type="submit" className="flex-1" loading={submitting} disabled={!name.trim() || !(email.trim() || phone.trim())}>{submitting ? 'Booking your service…' : <>Book my service <Check className="w-4 h-4" /></>}</Button>
             </div>
+            </form>
           </Section>
         )}
 
@@ -547,12 +555,16 @@ function ConfidenceBadge({ confidence }: { confidence?: string }) {
   }
   return <span className="text-[10px] font-semibold uppercase tracking-[0.14em] rounded-full px-2 py-0.5 border text-ink-muted border-border bg-bg-tertiary">Estimated</span>
 }
-function Field({ label, value, onChange, placeholder, type, autoFocus }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string; autoFocus?: boolean }) {
+function Field({ label, value, onChange, placeholder, type, autoFocus, autoComplete, inputMode }: {
+  label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string; autoFocus?: boolean
+  autoComplete?: string; inputMode?: 'email' | 'tel' | 'text' | 'numeric'
+}) {
   return (
-    <div className="flex flex-col gap-1.5">
-      <label className="text-xs font-semibold text-ink-muted">{label}</label>
+    <label className="flex flex-col gap-1.5">
+      <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">{label}</span>
       <input type={type || 'text'} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} autoFocus={autoFocus}
-        className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent" />
-    </div>
+        autoComplete={autoComplete} inputMode={inputMode}
+        className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+    </label>
   )
 }

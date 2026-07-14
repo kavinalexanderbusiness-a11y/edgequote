@@ -170,7 +170,7 @@ export function PublishPanel({ piece, ch, userId, hasPhoto, onSavePhoto, beforeP
           <Button size="sm" variant="secondary" onClick={() => setScheduleOpen(o => !o)}><CalendarPlus className="w-3.5 h-3.5" /> Schedule</Button>
           {scheduleOpen && (
             <>
-              <input type="date" value={scheduleDate} onChange={e => setScheduleDate(e.target.value)} className="bg-bg-tertiary border border-border rounded-lg px-2 py-1 text-xs text-ink" />
+              <input type="date" value={scheduleDate} onChange={e => setScheduleDate(e.target.value)} aria-label="Schedule date" className="bg-bg-tertiary border border-border rounded-lg px-2 py-1 text-xs text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
               {/* 9am in the owner's LOCAL timezone (a bare Z would land at 1–4am here). */}
               <Button size="sm" variant="secondary" onClick={() => record(new Date(`${scheduleDate}T09:00:00`).toISOString())} loading={busy === 'schedule'}>Set date</Button>
             </>

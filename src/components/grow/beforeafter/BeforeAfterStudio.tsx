@@ -886,10 +886,10 @@ export function BeforeAfterStudio() {
                     <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1"><SlidersHorizontal className="w-3 h-3" /> Framing</p>
                     {showLabels && (
                       <div className="grid grid-cols-2 gap-2">
-                        <input value={labelBefore} onChange={e => setLabelBefore(e.target.value)} placeholder="Before"
-                          className="bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-ink outline-none focus:border-accent" />
-                        <input value={labelAfter} onChange={e => setLabelAfter(e.target.value)} placeholder="After"
-                          className="bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-ink outline-none focus:border-accent" />
+                        <input value={labelBefore} onChange={e => setLabelBefore(e.target.value)} placeholder="Before" aria-label="Before label"
+                          className="bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+                        <input value={labelAfter} onChange={e => setLabelAfter(e.target.value)} placeholder="After" aria-label="After label"
+                          className="bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
                       </div>
                     )}
                     <FocusRow label="Before" focus={beforeFocus} onChange={setBeforeFocus} />

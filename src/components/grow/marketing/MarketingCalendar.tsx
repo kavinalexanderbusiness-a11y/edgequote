@@ -417,7 +417,7 @@ function PieceDetail({ piece, onClose, onUnschedule, onPublish, onFail, onSchedu
       </div>
       {pickDate && piece.status !== 'published' && (
         <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
-          <input type="date" value={date} onChange={e => setDate(e.target.value)} className="bg-bg-tertiary border border-border rounded-lg px-2 py-1 text-xs text-ink" />
+          <input type="date" value={date} onChange={e => setDate(e.target.value)} aria-label="Schedule date" className="bg-bg-tertiary border border-border rounded-lg px-2 py-1 text-xs text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
           <Button size="sm" variant="secondary" onClick={() => { onSchedule(date); setPickDate(false) }}>Set date</Button>
         </div>
       )}
@@ -453,24 +453,24 @@ function PlanPanel({ aiEnabled, onClose, onDone, defaultStart }: { aiEnabled: bo
     <Card className="p-4 space-y-3 border-accent/30">
       <div className="flex items-center justify-between">
         <p className="text-sm font-bold text-ink inline-flex items-center gap-2"><Sparkles className="w-4 h-4 text-accent" /> Plan a month of content</p>
-        <button onClick={onClose} aria-label="Close" className="text-ink-faint hover:text-ink"><X className="w-4 h-4" /></button>
+        <button type="button" onClick={onClose} aria-label="Close" className="h-7 w-7 rounded-lg flex items-center justify-center text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><X className="w-4 h-4" /></button>
       </div>
       <p className="text-xs text-ink-muted">Generate varied posts across your platforms and spread them across the calendar — one click, no repetition.</p>
-      <div className="flex items-end gap-3 flex-wrap">
-        <label className="text-xs text-ink-muted">Posts
-          <input type="number" min={1} max={16} value={count} onChange={e => setCount(Math.max(1, Math.min(16, Number(e.target.value) || 1)))}
-            className="mt-1 block w-20 bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-sm text-ink" />
+      <form onSubmit={e => { e.preventDefault(); if (aiEnabled && !busy) run() }} className="flex items-end gap-3 flex-wrap">
+        <label className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Posts
+          <input type="number" min={1} max={16} autoFocus value={count} onChange={e => setCount(Math.max(1, Math.min(16, Number(e.target.value) || 1)))}
+            className="mt-1 block w-20 bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-sm font-normal normal-case text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
         </label>
-        <label className="text-xs text-ink-muted">Every (days)
+        <label className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Every (days)
           <input type="number" min={1} max={14} value={everyDays} onChange={e => setEveryDays(Math.max(1, Math.min(14, Number(e.target.value) || 1)))}
-            className="mt-1 block w-20 bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-sm text-ink" />
+            className="mt-1 block w-20 bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-sm font-normal normal-case text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
         </label>
-        <label className="text-xs text-ink-muted">Starting
+        <label className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Starting
           <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
-            className="mt-1 block bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-sm text-ink" />
+            className="mt-1 block bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-sm font-normal normal-case text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
         </label>
-        <Button onClick={run} loading={busy} disabled={!aiEnabled} title={!aiEnabled ? "Add your Anthropic API key to enable AI generation" : undefined}><Sparkles className="w-4 h-4" /> Generate &amp; schedule</Button>
-      </div>
+        <Button type="submit" loading={busy} disabled={!aiEnabled} title={!aiEnabled ? "Add your Anthropic API key to enable AI generation" : undefined}><Sparkles className="w-4 h-4" /> Generate &amp; schedule</Button>
+      </form>
       {!aiEnabled && <p className="text-[11px] text-ink-faint">Add your Anthropic key to enable generation.</p>}
       {msg && <Banner tone="info" onDismiss={() => setMsg(null)}>{msg}</Banner>}
     </Card>

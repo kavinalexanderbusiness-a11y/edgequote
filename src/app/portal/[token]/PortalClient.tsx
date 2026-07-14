@@ -432,7 +432,7 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
       {/* Quote awaiting approval — one tap to the Documents tab, pre-filtered to quotes */}
       {awaiting.length > 0 && (
         <button type="button" onClick={onReviewQuotes}
-          className="w-full text-left rounded-card border border-amber-500/30 bg-amber-500/10 p-4 hover:border-amber-500/50 transition-colors card-lift">
+          className="w-full text-left rounded-card border border-amber-500/30 bg-amber-500/10 p-4 hover:border-amber-500/50 transition-colors card-lift focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-9 h-9 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-400 flex items-center justify-center shrink-0"><FileText className="w-4 h-4" /></div>
@@ -489,7 +489,7 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
       <div className="grid grid-cols-2 gap-3">
         {derived.outstanding > 0 ? (
           <button type="button" onClick={payOutstanding} disabled={payingId !== null}
-            className="text-left rounded-card border border-amber-500/30 bg-amber-500/[0.06] p-3.5 transition-colors hover:border-amber-500/50 active:scale-[0.99] disabled:opacity-60 card-lift">
+            className="text-left rounded-card border border-amber-500/30 bg-amber-500/[0.06] p-3.5 transition-colors hover:border-amber-500/50 active:scale-[0.99] disabled:opacity-60 card-lift focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
             <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint flex items-center gap-1"><Receipt className="w-3 h-3" /> Outstanding balance</p>
             <p className="text-lg font-bold mt-1 text-amber-400 tabular-nums">{formatCurrency(derived.outstanding)}</p>
             <span className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-accent">
@@ -749,8 +749,8 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, busines
       <div className="flex items-center gap-2">
         <div className="relative flex-1">
           <Search className="w-4 h-4 text-ink-faint absolute left-3 top-1/2 -translate-y-1/2" />
-          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search documents…"
-            className="w-full h-10 pl-9 pr-3 rounded-xl bg-bg-tertiary border border-border text-sm text-ink outline-none focus:border-accent" />
+          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search documents…" aria-label="Search documents"
+            className="w-full h-10 pl-9 pr-3 rounded-xl bg-bg-tertiary border border-border-strong text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
         </div>
         <Button variant="secondary" size="sm" className="shrink-0" onClick={() => setSort(s => s === 'newest' ? 'oldest' : 'newest')}>
           <ArrowUpDown className="w-4 h-4 text-ink-muted" /> {sort === 'newest' ? 'Newest' : 'Oldest'}
@@ -1081,8 +1081,8 @@ function AutoPayCard({ token, card, autopayEnabled, onChanged }: {
             <span className="truncate">{brand} •••• {card.last4 || '????'}{exp ? ` · ${exp}` : ''}</span>
           </span>
           <div className="flex items-center gap-3 shrink-0">
-            <button onClick={addCard} disabled={busy !== null} className="text-xs font-medium text-accent hover:underline disabled:opacity-50">Replace</button>
-            <button onClick={removeCard} disabled={busy !== null} className="text-xs font-medium text-red-400/70 hover:text-red-400 disabled:opacity-50 flex items-center gap-1"><Trash2 className="w-3.5 h-3.5" /> Remove</button>
+            <button onClick={addCard} disabled={busy !== null} className="text-xs font-medium text-accent hover:underline disabled:opacity-50 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">Replace</button>
+            <button onClick={removeCard} disabled={busy !== null} className="text-xs font-medium text-red-400/70 hover:text-red-400 disabled:opacity-50 flex items-center gap-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><Trash2 className="w-3.5 h-3.5" /> Remove</button>
           </div>
         </div>
       ) : (
@@ -1134,11 +1134,11 @@ function RequestTab({ presets, reqMsg, setReqMsg, request, reqBusy, reqSent, biz
         {reqSent === 'custom' ? (
           <p className="text-sm text-emerald-400 flex items-center gap-1.5 py-2"><CheckCircle2 className="w-4 h-4" /> Request sent — we’ll be in touch soon.</p>
         ) : (
-          <>
-            <textarea value={reqMsg} onChange={e => setReqMsg(e.target.value)} rows={3} placeholder="e.g. Can you add a fall cleanup this month?"
-              className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent" />
-            <div className="mt-2"><Button size="sm" onClick={() => request(reqMsg, 'custom')} loading={reqBusy === 'custom'} disabled={!reqMsg.trim()}>Send request</Button></div>
-          </>
+          <form onSubmit={e => { e.preventDefault(); if (reqMsg.trim() && reqBusy !== 'custom') request(reqMsg, 'custom') }}>
+            <textarea value={reqMsg} onChange={e => setReqMsg(e.target.value)} rows={3} aria-label="Your request" placeholder="e.g. Can you add a fall cleanup this month?"
+              className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+            <div className="mt-2"><Button size="sm" type="submit" loading={reqBusy === 'custom'} disabled={!reqMsg.trim()}>Send request</Button></div>
+          </form>
         )}
       </div>
     </div>

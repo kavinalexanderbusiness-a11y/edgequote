@@ -189,7 +189,7 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
           <Sparkles className="w-4 h-4" /> Generate {def.label} post
         </Button>
         {!aiEnabled && <p className="text-[11px] text-ink-faint">Add your Anthropic key to turn on generation.</p>}
-        {genError && <p className="text-[11px] text-red-400">{genError}</p>}
+        {genError && <p className="text-xs text-red-400">{genError}</p>}
       </div>
     )
   }
@@ -226,6 +226,7 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
             onChange={e => setTitle(e.target.value)}
             onBlur={saveEdits}
             readOnly={streaming}
+            aria-label="Headline"
             placeholder="Headline"
             className="w-full bg-bg-tertiary border border-border rounded-xl px-3.5 py-2.5 text-sm font-semibold text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/50"
           />
@@ -236,6 +237,8 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
           onBlur={saveEdits}
           readOnly={streaming}
           rows={6}
+          aria-label="Caption"
+          placeholder="Write your caption…"
           className="w-full bg-bg-tertiary border border-border rounded-xl px-3.5 py-2.5 text-sm text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/50 resize-y min-h-[120px] leading-relaxed"
         />
         {showHashtagField && (
@@ -244,7 +247,8 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
             onChange={e => setHashtagsText(e.target.value)}
             onBlur={saveEdits}
             readOnly={streaming}
-            placeholder="hashtags (space-separated)"
+            aria-label="Hashtags"
+            placeholder="#hashtags — space-separated"
             className="w-full bg-bg-tertiary border border-border rounded-xl px-3.5 py-2 text-sm text-accent placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/50"
           />
         )}
