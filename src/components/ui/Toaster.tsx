@@ -35,22 +35,23 @@ function ToastRow({ t }: { t: ToastItem }) {
     try { await t.undo?.() } catch { /* swallow — best-effort undo */ }
   }, [t])
   return (
-    <div className={`pointer-events-auto flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5 shadow-lg text-sm ${meta.cls}`}>
+    <div className={`pointer-events-auto flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5 shadow-lg text-sm animate-toast ${meta.cls}`}>
       <Icon className={`w-4 h-4 shrink-0 ${t.tone === 'loading' ? 'animate-spin' : ''}`} />
       <span className="flex-1 min-w-0">{t.message}</span>
       {t.undo && (
-        <button onClick={onUndo} className="shrink-0 inline-flex items-center gap-1 text-xs font-semibold rounded-lg px-2 py-1 border border-current/30 hover:bg-current/10 transition-colors">
+        <button type="button" onClick={onUndo} className="shrink-0 inline-flex items-center gap-1 text-xs font-semibold rounded-lg px-2 py-1 border border-current/30 hover:bg-current/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
           <Undo2 className="w-3.5 h-3.5" /> Undo
         </button>
       )}
       {t.action && (
         <button
+          type="button"
           onClick={async () => { const run = t.action?.run; dismissToast(t.id); try { await run?.() } catch { /* best-effort follow-up */ } }}
-          className="shrink-0 inline-flex items-center gap-1 text-xs font-semibold rounded-lg px-2 py-1 border border-current/30 hover:bg-current/10 transition-colors">
+          className="shrink-0 inline-flex items-center gap-1 text-xs font-semibold rounded-lg px-2 py-1 border border-current/30 hover:bg-current/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
           {t.action.label}
         </button>
       )}
-      <button onClick={() => dismissToast(t.id)} aria-label="Dismiss" className="shrink-0 text-ink-faint hover:text-ink">
+      <button type="button" onClick={() => dismissToast(t.id)} aria-label="Dismiss" className="shrink-0 p-1 -m-1 rounded text-ink-faint hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
         <X className="w-3.5 h-3.5" />
       </button>
     </div>

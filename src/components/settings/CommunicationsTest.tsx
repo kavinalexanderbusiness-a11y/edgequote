@@ -4,7 +4,9 @@ import { useEffect, useState } from 'react'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
-import { MessageSquare, CheckCircle2, XCircle, Loader2, RefreshCw, ShieldCheck, ShieldAlert } from 'lucide-react'
+import { Skeleton } from '@/components/ui/Skeleton'
+import { cn } from '@/lib/utils'
+import { MessageSquare, CheckCircle2, XCircle, RefreshCw, ShieldCheck, ShieldAlert } from 'lucide-react'
 
 interface Diag {
   enabled: { sms: boolean; email: boolean }
@@ -63,19 +65,23 @@ export function CommunicationsTest() {
   }
 
   return (
-    <Card className="mt-6">
+    <Card>
       <CardHeader>
         <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><MessageSquare className="w-4 h-4 text-accent" /> Communications test</h2>
             <p className="text-xs text-ink-faint mt-0.5">Verify Twilio/Resend setup. Test messages go ONLY to the number you enter — customers are never messaged here.</p>
           </div>
-          <Button size="sm" variant="ghost" onClick={loadDiag} loading={loadingDiag} title="Refresh diagnostics"><RefreshCw className="w-3.5 h-3.5" /></Button>
+          <Button size="sm" variant="ghost" onClick={loadDiag} disabled={loadingDiag} title="Refresh diagnostics" aria-label="Refresh diagnostics"><RefreshCw className={cn('w-3.5 h-3.5', loadingDiag && 'animate-spin')} /></Button>
         </div>
       </CardHeader>
       <CardBody className="space-y-4">
         {loadingDiag ? (
-          <p className="text-xs text-ink-muted flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Checking configuration…</p>
+          <div className="space-y-2.5" aria-hidden>
+            <div className="flex gap-2"><Skeleton className="h-6 w-16 rounded-full" /><Skeleton className="h-6 w-16 rounded-full" /></div>
+            <Skeleton className="h-3 w-1/2" />
+            <Skeleton className="h-3 w-2/3" />
+          </div>
         ) : !diag ? (
           <p className="text-xs text-red-400">Could not load diagnostics.</p>
         ) : (
@@ -117,7 +123,7 @@ export function CommunicationsTest() {
                 <div className="flex-1">
                   <Input label="Your phone number" placeholder="+15875551234" value={to} onChange={e => setTo(e.target.value)} />
                 </div>
-                <Button onClick={sendTest} loading={sending} disabled={!to.trim()}>Send test SMS</Button>
+                <Button variant="secondary" onClick={sendTest} loading={sending} disabled={!to.trim()}>Send test SMS</Button>
               </div>
               <p className="text-[10px] text-ink-faint mt-1">Use E.164 format (e.g. +1 then the 10-digit number).</p>
 
@@ -143,7 +149,7 @@ export function CommunicationsTest() {
                 <div className="flex-1">
                   <Input label="Your email address" type="email" placeholder="you@example.com" value={emailTo} onChange={e => setEmailTo(e.target.value)} />
                 </div>
-                <Button onClick={sendTestEmail} loading={emailSending} disabled={!emailTo.trim()}>Send test email</Button>
+                <Button variant="secondary" onClick={sendTestEmail} loading={emailSending} disabled={!emailTo.trim()}>Send test email</Button>
               </div>
               <p className="text-[10px] text-ink-faint mt-1">Sent from {diag.resendFrom || 'your RESEND_FROM address'} — must be on a domain verified in Resend.</p>
 

@@ -34,11 +34,11 @@ export function Tabs({ tabs, active, onChange, className }: TabsProps) {
           aria-selected={active === t.key}
           onClick={() => onChange(t.key)}
           className={cn(
-            'shrink-0 flex items-center gap-1.5 text-xs font-medium rounded-full px-3.5 py-2 border transition-colors',
+            'shrink-0 flex items-center gap-1.5 text-xs font-medium rounded-full px-3.5 py-2 border transition-all active:scale-[0.97]',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
             active === t.key
-              ? 'bg-accent text-black border-accent'
-              : 'border-border text-ink-muted hover:text-ink'
+              ? 'bg-accent text-black border-accent pill-glow'
+              : 'border-border text-ink-muted hover:text-ink hover:border-border-strong'
           )}
         >
           {t.icon && <t.icon className="w-3.5 h-3.5" />} {t.label}

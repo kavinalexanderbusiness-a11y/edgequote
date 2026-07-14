@@ -58,7 +58,7 @@ export function Modal({ open, onClose, title, icon: Icon, children, footer, size
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-4"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-4 animate-fade"
       onClick={dismissable ? onClose : undefined}
     >
       <div
@@ -69,7 +69,7 @@ export function Modal({ open, onClose, title, icon: Icon, children, footer, size
         aria-label={typeof title === 'string' ? title : undefined}
         onClick={e => e.stopPropagation()}
         className={cn(
-          'w-full bg-surface border border-border-strong rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] focus:outline-none',
+          'w-full bg-surface border border-border-strong rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] focus:outline-none animate-panel',
           SIZES[size],
           className
         )}
