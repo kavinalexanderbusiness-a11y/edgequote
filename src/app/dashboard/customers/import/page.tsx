@@ -7,8 +7,9 @@ import { createClient } from '@/lib/supabase/client'
 import { recordImportConsent, SMS_CONSENT_WARNING } from '@/lib/consent'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
+import { Banner } from '@/components/ui/Banner'
 import { Button } from '@/components/ui/Button'
-import { ArrowLeft, Upload, ShieldAlert, Check } from 'lucide-react'
+import { ArrowLeft, Upload, ShieldAlert, Check, AlertTriangle } from 'lucide-react'
 
 // Minimal CSV parser — handles quoted fields, embedded commas, and "" escapes.
 function parseCSV(text: string): string[][] {
@@ -149,7 +150,7 @@ export default function ImportCustomersPage() {
                 placeholder={'name,email,phone,city,sms_opt_in,email_opt_in\nJane Doe,jane@example.com,403-555-0100,Calgary,false,true'}
                 className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm font-mono text-ink outline-none focus:border-accent"
               />
-              {parseError && <p className="text-sm text-red-400">{parseError}</p>}
+              {parseError && <Banner tone="danger" icon={AlertTriangle}>{parseError}</Banner>}
             </CardBody>
           </Card>
 
@@ -170,10 +171,12 @@ export default function ImportCustomersPage() {
                 </div>
 
                 {smsCount > 0 && (
-                  <label className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2.5 cursor-pointer">
-                    <input type="checkbox" checked={smsAck} onChange={e => setSmsAck(e.target.checked)} className="mt-0.5 w-4 h-4 accent-accent" />
-                    <span className="text-xs text-ink-muted"><ShieldAlert className="w-3.5 h-3.5 text-amber-400 inline mr-1" />{SMS_CONSENT_WARNING}</span>
-                  </label>
+                  <Banner tone="warn" icon={ShieldAlert}>
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input type="checkbox" checked={smsAck} onChange={e => setSmsAck(e.target.checked)} className="mt-0.5 w-4 h-4 accent-accent" />
+                      <span className="text-xs text-ink-muted">{SMS_CONSENT_WARNING}</span>
+                    </label>
+                  </Banner>
                 )}
 
                 <Button onClick={runImport} loading={importing} disabled={smsCount > 0 && !smsAck}>

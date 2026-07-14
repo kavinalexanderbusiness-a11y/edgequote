@@ -12,6 +12,8 @@ import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
+import { SearchInput } from '@/components/ui/SearchInput'
+import { FilterPill } from '@/components/ui/FilterPill'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from '@/lib/toast'
 import { useBulkSelect } from '@/hooks/useBulkSelect'
@@ -218,18 +220,14 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
     <div className="space-y-4">
       {/* Filters — THE shared SearchInput + FilterPill (one chip shape app-wide) */}
       <div className="flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1">
-          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-faint" />
-          <input
-            type="text"
-            ref={searchRef}
-            placeholder="Search quotes…  ( / )"
-            onKeyDown={e => { if (e.key === 'Escape') { setSearch(''); e.currentTarget.blur() } }}
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="w-full bg-surface border border-border-strong rounded-xl pl-10 pr-4 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
-          />
-        </div>
+        <SearchInput
+          ref={searchRef}
+          className="flex-1"
+          placeholder="Search quotes…  ( / )"
+          onKeyDown={e => { if (e.key === 'Escape') { setSearch(''); e.currentTarget.blur() } }}
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+        />
         {/* One scrollable row on phones (the wrap made a 3-row wall of pills
             before any quotes); wraps normally on desktop. */}
         <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto sm:flex-wrap sm:overflow-visible pb-1 sm:pb-0">

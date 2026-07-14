@@ -7,7 +7,9 @@ import { createClient } from '@/lib/supabase/client'
 import { Customer } from '@/types'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
+import { Banner } from '@/components/ui/Banner'
 import { SkeletonTiles } from '@/components/ui/Skeleton'
+import { StatTile } from '@/components/ui/StatTile'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import { format } from 'date-fns'
@@ -246,7 +248,12 @@ export default function DataQualityPage() {
     } finally { setWorking(null) }
   }
 
-  if (loading) return <SkeletonTiles count={4} />
+  if (loading) return (
+    <div className="max-w-3xl space-y-6">
+      <PageHeader title="Data Quality" description="Make the data clean and trustworthy before growth features rely on it" />
+      <SkeletonTiles count={4} />
+    </div>
+  )
 
   const allClean = m.quotesNoCustomer.length === 0 && m.quotesNoProperty.length === 0 && m.jobsNoCustomer.length === 0 && m.jobsNoPrice === 0 && m.jobsNoQuote === 0 && m.propsUngeocoded.length === 0 && m.propsUnnamed.length === 0
 
@@ -278,12 +285,9 @@ export default function DataQualityPage() {
       </div>
 
       {allClean && (
-        <Card>
-          <CardBody className="flex items-center gap-3 text-sm text-emerald-400">
-            <CheckCircle2 className="w-5 h-5 shrink-0" />
-            Everything is linked and priced. Your data is clean — Saturation Map &amp; Neighbor Leads can trust it.
-          </CardBody>
-        </Card>
+        <Banner tone="success" icon={CheckCircle2}>
+          Everything is linked and priced. Your data is clean — Saturation Map &amp; Neighbor Leads can trust it.
+        </Banner>
       )}
 
       {/* Quotes missing a customer — manual review (identity matters) */}
@@ -294,7 +298,7 @@ export default function DataQualityPage() {
             const match = findCustomerMatch(customers, { name: q.customer_name, address: q.address })
             const busy = working === q.id
             return (
-              <div key={q.id} className="rounded-xl border border-border p-3 space-y-2.5">
+              <div key={q.id} className="rounded-card border border-border p-3 space-y-2.5">
                 <div className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-ink truncate">{q.customer_name || 'Unnamed'} <span className="text-ink-faint font-normal">· {q.quote_number}</span></p>
@@ -334,7 +338,7 @@ export default function DataQualityPage() {
             </Button>
           }>
           {m.quotesNoProperty.map(q => (
-            <div key={q.id} className="flex items-center justify-between gap-2 rounded-xl border border-border p-3">
+            <div key={q.id} className="flex items-center justify-between gap-2 rounded-card border border-border p-3">
               <div className="min-w-0">
                 <p className="text-sm font-medium text-ink truncate">{q.customer_name} <span className="text-ink-faint font-normal">· {q.quote_number}</span></p>
                 <p className="text-xs text-ink-muted truncate">{q.address || 'No address'}</p>
@@ -357,7 +361,7 @@ export default function DataQualityPage() {
             </Button>
           }>
           {m.propsUngeocoded.slice(0, 40).map(p => (
-            <div key={p.id} className="flex items-center gap-2 rounded-xl border border-border p-3">
+            <div key={p.id} className="flex items-center gap-2 rounded-card border border-border p-3">
               <MapPin className="w-3.5 h-3.5 text-ink-faint shrink-0" />
               <p className="text-sm text-ink truncate">{p.address}</p>
             </div>
@@ -377,7 +381,7 @@ export default function DataQualityPage() {
             </Button>
           }>
           {m.propsUnnamed.slice(0, 40).map(p => (
-            <div key={p.id} className="flex items-center gap-2 rounded-xl border border-border p-3">
+            <div key={p.id} className="flex items-center gap-2 rounded-card border border-border p-3">
               <MapPin className="w-3.5 h-3.5 text-ink-faint shrink-0" />
               <p className="text-sm text-ink truncate">{p.address}</p>
             </div>
@@ -391,7 +395,7 @@ export default function DataQualityPage() {
         <Section icon={Phone} title={`${m.customersNoContact.length} customer${m.customersNoContact.length !== 1 ? 's' : ''} with no contact info`}
           subtitle={`No phone or email — they can't receive quotes, reminders or invoices. (${m.customersNoPhone} missing a phone · ${m.customersNoEmail} missing an email in total.)`}>
           {m.customersNoContact.slice(0, 40).map(c => (
-            <Link key={c.id} href={`/dashboard/customers/${c.id}`} className="flex items-center justify-between gap-2 rounded-xl border border-border p-3 hover:border-border-strong transition-colors">
+            <Link key={c.id} href={`/dashboard/customers/${c.id}`} className="flex items-center justify-between gap-2 rounded-card border border-border p-3 hover:border-border-strong transition-colors">
               <div className="min-w-0">
                 <p className="text-sm font-medium text-ink truncate">{c.name}</p>
                 <p className="text-xs text-ink-muted truncate">{c.address || 'No address'}</p>
@@ -408,7 +412,7 @@ export default function DataQualityPage() {
         <Section icon={Ruler} title={`${m.propsNoSize.length} propert${m.propsNoSize.length !== 1 ? 'ies' : 'y'} with no lawn size`}
           subtitle="No lawn measurement on file — pricing recommendations need this. Measure to enable accurate quotes.">
           {m.propsNoSize.slice(0, 40).map(p => (
-            <div key={p.id} className="flex items-center justify-between gap-2 rounded-xl border border-border p-3">
+            <div key={p.id} className="flex items-center justify-between gap-2 rounded-card border border-border p-3">
               <p className="text-sm text-ink truncate min-w-0">{p.address}</p>
               <Link href={`/dashboard/properties/measure?id=${p.id}`}>
                 <Button size="sm" variant="secondary"><Ruler className="w-3.5 h-3.5" /> Measure</Button>
@@ -424,7 +428,7 @@ export default function DataQualityPage() {
         <Section icon={Copy} title={`${m.dupes.length} potential duplicate${m.dupes.length !== 1 ? 's' : ''}`}
           subtitle="These customer pairs share a phone, email or address. Open each to confirm and merge if they're the same person.">
           {m.dupes.slice(0, 40).map((d, i) => (
-            <div key={i} className="rounded-xl border border-border p-3">
+            <div key={i} className="rounded-card border border-border p-3">
               <span className="text-[10px] uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded-full px-2 py-0.5">Same {d.reason}</span>
               <div className="flex items-center justify-between gap-2 mt-2">
                 <Link href={`/dashboard/customers/${d.a.id}`} className="text-sm font-medium text-ink hover:text-accent truncate min-w-0 flex-1">{d.a.name}</Link>
@@ -442,7 +446,7 @@ export default function DataQualityPage() {
         <Section icon={Users} title={`${m.jobsNoCustomer.length} job${m.jobsNoCustomer.length !== 1 ? 's' : ''} with no customer`}
           subtitle="Backfill each job's customer from its property or linked quote.">
           {m.jobsNoCustomer.slice(0, 40).map(j => (
-            <div key={j.id} className="flex items-center justify-between gap-2 rounded-xl border border-border p-3">
+            <div key={j.id} className="flex items-center justify-between gap-2 rounded-card border border-border p-3">
               <div className="min-w-0">
                 <p className="text-sm font-medium text-ink truncate">{j.title}</p>
                 <p className="text-xs text-ink-muted">{j.scheduled_date}</p>
@@ -464,8 +468,8 @@ export default function DataQualityPage() {
               <h2 className="text-sm font-semibold text-ink">Pricing &amp; quote gaps</h2>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <Stat label="Jobs missing a price" value={m.jobsNoPrice} total={jobs.length} />
-              <Stat label="Jobs missing a quote" value={m.jobsNoQuote} total={jobs.length} />
+              <StatTile label="Jobs missing a price" value={m.jobsNoPrice} sub={`of ${jobs.length} jobs`} />
+              <StatTile label="Jobs missing a quote" value={m.jobsNoQuote} sub={`of ${jobs.length} jobs`} />
             </div>
             <p className="text-xs text-ink-muted">
               These are fixed in the dedicated tool — link jobs to quotes, set recurring prices, and create missing quotes in one click.
@@ -483,15 +487,11 @@ export default function DataQualityPage() {
       )}
 
       {/* Properties → customer (structural, FK-enforced) */}
-      <Card>
-        <CardBody className="flex items-center gap-3 text-sm">
-          {m.propsNoCustomer === 0 ? (
-            <><CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" /><span className="text-ink-muted">All {m.propertiesTotal} propert{m.propertiesTotal !== 1 ? 'ies are' : 'y is'} linked to a customer.</span></>
-          ) : (
-            <><AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" /><span className="text-ink-muted">{m.propsNoCustomer} propert{m.propsNoCustomer !== 1 ? 'ies have' : 'y has'} no customer.</span></>
-          )}
-        </CardBody>
-      </Card>
+      {m.propsNoCustomer === 0 ? (
+        <Banner tone="success" icon={CheckCircle2}>All {m.propertiesTotal} propert{m.propertiesTotal !== 1 ? 'ies are' : 'y is'} linked to a customer.</Banner>
+      ) : (
+        <Banner tone="warn" icon={AlertTriangle}>{m.propsNoCustomer} propert{m.propsNoCustomer !== 1 ? 'ies have' : 'y has'} no customer.</Banner>
+      )}
     </div>
   )
 }
@@ -529,14 +529,5 @@ function Section({ icon: Icon, title, subtitle, action, children }: {
       </div>
       <CardBody className="space-y-2">{children}</CardBody>
     </Card>
-  )
-}
-
-function Stat({ label, value, total }: { label: string; value: number; total: number }) {
-  return (
-    <div className="rounded-lg border border-border bg-bg-tertiary px-3 py-2">
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className="text-lg font-bold text-ink mt-0.5">{value}<span className="text-xs font-normal text-ink-faint"> / {total}</span></p>
-    </div>
   )
 }

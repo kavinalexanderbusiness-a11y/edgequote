@@ -14,6 +14,8 @@ import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
 import { Toggle } from '@/components/ui/Toggle'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { StickyActionBar } from '@/components/ui/StickyActionBar'
+import { Banner } from '@/components/ui/Banner'
 import { Collapsible } from '@/components/ui/Collapsible'
 import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
 import { sumServiceLines, serviceLineTotals, emptyServiceLine, SERVICE_UNITS } from '@/lib/quoteServices'
@@ -735,10 +737,9 @@ export function QuoteBuilder({
               </div>
             )}
             {customTravelRequired && (
-              <div className="flex items-start gap-2 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
-                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <Banner tone="warn" icon={AlertTriangle} className="text-xs">
                 Beyond your furthest travel tier — enter a custom travel fee above.
-              </div>
+              </Banner>
             )}
             {travelSuggestion && !travelSuggestion.isCustom && (
               <Button type="button" variant="secondary" size="sm" onClick={applySuggestedTravel}>
@@ -910,7 +911,7 @@ export function QuoteBuilder({
       </div>
 
       {/* Mobile sticky save bar — always reachable without scrolling */}
-      <div className="lg:hidden fixed bottom-0 left-0 right-0 z-30 px-4 py-2.5 bg-bg-secondary/95 backdrop-blur border-t border-border flex items-center justify-between gap-3">
+      <StickyActionBar fixed className="lg:hidden flex items-center justify-between gap-3">
         <div className="leading-tight min-w-0">
           <p className="text-[10px] uppercase tracking-wide text-ink-faint">First visit total</p>
           <p className="text-xl font-bold text-accent leading-none tabular-nums">{formatCurrency(effectiveTotal)}</p>
@@ -919,7 +920,7 @@ export function QuoteBuilder({
           <Button type="button" variant="ghost" size="sm" onClick={() => router.back()}>Cancel</Button>
           <Button type="submit" size="lg" loading={isSubmitting}>{isEdit ? 'Update' : 'Save Quote'}</Button>
         </div>
-      </div>
+      </StickyActionBar>
 
       {showMeasure && (
         <QuoteMeasure

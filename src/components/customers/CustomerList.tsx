@@ -19,7 +19,9 @@ import { exportRowsToCsv } from '@/lib/csv'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
-import { Edit2, Trash2, Phone, Mail, FileText, Search, Link2, Check, MessageSquare, ShieldAlert, Archive, Download, Send, Users } from 'lucide-react'
+import { SearchInput } from '@/components/ui/SearchInput'
+import { FilterPill } from '@/components/ui/FilterPill'
+import { Edit2, Trash2, Phone, Mail, FileText, Link2, Check, MessageSquare, ShieldAlert, Archive, Download, Send, Users } from 'lucide-react'
 
 type ConsentFilter = '' | 'sms_in' | 'sms_out' | 'email_in' | 'email_out' | 'both' | 'neither'
 const CONSENT_FILTERS: { value: ConsentFilter; label: string }[] = [
@@ -181,19 +183,14 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
 
   return (
     <div className="space-y-4">
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-faint" />
-        <input
-          ref={searchRef}
-          type="text"
-          placeholder="Search customers…  ( / )"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Escape') { setSearch(''); e.currentTarget.blur() } }}
-          className="w-full bg-surface border border-border-strong rounded-xl pl-10 pr-4 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
-        />
-      </div>
+      {/* Search — THE shared SearchInput */}
+      <SearchInput
+        ref={searchRef}
+        placeholder="Search customers…  ( / )"
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Escape') { setSearch(''); e.currentTarget.blur() } }}
+      />
 
       <div className="flex flex-wrap gap-1.5">
         {CONSENT_FILTERS.map(f => (

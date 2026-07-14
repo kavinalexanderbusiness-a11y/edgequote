@@ -13,8 +13,10 @@ import { ProfitMap, ProfitPoint } from '@/components/profitability/ProfitMap'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
+import { Banner } from '@/components/ui/Banner'
 import { InlineEmpty } from '@/components/ui/EmptyState'
 import { SkeletonTiles } from '@/components/ui/Skeleton'
+import { StatTile } from '@/components/ui/StatTile'
 import { parseISO, startOfWeek, format } from 'date-fns'
 import { TrendingUp, TrendingDown, Navigation, Clock, DollarSign, MapPin, Lightbulb, Trophy, AlertTriangle } from 'lucide-react'
 
@@ -147,46 +149,51 @@ export default function ProfitabilityPage() {
       .map(j => ({ lat: j.lat as number, lng: j.lng as number, grade: gradeByDate[j.scheduled_date] ?? 'C', title: formatDate(j.scheduled_date) }))
   }, [jobs, routes])
 
-  if (loading) return <SkeletonTiles count={4} />
+  if (loading) return (
+    <div className="max-w-4xl space-y-6">
+      <PageHeader title="Route Profitability" description="Which routes, days and neighborhoods make the most per hour" />
+      <SkeletonTiles count={4} />
+    </div>
+  )
 
   return (
     <div className="max-w-4xl space-y-6">
       <PageHeader title="Route Profitability" description="Which routes, days and neighborhoods make the most per hour" />
 
       {loadError && (
-        <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5">
+        <Banner tone="danger">
           {loadError} <button onClick={() => window.location.reload()} className="underline font-medium ml-1">Retry</button>
-        </div>
+        </Banner>
       )}
 
-      <div className="text-xs text-ink-muted bg-bg-secondary border border-border rounded-xl px-4 py-2.5">
+      <Banner tone="neutral" className="text-xs">
         <span className="font-medium text-ink">Revenue = booked route value</span> (cadence-priced), not collected cash. $/hr is projected from planned time until you log <span className="text-ink">actual minutes</span>; completion counts only past-due days.
-      </div>
+      </Banner>
 
       {!ctx.base && (
-        <div className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2.5">
+        <Banner tone="warn" className="text-xs">
           Set your base address in Settings — without it, $/km and the letter grade can’t include drive cost (grades are capped at C).
-        </div>
+        </Banner>
       )}
 
       {/* Opportunity detection */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <OppCard icon={Trophy} tone="text-emerald-400" label="Top booked day"
+        <StatTile icon={Trophy} tone="success" label="Top booked day"
           value={opp.topRevenue ? formatCurrency(opp.topRevenue.revenue) : '—'}
           sub={opp.topRevenue ? `${formatDate(opp.topRevenue.date)} · grade ${opp.topRevenue.grade}` : ''} />
-        <OppCard icon={TrendingUp} tone="text-accent" label="Best revenue/hour"
+        <StatTile icon={TrendingUp} tone="accent" label="Best revenue/hour"
           value={opp.bestPerHour ? `$${opp.bestPerHour.revPerHour}/h` : '—'}
           sub={opp.bestPerHour ? formatDate(opp.bestPerHour.date) : ''} />
-        <OppCard icon={MapPin} tone="text-emerald-400" label="Best neighborhood"
+        <StatTile icon={MapPin} tone="success" label="Best neighborhood"
           value={opp.bestHood ? opp.bestHood.key : '—'}
           sub={opp.bestHood ? `${formatCurrency(opp.bestHood.revenue)} · ${opp.bestHood.customers} cust` : ''} />
-        <OppCard icon={TrendingDown} tone="text-amber-400" label="Lowest booked day"
+        <StatTile icon={TrendingDown} tone="warn" label="Lowest booked day"
           value={opp.lowRevenue ? formatCurrency(opp.lowRevenue.revenue) : '—'}
           sub={opp.lowRevenue ? `${formatDate(opp.lowRevenue.date)} · grade ${opp.lowRevenue.grade}` : ''} />
-        <OppCard icon={AlertTriangle} tone="text-red-400" label="Worst revenue/hour"
+        <StatTile icon={AlertTriangle} tone="danger" label="Worst revenue/hour"
           value={opp.worstPerHour ? `$${opp.worstPerHour.revPerHour}/h` : '—'}
           sub={opp.worstPerHour ? formatDate(opp.worstPerHour.date) : ''} />
-        <OppCard icon={MapPin} tone="text-red-400" label="Worst neighborhood"
+        <StatTile icon={MapPin} tone="danger" label="Worst neighborhood"
           value={opp.worstHood ? opp.worstHood.key : '—'}
           sub={opp.worstHood ? `${formatCurrency(opp.worstHood.revenue)} · ${opp.worstHood.customers} cust` : ''} />
       </div>
@@ -279,18 +286,6 @@ function GradeBadge({ grade }: { grade: Grade }) {
   )
 }
 
-function OppCard({ icon: Icon, label, value, sub, tone }: { icon: typeof Trophy; label: string; value: string; sub: string; tone: string }) {
-  return (
-    <Card className="p-3.5">
-      <div className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-muted uppercase tracking-wide">
-        <Icon className={cn('w-3.5 h-3.5', tone)} /> {label}
-      </div>
-      <p className={cn('text-lg font-bold mt-1', tone)}>{value}</p>
-      {sub && <p className="text-xs text-ink-faint mt-0.5 truncate">{sub}</p>}
-    </Card>
-  )
-}
-
 function RouteCard({ r }: { r: RouteProfit }) {
   const tips = r.grade === 'D' || r.grade === 'F' || r.revPerHour < 60 ? improvementSuggestions(r) : []
   return (
@@ -322,10 +317,10 @@ function RouteCard({ r }: { r: RouteProfit }) {
           </div>
         </div>
         {tips.length > 0 && (
-          <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 space-y-1">
-            <p className="text-[11px] font-semibold text-amber-400 flex items-center gap-1 uppercase tracking-wide"><Lightbulb className="w-3 h-3" /> Improve this route</p>
+          <Banner tone="warn" icon={Lightbulb} className="items-start">
+            <p className="text-[11px] font-semibold uppercase tracking-wide">Improve this route</p>
             {tips.map((t, i) => <p key={i} className="text-xs text-ink-muted">• {t}</p>)}
-          </div>
+          </Banner>
         )}
       </CardBody>
     </Card>

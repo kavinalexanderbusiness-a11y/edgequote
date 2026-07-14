@@ -8,6 +8,8 @@ import { Customer, PaymentMethod } from '@/types'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Toggle } from '@/components/ui/Toggle'
+import { Select } from '@/components/ui/Select'
+import { Banner } from '@/components/ui/Banner'
 import { CreditCard, ShieldCheck, Trash2, Zap, AlertCircle } from 'lucide-react'
 
 type Mode = 'inherit' | 'auto' | 'manual_review'
@@ -113,9 +115,9 @@ export function PaymentMethodCard({ customer, onCustomerChange }: {
       </CardHeader>
       <CardBody className="space-y-4">
         {!paymentsEnabled && (
-          <div className="flex items-center gap-2 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
-            <AlertCircle className="w-3.5 h-3.5 shrink-0" /> Connect Stripe (STRIPE_SECRET_KEY) to enable saved cards &amp; AutoPay.
-          </div>
+          <Banner tone="warn" icon={AlertCircle} className="text-xs">
+            Connect Stripe (STRIPE_SECRET_KEY) to enable saved cards &amp; AutoPay.
+          </Banner>
         )}
 
         {/* Saved card */}
@@ -164,15 +166,17 @@ export function PaymentMethodCard({ customer, onCustomerChange }: {
               <p className="text-sm font-medium text-ink">Charge timing</p>
               <p className="text-[11px] text-ink-faint">Override the business default for this customer.</p>
             </div>
-            <select
+            <Select
+              fieldSize="sm"
               value={mode}
               onChange={e => changeMode(e.target.value as Mode)}
-              className="text-xs rounded-lg border border-border-strong bg-surface text-ink px-2 py-1.5 outline-none focus:border-accent shrink-0"
-            >
-              <option value="inherit">Use business default</option>
-              <option value="auto">Charge on completion</option>
-              <option value="manual_review">Hold for my review</option>
-            </select>
+              className="w-auto shrink-0"
+              options={[
+                { value: 'inherit', label: 'Use business default' },
+                { value: 'auto', label: 'Charge on completion' },
+                { value: 'manual_review', label: 'Hold for my review' },
+              ]}
+            />
           </div>
         )}
 

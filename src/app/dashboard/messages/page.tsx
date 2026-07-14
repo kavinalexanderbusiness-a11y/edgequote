@@ -14,12 +14,13 @@ import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { CustomerPicker } from '@/components/ui/CustomerPicker'
 import type { Customer } from '@/types'
 import { Button } from '@/components/ui/Button'
+import { SearchInput } from '@/components/ui/SearchInput'
 import { Skeleton } from '@/components/ui/Skeleton'
-import { EmptyState } from '@/components/ui/EmptyState'
+import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import {
-  Loader2, Inbox, User, ArrowLeft, MessageSquare, FileText, Search, X, Plus,
+  Loader2, Inbox, User, ArrowLeft, MessageSquare, FileText, X, Plus,
   Archive, ArchiveRestore, Pin, PinOff, BellOff, Bell, MailOpen, Trash2, MoreVertical, Reply,
   MapPin, Wrench, Receipt, Globe, Sparkles,
 } from 'lucide-react'
@@ -398,10 +399,9 @@ export default function MessagesPage() {
 
       {/* Spotlight search */}
       <div className="relative">
-        <Search className="w-4 h-4 text-ink-faint absolute left-3 top-1/2 -translate-y-1/2" />
-        <input ref={searchRef} value={query} onChange={e => setQuery(e.target.value)} aria-label="Search conversations"
+        <SearchInput ref={searchRef} fieldSize="sm" value={query} onChange={e => setQuery(e.target.value)} aria-label="Search conversations"
           placeholder="Search name, phone, address, property, service, message, quote #, invoice #…"
-          className="w-full h-10 pl-9 pr-9 rounded-xl bg-bg-tertiary border border-border text-sm text-ink outline-none focus:border-accent transition-colors" />
+          className="[&>input]:pr-9" />
         {query
           ? <button onClick={() => setQuery('')} aria-label="Clear search" className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-faint hover:text-ink"><X className="w-4 h-4" /></button>
           : <kbd className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-ink-faint border border-border rounded px-1 leading-4 pointer-events-none hidden sm:block">/</kbd>}
@@ -523,8 +523,8 @@ export default function MessagesPage() {
               </div>
             </>
           ) : (
-            <div className="flex-1 flex flex-col items-center justify-center text-sm text-ink-muted py-16">
-              <MessageSquare className="w-8 h-8 text-ink-faint mb-2" /> Select a conversation
+            <div className="flex-1 flex items-center justify-center py-16">
+              <InlineEmpty icon={MessageSquare}>Select a conversation</InlineEmpty>
             </div>
           )}
         </div>

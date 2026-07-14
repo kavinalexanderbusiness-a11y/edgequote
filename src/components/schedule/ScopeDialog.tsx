@@ -31,7 +31,7 @@ export function ScopeDialog({ title, verb, destructive, onChoose, onCancel }: Sc
   }, [onCancel])
   return (
     <div role="dialog" aria-modal="true" aria-label={`${verb} recurring job`}
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={onCancel}>
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-4" onClick={onCancel}>
       <div
         className="w-full max-w-sm bg-surface border border-border-strong rounded-2xl overflow-hidden shadow-xl"
         onClick={(e) => e.stopPropagation()}

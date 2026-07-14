@@ -13,6 +13,7 @@ import {
 import { SaturationMap, SatPoint, SatHood, SatLayer } from '@/components/saturation/SaturationMap'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
+import { Banner } from '@/components/ui/Banner'
 import { InlineEmpty } from '@/components/ui/EmptyState'
 import { SkeletonTiles } from '@/components/ui/Skeleton'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
@@ -268,7 +269,12 @@ export default function SaturationPage() {
     return { points, hoods, mapHoods, best, opportunities, strongest, weakest, unknownHood, intel }
   }, [jobs, properties, quotes, customersById, ctx])
 
-  if (loading) return <SkeletonTiles count={4} />
+  if (loading) return (
+    <div className="max-w-5xl space-y-6">
+      <PageHeader title="Saturation Map" description="Where your customers, revenue and routes concentrate — and where to grow next" />
+      <SkeletonTiles count={4} />
+    </div>
+  )
 
   const m = model
 
@@ -323,7 +329,7 @@ export default function SaturationPage() {
         {/* Where to get more customers */}
         <Card>
           <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-            <Sprout className="w-4 h-4 text-violet-300" />
+            <Sprout className="w-4 h-4 text-violet-400" />
             <h2 className="text-sm font-semibold text-ink">Where to get more customers</h2>
           </div>
           <CardBody className="space-y-2.5">
@@ -385,7 +391,7 @@ export default function SaturationPage() {
             <h2 className="text-sm font-semibold text-ink">Strongest routes</h2>
           </div>
           <CardBody className="space-y-2">
-            {m.strongest.length === 0 ? <p className="text-sm text-ink-muted py-3 text-center">Not enough multi-stop days yet.</p>
+            {m.strongest.length === 0 ? <InlineEmpty className="py-4">Not enough multi-stop days yet.</InlineEmpty>
               : m.strongest.map(r => <RouteLine key={r.date} date={r.date} grade={r.grade} revenue={r.revenue} revPerHour={r.revPerHour} stops={r.stops} />)}
           </CardBody>
         </Card>
@@ -395,7 +401,7 @@ export default function SaturationPage() {
             <h2 className="text-sm font-semibold text-ink">Weakest routes</h2>
           </div>
           <CardBody className="space-y-2">
-            {m.weakest.length === 0 ? <p className="text-sm text-ink-muted py-3 text-center">Nothing weak enough to flag.</p>
+            {m.weakest.length === 0 ? <InlineEmpty className="py-4">Nothing weak enough to flag.</InlineEmpty>
               : m.weakest.map(r => <RouteLine key={r.date} date={r.date} grade={r.grade} revenue={r.revenue} revPerHour={r.revPerHour} stops={r.stops} />)}
           </CardBody>
         </Card>

@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/Button'
 import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { useAutosave } from '@/hooks/useAutosave'
 import { AutosaveStatus, DraftRestoreBanner } from '@/components/ui/Autosave'
+import { Banner } from '@/components/ui/Banner'
 import { findCustomerMatch } from '@/lib/customers'
 import { Customer, CustomerFormValues, ACQUISITION_SOURCES } from '@/types'
 import { Users } from 'lucide-react'
@@ -101,19 +102,16 @@ export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel
 
       {/* Duplicate guard — link to the existing record instead of creating a copy */}
       {dupMatch && (
-        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 flex items-start gap-2">
-          <Users className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-          <div className="text-xs text-ink flex-1 min-w-0">
-            <p>
-              {dupMatch.confident
-                ? <>Looks like this customer already exists — <span className="font-semibold">{dupMatch.customer.name}</span> (same {dupMatch.reason}).</>
-                : <>Possible existing customer — <span className="font-semibold">{dupMatch.customer.name}</span> (same name).</>}
-            </p>
-            <Link href={`/dashboard/customers/${dupMatch.customer.id}`} className="inline-flex items-center gap-1 mt-1 text-accent font-medium hover:underline">
-              Open {dupMatch.customer.name.split(' ')[0]} instead →
-            </Link>
-          </div>
-        </div>
+        <Banner tone="warn" icon={Users} className="items-start text-xs">
+          <p>
+            {dupMatch.confident
+              ? <>Looks like this customer already exists — <span className="font-semibold">{dupMatch.customer.name}</span> (same {dupMatch.reason}).</>
+              : <>Possible existing customer — <span className="font-semibold">{dupMatch.customer.name}</span> (same name).</>}
+          </p>
+          <Link href={`/dashboard/customers/${dupMatch.customer.id}`} className="inline-flex items-center gap-1 mt-1 text-accent font-medium hover:underline">
+            Open {dupMatch.customer.name.split(' ')[0]} instead →
+          </Link>
+        </Banner>
       )}
 
       <Controller

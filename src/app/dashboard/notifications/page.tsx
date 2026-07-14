@@ -11,6 +11,8 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { SkeletonRows } from '@/components/ui/Skeleton'
+import { Banner } from '@/components/ui/Banner'
+import { SectionHeading } from '@/components/ui/SectionHeading'
 import { cn } from '@/lib/utils'
 import { Bell, Check, FileText, DollarSign, MessageSquare, Globe, Star, CreditCard, AlertTriangle, RotateCcw, ShieldAlert, ChevronDown, Clock, X, Archive } from 'lucide-react'
 

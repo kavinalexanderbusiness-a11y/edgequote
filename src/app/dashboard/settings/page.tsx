@@ -8,8 +8,11 @@ import type { BusinessSettingsFormValues, TravelFeeTier } from '@/types'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
+import { Select } from '@/components/ui/Select'
 import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
+import { Skeleton } from '@/components/ui/Skeleton'
+import { StickyActionBar } from '@/components/ui/StickyActionBar'
 import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { CommunicationsTest } from '@/components/settings/CommunicationsTest'
 import { MessageTemplateEditor } from '@/components/settings/MessageTemplateEditor'
@@ -212,7 +215,20 @@ export default function SettingsPage() {
     })
   }
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading settings...</div>
+  if (loading) return (
+    <div className="max-w-3xl space-y-6">
+      <PageHeader title="Business Settings" description="Company info, branding, pricing, and travel fees" />
+      <Skeleton className="h-9 w-full max-w-md" />
+      {[0, 1].map(i => (
+        <div key={i} className="rounded-card border border-border bg-surface p-6 space-y-4">
+          <Skeleton className="h-4 w-36" />
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-10 w-2/3" />
+        </div>
+      ))}
+    </div>
+  )
 
   // Tabs that contain react-hook-form fields. The <form> stays mounted across
   // these so values are never lost on tab switch; the Save footer shows on any
@@ -389,12 +405,12 @@ export default function SettingsPage() {
               <p className="text-xs text-ink-faint mt-0.5 mb-3">For customers with a saved card and AutoPay enabled. A customer can override the timing on their profile.</p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">When to charge</label>
-                  <select {...register('autopay_charge_mode')}
-                    className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all">
-                    <option value="auto">Charge automatically on completion</option>
-                    <option value="manual_review">Hold for my review, then charge</option>
-                  </select>
+                  <Select label="When to charge"
+                    options={[
+                      { value: 'auto', label: 'Charge automatically on completion' },
+                      { value: 'manual_review', label: 'Hold for my review, then charge' },
+                    ]}
+                    {...register('autopay_charge_mode')} />
                   <p className="text-xs text-ink-faint">“Automatically” charges the saved card the moment a recurring visit is completed.</p>
                 </div>
                 <Input label="Review threshold %" type="number" step="5" min="0" max="200"
@@ -434,18 +450,10 @@ export default function SettingsPage() {
               </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Work day start time</label>
-                <input type="time" value={workStart} onChange={e => setWorkStart(e.target.value)}
-                  className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" />
-                <p className="text-xs text-ink-faint">Arrival times for each stop and the estimated finish are computed from this.</p>
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Daily capacity (hours)</label>
-                <input type="number" min="1" max="16" step="0.5" value={capacityHours} onChange={e => setCapacityHours(e.target.value)}
-                  className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" />
-                <p className="text-xs text-ink-faint">Days past this show as overloaded; days with an hour+ spare show room for more jobs.</p>
-              </div>
+              <Input label="Work day start time" type="time" value={workStart} onChange={e => setWorkStart(e.target.value)}
+                hint="Arrival times for each stop and the estimated finish are computed from this." />
+              <Input label="Daily capacity (hours)" type="number" min="1" max="16" step="0.5" value={capacityHours} onChange={e => setCapacityHours(e.target.value)}
+                hint="Days past this show as overloaded; days with an hour+ spare show room for more jobs." />
             </div>
           </CardBody>
         </Card>
@@ -514,14 +522,12 @@ export default function SettingsPage() {
             every field (Company Info, Payment & Fees, Work Schedule, Service
             Seasons, Lawn Pricing) regardless of which tab is active. */}
         {showSave && (
-          <div className="sticky bottom-0 z-10 -mx-1 px-1">
-            <div className="rounded-card border border-border bg-surface/95 backdrop-blur px-6 py-4 flex items-center justify-end gap-3">
-              <span className="text-xs text-ink-faint mr-auto">Saves all business, pricing &amp; scheduling settings.</span>
-              <Button type="submit" loading={isSubmitting}>
-                {saved ? <><Check className="w-4 h-4" /> Saved</> : 'Save Settings'}
-              </Button>
-            </div>
-          </div>
+          <StickyActionBar className="-mx-1 flex items-center justify-end gap-3">
+            <span className="text-xs text-ink-faint mr-auto">Saves all business, pricing &amp; scheduling settings.</span>
+            <Button type="submit" loading={isSubmitting}>
+              {saved ? <><Check className="w-4 h-4" /> Saved</> : 'Save Settings'}
+            </Button>
+          </StickyActionBar>
         )}
       </form>
 
@@ -540,12 +546,9 @@ export default function SettingsPage() {
           </div>
           {localTiers.map((t, i) => (
             <div key={t.id || i} className="grid grid-cols-[1fr_1fr_1fr_auto_auto] gap-3 items-center">
-              <input type="number" value={t.min_km ?? ''} onChange={e => updateTier(i, 'min_km', e.target.value)}
-                className="bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent" />
-              <input type="number" value={t.max_km ?? ''} placeholder="inf" onChange={e => updateTier(i, 'max_km', e.target.value)}
-                className="bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent" />
-              <input type="number" value={t.fee ?? ''} placeholder="custom" onChange={e => updateTier(i, 'fee', e.target.value)}
-                className="bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent" />
+              <Input fieldSize="sm" type="number" value={t.min_km ?? ''} onChange={e => updateTier(i, 'min_km', e.target.value)} />
+              <Input fieldSize="sm" type="number" value={t.max_km ?? ''} placeholder="inf" onChange={e => updateTier(i, 'max_km', e.target.value)} />
+              <Input fieldSize="sm" type="number" value={t.fee ?? ''} placeholder="custom" onChange={e => updateTier(i, 'fee', e.target.value)} />
               <Button variant="ghost" size="sm" onClick={() => saveTier(i)} title="Save"><Check className="w-4 h-4" /></Button>
               <Button variant="ghost" size="sm" onClick={() => deleteTier(i)} className="hover:text-red-400" title="Delete"><Trash2 className="w-4 h-4" /></Button>
             </div>
@@ -593,7 +596,7 @@ function SeasonEditor({ icon, title, hint, season, onChange }: {
     </select>
   )
   return (
-    <div className="rounded-xl border border-border p-3">
+    <div className="rounded-card border border-border p-3">
       <div className="flex items-center gap-2 mb-1">
         {icon}
         <span className="text-sm font-semibold text-ink">{title}</span>

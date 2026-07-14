@@ -8,8 +8,11 @@ import { loadWeatherImpact, WeatherImpactReport, DayImpact } from '@/lib/weather
 import { DayForecast, RAIN_PROB_THRESHOLD, weatherScore, WeatherLevel } from '@/lib/weather'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
+import { Card } from '@/components/ui/Card'
+import { StatTile } from '@/components/ui/StatTile'
+import { Skeleton, SkeletonTiles } from '@/components/ui/Skeleton'
 import { formatCurrency, cn } from '@/lib/utils'
-import { Loader2, CloudRain, Droplets, Wind, Clock, DollarSign, Users, AlertTriangle, ArrowRight, MapPin, Thermometer, CalendarOff } from 'lucide-react'
+import { CloudRain, Droplets, Wind, Clock, DollarSign, Users, AlertTriangle, ArrowRight, MapPin, Thermometer, CalendarOff } from 'lucide-react'
 
 const dayLabel = (iso: string, today: string) => iso === today ? 'Today' : format(parseISO(iso + 'T00:00:00'), 'EEE MMM d')
 
@@ -40,9 +43,15 @@ export default function WeatherPage() {
 
   if (loading) {
     return (
-      <div className="max-w-5xl">
+      <div className="max-w-5xl space-y-6">
         <PageHeader title="Weather" description="Rain risk to your booked work — and the best dry days to move it." />
-        <div className="py-16 text-center text-sm text-ink-muted flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Checking the forecast…</div>
+        <Skeleton className="h-7 w-64 rounded-full" />
+        <div className="grid grid-cols-2 gap-3">
+          <Skeleton className="h-32 rounded-card" />
+          <Skeleton className="h-32 rounded-card" />
+        </div>
+        <Skeleton className="h-48 rounded-card" />
+        <SkeletonTiles count={4} />
       </div>
     )
   }
@@ -52,12 +61,12 @@ export default function WeatherPage() {
     return (
       <div className="max-w-5xl">
         <PageHeader title="Weather" description="Rain risk to your booked work — and the best dry days to move it." />
-        <div className="rounded-card border border-border bg-bg-secondary p-8 text-center">
+        <Card className="p-8 text-center">
           <MapPin className="w-10 h-10 text-ink-faint mx-auto mb-3" />
           <p className="text-sm font-medium text-ink">Set your base location first</p>
           <p className="text-xs text-ink-muted mt-1">Add your business base address in Settings so we can pull the local forecast.</p>
           <Link href="/dashboard/settings" className="inline-block mt-3"><Button size="sm" variant="secondary">Open Settings <ArrowRight className="w-3.5 h-3.5" /></Button></Link>
-        </div>
+        </Card>
       </div>
     )
   }
@@ -99,7 +108,7 @@ export default function WeatherPage() {
 
       {/* Days the owner manually marked unavailable — explained, not just skipped */}
       {r.blockedDays.length > 0 && (
-        <div className="rounded-card border border-border bg-bg-secondary p-4">
+        <Card className="p-4">
           <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-2 flex items-center gap-1.5"><CalendarOff className="w-3.5 h-3.5" /> Days you&apos;ve marked off</p>
           <div className="space-y-1">
             {r.blockedDays.map(b => (
@@ -109,7 +118,7 @@ export default function WeatherPage() {
             ))}
           </div>
           <p className="text-[10px] text-ink-faint mt-2">Weather Ops won&apos;t recommend these days. Re-enable a day from the schedule calendar.</p>
-        </div>
+        </Card>
       )}
 
       {/* Today / tomorrow */}
@@ -119,7 +128,7 @@ export default function WeatherPage() {
       </div>
 
       {/* 7-day outlook — rain %, wind, temp, severe, with a work-score colour */}
-      <div className="rounded-card border border-border bg-bg-secondary p-4">
+      <Card className="p-4">
         <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-2 flex items-center gap-1.5"><Droplets className="w-3.5 h-3.5" /> 7-day outlook</p>
         <div className="flex items-end gap-1.5 h-28">
           {r.forecast.map(f => {
@@ -138,8 +147,8 @@ export default function WeatherPage() {
         <div className="grid grid-cols-7 gap-1.5 mt-3">
           {r.forecast.map(f => (
             <div key={f.date} className="text-center">
-              <p className="text-[10px] text-ink-faint flex items-center justify-center gap-0.5"><Wind className="w-2.5 h-2.5" /> {f.windKph}</p>
-              {f.tempMax != null && <p className="text-[10px] text-ink-muted flex items-center justify-center gap-0.5"><Thermometer className="w-2.5 h-2.5" /> {f.tempMax}°</p>}
+              <p className="text-[10px] text-ink-faint flex items-center justify-center gap-0.5"><Wind className="w-3 h-3" /> {f.windKph}</p>
+              {f.tempMax != null && <p className="text-[10px] text-ink-muted flex items-center justify-center gap-0.5"><Thermometer className="w-3 h-3" /> {f.tempMax}°</p>}
               {f.severe && <p className="text-[10px] font-semibold text-red-400">⚠</p>}
             </div>
           ))}
@@ -150,7 +159,7 @@ export default function WeatherPage() {
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500" /> Delay</span>
           <span className="ml-auto">Rain ≥ {RAIN_PROB_THRESHOLD}% or wind/severe → flagged.</span>
         </p>
-      </div>
+      </Card>
 
       {/* Impact totals */}
       {r.atRiskDays.length === 0 ? (
@@ -161,10 +170,10 @@ export default function WeatherPage() {
       ) : (
         <>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <Tile label="Jobs at risk" value={String(r.totals.jobs)} icon={CloudRain} accent />
-            <Tile label="Labor hours at risk" value={`${r.totals.laborHours}h`} icon={Clock} />
-            <Tile label="Revenue at risk" value={formatCurrency(r.totals.revenue)} icon={DollarSign} />
-            <Tile label="Customers affected" value={String(r.totals.customers)} icon={Users} />
+            <StatTile label="Jobs at risk" value={String(r.totals.jobs)} icon={CloudRain} accent />
+            <StatTile label="Labor hours at risk" value={`${r.totals.laborHours}h`} icon={Clock} />
+            <StatTile label="Revenue at risk" value={formatCurrency(r.totals.revenue)} icon={DollarSign} />
+            <StatTile label="Customers affected" value={String(r.totals.customers)} icon={Users} />
           </div>
 
           <div className="space-y-3">
@@ -201,18 +210,9 @@ function WeatherCard({ f, label }: { f: DayForecast; label: string }) {
   )
 }
 
-function Tile({ label, value, icon: Icon, accent }: { label: string; value: string; icon: typeof CloudRain; accent?: boolean }) {
-  return (
-    <div className={cn('rounded-card border p-3.5', accent ? 'border-accent/30 bg-accent/[0.05]' : 'border-border bg-bg-secondary')}>
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1.5"><Icon className="w-3 h-3" /> {label}</p>
-      <p className={cn('text-xl font-black mt-1', accent ? 'text-accent' : 'text-ink')}>{value}</p>
-    </div>
-  )
-}
-
 function RiskRow({ d, today }: { d: DayImpact; today: string }) {
   return (
-    <div className="rounded-card border border-border bg-bg-secondary p-4">
+    <Card className="p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-sm font-bold text-ink flex items-center gap-1.5 flex-wrap">
@@ -239,7 +239,7 @@ function RiskRow({ d, today }: { d: DayImpact; today: string }) {
       <p className={cn('text-[11px] mt-2 flex items-center gap-1.5', d.recommendedOverbooks ? 'text-amber-400' : 'text-ink-muted')}>
         {d.recommendedOverbooks && <AlertTriangle className="w-3 h-3 shrink-0" />}{d.recommendedNote}
       </p>
-    </div>
+    </Card>
   )
 }
 
