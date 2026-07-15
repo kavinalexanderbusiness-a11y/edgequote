@@ -5,15 +5,18 @@ import { createClient } from '@/lib/supabase/client'
 import {
   loadLaborModel, estimateLabor, laborEconomics, LaborModel, LaborEstimate, Confidence, Cadence,
 } from '@/lib/labor'
+import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import { Sparkles, Check, HelpCircle, Gauge, RotateCw, Hourglass } from 'lucide-react'
 
-const CONF_TONE: Record<Confidence, string> = {
-  high: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
-  medium: 'text-amber-400 border-amber-500/30 bg-amber-500/10',
-  low: 'text-ink-muted border-border bg-bg-tertiary',
+// Confidence is a quiet dot + label (loud tinted pills are reserved for risk/alarm).
+const CONF_DOT: Record<Confidence, string> = {
+  high: 'bg-emerald-400',
+  medium: 'bg-amber-400',
+  low: 'bg-ink-faint',
 }
-const CONF_LABEL: Record<Confidence, string> = { high: 'High confidence', medium: 'Medium', low: 'Low' }
+// One confidence vocabulary — full words everywhere, matching types CONFIDENCE_LABELS.
+const CONF_LABEL: Record<Confidence, string> = { high: 'High confidence', medium: 'Medium confidence', low: 'Low confidence' }
 
 // ── Smart Labor Calculator V2 — drop-in estimate widget ─────────────────────────
 // The estimated duration is a SMART DEFAULT, not a locked value:
@@ -102,12 +105,12 @@ export function SmartLaborField({
   const applied = value === est.minutes
 
   return (
-    <div className="rounded-xl border border-accent/20 bg-accent/[0.04] p-3 space-y-2.5">
+    <div className="rounded-xl border border-accent/20 bg-accent/[0.04] p-3 space-y-2.5 animate-fade">
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-bold text-ink flex items-center gap-1.5"><Sparkles className="w-3.5 h-3.5 text-accent" /> Smart Labor Estimate</span>
         {/* ON/OFF toggle (hidden in read-only / quote mode) */}
         {!readOnly && (
-          <button type="button" onClick={() => setEnabled(e => !e)}
+          <button type="button" aria-pressed={enabled} onClick={() => setEnabled(e => !e)}
             className={cn('text-[10px] font-semibold rounded-full px-2 py-0.5 border transition-colors', enabled ? 'text-accent border-accent/40 bg-accent/10' : 'text-ink-faint border-border')}>
             {enabled ? 'Auto-fill ON' : 'Auto-fill OFF'}
           </button>
@@ -116,11 +119,12 @@ export function SmartLaborField({
 
       <div className="flex items-end justify-between gap-3">
         <div>
-          <p className="text-2xl font-black text-ink leading-none">{est.minutes} <span className="text-sm font-semibold text-ink-muted">min</span></p>
-          <p className="text-[11px] text-ink-muted mt-1">Range {est.minMinutes}–{est.maxMinutes} min · {est.sampleSize} {est.serviceLabel.toLowerCase()} job{est.sampleSize !== 1 ? 's' : ''}</p>
+          <p className="text-2xl font-black text-ink leading-none tabular-nums">{est.minutes} <span className="text-sm font-semibold text-ink-muted">min</span></p>
+          <p className="text-[11px] text-ink-muted mt-1 tabular-nums">Range {est.minMinutes}–{est.maxMinutes} min · {est.sampleSize} {est.serviceLabel.toLowerCase()} job{est.sampleSize !== 1 ? 's' : ''}</p>
         </div>
-        <span className={cn('text-[10px] font-semibold rounded-full px-2 py-0.5 border', CONF_TONE[est.confidence])}>
-          {est.confidencePct}% · {CONF_LABEL[est.confidence]}
+        <span className="inline-flex items-center gap-1.5 text-[11px] text-ink-muted whitespace-nowrap">
+          <span aria-hidden className={cn('w-1.5 h-1.5 rounded-full', CONF_DOT[est.confidence])} />
+          <span className="tabular-nums">{est.confidencePct}%</span> · {CONF_LABEL[est.confidence]}
         </span>
       </div>
 
@@ -135,12 +139,12 @@ export function SmartLaborField({
 
       <div className="flex items-center gap-2">
         {!readOnly && (applied
-          ? <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400"><Check className="w-3.5 h-3.5" /> Applied</span>
+          ? <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 animate-fade"><Check className="w-3.5 h-3.5" /> Applied</span>
           : isOverride
             ? <button type="button" onClick={recalc} className="inline-flex items-center gap-1 text-[11px] font-semibold text-accent hover:underline"><RotateCw className="w-3 h-3" /> Recalculate ({est.minutes} min)</button>
-            : <button type="button" onClick={recalc} className="text-[11px] font-semibold text-accent hover:underline">Use estimate ({est.minutes} min)</button>)}
+            : <Button type="button" variant="ghost" size="sm" onClick={recalc}>Use estimate ({est.minutes} min)</Button>)}
         {readOnly && <span className="text-[10px] text-ink-faint">Reference only — doesn’t change your price</span>}
-        <button type="button" onClick={() => setShowWhy(v => !v)} className="ml-auto text-[11px] font-medium text-ink-faint hover:text-ink flex items-center gap-1"><HelpCircle className="w-3 h-3" /> Why?</button>
+        <button type="button" aria-expanded={showWhy} onClick={() => setShowWhy(v => !v)} className="ml-auto text-[11px] font-medium text-ink-faint hover:text-ink flex items-center gap-1"><HelpCircle className="w-3 h-3" /> Why?</button>
       </div>
       {!readOnly && isOverride && <p className="text-[10px] text-ink-faint">You typed a custom duration — auto-fill is paused until you Recalculate.</p>}
 
@@ -154,11 +158,12 @@ export function SmartLaborField({
   )
 }
 
+// Same tile shape + micro-label size as every other pricing stat tile.
 function Mini({ label, value, tone }: { label: string; value: string; tone?: string }) {
   return (
-    <div className="rounded-md bg-bg-tertiary border border-border px-2 py-1.5 text-center">
-      <p className="text-[9px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className={cn('text-sm font-bold text-ink', tone)}>{value}</p>
+    <div className="rounded-lg bg-bg-tertiary border border-border px-2 py-1.5 text-center">
+      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
+      <p className={cn('text-sm font-bold text-ink tabular-nums', tone)}>{value}</p>
     </div>
   )
 }

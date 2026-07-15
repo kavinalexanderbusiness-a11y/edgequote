@@ -22,9 +22,10 @@ export function AutosaveStatus({ status, savedAt, className = '' }: { status: Au
   if (status === 'idle' && !savedAt) return null
   return (
     <span className={`inline-flex items-center gap-1 text-[11px] text-ink-faint ${className}`} aria-live="polite">
+      {/* Keyed by saving/saved so the swap cross-fades instead of hard-switching. */}
       {status === 'saving'
-        ? <><Loader2 className="w-3 h-3 animate-spin" /> Saving…</>
-        : <><Check className="w-3 h-3 text-emerald-400" /> Draft saved{savedAt && status !== 'saved' ? ` · ${ago(savedAt)}` : ''}</>}
+        ? <span key="saving" className="inline-flex items-center gap-1 animate-fade"><Loader2 className="w-3 h-3 animate-spin" /> Saving…</span>
+        : <span key="saved" className="inline-flex items-center gap-1 animate-fade"><Check className="w-3 h-3 text-emerald-400" /> Draft saved{savedAt && status !== 'saved' ? ` · ${ago(savedAt)}` : ''}</span>}
     </span>
   )
 }
@@ -43,10 +44,10 @@ export function DraftRestoreBanner({ savedAt, onRestore, onDiscard, label = 'uns
         You have an {label}{savedAt ? <span className="text-ink-muted"> from {ago(savedAt)}</span> : ''}. Restore it?
       </p>
       <div className="flex items-center gap-1.5 shrink-0">
-        <button onClick={onRestore} className="inline-flex items-center gap-1 text-xs font-semibold text-accent rounded-lg px-2.5 py-1.5 border border-accent/30 hover:bg-accent/10 transition-colors">
+        <button type="button" onClick={onRestore} className="inline-flex items-center gap-1 text-xs font-semibold text-accent rounded-lg px-2.5 py-1.5 border border-accent/30 hover:bg-accent/10 transition-colors">
           <RotateCcw className="w-3.5 h-3.5" /> Restore
         </button>
-        <button onClick={onDiscard} aria-label="Discard draft" className="inline-flex items-center gap-1 text-xs font-medium text-ink-faint rounded-lg px-2 py-1.5 hover:text-red-400 transition-colors">
+        <button type="button" onClick={onDiscard} aria-label="Discard draft" className="inline-flex items-center gap-1 text-xs font-medium text-ink-faint rounded-lg px-2 py-1.5 hover:text-red-400 transition-colors">
           <Trash2 className="w-3.5 h-3.5" /> Discard
         </button>
       </div>

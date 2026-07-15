@@ -3,9 +3,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { Button } from '@/components/ui/Button'
+import { Skeleton } from '@/components/ui/Skeleton'
 import { analyzeSms, smsCost, formatSmsCost, resolveSmsPricing, type SmsPricing } from '@/lib/sms/segments'
 import { loadSmsPricing, invalidateSmsPricing } from '@/lib/sms/useSmsPricing'
-import { MessageSquareText, Loader2, Check } from 'lucide-react'
+import { MessageSquareText, Check } from 'lucide-react'
 
 interface Row { body: string | null; created_at: string }
 
@@ -107,17 +109,22 @@ export function MessagingUsage() {
           </Field>
         </div>
         <div className="flex items-center gap-3">
-          <button onClick={save} disabled={saving}
-            className="px-3.5 py-2 rounded-lg bg-accent text-black text-xs font-semibold hover:bg-accent/90 disabled:opacity-50 flex items-center gap-1.5">
-            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : saved ? <Check className="w-3.5 h-3.5" /> : null}
-            {saved ? 'Saved' : 'Save pricing'}
-          </button>
-          {err && <span className="text-[11px] text-amber-400">{err}</span>}
+          <Button size="sm" onClick={save} loading={saving}>
+            {saved && <Check className="w-3.5 h-3.5" />}{saved ? 'Saved' : 'Save pricing'}
+          </Button>
+          {err && <span className="text-xs text-red-400 animate-fade">{err}</span>}
         </div>
 
         {/* Usage stats */}
         {!stats ? (
-          <div className="py-4 text-center text-xs text-ink-muted flex items-center justify-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading usage…</div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5" aria-hidden>
+            {[0, 1, 2, 3].map(i => (
+              <div key={i} className="rounded-xl border border-border bg-bg-secondary px-3 py-2.5">
+                <Skeleton className="h-2.5 w-20" />
+                <Skeleton className="h-5 w-14 mt-1.5" />
+              </div>
+            ))}
+          </div>
         ) : (
           <>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
@@ -136,12 +143,12 @@ export function MessagingUsage() {
   )
 }
 
-const inputCls = 'w-full bg-bg-tertiary border border-border-strong rounded-lg px-2.5 py-1.5 text-sm text-ink outline-none focus:border-accent'
+const inputCls = 'w-full bg-bg-tertiary border border-border-strong rounded-lg px-2.5 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20'
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <label className="flex flex-col gap-1 min-w-0">
-      <span className="text-[10px] font-semibold text-ink-faint uppercase tracking-wide truncate">{label}{hint && <span className="normal-case font-normal text-ink-faint"> · {hint}</span>}</span>
+      <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide truncate">{label}{hint && <span className="normal-case font-normal text-ink-faint"> · {hint}</span>}</span>
       {children}
     </label>
   )

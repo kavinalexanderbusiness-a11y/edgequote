@@ -9,7 +9,7 @@ import { channel as channelDef } from '@/lib/marketing/channels'
 import { listConnections } from '@/lib/marketing/connections'
 import { listJobsForPiece, markManualPublished, captionFor } from '@/lib/marketing/publishQueue'
 import { effectiveMode } from '@/lib/marketing/providers'
-import { cn } from '@/lib/utils'
+import { FilterPill } from '@/components/ui/FilterPill'
 import { Send, CalendarPlus, Settings2, CheckCircle2, ExternalLink, Copy, Download } from 'lucide-react'
 import type { ContentPiece, MarketingChannel, PublishJob, PublishJobStatus, PublishResponse, SocialConnection } from '@/lib/marketing/types'
 
@@ -125,18 +125,18 @@ export function PublishPanel({ piece, ch, userId, hasPhoto, onSavePhoto, beforeP
     <div className="rounded-card border border-border bg-surface/60 p-3 space-y-2.5">
       <div className="flex items-center justify-between gap-2">
         <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint inline-flex items-center gap-1.5"><Send className="w-3.5 h-3.5 text-accent" /> Publish</p>
-        <button onClick={() => setHub(true)} className="text-[11px] text-ink-faint hover:text-ink inline-flex items-center gap-1"><Settings2 className="w-3 h-3" /> Accounts</button>
+        <button onClick={() => setHub(true)} className="text-[11px] text-ink-faint hover:text-ink inline-flex items-center gap-1"><Settings2 className="w-3 h-3" /> Manage accounts</button>
       </div>
 
       {/* Account selector — only when there's an actual choice to make. With no
           connected account, manual is the only mode, so a lone pill is just noise. */}
       {channelConns.length > 0 && (
         <div className="flex items-center gap-1.5 flex-wrap">
-          <button onClick={() => setSelected(null)} className={cn('rounded-full px-2.5 py-1 text-xs border transition-colors', selected === null ? 'bg-accent text-black border-accent' : 'bg-surface text-ink-muted border-border hover:text-ink')}>Copy &amp; paste</button>
+          <FilterPill active={selected === null} onClick={() => setSelected(null)}>Copy &amp; paste</FilterPill>
           {channelConns.map(c => (
-            <button key={c.id} onClick={() => setSelected(c.id)} className={cn('rounded-full px-2.5 py-1 text-xs border transition-colors inline-flex items-center gap-1', selected === c.id ? 'bg-accent text-black border-accent' : 'bg-surface text-ink-muted border-border hover:text-ink')}>
+            <FilterPill key={c.id} active={selected === c.id} onClick={() => setSelected(c.id)}>
               <CheckCircle2 className="w-3 h-3" /> {c.account_name}
-            </button>
+            </FilterPill>
           ))}
         </div>
       )}
@@ -157,7 +157,7 @@ export function PublishPanel({ piece, ch, userId, hasPhoto, onSavePhoto, beforeP
           <p className="text-[11px] text-ink-muted">Ready to post. Copy the caption{hasPhoto ? ', save the photo' : ''}, open {def.label}, paste &amp; post, then mark it done.</p>
           <div className="flex items-center gap-2 flex-wrap">
             <Button size="sm" variant="secondary" onClick={() => { copyCaption(); setMsg({ tone: 'success', text: 'Caption copied.' }) }}><Copy className="w-3.5 h-3.5" /> Copy caption</Button>
-            {hasPhoto && onSavePhoto && <Button size="sm" variant="secondary" onClick={onSavePhoto}><Download className="w-3.5 h-3.5" /> Save photo</Button>}
+            {hasPhoto && onSavePhoto && <Button size="sm" variant="ghost" onClick={onSavePhoto}><Download className="w-3.5 h-3.5" /> Save photo</Button>}
             <Button size="sm" variant="secondary" onClick={openPlatform}><ExternalLink className="w-3.5 h-3.5" /> Open {def.label}</Button>
             <Button size="sm" onClick={confirmManual}><CheckCircle2 className="w-3.5 h-3.5" /> Mark as posted</Button>
           </div>
@@ -170,9 +170,9 @@ export function PublishPanel({ piece, ch, userId, hasPhoto, onSavePhoto, beforeP
           <Button size="sm" variant="secondary" onClick={() => setScheduleOpen(o => !o)}><CalendarPlus className="w-3.5 h-3.5" /> Schedule</Button>
           {scheduleOpen && (
             <>
-              <input type="date" value={scheduleDate} onChange={e => setScheduleDate(e.target.value)} className="bg-bg-tertiary border border-border rounded-lg px-2 py-1 text-xs text-ink" />
+              <input type="date" value={scheduleDate} onChange={e => setScheduleDate(e.target.value)} aria-label="Schedule date" className="bg-bg-tertiary border border-border rounded-lg px-2 py-1 text-xs text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
               {/* 9am in the owner's LOCAL timezone (a bare Z would land at 1–4am here). */}
-              <Button size="sm" onClick={() => record(new Date(`${scheduleDate}T09:00:00`).toISOString())} loading={busy === 'schedule'}>Set</Button>
+              <Button size="sm" variant="secondary" onClick={() => record(new Date(`${scheduleDate}T09:00:00`).toISOString())} loading={busy === 'schedule'}>Set date</Button>
             </>
           )}
           {hasPhoto && onSavePhoto && (

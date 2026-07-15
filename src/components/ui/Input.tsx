@@ -5,10 +5,13 @@ interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: string
   error?: string
   hint?: string
+  /** 'sm' = the blessed compact field (rounded-lg px-3 py-2 text-sm) for dense
+      inline panels — instead of hand-rolling a smaller input per file. */
+  fieldSize?: 'sm' | 'md'
 }
 
 const Input = forwardRef<HTMLInputElement, InputProps>(
-  ({ className, label, error, hint, id, ...props }, ref) => {
+  ({ className, label, error, hint, id, fieldSize = 'md', ...props }, ref) => {
     // Always-unique id (label-slugs collided when two fields shared a label,
     // breaking label↔input association); an explicit `id` still wins.
     const generatedId = useId()
@@ -24,7 +27,8 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
           ref={ref}
           id={inputId}
           className={cn(
-         'w-full bg-bg-tertiary border rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none transition-all',
+            'w-full bg-bg-tertiary border text-ink placeholder:text-ink-faint outline-none transition-all',
+            fieldSize === 'sm' ? 'rounded-lg px-3 py-2 text-sm' : 'rounded-xl px-3.5 py-3 text-base sm:text-sm',
             error
               ? 'border-red-500/50 focus:border-red-500 focus:ring-2 focus:ring-red-500/20'
               : 'border-border-strong focus:border-accent focus:ring-2 focus:ring-accent/20',
@@ -32,8 +36,8 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
           )}
           {...props}
         />
-        {error && <p className="text-xs text-red-400">{error}</p>}
-        {hint && !error && <p className="text-xs text-ink-faint">{hint}</p>}
+        {error && <p className="text-xs text-red-400 animate-fade">{error}</p>}
+        {hint && !error && <p className="text-xs text-ink-faint animate-fade">{hint}</p>}
       </div>
     )
   }

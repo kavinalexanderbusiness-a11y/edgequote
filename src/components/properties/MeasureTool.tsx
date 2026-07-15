@@ -7,7 +7,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Property, BusinessSettings, MeasurementSnapshot, LawnSections, LawnPolygon, PricingConfidence, CONFIDENCE_LABELS, CONFIDENCE_COLORS } from '@/types'
 import { priceTiers, routeDensityTravel, pricingConfidence, travelFeeForDistance, pricingConfigFromSettings, PricingConfig, DEFAULT_PRICING, PriceTier, pricingPackage, estimateVisitMinutes, buildSavedRecommendation } from '@/lib/pricing'
 import { PricePackagePanel, CadenceSelection } from '@/components/pricing/PricePackagePanel'
-import { ProspectContext, loadProspectContext, assessProspect } from '@/lib/prospect'
+import { ProspectContext, loadProspectContext, gradedProspectPricing } from '@/lib/prospect'
 import { DecisionSummary } from '@/components/pricing/DecisionSummary'
 import { AutoMeasureBanner } from '@/components/measure/AutoMeasureBanner'
 import { recordMeasurement, neighborhoodOf, AutoMeasureResult } from '@/lib/autoMeasure'
@@ -15,7 +15,7 @@ import { DEFAULT_CREW_COST, crewCostPerHour as resolveCrewCost } from '@/lib/eco
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { Coord, haversineKm, nearbyJobCount, fetchLocatedUpcomingJobs } from '@/lib/geo'
 import { Button } from '@/components/ui/Button'
-import { Undo2, Trash2, Check, Ruler, Plus, ZoomIn, ZoomOut, RotateCcw, FileText, Car, ShieldCheck, History, Move } from 'lucide-react'
+import { Undo2, Trash2, Check, Ruler, ZoomIn, ZoomOut, RotateCcw, FileText, Car, ShieldCheck, History, Move, Loader2 } from 'lucide-react'
 
 const M2_TO_SQFT = 10.7639
 const SNAP_PX = 24 // closing snap threshold in screen pixels (generous for touch)
@@ -544,13 +544,15 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
     const sections = currentSections()
     const sectionsTotal = Math.round(Object.values(sections).reduce((a, b) => a + b, 0))
     const total = sectionsTotal > 0 ? sectionsTotal : Math.round(overrideRef.current || 0)
-    const baseSave = pricingPackage(total, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood })
     const estMin = estimateVisitMinutes(total, prospect?.observedMinPer1000)
-    const scoreSave = prospect
-      ? assessProspect(baseSave, prospect, { distanceKm, travelFee: effectiveTravel, neighborhoodName: property.neighborhood, estimatedMinutes: estMin, timedJobs: prospect.timedJobs }).score
+    // ONE composed result (gradedProspectPricing) — the saved recurring prices and
+    // the saved score come from the SAME grade-adjusted package.
+    const gradedSave = prospect
+      ? gradedProspectPricing(total, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood }, prospect,
+          { distanceKm, travelFee: effectiveTravel, neighborhoodName: property.neighborhood, estimatedMinutes: estMin, timedJobs: prospect.timedJobs })
       : null
-    // Save the grade-adjusted package so stored recurring prices reflect value.
-    const pkgSave = pricingPackage(total, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood, valueGrade: scoreSave })
+    const scoreSave = gradedSave?.assessment.score ?? null
+    const pkgSave = gradedSave?.pkg ?? pricingPackage(total, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood })
     // Permanent boundary + how the area was captured (traced shapes win; else the
     // accepted auto estimate; else a typed figure).
     const polygon = currentPolygon()
@@ -665,6 +667,7 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
         {SECTIONS.map(s => (
           <button
             key={s.key}
+            type="button"
             onClick={() => selectSection(s.key)}
             className={`shrink-0 flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-sm font-medium border transition-all ${
               active === s.key ? 'border-2 bg-bg-tertiary' : 'border-border text-ink-muted hover:text-ink'
@@ -694,14 +697,14 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
       <div className="relative rounded-card overflow-hidden border border-border">
         <div ref={mapEl} className="w-full h-[55vh] min-h-[340px] bg-bg-secondary" style={{ cursor: 'crosshair' }} />
         {!ready && !loadError && (
-          <div className="absolute inset-0 flex items-center justify-center text-sm text-ink-muted bg-bg-secondary/80">
-            Loading satellite map...
+          <div className="absolute inset-0 flex items-center justify-center gap-2 text-sm text-ink-muted bg-bg-secondary/80 animate-pulse">
+            <Loader2 className="w-4 h-4 animate-spin" /> Loading satellite map…
           </div>
         )}
         {ready && (
           <div className="absolute top-3 right-3 flex flex-col gap-1.5">
-            <button onClick={() => zoom(1)} aria-label="Zoom in" className="w-11 h-11 rounded-xl bg-bg-secondary/90 border border-border-strong text-ink flex items-center justify-center hover:bg-bg-tertiary shadow-lg"><ZoomIn className="w-5 h-5" /></button>
-            <button onClick={() => zoom(-1)} aria-label="Zoom out" className="w-11 h-11 rounded-xl bg-bg-secondary/90 border border-border-strong text-ink flex items-center justify-center hover:bg-bg-tertiary shadow-lg"><ZoomOut className="w-5 h-5" /></button>
+            <button type="button" onClick={() => zoom(1)} aria-label="Zoom in" className="w-11 h-11 rounded-xl bg-bg-secondary/90 border border-border-strong text-ink flex items-center justify-center hover:bg-bg-tertiary shadow-lg"><ZoomIn className="w-5 h-5" /></button>
+            <button type="button" onClick={() => zoom(-1)} aria-label="Zoom out" className="w-11 h-11 rounded-xl bg-bg-secondary/90 border border-border-strong text-ink flex items-center justify-center hover:bg-bg-tertiary shadow-lg"><ZoomOut className="w-5 h-5" /></button>
           </div>
         )}
         {/* Active-section pill */}
@@ -718,7 +721,7 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
       {/* Drawing controls — large targets */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         <Button variant="secondary" onClick={() => commitCurrent(active)} disabled={mode === 'adjust' || pointsInCurrent < 3} className="h-11">
-          <Plus className="w-4 h-4" /> Finish section
+          <Check className="w-4 h-4" /> Finish section
         </Button>
         <Button variant="secondary" onClick={undo} disabled={mode === 'adjust' || (pointsInCurrent === 0 && shapes.current.length === 0)} className="h-11">
           <Undo2 className="w-4 h-4" /> Undo point
@@ -726,7 +729,8 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
         <Button variant="secondary" onClick={resetCurrent} disabled={mode === 'adjust' || pointsInCurrent === 0} className="h-11">
           <RotateCcw className="w-4 h-4" /> Reset shape
         </Button>
-        <Button variant="secondary" onClick={clearAll} disabled={pointsInCurrent === 0 && shapes.current.length === 0} className="h-11">
+        {/* Danger variant — this wipes every traced section, unlike its safe siblings. */}
+        <Button variant="danger" onClick={clearAll} disabled={pointsInCurrent === 0 && shapes.current.length === 0} className="h-11">
           <Trash2 className="w-4 h-4" /> Clear all
         </Button>
       </div>
@@ -735,6 +739,7 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
       {shapes.current.length > 0 && (
         <button
           type="button"
+          aria-pressed={mode === 'adjust'}
           onClick={toggleAdjust}
           className={`w-full h-11 rounded-xl border text-sm font-medium flex items-center justify-center gap-2 transition-colors ${
             mode === 'adjust' ? 'border-amber-500/50 bg-amber-500/10 text-amber-400' : 'border-border text-ink-muted hover:text-ink'
@@ -745,8 +750,8 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
         </button>
       )}
 
-      {/* Live breakdown + total */}
-      <div className="bg-bg-secondary border border-border rounded-xl px-4 py-3 space-y-2">
+      {/* Live breakdown + total — tabular figures so digits don't wobble while tracing */}
+      <div className="bg-bg-secondary border border-border rounded-card px-4 py-3.5 space-y-2">
         <div className="flex items-center gap-2 mb-1">
           <Ruler className="w-4 h-4 text-accent" />
           <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Measurement</span>
@@ -754,12 +759,12 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
         {SECTIONS.filter(s => breakdown[s.key] > 0).map(s => (
           <div key={s.key} className="flex items-center justify-between text-sm">
             <span className="flex items-center gap-2 text-ink-muted"><span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: s.color }} />{s.label}</span>
-            <span className="text-ink font-medium">{Math.round(breakdown[s.key]).toLocaleString()} sq ft</span>
+            <span className="text-ink font-medium tabular-nums">{Math.round(breakdown[s.key]).toLocaleString()} sq ft</span>
           </div>
         ))}
         <div className="flex items-center justify-between pt-2 border-t border-border">
           <span className="text-sm font-semibold text-ink">Total</span>
-          <span className="text-xl font-bold text-accent">{totalSqft > 0 ? `${totalSqft.toLocaleString()} sq ft` : '—'}</span>
+          <span className="text-xl font-bold text-accent tabular-nums transition-colors">{totalSqft > 0 ? `${totalSqft.toLocaleString()} sq ft` : '—'}</span>
         </div>
       </div>
 
@@ -768,13 +773,17 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
           the measurement; create a quote to price it. */}
       {showPricing && (<>
       {/* Auto pricing tiers (job only) */}
-      <div className="bg-bg-secondary border border-border rounded-xl px-4 py-3 space-y-3">
+      <div className="bg-bg-secondary border border-border rounded-card px-4 py-3.5 space-y-3 animate-pop">
         <div className="flex items-center justify-between flex-wrap gap-3">
           <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Suggested job price</span>
           <label className="flex items-center gap-1.5 text-xs text-ink-muted" title="Lawn condition multiplier — 0.75 easy, 1.0 standard, 1.25 overgrown">
-            <span>Condition<span className="block text-[10px] text-ink-faint">1.0 standard · 1.25 overgrown</span></span>
+            <span>
+              Condition<span className="block text-[10px] text-ink-faint">1.0 standard · 1.25 overgrown</span>
+              {/* A value ≠ 1 changes every price — say so instead of adjusting silently. */}
+              {overgrowth !== 1 && <span className="block text-[10px] font-semibold text-accent">×{overgrowth} applied to prices</span>}
+            </span>
             <input type="number" min="0" step="0.05" value={overgrowthRaw} onChange={e => setOvergrowthRaw(e.target.value)}
-              className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none focus:border-accent" />
+              className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink tabular-nums outline-none focus:border-accent" />
           </label>
         </div>
         {totalSqft > 0 ? (
@@ -782,6 +791,8 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
             {tierList.map(t => (
               <button
                 key={t.tier}
+                type="button"
+                aria-pressed={selectedTier === t.tier}
                 onClick={() => setSelectedTier(t.tier)}
                 className={`text-left rounded-xl border px-3 py-2.5 transition-all ${
                   selectedTier === t.tier ? 'border-accent ring-1 ring-accent/40 bg-accent/5'
@@ -789,7 +800,7 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
                 }`}
               >
                 <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1">{t.label}{t.recommended && <span className="text-accent">★</span>}</p>
-                <p className="text-lg font-bold text-ink">${t.amount.toLocaleString()}</p>
+                <p className="text-lg font-bold text-ink tabular-nums">${t.amount.toLocaleString()}</p>
               </button>
             ))}
           </div>
@@ -801,25 +812,36 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
       {/* Pricing recommendation package — cadence prices, season value, verdict.
           "Use X" creates the quote with that structure in one tap. */}
       {totalSqft > 0 && (() => {
-        const basePkg = pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood })
-        const assessment = prospect
-          ? assessProspect(basePkg, prospect, {
+        // ONE composed result (gradedProspectPricing): the assessment is re-run
+        // against the grade-adjusted package, so the hero price, CTA, Pricing
+        // Details and Guidance all display the same recommended value.
+        const graded = prospect
+          ? gradedProspectPricing(totalSqft, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood }, prospect, {
               distanceKm, travelFee: effectiveTravel, neighborhoodName: property.neighborhood,
               estimatedMinutes: estimateVisitMinutes(totalSqft, prospect.observedMinPer1000),
               timedJobs: prospect.timedJobs, crewCostPerHour: crewCost,
             })
           : null
-        // Grade-adjusted recurring pricing (business value, not just size).
-        const pkg = pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood, valueGrade: assessment?.score ?? null })
+        const assessment = graded?.assessment ?? null
+        const pkg = graded?.pkg ?? pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood })
         return (
-          <div className="bg-bg-secondary border border-border rounded-xl px-4 py-3 space-y-3">
+          <div className="bg-bg-secondary border border-border rounded-card px-4 py-3.5 space-y-3 animate-pop">
             <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Pricing recommendation</span>
             {assessment ? (
               // Decision-first: five numbers + take/minimum/avoid up top; the full
               // route/customer/growth/LTV analysis folds under "View full analysis".
-              <DecisionSummary a={assessment} pkg={pkg} onUse={sel => createQuote(sel)} />
+              <DecisionSummary a={assessment} pkg={pkg} onUse={sel => createQuote(sel)} busy={creating} />
             ) : (
-              <PricePackagePanel pkg={pkg} onUse={sel => createQuote(sel)} />
+              <>
+                {/* Route & customer context is still loading — say the verdict is
+                    coming so its upgrade doesn't read as a flicker. */}
+                {prospect == null && (
+                  <p className="text-[11px] text-ink-faint flex items-center gap-1.5 animate-pulse">
+                    <Loader2 className="w-3 h-3 animate-spin" /> Analyzing route fit &amp; customer value…
+                  </p>
+                )}
+                <PricePackagePanel pkg={pkg} onUse={sel => createQuote(sel)} />
+              </>
             )}
           </div>
         )
@@ -827,25 +849,28 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
 
       {/* Travel — distance, route-density discount, toggle */}
       {totalSqft > 0 && (
-        <div className="bg-bg-secondary border border-border rounded-xl px-4 py-3 space-y-3">
+        <div className="bg-bg-secondary border border-border rounded-card px-4 py-3.5 space-y-3 animate-pop">
           <div className="flex items-center justify-between">
             <span className="flex items-center gap-2 text-xs font-semibold text-ink-muted uppercase tracking-wide"><Car className="w-3.5 h-3.5" /> Travel</span>
             <button
               type="button"
+              aria-pressed={includeTravel}
               onClick={() => setIncludeTravel(v => !v)}
               className={`text-xs font-medium px-2.5 py-1 rounded-lg border transition-colors ${includeTravel ? 'border-accent/40 bg-accent/10 text-accent' : 'border-border text-ink-muted'}`}
             >
-              {includeTravel ? 'Charging travel' : 'Travel off'}
+              {includeTravel ? 'Travel fee on' : 'Travel fee off'}
             </button>
           </div>
           <div className="space-y-1 text-sm">
             <div className="flex items-center justify-between text-ink-muted">
               <span>Distance from base</span>
-              <span className="text-ink">{distanceKm != null ? `${distanceKm} km` : '—'}</span>
+              {distanceKm != null
+                ? <span className="text-ink tabular-nums">{distanceKm} km</span>
+                : <span className="inline-block h-3.5 w-12 rounded bg-border/60 animate-pulse" aria-label="Calculating distance" />}
             </div>
             <div className="flex items-center justify-between text-ink-muted">
               <span>Base travel fee</span>
-              <span className="text-ink">{formatCurrency(travelComp.baseFee)}</span>
+              <span className="text-ink tabular-nums">{formatCurrency(travelComp.baseFee)}</span>
             </div>
             {travelComp.discountPct > 0 && includeTravel && (
               <div className="flex items-center justify-between text-emerald-400">
@@ -855,7 +880,7 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
             )}
             <div className="flex items-center justify-between pt-1 border-t border-border">
               <span className="text-ink-muted">Travel applied</span>
-              <span className="font-semibold text-ink">{formatCurrency(effectiveTravel)}</span>
+              <span className="font-semibold text-ink tabular-nums">{formatCurrency(effectiveTravel)}</span>
             </div>
           </div>
         </div>
@@ -863,25 +888,32 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
 
       {/* Fast quote — recommended total + confidence + one click */}
       {totalSqft > 0 && (
-        <div className="bg-bg-secondary border border-accent/30 rounded-xl px-4 py-4 space-y-3">
+        <div className="bg-bg-secondary border border-accent/30 rounded-card px-4 py-3.5 space-y-3 animate-pop">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">{TIER_LABEL(selectedTier)} total</span>
             <span className={`inline-flex items-center gap-1 text-[11px] font-semibold border rounded-full px-2 py-0.5 ${CONFIDENCE_COLORS[confidence]}`}>
               <ShieldCheck className="w-3 h-3" /> {CONFIDENCE_LABELS[confidence]}
             </span>
           </div>
+          {/* The basis behind the confidence pill — an assistant states its evidence. */}
+          <p className="text-[11px] text-ink-faint -mt-1.5">
+            Based on your traced measurement · {nearbyCount} nearby job{nearbyCount !== 1 ? 's' : ''} for comparison
+          </p>
           <div className="space-y-1 text-sm">
-            <div className="flex items-center justify-between"><span className="text-ink-muted">Job price</span><span className="text-ink font-medium">{formatCurrency(chosenJob)}</span></div>
-            <div className="flex items-center justify-between"><span className="text-ink-muted">Travel</span><span className="text-ink font-medium">{formatCurrency(effectiveTravel)}</span></div>
+            <div className="flex items-center justify-between"><span className="text-ink-muted">Job price</span><span className="text-ink font-medium tabular-nums">{formatCurrency(chosenJob)}</span></div>
+            <div className="flex items-center justify-between"><span className="text-ink-muted">Travel</span><span className="text-ink font-medium tabular-nums">{formatCurrency(effectiveTravel)}</span></div>
             <div className="flex items-center justify-between pt-1.5 border-t border-border">
               <span className="text-sm font-semibold text-ink">Recommended total</span>
-              <span className="text-2xl font-bold text-accent">{formatCurrency(chosenTotal)}</span>
+              <span className="text-2xl font-bold text-accent tabular-nums transition-colors">{formatCurrency(chosenTotal)}</span>
             </div>
           </div>
           {/* "one-time" in the label — the recommendation card's "Use <plan>" button
               above creates a RECURRING quote; without the word the two big
-              create-quote actions read as duplicates with different prices. */}
-          <Button onClick={() => createQuote()} loading={creating} size="lg" className="w-full">
+              create-quote actions read as duplicates with different prices.
+              When the graded verdict CTA (DecisionSummary, rendered when `prospect`
+              is loaded) is on screen above, THAT is the primary — this steps down
+              to secondary so the view has one hero action. */}
+          <Button variant={prospect ? 'secondary' : 'primary'} onClick={() => createQuote()} loading={creating} size="lg" className="w-full">
             <FileText className="w-4 h-4" /> Create one-time quote — {formatCurrency(chosenTotal)}
           </Button>
           <div className="flex items-center justify-center gap-3">
@@ -897,25 +929,24 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
       {/* Measurement-focused actions (standalone Measurements page). Saving keeps
           the boundary permanently; a quote is one tap away when ready to price. */}
       {!showPricing && totalSqft > 0 && (
-        <div className="bg-bg-secondary border border-accent/30 rounded-xl px-4 py-4 space-y-3">
+        <div className="bg-bg-secondary border border-accent/30 rounded-card px-4 py-3.5 space-y-3 animate-pop">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Measured area</span>
-            <span className="text-2xl font-bold text-accent">{totalSqft.toLocaleString()} ft²</span>
+            <span className="text-2xl font-bold text-accent tabular-nums">{totalSqft.toLocaleString()} ft²</span>
           </div>
           <Button onClick={save} loading={saving} size="lg" className="w-full">
             <Check className="w-4 h-4" /> Save measurement
           </Button>
-          <button type="button" onClick={() => createQuote()} disabled={creating}
-            className="w-full text-center text-sm font-medium text-accent hover:underline disabled:opacity-50">
-            Create a quote from this measurement →
-          </button>
+          <Button variant="ghost" onClick={() => createQuote()} loading={creating} className="w-full">
+            Create a quote from this measurement
+          </Button>
           {savedSqft != null && <p className="text-center text-xs text-ink-faint">Saved: {savedSqft.toLocaleString()} sq ft</p>}
         </div>
       )}
 
       {/* Measurement history (versioned, never overwritten) */}
       {history.length > 0 && (
-        <div className="bg-bg-secondary border border-border rounded-xl px-4 py-3 space-y-2">
+        <div className="bg-bg-secondary border border-border rounded-card px-4 py-3.5 space-y-2">
           <div className="flex items-center gap-2">
             <History className="w-4 h-4 text-ink-muted" />
             <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Measurement history</span>

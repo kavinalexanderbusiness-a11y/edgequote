@@ -2,13 +2,16 @@
 
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { toast } from '@/lib/toast'
 import { useBusinessData } from '@/hooks/useBusinessData'
 import type { BusinessSettingsFormValues, TravelFeeTier } from '@/types'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
+import { Select } from '@/components/ui/Select'
 import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
+import { Skeleton } from '@/components/ui/Skeleton'
 import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { CommunicationsTest } from '@/components/settings/CommunicationsTest'
 import { MessageTemplateEditor } from '@/components/settings/MessageTemplateEditor'
@@ -17,11 +20,12 @@ import { AutomationToggles } from '@/components/settings/AutomationToggles'
 import { PushNotificationSettings } from '@/components/settings/PushNotificationSettings'
 import { WebsiteIntegration } from '@/components/settings/WebsiteIntegration'
 import { Tabs, type TabItem } from '@/components/ui/Tabs'
+import { SkeletonRows } from '@/components/ui/Skeleton'
 import { useForm, Controller } from 'react-hook-form'
 import { cn } from '@/lib/utils'
 import { ThemePref, getThemePref, applyThemePref } from '@/lib/theme'
 import { ServiceSeasons, ServiceSeason, DEFAULT_SEASONS, settingsToSeasons, seasonLabel } from '@/lib/seasons'
-import { Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard, Building2, DollarSign, MessageSquare, Bell, Link as LinkIcon, Zap } from 'lucide-react'
+import { Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard, Building2, DollarSign, MessageSquare, Bell, Link as LinkIcon, Zap, RotateCcw, Image as ImageIcon, Palette, Clock, MapPin } from 'lucide-react'
 
 const SETTINGS_TABS: TabItem[] = [
   { key: 'business', label: 'Business', icon: Building2 },
@@ -57,6 +61,18 @@ export default function SettingsPage() {
   const [seasons, setSeasons] = useState<ServiceSeasons>(DEFAULT_SEASONS)
   const [tab, setTab] = useState<SettingsTab>('business')
 
+  // Restore the active tab from the URL hash so a refresh (or a shared link like
+  // /dashboard/settings#messaging) lands on the named section instead of always
+  // resetting to Business; replaceState keeps the back button clean.
+  useEffect(() => {
+    const h = window.location.hash.slice(1)
+    if (SETTINGS_TABS.some(t => t.key === h)) setTab(h as SettingsTab)
+  }, [])
+  function pickTab(k: SettingsTab) {
+    setTab(k)
+    try { history.replaceState(null, '', `#${k}`) } catch { /* ignore */ }
+  }
+
   useEffect(() => { setThemePref(getThemePref()) }, [])
   function pickTheme(p: ThemePref) { setThemePref(p); applyThemePref(p) }
 
@@ -68,7 +84,7 @@ export default function SettingsPage() {
     try { window.localStorage.setItem('eq-logo', JSON.stringify({ url: logoUrl, scale: v })) } catch { /* ignore */ }
   }
 
-  const { register, handleSubmit, reset, control, formState: { isSubmitting } } =
+  const { register, handleSubmit, reset, control, formState: { isSubmitting, isDirty } } =
     useForm<BusinessSettingsFormValues>()
 
   useEffect(() => {
@@ -187,22 +203,38 @@ export default function SettingsPage() {
     if (data) setLocalTiers(prev => [...prev, data])
   }
 
-  async function saveTier(idx: number) {
-    const t = localTiers[idx]
-    if (!t.id) return
-    await supabase.from('travel_fee_tiers')
-      .update({ min_km: t.min_km, max_km: t.max_km, fee: t.fee, is_custom: t.fee === null })
-      .eq('id', t.id)
-    refresh()
-  }
+  // Per-row saving was removed from the UI — the sticky "Save settings" footer
+  // (onSubmit) persists every edited tier row alongside the rest of the form.
 
+  // Remove-with-undo (the shared pattern): act immediately, offer a few seconds
+  // to restore the exact row — never a silent, irreversible delete.
   async function deleteTier(idx: number) {
     const t = localTiers[idx]
-    if (t.id) await supabase.from('travel_fee_tiers').delete().eq('id', t.id)
+    if (t.id) {
+      const { error } = await supabase.from('travel_fee_tiers').delete().eq('id', t.id)
+      if (error) { toast.error('Could not remove the fee tier: ' + error.message); return }
+    }
     setLocalTiers(prev => prev.filter((_, i) => i !== idx))
+    toast.undo('Travel fee tier removed', async () => {
+      if (t.id) await supabase.from('travel_fee_tiers').insert(t)
+      setLocalTiers(prev => [...prev.slice(0, idx), t, ...prev.slice(idx)])
+    })
   }
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Loading settings...</div>
+  if (loading) return (
+    <div className="max-w-3xl space-y-6">
+      <PageHeader title="Business Settings" description="Business info, pricing, scheduling, messaging, notifications and booking." />
+      <Skeleton className="h-9 w-full max-w-md" />
+      {[0, 1].map(i => (
+        <div key={i} className="rounded-card border border-border bg-surface p-6 space-y-4">
+          <Skeleton className="h-4 w-36" />
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-10 w-2/3" />
+        </div>
+      ))}
+    </div>
+  )
 
   // Tabs that contain react-hook-form fields. The <form> stays mounted across
   // these so values are never lost on tab switch; the Save footer shows on any
@@ -211,17 +243,22 @@ export default function SettingsPage() {
   const showSave = formTabs.includes(tab)
 
   return (
-    <div className="max-w-3xl space-y-6">
-      <PageHeader title="Business Settings" description="Company info, branding, pricing, and travel fees" />
+    // flex-col + order utilities put Company Information first on the Business
+    // tab (it's what people come here to check) while the react-hook-form keeps
+    // its single mounted <form> — no field ever registers twice.
+    <div className="max-w-3xl mx-auto flex flex-col gap-6">
+      <PageHeader title="Business Settings" description="Business info, pricing, scheduling, messaging, notifications and booking." />
 
       <div className="sticky top-0 z-10 -mx-1 px-1 py-2 bg-bg/90 backdrop-blur">
-        <Tabs tabs={SETTINGS_TABS} active={tab} onChange={(k) => setTab(k as SettingsTab)} />
+        <Tabs tabs={SETTINGS_TABS} active={tab} onChange={(k) => pickTab(k as SettingsTab)} />
       </div>
 
-      {/* BUSINESS */}
-      <div className={cn('space-y-6', tab !== 'business' && 'hidden')}>
+      {/* BUSINESS — non-form cards (Branding, Appearance). Rendered after the
+          form in the DOM so Company Information leads the Business tab — it's
+          what people come here to check; branding follows below. */}
+      <div className={cn('order-2 space-y-6', tab !== 'business' && 'hidden')}>
       <Card>
-        <CardHeader><h2 className="text-sm font-semibold text-ink">Branding</h2></CardHeader>
+        <CardHeader><h2 className="text-sm font-semibold text-ink flex items-center gap-2"><ImageIcon className="w-4 h-4 text-accent" /> Branding</h2></CardHeader>
         <CardBody className="space-y-5">
           <div className="flex items-center gap-5 flex-wrap">
             <div className="w-32 h-32 rounded-xl border border-border-strong bg-black flex items-center justify-center overflow-hidden shrink-0">
@@ -234,10 +271,10 @@ export default function SettingsPage() {
               )}
             </div>
             <div>
-              <label className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-surface border border-border-strong text-sm text-ink cursor-pointer hover:bg-surface-raised transition-colors">
+              <label className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-surface border border-border-strong text-sm text-ink cursor-pointer hover:bg-surface-raised transition-colors focus-within:ring-2 focus-within:ring-accent/50">
                 <Upload className="w-4 h-4" />
-                {uploading ? 'Uploading...' : 'Upload Logo'}
-                <input type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} disabled={uploading} />
+                {uploading ? 'Uploading...' : 'Upload logo'}
+                <input type="file" accept="image/*" className="sr-only" onChange={handleLogoUpload} disabled={uploading} />
               </label>
               <p className="text-xs text-ink-faint mt-2 max-w-xs">
                 Upload your company logo. Used in the sidebar, on the login screen and on PDF quotes &amp; invoices.
@@ -251,13 +288,14 @@ export default function SettingsPage() {
               <div className="flex items-center gap-2 flex-wrap">
                 {([['Small', 75], ['Medium', 100], ['Large', 150]] as const).map(([label, v]) => (
                   <button key={label} type="button" onClick={() => persistLogoScale(v)}
-                    className={cn('px-3.5 py-2 rounded-lg text-xs font-medium border transition-colors',
+                    className={cn('px-3.5 py-2 rounded-lg text-xs font-medium border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
                       logoScale === v ? 'bg-accent text-black border-accent' : 'bg-surface border-border-strong text-ink-muted hover:text-ink')}>
                     {label}
                   </button>
                 ))}
                 <div className="flex items-center gap-2 flex-1 min-w-[180px]">
                   <input type="range" min={50} max={200} step={5} value={logoScale}
+                    aria-label="Logo size percent" aria-valuetext={`${logoScale}%`}
                     onChange={e => setLogoScale(Number(e.target.value))}
                     onPointerUp={e => persistLogoScale(Number((e.target as HTMLInputElement).value))}
                     className="flex-1 accent-[rgb(var(--c-accent))]" />
@@ -272,7 +310,7 @@ export default function SettingsPage() {
       <Card>
         <CardHeader>
           <div>
-            <h2 className="text-sm font-semibold text-ink">Appearance</h2>
+            <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Palette className="w-4 h-4 text-accent" /> Appearance</h2>
             <p className="text-xs text-ink-faint mt-0.5">Applies across the whole app and is remembered on this device.</p>
           </div>
         </CardHeader>
@@ -284,9 +322,9 @@ export default function SettingsPage() {
               { p: 'system' as ThemePref, label: 'System', Icon: Monitor },
             ]).map(({ p, label, Icon }) => (
               <button key={p} type="button" onClick={() => pickTheme(p)}
-                className={cn('h-16 rounded-xl border text-sm font-medium flex flex-col items-center justify-center gap-1.5 transition-colors',
-                  themePref === p ? 'border-accent bg-accent/10 text-ink' : 'border-border-strong bg-surface text-ink-muted hover:text-ink')}>
-                <Icon className={cn('w-4 h-4', themePref === p && 'text-accent')} />
+                className={cn('h-16 rounded-xl border text-sm font-medium flex flex-col items-center justify-center gap-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                  themePref === p ? 'bg-accent text-black border-accent' : 'border-border-strong bg-surface text-ink-muted hover:text-ink')}>
+                <Icon className="w-4 h-4" />
                 {label}
               </button>
             ))}
@@ -298,10 +336,11 @@ export default function SettingsPage() {
 
       {/* The form stays mounted across the Business / Pricing / Scheduling tabs
           so react-hook-form never loses values when switching tabs. Each card
-          group is shown/hidden by tab; the Save footer submits every field. */}
-      <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+          group is shown/hidden by tab; the Save footer (last element of the
+          page, submits via form=) saves every field. */}
+      <form id="settings-form" onSubmit={handleSubmit(onSubmit)} className="order-1 space-y-6">
         <Card className={cn(tab !== 'business' && 'hidden')}>
-          <CardHeader><h2 className="text-sm font-semibold text-ink">Company Information</h2></CardHeader>
+          <CardHeader><h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Building2 className="w-4 h-4 text-accent" /> Company Information</h2></CardHeader>
           <CardBody className="space-y-4">
             <Input label="Company Name" {...register('company_name')} />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -348,16 +387,14 @@ export default function SettingsPage() {
             </div>
           </CardHeader>
           <CardBody className="space-y-4">
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Fee recovery strategy</label>
-              <select {...register('payment_fee_strategy')}
-                className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all">
-                <option value="global_price_increase">Global price increase (recommended)</option>
-                <option value="absorb">Absorb the fee (no change)</option>
-                <option value="etransfer_discount" disabled>E-transfer discount (coming soon)</option>
-              </select>
-              <p className="text-xs text-ink-faint">“Global price increase” adds the % below to every NEW quote so card fees are covered. Existing quotes are never changed.</p>
-            </div>
+            <Select label="Fee recovery strategy"
+              hint="“Global price increase” adds the % below to every NEW quote so card fees are covered. Existing quotes are never changed."
+              options={[
+                { value: 'global_price_increase', label: 'Global price increase (recommended)' },
+                { value: 'absorb', label: 'Absorb the fee (no change)' },
+                { value: 'etransfer_discount', label: 'E-transfer discount (coming soon)', disabled: true },
+              ]}
+              {...register('payment_fee_strategy')} />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input label="Fee recovery %" type="number" step="0.5" min="0" max="10"
                 hint="Baked into new quote prices. ~3% covers Stripe's ~2.9% + 30¢."
@@ -365,10 +402,10 @@ export default function SettingsPage() {
               <Input label="GST % (if registered)" type="number" step="0.5" min="0" max="15"
                 hint="Alberta GST is 5%. Leave 0 if you're not GST-registered — no GST line will be shown."
                 {...register('gst_percent')} />
+              <Input label="E-transfer email" type="email" placeholder="pay@yourbusiness.com"
+                hint="The email registered with your bank for Interac e-transfers (often your business email). Shown to customers in the portal's Ways to Pay."
+                {...register('etransfer_email')} />
             </div>
-            <Input label="E-transfer email" type="email" placeholder="pay@yourbusiness.com"
-              hint="The email registered with your bank for Interac e-transfers (often your business email). Shown to customers in the portal's Ways to pay."
-              {...register('etransfer_email')} />
 
             {/* ── Recurring AutoPay ── */}
             <div className="pt-4 mt-2 border-t border-border">
@@ -376,12 +413,12 @@ export default function SettingsPage() {
               <p className="text-xs text-ink-faint mt-0.5 mb-3">For customers with a saved card and AutoPay enabled. A customer can override the timing on their profile.</p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">When to charge</label>
-                  <select {...register('autopay_charge_mode')}
-                    className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all">
-                    <option value="auto">Charge automatically on completion</option>
-                    <option value="manual_review">Hold for my review, then charge</option>
-                  </select>
+                  <Select label="When to charge"
+                    options={[
+                      { value: 'auto', label: 'Charge automatically on completion' },
+                      { value: 'manual_review', label: 'Hold for my review, then charge' },
+                    ]}
+                    {...register('autopay_charge_mode')} />
                   <p className="text-xs text-ink-faint">“Automatically” charges the saved card the moment a recurring visit is completed.</p>
                 </div>
                 <Input label="Review threshold %" type="number" step="5" min="0" max="200"
@@ -395,7 +432,7 @@ export default function SettingsPage() {
         <Card className={cn(tab !== 'scheduling' && 'hidden')}>
           <CardHeader>
             <div>
-              <h2 className="text-sm font-semibold text-ink">Work Schedule</h2>
+              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Clock className="w-4 h-4 text-accent" /> Work Schedule</h2>
               <p className="text-xs text-ink-faint mt-0.5">Drives the weekly scheduler, per-stop arrival times and the day-load signal.</p>
             </div>
           </CardHeader>
@@ -408,7 +445,7 @@ export default function SettingsPage() {
                   return (
                     <button key={w.i} type="button" onClick={() => toggleDay(w.i)}
                       className={cn(
-                        'px-3.5 py-2 rounded-xl text-sm font-medium border transition-colors flex items-center gap-1.5',
+                        'px-3.5 py-2 rounded-xl text-sm font-medium border transition-colors flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
                         on ? 'bg-accent text-black border-accent' : 'bg-surface border-border-strong text-ink-muted hover:text-ink'
                       )}>
                       <span className={cn('w-3.5 h-3.5 rounded border flex items-center justify-center', on ? 'border-black/40 bg-black/10' : 'border-border-strong')}>
@@ -421,18 +458,10 @@ export default function SettingsPage() {
               </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Work day start time</label>
-                <input type="time" value={workStart} onChange={e => setWorkStart(e.target.value)}
-                  className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" />
-                <p className="text-xs text-ink-faint">Arrival times for each stop and the estimated finish are computed from this.</p>
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Daily capacity (hours)</label>
-                <input type="number" min="1" max="16" step="0.5" value={capacityHours} onChange={e => setCapacityHours(e.target.value)}
-                  className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" />
-                <p className="text-xs text-ink-faint">Days past this show as overloaded; days with an hour+ spare show room for more jobs.</p>
-              </div>
+              <Input label="Work day start time" type="time" value={workStart} onChange={e => setWorkStart(e.target.value)}
+                hint="Arrival times for each stop and the estimated finish are computed from this." />
+              <Input label="Daily capacity (hours)" type="number" min="1" max="16" step="0.5" value={capacityHours} onChange={e => setCapacityHours(e.target.value)}
+                hint="Days past this show as overloaded; days with an hour+ spare show room for more jobs." />
             </div>
           </CardBody>
         </Card>
@@ -460,14 +489,15 @@ export default function SettingsPage() {
               onChange={s => setSeasons(prev => ({ ...prev, snow: s }))}
             />
             <button type="button" onClick={() => setSeasons(DEFAULT_SEASONS)}
-              className="text-xs text-accent hover:underline">Reset to Calgary defaults (Apr 15 → Oct 31 · Nov 1 → Mar 31)</button>
+              className="inline-flex items-center gap-1.5 text-xs text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded">
+              <RotateCcw className="w-3 h-3" /> Reset to Calgary defaults (Apr 15 → Oct 31 · Nov 1 → Mar 31)</button>
           </CardBody>
         </Card>
 
         <Card className={cn(tab !== 'pricing' && 'hidden')}>
           <CardHeader>
             <div>
-              <h2 className="text-sm font-semibold text-ink">Lawn Pricing</h2>
+              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><DollarSign className="w-4 h-4 text-accent" /> Lawn Pricing</h2>
               <p className="text-xs text-ink-faint mt-0.5">Drives suggested measurement prices. Recommended = base price × multiplier.</p>
             </div>
           </CardHeader>
@@ -497,66 +527,69 @@ export default function SettingsPage() {
           </CardBody>
         </Card>
 
-        {/* Persistent Save footer — visible on any form-bearing tab, submits
-            every field (Company Info, Payment & Fees, Work Schedule, Service
-            Seasons, Lawn Pricing) regardless of which tab is active. */}
-        {showSave && (
-          <div className="sticky bottom-0 z-10 -mx-1 px-1">
-            <div className="rounded-card border border-border bg-surface/95 backdrop-blur px-6 py-4 flex items-center justify-end gap-3">
-              <span className="text-xs text-ink-faint mr-auto">Saves all business, pricing &amp; scheduling settings.</span>
-              <Button type="submit" loading={isSubmitting}>
-                {saved ? <><Check className="w-4 h-4" /> Saved</> : 'Save Settings'}
-              </Button>
-            </div>
-          </div>
-        )}
       </form>
 
       {/* PRICING — standalone (not part of the react-hook-form) */}
-      <Card className={cn(tab !== 'pricing' && 'hidden')}>
+      <Card className={cn('order-3', tab !== 'pricing' && 'hidden')}>
         <CardHeader className="flex items-center justify-between">
           <div>
-            <h2 className="text-sm font-semibold text-ink">Travel Fee Tiers</h2>
+            <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><MapPin className="w-4 h-4 text-accent" /> Travel Fee Tiers</h2>
             <p className="text-xs text-ink-faint mt-0.5">Fully configurable. Leave fee blank for &quot;custom quote&quot;.</p>
           </div>
-          <Button variant="secondary" size="sm" onClick={addTier}><Plus className="w-3.5 h-3.5" /> Add Tier</Button>
+          <Button variant="secondary" size="sm" onClick={addTier}><Plus className="w-3.5 h-3.5" /> Add tier</Button>
         </CardHeader>
         <CardBody className="space-y-3">
-          <div className="grid grid-cols-[1fr_1fr_1fr_auto_auto] gap-3 text-xs font-semibold text-ink-faint uppercase tracking-wide px-1">
-            <span>Min km</span><span>Max km</span><span>Fee ($)</span><span /><span />
+          <div className="grid grid-cols-[1fr_1fr_1fr_auto] gap-3 text-xs font-semibold text-ink-faint uppercase tracking-wide px-1">
+            <span>Min km</span><span>Max km</span><span>Fee ($)</span><span />
           </div>
           {localTiers.map((t, i) => (
-            <div key={t.id || i} className="grid grid-cols-[1fr_1fr_1fr_auto_auto] gap-3 items-center">
-              <input type="number" value={t.min_km ?? ''} onChange={e => updateTier(i, 'min_km', e.target.value)}
-                className="bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent" />
-              <input type="number" value={t.max_km ?? ''} placeholder="inf" onChange={e => updateTier(i, 'max_km', e.target.value)}
-                className="bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent" />
-              <input type="number" value={t.fee ?? ''} placeholder="custom" onChange={e => updateTier(i, 'fee', e.target.value)}
-                className="bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent" />
-              <Button variant="ghost" size="sm" onClick={() => saveTier(i)} title="Save"><Check className="w-4 h-4" /></Button>
-              <Button variant="ghost" size="sm" onClick={() => deleteTier(i)} className="hover:text-red-400" title="Delete"><Trash2 className="w-4 h-4" /></Button>
+            <div key={t.id || i} className="grid grid-cols-[1fr_1fr_1fr_auto] gap-3 items-center">
+              <Input fieldSize="sm" type="number" value={t.min_km ?? ''} onChange={e => updateTier(i, 'min_km', e.target.value)} />
+              <Input fieldSize="sm" type="number" value={t.max_km ?? ''} placeholder="inf" onChange={e => updateTier(i, 'max_km', e.target.value)} />
+              <Input fieldSize="sm" type="number" value={t.fee ?? ''} placeholder="custom" onChange={e => updateTier(i, 'fee', e.target.value)} />
+              <Button variant="ghost" size="sm" onClick={() => deleteTier(i)} className="text-red-400/70 hover:text-red-400" title="Delete" aria-label="Delete tier"><Trash2 className="w-4 h-4" /></Button>
             </div>
           ))}
         </CardBody>
       </Card>
 
-      {/* MESSAGING */}
-      <div className={cn('space-y-6', tab !== 'messaging' && 'hidden')}>
+      {/* MESSAGING — templates second (the most-edited card); cost/usage below. */}
+      <div className={cn('order-3 space-y-6', tab !== 'messaging' && 'hidden')}>
         <AutomationToggles />
-        <MessagingUsage />
         <MessageTemplateEditor />
+        <MessagingUsage />
         <CommunicationsTest />
       </div>
 
       {/* NOTIFICATIONS */}
-      <div className={cn('space-y-6', tab !== 'notifications' && 'hidden')}>
+      <div className={cn('order-3 space-y-6', tab !== 'notifications' && 'hidden')}>
         <PushNotificationSettings />
       </div>
 
       {/* BOOKING */}
-      <div className={cn('space-y-6', tab !== 'booking' && 'hidden')}>
+      <div className={cn('order-3 space-y-6', tab !== 'booking' && 'hidden')}>
         <WebsiteIntegration />
       </div>
+
+      {/* Persistent Save footer — LAST element of the page (after Travel Fee
+          Tiers too, which onSubmit also saves), so "saves everything" reads
+          true and the bar stays pinned to the viewport bottom on every
+          form-bearing tab. Submits the mounted form via form=. */}
+      {showSave && (
+        <div className="order-4 sticky bottom-0 z-10 -mx-1 px-1">
+          <div className={cn('rounded-card border bg-surface/95 backdrop-blur px-6 py-4 flex items-center justify-end gap-3 transition-colors',
+            isDirty ? 'border-accent/40' : 'border-border')}>
+            <span className="text-xs mr-auto text-ink-faint">
+              {isDirty ? 'You have unsaved changes.' : 'Saves all business, pricing & scheduling settings.'}
+            </span>
+            <Button type="submit" form="settings-form" loading={isSubmitting} className={cn(isDirty && 'pill-glow')}>
+              {saved ? <><Check className="w-4 h-4" /> Saved</> : isDirty ? 'Save changes' : 'Save settings'}
+            </Button>
+            {/* Success is otherwise visual-only (the button label swaps for 2s). */}
+            <span role="status" aria-live="polite" className="sr-only">{saved ? 'Settings saved.' : ''}</span>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -569,18 +602,18 @@ function SeasonEditor({ icon, title, hint, season, onChange }: {
 }) {
   const set = (patch: Partial<ServiceSeason>) => onChange({ ...season, ...patch })
   const dayField = (val: number, key: 'startDay' | 'endDay') => (
-    <input type="number" min={1} max={31} value={val}
+    <input type="number" min={1} max={31} value={val} aria-label={key === 'startDay' ? 'Start day' : 'End day'}
       onChange={e => set({ [key]: Math.min(31, Math.max(1, Number(e.target.value) || 1)) })}
-      className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2 text-sm text-ink outline-none focus:border-accent" />
+      className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
   )
   const monthField = (val: number, key: 'startMonth' | 'endMonth') => (
-    <select value={val} onChange={e => set({ [key]: Number(e.target.value) })}
-      className="bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2 text-sm text-ink outline-none focus:border-accent">
+    <select value={val} onChange={e => set({ [key]: Number(e.target.value) })} aria-label={key === 'startMonth' ? 'Start month' : 'End month'}
+      className="bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20">
       {MONTH_OPTS.map(o => <option key={o.value} value={o.value} className="bg-bg-secondary">{o.label}</option>)}
     </select>
   )
   return (
-    <div className="rounded-xl border border-border p-3">
+    <div className="rounded-card border border-border p-3">
       <div className="flex items-center gap-2 mb-1">
         {icon}
         <span className="text-sm font-semibold text-ink">{title}</span>

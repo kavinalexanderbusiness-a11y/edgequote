@@ -6,6 +6,7 @@ import { loadBusinessIntelligence, BIReport, NamedValue } from '@/lib/businessIn
 import { loadLaborInsights, LaborInsights, ServiceAccuracy, ServiceProfit } from '@/lib/labor'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Skeleton, SkeletonTiles } from '@/components/ui/Skeleton'
+import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { StatTile } from '@/components/ui/StatTile'
 import { Collapsible } from '@/components/ui/Collapsible'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
@@ -35,8 +36,8 @@ export default function IntelligencePage() {
 
   if (loading && !bi) {
     return (
-      <div className="max-w-6xl space-y-6">
-        <PageHeader title="Business Intelligence" description="How your business is performing — and where to focus next." />
+      <div className="max-w-6xl mx-auto space-y-6">
+        <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Business Intelligence" description="How your business is performing — and where to focus next." />
         <SkeletonTiles count={4} />
         <Skeleton className="h-32 w-full rounded-card" />
         <div className="grid md:grid-cols-3 gap-3">{[0, 1, 2].map(i => <Skeleton key={i} className="h-40 rounded-card" />)}</div>
@@ -47,8 +48,8 @@ export default function IntelligencePage() {
   if (!bi) return null
 
   return (
-    <div className="max-w-6xl space-y-6">
-      <PageHeader title="Business Intelligence" description={`How your business is performing — and where to focus. As of ${bi.generatedFor}.`} />
+    <div className="max-w-6xl mx-auto space-y-6">
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Business Intelligence" description={`How your business is performing — and where to focus. As of ${bi.generatedFor}.`} />
 
       {/* ── FINANCIAL ── */}
       <Section title="Financial" icon={DollarSign}>
@@ -113,7 +114,15 @@ export default function IntelligencePage() {
               engines' numbers could disagree, so only the learned one is shown). */}
           <Stat label="Capacity used (4 wk)" value={bi.operations.capacityUtilizationPct != null ? `${bi.operations.capacityUtilizationPct}%` : '—'} sub="of workday capacity" />
           <Stat label="Booked next 2 wk" value={bi.operations.bookedUtilizationPct != null ? `${bi.operations.bookedUtilizationPct}%` : '—'} sub="of capacity" />
-          <Stat label="Avg route density" value={`${bi.operations.avgRouteDensity}/100`} sub="how clustered you are" />
+          <Stat label="Avg route density" value={String(bi.operations.avgRouteDensity)}
+            sub={
+              <span className="flex items-center gap-1.5">
+                <span className="w-10 h-1 rounded-full bg-bg-tertiary overflow-hidden shrink-0">
+                  <span className="block h-full rounded-full bg-accent/80" style={{ width: `${Math.min(100, Math.max(0, bi.operations.avgRouteDensity))}%` }} />
+                </span>
+                how clustered you are
+              </span>
+            } />
         </div>
       </Section>
 
@@ -148,9 +157,9 @@ export default function IntelligencePage() {
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                   {labor.crewTrends.map(t => (
                     <div key={t.crewSize} className="rounded-lg border border-border bg-bg-tertiary px-3 py-2">
-                      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{t.crewSize}-person crew</p>
-                      <p className="text-base font-bold text-ink">{t.effectiveWorkers}× <span className="text-[11px] font-normal text-ink-muted">effective</span></p>
-                      <p className="text-[10px] text-ink-faint">{t.manMinPer1000} man-min / 1,000 ft²</p>
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">{t.crewSize}-person crew</p>
+                      <p className="text-base font-bold text-ink tabular-nums">{t.effectiveWorkers}× <span className="text-[11px] font-normal text-ink-muted">effective</span></p>
+                      <p className="text-[10px] text-ink-faint tabular-nums">{t.manMinPer1000} man-min / 1,000 ft²</p>
                     </div>
                   ))}
                 </div>
@@ -164,7 +173,7 @@ export default function IntelligencePage() {
                     {labor.bestProperties.map(p => (
                       <li key={p.propertyId} className="flex items-center justify-between gap-2 text-sm">
                         <span className="text-ink truncate">{p.name}</span>
-                        <span className="shrink-0 font-semibold text-emerald-400">{p.accuracyPct}% <span className="text-[11px] text-ink-faint font-normal">· {p.n}</span></span>
+                        <span className="shrink-0 font-semibold text-emerald-400 tabular-nums">{p.accuracyPct}% <span className="text-[11px] text-ink-faint font-normal">· {p.n}</span></span>
                       </li>
                     ))}
                   </ul>
@@ -176,7 +185,7 @@ export default function IntelligencePage() {
                     {labor.worstMisses.map((m, i) => (
                       <li key={i} className="flex items-center justify-between gap-2 text-sm">
                         <span className="text-ink truncate">{m.propertyName} <span className="text-ink-faint text-[11px]">· {m.combo}</span></span>
-                        <span className="shrink-0 text-ink-muted text-xs">est {m.estimated} → <span className="font-semibold text-red-400">{m.actual}</span> ({m.errorPct}%)</span>
+                        <span className="shrink-0 text-ink-muted text-xs tabular-nums">est {m.estimated} → <span className="font-semibold text-red-400">{m.actual}</span> ({m.errorPct}%)</span>
                       </li>
                     ))}
                   </ul>
@@ -185,10 +194,9 @@ export default function IntelligencePage() {
             </div>
           </div>
         ) : (
-          <div className="rounded-card border border-border bg-bg-secondary p-6 text-center">
-            <Gauge className="w-8 h-8 text-ink-faint mx-auto mb-2" />
-            <p className="text-sm font-medium text-ink">No timed jobs yet</p>
-            <p className="text-xs text-ink-muted mt-1">Start and complete jobs in Day Ops (check-in / check-out) and the model learns automatically. The Smart Estimate falls back to lawn size until then.</p>
+          <div className="rounded-card border border-border bg-bg-secondary">
+            <EmptyState icon={Gauge} className="py-10" title="No timed jobs yet"
+              description="Start and complete jobs in Day Ops (check-in / check-out) and the model learns automatically. The Smart Estimate falls back to lawn size until then." />
           </div>
         )}
       </Collapsible>
@@ -209,8 +217,14 @@ function cap(s: string) { return s.replace(/_/g, ' ').replace(/^\w/, c => c.toUp
 
 function Section({ title, icon: Icon, children }: { title: string; icon: typeof DollarSign; children: React.ReactNode }) {
   return (
-    <div className="space-y-3">
-      <p className="text-sm font-bold text-ink flex items-center gap-2"><Icon className="w-4 h-4 text-accent" /> {title}</p>
+    <div className="space-y-3 animate-rise">
+      <div className="flex items-center gap-2.5">
+        <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
+          <Icon className="w-3.5 h-3.5 text-accent" />
+        </span>
+        <p className="text-sm font-semibold tracking-tight text-ink">{title}</p>
+        <span className="flex-1 h-px bg-border" aria-hidden />
+      </div>
       {children}
     </div>
   )
@@ -219,31 +233,34 @@ function Section({ title, icon: Icon, children }: { title: string; icon: typeof 
 // Thin adapter over the ONE shared KPI tile — the delta (▲/▼ vs last period)
 // renders as the tile's `sub` node, so the change is highlighted right under
 // the number without a second tile style existing anywhere.
-function Stat({ label, value, sub, delta, deltaLabel, accent }: { label: string; value: string; sub?: string; delta?: number | null; deltaLabel?: string; accent?: boolean }) {
+function Stat({ label, value, sub, delta, deltaLabel, accent }: { label: string; value: string; sub?: React.ReactNode; delta?: number | null; deltaLabel?: string; accent?: boolean }) {
   const deltaNode = delta != null ? (
-    <span className={cn('font-semibold inline-flex items-center gap-1', delta >= 0 ? 'text-emerald-400' : 'text-red-400')}>
+    <span className={cn('font-semibold inline-flex items-center gap-1 tabular-nums', delta >= 0 ? 'text-emerald-400' : 'text-red-400')}>
       {delta >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
       {delta > 0 ? '+' : ''}{delta}% {deltaLabel && <span className="text-ink-faint font-normal">{deltaLabel}</span>}
     </span>
   ) : null
-  return <StatTile label={label} value={value} accent={accent} sub={deltaNode ?? sub} />
+  return <StatTile label={label} value={<span className="tabular-nums">{value}</span>} accent={accent} sub={deltaNode ?? sub} />
 }
 
 function RankList({ title, items, fmt, subFmt }: { title: string; items: NamedValue[]; fmt: (v: number) => string; subFmt?: (v: number) => string }) {
   return (
-    <div className="rounded-card border border-border bg-bg-secondary p-3.5">
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-2">{title}</p>
+    <div className="rounded-card border border-border bg-bg-secondary p-4">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint mb-2.5">{title}</p>
       {items.length === 0 ? (
-        <p className="text-xs text-ink-faint py-3 text-center">Not enough data yet</p>
+        <InlineEmpty className="py-3">Not enough data yet — this fills in as jobs complete.</InlineEmpty>
       ) : (
-        <ul className="space-y-1.5">
+        <ul className="space-y-2">
           {items.map((it, i) => (
             <li key={i} className="flex items-center justify-between gap-2 text-sm">
-              <span className="text-ink truncate flex items-center gap-1.5">
-                <span className="text-[10px] text-ink-faint w-3 shrink-0">{i + 1}</span>
-                <span className="truncate">{it.name}</span>
+              <span className="text-ink truncate flex items-center gap-2">
+                <span className={cn(
+                  'w-4 h-4 rounded text-[10px] font-bold flex items-center justify-center shrink-0 tabular-nums',
+                  i === 0 ? 'bg-accent/15 text-accent' : 'bg-bg-tertiary text-ink-faint'
+                )}>{i + 1}</span>
+                <span className={cn('truncate', i === 0 && 'font-medium')}>{it.name}</span>
               </span>
-              <span className="shrink-0 font-semibold text-ink">
+              <span className="shrink-0 font-semibold text-ink tabular-nums">
                 {fmt(it.value)}
                 {subFmt && it.sub != null && <span className="text-[11px] text-ink-faint font-normal ml-1.5">{subFmt(it.sub)}</span>}
               </span>
@@ -258,17 +275,36 @@ function RankList({ title, items, fmt, subFmt }: { title: string; items: NamedVa
 function TrendBars({ trend, label = 'Revenue / month', integer = false }: { trend: { month: string; revenue: number }[]; label?: string; integer?: boolean }) {
   if (!trend.length) return null
   const max = Math.max(1, ...trend.map(t => t.revenue))
+  const best = trend.reduce((m, t) => Math.max(m, t.revenue), 0)
+  const fmt = (v: number) => integer ? String(v) : '$' + Math.round(v).toLocaleString()
+  const latest = trend[trend.length - 1]
   return (
-    <div className="rounded-card border border-border bg-bg-secondary p-3.5">
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-2">{label}</p>
+    <div className="rounded-card border border-border bg-bg-secondary p-4">
+      <div className="flex items-baseline justify-between gap-3 mb-3">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">{label}</p>
+        {latest && <p className="text-xs text-ink-muted tabular-nums">{latest.month.slice(5)}: <span className="font-semibold text-ink">{fmt(latest.revenue)}</span></p>}
+      </div>
       <div className="flex items-end gap-1.5 h-24">
-        {trend.map((t, i) => (
-          <div key={i} className="flex-1 flex flex-col items-center justify-end gap-1 min-w-0">
-            <div className="w-full rounded-t bg-accent/60 hover:bg-accent transition-colors" style={{ height: `${Math.max(2, (t.revenue / max) * 100)}%` }}
-              title={`${t.month}: ${integer ? t.revenue : '$' + Math.round(t.revenue).toLocaleString()}`} />
-            <span className="text-[8px] text-ink-faint truncate w-full text-center">{t.month.slice(5)}</span>
-          </div>
-        ))}
+        {trend.map((t, i) => {
+          const current = i === trend.length - 1
+          return (
+            <div key={i} className="flex-1 flex flex-col items-center justify-end gap-1.5 min-w-0 group/bar">
+              <div
+                className={cn(
+                  'w-full rounded-t-md transition-all duration-200 group-hover/bar:opacity-100',
+                  current
+                    ? 'bg-gradient-to-t from-accent/70 to-accent'
+                    : t.revenue === best && best > 0
+                      ? 'bg-gradient-to-t from-accent/35 to-accent/70 opacity-90'
+                      : 'bg-gradient-to-t from-accent/20 to-accent/50 opacity-80',
+                )}
+                style={{ height: `${Math.max(3, (t.revenue / max) * 100)}%` }}
+                title={`${t.month}: ${fmt(t.revenue)}`}
+              />
+              <span className={cn('text-[10px] truncate w-full text-center tabular-nums', current ? 'text-ink-muted font-semibold' : 'text-ink-faint')}>{t.month.slice(5)}</span>
+            </div>
+          )
+        })}
       </div>
     </div>
   )
@@ -278,12 +314,12 @@ function TrendBars({ trend, label = 'Revenue / month', integer = false }: { tren
 function LaborCard({ title, icon: Icon, children }: { title: string; icon: typeof Gauge; children: React.ReactNode }) {
   return (
     <div className="rounded-card border border-border bg-bg-secondary p-4">
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-2 flex items-center gap-1.5"><Icon className="w-3.5 h-3.5" /> {title}</p>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint mb-2 flex items-center gap-1.5"><Icon className="w-3.5 h-3.5" /> {title}</p>
       {children}
     </div>
   )
 }
-function LaborEmpty() { return <p className="text-xs text-ink-faint py-3 text-center">Not enough data yet</p> }
+function LaborEmpty() { return <InlineEmpty className="py-3">Not enough data yet</InlineEmpty> }
 
 function LaborAccuracyList({ title, icon, items, good }: { title: string; icon: typeof Gauge; items: ServiceAccuracy[]; good?: boolean }) {
   return (
@@ -293,7 +329,7 @@ function LaborAccuracyList({ title, icon, items, good }: { title: string; icon: 
           {items.map(s => (
             <li key={s.combo} className="flex items-center justify-between gap-2 text-sm">
               <span className="text-ink truncate">{s.label} <span className="text-[11px] text-ink-faint">· {s.n}</span></span>
-              <span className={cn('shrink-0 font-semibold', good ? 'text-emerald-400' : s.accuracyPct < 70 ? 'text-amber-400' : 'text-ink')}>{s.accuracyPct}%</span>
+              <span className={cn('shrink-0 font-semibold tabular-nums', good ? 'text-emerald-400' : s.accuracyPct < 70 ? 'text-amber-400' : 'text-ink')}>{s.accuracyPct}%</span>
             </li>
           ))}
         </ul>
@@ -309,7 +345,7 @@ function LaborProfitList({ title, icon, items }: { title: string; icon: typeof G
           {items.map(s => (
             <li key={s.combo} className="flex items-center justify-between gap-2 text-sm">
               <span className="text-ink truncate">{s.label} <span className="text-[11px] text-ink-faint">· {s.n}</span></span>
-              <span className="shrink-0 font-semibold text-ink">${s.revPerHour}/hr <span className="text-[11px] text-ink-faint font-normal">{formatCurrency(s.profit)}</span></span>
+              <span className="shrink-0 font-semibold text-ink tabular-nums">${s.revPerHour}/hr <span className="text-[11px] text-ink-faint font-normal">{formatCurrency(s.profit)}</span></span>
             </li>
           ))}
         </ul>

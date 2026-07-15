@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { submitLead } from '@/lib/intake'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -59,14 +59,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   set('details', pick(flat, ['message', 'details', 'comments', 'notes', 'Message']))
   payload.source = 'formspree'
 
-  const anon = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!)
-  const { data, error } = await anon.rpc('submit_website_lead', { p_token: tok, p_payload: payload })
-  if (error) {
-    console.error('[website-lead/formspree] rpc error:', error.message)
-    return NextResponse.json({ error: 'Could not submit your request.' }, { status: 502, headers: CORS })
-  }
-  if (!data) return NextResponse.json({ error: 'This form is not accepting submissions.' }, { status: 404, headers: CORS })
-  const result = data as { error?: string; lead_id?: string; customer_id?: string }
-  if (result.error === 'rate_limited') return NextResponse.json({ error: 'Too many requests — try again shortly.' }, { status: 429, headers: CORS })
-  return NextResponse.json({ ok: true, ...(result as object) }, { headers: CORS })
+  // Same shared pipeline as /api/intake (dedupe, lead, Messages thread, owner
+  // alert email) — this adapter only normalizes Formspree's field names.
+  const r = await submitLead({ token: tok, source: 'Website', payload })
+  return NextResponse.json(r.body, { status: r.status, headers: CORS })
 }

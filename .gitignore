@@ -9,3 +9,6 @@ out/
 # generated esbuild bundles (scripts/*.ts → node)
 scripts/.bench.cjs
 scripts/.repro.cjs
+
+.vercel
+.env*

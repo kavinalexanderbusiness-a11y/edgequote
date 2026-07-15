@@ -6,9 +6,9 @@ import { toast } from '@/lib/toast'
 import { formatCurrency } from '@/lib/utils'
 import { Invoice, BusinessSettings, Payment, PAYMENT_METHODS, paymentMethodLabel } from '@/types'
 import { Button } from '@/components/ui/Button'
-import { invoiceBalance, recordPayment, applyCreditToInvoice, overpaymentToCredit, recordRefund, receiptNumberFor } from '@/lib/payments/ledger'
+import { invoiceBalance, recordPayment, applyCreditToInvoice, overpaymentToCredit, recordRefund, receiptNumberFor, removePayment, restorePayment } from '@/lib/payments/ledger'
 import { receiptMessageBody } from '@/lib/comms/templates'
-import { Wallet, Plus, Gift, RotateCcw, TrendingUp, X, FileDown, Mail, MessageSquare, ReceiptText } from 'lucide-react'
+import { Wallet, Plus, Gift, RotateCcw, Banknote, TrendingUp, X, FileDown, Mail, MessageSquare, ReceiptText } from 'lucide-react'
 
 function todayISO(): string {
   const d = new Date()
@@ -19,11 +19,12 @@ function todayISO(): string {
 // Record-Payment (multiple payments per invoice), the overpayment resolver
 // (credit / refund / raise total), and one-tap apply-credit. All movements go
 // through the shared ledger so dashboard, portal and reports update automatically.
-export function InvoicePaymentControls({ invoice, settings, uid, credit, onChanged }: {
+export function InvoicePaymentControls({ invoice, settings, uid, credit, payments = [], onChanged }: {
   invoice: Invoice
   settings: BusinessSettings | null
   uid: string
   credit: number              // the customer's available credit
+  payments?: Payment[]        // this invoice's ledger rows (permanent receipts + revert)
   onChanged: () => void
 }) {
   const supabase = useState(() => createClient())[0]
@@ -38,6 +39,35 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, onChang
   // The just-recorded payment → drives the automatic receipt panel (PDF/email/SMS).
   const [lastPayment, setLastPayment] = useState<Payment | null>(null)
   const [sendingReceipt, setSendingReceipt] = useState<string | null>(null)
+  // Per-row busy state for the PERMANENT ledger list (receipt download / revert).
+  const [rowBusy, setRowBusy] = useState<string | null>(null)
+
+  // Revert = remove the ledger row through the engine; the trigger re-derives the
+  // invoice (paid → partial/unpaid) naturally. Undo re-inserts the same row.
+  async function revertPayment(p: Payment) {
+    setRowBusy(p.id)
+    const res = await removePayment(supabase, p)
+    setRowBusy(null)
+    if (res.error) { toast.error(res.error); return }
+    onChanged()
+    toast.undo(`Payment of ${formatCurrency(Math.abs(Number(p.amount)))} reverted on ${invoice.invoice_number}.`, async () => {
+      const r = await restorePayment(supabase, p)
+      if (r.error) toast.error('Could not restore the payment: ' + r.error)
+      onChanged()
+    })
+  }
+  // Receipt for a HISTORIC row — amount_paid on the invoice prop is already
+  // current, so render straight from the row + invoice (no balance projection).
+  async function downloadRowReceipt(p: Payment) {
+    setRowBusy(p.id)
+    try {
+      const [{ renderReceiptBlob }, { downloadBlob }] = await Promise.all([
+        import('@/components/payments/ReceiptPDF'), import('@/lib/portalPdf'),
+      ])
+      downloadBlob(await renderReceiptBlob(p, invoice, settings), `${receiptNumberFor(p.id)}.pdf`)
+    } catch { toast.error('Could not generate the receipt PDF.') }
+    setRowBusy(null)
+  }
 
   const applyable = Math.min(credit, balance)
 
@@ -127,6 +157,13 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, onChang
     onChanged()
   }
 
+  // Nothing to show, nothing to do → render nothing at all. An unpaid invoice
+  // with no ledger rows gets the Record-payment action but never an empty
+  // receipt area; a cancelled invoice with no history adds zero chrome.
+  const canRecord = invoice.status !== 'paid' && invoice.status !== 'cancelled' && balance > 0
+  const hasContent = payments.length > 0 || paid > 0 || balance !== total || overpaid > 0 || canRecord || !!lastPayment
+  if (!hasContent) return null
+
   return (
     <div className="mt-3 pt-3 border-t border-border space-y-2.5">
       {/* Summary — only once money is involved (drafts/unpaid stay quiet) */}
@@ -139,6 +176,51 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, onChang
         </div>
       )}
 
+      {/* ── Payments on this invoice — PERMANENT, straight from the ledger. Every
+          row keeps its receipt forever; manual rows can be safely reverted (the
+          trigger re-derives the status — the invoice is never unlocked by hand). */}
+      {payments.length > 0 && (
+        <div className="rounded-lg border border-border bg-bg-secondary divide-y divide-border">
+          {payments.map(p => {
+            const negative = Number(p.amount) < 0
+            const revertable = !negative && p.provider !== 'stripe'
+            return (
+              <div key={p.id} className="flex items-center justify-between gap-2 px-2.5 py-1.5">
+                <div className="min-w-0 text-xs">
+                  <span className={`font-semibold ${negative ? 'text-red-400' : 'text-emerald-400'}`}>
+                    {negative ? '−' : ''}{formatCurrency(Math.abs(Number(p.amount)))}
+                  </span>
+                  <span className="text-ink-faint"> · {negative ? 'Refund' : paymentMethodLabel(p.method || p.provider)} · {new Date(p.paid_at || p.created_at).toLocaleDateString()}</span>
+                  <span className="block font-mono text-[10px] text-ink-faint mt-0.5">{receiptNumberFor(p.id)}</span>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button onClick={() => downloadRowReceipt(p)} disabled={rowBusy === p.id}
+                    className="p-1.5 text-ink-faint hover:text-accent transition-colors"
+                    aria-label={negative ? 'Download refund receipt' : 'Download receipt'}
+                    title={`Download ${negative ? 'refund receipt' : 'receipt'} ${receiptNumberFor(p.id)}`}>
+                    <FileDown className="w-3.5 h-3.5" />
+                  </button>
+                  {invoice.customers?.phone && (
+                    <button onClick={() => sendReceipt(p, 'sms')} disabled={rowBusy === p.id || sendingReceipt !== null}
+                      className="p-1.5 text-ink-faint hover:text-accent transition-colors"
+                      aria-label="Text this receipt to the customer" title={`Text ${negative ? 'refund receipt' : 'receipt'} ${receiptNumberFor(p.id)} to the customer`}>
+                      <MessageSquare className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                  {revertable && (
+                    <button onClick={() => revertPayment(p)} disabled={rowBusy === p.id}
+                      className="p-1.5 ml-1 pl-1 border-l border-border text-red-400/70 hover:text-red-400 transition-colors"
+                      aria-label="Revert payment" title="Revert this payment (undoable) — the invoice recalculates from the ledger">
+                      <RotateCcw className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
       {/* Overpayment resolver */}
       {overpaid > 0 && (
         <div className="rounded-lg border border-violet-500/30 bg-violet-500/[0.06] p-2.5 space-y-2">
@@ -148,7 +230,7 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, onChang
               <Gift className="w-3.5 h-3.5" /> Apply as credit
             </Button>
             <Button size="sm" variant="secondary" loading={busy} onClick={() => run(() => recordRefund(supabase, { userId: uid, invoice, amount: overpaid, notes: 'Overpayment refund' }), `Refund of ${formatCurrency(overpaid)} recorded.`)}>
-              <RotateCcw className="w-3.5 h-3.5" /> Record refund
+              <Banknote className="w-3.5 h-3.5" /> Record refund
             </Button>
             <Button size="sm" variant="ghost" loading={busy} onClick={raiseTotal}>
               <TrendingUp className="w-3.5 h-3.5" /> Raise total
@@ -159,13 +241,13 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, onChang
       )}
 
       {/* Actions */}
-      {invoice.status !== 'paid' && balance > 0 && (
+      {canRecord && (
         <div className="flex flex-wrap items-center gap-2">
           <Button size="sm" variant="secondary" onClick={() => { setAmount(balance > 0 ? String(balance) : ''); setOpen(o => !o) }}>
             <Plus className="w-3.5 h-3.5" /> Record payment
           </Button>
           {applyable > 0 && (
-            <Button size="sm" variant="ghost" className="text-accent" loading={busy}
+            <Button size="sm" variant="secondary" loading={busy}
               onClick={() => run(() => applyCreditToInvoice(supabase, { userId: uid, invoice, amount: applyable }), `Applied ${formatCurrency(applyable)} credit to ${invoice.invoice_number}.`)}>
               <Gift className="w-3.5 h-3.5" /> Apply {formatCurrency(applyable)} credit
             </Button>
@@ -175,38 +257,41 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, onChang
 
       {/* Record-payment form */}
       {open && (
-        <div className="rounded-lg border border-border bg-bg-secondary p-3 space-y-2.5">
+        <form onSubmit={e => { e.preventDefault(); if (Number(amount) > 0 && !busy) save() }}
+          className="rounded-lg border border-border bg-bg-secondary p-3 space-y-2.5">
           <div className="flex items-center justify-between">
             <p className="text-xs font-semibold text-ink flex items-center gap-1.5"><Wallet className="w-3.5 h-3.5 text-accent" /> Record a payment</p>
-            <button onClick={() => setOpen(false)} className="text-ink-faint hover:text-ink" aria-label="Close"><X className="w-4 h-4" /></button>
+            <button type="button" onClick={() => setOpen(false)} className="h-7 w-7 rounded-lg flex items-center justify-center text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" aria-label="Close"><X className="w-4 h-4" /></button>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            <label className="text-[10px] uppercase tracking-wide text-ink-faint">Amount
-              <div className="relative mt-0.5">
+            <label className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Amount
+              <div className="relative mt-1">
                 <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-faint text-sm">$</span>
                 <input type="number" min="0" step="0.01" autoFocus value={amount} onChange={e => setAmount(e.target.value)}
-                  className="w-full bg-bg-tertiary border border-border-strong rounded-lg pl-6 pr-2 py-2 text-base sm:text-sm text-ink outline-none focus:border-accent" />
+                  className="w-full bg-bg-tertiary border border-border-strong rounded-lg pl-6 pr-2 py-2 text-base sm:text-sm font-normal text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
               </div>
             </label>
-            <label className="text-[10px] uppercase tracking-wide text-ink-faint">Method
+            <label className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Method
               <select value={method} onChange={e => setMethod(e.target.value)}
-                className="w-full mt-0.5 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2 text-sm text-ink outline-none focus:border-accent">
+                className="w-full mt-1 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2 text-sm font-normal text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20">
                 {PAYMENT_METHODS.filter(m => m.value !== 'credit').map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
               </select>
             </label>
-            <label className="text-[10px] uppercase tracking-wide text-ink-faint">Date
+            <label className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Date
               <input type="date" value={date} onChange={e => setDate(e.target.value)}
-                className="w-full mt-0.5 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2 text-sm text-ink outline-none focus:border-accent" />
+                className="w-full mt-1 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2 text-sm font-normal text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
             </label>
           </div>
-          <input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Note (optional)"
-            className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-2.5 py-2 text-base sm:text-sm text-ink outline-none focus:border-accent" />
+          <label className="block text-xs font-semibold uppercase tracking-wide text-ink-muted">Note
+            <input value={notes} onChange={e => setNotes(e.target.value)} placeholder="e.g. cheque #142 — optional"
+              className="w-full mt-1 bg-bg-tertiary border border-border-strong rounded-lg px-2.5 py-2 text-base sm:text-sm font-normal text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+          </label>
           <div className="flex items-center gap-2">
-            <Button size="sm" onClick={save} loading={busy} disabled={!(Number(amount) > 0)}>Record {Number(amount) > 0 ? formatCurrency(Number(amount)) : 'payment'}</Button>
+            <Button size="sm" type="submit" loading={busy} disabled={!(Number(amount) > 0)} title={!(Number(amount) > 0) ? 'Enter an amount greater than $0 to record a payment.' : undefined}>Record {Number(amount) > 0 ? formatCurrency(Number(amount)) : 'payment'}</Button>
             <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
             {balance > 0 && Number(amount) > 0 && Number(amount) < balance && <span className="text-[10px] text-amber-400 ml-auto">Partial — {formatCurrency(balance - Number(amount))} will remain</span>}
           </div>
-        </div>
+        </form>
       )}
 
       {/* Automatic receipt — appears the moment a payment is recorded. Generated
@@ -219,7 +304,7 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, onChang
               <ReceiptText className="w-3.5 h-3.5 text-emerald-400" />
               Receipt {receiptNumberFor(lastPayment.id)} · {formatCurrency(Number(lastPayment.amount) || 0)} {paymentMethodLabel(lastPayment.method || lastPayment.provider).toLowerCase()}
             </p>
-            <button onClick={() => setLastPayment(null)} className="text-ink-faint hover:text-ink" aria-label="Dismiss"><X className="w-4 h-4" /></button>
+            <button onClick={() => setLastPayment(null)} className="h-7 w-7 rounded-lg flex items-center justify-center text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" aria-label="Dismiss"><X className="w-4 h-4" /></button>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button size="sm" variant="secondary" loading={sendingReceipt === 'pdf'} onClick={() => downloadReceipt(lastPayment)}>

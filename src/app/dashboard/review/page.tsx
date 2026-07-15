@@ -14,9 +14,12 @@ import {
 import { needsFollowUp } from '@/lib/followup'
 import { localTodayISO, formatCurrency, formatDate, cn } from '@/lib/utils'
 import { PageHeader } from '@/components/layout/PageHeader'
+import { SkeletonTiles } from '@/components/ui/Skeleton'
+import { StatTile } from '@/components/ui/StatTile'
 import { Card, CardBody } from '@/components/ui/Card'
+import { Banner } from '@/components/ui/Banner'
 import {
-  CalendarCheck, DollarSign, Gauge, MapPin, Bell, HeartPulse, Sprout, ArrowRight, TrendingUp, TrendingDown,
+  CalendarCheck, DollarSign, Gauge, MapPin, Bell, HeartPulse, Sprout, ArrowRight, TrendingUp, TrendingDown, AlertTriangle,
 } from 'lucide-react'
 
 type SatJob = ProfitJob & { start_time?: string | null }
@@ -122,56 +125,60 @@ export default function WeeklyReviewPage() {
     return { weekStart, today, revenue, completedCount: completed.length, missed, dayRoutes, avgGrade, best, worst, followUps: followUps.length, followUpValue, pending: pending.length, pendingValue, growth }
   }, [jobs, quotes, ctx])
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Building your weekly review…</div>
+  // Skeleton lands inside the SAME container + header as the loaded page, so
+  // nothing jumps when the numbers arrive.
+  if (loading) {
+    return (
+      <div className="max-w-5xl mx-auto space-y-6">
+        <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }}
+          title="Weekly Review"
+          description="How the week went, and next week's moves." />
+        <SkeletonTiles count={3} className="grid-cols-3 lg:grid-cols-3" />
+        <SkeletonTiles count={2} className="grid-cols-1 sm:grid-cols-2 lg:grid-cols-2" />
+      </div>
+    )
+  }
 
   return (
-    <div className="max-w-3xl space-y-6">
-      <PageHeader
+    <div className="max-w-5xl mx-auto space-y-6">
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }}
         title="Weekly Review"
         description={`${formatDate(m.weekStart)} – ${formatDate(m.today)} · how the week went, and next week's moves`}
       />
 
       {loadError && (
-        <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5">
-          {loadError} <button onClick={() => window.location.reload()} className="underline font-medium ml-1">Retry</button>
-        </div>
+        <Banner tone="danger" icon={AlertTriangle}
+          action={<button type="button" onClick={() => window.location.reload()} className="shrink-0 underline font-semibold">Retry</button>}>
+          {loadError}
+        </Banner>
       )}
 
       {/* The week in numbers */}
       <div className="grid grid-cols-3 gap-3">
-        <Card className="p-4">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted flex items-center gap-1.5"><DollarSign className="w-3.5 h-3.5 text-accent" /> Revenue earned</p>
-          <p className="text-2xl font-bold text-accent mt-1">{formatCurrency(m.revenue)}</p>
-        </Card>
-        <Card className="p-4">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted flex items-center gap-1.5"><CalendarCheck className="w-3.5 h-3.5" /> Jobs completed</p>
-          <p className="text-2xl font-bold text-ink mt-1">{m.completedCount}{m.missed > 0 && <span className="text-sm font-semibold text-amber-400"> · {m.missed} open</span>}</p>
-        </Card>
-        <Card className="p-4">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted flex items-center gap-1.5"><Gauge className="w-3.5 h-3.5" /> Avg route grade</p>
-          {m.avgGrade ? (
-            <p className="text-2xl font-black mt-1" style={{ color: GRADE_COLORS[m.avgGrade] }}>{m.avgGrade}</p>
-          ) : <p className="text-2xl font-bold text-ink-faint mt-1">—</p>}
-        </Card>
+        <StatTile icon={DollarSign} label="Revenue earned" value={formatCurrency(m.revenue)} accent />
+        <StatTile icon={CalendarCheck} label="Jobs completed"
+          value={<>{m.completedCount}{m.missed > 0 && <span className="text-sm font-semibold text-amber-400"> · {m.missed} open</span>}</>} />
+        <StatTile icon={Gauge} label="Avg route grade"
+          value={m.avgGrade ? <span style={{ color: GRADE_COLORS[m.avgGrade] }}>{m.avgGrade}</span> : '—'} />
       </div>
 
       {/* Best / worst neighborhood this week */}
       <div className="grid sm:grid-cols-2 gap-3">
         <Card className="p-4">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted flex items-center gap-1.5"><TrendingUp className="w-3.5 h-3.5 text-emerald-400" /> Best neighborhood</p>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-muted flex items-center gap-1.5"><TrendingUp className="w-3.5 h-3.5 text-emerald-400" /> Best neighborhood</p>
           {m.best ? (
             <>
               <p className="text-lg font-bold text-ink mt-1 flex items-center gap-1.5"><MapPin className="w-4 h-4 text-emerald-400" /> {m.best.key}</p>
-              <p className="text-xs text-ink-muted mt-0.5">{formatCurrency(m.best.revenue)} · {m.best.jobs} job{m.best.jobs !== 1 ? 's' : ''} · ${m.best.revPerHour}/hr</p>
+              <p className="text-xs text-ink-muted mt-0.5 tabular-nums">{formatCurrency(m.best.revenue)} · {m.best.jobs} job{m.best.jobs !== 1 ? 's' : ''} · ${m.best.revPerHour}/hr</p>
             </>
           ) : <p className="text-sm text-ink-faint mt-1">No worked areas this week.</p>}
         </Card>
         <Card className="p-4">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted flex items-center gap-1.5"><TrendingDown className="w-3.5 h-3.5 text-red-400" /> Worst neighborhood</p>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-muted flex items-center gap-1.5"><TrendingDown className="w-3.5 h-3.5 text-red-400" /> Worst neighborhood</p>
           {m.worst ? (
             <>
               <p className="text-lg font-bold text-ink mt-1 flex items-center gap-1.5"><MapPin className="w-4 h-4 text-red-400" /> {m.worst.key}</p>
-              <p className="text-xs text-ink-muted mt-0.5">{formatCurrency(m.worst.revenue)} · {m.worst.jobs} job{m.worst.jobs !== 1 ? 's' : ''} · ${m.worst.revPerHour}/hr</p>
+              <p className="text-xs text-ink-muted mt-0.5 tabular-nums">{formatCurrency(m.worst.revenue)} · {m.worst.jobs} job{m.worst.jobs !== 1 ? 's' : ''} · ${m.worst.revPerHour}/hr</p>
             </>
           ) : <p className="text-sm text-ink-faint mt-1">Only one area worked — nothing to compare.</p>}
         </Card>
@@ -185,7 +192,7 @@ export default function WeeklyReviewPage() {
               <div key={r.date} className="rounded-lg border border-border bg-bg-tertiary px-2.5 py-1.5 text-center">
                 <p className="text-[10px] uppercase tracking-wide text-ink-faint">{format(parseISO(r.date + 'T00:00:00'), 'EEE')}</p>
                 <p className="text-sm font-black" style={{ color: GRADE_COLORS[r.grade] }}>{r.grade}</p>
-                <p className="text-[10px] text-ink-muted">{formatCurrency(r.revenue)}</p>
+                <p className="text-[10px] text-ink-muted tabular-nums">{formatCurrency(r.revenue)}</p>
               </div>
             ))}
           </CardBody>
@@ -194,8 +201,10 @@ export default function WeeklyReviewPage() {
 
       {/* Next week's moves */}
       <Card>
-        <div className="px-4 py-3 border-b border-border">
-          <h2 className="text-sm font-semibold text-ink">Next week&apos;s moves</h2>
+        <div className="px-4 py-3 border-b border-border flex items-center gap-2">
+          <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><CalendarCheck className="w-3.5 h-3.5 text-accent" /></span>
+          <h2 className="text-sm font-semibold text-ink tracking-tight">Next week&apos;s moves</h2>
+          <span className="flex-1 h-px bg-border" aria-hidden />
         </div>
         <CardBody className="p-0">
           <div className="divide-y divide-border">
@@ -222,15 +231,15 @@ function ReviewRow({ icon: Icon, tone, label, value, href, cta }: {
   icon: typeof Bell; tone: string; label: string; value: string; href: string; cta?: string
 }) {
   return (
-    <div className="px-4 py-3 flex items-center gap-3">
+    <div className="group px-4 py-3 flex items-center gap-3">
       <Icon className={cn('w-4 h-4 shrink-0', tone)} />
       <div className="min-w-0 flex-1">
         <p className="text-xs text-ink-faint">{label}</p>
-        <p className="text-sm font-medium text-ink truncate">{value}</p>
+        <p className="text-sm font-medium text-ink truncate tabular-nums">{value}</p>
       </div>
       {cta && (
         <Link href={href} className="shrink-0 text-xs font-semibold text-accent flex items-center gap-1 hover:underline">
-          {cta} <ArrowRight className="w-3 h-3" />
+          {cta} <ArrowRight className="w-3 h-3 transition-transform group-hover:translate-x-0.5" />
         </Link>
       )}
     </div>

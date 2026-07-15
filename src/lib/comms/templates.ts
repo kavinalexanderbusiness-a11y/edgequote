@@ -62,6 +62,7 @@ export const MSG_VARIABLES: { key: string; hint: string }[] = [
   { key: 'quote_link', hint: 'link to the quote (portal)' },
   { key: 'invoice_link', hint: 'link to the invoice (portal)' },
   { key: 'amount', hint: 'invoice amount' },
+  { key: 'direct_phone', hint: 'your business phone (Settings → Business Information)' },
 ]
 
 // Professional, friendly defaults. **bold** → <strong> in email, stripped for SMS.
@@ -80,15 +81,17 @@ This is a friendly reminder that {{business_name}} is scheduled to service your 
 
 If anything changes before then, simply reply to this message.
 
-We look forward to seeing you tomorrow!`,
+We look forward to seeing you then!`,
 
   introduction: `Hi {{first_name}},
 
-This is {{business_name}} — please save our new number so you can always reach us here.
+This is {{business_name}}.
 
-We truly appreciate your business and are always a text away if you need anything or want to book a service.
+Please save this number to your contacts. We'll send appointment reminders, scheduling updates, on-the-way notifications, weather delays, invoices, receipts, and other service updates from this number.
 
-Thank you!`,
+If you ever need to reach us directly, please call or text us at {{direct_phone}}.
+
+Thank you for choosing {{business_name}}!`,
 
   eta: `Hi {{first_name}},
 
@@ -110,15 +113,17 @@ See you soon!
 
   running_late: `Hi {{first_name}},
 
-I just wanted to let you know I'm running a little behind schedule today.
+This is {{business_name}} — I just wanted to let you know I'm running a little behind schedule today.
 
 My updated arrival time is approximately **{{eta}} minutes**.
 
-Thank you for your patience—I appreciate your understanding and I'll be there as soon as possible.`,
+Thank you for your patience—I appreciate your understanding and I'll be there as soon as possible.
+
+— {{business_name}}`,
 
   arrived: `Hi {{first_name}},
 
-I've just arrived at your property and will be getting started shortly.
+This is {{business_name}} — I've just arrived at your property and will be getting started shortly.
 
 If there's anything you'd like me to know before I begin, just let me know.
 
@@ -126,7 +131,7 @@ Thanks!`,
 
   early_arrival: `Hi {{first_name}},
 
-My schedule opened up earlier than expected today.
+This is {{business_name}}. My schedule opened up earlier than expected today.
 
 If it works for you, I can arrive earlier than originally planned.
 
@@ -134,11 +139,13 @@ Just reply to this message and let me know.`,
 
   rescheduled: `Hi {{first_name}},
 
-Your service has been rescheduled to **{{date}}**.
+Your service with {{business_name}} has been rescheduled to **{{date}}**.
 
 If this new date doesn't work for you, simply reply to this message and we'll be happy to arrange another time.
 
-Thank you for your understanding!`,
+Thank you for your understanding!
+
+— {{business_name}}`,
 
   rain_delay: `Hi {{first_name}},
 
@@ -172,7 +179,7 @@ Have a wonderful day!`,
 
 Thank you for choosing {{business_name}}!
 
-If you were happy with today's service, we'd really appreciate a quick Google review.
+If you were happy with today's service, we'd really appreciate a quick review.
 
 Your feedback helps our small business grow and helps other homeowners choose a company they can trust.
 
@@ -184,7 +191,7 @@ Thank you again—we truly appreciate your support!`,
 
 Your quote from {{business_name}} is ready.
 
-You can view, approve, or decline it anytime using the secure link below:
+You can view and approve it anytime using the secure link below:
 
 {{portal_link}}
 
@@ -192,7 +199,7 @@ If you have any questions about the quote, simply reply to this message and we'l
 
   invoice: `Hi {{first_name}},
 
-Your invoice from {{business_name}} is now ready{{amount}}.
+Your invoice from {{business_name}}{{amount}} is ready.
 
 You can securely view and pay it anytime using the link below:
 
@@ -202,19 +209,21 @@ Thank you for choosing {{business_name}}. We appreciate your business!`,
 
   estimate_reminder: `Hi {{first_name}},
 
-This is a reminder about your upcoming estimate on **{{date}}**.
+This is a reminder from {{business_name}} about your upcoming estimate on **{{date}}**.
 
 We look forward to meeting with you. If you need to reschedule, simply reply to this message.`,
 
   payment_reminder: `Hi {{first_name}},
 
-This is a friendly reminder that your invoice is still outstanding.
+This is a friendly reminder from {{business_name}} that your invoice is still outstanding.
 
 You can securely view and pay it here:
 
 {{invoice_link}}
 
-If you've already made payment, please disregard this message. Thank you!`,
+If you've already made payment, please disregard this message. Thank you!
+
+— {{business_name}}`,
 
   estimate_followup: `Hi {{first_name}},
 
@@ -303,6 +312,10 @@ export interface MsgVars {
   timeWindow?: string
   oldDateLabel?: string
   address?: string
+  directPhone?: string
+  // Email-shell branding — straight from Business Settings (logo_url / website).
+  logoUrl?: string
+  website?: string
 }
 
 export interface RenderedMessage { sms: string; subject: string; html: string; text: string }
@@ -310,7 +323,7 @@ export interface RenderedMessage { sms: string; subject: string; html: string; t
 function interpolate(tpl: string, v: MsgVars): string {
   const sub: Record<string, string> = {
     first_name: (v.firstName || '').trim().split(/\s+/)[0] || 'there',
-    business_name: v.businessName || 'us',
+    business_name: v.businessName || 'your service provider',
     eta: String(v.eta ?? '15'),
     review_link: v.reviewLink || '',
     portal_link: v.portalLink || '',
@@ -321,6 +334,8 @@ function interpolate(tpl: string, v: MsgVars): string {
     time_window: v.timeWindow || 'your scheduled window',
     address: v.address || 'your property',
     amount: v.amount ? ` for ${v.amount}` : '',
+    // Graceful when no business phone is set: "call or text us at this number".
+    direct_phone: (v.directPhone || '').trim() || 'this number',
   }
   // Substitute, collapse runs of spaces/tabs (NOT newlines — paragraphs stay), trim.
   return tpl.replace(/\{\{\s*([a-z_]+)\s*\}\}/g, (_m, key: string) => (key in sub ? sub[key] : '')).replace(/[ \t]{2,}/g, ' ').trim()
@@ -334,8 +349,35 @@ export function renderBody(rawBody: string, vars: MsgVars, subject: string): Ren
   const raw = interpolate(rawBody, vars)
   // SMS/plain: strip the **bold** markers. Email: render them as <strong>.
   const sms = raw.replace(/\*\*(.+?)\*\*/g, '$1')
-  const htmlBody = raw.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/\n/g, '<br>')
-  const html = `<div style="font-family:system-ui,Segoe UI,Arial,sans-serif;font-size:15px;line-height:1.55;color:#1A2333">${htmlBody}</div>`
+  const htmlBody = raw
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    // Bare URLs (portal / quote / review links) become real, tappable links —
+    // brand-toned, and break-anywhere so long tokens never overflow on phones.
+    .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" style="color:#0B8C68;font-weight:600;text-decoration:underline;word-break:break-all">$1</a>')
+    .replace(/\n/g, '<br>')
+  // One email shell for EVERY message the app sends (templates, owner-edited
+  // sends, receipts): the business logo (when configured) above the business
+  // name, a quiet centered card, and a contact footer — email-safe inline CSS
+  // only. Branding values come straight from Business Settings, threaded in via
+  // MsgVars by the server senders; nothing is duplicated here.
+  const business = vars.businessName || 'Your service provider'
+  const logo = (vars.logoUrl || '').trim()
+  const header = `${logo ? `<img src="${logo}" alt="${business}" style="display:block;max-height:48px;max-width:220px;margin:0 0 8px" />\n    ` : ''}<p style="margin:0 0 12px;padding:0;font-size:17px;font-weight:700;letter-spacing:.01em;color:#1A2333">${business}</p>`
+  const site = (vars.website || '').trim()
+  const siteHref = site ? (site.startsWith('http') ? site : `https://${site}`) : ''
+  const contactBits = [
+    (vars.directPhone || '').trim(),
+    site ? `<a href="${siteHref}" style="color:#5B6672;text-decoration:underline">${site.replace(/^https?:\/\//, '')}</a>` : '',
+  ].filter(Boolean).join(' &nbsp;·&nbsp; ')
+  const footer = `${contactBits ? `<p style="margin:12px 0 0;padding:0 6px;font-size:12px;line-height:1.5;color:#8A94A0">${business} &nbsp;·&nbsp; ${contactBits}</p>` : ''}
+    <p style="margin:${contactBits ? '4px' : '12px'} 0 0;padding:0 6px;font-size:12px;line-height:1.5;color:#8A94A0">Reply directly to this email if you have any questions.</p>`
+  const html = `<div style="background:#F4F6F5;padding:24px 12px;font-family:system-ui,'Segoe UI',Arial,sans-serif">
+  <div style="max-width:560px;margin:0 auto">
+    <div style="padding:0 6px">${header}</div>
+    <div style="background:#FFFFFF;border:1px solid #E4E8E6;border-top:3px solid #0B8C68;border-radius:12px;padding:24px 26px;font-size:15px;line-height:1.65;color:#1A2333">${htmlBody}</div>
+    ${footer}
+  </div>
+</div>`
   return { sms, subject, html, text: sms }
 }
 

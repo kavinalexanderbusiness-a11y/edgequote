@@ -47,17 +47,17 @@ export const ITEM_META: Record<ScheduleItemType, ItemTypeMeta> = {
   estimate: {
     label: 'Estimate', emoji: '📏', icon: Ruler, routable: true,
     fields: { customer: true, property: true, duration: true },
-    chip: 'border-sky-400/40 bg-sky-400/10 text-sky-300', dot: 'bg-sky-400', accent: 'text-sky-300',
+    chip: 'border-sky-400/40 bg-sky-400/10 text-sky-400', dot: 'bg-sky-400', accent: 'text-sky-400',
   },
   callback: {
     label: 'Callback', emoji: '📞', icon: Phone, routable: false,
     fields: { customer: true, phone: true },
-    chip: 'border-amber-400/40 bg-amber-400/10 text-amber-300', dot: 'bg-amber-400', accent: 'text-amber-300',
+    chip: 'border-amber-400/40 bg-amber-400/10 text-amber-400', dot: 'bg-amber-400', accent: 'text-amber-400',
   },
   appointment: {
     label: 'Appointment', emoji: '📅', icon: CalendarClock, routable: false,
     fields: { customer: true, property: true, duration: true },
-    chip: 'border-violet-400/40 bg-violet-400/10 text-violet-300', dot: 'bg-violet-400', accent: 'text-violet-300',
+    chip: 'border-violet-400/40 bg-violet-400/10 text-violet-400', dot: 'bg-violet-400', accent: 'text-violet-400',
   },
   task: {
     label: 'Task', emoji: '📋', icon: ListChecks, routable: false,

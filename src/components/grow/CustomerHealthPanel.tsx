@@ -4,8 +4,11 @@ import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { loadCustomerHealth, HealthRow, HealthTier } from '@/lib/customerHealth'
+import { Skeleton } from '@/components/ui/Skeleton'
+import { FilterPill } from '@/components/ui/FilterPill'
 import { formatCurrency, cn } from '@/lib/utils'
-import { HeartPulse, Loader2, RefreshCw, Star, ArrowRight } from 'lucide-react'
+import { HeartPulse, RefreshCw, Star, ArrowRight } from 'lucide-react'
+import { IconButton } from '@/components/ui/IconButton'
 
 const TIER: Record<HealthTier, { label: string; tone: string; dot: string }> = {
   healthy: { label: 'Healthy', tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10', dot: 'bg-emerald-400' },
@@ -45,8 +48,16 @@ export function CustomerHealthPanel() {
 
   if (loading) {
     return (
-      <div className="rounded-card border border-border bg-bg-secondary p-5 flex items-center gap-2 text-sm text-ink-muted">
-        <Loader2 className="w-4 h-4 animate-spin" /> Scoring customer health…
+      <div className="rounded-card border border-border bg-bg-secondary p-5">
+        <div className="space-y-2.5" aria-hidden>
+          {[0, 1, 2].map(i => (
+            <div key={i} className="flex items-center gap-3">
+              <Skeleton className="w-10 h-10 rounded-xl shrink-0" />
+              <div className="min-w-0 flex-1"><Skeleton className="h-3 w-32" /><Skeleton className="h-2.5 w-44 mt-1.5" /></div>
+              <Skeleton className="h-3 w-12 shrink-0" />
+            </div>
+          ))}
+        </div>
       </div>
     )
   }
@@ -57,31 +68,27 @@ export function CustomerHealthPanel() {
   const visible = showAll ? sorted : sorted.slice(0, 12)
 
   return (
-    <div className="rounded-card border border-border bg-bg-secondary overflow-hidden">
+    <div className="rounded-card border border-border bg-bg-secondary overflow-hidden animate-rise">
       <div className="px-5 py-4 border-b border-border flex items-start justify-between gap-3">
         <div className="flex items-start gap-3 min-w-0">
           <div className="w-9 h-9 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
-            <HeartPulse className="w-4.5 h-4.5 text-accent" />
+            <HeartPulse className="w-4 h-4 text-accent" />
           </div>
           <div className="min-w-0">
-            <p className="text-base font-bold text-ink">Customer Health</p>
-            <p className="text-xs text-ink-muted mt-0.5">
+            <p className="text-base font-bold tracking-tight text-ink">Customer Health</p>
+            <p className="text-xs text-ink-muted mt-0.5 tabular-nums">
               {rows.length} customers · {atRisk} at risk · {vips} VIP
             </p>
           </div>
         </div>
-        <button onClick={load} title="Refresh" className="h-8 w-8 rounded-lg border border-border text-ink-muted hover:text-ink flex items-center justify-center shrink-0">
-          <RefreshCw className="w-4 h-4" />
-        </button>
+        <IconButton icon={RefreshCw} label="Refresh customer health" onClick={load} />
       </div>
 
       <div className="px-4 py-2.5 border-b border-border flex flex-wrap gap-1.5">
         {SORTS.map(s => (
-          <button key={s.key} onClick={() => { setSort(s.key); setShowAll(false) }}
-            className={cn('text-xs font-medium rounded-full px-2.5 py-1 border transition-colors',
-              sort === s.key ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
+          <FilterPill key={s.key} active={sort === s.key} onClick={() => { setSort(s.key); setShowAll(false) }}>
             {s.label}
-          </button>
+          </FilterPill>
         ))}
       </div>
 
@@ -110,7 +117,7 @@ export function CustomerHealthPanel() {
         })}
       </div>
       {sorted.length > 12 && (
-        <button onClick={() => setShowAll(s => !s)} className="w-full py-2.5 text-xs font-medium text-accent hover:underline border-t border-border">
+        <button onClick={() => setShowAll(s => !s)} aria-expanded={showAll} className="w-full py-2.5 text-xs font-medium text-accent hover:underline border-t border-border">
           {showAll ? 'Show less' : `Show all ${sorted.length} customers`}
         </button>
       )}

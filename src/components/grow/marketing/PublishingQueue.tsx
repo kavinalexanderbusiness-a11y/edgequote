@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/Button'
 import { InlineEmpty } from '@/components/ui/EmptyState'
+import { SkeletonRows } from '@/components/ui/Skeleton'
 import { channel as channelDef } from '@/lib/marketing/channels'
 import { listJobs, cancelJob, retryJob, clearHistory, markManualPublished, captionFor } from '@/lib/marketing/publishQueue'
 import { listConnections } from '@/lib/marketing/connections'
@@ -15,10 +16,10 @@ import type { MarketingChannel, PublishJob, PublishJobStatus, SocialConnection }
 const STATUS: Record<PublishJobStatus, { label: string; chip: string }> = {
   draft:      { label: 'Draft',      chip: 'border-border text-ink-muted' },
   scheduled:  { label: 'Scheduled',  chip: 'border-accent/40 text-accent' },
-  queued:     { label: 'Ready to post', chip: 'border-sky-500/30 text-sky-300' },
-  publishing: { label: 'Publishing', chip: 'border-amber-500/30 text-amber-300' },
-  published:  { label: 'Published',  chip: 'border-emerald-500/30 text-emerald-300' },
-  failed:     { label: 'Failed',     chip: 'border-red-500/30 text-red-300' },
+  queued:     { label: 'Ready to post', chip: 'border-sky-500/30 text-sky-400' },
+  publishing: { label: 'Publishing', chip: 'border-amber-500/30 text-amber-400' },
+  published:  { label: 'Published',  chip: 'border-emerald-500/30 text-emerald-400' },
+  failed:     { label: 'Failed',     chip: 'border-red-500/30 text-red-400' },
   canceled:   { label: 'Canceled',   chip: 'border-border text-ink-faint' },
 }
 
@@ -86,9 +87,13 @@ export function PublishingQueue({ userId }: { userId: string }) {
     const cap = pieceByJob[j.content_piece_id]?.caption
     if (cap) { try { navigator.clipboard?.writeText(cap); toast.success('Caption copied.') } catch { /* still visible to copy by hand */ } }
   }
+  const [postingId, setPostingId] = useState<string | null>(null)
   async function markPosted(j: PublishJob) {
+    setPostingId(j.id)
     const updated = await markManualPublished(supabase, j)
-    if (updated) setJobs(prev => prev.map(x => x.id === j.id ? updated : x))
+    setPostingId(null)
+    if (updated) { setJobs(prev => prev.map(x => x.id === j.id ? updated : x)); toast.success('Marked as posted.') }
+    else toast.error('Could not mark it posted — please try again.')
   }
   // Drive the whole queue forward (API posts publish; manual scheduled → ready). The
   // server loop is per-job try/continue, so one failure never stops the rest.
@@ -130,7 +135,7 @@ export function PublishingQueue({ userId }: { userId: string }) {
   // so counting it here would make the button look like it did nothing.
   const readyCount = jobs.filter(j => j.status === 'scheduled' || (j.status === 'queued' && j.mode === 'api')).length
 
-  if (loading) return <div className="h-32 flex items-center justify-center text-ink-faint"><Loader2 className="w-5 h-5 animate-spin" /></div>
+  if (loading) return <SkeletonRows count={3} />
   if (!jobs.length) return <InlineEmpty icon={ListChecks}>No publishes yet. Schedule or publish a post and it’ll show up here.</InlineEmpty>
 
   const Row = ({ j }: { j: PublishJob }) => {
@@ -144,7 +149,7 @@ export function PublishingQueue({ userId }: { userId: string }) {
           <div className="min-w-0 flex-1">
             <p className="text-xs font-medium text-ink truncate">
               {def.label} · {connName(j.connection_id)}
-              <span className="ml-1.5 text-[9px] uppercase tracking-wide text-ink-faint border border-border rounded px-1 py-0.5">{j.mode === 'api' ? 'API' : 'Manual'}</span>
+              <span className="ml-1.5 text-[10px] uppercase tracking-wide text-ink-faint border border-border rounded px-1 py-0.5">{j.mode === 'api' ? 'API' : 'Manual'}</span>
             </p>
             <p className="text-[10px] text-ink-faint truncate">{whenLabel(j)}{j.attempts > 0 ? ` · ${j.attempts} attempt${j.attempts > 1 ? 's' : ''}` : ''}</p>
           </div>
@@ -160,13 +165,13 @@ export function PublishingQueue({ userId }: { userId: string }) {
         <div className="flex items-center gap-1.5 pl-6">
           {j.mode === 'manual' && j.status === 'queued' && (
             <>
-              <button onClick={() => copyCaption(j)} className="text-ink-faint hover:text-ink inline-flex items-center gap-1 text-[11px]" title="Copy caption"><Copy className="w-3.5 h-3.5" /> Copy caption</button>
+              <Button size="sm" variant="ghost" onClick={() => copyCaption(j)} title="Copy caption"><Copy className="w-3.5 h-3.5" /> Copy caption</Button>
               <a href={def.openUrl} target="_blank" rel="noreferrer" className="text-ink-faint hover:text-ink inline-flex items-center gap-1 text-[11px]" title={`Open ${def.label}`}><ExternalLink className="w-3.5 h-3.5" /> Open</a>
-              <Button size="sm" variant="ghost" onClick={() => markPosted(j)}><CheckCircle2 className="w-3.5 h-3.5" /> Mark as posted</Button>
+              <Button size="sm" variant="secondary" onClick={() => markPosted(j)} loading={postingId === j.id}><CheckCircle2 className="w-3.5 h-3.5" /> Mark as posted</Button>
             </>
           )}
           {j.status === 'failed' && <Button size="sm" variant="ghost" loading={retrying === j.id} onClick={() => retry(j)}><RotateCcw className="w-3.5 h-3.5" /> Retry</Button>}
-          {(j.status === 'scheduled' || j.status === 'queued') && <button onClick={() => cancel(j)} className="text-ink-faint hover:text-red-400 inline-flex items-center gap-1 text-[11px]" title="Cancel"><X className="w-3.5 h-3.5" /> Cancel</button>}
+          {(j.status === 'scheduled' || j.status === 'queued') && <Button size="sm" variant="ghost" className="text-red-400/70 hover:text-red-400" onClick={() => cancel(j)} title="Cancel"><X className="w-3.5 h-3.5" /> Cancel</Button>}
           {j.status === 'published' && j.external_url && <a href={j.external_url} target="_blank" rel="noreferrer" className="text-accent inline-flex items-center gap-1 text-[11px]" title="View post"><ExternalLink className="w-3.5 h-3.5" /> View post</a>}
         </div>
       </div>
@@ -182,17 +187,17 @@ export function PublishingQueue({ userId }: { userId: string }) {
         <div className="relative flex-1 min-w-[140px]">
           <Search className="w-3.5 h-3.5 text-ink-faint absolute left-2.5 top-1/2 -translate-y-1/2" />
           <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search caption or platform…"
-            className="w-full bg-bg-tertiary border border-border rounded-lg pl-8 pr-2 py-1.5 text-xs text-ink outline-none focus:border-accent" />
+            className="w-full bg-bg-tertiary border border-border rounded-lg pl-8 pr-2 py-1.5 text-xs text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
         </div>
         <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as typeof statusFilter)}
-          className="bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-ink outline-none focus:border-accent">
+          className="bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20">
           <option value="all">All statuses</option>
           <option value="active">Scheduled &amp; ready</option>
           <option value="published">Published</option>
           <option value="failed">Failed</option>
         </select>
         <select value={platformFilter} onChange={e => setPlatformFilter(e.target.value as typeof platformFilter)}
-          className="bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-ink outline-none focus:border-accent">
+          className="bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20">
           <option value="all">All platforms</option>
           {platformsPresent.map(p => <option key={p} value={p}>{channelDef(p).label}</option>)}
         </select>
@@ -204,7 +209,7 @@ export function PublishingQueue({ userId }: { userId: string }) {
       </div>
 
       {filtered.length === 0 ? (
-        <InlineEmpty icon={Search}>No posts match those filters.</InlineEmpty>
+        <InlineEmpty icon={Search}>No posts match your filters.</InlineEmpty>
       ) : (
         <>
           {active.length > 0 && (
@@ -217,7 +222,7 @@ export function PublishingQueue({ userId }: { userId: string }) {
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">History · {history.length}</p>
-                <button onClick={clear} className="text-[11px] text-ink-faint hover:text-red-400 inline-flex items-center gap-1"><Trash2 className="w-3 h-3" /> Clear</button>
+                <button onClick={clear} className="text-[11px] text-ink-faint hover:text-red-400 inline-flex items-center gap-1"><Trash2 className="w-3 h-3" /> Clear history</button>
               </div>
               {history.map(j => <Row key={j.id} j={j} />)}
             </div>

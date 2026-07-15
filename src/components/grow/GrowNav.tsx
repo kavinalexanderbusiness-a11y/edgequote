@@ -19,7 +19,7 @@ const ITEMS: RailItem[] = [
   { label: 'Calendar', href: '/dashboard/grow/calendar', icon: CalendarDays },
   { label: 'Posts', href: '/dashboard/grow/posts', icon: LayoutGrid },
   { label: 'Library', href: '/dashboard/grow/library', icon: Images },
-  { label: 'Before & after', href: '/dashboard/grow/before-after', icon: ArrowLeftRight },
+  { label: 'Before / After', href: '/dashboard/grow/before-after', icon: ArrowLeftRight },
   { label: 'Campaigns', href: '/dashboard/grow/campaigns', icon: Megaphone },
   { label: 'Ideas', href: '/dashboard/grow/ideas', icon: Lightbulb },
   { label: 'Automations', href: '/dashboard/grow/crm', icon: Bot },
@@ -28,7 +28,9 @@ const ITEMS: RailItem[] = [
 export function GrowNav() {
   const pathname = usePathname()
   return (
-    <div className="flex gap-1.5 overflow-x-auto no-scrollbar -mx-1 px-1 pb-1">
+    // The right-edge fade tells phones the rail keeps going — 9 pills never fit,
+    // and no-scrollbar otherwise hides every cue that Campaigns/Ideas/Automations exist.
+    <nav aria-label="Grow sections" className="flex gap-1.5 overflow-x-auto no-scrollbar -mx-1 px-1 pb-1 [mask-image:linear-gradient(to_right,black_calc(100%-28px),transparent)] sm:[mask-image:none]">
       {ITEMS.map(item => {
         const Icon = item.icon
         const active = item.href && (item.href === '/dashboard/grow'
@@ -40,7 +42,7 @@ export function GrowNav() {
             <span key={item.label} className={cn(base, 'bg-surface/50 text-ink-faint border-border cursor-default')} aria-disabled>
               <Icon className="w-3.5 h-3.5" />
               {item.label}
-              <span className="text-[9px] uppercase tracking-wide text-ink-faint/70 bg-ink-faint/10 rounded px-1 py-0.5">Soon</span>
+              <span className="text-[10px] uppercase tracking-wide text-ink-faint/70 bg-ink-faint/10 rounded px-1 py-0.5">Soon</span>
             </span>
           )
         }
@@ -48,13 +50,14 @@ export function GrowNav() {
           <Link
             key={item.label}
             href={item.href!}
-            className={cn(base, active ? 'bg-accent text-black border-accent' : 'bg-surface text-ink-muted border-border hover:text-ink hover:border-border-strong')}
+            aria-current={active ? 'page' : undefined}
+            className={cn(base, active ? 'bg-accent text-black border-accent font-semibold pill-glow' : 'bg-surface text-ink-muted border-border hover:text-ink hover:border-border-strong')}
           >
-            <Icon className="w-3.5 h-3.5" />
+            <Icon className="w-3.5 h-3.5" aria-hidden="true" />
             {item.label}
           </Link>
         )
       })}
-    </div>
+    </nav>
   )
 }

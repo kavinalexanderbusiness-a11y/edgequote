@@ -25,7 +25,7 @@ export function Banner({ tone = 'accent', variant = 'soft', icon: Icon, children
     <div
       role="status"
       className={cn(
-        'flex items-center gap-2.5 rounded-card border px-4 py-2.5 text-sm',
+        'flex items-center gap-2.5 rounded-card border px-4 py-2.5 text-sm animate-fade',
         solid ? 'bg-ink text-bg border-border-strong shadow-lg' : toneSoft[tone],
         className
       )}

@@ -6,9 +6,11 @@ import { format, parseISO, addDays, nextFriday } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency, cn, localTodayISO } from '@/lib/utils'
 import { Skeleton } from '@/components/ui/Skeleton'
+import { Menu } from '@/components/ui/Menu'
 import {
   ChevronDown, MapPin, Receipt, CalendarClock, DollarSign,
-  MessageSquare, Mail, Plus, Loader2, Check,
+  MessageSquare, Mail, Plus, Check,
+  FileText, CheckCircle2, Sprout, Calendar, Banknote,
 } from 'lucide-react'
 
 // The CRM cockpit at the top of a conversation: an auto-generated activity timeline
@@ -27,7 +29,7 @@ interface Info {
   quotes: Qte[]; jobs: Jb[]; invoices: Inv[]; payments: Pay[]
 }
 
-interface TLEvent { at: string; emoji: string; label: string }
+interface TLEvent { at: string; icon: typeof FileText; label: string }
 
 const FOLLOWUPS: { key: string; label: string; type: string; title: string; when: (today: string) => string }[] = [
   { key: 'call_tmrw', label: 'Call tomorrow', type: 'callback', title: 'Call customer', when: t => format(addDays(parseISO(t + 'T00:00:00'), 1), 'yyyy-MM-dd') },
@@ -39,7 +41,6 @@ export function ConversationInfo({ customerId }: Props) {
   const supabase = useMemo(() => createClient(), [])
   const [info, setInfo] = useState<Info | null>(null)
   const [open, setOpen] = useState(false)
-  const [followOpen, setFollowOpen] = useState(false)
   const [followDone, setFollowDone] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
 
@@ -73,16 +74,16 @@ export function ConversationInfo({ customerId }: Props) {
     const today = localTodayISO()
     const ev: TLEvent[] = []
     for (const q of info.quotes) {
-      ev.push({ at: q.issued_date || q.created_at, emoji: '📄', label: 'Quote sent' })
-      if (q.status === 'accepted') ev.push({ at: q.issued_date || q.created_at, emoji: '✅', label: 'Quote accepted' })
+      ev.push({ at: q.issued_date || q.created_at, icon: FileText, label: 'Quote sent' })
+      if (q.status === 'accepted') ev.push({ at: q.issued_date || q.created_at, icon: CheckCircle2, label: 'Quote accepted' })
     }
     for (const j of info.jobs) {
-      if (j.completed_at || j.status === 'completed') ev.push({ at: j.completed_at || j.scheduled_date, emoji: '🌱', label: `${j.service_type || 'Service'} completed` })
-      else if (j.scheduled_date >= today) ev.push({ at: j.scheduled_date, emoji: '📅', label: `${j.service_type || 'Visit'} scheduled` })
+      if (j.completed_at || j.status === 'completed') ev.push({ at: j.completed_at || j.scheduled_date, icon: Sprout, label: `${j.service_type || 'Service'} completed` })
+      else if (j.scheduled_date >= today) ev.push({ at: j.scheduled_date, icon: Calendar, label: `${j.service_type || 'Visit'} scheduled` })
     }
     for (const i of info.invoices) {
-      ev.push({ at: i.issued_date || i.created_at, emoji: '🧾', label: `Invoice ${i.invoice_number || ''}`.trim() })
-      if (i.status === 'paid' && i.paid_at) ev.push({ at: i.paid_at, emoji: '💵', label: 'Invoice paid' })
+      ev.push({ at: i.issued_date || i.created_at, icon: Receipt, label: `Invoice ${i.invoice_number || ''}`.trim() })
+      if (i.status === 'paid' && i.paid_at) ev.push({ at: i.paid_at, icon: Banknote, label: 'Invoice paid' })
     }
     const timeline = ev.filter(e => e.at).sort((a, b) => a.at.localeCompare(b.at)).slice(-8)
 
@@ -111,7 +112,7 @@ export function ConversationInfo({ customerId }: Props) {
     })
     setBusy(null)
     if (error) return   // don't flip to "Added" if the reminder wasn't actually created
-    setFollowDone(f.key); setFollowOpen(false)
+    setFollowDone(f.key)
     setTimeout(() => setFollowDone(null), 2500)
   }
 
@@ -127,26 +128,24 @@ export function ConversationInfo({ customerId }: Props) {
     <div className="border-b border-border pb-2 mb-2 space-y-2">
       {/* Quick row: follow-up + key facts + expand */}
       <div className="flex items-center gap-2 flex-wrap text-[11px]">
-        <div className="relative">
-          <button onClick={() => setFollowOpen(o => !o)} className="h-7 px-2.5 rounded-lg border border-accent/30 bg-accent/10 text-accent font-medium flex items-center gap-1 hover:bg-accent/20">
-            {followDone ? <><Check className="w-3 h-3" /> Added</> : <><Plus className="w-3 h-3" /> Follow up</>}
-          </button>
-          {followOpen && (
-            <div className="absolute left-0 top-8 z-20 w-48 rounded-xl border border-border bg-bg-secondary shadow-xl overflow-hidden py-1 origin-top-left animate-[popIn_0.12s_ease-out]">
-              {FOLLOWUPS.map(f => (
-                <button key={f.key} onClick={() => addFollowUp(f)} disabled={busy === f.key}
-                  className="w-full text-left px-3 py-2 text-xs text-ink hover:bg-surface/60 flex items-center gap-2 disabled:opacity-50">
-                  {busy === f.key ? <Loader2 className="w-3 h-3 animate-spin" /> : <CalendarClock className="w-3 h-3 text-ink-faint" />} {f.label}
-                </button>
-              ))}
-              <p className="px-3 pt-1 text-[10px] text-ink-faint border-t border-border mt-1">Creates a schedule item</p>
-            </div>
+        <Menu align="start" width={220} ariaLabel="Follow up"
+          items={FOLLOWUPS.map((f, i) => ({
+            key: f.key, label: f.label, icon: CalendarClock,
+            description: i === 0 ? 'Creates a schedule item' : undefined,
+            disabled: busy !== null,
+            onSelect: () => addFollowUp(f),
+          }))}>
+          {({ toggle, triggerProps }) => (
+            <button type="button" onClick={toggle} {...triggerProps}
+              className="h-7 px-2.5 rounded-lg border border-accent/30 bg-accent/10 text-accent font-medium flex items-center gap-1 hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+              {followDone ? <><Check className="w-3 h-3" /> Added</> : <><Plus className="w-3 h-3" /> Follow up</>}
+            </button>
           )}
-        </div>
+        </Menu>
         {derived.lifetime > 0 && <Fact icon={DollarSign} text={`${formatCurrency(derived.lifetime)} lifetime`} />}
         {derived.nextVisit && <Fact icon={CalendarClock} text={`Next ${format(parseISO(derived.nextVisit.scheduled_date + 'T00:00:00'), 'MMM d')}`} />}
         {derived.unpaid.length > 0 && <Fact icon={Receipt} text={`${formatCurrency(derived.unpaidTotal)} owing`} tone="text-amber-400" />}
-        <button onClick={() => setOpen(o => !o)} className="ml-auto text-ink-faint hover:text-ink flex items-center gap-1">
+        <button onClick={() => setOpen(o => !o)} aria-expanded={open} className="ml-auto text-ink-faint hover:text-ink flex items-center gap-1">
           Info <ChevronDown className={cn('w-3.5 h-3.5 transition-transform', open && 'rotate-180')} />
         </button>
       </div>
@@ -174,7 +173,7 @@ export function ConversationInfo({ customerId }: Props) {
             <div className="flex items-center gap-2 overflow-x-auto pt-2 border-t border-border">
               {derived.timeline.map((e, i) => (
                 <span key={i} className="shrink-0 inline-flex items-center gap-1 text-[11px] rounded-full border border-border bg-bg-secondary px-2 py-0.5 text-ink-muted" title={e.label}>
-                  <span>{e.emoji}</span> <span className="font-medium text-ink">{e.label}</span>
+                  <e.icon className="w-3 h-3" /> <span className="font-medium text-ink">{e.label}</span>
                   <span className="text-ink-faint">{(() => { try { return format(parseISO(e.at.slice(0, 10) + 'T00:00:00'), 'MMM d') } catch { return '' } })()}</span>
                 </span>
               ))}
@@ -192,7 +191,7 @@ function Fact({ icon: Icon, text, tone }: { icon: typeof DollarSign; text: strin
 function Cell({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="min-w-0">
-      <p className="text-[9px] uppercase tracking-wide text-ink-faint">{label}</p>
+      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
       <div className="truncate mt-0.5">{children}</div>
     </div>
   )

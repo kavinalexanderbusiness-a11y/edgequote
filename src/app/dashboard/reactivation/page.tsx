@@ -9,7 +9,10 @@ import { seasonForService, isWithinSeason, settingsToSeasons, ServiceSeasons } f
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
-import { Phone, MessageSquare, FileText, CalendarPlus, HeartPulse, DollarSign, Percent, TrendingUp, AlertTriangle, Repeat, Star } from 'lucide-react'
+import { StatTile } from '@/components/ui/StatTile'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { Skeleton, SkeletonTiles } from '@/components/ui/Skeleton'
+import { Phone, MessageSquare, FileText, CalendarPlus, HeartPulse, DollarSign, Percent, TrendingUp, AlertTriangle, Repeat } from 'lucide-react'
 
 interface JobLite { customer_id: string | null; scheduled_date: string; status: string; service_type: string | null; quote_id: string | null; recurrence_id: string | null; price: number | null }
 interface QuoteLite { id: string; customer_id: string | null; status: string; total: number | null; service_type: string; created_at: string; initial_price: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null }
@@ -224,47 +227,58 @@ export default function ReactivationPage() {
     load()
   }, [])
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Finding lapsed customers…</div>
+  if (loading) {
+    return (
+      <div className="max-w-5xl mx-auto space-y-6">
+        <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Customer Reactivation" description="Win back customers you already paid to acquire." />
+        <SkeletonTiles count={4} />
+        <Card className="p-5"><Skeleton className="h-4 w-48" /><Skeleton className="h-3 w-72 mt-2.5" /></Card>
+      </div>
+    )
+  }
 
   return (
-    <div className="max-w-4xl space-y-6">
-      <PageHeader title="Customer Reactivation" description="Win back customers you already paid to acquire" />
+    <div className="max-w-5xl mx-auto space-y-6">
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Customer Reactivation" description="Win back customers you already paid to acquire." />
 
       {/* Headline metrics */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <Metric icon={AlertTriangle} label="At risk" value={String(metrics.atRisk)} tone="text-amber-400" />
-        <Metric icon={DollarSign} label="Potential recovery" value={formatCurrency(metrics.potential)} tone="text-accent" />
-        <Metric icon={Percent} label="Reactivation rate" value={`${metrics.reactivationRate}%`} />
-        <Metric icon={TrendingUp} label="Recovered (1y)" value={formatCurrency(metrics.revenueRecovered)} tone="text-emerald-400" />
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 animate-rise">
+        <StatTile icon={AlertTriangle} label="At risk" value={String(metrics.atRisk)} tone="warn" />
+        <StatTile icon={DollarSign} label="Potential recovery" value={formatCurrency(metrics.potential)} tone="accent" />
+        <StatTile icon={Percent} label="Reactivation rate" value={`${metrics.reactivationRate}%`} />
+        <StatTile icon={TrendingUp} label="Recovered (1y)" value={formatCurrency(metrics.revenueRecovered)} tone="success" />
       </div>
 
       {/* Recurring series ran out — the urgent re-book queue (any days-since) */}
       {ranOut.length > 0 && (
         <div className="space-y-3">
           <div className="flex items-center gap-2 flex-wrap">
-            <Repeat className="w-4 h-4 text-red-400" />
-            <h2 className="text-sm font-bold text-red-400">Recurring series ran out</h2>
-            <span className="text-xs text-ink-faint">No next visit booked · {ranOut.length} customer{ranOut.length !== 1 ? 's' : ''} · {formatCurrency(ranOut.reduce((s, r) => s + r.perVisit, 0))}/visit at stake</span>
+            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
+              <Repeat className="w-3.5 h-3.5 text-accent" />
+            </span>
+            <h2 className="text-sm font-semibold text-ink tracking-tight">Recurring series ran out</h2>
+            <span className="text-xs text-ink-faint tabular-nums">No next visit booked · {ranOut.length} customer{ranOut.length !== 1 ? 's' : ''} · {formatCurrency(ranOut.reduce((s, r) => s + r.perVisit, 0))}/visit at stake</span>
+            <span className="flex-1 h-px bg-border" aria-hidden />
           </div>
-          {ranOut.map(r => <RanOutCard key={r.customer.id} r={r} />)}
+          {ranOut.map((r, i) => <div key={r.customer.id} className={`animate-rise stagger-${Math.min(i + 1, 6)}`}><RanOutCard r={r} /></div>)}
         </div>
       )}
 
       {risk.length === 0 && ranOut.length === 0 ? (
-        <Card><CardBody className="text-center py-12 text-sm text-ink-muted">
-          <HeartPulse className="w-6 h-6 mx-auto mb-2 text-emerald-400" />
-          No lapsed customers — everyone with service history is booked or recently served. Nice.
-        </CardBody></Card>
+        <Card><EmptyState icon={HeartPulse} tone="positive" className="py-14" title="Every customer is booked or recently served"
+          description="When someone starts slipping away, they’ll appear here — valued and ranked, with one-tap ways to reach out." /></Card>
       ) : BUCKETS.map(b => {
         const list = risk.filter(r => r.bucket === b.key)
         if (list.length === 0) return null
         return (
           <div key={b.key} className="space-y-3">
             <div className="flex items-center gap-2">
-              <h2 className={`text-sm font-bold ${b.tone}`}>{b.label}</h2>
-              <span className="text-xs text-ink-faint">{b.sub} · {list.length} customer{list.length !== 1 ? 's' : ''} · {formatCurrency(list.reduce((s, r) => s + r.potentialRecovery, 0))} potential</span>
+              <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><AlertTriangle className="w-3.5 h-3.5 text-accent" /></span>
+              <h2 className={`text-sm font-semibold tracking-tight ${b.tone}`}>{b.label}</h2>
+              <span className="text-xs text-ink-faint tabular-nums">{b.sub} · {list.length} customer{list.length !== 1 ? 's' : ''} · {formatCurrency(list.reduce((s, r) => s + r.potentialRecovery, 0))} potential</span>
+              <span className="flex-1 h-px bg-border" aria-hidden />
             </div>
-            {list.map(r => <RiskCard key={r.customer.id} r={r} />)}
+            {list.map((r, i) => <div key={r.customer.id} className={`animate-rise stagger-${Math.min(i + 1, 6)}`}><RiskCard r={r} /></div>)}
           </div>
         )
       })}
@@ -272,23 +286,13 @@ export default function ReactivationPage() {
   )
 }
 
-function Metric({ icon: Icon, label, value, tone }: { icon: typeof DollarSign; label: string; value: string; tone?: string }) {
-  return (
-    <Card className="p-4">
-      <div className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-muted uppercase tracking-wide">
-        <Icon className="w-3.5 h-3.5" /> {label}
-      </div>
-      <p className={`text-2xl font-bold tracking-tight mt-1 ${tone || 'text-ink'}`}>{value}</p>
-    </Card>
-  )
-}
 
 function RiskCard({ r }: { r: RiskCustomer }) {
   const c = r.customer
   const phone = c.phone || null
   const months = Math.floor(r.daysSince / 30)
   return (
-    <Card>
+    <Card className="card-lift">
       <CardBody className="space-y-3">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -301,8 +305,8 @@ function RiskCard({ r }: { r: RiskCustomer }) {
             </p>
           </div>
           <div className="text-right shrink-0">
-            <p className="text-[10px] uppercase tracking-wide text-ink-faint">Potential</p>
-            <p className="text-lg font-bold text-accent">{formatCurrency(r.potentialRecovery)}</p>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">Potential</p>
+            <p className="text-lg font-bold text-accent tabular-nums">{formatCurrency(r.potentialRecovery)}</p>
           </div>
         </div>
 
@@ -339,16 +343,16 @@ function RiskCard({ r }: { r: RiskCustomer }) {
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-border bg-bg-tertiary px-2.5 py-1.5">
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint truncate">{label}</p>
-      <p className="text-sm font-bold text-ink mt-0.5 truncate">{value}</p>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint truncate">{label}</p>
+      <p className="text-sm font-bold text-ink mt-0.5 truncate tabular-nums">{value}</p>
     </div>
   )
 }
 
 function VipChip() {
   return (
-    <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-amber-300 border border-amber-400/40 bg-amber-400/10 rounded px-1.5 py-0.5 shrink-0">
-      <Star className="w-3 h-3" /> VIP
+    <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-ink-muted shrink-0">
+      <span className="w-1.5 h-1.5 rounded-full bg-accent" /> VIP
     </span>
   )
 }
@@ -358,7 +362,7 @@ function RanOutCard({ r }: { r: RanOutCustomer }) {
   const phone = c.phone || null
   const cadence = r.cadence === 'weekly' ? 'Weekly' : r.cadence === 'biweekly' ? 'Bi-weekly' : r.cadence === 'monthly' ? 'Monthly' : 'Recurring'
   return (
-    <Card className="border-red-500/20">
+    <Card className="border-red-500/20 card-lift">
       <CardBody className="space-y-3">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
@@ -371,8 +375,8 @@ function RanOutCard({ r }: { r: RanOutCustomer }) {
             </p>
           </div>
           <div className="text-right shrink-0">
-            <p className="text-[10px] uppercase tracking-wide text-ink-faint">Per visit</p>
-            <p className="text-lg font-bold text-accent">{r.perVisit > 0 ? formatCurrency(r.perVisit) : '—'}</p>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">Per visit</p>
+            <p className="text-lg font-bold text-accent tabular-nums">{r.perVisit > 0 ? formatCurrency(r.perVisit) : '—'}</p>
           </div>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">

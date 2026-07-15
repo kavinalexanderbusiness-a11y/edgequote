@@ -1,113 +1,73 @@
 import { WeekendOutlook } from '@/components/dashboard/WeekendOutlook'
-import { DashboardSections } from '@/components/dashboard/DashboardSections'
-import { createClient } from '@/lib/supabase/server'
-import { StatsGrid } from '@/components/dashboard/StatsGrid'
-import { RecentQuotes } from '@/components/dashboard/RecentQuotes'
-import { AcquisitionInsights } from '@/components/dashboard/AcquisitionInsights'
-import { DashboardTopSuggestions } from '@/components/dashboard/DashboardTopSuggestions'
 import { TodaysPriorities } from '@/components/dashboard/TodaysPriorities'
-import { UnscheduledAccepted } from '@/components/dashboard/UnscheduledAccepted'
-import { MissedJobs } from '@/components/dashboard/MissedJobs'
-import { TodayJobs } from '@/components/dashboard/TodayJobs'
+import { DashboardKpis } from '@/components/dashboard/DashboardKpis'
+import { createClient } from '@/lib/supabase/server'
+import { invoiceBalance } from '@/lib/payments/ledger'
 import { PageHeader } from '@/components/layout/PageHeader'
-import { DashboardStats, Quote } from '@/types'
+import { PageContainer } from '@/components/layout/PageContainer'
 import Link from 'next/link'
-import { Button } from '@/components/ui/Button'
 import { Plus } from 'lucide-react'
 
+// The 7:00-AM owner view — answers both halves of the morning:
+//   WHAT DO I DO TODAY?
+//     1. What first?            → Today's Priorities (ranked queue)
+//     2. Who owes me money?     → Today's Priorities (unpaid-invoices row)
+//     3. What jobs are today?   → Your next work days (today's stops, call/map)
+//     4. What needs scheduling? → Today's Priorities (accepted-not-scheduled row)
+//     5. Who needs follow-up?   → Today's Priorities (follow-up-quotes row)
+//   HOW IS MY BUSINESS DOING?  → the compact KPI strip (Collected, Outstanding,
+//     Jobs This Month, Conversion) under the day plan.
+// Nothing else earns space: growth suggestions, recent quotes and acquisition
+// insights don't help you start the day and live on their own pages.
 export default async function DashboardPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
-  const [{ data: quotes }, { data: invoices }, { data: jobs }, { data: settingsRow }] = await Promise.all([
-    supabase.from('quotes').select('*').eq('user_id', user!.id).order('created_at', { ascending: false }),
-    supabase.from('invoices').select('amount, status, amount_paid').eq('user_id', user!.id),
-    supabase.from('jobs').select('status, scheduled_date, quote_id').eq('user_id', user!.id),
-    supabase.from('business_settings').select('dashboard_cards, gst_percent').eq('user_id', user!.id).maybeSingle(),
+  const [{ data: invoices }, { data: jobs }, { data: quotes }, { data: settingsRow }] = await Promise.all([
+    supabase.from('invoices').select('amount, status, amount_paid, discount_type, discount_value').eq('user_id', user!.id),
+    supabase.from('jobs').select('status, scheduled_date').eq('user_id', user!.id),
+    supabase.from('quotes').select('status').eq('user_id', user!.id),
+    supabase.from('business_settings').select('gst_percent').eq('user_id', user!.id).maybeSingle(),
   ])
+  const allInvoices = (invoices as { amount: number; status: string; amount_paid?: number; discount_type: 'amount' | 'percent' | null; discount_value: number | null }[]) || []
+  const allJobs = (jobs as { status: string; scheduled_date: string }[]) || []
+  const allQuotes = (quotes as { status: string }[]) || []
 
-  const allQuotes: Quote[] = quotes || []
-  const allInvoices = (invoices as { amount: number; status: string; amount_paid?: number }[]) || []
-  const allJobs = (jobs as { status: string; scheduled_date: string; quote_id: string | null }[]) || []
-  // Accepted quotes with no live job — feeds the "not yet scheduled" safety net
-  // below without a second client fetch. Cancelled jobs must NOT count as
-  // "scheduled": an accepted quote whose only job was cancelled would otherwise
-  // vanish from that card.
-  const scheduledQuoteIds = new Set(allJobs.filter(j => j.quote_id && j.status !== 'cancelled').map(j => j.quote_id))
-  const unscheduledAccepted = allQuotes.filter(q => q.status === 'accepted' && !scheduledQuoteIds.has(q.id))
-  // Ledger-aware: Collected = money actually received (amount_paid, including
-  // partial payments) — agrees with the Invoices page and the portal.
-  // (Outstanding is NOT a stat tile: it's already an actionable row in Today's
-  // Priorities — the decluttered grid must not reintroduce it.)
-  const collectedRevenue = allInvoices.reduce((s, i) => s + (Number(i.amount_paid) || 0), 0)
+  // Ledger-aware, so these agree with the "Collect unpaid invoices" priority AND the
+  // Invoices page: Collected = money actually received (amount_paid, incl. partials);
+  // Outstanding = remaining GST-inclusive balance across issued invoices.
+  const collected = allInvoices.reduce((s, i) => s + (Number(i.amount_paid) || 0), 0)
+  const outstanding = allInvoices
+    .filter(i => i.status !== 'draft' && i.status !== 'cancelled')
+    .reduce((s, i) => s + Math.max(0, invoiceBalance(i, settingsRow).balance), 0)
 
-  // Month boundary — only needed for the "this month" jobs count below.
   const now = new Date()
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+  const monthStartISO = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
+  const jobsThisMonth = allJobs.filter(j => j.status === 'completed' && j.scheduled_date >= monthStartISO).length
 
-  // Conversion rate = accepted / (everything except draft)
-  const acceptedCount = allQuotes.filter(q => q.status === 'accepted').length
-  const decidedCount = allQuotes.filter(q => q.status !== 'draft').length
-  const conversionRate = decidedCount > 0
-    ? Math.round((acceptedCount / decidedCount) * 100)
-    : 0
+  const accepted = allQuotes.filter(q => q.status === 'accepted').length
+  const decided = allQuotes.filter(q => q.status !== 'draft').length
+  const conversionRate = decided > 0 ? Math.round((accepted / decided) * 100) : 0
 
-  // Done (completed) jobs feed reporting.
-  const doneJobs = allJobs.filter(j => j.status === 'completed')
-  const monthStartISO = `${monthStart.getFullYear()}-${String(monthStart.getMonth() + 1).padStart(2, '0')}-01`
-  const jobsDone = doneJobs.length
-  const jobsDoneThisMonth = doneJobs.filter(j => j.scheduled_date >= monthStartISO).length
-
-  const stats: DashboardStats = {
-    collectedRevenue,
-    acceptedRevenue: allQuotes
-      .filter(q => q.status === 'accepted')
-      .reduce((sum, q) => sum + Number(q.total), 0),
-    jobsDone,
-    jobsDoneThisMonth,
-    conversionRate,
-  }
-
-  // 5 is enough for a glance — the full list is one tap away ("View all").
-  const recent = allQuotes.slice(0, 5)
-
-  const hour = new Date().getHours()
+  const hour = now.getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
+  const dateLine = now.toLocaleDateString('en-CA', { weekday: 'long', month: 'long', day: 'numeric' })
 
   return (
-    <div className="max-w-6xl space-y-6">
+    <PageContainer width="wide">
       <PageHeader
         title={greeting}
-        description="Here's what's happening with your business today."
+        description={`${dateLine} — your day, and how the business is doing.`}
         action={
-          <Link href="/dashboard/quotes/new">
-            <Button>
-              <Plus className="w-4 h-4" /> New Quote
-            </Button>
+          <Link href="/dashboard/quotes/new"
+            className="inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-accent text-black hover:bg-accent-hover active:scale-[0.98] shadow-sm px-4 py-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+            <Plus className="w-4 h-4" /> New quote
           </Link>
         }
       />
-      {/* Operational block — what to work on RIGHT NOW, fixed above the customizable
-          business-overview sections so it always leads the page:
-            1. Today's Priorities — the ranked triage queue (money owed, risk, replies).
-            2. Accepted — not yet scheduled — committed revenue at risk, one-tap to book.
-            3. Missed jobs — past-date visits still open, one-tap Done / move-to-today.
-               (2 and 3 render null when there's nothing slipping — silent on a clean day.)
-            4. Today's Jobs — the day's route with one-tap call / open-in-Maps. */}
-      <TodaysPriorities />
-      <UnscheduledAccepted quotes={unscheduledAccepted} />
-      <MissedJobs />
-      <TodayJobs />
-      <DashboardSections
-        initialPrefs={(settingsRow as { dashboard_cards: { order: string[]; hidden: string[] } | null } | null)?.dashboard_cards ?? null}
-        sections={{
-          suggestions: <DashboardTopSuggestions />,
-          stats: <StatsGrid stats={stats} />,
-          weekend: <WeekendOutlook />,
-          recent: <RecentQuotes quotes={recent} />,
-          acquisition: <AcquisitionInsights />,
-        }}
-      />
-    </div>
+      <div className="animate-rise"><TodaysPriorities /></div>
+      <div className="animate-rise stagger-2"><WeekendOutlook /></div>
+      <div className="animate-rise stagger-3"><DashboardKpis collected={collected} outstanding={outstanding} jobsThisMonth={jobsThisMonth} conversionRate={conversionRate} /></div>
+    </PageContainer>
   )
 }

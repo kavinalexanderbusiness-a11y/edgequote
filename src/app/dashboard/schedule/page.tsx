@@ -17,6 +17,7 @@ import { resolveAutomations, Automations } from '@/lib/comms/automations'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { Skeleton, SkeletonRows } from '@/components/ui/Skeleton'
 import { cn, minutesBetween } from '@/lib/utils'
 import { toast } from '@/lib/toast'
 import { format, addMonths, addWeeks, addDays, subMonths, subWeeks, subDays, parseISO, getDay } from 'date-fns'
@@ -39,6 +40,7 @@ import { buildDayStatusMap, buildCapacityForDate, dayStartTime, isDayBlocked, lo
 import { directionsUrl } from '@/lib/route'
 import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
+import { useFocusTrap } from '@/hooks/useFocusTrap'
 import { DaySettingsBar } from '@/components/schedule/DaySettingsBar'
 import { WeatherRainCard, type RainMoveSummary } from '@/components/schedule/WeatherRainCard'
 import { loadWeatherImpact, type WeatherImpactReport, type DayImpact } from '@/lib/weatherImpact'
@@ -127,6 +129,8 @@ export default function SchedulePage() {
   const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(new Set())
   // Soft warning before a hand move that breaks cadence or a customer preference.
   const [moveConfirm, setMoveConfirm] = useState<{ job: Job; newDate: string; warnings: string[] } | null>(null)
+  // Dialog focus management for the move-confirm overlay (Escape/trap/restore).
+  const moveConfirmRef = useFocusTrap<HTMLDivElement>(!!moveConfirm, () => setMoveConfirm(null))
   // After a job is added, auto-propose optimization — LOCAL first (the new job's
   // week), escalating to month/all-future ONLY for a substantial gain. Carries
   // the new job's date so the proposal is anchored around it.
@@ -1264,9 +1268,23 @@ export default function SchedulePage() {
     await fetchJobs()
   }
   async function removeLineItem(item: JobLineItem) {
+    // Snapshot BEFORE deleting: a grouped (plan-wide) add-on removes rows across
+    // many visits, so Undo must restore the whole group, not just this row.
+    let snapshot: JobLineItem[] = [item]
+    if (item.group_id) {
+      const { data } = await supabase.from('job_line_items').select('*').eq('group_id', item.group_id)
+      if (data?.length) snapshot = data as JobLineItem[]
+    }
     await deleteLineItem(supabase, item)
-    await syncDraftInvoiceAmounts(supabase, [item.job_id])
+    const affectedJobs = [...new Set(snapshot.map(r => r.job_id))]
+    await syncDraftInvoiceAmounts(supabase, affectedJobs)
     await fetchJobs()
+    const scope = snapshot.length > 1 ? ` from ${snapshot.length} visits` : ''
+    toast.undo(`Removed “${item.description}” ($${Number(item.amount).toFixed(2)})${scope}`, async () => {
+      await supabase.from('job_line_items').insert(snapshot)
+      await syncDraftInvoiceAmounts(supabase, affectedJobs)
+      await fetchJobs()
+    })
   }
   // The previous visit's add-ons (most recent earlier visit of the same series, or
   // same customer for one-offs, that had any). Drives the one-tap "copy previous".
@@ -1446,10 +1464,11 @@ export default function SchedulePage() {
     setShowForm(true)
   }
 
+  // Day view leads with the WEEKDAY — it's the datum you're paging by.
   const headingLabel =
     view === 'month' ? format(cursor, 'MMMM yyyy')
     : view === 'week' ? `Week of ${format(cursor, 'MMM d, yyyy')}`
-    : format(cursor, 'MMMM d, yyyy')
+    : format(cursor, 'EEEE, MMM d, yyyy')
 
   const viewButtons: CalendarView[] = ['month', 'week', 'day']
 
@@ -1458,7 +1477,7 @@ export default function SchedulePage() {
     : pendingAction?.type === 'price' ? 'Update price for' : 'Save changes to'
 
   return (
-    <div className="max-w-5xl space-y-6">
+    <div className="max-w-6xl mx-auto space-y-6">
       <PageHeader
         title="Schedule"
         description={`${jobs.length} job${jobs.length !== 1 ? 's' : ''} on the calendar`}
@@ -1489,22 +1508,23 @@ export default function SchedulePage() {
       {/* Controls */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-2 flex-wrap">
-          <Button variant="secondary" size="sm" onClick={() => navigate(-1)}>
+          <Button variant="secondary" size="sm" aria-label="Previous period" onClick={() => navigate(-1)}>
             <ChevronLeft className="w-4 h-4" />
           </Button>
           <Button variant="secondary" size="sm" onClick={() => setCursor(new Date())}>Today</Button>
-          <Button variant="secondary" size="sm" onClick={() => navigate(1)}>
+          <Button variant="secondary" size="sm" aria-label="Next period" onClick={() => navigate(1)}>
             <ChevronRight className="w-4 h-4" />
           </Button>
-          <span className="text-sm font-semibold text-ink ml-2">{headingLabel}</span>
+          <span className="text-base font-bold tracking-tight text-ink ml-2">{headingLabel}</span>
         </div>
         <div className="flex items-center gap-1 bg-bg-secondary border border-border rounded-xl p-1">
           {viewButtons.map(v => (
             <button
               key={v}
               onClick={() => setView(v)}
+              aria-pressed={view === v}
               className={cn(
-                'px-3 py-1.5 rounded-lg text-sm font-medium capitalize transition-all',
+                'px-3 py-1.5 rounded-lg text-sm font-medium capitalize transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
                 view === v ? 'bg-accent text-black' : 'text-ink-muted hover:text-ink'
               )}
             >
@@ -1586,7 +1606,7 @@ export default function SchedulePage() {
                 )}
               </div>
               <button onClick={() => setDismissedSuggestions(prev => new Set(prev).add(s.id))}
-                className="text-ink-faint hover:text-ink shrink-0" title="Dismiss">
+                className="text-ink-faint hover:text-ink shrink-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" title="Dismiss" aria-label="Dismiss suggestion">
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
@@ -1596,18 +1616,18 @@ export default function SchedulePage() {
 
       {/* Edit/New job — modal overlay so Open always brings the correct job into view */}
       {(showForm || editing) && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/60 backdrop-blur-sm" onClick={closeForm}>
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/50" onClick={closeForm}>
           <div className="min-h-full flex items-start justify-center p-4 sm:p-6">
-            <Card className="w-full max-w-2xl my-2 shadow-2xl" onClick={e => e.stopPropagation()}>
+            <Card role="dialog" aria-modal="true" aria-labelledby="job-form-title" className="w-full max-w-2xl my-2 shadow-2xl" onClick={e => e.stopPropagation()}>
           <CardHeader className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-ink">{editing ? 'Edit Job' : 'New Job'}</h2>
+            <h2 id="job-form-title" className="text-sm font-semibold text-ink">{editing ? 'Edit Job' : 'New Job'}</h2>
             <div className="flex items-center gap-2">
               {editing && (
-                <button onClick={handleDelete} className="text-ink-faint hover:text-red-400 transition-colors" title="Delete job">
+                <button onClick={handleDelete} className="text-red-400/70 hover:text-red-400 transition-colors" title="Delete job" aria-label="Delete job">
                   <Trash2 className="w-4 h-4" />
                 </button>
               )}
-              <button onClick={closeForm} className="text-ink-faint hover:text-ink transition-colors">
+              <button onClick={closeForm} className="text-ink-faint hover:text-ink transition-colors" aria-label="Close">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -1687,7 +1707,12 @@ export default function SchedulePage() {
       )}
 
       {loading ? (
-        <div className="text-center py-16 text-sm text-ink-muted">Loading schedule...</div>
+        // Shimmer in the shape of the day view (settings bar + job rows) — the
+        // shared skeleton language instead of a bare "Loading…" line.
+        <div className="space-y-3">
+          <Skeleton className="h-12 w-full rounded-card" />
+          <SkeletonRows count={5} />
+        </div>
       ) : view === 'day' ? (
         <>
         <DaySettingsBar
@@ -1758,11 +1783,11 @@ export default function SchedulePage() {
 
       {/* Soft cadence / preference warning before a hand move */}
       {moveConfirm && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setMoveConfirm(null)}>
-          <Card className="w-full max-w-md shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div ref={moveConfirmRef} className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4" onClick={() => setMoveConfirm(null)}>
+          <Card role="dialog" aria-modal="true" aria-labelledby="move-confirm-title" tabIndex={-1} className="w-full max-w-md shadow-2xl focus:outline-none" onClick={e => e.stopPropagation()}>
             <CardHeader className="flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-amber-400" />
-              <h2 className="text-sm font-semibold text-ink">Move to {format(parseISO(moveConfirm.newDate + 'T00:00:00'), 'EEE, MMM d')}?</h2>
+              <AlertTriangle className="w-4 h-4 text-amber-400" aria-hidden="true" />
+              <h2 id="move-confirm-title" className="text-sm font-semibold text-ink">Move to {format(parseISO(moveConfirm.newDate + 'T00:00:00'), 'EEE, MMM d')}?</h2>
             </CardHeader>
             <CardBody className="space-y-3">
               <ul className="space-y-1.5">
@@ -1835,15 +1860,12 @@ export default function SchedulePage() {
       {selectedDays.size > 0 && (
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[55] flex items-center gap-2 rounded-2xl border border-border bg-bg-secondary/95 backdrop-blur px-4 py-2.5 shadow-2xl">
           <span className="text-sm font-semibold text-ink">{selectedDays.size} day{selectedDays.size !== 1 ? 's' : ''} selected</span>
-          <button
-            onClick={() => setDayMenu({ dates: Array.from(selectedDays), current: null, x: window.innerWidth / 2 - 124, y: Math.max(60, window.innerHeight / 2 - 200) })}
-            className="px-3 py-1.5 rounded-lg bg-accent text-black text-xs font-semibold hover:bg-accent/90 transition-colors">Set status</button>
-          <button
-            onClick={() => clearDayStatusFor(Array.from(selectedDays))}
-            className="px-3 py-1.5 rounded-lg border border-border text-xs font-medium text-ink-muted hover:text-ink transition-colors">Clear</button>
-          <button
-            onClick={() => setSelectedDays(new Set())}
-            className="px-2 py-1.5 rounded-lg text-xs font-medium text-ink-faint hover:text-ink transition-colors">Done</button>
+          <Button size="sm"
+            onClick={() => setDayMenu({ dates: Array.from(selectedDays), current: null, x: window.innerWidth / 2 - 124, y: Math.max(60, window.innerHeight / 2 - 200) })}>
+            Set status
+          </Button>
+          <Button size="sm" variant="secondary" onClick={() => clearDayStatusFor(Array.from(selectedDays))}>Clear status</Button>
+          <Button size="sm" variant="ghost" onClick={() => setSelectedDays(new Set())}>Cancel</Button>
         </div>
       )}
     </div>

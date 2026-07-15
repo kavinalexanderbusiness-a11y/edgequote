@@ -629,6 +629,11 @@ export interface CustomerFormValues {
   referred_by_customer_id: string
   birthday: string
   anniversary: string
+  // Contact consent captured at creation (persisted via the shared consent
+  // engine so the audit trail is written). Optional — absent on the edit form,
+  // where the profile's Communication card is the canonical consent manager.
+  sms_opt_in?: boolean
+  email_opt_in?: boolean
 }
 
 // ── CRM automation ──────────────────────────────────────────────────────────
@@ -749,7 +754,8 @@ export interface BusinessSettings {
   payment_fee_strategy: PaymentFeeStrategy | null
   fee_recovery_percent: number | null        // markup % baked into new quotes
   etransfer_discount_percent: number | null  // future: % off for non-card pay (off by default)
-  etransfer_email: string | null             // Interac e-transfer recipient shown in the portal's "Ways to pay"
+  // Where customers send e-transfers — shown in the portal's Ways-to-pay panel.
+  etransfer_email?: string | null
   gst_percent: number | null                 // GST shown/charged only when > 0 (Alberta = 5 when registered)
   // ── Recurring AutoPay ── business-wide default charge mode (a customer may
   // override). 'auto' = charge a saved card the moment a recurring visit completes;

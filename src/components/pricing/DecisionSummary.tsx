@@ -6,7 +6,7 @@ import { PricingPackage } from '@/lib/pricing'
 import { PricePackagePanel, CadenceSelection, CADENCE_LABELS } from '@/components/pricing/PricePackagePanel'
 import { Collapsible } from '@/components/ui/Collapsible'
 import { cn } from '@/lib/utils'
-import { ArrowRight, BarChart3, ChevronDown, DollarSign, Route, Sprout, Star, TrendingUp } from 'lucide-react'
+import { ArrowRight, BarChart3, ChevronDown, DollarSign, Loader2, Route, Sprout, Star, TrendingUp } from 'lucide-react'
 
 // ── 80% of the value in 20% of the screen ───────────────────────────────────
 // The owner reads FIVE numbers and a row of tags, sees the take/minimum/avoid
@@ -67,11 +67,14 @@ function buildTags(a: ProspectAssessment, pkg: PricingPackage): { text: string; 
 }
 
 export function DecisionSummary({
-  a, pkg, onUse,
+  a, pkg, onUse, busy,
 }: {
   a: ProspectAssessment
   pkg: PricingPackage
   onUse: (sel: CadenceSelection) => void
+  /** The parent is acting on the selection (e.g. creating the quote) — the CTA
+      shows a spinner and locks against double-taps. Presentation only. */
+  busy?: boolean
 }) {
   const d = a.decision
   const c = CALL[d.call]
@@ -81,7 +84,7 @@ export function DecisionSummary({
   const tags = buildTags(a, pkg)
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 animate-fade">
       {/* ── DECISION SUMMARY — answers only: take? charge? minimum? freq? why? */}
       <div className={cn('rounded-xl border p-4 space-y-3', c.cls)}>
         {/* Q1 — should I take this customer? */}
@@ -89,8 +92,23 @@ export function DecisionSummary({
           <p className={cn('text-base font-bold', c.tone)}>{c.dot} {d.headline}</p>
           <div className="text-center shrink-0">
             <p className={cn('text-2xl font-black leading-none', gradeTone(a.score))}>{a.score}</p>
-            <p className="text-[9px] uppercase tracking-wide text-ink-faint mt-0.5">Grade</p>
+            <p className="text-[10px] uppercase tracking-wide text-ink-faint mt-0.5">Grade</p>
           </div>
+        </div>
+
+        {/* Why this recommendation? — the top signals behind the grade, straight
+            from the SAME engine (decision.reasons; presentation only). Positive
+            drivers lead; a weak verdict honestly leads with what's dragging it. */}
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint">Why this recommendation?</p>
+          <ul className="mt-1 space-y-0.5">
+            {[...d.reasons].sort((x, y) => Number(y.good) - Number(x.good)).slice(0, 4).map((r, i) => (
+              <li key={i} className="text-[11px] text-ink-muted flex items-center gap-1.5">
+                <span className={cn('font-bold shrink-0', r.good ? 'text-emerald-400' : 'text-amber-400')}>{r.good ? '✓' : '✗'}</span>
+                {r.text}
+              </li>
+            ))}
+          </ul>
         </div>
 
         {/* Q4 frequency + Q2 charge, front and centre — the plan to pitch */}
@@ -117,21 +135,23 @@ export function DecisionSummary({
         </div>
       </div>
 
-      {/* ── PRIMARY ACTION ───────────────────────────────────────────────── */}
+      {/* ── PRIMARY ACTION — spinner + lock while the parent creates the quote */}
       <button
         type="button"
+        disabled={busy}
         onClick={() => onUse({ cadence: recCadence, price: d.recommendedPrice })}
-        className={cn('w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold transition-colors', c.btn)}
+        className={cn('w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold transition-colors disabled:opacity-60 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50', c.btn)}
       >
-        Use {recLabel} — ${d.recommendedPrice}
-        <ArrowRight className="w-4 h-4" />
+        {busy ? 'Creating quote…' : <>Use {recLabel} — ${d.recommendedPrice}</>}
+        {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
       </button>
 
       {/* ── FULL ANALYSIS — folded away until asked for ──────────────────── */}
       <button
         type="button"
+        aria-expanded={showFull}
         onClick={() => setShowFull(s => !s)}
-        className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold text-ink-muted hover:text-ink hover:bg-bg-tertiary transition-colors"
+        className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold text-ink-muted hover:text-ink hover:bg-bg-tertiary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       >
         <BarChart3 className="w-3.5 h-3.5" />
         {showFull ? 'Hide full analysis' : 'View full analysis'}
@@ -139,7 +159,7 @@ export function DecisionSummary({
       </button>
 
       {showFull && (
-        <div className="space-y-2">
+        <div className="space-y-2 animate-fade">
           {/* Pricing Details — the one home for cadence prices + guidance */}
           <Collapsible title="Pricing Details" icon={DollarSign}
             summary={`One-time $${pkg.oneTime} · ${recLabel} $${d.recommendedPrice}`}>
@@ -246,11 +266,13 @@ export function DecisionSummary({
   )
 }
 
+// Stat tiles share ONE micro-label size (text-[10px]) + tabular figures across
+// every pricing card, so grids read as one system.
 function Stat({ label, value, big, tone }: { label: string; value: string; big?: boolean; tone?: string }) {
   return (
     <div className="rounded-lg border border-border bg-bg-secondary px-2.5 py-2">
-      <p className="text-[9px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className={cn('font-bold text-ink', big ? 'text-lg' : 'text-sm', tone)}>{value}</p>
+      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
+      <p className={cn('font-bold text-ink tabular-nums', big ? 'text-lg' : 'text-sm', tone)}>{value}</p>
     </div>
   )
 }
@@ -258,8 +280,8 @@ function Stat({ label, value, big, tone }: { label: string; value: string; big?:
 function Decision({ label, value, tone, cls }: { label: string; value: string; tone: string; cls: string }) {
   return (
     <div className={cn('rounded-lg border px-2.5 py-2 text-center', cls)}>
-      <p className="text-[9px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className={cn('text-base font-bold', tone)}>{value}</p>
+      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
+      <p className={cn('text-base font-bold tabular-nums', tone)}>{value}</p>
     </div>
   )
 }

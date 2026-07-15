@@ -1,24 +1,36 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Customer } from '@/types'
-import { formatDate, getInitials, cn } from '@/lib/utils'
+import { formatDate, cn } from '@/lib/utils'
+import { Avatar } from '@/components/ui/Avatar'
 import { createClient } from '@/lib/supabase/client'
 import { prefetchCustomer, hoverIntent } from '@/lib/prefetch'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { applyConsent, SMS_CONSENT_WARNING, ConsentChannel } from '@/lib/consent'
 import { toast as notify } from '@/lib/toast'
+import { confirm as confirmDialog } from '@/lib/confirm'
 import { useBulkSelect } from '@/hooks/useBulkSelect'
+import { useListShortcuts } from '@/hooks/useListShortcuts'
 import { BulkActionBar, SelectCheckbox, SelectAllToggle, type BulkAction } from '@/components/ui/BulkActions'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import type { MsgType } from '@/lib/comms/templates'
 import { exportRowsToCsv } from '@/lib/csv'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
+import { Menu } from '@/components/ui/Menu'
+import { FilterPill } from '@/components/ui/FilterPill'
 import { EmptyState } from '@/components/ui/EmptyState'
-import { Edit2, Trash2, Phone, Mail, FileText, Search, Link2, Check, MessageSquare, ShieldAlert, Archive, Download, Send, Users } from 'lucide-react'
+import { SearchInput } from '@/components/ui/SearchInput'
+import { Edit2, Phone, Mail, FileText, Link2, MessageSquare, ShieldAlert, Archive, Download, Send, Users, Star, Smartphone, MoreHorizontal } from 'lucide-react'
+
+// Cap the rendered rows so a book of thousands of customers doesn't paint
+// thousands of DOM nodes (janky scroll, slow filter). The full set is still
+// searched/selected/exported — only the DOM is bounded, same idea as the
+// CustomerPicker's 50-row cap. Search narrows to what you're actually after.
+const RENDER_CAP = 100
 
 type ConsentFilter = '' | 'sms_in' | 'sms_out' | 'email_in' | 'email_out' | 'both' | 'neither'
 const CONSENT_FILTERS: { value: ConsentFilter; label: string }[] = [
@@ -42,11 +54,13 @@ interface CustomerListProps {
 
 export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: CustomerListProps) {
   const router = useRouter()
+  const searchRef = useRef<HTMLInputElement>(null)
+  // '/' focuses search, 'n' opens the Add-Customer form — the shared list idiom.
+  useListShortcuts({ search: searchRef, onNew: onAdd })
   const [search, setSearch] = useState('')
   const [consentFilter, setConsentFilter] = useState<ConsentFilter>('')
   const [deleting, setDeleting] = useState<string | null>(null)
   const [portalBusy, setPortalBusy] = useState<string | null>(null)
-  const [smsConfirm, setSmsConfirm] = useState(false)
   // Which template the Send-Message dialog opens on (null = closed; 'choose' = let the
   // owner pick). Lets "Send introduction" / "Review request" be one-tap entries into
   // THE same dialog instead of separate UIs.
@@ -67,12 +81,21 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
   // Memoized so typing in a search box or ticking a bulk-select checkbox (which
   // changes unrelated state) doesn't re-run these O(n) passes over every customer.
   const filtered = useMemo(() => {
-    const q = search.toLowerCase()
-    return customers.filter(c =>
-      (c.name.toLowerCase().includes(q) ||
-        c.email?.toLowerCase().includes(q) ||
-        c.city?.toLowerCase().includes(q)) && matchesConsent(c)
-    )
+    const q = search.trim().toLowerCase()
+    // Digits-only pass so a phone search matches regardless of formatting —
+    // "4035550100", "403 555" and "(403) 555-0100" all find the same person.
+    const digits = q.replace(/\D/g, '')
+    return customers.filter(c => {
+      if (!matchesConsent(c)) return false
+      if (!q) return true
+      return (
+        c.name.toLowerCase().includes(q) ||
+        !!c.email?.toLowerCase().includes(q) ||
+        !!c.city?.toLowerCase().includes(q) ||
+        !!c.address?.toLowerCase().includes(q) ||
+        (!!digits && !!c.phone && c.phone.replace(/\D/g, '').includes(digits))
+      )
+    })
   }, [customers, search, consentFilter]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Missing-consent report — over ALL customers, not the filtered view.
@@ -99,9 +122,23 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
     sel.clear()
     await onRefresh()
   }
-  // Enabling SMS always routes through an explicit confirmation first.
-  function requestBulk(channel: ConsentChannel, value: boolean) {
-    if (channel === 'sms' && value) { setSmsConfirm(true); return }
+  // Enabling SMS always routes through an explicit confirmation first — THE shared
+  // confirm dialog (same title/message/handler as before, one confirm experience app-wide).
+  async function requestBulk(channel: ConsentChannel, value: boolean) {
+    if (channel === 'sms' && value) {
+      const ok = await confirmDialog({
+        title: 'Enable SMS consent?',
+        icon: ShieldAlert,
+        confirmLabel: 'Enable SMS',
+        message: (
+          <>
+            <p>{SMS_CONSENT_WARNING}</p>
+            <p className="text-xs text-ink-faint mt-2">This enables SMS for {sel.count} selected customer{sel.count !== 1 ? 's' : ''}.</p>
+          </>
+        ),
+      })
+      if (!ok) return
+    }
     runBulk(channel, value)
   }
 
@@ -143,11 +180,11 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
     { key: 'message', label: 'Message', icon: Send, tone: 'primary', onClick: () => setMsgTemplate('choose') },
     // One-tap entries into THE same dialog, preselected — not separate UIs.
     { key: 'introduction', label: 'Send introduction', icon: MessageSquare, onClick: () => setMsgTemplate('introduction') },
-    { key: 'review', label: 'Review request', icon: Check, onClick: () => setMsgTemplate('review_request') },
+    { key: 'review', label: 'Send review request', icon: Star, onClick: () => setMsgTemplate('review_request') },
     { key: 'archive', label: 'Archive', icon: Archive, onClick: bulkArchive },
     { key: 'export', label: 'Export', icon: Download, onClick: exportSelected },
-    { key: 'email-on', label: 'Email on', icon: Mail, onClick: () => requestBulk('email', true) },
-    { key: 'sms-on', label: 'SMS on', icon: MessageSquare, onClick: () => requestBulk('sms', true) },
+    { key: 'email-on', label: 'Enable email', icon: Mail, onClick: () => requestBulk('email', true) },
+    { key: 'sms-on', label: 'Enable SMS', icon: Smartphone, onClick: () => requestBulk('sms', true) },
   ]
 
   async function handleDelete(id: string) {
@@ -177,26 +214,21 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
 
   return (
     <div className="space-y-4">
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-faint" />
-        <input
-          type="text"
-          placeholder="Search customers..."
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          className="w-full bg-surface border border-border-strong rounded-xl pl-10 pr-4 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
-        />
-      </div>
+      {/* Search — THE shared SearchInput */}
+      <SearchInput
+        ref={searchRef}
+        placeholder="Search name, email, phone, address…  ( / )"
+        value={search}
+        onChange={e => setSearch(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Escape') { setSearch(''); e.currentTarget.blur() } }}
+      />
 
-      {/* Consent filters */}
+      {/* Consent filters — the shared FilterPill (aria-pressed + focus ring built in) */}
       <div className="flex flex-wrap gap-1.5">
         {CONSENT_FILTERS.map(f => (
-          <button key={f.value} onClick={() => setConsentFilter(f.value)}
-            className={cn('px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors',
-              consentFilter === f.value ? 'bg-accent text-black border-accent' : 'bg-surface border-border-strong text-ink-muted hover:text-ink')}>
+          <FilterPill key={f.value} active={consentFilter === f.value} onClick={() => setConsentFilter(f.value)}>
             {f.label}
-          </button>
+          </FilterPill>
         ))}
       </div>
 
@@ -213,21 +245,28 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
           <Card>
             <EmptyState icon={Users} title="No customers yet"
               description="Add your first customer, or import your existing list from a CSV in one step."
-              action={onAdd ? { label: 'Add Customer', onClick: onAdd } : { label: 'Import customers', onClick: () => router.push('/dashboard/customers/import') }} />
+              action={onAdd ? { label: 'Add customer', onClick: onAdd } : { label: 'Import customers', onClick: () => router.push('/dashboard/customers/import') }} />
           </Card>
         ) : (
-          <Card className="py-14 text-center text-sm text-ink-muted">No customers match your filters.</Card>
+          <Card>
+            <div className="px-6 py-8 text-center space-y-3">
+              <p className="text-sm text-ink-muted">
+                No customers match {search.trim() ? <>“<span className="text-ink">{search.trim()}</span>”</> : 'these filters'}.
+              </p>
+              <Button size="sm" variant="secondary" onClick={() => { setSearch(''); setConsentFilter('') }}>
+                Clear search &amp; filters
+              </Button>
+            </div>
+          </Card>
         )
       ) : (
         <div className="grid gap-3">
-          {filtered.map(c => (
+          {filtered.slice(0, RENDER_CAP).map((c, i) => (
             <Card key={c.id} {...hoverIntent(() => prefetchCustomer(c.id))}
-              className={cn('flex items-center gap-3 px-5 py-4 transition-colors', sel.isSelected(c.id) ? 'border-accent/50' : 'hover:border-border-strong')}>
+              className={cn('flex items-center gap-3 px-5 py-4 transition-colors card-lift animate-rise', i < 6 && `stagger-${i + 1}`, sel.isSelected(c.id) ? 'border-accent/50' : 'hover:border-border-strong')}>
               <SelectCheckbox checked={sel.isSelected(c.id)} onToggle={shift => sel.toggle(c.id, shift)} />
-              {/* Avatar */}
-              <div className="w-10 h-10 rounded-full bg-accent/10 border border-accent/20 flex items-center justify-center flex-shrink-0">
-                <span className="text-sm font-bold text-accent">{getInitials(c.name)}</span>
-              </div>
+              {/* Avatar — deterministic colour per customer (scannable identity) */}
+              <Avatar name={c.name} seed={c.id} />
               {/* Info */}
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -246,36 +285,43 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
                       <Phone className="w-3 h-3" /> {c.phone}
                     </a>
                   )}
-                  {c.city && <span className="text-xs text-ink-faint">{c.city}, {c.province}</span>}
+                  {c.city && <span className="text-xs text-ink-faint">{c.city}{c.province ? `, ${c.province}` : ''}</span>}
                   {c.acquisition_source && (
-                    <span className="text-[10px] uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5">{c.acquisition_source}</span>
+                    <span className="text-[10px] uppercase tracking-wide text-ink-muted border border-border rounded px-1.5 py-0.5">{c.acquisition_source}</span>
                   )}
                 </div>
               </div>
               {/* Added */}
               <p className="text-xs text-ink-faint hidden md:block">{formatDate(c.created_at)}</p>
-              {/* Actions — the quoting workflow's entry point is labeled and first;
-                  one Portal action (copy), no duplicate open-in-tab twin. */}
+              {/* Actions — the quoting workflow's entry point stays labeled and first;
+                  the secondary actions live in one shared overflow menu. */}
               <div className="flex items-center gap-1">
                 <Button variant="secondary" size="sm" onClick={() => router.push(`/dashboard/quotes/new?customer=${c.id}`)} title="Start a new quote for this customer">
                   <FileText className="w-4 h-4" /> Quote
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => copyPortal(c.id)} loading={portalBusy === c.id}
-                  title="Copy this customer's private portal link (quotes, invoices, history, photos)">
-                  <Link2 className="w-4 h-4" /> Portal
-                </Button>
-                <Button variant="ghost" size="sm" onClick={() => onEdit(c)} title="Edit">
-                  <Edit2 className="w-4 h-4" />
-                </Button>
-                <Button variant="danger" size="sm" onClick={() => handleDelete(c.id)} loading={deleting === c.id} title="Delete">
-                  <Trash2 className="w-4 h-4" />
-                </Button>
+                <Menu align="end" width={220} items={[
+                  { key: 'portal', label: 'Copy portal link', icon: Link2, onSelect: () => copyPortal(c.id) },
+                  { key: 'edit', label: 'Edit customer', icon: Edit2, onSelect: () => onEdit(c) },
+                  // Archive, not delete — reversible (the undo toast restores it).
+                  { key: 'archive', label: 'Archive customer', icon: Archive, onSelect: () => handleDelete(c.id) },
+                ]}>
+                  {({ toggle, triggerProps }) => (
+                    <Button size="sm" variant="ghost" onClick={toggle} aria-label="More actions" title="More actions"
+                      loading={portalBusy === c.id || deleting === c.id} {...triggerProps}>
+                      <MoreHorizontal className="w-4 h-4" />
+                    </Button>
+                  )}
+                </Menu>
               </div>
             </Card>
           ))}
         </div>
       )}
-      <p className="text-xs text-ink-faint text-right">{filtered.length} customer{filtered.length !== 1 ? 's' : ''}</p>
+      <p className="text-xs text-ink-faint text-right">
+        {filtered.length > RENDER_CAP
+          ? <>Showing {RENDER_CAP} of {filtered.length.toLocaleString()} — search to find anyone</>
+          : <>{filtered.length.toLocaleString()} customer{filtered.length !== 1 ? 's' : ''}</>}
+      </p>
 
       {/* Consent overview — compliance reference, below the work surface so the
           list (what the owner came for) is never pushed a screen down. */}
@@ -298,30 +344,15 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
           onClose={sent => { setMsgTemplate(null); if (sent) sel.clear() }}
         />
       )}
-
-      {/* SMS safety confirmation */}
-      {smsConfirm && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => setSmsConfirm(false)}>
-          <div className="bg-bg-secondary border border-border-strong rounded-card max-w-md w-full p-5 space-y-4" onClick={e => e.stopPropagation()}>
-            <p className="text-sm font-bold text-amber-400 flex items-center gap-2"><ShieldAlert className="w-4 h-4" /> Enable SMS consent?</p>
-            <p className="text-sm text-ink-muted">{SMS_CONSENT_WARNING}</p>
-            <p className="text-xs text-ink-faint">This enables SMS for {sel.count} selected customer{sel.count !== 1 ? 's' : ''}.</p>
-            <div className="flex justify-end gap-2">
-              <Button variant="ghost" size="sm" onClick={() => setSmsConfirm(false)}>Cancel</Button>
-              <Button size="sm" onClick={() => { setSmsConfirm(false); runBulk('sms', true) }}>I confirm — enable SMS</Button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
 
 function ReportStat({ label, value, tone }: { label: string; value: number; tone?: string }) {
   return (
-    <div className="rounded-xl border border-border bg-bg-secondary px-3 py-2">
+    <div className="rounded-card border border-border bg-bg-secondary px-3 py-2">
       <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className={cn('text-lg font-bold', tone || 'text-ink')}>{value}</p>
+      <p className={cn('text-lg font-bold tabular-nums', tone || 'text-ink')}>{value.toLocaleString()}</p>
     </div>
   )
 }

@@ -20,6 +20,7 @@ import { getPropertyContext, type PropertyIntelligence } from '@/lib/ai/property
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { EmptyState } from '@/components/ui/EmptyState'
 import {
   Download, Images, Loader2, Wand2, Tag, BadgeCheck, AlertTriangle,
   SlidersHorizontal, RefreshCw, Layers, ShieldCheck, ChevronDown, ChevronUp, Camera,
@@ -670,19 +671,16 @@ export function BeforeAfterStudio() {
     return (
       <div className="space-y-6">
         {header}
-        <Card className="p-8 text-center">
-          <div className="w-12 h-12 rounded-2xl bg-accent/10 border border-accent/20 flex items-center justify-center mx-auto mb-3">
-            <Camera className="w-6 h-6 text-accent" />
-          </div>
-          <p className="text-sm font-semibold text-ink">No before/after pairs yet</p>
-          <p className="text-xs text-ink-muted mt-1 max-w-md mx-auto">
-            On a completed visit, snap a <span className="text-amber-300 font-medium">Before</span> and an{' '}
-            <span className="text-emerald-300 font-medium">After</span> photo — any completed job with both lands
-            here, ready to turn into a branded post in one tap.
-          </p>
-          <Link href="/dashboard/schedule" className="inline-flex items-center gap-1.5 mt-4 text-xs font-semibold text-accent hover:underline">
-            <CalendarDays className="w-3.5 h-3.5" /> Go to today’s jobs
-          </Link>
+        <Card>
+          <EmptyState icon={Camera} className="py-10" title="No before/after pairs yet"
+            description={<>
+              On a completed visit, snap a <span className="text-amber-300 font-medium">Before</span> and an{' '}
+              <span className="text-emerald-300 font-medium">After</span> photo — any completed job with both lands
+              here, ready to turn into a branded post in one tap.
+              <Link href="/dashboard/schedule" className="flex items-center justify-center gap-1.5 mt-4 text-xs font-semibold text-accent hover:underline">
+                <CalendarDays className="w-3.5 h-3.5" /> Go to today’s jobs
+              </Link>
+            </>} />
         </Card>
       </div>
     )
@@ -728,7 +726,7 @@ export function BeforeAfterStudio() {
                   <img src={thumbUrl(p.after.url, 240, 240)} alt="after" loading="lazy" decoding="async" className="w-full h-full object-cover" />
                 </div>
                 {p.jobId === bestAiJobId && (
-                  <span className="absolute top-1 right-1 inline-flex items-center gap-0.5 rounded-full bg-accent text-black text-[9px] font-bold px-1.5 py-0.5 shadow">
+                  <span className="absolute top-1 right-1 inline-flex items-center gap-0.5 rounded-full bg-accent text-black text-[10px] font-bold px-1.5 py-0.5 shadow">
                     <Crown className="w-2.5 h-2.5" /> AI pick
                   </span>
                 )}
@@ -746,7 +744,7 @@ export function BeforeAfterStudio() {
                 </div>
                 <p className="text-[10px] text-ink-faint truncate">{p.job.service_type || 'Service'} · {formatDate(p.job.completed_at || p.job.scheduled_date)}</p>
                 {assetStatus[p.jobId] === 'used' && (
-                  <span className="mt-1 inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wide text-accent"><BookMarked className="w-2.5 h-2.5" /> Used</span>
+                  <span className="mt-1 inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent"><BookMarked className="w-3 h-3" /> Used</span>
                 )}
                 {rank?.rationale && <p className="text-[10px] text-ink-muted mt-1 line-clamp-2">{rank.rationale}</p>}
               </div>
@@ -770,7 +768,7 @@ export function BeforeAfterStudio() {
             <span className="font-semibold">{selected?.context.customerName || 'This customer'}</span> hasn’t cleared their photos for public marketing.
             Get a quick OK before you post, then mark it here.
           </p>
-          <Button size="sm" variant="secondary" onClick={allowPhotos} className="shrink-0 border-amber-500/40 text-amber-200">
+          <Button size="sm" variant="secondary" onClick={allowPhotos} className="shrink-0">
             <BadgeCheck className="w-4 h-4" /> Mark allowed
           </Button>
         </div>
@@ -849,7 +847,7 @@ export function BeforeAfterStudio() {
             <Button variant="secondary" onClick={downloadAllPlatforms} disabled={downloading} loading={downloading && !!batchProgress} className="w-full">
               {batchDone
                 ? <><Check className="w-4 h-4" /> Saved all {PLATFORM_KEYS.length}</>
-                : <><Images className="w-4 h-4" /> {batchProgress ? `Saving ${batchProgress}…` : `All platforms (${PLATFORM_KEYS.length})`}</>}
+                : <><Images className="w-4 h-4" /> {batchProgress ? `Saving ${batchProgress}…` : `Download all platforms (${PLATFORM_KEYS.length})`}</>}
             </Button>
             {/* Screen-reader announcement for download progress / completion. */}
             <span className="sr-only" aria-live="polite">
@@ -888,15 +886,15 @@ export function BeforeAfterStudio() {
                     <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1"><SlidersHorizontal className="w-3 h-3" /> Framing</p>
                     {showLabels && (
                       <div className="grid grid-cols-2 gap-2">
-                        <input value={labelBefore} onChange={e => setLabelBefore(e.target.value)} placeholder="Before"
-                          className="bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-ink outline-none focus:border-accent" />
-                        <input value={labelAfter} onChange={e => setLabelAfter(e.target.value)} placeholder="After"
-                          className="bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-ink outline-none focus:border-accent" />
+                        <input value={labelBefore} onChange={e => setLabelBefore(e.target.value)} placeholder="Before" aria-label="Before label"
+                          className="bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+                        <input value={labelAfter} onChange={e => setLabelAfter(e.target.value)} placeholder="After" aria-label="After label"
+                          className="bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
                       </div>
                     )}
                     <FocusRow label="Before" focus={beforeFocus} onChange={setBeforeFocus} />
                     <FocusRow label="After" focus={afterFocus} onChange={setAfterFocus} />
-                    <button onClick={resetFraming} className="text-[11px] text-accent hover:underline flex items-center gap-1">
+                    <button onClick={resetFraming} className={`text-[11px] text-accent hover:underline flex items-center gap-1 rounded ${FOCUS_RING}`}>
                       <RefreshCw className="w-3 h-3" /> Reset framing
                     </button>
                     {selected.beforeOptions.length > 1 && (
@@ -965,8 +963,8 @@ function SwapRow({ label, photos, activeId, onPick }: { label: string; photos: P
     <div>
       <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-1">{label}</p>
       <div className="flex gap-1.5 overflow-x-auto pb-1">
-        {photos.map(p => (
-          <button key={p.id} onClick={() => onPick(p.id)} aria-label={label} aria-pressed={activeId === p.id}
+        {photos.map((p, i) => (
+          <button key={p.id} onClick={() => onPick(p.id)} aria-label={`${label} — photo ${i + 1} of ${photos.length}`} aria-pressed={activeId === p.id}
             className={`shrink-0 w-12 h-12 rounded-lg overflow-hidden border-2 ${FOCUS_RING} ${activeId === p.id ? 'border-accent' : 'border-transparent opacity-70 hover:opacity-100'}`}>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={thumbUrl(p.url, 120, 120)} alt="" loading="lazy" decoding="async" className="w-full h-full object-cover" />

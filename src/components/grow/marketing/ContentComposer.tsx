@@ -185,11 +185,11 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
         <p className="text-sm text-ink-muted max-w-xs mx-auto">
           Draft a {def.label} post for this job in your brand voice — ready to review and post.
         </p>
-        <Button onClick={runGenerate} disabled={!aiEnabled}>
+        <Button variant="secondary" onClick={runGenerate} disabled={!aiEnabled}>
           <Sparkles className="w-4 h-4" /> Generate {def.label} post
         </Button>
         {!aiEnabled && <p className="text-[11px] text-ink-faint">Add your Anthropic key to turn on generation.</p>}
-        {genError && <p className="text-[11px] text-red-400">{genError}</p>}
+        {genError && <p className="text-xs text-red-400">{genError}</p>}
       </div>
     )
   }
@@ -200,6 +200,7 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
     const { data } = await supabase.from('content_pieces').update(patch).eq('id', draft.id).select('*').maybeSingle()
     setSaving(false)
     if (data) { setSaved(true); onDraftChange?.(data as ContentPiece); setTimeout(() => setSaved(false), 1500) }
+    else toast.error('Could not save your edits — check your connection and try again.')
   }
 
   function saveEdits() {
@@ -225,6 +226,7 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
             onChange={e => setTitle(e.target.value)}
             onBlur={saveEdits}
             readOnly={streaming}
+            aria-label="Headline"
             placeholder="Headline"
             className="w-full bg-bg-tertiary border border-border rounded-xl px-3.5 py-2.5 text-sm font-semibold text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/50"
           />
@@ -235,6 +237,8 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
           onBlur={saveEdits}
           readOnly={streaming}
           rows={6}
+          aria-label="Caption"
+          placeholder="Write your caption…"
           className="w-full bg-bg-tertiary border border-border rounded-xl px-3.5 py-2.5 text-sm text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/50 resize-y min-h-[120px] leading-relaxed"
         />
         {showHashtagField && (
@@ -243,12 +247,13 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
             onChange={e => setHashtagsText(e.target.value)}
             onBlur={saveEdits}
             readOnly={streaming}
-            placeholder="hashtags (space-separated)"
+            aria-label="Hashtags"
+            placeholder="#hashtags — space-separated"
             className="w-full bg-bg-tertiary border border-border rounded-xl px-3.5 py-2 text-sm text-accent placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/50"
           />
         )}
         <div className="flex items-center gap-3 flex-wrap">
-          <Button variant="secondary" size="sm" onClick={runGenerate} loading={streaming} disabled={!aiEnabled}>
+          <Button variant="secondary" size="sm" onClick={runGenerate} loading={streaming} disabled={!aiEnabled} title={!aiEnabled ? "Add your Anthropic API key to enable AI generation" : undefined}>
             <RefreshCw className="w-3.5 h-3.5" /> Regenerate
           </Button>
           <span className="text-[11px] text-ink-faint inline-flex items-center gap-1.5">

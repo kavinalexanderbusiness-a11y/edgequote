@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/Button'
 import { Banner } from '@/components/ui/Banner'
+import { SkeletonRows } from '@/components/ui/Skeleton'
 import { CHANNELS } from '@/lib/marketing/channels'
 import { PROVIDERS, canConnectApi } from '@/lib/marketing/providers'
 import { listConnections, connectManual, disconnect, connectionsByPlatform } from '@/lib/marketing/connections'
@@ -50,7 +51,7 @@ export function ConnectionsManager({ userId }: { userId: string }) {
     })
   }
 
-  if (loading) return <div className="h-32 flex items-center justify-center text-ink-faint"><Loader2 className="w-5 h-5 animate-spin" /></div>
+  if (loading) return <SkeletonRows count={3} />
 
   return (
     <div className="space-y-3">
@@ -97,8 +98,8 @@ export function ConnectionsManager({ userId }: { userId: string }) {
                       <p className="text-xs font-medium text-ink truncate">{a.account_name}</p>
                       <p className="text-[10px] text-ink-faint">{a.mode === 'api' ? 'Connected · auto-publish' : 'Connected · copy & paste'}</p>
                     </div>
-                    {a.account_url && <a href={a.account_url} target="_blank" rel="noreferrer" className="text-ink-faint hover:text-ink shrink-0"><Link2 className="w-3.5 h-3.5" /></a>}
-                    <button onClick={() => remove(a)} className="text-ink-faint hover:text-red-400 shrink-0" title="Disconnect"><X className="w-3.5 h-3.5" /></button>
+                    {a.account_url && <a href={a.account_url} target="_blank" rel="noreferrer" title="Open profile" aria-label="Open profile" className="text-ink-faint hover:text-ink shrink-0"><Link2 className="w-3.5 h-3.5" /></a>}
+                    <button onClick={() => remove(a)} aria-label="Disconnect" className="text-ink-faint hover:text-red-400 shrink-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" title="Disconnect"><X className="w-3.5 h-3.5" /></button>
                   </div>
                 ))}
               </div>
@@ -109,12 +110,18 @@ export function ConnectionsManager({ userId }: { userId: string }) {
                 {p.apiStatus !== 'unavailable' && (
                   <p className="text-[11px] text-ink-faint inline-flex items-center gap-1"><Clock className="w-3 h-3" /> Direct {p.apiName} publishing is on the way — add the account now to schedule &amp; track; you’ll post by copy &amp; paste until then.</p>
                 )}
-                <input value={name} onChange={e => setName(e.target.value)} placeholder={`${def.label} account name (e.g. "${def.label} – your business")`}
-                  className="w-full bg-bg-tertiary border border-border rounded-lg px-2.5 py-1.5 text-xs text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40" />
-                <input value={url} onChange={e => setUrl(e.target.value)} placeholder="Profile/page URL (optional)"
-                  className="w-full bg-bg-tertiary border border-border rounded-lg px-2.5 py-1.5 text-xs text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40" />
+                <label className="block">
+                  <span className="block text-[10px] font-semibold uppercase tracking-wide text-ink-muted mb-1">Account name *</span>
+                  <input value={name} autoFocus onChange={e => setName(e.target.value)} placeholder={`e.g. "${def.label} – your business"`}
+                    className="w-full bg-bg-tertiary border border-border rounded-lg px-2.5 py-1.5 text-xs text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40" />
+                </label>
+                <label className="block">
+                  <span className="block text-[10px] font-semibold uppercase tracking-wide text-ink-muted mb-1">Profile/page URL</span>
+                  <input value={url} onChange={e => setUrl(e.target.value)} placeholder="https://…"
+                    className="w-full bg-bg-tertiary border border-border rounded-lg px-2.5 py-1.5 text-xs text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40" />
+                </label>
                 <div className="flex gap-1.5">
-                  <Button size="sm" onClick={() => add(def.key)} loading={busy} disabled={!name.trim()}>Connect</Button>
+                  <Button size="sm" onClick={() => add(def.key)} loading={busy} disabled={!name.trim()}>Add account</Button>
                   <Button size="sm" variant="ghost" onClick={() => setAdding(null)}>Cancel</Button>
                 </div>
               </div>

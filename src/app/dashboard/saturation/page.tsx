@@ -13,6 +13,10 @@ import {
 import { SaturationMap, SatPoint, SatHood, SatLayer } from '@/components/saturation/SaturationMap'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
+import { Banner } from '@/components/ui/Banner'
+import { InlineEmpty } from '@/components/ui/EmptyState'
+import { FilterPill } from '@/components/ui/FilterPill'
+import { SkeletonTiles } from '@/components/ui/Skeleton'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { format } from 'date-fns'
 import { Trophy, Sprout, TrendingDown, TrendingUp, Users, Repeat, FileText, MapPin, Navigation } from 'lucide-react'
@@ -25,7 +29,7 @@ type HoodTag = 'saturated' | 'warm' | 'expand' | 'growing'
 const TAG_META: Record<HoodTag, { label: string; cls: string }> = {
   saturated: { label: 'Saturated — protect it', cls: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' },
   warm: { label: 'Warm demand — close quotes', cls: 'text-amber-400 border-amber-500/30 bg-amber-500/10' },
-  expand: { label: 'Expand here', cls: 'text-violet-300 border-violet-400/40 bg-violet-400/10' },
+  expand: { label: 'Expand here', cls: 'text-violet-400 border-violet-400/40 bg-violet-400/10' },
   growing: { label: 'Growing', cls: 'text-ink-muted border-border bg-bg-tertiary' },
 }
 
@@ -266,28 +270,31 @@ export default function SaturationPage() {
     return { points, hoods, mapHoods, best, opportunities, strongest, weakest, unknownHood, intel }
   }, [jobs, properties, quotes, customersById, ctx])
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Mapping your service area…</div>
+  if (loading) return (
+    <div className="max-w-6xl mx-auto space-y-6">
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Saturation Map" description="Where your customers, revenue and routes concentrate — and where to grow next." />
+      <SkeletonTiles count={4} />
+    </div>
+  )
 
   const m = model
 
   return (
-    <div className="max-w-5xl space-y-6">
-      <PageHeader title="Saturation Map" description="Where your customers, revenue and routes concentrate — and where to grow next" />
+    <div className="max-w-6xl mx-auto space-y-6">
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Saturation Map" description="Where your customers, revenue and routes concentrate — and where to grow next." />
 
       {loadError && (
-        <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5">
+        <Banner tone="danger">
           {loadError} <button onClick={() => window.location.reload()} className="underline font-medium ml-1">Retry</button>
-        </div>
+        </Banner>
       )}
 
       {/* Layer toggles */}
       <div className="flex flex-wrap items-center gap-1.5">
         {LAYER_DEFS.map(l => (
-          <button key={l.key} onClick={() => setLayers(prev => ({ ...prev, [l.key]: !prev[l.key] }))}
-            className={cn('px-3.5 py-2.5 rounded-lg text-xs font-medium border transition-colors',
-              layers[l.key] ? 'bg-accent text-black border-accent' : 'bg-surface border-border-strong text-ink-muted hover:text-ink')}>
+          <FilterPill key={l.key} active={layers[l.key]} onClick={() => setLayers(prev => ({ ...prev, [l.key]: !prev[l.key] }))}>
             {l.label}
-          </button>
+          </FilterPill>
         ))}
       </div>
 
@@ -301,8 +308,9 @@ export default function SaturationPage() {
       {(m.intel.revenue || m.intel.density || m.intel.recurring || m.intel.conversion || m.intel.growth) && (
         <Card>
           <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-            <Trophy className="w-4 h-4 text-accent" />
-            <h2 className="text-sm font-semibold text-ink">Neighborhood intelligence</h2>
+            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><Trophy className="w-3.5 h-3.5 text-accent" /></span>
+            <h2 className="text-sm font-semibold text-ink tracking-tight">Neighborhood intelligence</h2>
+            <span className="flex-1 h-px bg-border" aria-hidden />
           </div>
           <CardBody className="p-0">
             <div className="divide-y divide-border">
@@ -321,14 +329,15 @@ export default function SaturationPage() {
         {/* Where to get more customers */}
         <Card>
           <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-            <Sprout className="w-4 h-4 text-violet-300" />
-            <h2 className="text-sm font-semibold text-ink">Where to get more customers</h2>
+            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><Sprout className="w-3.5 h-3.5 text-accent" /></span>
+            <h2 className="text-sm font-semibold text-ink tracking-tight">Where to get more customers</h2>
+            <span className="flex-1 h-px bg-border" aria-hidden />
           </div>
           <CardBody className="space-y-2.5">
             {m.opportunities.length === 0 ? (
-              <p className="text-sm text-ink-muted py-4 text-center">No clear expansion signal yet — add more priced, located jobs.</p>
+              <InlineEmpty className="py-4">No clear expansion signal yet — add more priced, located jobs.</InlineEmpty>
             ) : m.opportunities.slice(0, 5).map(h => (
-              <div key={h.key} className="rounded-xl border border-border p-3">
+              <div key={h.key} className="rounded-card border border-border p-3">
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-sm font-bold text-ink flex items-center gap-2"><MapPin className="w-3.5 h-3.5 text-ink-faint" /> {h.key}</p>
                   <span className={cn('text-[10px] font-semibold uppercase tracking-wide border rounded px-1.5 py-0.5', TAG_META[h.tag].cls)}>{TAG_META[h.tag].label}</span>
@@ -338,7 +347,7 @@ export default function SaturationPage() {
                     ? <>{h.pendingQuotes} pending quote{h.pendingQuotes !== 1 ? 's' : ''} worth <span className="text-amber-400 font-semibold">{formatCurrency(h.pendingValue)}</span> — close them to densify this area.</>
                     : <>Only {h.customers} customer{h.customers !== 1 ? 's' : ''} here but strong value (<span className="text-ink font-medium">{formatCurrency(h.revPerJob)}/job</span>) — knock neighbors, drop flyers, ask for referrals.</>}
                 </p>
-                <p className="text-[11px] text-ink-faint mt-1">{formatCurrency(h.revenue)} booked · {h.recurringCustomers} recurring · ${h.revPerHour}/hr</p>
+                <p className="text-[11px] text-ink-faint mt-1 tabular-nums">{formatCurrency(h.revenue)} booked · {h.recurringCustomers} recurring · ${h.revPerHour}/hr</p>
               </div>
             ))}
           </CardBody>
@@ -347,21 +356,22 @@ export default function SaturationPage() {
         {/* Best neighborhoods */}
         <Card>
           <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-            <Trophy className="w-4 h-4 text-amber-400" />
-            <h2 className="text-sm font-semibold text-ink">Best neighborhoods</h2>
+            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><Trophy className="w-3.5 h-3.5 text-accent" /></span>
+            <h2 className="text-sm font-semibold text-ink tracking-tight">Best neighborhoods</h2>
+            <span className="flex-1 h-px bg-border" aria-hidden />
           </div>
           <CardBody className="space-y-2.5">
             {m.best.length === 0 ? (
-              <p className="text-sm text-ink-muted py-4 text-center">No neighborhood data yet.</p>
+              <InlineEmpty className="py-4">No neighborhood data yet.</InlineEmpty>
             ) : m.best.map((h, i) => (
-              <div key={h.key} className="flex items-center gap-3 rounded-xl border border-border p-3">
+              <div key={h.key} className="flex items-center gap-3 rounded-card border border-border p-3">
                 <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0" style={{ background: h.color + '33', color: h.color }}>{i + 1}</div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-sm font-bold text-ink">{h.key}</p>
-                    <p className="text-sm font-bold text-accent">{formatCurrency(h.revenue)}</p>
+                    <p className="text-sm font-bold text-accent tabular-nums">{formatCurrency(h.revenue)}</p>
                   </div>
-                  <p className="text-[11px] text-ink-muted mt-0.5 flex items-center gap-x-3 flex-wrap">
+                  <p className="text-[11px] text-ink-muted mt-0.5 flex items-center gap-x-3 flex-wrap tabular-nums">
                     <span className="flex items-center gap-1"><Users className="w-3 h-3" />{h.customers}</span>
                     <span className="flex items-center gap-1"><Repeat className="w-3 h-3" />{h.recurringCustomers} recurring</span>
                     <span>{formatCurrency(h.revPerJob)}/job</span>
@@ -379,21 +389,23 @@ export default function SaturationPage() {
       <div className="grid lg:grid-cols-2 gap-4">
         <Card>
           <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-            <TrendingUp className="w-4 h-4 text-emerald-400" />
-            <h2 className="text-sm font-semibold text-ink">Strongest routes</h2>
+            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><TrendingUp className="w-3.5 h-3.5 text-accent" /></span>
+            <h2 className="text-sm font-semibold text-ink tracking-tight">Strongest routes</h2>
+            <span className="flex-1 h-px bg-border" aria-hidden />
           </div>
           <CardBody className="space-y-2">
-            {m.strongest.length === 0 ? <p className="text-sm text-ink-muted py-3 text-center">Not enough multi-stop days yet.</p>
+            {m.strongest.length === 0 ? <InlineEmpty className="py-4">Not enough multi-stop days yet.</InlineEmpty>
               : m.strongest.map(r => <RouteLine key={r.date} date={r.date} grade={r.grade} revenue={r.revenue} revPerHour={r.revPerHour} stops={r.stops} />)}
           </CardBody>
         </Card>
         <Card>
           <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-            <TrendingDown className="w-4 h-4 text-red-400" />
-            <h2 className="text-sm font-semibold text-ink">Weakest routes</h2>
+            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><TrendingDown className="w-3.5 h-3.5 text-accent" /></span>
+            <h2 className="text-sm font-semibold text-ink tracking-tight">Weakest routes</h2>
+            <span className="flex-1 h-px bg-border" aria-hidden />
           </div>
           <CardBody className="space-y-2">
-            {m.weakest.length === 0 ? <p className="text-sm text-ink-muted py-3 text-center">Nothing weak enough to flag.</p>
+            {m.weakest.length === 0 ? <InlineEmpty className="py-4">Nothing weak enough to flag.</InlineEmpty>
               : m.weakest.map(r => <RouteLine key={r.date} date={r.date} grade={r.grade} revenue={r.revenue} revPerHour={r.revPerHour} stops={r.stops} />)}
           </CardBody>
         </Card>
@@ -419,24 +431,24 @@ function IntelRow({ label, hood, stat }: { label: string; hood: string; stat: st
       <span className="text-sm font-bold text-ink min-w-0 truncate flex items-center gap-1.5">
         <MapPin className="w-3.5 h-3.5 text-accent shrink-0" /> {hood}
       </span>
-      <span className="ml-auto text-xs text-ink-muted shrink-0">{stat}</span>
+      <span className="ml-auto text-xs text-ink-muted shrink-0 tabular-nums">{stat}</span>
     </div>
   )
 }
 
 function RouteLine({ date, grade, revenue, revPerHour, stops }: { date: string; grade: keyof typeof GRADE_COLORS; revenue: number; revPerHour: number; stops: number }) {
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-border px-3 py-2.5">
+    <div className="flex items-center gap-3 rounded-card border border-border px-3 py-2.5">
       <div className="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-black shrink-0"
         style={{ backgroundColor: GRADE_COLORS[grade] + '22', color: GRADE_COLORS[grade], border: `1px solid ${GRADE_COLORS[grade]}55` }}>
         {grade}
       </div>
       <div className="min-w-0 flex-1">
         <p className="text-sm font-semibold text-ink">{formatDate(date)}</p>
-        <p className="text-[11px] text-ink-muted">{stops} stops · ${revPerHour}/hr</p>
+        <p className="text-[11px] text-ink-muted tabular-nums">{stops} stops · ${revPerHour}/hr</p>
       </div>
-      <p className="text-sm font-bold text-accent shrink-0">{formatCurrency(revenue)}</p>
-      <Link href="/dashboard/routes" className="text-ink-faint hover:text-ink shrink-0" title="Analyze this route">
+      <p className="text-sm font-bold text-accent shrink-0 tabular-nums">{formatCurrency(revenue)}</p>
+      <Link href="/dashboard/routes" className="text-ink-faint hover:text-ink shrink-0" title="Analyze this route" aria-label="Analyze this route">
         <Navigation className="w-4 h-4" />
       </Link>
     </div>

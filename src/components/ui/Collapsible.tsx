@@ -24,7 +24,7 @@ export function Collapsible({
         type="button"
         onClick={() => setOpen(o => !o)}
         aria-expanded={open}
-        className="w-full flex items-center gap-2.5 px-4 py-3.5 text-left hover:bg-surface/40 transition-colors"
+        className="w-full flex items-center gap-2.5 px-4 py-3.5 text-left hover:bg-surface/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       >
         {Icon && <Icon className="w-4 h-4 text-ink-muted shrink-0" />}
         <span className="text-sm font-semibold text-ink shrink-0">{title}</span>
@@ -34,7 +34,7 @@ export function Collapsible({
         )}
         <ChevronDown className={cn('w-4 h-4 text-ink-faint ml-auto shrink-0 transition-transform', open && 'rotate-180')} />
       </button>
-      {open && <div className="px-4 pb-4 pt-1 space-y-4 border-t border-border">{children}</div>}
+      {open && <div className="px-4 pb-4 pt-1 space-y-4 border-t border-border animate-fade">{children}</div>}
     </div>
   )
 }

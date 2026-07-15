@@ -13,6 +13,8 @@ import { jobVisitValue, effectiveFreq, quoteVisitAmount } from '@/lib/invoicing'
 import { addonsTotal } from '@/lib/jobPricing'
 import { formatCurrency, cn, localTodayISO } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
+import { Menu } from '@/components/ui/Menu'
+import { EmptyState } from '@/components/ui/EmptyState'
 import { JobPhotos } from '@/components/photos/JobPhotos'
 import { JobAddons } from '@/components/schedule/JobAddons'
 import { JobMessages } from '@/components/schedule/JobMessages'
@@ -20,7 +22,7 @@ import { SendMessageDialog, type MessageRecipient } from '@/components/comms/Sen
 import {
   DollarSign, Clock, CheckCircle2, Check, Repeat, Navigation, ExternalLink,
   Plus, Pencil, Move, Route as RouteIcon, ListChecks, Wallet, Hourglass, SlidersHorizontal, AlertTriangle, CloudRain, Play, Timer, Camera, PlusCircle, MessageSquare, Send, Receipt,
-  ChevronUp, ChevronDown, Wand2,
+  ChevronUp, ChevronDown, Wand2, MoreHorizontal, CalendarDays,
 } from 'lucide-react'
 
 export interface QuoteLite {
@@ -487,7 +489,7 @@ export function DayOpsPanel({
       {/* Header: date + add */}
       <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-3 bg-gradient-to-r from-accent/5 to-transparent">
         <div className="min-w-0 flex items-center gap-2">
-          <p className="text-sm font-bold text-ink truncate">{dateLabel}</p>
+          <p className="text-sm font-semibold tracking-tight text-ink truncate">{dateLabel}</p>
           {active.length > 0 && (
             <span className={cn(
               'text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 border shrink-0',
@@ -510,7 +512,7 @@ export function DayOpsPanel({
           )}
           {remaining.length > 0 && (
             <Button size="sm" variant="secondary" onClick={onRainDelay} title="Bump all remaining jobs to your next work day">
-              <CloudRain className="w-4 h-4" /> Rain delay
+              <CloudRain className="w-4 h-4" /> Delay remaining
             </Button>
           )}
           <Button size="sm" onClick={onAddJob}><Plus className="w-4 h-4" /> Add job</Button>
@@ -542,9 +544,10 @@ export function DayOpsPanel({
       )}
 
       {active.length === 0 ? (
-        <button onClick={onAddJob} className="w-full text-center py-12 text-sm text-ink-muted hover:text-ink transition-colors">
-          No jobs this day. Tap to add one.
-        </button>
+        <EmptyState icon={CalendarDays} className="py-12"
+          title="No jobs scheduled"
+          description="This day is open. Add a visit, or drag one here from another day."
+          action={{ label: 'Add job', onClick: onAddJob }} />
       ) : (
         <div className="p-4 space-y-4">
           {/* Route intelligence — the dispatcher board. (The old 4-stat "day
@@ -563,9 +566,9 @@ export function DayOpsPanel({
                 {/* Persistent "reset to best route" — reuses the continuously-computed
                     optimized order; confirms only when a manual order would be lost. */}
                 {active.length > 1 && baseCoord && (
-                  <button onClick={optimizeRouteNow} disabled={optimizing}
+                  <button type="button" onClick={optimizeRouteNow} disabled={optimizing}
                     title="Recalculate the best stop order (clears manual reordering)"
-                    className="text-xs text-accent font-medium flex items-center gap-1 hover:underline disabled:opacity-50">
+                    className="text-xs font-medium rounded-lg border border-border-strong text-ink-muted hover:text-ink hover:bg-surface px-2.5 py-1 flex items-center gap-1 transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                     <Wand2 className="w-3 h-3" /> Optimize route
                   </button>
                 )}
@@ -683,7 +686,7 @@ export function DayOpsPanel({
                               value={priceVal}
                               onChange={e => setPriceVal(e.target.value)}
                               onKeyDown={e => { if (e.key === 'Enter') savePrice(job) }}
-                              className="w-full mt-0.5 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none focus:border-accent" />
+                              className="w-full mt-0.5 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
                           </label>
                           {/* Decision-first: the change at a glance (Original → New). */}
                           {(() => {
@@ -725,7 +728,7 @@ export function DayOpsPanel({
                                 </div>
                                 {isCustom && (
                                   <input type="text" autoFocus value={priceReason.trim()} onChange={e => setPriceReason(e.target.value || ' ')}
-                                    placeholder="Describe the increase" className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-xs text-ink outline-none focus:border-accent" />
+                                    placeholder="Describe the increase" className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-xs text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
                                 )}
                               </div>
                             )
@@ -784,7 +787,7 @@ export function DayOpsPanel({
                             className="h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border border-current/30 text-xs font-medium flex items-center gap-1 hover:bg-black/10">
                             <Receipt className="w-3.5 h-3.5" /> Invoice
                           </a>
-                          <ActionBtn onClick={() => onOpenJob(job)} icon={Pencil} label="Open" />
+                          <ActionBtn onClick={() => onOpenJob(job)} icon={Pencil} label="Edit" />
                           <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setAddonsId(null); setMessageId(null); setPhotoId(photoId === job.id ? null : job.id) }} icon={Camera} label="Photos" />
                         </div>
                       ) : (
@@ -816,11 +819,20 @@ export function DayOpsPanel({
                         {job.status === 'scheduled' && (
                           <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onMarkDone(job) } finally { setActing(null) } }} icon={CheckCircle2} label="Complete" />
                         )}
-                        <ActionBtn onClick={() => (quickId === job.id ? setQuickId(null) : openQuick(job))} icon={SlidersHorizontal} label="Quick" />
-                        <ActionBtn onClick={() => onOpenJob(job)} icon={Pencil} label="Open" />
                         <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setAddonsId(null); setMessageId(null); setPhotoId(photoId === job.id ? null : job.id) }} icon={Camera} label="Photos" />
                         <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setMessageId(null); setAddonsId(addonsId === job.id ? null : job.id) }} icon={PlusCircle} label={addons.length ? `Services (${addons.length})` : 'Services'} />
-                        <ActionBtn onClick={() => setMoveId(moveId === job.id ? null : job.id)} icon={Move} label="Move" />
+                        {/* Rare edit actions live in ONE overflow — same handlers, less chrome. */}
+                        <Menu align="end" items={[
+                          { key: 'quick', label: 'Quick edit', icon: SlidersHorizontal, onSelect: () => { quickId === job.id ? setQuickId(null) : openQuick(job) } },
+                          { key: 'edit', label: 'Edit job', icon: Pencil, onSelect: () => onOpenJob(job) },
+                          { key: 'move', label: 'Move to another day', icon: Move, onSelect: () => setMoveId(moveId === job.id ? null : job.id) },
+                        ]}>
+                          {({ toggle, triggerProps }) => (
+                            <Button size="sm" variant="ghost" onClick={toggle} aria-label="More actions" title="More actions" {...triggerProps}>
+                              <MoreHorizontal className="w-4 h-4" />
+                            </Button>
+                          )}
+                        </Menu>
                       </div>
                       )}
 
@@ -830,8 +842,8 @@ export function DayOpsPanel({
                           <span className="text-xs text-ink-muted">Move to</span>
                           <input type="date" defaultValue={date}
                             onChange={e => { if (e.target.value && e.target.value !== date) { onMove(job, e.target.value); setMoveId(null) } }}
-                            className="bg-bg-secondary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none focus:border-accent" />
-                          <button onClick={() => setMoveId(null)} className="text-xs text-ink-faint hover:text-ink">Cancel</button>
+                            className="bg-bg-secondary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+                          <Button size="sm" variant="ghost" onClick={() => setMoveId(null)}>Cancel</Button>
                         </div>
                       )}
 
@@ -877,27 +889,29 @@ export function DayOpsPanel({
                           <div className="grid grid-cols-3 gap-2">
                             <label className="text-[10px] uppercase tracking-wide text-ink-faint">Time
                               <input type="time" value={qv.start_time} onChange={e => setQv(v => ({ ...v, start_time: e.target.value }))}
-                                className="w-full mt-0.5 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none focus:border-accent" />
+                                className="w-full mt-0.5 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
                             </label>
                             <label className="text-[10px] uppercase tracking-wide text-ink-faint">Crew
                               <input type="number" min="1" value={qv.crew_size} onChange={e => setQv(v => ({ ...v, crew_size: Number(e.target.value) || 1 }))}
-                                className="w-full mt-0.5 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none focus:border-accent" />
+                                className="w-full mt-0.5 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
                             </label>
                             <label className="text-[10px] uppercase tracking-wide text-ink-faint">Mins
                               <input type="number" min="0" step="5" value={qv.duration_minutes} onChange={e => setQv(v => ({ ...v, duration_minutes: Number(e.target.value) || 0 }))}
-                                className="w-full mt-0.5 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none focus:border-accent" />
+                                className="w-full mt-0.5 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
                             </label>
                           </div>
                           <label className="text-[10px] uppercase tracking-wide text-ink-faint block">Status
                             <select value={qv.status} onChange={e => setQv(v => ({ ...v, status: e.target.value as JobStatus }))}
-                              className="w-full mt-0.5 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none focus:border-accent">
+                              className="w-full mt-0.5 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20">
                               {(['scheduled', 'in_progress', 'completed', 'cancelled'] as JobStatus[]).map(s => (
                                 <option key={s} value={s} className="bg-bg-secondary">{JOB_STATUS_LABELS[s]}</option>
                               ))}
                             </select>
                           </label>
-                          <textarea value={qv.notes} onChange={e => setQv(v => ({ ...v, notes: e.target.value }))} placeholder="Notes" rows={2}
-                            className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink outline-none focus:border-accent" />
+                          <label className="text-[10px] uppercase tracking-wide text-ink-faint block">Notes
+                            <textarea value={qv.notes} onChange={e => setQv(v => ({ ...v, notes: e.target.value }))} placeholder="Gate code, access, crew notes…" rows={2}
+                              className="w-full mt-0.5 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+                          </label>
                           <div className="flex items-center gap-2">
                             <Button size="sm" onClick={() => saveQuick(job)} loading={savingQuick}>Save</Button>
                             <Button size="sm" variant="ghost" onClick={() => setQuickId(null)}>Cancel</Button>
@@ -923,7 +937,7 @@ function Metric({ icon: Icon, label, value, tone }: { icon: typeof DollarSign; l
       <div className="flex items-center gap-1.5 text-[10px] sm:text-[11px] font-semibold text-ink-muted uppercase tracking-wide">
         <Icon className="w-3.5 h-3.5 shrink-0" /> <span className="truncate">{label}</span>
       </div>
-      <p className={cn('text-lg sm:text-xl font-bold tracking-tight mt-0.5 truncate', tone || 'text-ink')}>{value}</p>
+      <p className={cn('text-lg sm:text-xl font-bold tracking-tight tabular-nums mt-0.5 truncate', tone || 'text-ink')}>{value}</p>
     </div>
   )
 }

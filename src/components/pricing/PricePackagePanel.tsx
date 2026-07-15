@@ -33,19 +33,19 @@ export function PricePackagePanel({ pkg, onUse }: { pkg: PricingPackage; onUse: 
   ]
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 animate-fade">
       {/* Cadence prices — tap to use on the quote */}
       <div className="grid grid-cols-2 gap-2">
         {cards.map(c => {
           const isRec = c.cadence === pkg.recommended.cadence
           return (
             <button key={c.cadence} type="button" onClick={() => onUse({ cadence: c.cadence, price: c.price })}
-              className={cn('text-left rounded-xl border px-3 py-2.5 transition-all hover:border-accent',
+              className={cn('text-left rounded-xl border px-3 py-2.5 transition-all hover:border-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
                 isRec ? 'border-accent/50 bg-accent/10' : 'border-border')}>
               <p className="text-[11px] uppercase tracking-wide text-ink-faint flex items-center gap-1">
                 {CADENCE_LABELS[c.cadence]}{isRec && <Trophy className="w-3 h-3 text-accent" />}
               </p>
-              <p className="text-lg font-bold text-ink">${c.price.toLocaleString()}</p>
+              <p className="text-lg font-bold text-ink tabular-nums">${c.price.toLocaleString()}</p>
               {c.annual && <p className="text-[10px] text-ink-faint leading-tight mt-0.5">{c.annual}</p>}
               <p className={cn('text-[10px] font-semibold mt-1', isRec ? 'text-accent' : 'text-ink-faint')}>Use {CADENCE_LABELS[c.cadence]} →</p>
             </button>
@@ -57,7 +57,11 @@ export function PricePackagePanel({ pkg, onUse }: { pkg: PricingPackage; onUse: 
       {pkg.valuePricing && (
         <div className={cn('rounded-xl border px-3 py-2.5', AGG_META[pkg.valuePricing.aggressiveness].cls)}>
           <div className="flex items-center justify-between gap-2 flex-wrap">
-            <p className="text-xs font-bold flex items-center gap-1.5"><Route className="w-3.5 h-3.5" /> {pkg.valuePricing.confidence}</p>
+            {/* Same pill treatment as every other confidence marker — one visual language. */}
+            <p className="text-xs font-bold flex items-center gap-1.5">
+              <Route className="w-3.5 h-3.5" />
+              <span className="text-[10px] font-semibold rounded-full px-2 py-0.5 border border-current/30">{pkg.valuePricing.confidence}</span>
+            </p>
             <span className="text-[10px] font-semibold uppercase tracking-wide">{AGG_META[pkg.valuePricing.aggressiveness].label}</span>
           </div>
           <ul className="mt-1 space-y-0.5">
@@ -94,7 +98,7 @@ function Guide({ label, value, tone }: { label: string; value: string; tone: str
   return (
     <div className="rounded-lg border border-border bg-bg-secondary px-2 py-1.5">
       <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className={cn('text-sm font-bold', tone)}>{value}</p>
+      <p className={cn('text-sm font-bold tabular-nums', tone)}>{value}</p>
     </div>
   )
 }

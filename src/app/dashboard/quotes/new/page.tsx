@@ -7,7 +7,9 @@ import { Customer, QuoteFormValues, ServiceTemplate, TravelFeeTier, BusinessSett
 import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { SkeletonRows } from '@/components/ui/Skeleton'
-import { applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
+import { Banner } from '@/components/ui/Banner'
+import { applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix, formatCurrency } from '@/lib/utils'
+import { Globe } from 'lucide-react'
 import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes } from '@/lib/pricing'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { applyFeeRecovery } from '@/lib/invoiceTotals'
@@ -252,17 +254,29 @@ export default function NewQuotePage() {
       if (typeof window !== 'undefined' && (createdCustomer || matchedBy)) {
         window.sessionStorage.setItem('eq_quote_save_customer', JSON.stringify({ created: createdCustomer, name: customerName, matchedBy }))
       }
+      toast.success(lead ? 'Quote created from the website lead.' : 'Quote created.')
       router.push(`/dashboard/quotes/${data.id}`)
     } else if (error) {
       toast.error('Could not save quote: ' + error.message)
     }
   }
 
-  if (loading) return <SkeletonRows count={6} />
+  if (loading) return <div className="max-w-5xl mx-auto space-y-6"><SkeletonRows count={6} /></div>
 
   return (
-    <div className="max-w-5xl space-y-6">
-      <PageHeader title="New Quote" description="Build and save a new service quote" />
+    <div className="max-w-5xl mx-auto space-y-6">
+      {lead ? (
+        <>
+          <PageHeader title="New quote from website lead" description="Review the pre-filled details and price, then create." />
+          <Banner tone="accent" icon={Globe}>
+            <span className="font-semibold text-ink">From a website request{lead.customerName ? ` — ${lead.customerName}` : ''}</span>
+            {lead.initialPrice > 0 ? <> · they were quoted <span className="font-semibold text-ink">{formatCurrency(lead.initialPrice)}</span></> : null}
+            {lead.serviceType ? <> · {lead.serviceType}</> : null}. We pre-filled their contact, address and pricing below — review and adjust before saving.
+          </Banner>
+        </>
+      ) : (
+        <PageHeader title="New Quote" description="Build and save a new service quote." />
+      )}
       <QuoteBuilder
         customers={customers}
         templates={templates}

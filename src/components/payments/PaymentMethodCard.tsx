@@ -7,6 +7,9 @@ import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { Customer, PaymentMethod } from '@/types'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { Toggle } from '@/components/ui/Toggle'
+import { Select } from '@/components/ui/Select'
+import { Banner } from '@/components/ui/Banner'
 import { CreditCard, ShieldCheck, Trash2, Zap, AlertCircle } from 'lucide-react'
 
 type Mode = 'inherit' | 'auto' | 'manual_review'
@@ -112,9 +115,9 @@ export function PaymentMethodCard({ customer, onCustomerChange }: {
       </CardHeader>
       <CardBody className="space-y-4">
         {!paymentsEnabled && (
-          <div className="flex items-center gap-2 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
-            <AlertCircle className="w-3.5 h-3.5 shrink-0" /> Connect Stripe (STRIPE_SECRET_KEY) to enable saved cards &amp; AutoPay.
-          </div>
+          <Banner tone="warn" icon={AlertCircle} className="text-xs">
+            Connect Stripe (STRIPE_SECRET_KEY) to enable saved cards &amp; AutoPay.
+          </Banner>
         )}
 
         {/* Saved card */}
@@ -132,8 +135,8 @@ export function PaymentMethodCard({ customer, onCustomerChange }: {
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <Button size="sm" variant="secondary" onClick={saveCard} loading={busy === 'save'} disabled={!paymentsEnabled}>Replace</Button>
-              <Button size="sm" variant="ghost" onClick={removeCard} loading={busy === 'remove'} className="hover:text-red-400" title="Remove card">
+              <Button size="sm" variant="secondary" onClick={saveCard} loading={busy === 'save'} disabled={!paymentsEnabled} title={!paymentsEnabled ? "Connect Stripe in Settings to enable card payments" : undefined}>Replace</Button>
+              <Button size="sm" variant="ghost" onClick={removeCard} loading={busy === 'remove'} className="text-red-400/70 hover:text-red-400" aria-label="Remove card" title="Remove card">
                 <Trash2 className="w-3.5 h-3.5" />
               </Button>
             </div>
@@ -141,7 +144,7 @@ export function PaymentMethodCard({ customer, onCustomerChange }: {
         ) : (
           <div className="flex items-center justify-between gap-3 rounded-xl border border-dashed border-border p-3">
             <p className="text-sm text-ink-muted">No card on file.</p>
-            <Button size="sm" onClick={saveCard} loading={busy === 'save'} disabled={!paymentsEnabled}>
+            <Button size="sm" onClick={saveCard} loading={busy === 'save'} disabled={!paymentsEnabled} title={!paymentsEnabled ? "Connect Stripe in Settings to enable card payments" : undefined}>
               <CreditCard className="w-3.5 h-3.5" /> Add card
             </Button>
           </div>
@@ -153,14 +156,7 @@ export function PaymentMethodCard({ customer, onCustomerChange }: {
             <p className="text-sm font-medium text-ink">AutoPay recurring invoices</p>
             <p className="text-[11px] text-ink-faint">Automatically charge the saved card when a recurring visit is completed.</p>
           </div>
-          <button
-            onClick={toggleAutopay}
-            disabled={!card && !autopay}
-            aria-pressed={autopay}
-            className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${autopay ? 'bg-accent' : 'bg-surface border border-border-strong'} ${(!card && !autopay) ? 'opacity-40 cursor-not-allowed' : ''}`}
-          >
-            <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${autopay ? 'translate-x-5' : ''}`} />
-          </button>
+          <Toggle checked={autopay} onChange={() => toggleAutopay()} disabled={!card && !autopay} ariaLabel="AutoPay recurring invoices" />
         </div>
 
         {/* Charge-mode override (only relevant when AutoPay is on) */}
@@ -170,15 +166,17 @@ export function PaymentMethodCard({ customer, onCustomerChange }: {
               <p className="text-sm font-medium text-ink">Charge timing</p>
               <p className="text-[11px] text-ink-faint">Override the business default for this customer.</p>
             </div>
-            <select
+            <Select
+              fieldSize="sm"
               value={mode}
               onChange={e => changeMode(e.target.value as Mode)}
-              className="text-xs rounded-lg border border-border-strong bg-surface text-ink px-2 py-1.5 outline-none focus:border-accent shrink-0"
-            >
-              <option value="inherit">Use business default</option>
-              <option value="auto">Charge on completion</option>
-              <option value="manual_review">Hold for my review</option>
-            </select>
+              className="w-auto shrink-0"
+              options={[
+                { value: 'inherit', label: 'Use business default' },
+                { value: 'auto', label: 'Charge on completion' },
+                { value: 'manual_review', label: 'Hold for my review' },
+              ]}
+            />
           </div>
         )}
 

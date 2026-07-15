@@ -7,8 +7,9 @@ import { createClient } from '@/lib/supabase/client'
 import { recordImportConsent, SMS_CONSENT_WARNING } from '@/lib/consent'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
+import { Banner } from '@/components/ui/Banner'
 import { Button } from '@/components/ui/Button'
-import { ArrowLeft, Upload, ShieldAlert, Check } from 'lucide-react'
+import { ArrowLeft, Upload, ShieldAlert, Check, AlertTriangle } from 'lucide-react'
 
 // Minimal CSV parser — handles quoted fields, embedded commas, and "" escapes.
 function parseCSV(text: string): string[][] {
@@ -119,14 +120,17 @@ export default function ImportCustomersPage() {
   }
 
   return (
-    <div className="max-w-3xl space-y-6">
-      <Link href="/dashboard/customers" className="text-sm text-ink-muted hover:text-ink flex items-center gap-1.5"><ArrowLeft className="w-4 h-4" /> Back to customers</Link>
+    <div className="max-w-3xl mx-auto space-y-6">
+      {/* Hidden in the success state — the done card renders its own "Back to customers" CTA. */}
+      {done == null && (
+        <Link href="/dashboard/customers" className="text-sm text-ink-muted hover:text-ink flex items-center gap-1.5"><ArrowLeft className="w-4 h-4" /> Back to customers</Link>
+      )}
       <PageHeader title="Import Customers" description="Paste or upload a CSV. Optional columns: sms_opt_in, email_opt_in." />
 
       {done != null ? (
         <Card>
-          <CardBody className="text-center py-10 space-y-3">
-            <Check className="w-10 h-10 text-emerald-400 mx-auto" />
+          <CardBody className="text-center py-10 space-y-3" role="status" aria-live="polite">
+            <Check className="w-10 h-10 text-emerald-400 mx-auto" aria-hidden="true" />
             <p className="text-lg font-semibold text-ink">Imported {done} customer{done !== 1 ? 's' : ''}.</p>
             <Button onClick={() => router.push('/dashboard/customers')}>Back to customers</Button>
           </CardBody>
@@ -137,26 +141,27 @@ export default function ImportCustomersPage() {
             <CardBody className="space-y-3">
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <p className="text-xs text-ink-muted">Columns: <span className="text-ink">name</span> (required), email, phone, address, city, province, postal_code, notes, sms_opt_in, email_opt_in</p>
-                <label className="inline-flex items-center gap-1.5 text-xs font-medium text-accent cursor-pointer">
+                <label className="inline-flex items-center gap-1.5 text-xs font-medium text-accent cursor-pointer rounded-md focus-within:ring-2 focus-within:ring-accent/40">
                   <Upload className="w-3.5 h-3.5" /> Upload CSV file
-                  <input type="file" accept=".csv,text/csv" onChange={onFile} className="hidden" />
+                  <input type="file" accept=".csv,text/csv" onChange={onFile} className="sr-only" />
                 </label>
               </div>
               <textarea
                 value={csv}
                 onChange={e => preview(e.target.value)}
                 rows={8}
+                aria-label="Paste CSV data"
                 placeholder={'name,email,phone,city,sms_opt_in,email_opt_in\nJane Doe,jane@example.com,403-555-0100,Calgary,false,true'}
-                className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm font-mono text-ink outline-none focus:border-accent"
+                className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm font-mono text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20"
               />
-              {parseError && <p className="text-sm text-red-400">{parseError}</p>}
+              {parseError && <Banner tone="danger" icon={AlertTriangle}>{parseError}</Banner>}
             </CardBody>
           </Card>
 
           {rows.length > 0 && (
             <Card>
               <CardBody className="space-y-3">
-                <p className="text-sm font-semibold text-ink">{rows.length} customer{rows.length !== 1 ? 's' : ''} ready · {emailCount} email opt-in · {smsCount} SMS opt-in</p>
+                <p className="text-sm font-semibold text-ink tabular-nums">{rows.length} customer{rows.length !== 1 ? 's' : ''} ready · {emailCount} email opt-in · {smsCount} SMS opt-in</p>
                 <div className="max-h-48 overflow-auto rounded-lg border border-border divide-y divide-border">
                   {rows.slice(0, 25).map((r, i) => (
                     <div key={i} className="flex items-center gap-3 px-3 py-1.5 text-xs">
@@ -170,13 +175,17 @@ export default function ImportCustomersPage() {
                 </div>
 
                 {smsCount > 0 && (
-                  <label className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2.5 cursor-pointer">
-                    <input type="checkbox" checked={smsAck} onChange={e => setSmsAck(e.target.checked)} className="mt-0.5 w-4 h-4 accent-accent" />
-                    <span className="text-xs text-ink-muted"><ShieldAlert className="w-3.5 h-3.5 text-amber-400 inline mr-1" />{SMS_CONSENT_WARNING}</span>
-                  </label>
+                  <Banner tone="warn" icon={ShieldAlert}>
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input id="sms-consent-ack" type="checkbox" checked={smsAck} onChange={e => setSmsAck(e.target.checked)} className="mt-0.5 w-4 h-4 accent-accent" />
+                      <span className="text-xs text-ink-muted">{SMS_CONSENT_WARNING}</span>
+                    </label>
+                  </Banner>
                 )}
 
-                <Button onClick={runImport} loading={importing} disabled={smsCount > 0 && !smsAck}>
+                <Button onClick={runImport} loading={importing} disabled={smsCount > 0 && !smsAck}
+                  aria-describedby={smsCount > 0 && !smsAck ? 'sms-consent-ack' : undefined}
+                  title={smsCount > 0 && !smsAck ? 'Acknowledge the SMS consent notice above to import.' : undefined}>
                   Import {rows.length} customer{rows.length !== 1 ? 's' : ''}
                 </Button>
               </CardBody>

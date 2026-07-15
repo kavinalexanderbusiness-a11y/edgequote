@@ -73,7 +73,7 @@ export interface ReceiptPDFProps {
 }
 
 export function ReceiptDocument({ payment, invoice, settings }: ReceiptPDFProps) {
-  const company = settings?.company_name || 'Edge Property Services'
+  const company = settings?.company_name || 'Your service provider'
   const contactLines = [settings?.phone, settings?.email_secondary || settings?.email_primary, settings?.website].filter(Boolean) as string[]
   const totals = invoiceTotals(invoice.amount, settings, { type: invoice.discount_type, value: invoice.discount_value })
   const { balance } = invoiceBalance(invoice, settings)
@@ -143,6 +143,13 @@ export function ReceiptDocument({ payment, invoice, settings }: ReceiptPDFProps)
           </View>
         </View>
 
+        {invoice.service_type ? (
+          <View style={{ marginBottom: 10 }}>
+            <Text style={styles.sectionTitle}>For</Text>
+            <Text style={styles.bodyText}>{invoice.service_type}</Text>
+          </View>
+        ) : null}
+
         <Text style={styles.sectionTitle}>Invoice Summary</Text>
         <View style={{ marginBottom: 8 }}>
           <View style={styles.row}>
@@ -172,7 +179,7 @@ export function ReceiptDocument({ payment, invoice, settings }: ReceiptPDFProps)
           <View style={styles.balanceRow}>
             <Text style={styles.balanceLabel}>{owing > 0.01 ? 'Balance Remaining' : 'Balance'}</Text>
             <Text style={[styles.balanceValue, { color: owing > 0.01 ? COLORS.dark : COLORS.green }]}>
-              {owing > 0.01 ? money(owing) : 'PAID IN FULL'}
+              {owing > 0.01 ? money(owing) : 'Paid in full'}
             </Text>
           </View>
         </View>

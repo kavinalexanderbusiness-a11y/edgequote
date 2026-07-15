@@ -5,7 +5,8 @@ import { createClient } from '@/lib/supabase/client'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Input } from '@/components/ui/Input'
-import { Button } from '@/components/ui/Button'
+import { InlineEmpty } from '@/components/ui/EmptyState'
+import { SkeletonTiles } from '@/components/ui/Skeleton'
 import { format } from 'date-fns'
 import { Coord, geocodeAddress } from '@/lib/geo'
 import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, routeStats, computeDayEtas, DEFAULT_JOB_MIN } from '@/lib/route'
@@ -138,10 +139,10 @@ export default function RoutesPage() {
   const tips = improvementSuggestions(profit)
 
   return (
-    <div className="max-w-4xl space-y-6">
-      <PageHeader
+    <div className="max-w-5xl mx-auto space-y-6">
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }}
         title="Route Analysis"
-        description="Visualize and analyze a day's route — distance, density, and profit per hour"
+        description="Visualize and analyze a day's route — distance, density, and profit per hour."
       />
 
       <div className="flex flex-col sm:flex-row sm:items-end gap-3">
@@ -160,11 +161,9 @@ export default function RoutesPage() {
       </p>
 
       {loading ? (
-        <div className="text-center py-20 text-sm text-ink-muted">Analyzing route…</div>
+        <SkeletonTiles count={4} />
       ) : activeCount === 0 ? (
-        <Card><CardBody className="text-center py-16 text-sm text-ink-muted">
-          No jobs scheduled for {format(new Date(date + 'T00:00:00'), 'EEEE, MMMM d')}. Schedule jobs first, then analyze the route.
-        </CardBody></Card>
+        <Card><InlineEmpty className="py-16">No jobs scheduled for {format(new Date(date + 'T00:00:00'), 'EEEE, MMMM d')}. Schedule jobs first, then analyze the route.</InlineEmpty></Card>
       ) : (
         <div className="space-y-5">
           {/* Summary + map */}
@@ -185,10 +184,11 @@ export default function RoutesPage() {
                 </div>
               </div>
               <div className="flex items-center gap-3">
-                <p className="text-xl font-bold text-accent">{formatCurrency(profit.revenue)}</p>
+                <p className="text-xl font-bold text-accent tabular-nums">{formatCurrency(profit.revenue)}</p>
                 {route?.mapsUrl && (
-                  <a href={route.mapsUrl} target="_blank" rel="noopener noreferrer">
-                    <Button size="sm" variant="secondary"><ExternalLink className="w-3.5 h-3.5" /> Maps</Button>
+                  <a href={route.mapsUrl} target="_blank" rel="noopener noreferrer"
+                    className="inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-surface border border-border-strong text-ink hover:bg-surface-raised active:scale-[0.98] px-3.5 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+                    <ExternalLink className="w-3.5 h-3.5" /> Open in Maps
                   </a>
                 )}
               </div>
@@ -197,11 +197,10 @@ export default function RoutesPage() {
             {mapStops.length > 0 ? (
               <RouteMap base={ctx.base} stops={mapStops} grade={profit.grade} />
             ) : (
-              <div className="px-5 py-10 text-center text-sm text-ink-muted">
-                <MapPin className="w-5 h-5 mx-auto mb-2 text-ink-faint" />
+              <InlineEmpty icon={MapPin} className="py-10">
                 {hasBase ? 'No stop on this day has a locatable address yet — add proper addresses to the properties.'
                   : 'Set a base address in Settings to plot and measure the route.'}
-              </div>
+              </InlineEmpty>
             )}
           </Card>
 
@@ -244,7 +243,7 @@ export default function RoutesPage() {
           {/* Improvement suggestions */}
           {tips.length > 0 && (
             <div className="rounded-card border border-amber-500/20 bg-amber-500/5 px-4 py-3 space-y-1.5">
-              <p className="text-[11px] font-semibold text-amber-400 flex items-center gap-1 uppercase tracking-wide"><Lightbulb className="w-3 h-3" /> Ways to improve this route</p>
+              <p className="text-[10px] font-semibold text-amber-400 flex items-center gap-1 uppercase tracking-[0.14em]"><Lightbulb className="w-3 h-3" /> Ways to improve this route</p>
               {tips.map((t, i) => <p key={i} className="text-sm text-ink-muted">• {t}</p>)}
             </div>
           )}
@@ -253,9 +252,10 @@ export default function RoutesPage() {
           {route && route.ordered.length > 0 && (
             <Card>
               <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-                <Navigation className="w-4 h-4 text-accent" />
-                <h2 className="text-sm font-semibold text-ink">Route breakdown</h2>
-                <span className="ml-auto text-xs text-ink-faint">arrival · value · leg</span>
+                <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><Navigation className="w-3.5 h-3.5 text-accent" /></span>
+                <h2 className="text-sm font-semibold text-ink tracking-tight">Route breakdown</h2>
+                <span className="flex-1 h-px bg-border" aria-hidden />
+                <span className="text-xs text-ink-faint">arrival · value · leg</span>
               </div>
               <CardBody className="space-y-2">
                 <div className="flex items-center gap-3 p-2.5 rounded-xl bg-surface border border-border">
@@ -317,8 +317,8 @@ function GradeBadge({ grade }: { grade: Grade }) {
 function Metric({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
     <div className="rounded-lg border border-border bg-bg-tertiary px-2 py-1.5">
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className={cn('text-sm font-bold mt-0.5', accent ? 'text-accent' : 'text-ink')}>{value}</p>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">{label}</p>
+      <p className={cn('text-sm font-bold mt-0.5 tabular-nums', accent ? 'text-accent' : 'text-ink')}>{value}</p>
     </div>
   )
 }

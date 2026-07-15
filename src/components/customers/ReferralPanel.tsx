@@ -142,7 +142,7 @@ export function ReferralPanel({ customer, referrer, referredRevenue }: {
                     {r.status === 'invited' && (
                       <>
                         <button aria-label={`Mark ${who} as joined`} title="Mark joined" onClick={() => patch(r.id, { status: 'joined', joined_at: new Date().toISOString() })} className="p-2 rounded-lg text-ink-muted hover:text-emerald-400 hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><Check className="w-4 h-4" /></button>
-                        <button aria-label={`Mark ${who} as declined`} title="Declined" onClick={() => patch(r.id, { status: 'declined' })} className="p-2 rounded-lg text-ink-muted hover:text-ink hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><ThumbsDown className="w-4 h-4" /></button>
+                        <button aria-label={`Mark ${who} as declined`} title="Mark declined" onClick={() => patch(r.id, { status: 'declined' })} className="p-2 rounded-lg text-ink-muted hover:text-ink hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><ThumbsDown className="w-4 h-4" /></button>
                       </>
                     )}
                     {r.status === 'joined' && (
@@ -157,19 +157,19 @@ export function ReferralPanel({ customer, referrer, referredRevenue }: {
         )}
 
         {adding ? (
-          <div className="space-y-2 rounded-xl border border-border p-3">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <Input aria-label="Who they referred" autoFocus value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Who they referred *" />
-              <Input aria-label="Phone or email" value={form.contact} onChange={e => setForm({ ...form, contact: e.target.value })} placeholder="Phone or email (optional)" />
+          <div className="space-y-3 rounded-xl border border-border p-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Input label="Referred name *" autoFocus value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Jane Smith" />
+              <Input label="Phone or email" value={form.contact} onChange={e => setForm({ ...form, contact: e.target.value })} placeholder="(403) 555-0100" />
             </div>
-            <Input aria-label="Reward" value={form.reward} onChange={e => setForm({ ...form, reward: e.target.value })} placeholder="Reward, e.g. “$25 credit” (optional)" />
+            <Input label="Reward" value={form.reward} onChange={e => setForm({ ...form, reward: e.target.value })} placeholder="e.g. “$25 credit”" />
             <div className="flex items-center gap-2">
               <Button size="sm" onClick={addReferral} loading={busy} disabled={!form.name.trim()}>Save</Button>
               <Button size="sm" variant="ghost" onClick={() => { setAdding(false); setForm({ name: '', contact: '', reward: '' }) }}>Cancel</Button>
             </div>
           </div>
         ) : (
-          <Button size="sm" variant="ghost" onClick={() => setAdding(true)} className="text-accent"><Plus className="w-3.5 h-3.5" /> Record a referral</Button>
+          <Button size="sm" variant="ghost" onClick={() => setAdding(true)}><Plus className="w-3.5 h-3.5" /> Record a referral</Button>
         )}
       </CardBody>
     </Card>

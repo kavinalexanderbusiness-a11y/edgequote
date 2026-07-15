@@ -64,7 +64,7 @@ export function LibraryClient({ candidates }: { candidates: MarketingCandidate[]
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <PageHeader title="Content Library" description="Every completed job, ready to reuse as marketing." />
 
       {/* Search + facets */}
@@ -103,7 +103,7 @@ export function LibraryClient({ candidates }: { candidates: MarketingCandidate[]
       </div>
 
       {filtered.length === 0 ? (
-        <InlineEmpty icon={Search}>No jobs match those filters.</InlineEmpty>
+        <InlineEmpty icon={Search}>No jobs match your filters.</InlineEmpty>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {filtered.map(c => {
@@ -111,7 +111,7 @@ export function LibraryClient({ candidates }: { candidates: MarketingCandidate[]
             return (
               // Whole card is the link (click anywhere), matching the Studio cards.
               <Link key={c.jobId} href={`/dashboard/grow/studio?job=${c.jobId}`} className="block group">
-                <Card className="overflow-hidden flex flex-col h-full transition-colors group-hover:border-accent/40">
+                <Card className="overflow-hidden flex flex-col h-full card-lift transition-colors group-hover:border-accent/40">
                   <div className="relative h-40 bg-bg-tertiary">
                     {thumb ? (
                       // eslint-disable-next-line @next/next/no-img-element
@@ -119,7 +119,7 @@ export function LibraryClient({ candidates }: { candidates: MarketingCandidate[]
                     ) : (
                       <div className="w-full h-full flex items-center justify-center"><ImageIcon className="w-6 h-6 text-ink-faint" /></div>
                     )}
-                    <span title="Post potential score (0–100)" className={cn('absolute top-2 right-2 text-[10px] font-bold rounded-full px-1.5 py-0.5 border', toneSoft[scoreTone(c.score)])}>
+                    <span title="Post potential score (0–100)" className={cn('absolute top-2 right-2 text-[10px] font-bold tabular-nums rounded-full px-1.5 py-0.5 border', toneSoft[scoreTone(c.score)])}>
                       {c.score}
                     </span>
                   </div>

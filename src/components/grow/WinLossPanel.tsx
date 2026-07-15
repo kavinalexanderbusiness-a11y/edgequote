@@ -3,8 +3,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { loadWinLoss, recordQuoteOutcome, WinLossData, LostQuoteRow, LOSS_REASONS, LOSS_REASON_LABEL, LossReason } from '@/lib/winLoss'
+import { Skeleton } from '@/components/ui/Skeleton'
+import { EmptyState } from '@/components/ui/EmptyState'
 import { formatCurrency, cn } from '@/lib/utils'
-import { Trophy, Loader2, RefreshCw, Check } from 'lucide-react'
+import { Trophy, RefreshCw, Check } from 'lucide-react'
+import { IconButton } from '@/components/ui/IconButton'
 
 // ── Win/Loss (Growth) ───────────────────────────────────────────────────────────
 // Decision-first: the win rate up top, then the ONE action — tag why each lost
@@ -35,8 +38,15 @@ export function WinLossPanel() {
 
   if (loading) {
     return (
-      <div className="rounded-card border border-border bg-bg-secondary p-5 flex items-center gap-2 text-sm text-ink-muted">
-        <Loader2 className="w-4 h-4 animate-spin" /> Reading your quote outcomes…
+      <div className="rounded-card border border-border bg-bg-secondary p-5">
+        <div className="space-y-2.5" aria-hidden>
+          {[0, 1].map(i => (
+            <div key={i} className="flex items-center gap-3">
+              <div className="min-w-0 flex-1"><Skeleton className="h-3 w-36" /><Skeleton className="h-2.5 w-48 mt-1.5" /></div>
+              <Skeleton className="h-6 w-20 rounded-full shrink-0" />
+            </div>
+          ))}
+        </div>
       </div>
     )
   }
@@ -48,23 +58,21 @@ export function WinLossPanel() {
   const untagged = lostQuotes.filter(q => !q.reason)
 
   return (
-    <div className="rounded-card border border-border bg-bg-secondary overflow-hidden">
+    <div className="rounded-card border border-border bg-bg-secondary overflow-hidden animate-rise">
       <div className="px-5 py-4 border-b border-border flex items-start justify-between gap-3">
         <div className="flex items-start gap-3 min-w-0">
           <div className="w-9 h-9 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
-            <Trophy className="w-4.5 h-4.5 text-accent" />
+            <Trophy className="w-4 h-4 text-accent" />
           </div>
           <div className="min-w-0">
-            <p className="text-base font-bold text-ink">Win / Loss</p>
-            <p className="text-xs text-ink-muted mt-0.5">
+            <p className="text-base font-bold tracking-tight text-ink">Win / Loss</p>
+            <p className="text-xs text-ink-muted mt-0.5 tabular-nums">
               {winPct}% win rate · {stats.won} won · {stats.lost} lost
               {untagged.length > 0 ? ` · ${untagged.length} to tag` : ''}
             </p>
           </div>
         </div>
-        <button onClick={load} title="Refresh" className="h-8 w-8 rounded-lg border border-border text-ink-muted hover:text-ink flex items-center justify-center shrink-0">
-          <RefreshCw className="w-4 h-4" />
-        </button>
+        <IconButton icon={RefreshCw} label="Refresh win/loss" onClick={load} />
       </div>
 
       {/* Why you're losing — at a glance */}
@@ -82,7 +90,8 @@ export function WinLossPanel() {
       {/* The action: tag each lost quote */}
       <div className="p-4 space-y-2">
         {lostQuotes.length === 0 ? (
-          <p className="py-6 text-center text-sm text-ink-muted">No lost quotes — nice. 🎉</p>
+          <EmptyState icon={Trophy} tone="positive" className="py-8" title="No lost quotes on the board"
+            description="When a quote is declined, tag why here — the advisor learns your market from it." />
         ) : (
           lostQuotes.slice(0, 12).map(q => (
             <div key={q.id} className="rounded-xl border border-border bg-bg-tertiary p-3">

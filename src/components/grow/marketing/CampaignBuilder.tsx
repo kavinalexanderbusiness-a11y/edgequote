@@ -108,7 +108,7 @@ export function CampaignBuilder({ aiEnabled, initialCampaigns, initialKind, init
 
       {/* Pick a campaign */}
       <div>
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-2">Choose a campaign</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-faint mb-2">Choose a campaign</p>
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
           {CAMPAIGN_DEFS.map(c => {
             const Icon = c.icon
@@ -136,13 +136,16 @@ export function CampaignBuilder({ aiEnabled, initialCampaigns, initialKind, init
           {initialHoliday && <span className="text-xs text-ink-muted">· {initialHoliday}</span>}
         </div>
 
-        <input value={name} onChange={e => setName(e.target.value)} placeholder={def.defaultName}
-          className="w-full bg-bg-tertiary border border-border rounded-xl px-3.5 py-2.5 text-sm text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/50" />
+        <label className="block">
+          <span className="block text-xs font-semibold uppercase tracking-wide text-ink-muted mb-1.5">Campaign name</span>
+          <input value={name} onChange={e => setName(e.target.value)} placeholder={def.defaultName}
+            className="w-full bg-bg-tertiary border border-border rounded-xl px-3.5 py-2.5 text-sm text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/50" />
+        </label>
 
         <div>
           <div className="flex items-center justify-between mb-1.5">
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Platforms · {count} selected</p>
-            <button type="button" onClick={allSelected ? clearAll : selectAll} className="text-[11px] text-accent hover:underline">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-faint">Platforms · {count} selected</p>
+            <button type="button" onClick={allSelected ? clearAll : selectAll} className="text-[11px] text-accent hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
               {allSelected ? 'Clear all' : 'Select all'}
             </button>
           </div>
@@ -162,10 +165,10 @@ export function CampaignBuilder({ aiEnabled, initialCampaigns, initialKind, init
           {schedule && (
             <>
               <label className="text-xs text-ink-muted">From
-                <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="ml-1.5 bg-bg-tertiary border border-border rounded-lg px-2 py-1 text-sm text-ink" />
+                <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="ml-1.5 bg-bg-tertiary border border-border rounded-lg px-2 py-1 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
               </label>
               <label className="text-xs text-ink-muted">every
-                <input type="number" min={1} max={14} value={everyDays} onChange={e => setEveryDays(Math.max(1, Math.min(14, Number(e.target.value) || 1)))} className="mx-1.5 w-16 bg-bg-tertiary border border-border rounded-lg px-2 py-1 text-sm text-ink" />
+                <input type="number" min={1} max={14} value={everyDays} onChange={e => setEveryDays(Math.max(1, Math.min(14, Number(e.target.value) || 1)))} className="mx-1.5 w-16 bg-bg-tertiary border border-border rounded-lg px-2 py-1 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
                 days
               </label>
             </>
@@ -188,7 +191,7 @@ export function CampaignBuilder({ aiEnabled, initialCampaigns, initialKind, init
 
       {/* Existing campaigns */}
       <div>
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-2">Your campaigns · {campaigns.length}</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-faint mb-2">Your campaigns · {campaigns.length}</p>
         {campaigns.length === 0 ? (
           <EmptyState icon={Megaphone} title="No campaigns yet" description="Pick a theme above and generate your first multi-platform campaign." />
         ) : (
@@ -196,14 +199,14 @@ export function CampaignBuilder({ aiEnabled, initialCampaigns, initialKind, init
             {campaigns.map(c => {
               const cd = campaignDef(c.kind)
               return (
-                <Card key={c.id} className="p-3 flex items-center gap-3">
+                <Card key={c.id} className="group p-3 flex items-center gap-3 card-lift">
                   <cd.icon className="w-4 h-4 text-ink-muted shrink-0" />
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-semibold text-ink truncate">{c.name}</p>
                     <p className="text-xs text-ink-muted">{cd.label} · {c.channels.length} platform{c.channels.length === 1 ? '' : 's'} · {c.status}</p>
                   </div>
                   <Link href={`/dashboard/grow/posts?campaign=${c.id}`} className="text-xs text-accent inline-flex items-center gap-1 hover:underline shrink-0">
-                    View posts <ArrowRight className="w-3 h-3" />
+                    View posts <ArrowRight className="w-3 h-3 transition-transform group-hover:translate-x-0.5" />
                   </Link>
                   <button onClick={() => archive(c)} className="text-ink-faint hover:text-ink shrink-0" title="Archive"><Archive className="w-4 h-4" /></button>
                 </Card>

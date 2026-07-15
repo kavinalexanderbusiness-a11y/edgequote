@@ -9,13 +9,19 @@ import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { Customer, CustomerFormValues } from '@/types'
 import { CustomerList } from '@/components/customers/CustomerList'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
+import { applyConsent } from '@/lib/consent'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { CustomerForm } from '@/components/customers/CustomerForm'
+import { Avatar } from '@/components/ui/Avatar'
 import { PageHeader } from '@/components/layout/PageHeader'
 import Link from 'next/link'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Plus, X, Upload, Archive, RotateCcw, Trash2 } from 'lucide-react'
+
+// Bound the archived DOM too — a long-lived company can accumulate hundreds of
+// churned customers; render a page's worth and note the rest.
+const ARCHIVED_RENDER_CAP = 50
 
 export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[]>([])
@@ -70,8 +76,14 @@ export default function CustomersPage() {
   useRealtimeRefresh('customers', uid ? `user_id=eq.${uid}` : null, fetchCustomers)
 
   function normalize(values: CustomerFormValues) {
+    // Consent is applied AFTER insert through the shared consent engine (which
+    // writes the audit row) — keep it OUT of the raw insert so nothing bypasses
+    // that trail. The customer is born with consent off (DB default).
+    const rest = { ...values }
+    delete rest.sms_opt_in
+    delete rest.email_opt_in
     return {
-      ...values,
+      ...rest,
       acquisition_source: values.acquisition_source || null,
       referred_by_customer_id: values.referred_by_customer_id || null,
       birthday: values.birthday || null,
@@ -93,11 +105,12 @@ export default function CustomersPage() {
       toast.error('Could not create the customer: ' + (error?.message ?? 'please try again.'))
       return
     }
+    const c = newCustomer as Customer
 
     // Auto-create a primary property from the customer's address
     if (values.address) {
       await supabase.from('properties').insert({
-        customer_id: newCustomer.id,
+        customer_id: c.id,
         user_id: user!.id,
         address: values.address,
         city: values.city || null,
@@ -107,11 +120,30 @@ export default function CustomersPage() {
       })
     }
 
+    // Persist the consent captured on the form through the shared engine (writes
+    // the audit trail) — only for a channel that actually has a contact method.
+    const wantSms = !!values.sms_opt_in && !!c.phone
+    const wantEmail = !!values.email_opt_in && !!c.email
+    if (wantSms || wantEmail) {
+      const targets = [{ id: c.id, sms_opt_in: false, email_opt_in: false }]
+      const by = user!.email || user!.id
+      if (wantSms) await applyConsent(supabase, { targets, channel: 'sms', value: true, userId: user!.id, changedBy: by, source: 'single' })
+      if (wantEmail) await applyConsent(supabase, { targets, channel: 'email', value: true, userId: user!.id, changedBy: by, source: 'single' })
+    }
+
     await fetchCustomers()
     setShowForm(false)
-    // New customer with a phone/email → offer the introduction message right away.
-    const c = newCustomer as Customer
-    if (c.phone || c.email) setIntroFor(c)
+
+    // Guide, never silently create: only offer the introduction when we can
+    // actually reach them; otherwise say exactly how to enable messaging.
+    const first = c.name.split(' ')[0] || 'Customer'
+    if (wantSms || wantEmail) {
+      setIntroFor({ ...c, sms_opt_in: wantSms, email_opt_in: wantEmail })
+    } else if (c.phone || c.email) {
+      toast(`${first} added. To message ${first}, turn on texts or email on their profile — you'll confirm consent there.`, { duration: 7000 })
+    } else {
+      toast.success(`${first} added.`)
+    }
   }
 
   async function handleEdit(values: CustomerFormValues) {
@@ -174,18 +206,27 @@ export default function CustomersPage() {
     toast.success(`${name} permanently deleted.`)
   }
 
+  // The add/edit form renders inline at the top of the page. Editing from a row
+  // deep in a long list would otherwise open it off-screen — bring it into view.
+  function scrollToTop() {
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+  function openAdd() { setEditing(null); setShowForm(true); scrollToTop() }
+  function openEdit(c: Customer) { setEditing(c); setShowForm(false); scrollToTop() }
+
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       <PageHeader
         title="Customers"
-        description={`${customers.length} customer${customers.length !== 1 ? 's' : ''} in your database`}
+        description={`${customers.length.toLocaleString()} customer${customers.length !== 1 ? 's' : ''} in your database`}
         action={
           <div className="flex items-center gap-2">
-            <Link href="/dashboard/customers/import">
-              <Button variant="secondary"><Upload className="w-4 h-4" /> Import</Button>
+            <Link href="/dashboard/customers/import"
+              className="inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-surface border border-border-strong text-ink hover:bg-surface-raised active:scale-[0.98] px-4 py-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+              <Upload className="w-4 h-4" /> Import
             </Link>
-            <Button onClick={() => { setShowForm(true); setEditing(null) }}>
-              <Plus className="w-4 h-4" /> Add Customer
+            <Button onClick={openAdd}>
+              <Plus className="w-4 h-4" /> Add customer
             </Button>
           </div>
         }
@@ -199,7 +240,8 @@ export default function CustomersPage() {
             </h2>
             <button
               onClick={() => { setShowForm(false); setEditing(null) }}
-              className="text-ink-faint hover:text-ink transition-colors"
+              aria-label="Close form"
+              className="h-7 w-7 rounded-lg flex items-center justify-center text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
               <X className="w-4 h-4" />
             </button>
@@ -235,45 +277,53 @@ export default function CustomersPage() {
       ) : (
         <CustomerList
           customers={customers}
-          onEdit={c => { setEditing(c); setShowForm(false) }}
+          onEdit={openEdit}
           onDelete={handleDelete}
           onRefresh={fetchCustomers}
-          onAdd={() => { setShowForm(true); setEditing(null) }}
+          onAdd={openAdd}
         />
       )}
 
       {/* Archived customers — fully preserved, restorable any time */}
       {!loading && archived.length > 0 && (
         <div className="rounded-card border border-border bg-bg-secondary p-4">
-          <button onClick={() => setShowArchived(s => !s)} className="text-sm font-medium text-ink-muted hover:text-ink flex items-center gap-1.5">
-            <Archive className="w-4 h-4" /> {showArchived ? 'Hide' : 'Show'} archived ({archived.length})
+          <button onClick={() => setShowArchived(s => !s)} className="text-sm font-medium text-ink-muted hover:text-ink flex items-center gap-1.5 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            <Archive className="w-4 h-4" /> {showArchived ? 'Hide' : 'Show'} archived ({archived.length.toLocaleString()})
           </button>
           {showArchived && (
             <div className="mt-3 divide-y divide-border">
-              {archived.map(c => (
+              {archived.slice(0, ARCHIVED_RENDER_CAP).map(c => (
                 <div key={c.id} className="flex items-center justify-between gap-3 py-2">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-ink truncate">{c.name}</p>
-                    <p className="text-[11px] text-ink-faint">Archived{c.archived_at ? ` ${new Date(c.archived_at).toLocaleDateString()}` : ''} · all history preserved</p>
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Avatar name={c.name} seed={c.id} size="sm" className="opacity-60" />
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-ink truncate">{c.name}</p>
+                      <p className="text-[11px] text-ink-faint">Archived{c.archived_at ? ` ${new Date(c.archived_at).toLocaleDateString()}` : ''} · all history preserved</p>
+                    </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <Button size="sm" variant="secondary" onClick={() => handleRestore(c.id)}><RotateCcw className="w-3.5 h-3.5" /> Restore</Button>
-                    <Button size="sm" variant="danger" onClick={() => handleDeletePermanently(c.id)} title="Delete permanently"><Trash2 className="w-3.5 h-3.5" /> Delete</Button>
+                    <Button size="sm" variant="danger" onClick={() => handleDeletePermanently(c.id)}><Trash2 className="w-3.5 h-3.5" /> Delete permanently</Button>
                   </div>
                 </div>
               ))}
+              {archived.length > ARCHIVED_RENDER_CAP && (
+                <p className="text-[11px] text-ink-faint pt-2">…and {(archived.length - ARCHIVED_RENDER_CAP).toLocaleString()} more archived</p>
+              )}
             </div>
           )}
         </div>
       )}
 
-      {/* Just added a customer with contact info → one-tap introduction (same shared dialog) */}
+      {/* Just added a reachable customer → one-tap introduction. The composer shows
+          the exact message that will be sent (editable); channel(s) reflect the
+          consent just captured. */}
       {introFor && (
         <SendMessageDialog
           open
           recipients={[{ customerId: introFor.id, name: introFor.name, phone: introFor.phone }]}
           defaultTemplate="introduction"
-          title={`Welcome ${introFor.name.split(' ')[0]} — send an introduction?`}
+          title={`Introduce your business to ${introFor.name.split(' ')[0]}`}
           onClose={() => setIntroFor(null)}
         />
       )}

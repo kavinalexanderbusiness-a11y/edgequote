@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
+import { useListShortcuts } from '@/hooks/useListShortcuts'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { hoverIntent } from '@/lib/prefetch'
@@ -10,14 +11,16 @@ import { needsFollowUp, daysSince, compareFollowUp } from '@/lib/followup'
 import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
-import { EmptyState } from '@/components/ui/EmptyState'
+import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
+import { SearchInput } from '@/components/ui/SearchInput'
+import { FilterPill } from '@/components/ui/FilterPill'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from '@/lib/toast'
 import { useBulkSelect } from '@/hooks/useBulkSelect'
 import { BulkActionBar, SelectCheckbox, SelectAllToggle, type BulkAction } from '@/components/ui/BulkActions'
 import { exportRowsToCsv } from '@/lib/csv'
 import { addDays, format as formatDfn, parseISO } from 'date-fns'
-import { Search, Trash2, Bell, Send, FileText, Copy, Download } from 'lucide-react'
+import { Trash2, Bell, Send, FileText, Copy, Download } from 'lucide-react'
 
 interface QuoteListProps {
   quotes: Quote[]
@@ -41,6 +44,9 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
   const [statusFilter, setStatusFilter] = useState<'' | QuoteStatus>('')
   const [followUpOnly, setFollowUpOnly] = useState(false)
   const [deleting, setDeleting] = useState<string | null>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+  // '/' focuses search, 'n' starts a new quote — the shared list idiom.
+  useListShortcuts({ search: searchRef, onNew: () => router.push('/dashboard/quotes/new') })
 
   // Date math over every quote — memoized so it doesn't re-run on each search keystroke.
   const followUpCount = useMemo(() => quotes.filter(needsFollowUp).length, [quotes])
@@ -212,45 +218,31 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
 
   return (
     <div className="space-y-4">
-      {/* Filters */}
+      {/* Filters — THE shared SearchInput + FilterPill (one chip shape app-wide) */}
       <div className="flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1">
-          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-faint" />
-          <input
-            type="text"
-            placeholder="Search quotes..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="w-full bg-surface border border-border-strong rounded-xl pl-10 pr-4 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
-          />
-        </div>
+        <SearchInput
+          ref={searchRef}
+          className="flex-1"
+          placeholder="Search quotes…  ( / )"
+          onKeyDown={e => { if (e.key === 'Escape') { setSearch(''); e.currentTarget.blur() } }}
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+        />
         {/* One scrollable row on phones (the wrap made a 3-row wall of pills
             before any quotes); wraps normally on desktop. */}
         <div className="flex items-center gap-1.5 flex-nowrap overflow-x-auto sm:flex-wrap sm:overflow-visible pb-1 sm:pb-0">
+          {/* Follow-up queue toggle — FilterPill geometry, but it keeps its amber
+              identity (amber = follow-up everywhere), so no accent pill-glow. */}
           {followUpCount > 0 && (
-            <button
-              onClick={() => setFollowUpOnly(v => !v)}
-              className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                followUpOnly
-                  ? 'bg-amber-400 text-black'
-                  : 'bg-amber-500/10 border border-amber-500/30 text-amber-400 hover:bg-amber-500/20'
-              }`}
-            >
-              <Bell className="w-3 h-3" /> Follow up ({followUpCount})
-            </button>
+            <FilterPill active={followUpOnly} onClick={() => setFollowUpOnly(v => !v)}
+              className={followUpOnly ? '!bg-amber-400 !border-amber-400' : '!border-amber-500/30 !bg-amber-500/10 !text-amber-400 hover:!bg-amber-500/20'}>
+              <Bell className="w-3 h-3" /> Follow up <span className="tabular-nums">({followUpCount})</span>
+            </FilterPill>
           )}
           {STATUS_FILTERS.map(f => (
-            <button
-              key={f.value}
-              onClick={() => setStatusFilter(f.value)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                statusFilter === f.value
-                  ? 'bg-accent text-black'
-                  : 'bg-surface border border-border-strong text-ink-muted hover:text-ink'
-              }`}
-            >
+            <FilterPill key={f.value} active={statusFilter === f.value} onClick={() => setStatusFilter(f.value)}>
               {f.label}
-            </button>
+            </FilterPill>
           ))}
         </div>
       </div>
@@ -266,10 +258,10 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
           <Card>
             <EmptyState icon={FileText} title="No quotes yet"
               description="Create your first quote — measure the lawn, pick a service, and send it in minutes."
-              action={{ label: 'New Quote', onClick: () => router.push('/dashboard/quotes/new') }} />
+              action={{ label: 'New quote', onClick: () => router.push('/dashboard/quotes/new') }} />
           </Card>
         ) : (
-          <Card className="py-14 text-center text-sm text-ink-muted">No quotes match your filters.</Card>
+          <Card><InlineEmpty>No quotes match your filters.</InlineEmpty></Card>
         )
       ) : (
         <Card className="overflow-hidden">
@@ -304,13 +296,18 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
                       </span>
                     </td>
                     <td className="px-3 sm:px-5 py-3.5 font-medium text-ink">
-                      {q.customer_name}
+                      {/* A real link makes the row keyboard-operable (the row's own
+                          onClick only serves the mouse) and gives it an accessible name. */}
+                      <Link href={`/dashboard/quotes/${q.id}`} onClick={e => e.stopPropagation()}
+                        className="rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 hover:text-accent transition-colors">
+                        {q.customer_name}
+                      </Link>
                       {needsFollowUp(q) && q.sent_at && (
                         <span className="block text-[10px] font-semibold text-amber-400 mt-0.5">Sent {daysSince(q.sent_at)}d ago · follow up</span>
                       )}
                     </td>
                     <td className="px-3 sm:px-5 py-3.5 text-ink-muted hidden md:table-cell">{q.service_type}</td>
-                    <td className="px-3 sm:px-5 py-3.5 font-semibold text-ink">{formatCurrency(q.total)}</td>
+                    <td className="px-3 sm:px-5 py-3.5 font-semibold text-ink tabular-nums">{formatCurrency(q.total)}</td>
                     <td className="px-3 sm:px-5 py-3.5" onClick={e => e.stopPropagation()}><QuoteStatusControl quoteId={q.id} status={q.status} followUpCount={q.follow_up_count} /></td>
                     <td className="px-3 sm:px-5 py-3.5 text-ink-faint hidden lg:table-cell">{formatDate(q.created_at)}</td>
                     <td className="px-3 sm:px-5 py-3.5" onClick={e => e.stopPropagation()}>
@@ -321,6 +318,7 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
                           onClick={() => handleDelete(q.id)}
                           loading={deleting === q.id}
                           title="Delete quote"
+                          aria-label="Delete quote"
                           className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
                         >
                           <Trash2 className="w-3.5 h-3.5" />

@@ -44,6 +44,11 @@ const config: Config = {
         card: '14px',
         xl2: '20px',
       },
+      // 18px step — w-4.5/h-4.5 icons inside 32px chips were silently falling
+      // back to lucide's 24px default because this step didn't exist.
+      spacing: {
+        '4.5': '1.125rem',
+      },
     },
   },
   plugins: [],

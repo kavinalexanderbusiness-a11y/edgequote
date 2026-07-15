@@ -90,6 +90,32 @@ export async function recordPayment(sb: Supa, p: {
   return error ? { error: error.message } : { payment: data as import('@/types').Payment }
 }
 
+// Revert (remove) a recorded payment — the SAFE way to "un-pay" an invoice: the
+// row is deleted from the ledger and the recompute trigger re-derives amount_paid
+// and status naturally (paid → partial/unpaid). Never writes invoice status.
+// Guarded to MANUAL rows: an online (Stripe) payment is real money held by the
+// processor — reversing it means a refund, not an edit. Returns the removed row
+// so the caller can offer Undo (re-insert with the same id → trigger re-derives).
+export async function removePayment(sb: Supa, payment: import('@/types').Payment): Promise<{ error?: string }> {
+  if (payment.provider === 'stripe') {
+    return { error: 'Online payments can’t be reverted — issue a refund in Stripe instead (it flows back automatically).' }
+  }
+  const { error } = await sb.from('payments').delete().eq('id', payment.id)
+  return error ? { error: error.message } : {}
+}
+
+// Re-insert a reverted payment with its ORIGINAL id/dates (the Undo path) — the
+// trigger recomputes the invoice forward again.
+export async function restorePayment(sb: Supa, payment: import('@/types').Payment): Promise<{ error?: string }> {
+  const { error } = await sb.from('payments').insert({
+    id: payment.id, user_id: payment.user_id, customer_id: payment.customer_id,
+    invoice_id: payment.invoice_id, amount: payment.amount, currency: payment.currency,
+    provider: payment.provider, kind: payment.kind, method: payment.method,
+    status: payment.status, paid_at: payment.paid_at, notes: payment.notes,
+  })
+  return error ? { error: error.message } : {}
+}
+
 // Sum of the customer's credit ledger = currently available credit.
 export async function availableCredit(sb: Supa, customerId: string): Promise<number> {
   const { data } = await sb.from('payments').select('amount').eq('customer_id', customerId).eq('kind', 'credit')

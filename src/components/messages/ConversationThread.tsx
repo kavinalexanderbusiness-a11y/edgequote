@@ -16,6 +16,7 @@ import { extractBookingPhotos } from '@/lib/bookingPhotos'
 import { Send, StickyNote, Clock, Mail, MessageSquare, Camera } from 'lucide-react'
 import { format } from 'date-fns'
 import { Skeleton } from '@/components/ui/Skeleton'
+import { EmptyState } from '@/components/ui/EmptyState'
 
 interface Msg { id: string; created_at: string; direction: string; channel: string; body: string; status: string | null }
 interface Log { id: string; created_at: string; channel: string; template: string; status: string; message_id: string | null; detail: string | null }
@@ -33,6 +34,9 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
   const [note, setNote] = useState(false)
   const [sending, setSending] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  // A "saved but not delivered" soft-warning is styled amber (not the red of a true
+  // failure) — the message DID save to the timeline.
+  const [errIsWarn, setErrIsWarn] = useState(false)
   const endRef = useRef<HTMLDivElement>(null)
   // Guards a fast conversation switch: a slow load for an earlier customer must never
   // overwrite the thread you've since opened (the component is reused across both).
@@ -130,7 +134,7 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
     // the same id → the server dispatches the SMS at most once (no duplicate on replay).
     const clientMessageId = newClientMessageId()
     setItems(prev => [...prev, { id: pendId, at: new Date().toISOString(), kind: isNote ? 'note' : 'out', channel: 'sms', body: t, status: 'sending' }])
-    setText(''); setSending(true); setErr(null)
+    setText(''); setSending(true); setErr(null); setErrIsWarn(false)
     let deliveryWarn: string | null = null
     try {
       const outcome = await queueOrRun(
@@ -140,7 +144,7 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
           const d = await res.json().catch(() => ({}))
           if (!res.ok) throw new Error(d.error || 'send failed')
           // Saved server-side but SMS not delivered → surface a soft warning (don't roll back).
-          if (d.ok === false && !d.internal) deliveryWarn = d.error || 'Message saved, but the text couldn’t be delivered.'
+          if (d.ok === false && !d.internal) deliveryWarn = d.error || 'Saved to the timeline, but the text couldn’t be delivered.'
         },
         // A lost response after the server may have sent must NOT re-queue (→ no double SMS);
         // true offline still queues. See queueOrRun.
@@ -149,11 +153,11 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
       if (outcome === 'queued') {
         setItems(prev => prev.map(i => i.id === pendId ? { ...i, status: 'queued' } : i))
       } else {
-        if (deliveryWarn) setErr(deliveryWarn)
+        if (deliveryWarn) { setErr(deliveryWarn); setErrIsWarn(true) }
         scheduleLoad() // replaces the optimistic bubble with the saved message; coalesces with the realtime echo
       }
     } catch {
-      setErr('Message could not be sent. Please try again.')
+      setErr('Message could not be sent. Please try again.'); setErrIsWarn(false)
       setItems(prev => prev.filter(i => i.id !== pendId))
       setText(t)
     } finally { setSending(false) }
@@ -169,29 +173,36 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
             ))}
           </div>
         ) : items.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-center py-10">
-            <MessageSquare className="w-8 h-8 text-ink-faint mb-2" />
-            <p className="text-sm font-medium text-ink">No messages yet</p>
-            <p className="text-xs text-ink-muted mt-0.5">Send the first message below — it’ll save to this customer’s history.</p>
+          <div className="h-full flex items-center justify-center">
+            <EmptyState icon={MessageSquare} className="py-10" title="No messages yet"
+              description="Send the first message below — it’ll save to this customer’s history." />
           </div>
         ) : items.map(it => <Bubble key={it.id} it={it} customerId={customerId} />)}
         <div ref={endRef} />
       </div>
 
       <div className="border-t border-border pt-2 mt-1">
-        {err && <p className="text-xs text-red-400 mb-1">{err}</p>}
+        {err && <p className={cn('text-xs mb-1', errIsWarn ? 'text-amber-400' : 'text-red-400')}>{err}</p>}
         <div className="flex items-end gap-2">
           <textarea value={text} onChange={e => setText(e.target.value)} rows={2}
-            onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send() }}
+            aria-label={note ? 'Internal note' : 'Reply message'}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send()
+              else if (e.key === 'Escape') e.currentTarget.blur()
+            }}
             placeholder={note ? 'Internal note (not sent to the customer)…' : 'Reply by SMS…'}
-            className={cn('flex-1 rounded-lg border px-3 py-2 text-sm text-ink outline-none focus:border-accent resize-none',
+            className={cn('flex-1 rounded-lg border px-3 py-2 text-base sm:text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 resize-none',
               note ? 'bg-amber-500/5 border-amber-500/30' : 'bg-bg-tertiary border-border-strong')} />
           <div className="flex flex-col gap-1.5 shrink-0">
             <button type="button" onClick={() => setNote(n => !n)} title="Toggle internal note"
+              aria-pressed={note} aria-label="Internal note mode"
               className={cn('h-8 w-9 rounded-lg border flex items-center justify-center', note ? 'text-amber-400 border-amber-500/40 bg-amber-500/10' : 'text-ink-faint border-border hover:text-ink')}>
               <StickyNote className="w-4 h-4" />
             </button>
-            <Button size="sm" onClick={send} loading={sending} disabled={!text.trim()}>{note ? 'Save' : <Send className="w-4 h-4" />}</Button>
+            <Button size="sm" onClick={send} loading={sending} disabled={!text.trim()}
+              aria-label={note ? 'Save note' : 'Send message'} title={note ? 'Save note' : 'Send message'}>
+              {note ? 'Save note' : <><Send className="w-4 h-4" /> Send</>}
+            </Button>
           </div>
         </div>
         <p className="text-[10px] text-ink-faint mt-1">{note ? 'Internal note — only you see this.' : 'Sends an SMS via your number. ⌘/Ctrl+Enter to send.'}</p>
@@ -214,7 +225,7 @@ const Bubble = memo(function Bubble({ it, customerId }: { it: Item; customerId: 
     return (
       <div className="text-center space-y-0.5">
         <span className={cn('inline-flex items-center gap-1 text-[10px] rounded-full px-2.5 py-0.5 border', TONE_CLASS[meta.tone])}>
-          <meta.Icon className="w-2.5 h-2.5 shrink-0" />
+          <meta.Icon className="w-3 h-3 shrink-0" />
           {meta.label}{reason && it.status !== 'sent' ? ` (${reason})` : ''} · {templateLabel} · {it.channel} · {time}
         </span>
         {skip?.action && (

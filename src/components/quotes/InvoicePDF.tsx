@@ -70,7 +70,7 @@ interface InvoicePDFProps {
 }
 
 export function InvoiceDocument({ invoice, settings }: InvoicePDFProps) {
-  const company = settings?.company_name || 'Edge Property Services'
+  const company = settings?.company_name || 'Your service provider'
   const contactLines = [
     settings?.phone,
     settings?.email_secondary || settings?.email_primary,

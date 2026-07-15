@@ -9,6 +9,8 @@ import { toast } from '@/lib/toast'
 import { formatDate } from '@/lib/utils'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { InlineEmpty } from '@/components/ui/EmptyState'
+import { Button } from '@/components/ui/Button'
+import { FilterPill } from '@/components/ui/FilterPill'
 import { Camera, ImagePlus, Trash2, X, Loader2, Check, ChevronLeft, ChevronRight, Download } from 'lucide-react'
 
 interface Props {
@@ -242,7 +244,7 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
           <CaptureBtn label="Before" icon={Camera} busy={busyOf('before')} onClick={() => pick('before')} tone="amber" />
           <CaptureBtn label="After" icon={Camera} busy={busyOf('after')} onClick={() => pick('after')} tone="emerald" />
           {variant === 'gallery' && (
-            <CaptureBtn label="Photo" icon={ImagePlus} busy={busyOf('general')} onClick={() => pick('general')} />
+            <CaptureBtn label="Add photo" icon={ImagePlus} busy={busyOf('general')} onClick={() => pick('general')} />
           )}
         </>}
         <span className="text-[11px] ml-auto inline-flex items-center gap-1.5">
@@ -255,9 +257,9 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
       {/* Kind filter — only when there's enough to be worth culling. */}
       {showFilters && (
         <div className="flex items-center gap-1.5 flex-wrap mt-2">
-          <FilterChip active={kindFilter === 'all'} onClick={() => setFilter('all')}>All {photos.length}</FilterChip>
+          <FilterPill active={kindFilter === 'all'} onClick={() => setFilter('all')} className="px-2.5 py-0.5 text-[11px]">All {photos.length}</FilterPill>
           {(['before', 'after', 'general'] as PhotoKind[]).filter(k => counts[k] > 0).map(k => (
-            <FilterChip key={k} active={kindFilter === k} onClick={() => setFilter(k)}>{PHOTO_KIND_LABELS[k]} {counts[k]}</FilterChip>
+            <FilterPill key={k} active={kindFilter === k} onClick={() => setFilter(k)} className="px-2.5 py-0.5 text-[11px]">{PHOTO_KIND_LABELS[k]} {counts[k]}</FilterPill>
           ))}
         </div>
       )}
@@ -277,7 +279,7 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
               <div key={t.tempId} className="relative aspect-square rounded-lg overflow-hidden border border-border bg-bg-tertiary">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={t.url} alt="" className={`w-full h-full object-cover ${t.status === 'error' ? 'opacity-40' : 'opacity-70'}`} />
-                <span className={`absolute top-1 left-1 text-[9px] font-semibold uppercase tracking-wide rounded px-1 py-0.5 border ${KIND_BADGE[t.kind]}`}>
+                <span className={`absolute top-1 left-1 text-[10px] font-semibold uppercase tracking-wide rounded px-1 py-0.5 border ${KIND_BADGE[t.kind]}`}>
                   {PHOTO_KIND_LABELS[t.kind]}
                 </span>
                 {t.status === 'uploading' ? (
@@ -286,27 +288,27 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
                   <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-black/45">
                     <span className="text-[10px] font-medium text-white">Upload failed</span>
                     <div className="flex items-center gap-1.5">
-                      <button onClick={() => retryTile(t)} className="text-[10px] font-semibold text-white bg-white/20 hover:bg-white/30 rounded px-2 py-0.5">Retry</button>
-                      <button onClick={() => dismissTile(t)} className="text-white/80 hover:text-white" title="Dismiss"><X className="w-3.5 h-3.5" /></button>
+                      <button type="button" onClick={() => retryTile(t)} className="text-[10px] font-semibold text-white bg-white/20 hover:bg-white/30 rounded px-2 py-0.5">Retry</button>
+                      <button type="button" onClick={() => dismissTile(t)} className="text-white/80 hover:text-white" title="Dismiss" aria-label="Dismiss"><X className="w-3.5 h-3.5" /></button>
                     </div>
                   </div>
                 )}
               </div>
             ))}
             {visible.map(p => (
-              <button key={p.id} onClick={() => setLightboxId(p.id)}
+              <button key={p.id} type="button" onClick={() => setLightboxId(p.id)}
                 className="relative aspect-square rounded-lg overflow-hidden border border-border bg-bg-tertiary group">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={thumbUrl(p.url)} alt={p.caption || PHOTO_KIND_LABELS[p.kind]} loading="lazy"
                   className="w-full h-full object-cover transition-transform group-hover:scale-105" />
-                <span className={`absolute top-1 left-1 text-[9px] font-semibold uppercase tracking-wide rounded px-1 py-0.5 border ${KIND_BADGE[p.kind]}`}>
+                <span className={`absolute top-1 left-1 text-[10px] font-semibold uppercase tracking-wide rounded px-1 py-0.5 border ${KIND_BADGE[p.kind]}`}>
                   {PHOTO_KIND_LABELS[p.kind]}
                 </span>
               </button>
             ))}
           </div>
           {filtered.length > shown && (
-            <button onClick={() => setShown(s => s + 24)} className="mt-2 w-full text-xs font-medium text-accent hover:underline py-1.5">
+            <button type="button" onClick={() => setShown(s => s + 24)} className="mt-2 w-full text-xs font-medium text-accent hover:underline py-1.5">
               Show {Math.min(24, filtered.length - shown)} more ({filtered.length - shown} hidden)
             </button>
           )}
@@ -319,19 +321,19 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
           {/* Prev / next across the current (filtered) set — no open-close per photo. */}
           {filtered.length > 1 && (
             <>
-              <button onClick={e => { e.stopPropagation(); step(-1) }} disabled={lightboxIdx === 0} aria-label="Previous photo"
+              <button type="button" onClick={e => { e.stopPropagation(); step(-1) }} disabled={lightboxIdx === 0} aria-label="Previous photo"
                 className="absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 h-10 w-10 rounded-full bg-black/40 hover:bg-black/60 text-white flex items-center justify-center disabled:opacity-30"><ChevronLeft className="w-5 h-5" /></button>
-              <button onClick={e => { e.stopPropagation(); step(1) }} disabled={lightboxIdx === filtered.length - 1} aria-label="Next photo"
+              <button type="button" onClick={e => { e.stopPropagation(); step(1) }} disabled={lightboxIdx === filtered.length - 1} aria-label="Next photo"
                 className="absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 h-10 w-10 rounded-full bg-black/40 hover:bg-black/60 text-white flex items-center justify-center disabled:opacity-30"><ChevronRight className="w-5 h-5" /></button>
             </>
           )}
-          <div className="bg-bg-secondary border border-border rounded-card max-w-2xl w-full max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+          <div role="dialog" aria-modal="true" aria-label="Photo viewer" className="bg-bg-secondary border border-border rounded-card max-w-2xl w-full max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-4 py-2.5 border-b border-border">
               <span className={`text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 border ${KIND_BADGE[current.kind]}`}>
                 {PHOTO_KIND_LABELS[current.kind]} · {formatDate(current.taken_at)}
               </span>
               <span className="text-[11px] text-ink-faint">{lightboxIdx + 1} / {filtered.length}</span>
-              <button onClick={() => setLightboxId(null)} className="h-7 w-7 rounded-lg hover:bg-black/20 flex items-center justify-center text-ink-muted">
+              <button type="button" onClick={() => setLightboxId(null)} aria-label="Close" className="h-7 w-7 rounded-lg hover:bg-black/20 flex items-center justify-center text-ink-muted">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -342,7 +344,7 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
                 <div className="flex items-center gap-2">
                   <span className="text-[11px] text-ink-faint uppercase tracking-wide">Tag</span>
                   {(['before', 'after', 'general'] as PhotoKind[]).map(k => (
-                    <button key={k} onClick={() => retag(current, k)}
+                    <button key={k} type="button" onClick={() => retag(current, k)} aria-pressed={current.kind === k}
                       className={`text-xs font-medium rounded-lg px-2.5 py-1 border transition-colors ${current.kind === k ? KIND_BADGE[k] : 'border-border text-ink-muted hover:text-ink'}`}>
                       {current.kind === k && <Check className="w-3 h-3 inline mr-1" />}{PHOTO_KIND_LABELS[k]}
                     </button>
@@ -362,15 +364,15 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
                   <a href={current.url} target="_blank" rel="noopener noreferrer" className="text-xs text-accent hover:underline">Open full size</a>
-                  <button onClick={() => download(current)} disabled={downloading === current.id}
+                  <button type="button" onClick={() => download(current)} disabled={downloading === current.id}
                     className="text-xs font-medium text-ink-muted hover:text-ink flex items-center gap-1 disabled:opacity-50">
                     {downloading === current.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />} Download
                   </button>
                 </div>
                 {!readOnly && (
-                  <button onClick={() => remove(current)} className="text-xs font-medium text-red-400 flex items-center gap-1 hover:text-red-300">
+                  <Button variant="danger" size="sm" onClick={() => remove(current)}>
                     <Trash2 className="w-3.5 h-3.5" /> Delete
-                  </button>
+                  </Button>
                 )}
               </div>
             </div>
@@ -381,20 +383,11 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
   )
 }
 
-function FilterChip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button onClick={onClick}
-      className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium border transition-colors ${active ? 'bg-accent text-black border-accent' : 'bg-surface text-ink-muted border-border hover:text-ink'}`}>
-      {children}
-    </button>
-  )
-}
-
 function CaptureBtn({ label, icon: Icon, busy, disabled, onClick, tone }: {
   label: string; icon: typeof Camera; busy: boolean; disabled?: boolean; onClick: () => void; tone?: 'amber' | 'emerald'
 }) {
   return (
-    <button onClick={onClick} disabled={disabled}
+    <button type="button" onClick={onClick} disabled={disabled}
       className={`h-8 px-2.5 rounded-lg border text-xs font-medium flex items-center gap-1.5 active:scale-95 transition-transform disabled:opacity-50 ${
         tone === 'amber' ? 'bg-amber-500/15 border-amber-500/30 text-amber-300 hover:bg-amber-500/25'
           : tone === 'emerald' ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25'

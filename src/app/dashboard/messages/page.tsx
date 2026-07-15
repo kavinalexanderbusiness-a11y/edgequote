@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { formatDistanceToNow } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -11,16 +10,22 @@ import { ConversationThread } from '@/components/messages/ConversationThread'
 import { ConversationInfo } from '@/components/messages/ConversationInfo'
 import { LeadCard } from '@/components/messages/LeadCard'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
+import { Modal } from '@/components/ui/Modal'
 import { CustomerPicker } from '@/components/ui/CustomerPicker'
 import type { Customer } from '@/types'
 import { Button } from '@/components/ui/Button'
+import { SearchInput } from '@/components/ui/SearchInput'
+import { Menu, type MenuItem } from '@/components/ui/Menu'
+import { FilterPill } from '@/components/ui/FilterPill'
+import { BulkActionBar } from '@/components/ui/BulkActions'
 import { Skeleton } from '@/components/ui/Skeleton'
+import { EmptyState } from '@/components/ui/EmptyState'
 import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import {
-  Loader2, Inbox, User, ArrowLeft, MessageSquare, FileText, Search, X, Plus,
+  Loader2, Inbox, User, ArrowLeft, MessageSquare, FileText, X, Plus,
   Archive, ArchiveRestore, Pin, PinOff, BellOff, Bell, MailOpen, Trash2, MoreVertical, Reply,
-  MapPin, Wrench, Receipt, Globe, Sparkles,
+  MapPin, Wrench, Receipt, Globe, Sparkles, Mail,
 } from 'lucide-react'
 
 // Apple-Messages-style inbox that stays a CRM. Archive is a FLAG — nothing is
@@ -45,14 +50,25 @@ const FILTERS: { key: Filter; label: string; icon: typeof Inbox }[] = [
   { key: 'all', label: 'All', icon: Inbox },
   { key: 'sms', label: 'SMS', icon: MessageSquare },
   { key: 'portal', label: 'Portal', icon: Globe },
-  { key: 'website_lead', label: 'Website Leads', icon: Sparkles },
+  { key: 'website_lead', label: 'Website leads', icon: Sparkles },
   { key: 'archived', label: 'Archived', icon: Archive },
 ]
 const SELECT_COLS = 'id, customer_id, last_message_at, last_preview, last_direction, unread, archived_at, pinned_at, muted, lead_status, last_channel, customers(id, name, phone)'
 const PAGE = 40
 const ROW_H = 76
 
-const timeAgo = (iso: string) => { try { return formatDistanceToNow(new Date(iso), { addSuffix: true }) } catch { return '' } }
+// Compact relative time for the busy list rows — "now", "5m", "2h", "3d", then a
+// short date after a week (the thread bubbles keep the full absolute timestamp).
+const timeAgo = (iso: string) => {
+  try {
+    const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000))
+    if (s < 45) return 'now'
+    const m = Math.round(s / 60); if (m < 60) return `${m}m`
+    const h = Math.round(m / 60); if (h < 24) return `${h}h`
+    const d = Math.round(h / 24); if (d < 7) return `${d}d`
+    return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  } catch { return '' }
+}
 const nameOf = (c: Convo) => c.customers?.name || c.customer_name || 'Unknown'
 const phoneOf = (c: Convo) => c.customers?.phone ?? c.customer_phone ?? null
 
@@ -367,8 +383,8 @@ export default function MessagesPage() {
   }, [query, selectMode, sel, list]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div className="max-w-5xl space-y-4">
-      <PageHeader title="Messages" description="Two-way SMS + portal conversations — archived chats stay in CRM history forever."
+    <div className="max-w-6xl mx-auto space-y-6">
+      <PageHeader title="Messages" description="Texts, portal requests, and website leads — one inbox."
         action={
           <Button variant="secondary" onClick={openCompose}>
             <Plus className="w-4 h-4" /> New message
@@ -376,20 +392,19 @@ export default function MessagesPage() {
         } />
 
       {/* Start a conversation without leaving the inbox: pick a customer → THE shared
-          Send-Message dialog (same engine; the sent message threads into this list). */}
-      {composeOpen && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center p-4 pt-24" onClick={() => setComposeOpen(false)}>
-          <div className="bg-bg-secondary border border-border-strong rounded-card max-w-md w-full p-5 space-y-3" onClick={e => e.stopPropagation()}>
-            <p className="text-sm font-bold text-ink">Who do you want to message?</p>
-            <CustomerPicker customers={composeCustomers} value={''} allowManual={false}
-              onChange={id => {
-                const c = composeCustomers.find(x => x.id === id)
-                if (c) { setComposeOpen(false); setComposeTo({ id: c.id, name: c.name }) }
-              }} />
-            <button onClick={() => setComposeOpen(false)} className="text-xs text-ink-faint hover:text-ink">Cancel</button>
-          </div>
+          Send-Message dialog (same engine; the sent message threads into this list).
+          The picker uses the shared Modal so both compose steps share one chrome
+          (backdrop, Escape, scroll-lock, mobile bottom-sheet). */}
+      <Modal open={composeOpen} onClose={() => setComposeOpen(false)} title="New message" icon={MessageSquare} size="md">
+        <div className="min-h-[16rem] space-y-3">
+          <p className="text-xs text-ink-muted">Search a name, phone, or address — picking a customer opens the composer.</p>
+          <CustomerPicker customers={composeCustomers} value={''} allowManual={false} autoFocus
+            onChange={id => {
+              const c = composeCustomers.find(x => x.id === id)
+              if (c) { setComposeOpen(false); setComposeTo({ id: c.id, name: c.name }) }
+            }} />
         </div>
-      )}
+      </Modal>
       {composeTo && (
         <SendMessageDialog open onClose={() => { setComposeTo(null); if (uid) loadPage(uid, filterRef.current, true) }}
           customerId={composeTo.id} customerName={composeTo.name} />
@@ -397,10 +412,9 @@ export default function MessagesPage() {
 
       {/* Spotlight search */}
       <div className="relative">
-        <Search className="w-4 h-4 text-ink-faint absolute left-3 top-1/2 -translate-y-1/2" />
-        <input ref={searchRef} value={query} onChange={e => setQuery(e.target.value)} aria-label="Search conversations"
-          placeholder="Search name, phone, address, property, service, message, quote #, invoice #…"
-          className="w-full h-10 pl-9 pr-9 rounded-xl bg-bg-tertiary border border-border text-sm text-ink outline-none focus:border-accent transition-colors" />
+        <SearchInput ref={searchRef} fieldSize="sm" value={query} onChange={e => setQuery(e.target.value)} aria-label="Search conversations"
+          placeholder="Search people, messages, quotes…"
+          className="[&>input]:pr-9" />
         {query
           ? <button onClick={() => setQuery('')} aria-label="Clear search" className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-faint hover:text-ink"><X className="w-4 h-4" /></button>
           : <kbd className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-ink-faint border border-border rounded px-1 leading-4 pointer-events-none hidden sm:block">/</kbd>}
@@ -410,42 +424,40 @@ export default function MessagesPage() {
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <div className="flex flex-wrap gap-1.5">
             {FILTERS.map(f => (
-              <button key={f.key} onClick={() => { setFilter(f.key); setSel(null) }}
-                className={cn('flex items-center gap-1.5 text-xs font-medium rounded-full px-3 py-1.5 border transition-colors',
-                  filter === f.key ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
+              <FilterPill key={f.key} active={filter === f.key} onClick={() => { setFilter(f.key); setSel(null) }}>
                 <f.icon className="w-3.5 h-3.5" /> {f.label}
-                {counts[f.key] > 0 && <span className={cn('text-[10px] font-bold', filter === f.key ? 'text-black/70' : 'text-ink-faint')}>{counts[f.key]}</span>}
-              </button>
+                {counts[f.key] > 0 && <span className={cn('text-[10px] font-bold tabular-nums', filter === f.key ? 'text-black/70' : 'text-ink-faint')}>{counts[f.key]}</span>}
+              </FilterPill>
             ))}
           </div>
-          <button onClick={() => selectMode ? exitSelect() : setSelectMode(true)} className="text-xs font-medium text-ink-muted hover:text-ink shrink-0">
+          <Button variant="ghost" size="sm" className="shrink-0" onClick={() => selectMode ? exitSelect() : setSelectMode(true)}>
             {selectMode ? 'Cancel' : 'Select'}
-          </button>
+          </Button>
         </div>
       )}
 
+      {/* Context-gated: only actions that can DO something here are offered —
+          Archive outside Archived, Unarchive inside it, Mute/Unmute per what's
+          actually selected, permanent Delete only inside Archived. */}
       {selectMode && (
-        <div className="flex items-center gap-1.5 flex-wrap rounded-xl border border-accent/30 bg-accent/[0.06] px-3 py-2 animate-[popIn_0.12s_ease-out]">
-          <span className="text-xs font-semibold text-ink mr-1">{selectedIds.size} selected</span>
-          {/* Context-gated: only actions that can DO something here are offered —
-              Archive outside Archived, Unarchive inside it, Mute/Unmute per what's
-              actually selected, permanent Delete only inside Archived. */}
-          {filter !== 'archived' && <BulkBtn icon={Archive} label="Archive" onClick={() => bulk('archive')} />}
-          {filter === 'archived' && <BulkBtn icon={ArchiveRestore} label="Unarchive" onClick={() => bulk('unarchive')} />}
-          <BulkBtn icon={MailOpen} label="Read" onClick={() => bulk('read')} />
-          <BulkBtn icon={MessageSquare} label="Unread" onClick={() => bulk('unread')} />
-          <BulkBtn icon={Pin} label="Pin" onClick={() => bulk('pin')} />
-          {(searchResults ?? rows).some(c => selectedIds.has(c.id) && !c.muted) && <BulkBtn icon={BellOff} label="Mute" onClick={() => bulk('mute')} />}
-          {(searchResults ?? rows).some(c => selectedIds.has(c.id) && c.muted) && <BulkBtn icon={Bell} label="Unmute" onClick={() => bulk('unmute')} />}
-          {filter === 'archived' && <BulkBtn icon={Trash2} label="Delete" onClick={() => bulk('delete')} danger />}
-        </div>
+        <BulkActionBar count={selectedIds.size} onClear={exitSelect}
+          actions={[
+            { key: 'archive', label: 'Archive', icon: Archive, onClick: () => bulk('archive'), hidden: filter === 'archived' },
+            { key: 'unarchive', label: 'Unarchive', icon: ArchiveRestore, onClick: () => bulk('unarchive'), hidden: filter !== 'archived' },
+            { key: 'read', label: 'Mark read', icon: MailOpen, onClick: () => bulk('read') },
+            { key: 'unread', label: 'Mark unread', icon: MessageSquare, onClick: () => bulk('unread') },
+            { key: 'pin', label: 'Pin', icon: Pin, onClick: () => bulk('pin') },
+            { key: 'mute', label: 'Mute', icon: BellOff, onClick: () => bulk('mute'), hidden: !(searchResults ?? rows).some(c => selectedIds.has(c.id) && !c.muted) },
+            { key: 'unmute', label: 'Unmute', icon: Bell, onClick: () => bulk('unmute'), hidden: !(searchResults ?? rows).some(c => selectedIds.has(c.id) && c.muted) },
+            { key: 'delete', label: 'Delete', icon: Trash2, onClick: () => bulk('delete'), tone: 'danger', hidden: filter !== 'archived' },
+          ]} />
       )}
 
       <div className="grid lg:grid-cols-[340px_1fr] gap-4" style={{ minHeight: '62vh' }}>
         {/* List */}
         <div className={cn('rounded-card border border-border bg-bg-secondary overflow-hidden flex flex-col', sel && 'hidden lg:flex')}>
           {searchResults && (
-            <p className="px-4 py-2 text-[11px] text-ink-faint border-b border-border flex items-center gap-1.5 shrink-0">
+            <p className="px-4 py-2 text-[11px] text-ink-faint tabular-nums border-b border-border flex items-center gap-1.5 shrink-0">
               {searching ? <><Loader2 className="w-3 h-3 animate-spin" /> Searching…</> : `${searchResults.length} result${searchResults.length !== 1 ? 's' : ''} (incl. archived)`}
             </p>
           )}
@@ -463,23 +475,17 @@ export default function MessagesPage() {
               ))}
             </div>
           ) : list.length === 0 ? (
-            <div className="py-16 text-center px-4">
-              <Inbox className="w-9 h-9 text-ink-faint mx-auto mb-2" />
-              <p className="text-sm font-medium text-ink">
-                {searchResults ? 'No matches'
-                  : filter === 'archived' ? 'No archived chats'
-                  : filter === 'website_lead' ? 'No new website leads'
-                  : filter === 'portal' ? 'No portal messages yet'
-                  : filter === 'sms' ? 'No text conversations yet'
-                  : 'No conversations yet'}
-              </p>
-              <p className="text-xs text-ink-muted mt-1">
-                {searchResults ? 'Try a name, address, service, or quote/invoice #.'
-                  : filter === 'website_lead' ? 'Leads land here the moment your website form is submitted.'
-                  : filter === 'portal' ? 'Requests customers send from their portal show up here.'
-                  : 'Inbound texts, portal requests and website leads all land here — replies go out from your business number.'}
-              </p>
-            </div>
+            <EmptyState icon={Inbox} className="py-16"
+              title={searchResults ? 'No matches'
+                : filter === 'archived' ? 'No archived chats'
+                : filter === 'website_lead' ? 'No new website leads'
+                : filter === 'portal' ? 'No portal messages yet'
+                : filter === 'sms' ? 'No text conversations yet'
+                : 'No conversations yet'}
+              description={searchResults ? 'Try a name, address, service, or quote/invoice #.'
+                : filter === 'website_lead' ? 'Leads land here the moment your website form is submitted.'
+                : filter === 'portal' ? 'Requests customers send from their portal show up here.'
+                : 'Inbound texts, portal requests and website leads all land here — replies go out from your business number.'} />
           ) : (
             <div ref={scrollRef} onScroll={onScroll} className="overflow-y-auto" style={{ maxHeight: '72vh' }}>
               <div style={{ height: list.length * ROW_H, position: 'relative' }}>
@@ -505,8 +511,8 @@ export default function MessagesPage() {
                   <div className="min-w-0">
                     <p className="text-sm font-bold text-ink truncate flex items-center gap-1.5">
                       {sel.pinned_at && <Pin className="w-3 h-3 text-accent shrink-0" />}{nameOf(sel)}
-                      {sel.lead_status === 'new' && <span className="text-[10px] font-bold uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5 flex items-center gap-0.5"><Globe className="w-2.5 h-2.5" /> Website Lead</span>}
-                      {sel.archived_at && <span className="text-[10px] font-semibold uppercase text-ink-faint border border-border rounded px-1 py-0.5">Archived</span>}
+                      {sel.lead_status === 'new' && <span className="text-[10px] font-bold uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded-full px-2 py-0.5 flex items-center gap-0.5"><Globe className="w-2.5 h-2.5" /> Website lead</span>}
+                      {sel.archived_at && <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint border border-border rounded-full px-2 py-0.5">Archived</span>}
                       {sel.muted && <BellOff className="w-3 h-3 text-ink-faint shrink-0" />}
                     </p>
                     {phoneOf(sel) && <p className="text-[11px] text-ink-faint">{phoneOf(sel)}</p>}
@@ -516,8 +522,17 @@ export default function MessagesPage() {
                   {sel.archived_at
                     ? <Button size="sm" variant="secondary" onClick={() => actions.unarchive(sel)} title="Unarchive"><ArchiveRestore className="w-3.5 h-3.5" /><span className="hidden sm:inline">Unarchive</span></Button>
                     : <Button size="sm" variant="ghost" onClick={() => actions.archive(sel)} title="Archive"><Archive className="w-3.5 h-3.5" /><span className="hidden sm:inline">Archive</span></Button>}
-                  <Link href={`/dashboard/quotes/new?customer=${sel.customer_id}`}><Button size="sm" variant="secondary" title="New quote"><FileText className="w-3.5 h-3.5" /><span className="hidden sm:inline">Quote</span></Button></Link>
-                  <Link href={`/dashboard/customers/${sel.customer_id}`}><Button size="sm" variant="ghost" title="Customer profile"><User className="w-3.5 h-3.5" /><span className="hidden sm:inline">Profile</span></Button></Link>
+                  {/* One quote CTA: while the lead is open the LeadCard below carries Build quote. */}
+                  {sel.lead_status !== 'new' && (
+                    <Link href={`/dashboard/quotes/new?customer=${sel.customer_id}`} title="New quote"
+                      className="inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-surface border border-border-strong text-ink hover:bg-surface-raised active:scale-[0.98] px-3.5 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+                      <FileText className="w-3.5 h-3.5" /><span className="hidden sm:inline">New quote</span>
+                    </Link>
+                  )}
+                  <Link href={`/dashboard/customers/${sel.customer_id}`} title="Customer profile"
+                    className="inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 text-ink-muted hover:text-ink hover:bg-surface active:scale-[0.98] px-3.5 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+                    <User className="w-3.5 h-3.5" /><span className="hidden sm:inline">Profile</span>
+                  </Link>
                 </div>
               </div>
               {/* Website-lead context + Build Quote, shown only while the lead is open. */}
@@ -528,23 +543,15 @@ export default function MessagesPage() {
               </div>
             </>
           ) : (
-            <div className="flex-1 flex flex-col items-center justify-center text-sm text-ink-muted py-16">
-              <MessageSquare className="w-8 h-8 text-ink-faint mb-2" /> Select a conversation
+            <div className="flex-1 flex items-center justify-center py-16 px-4">
+              <EmptyState icon={MessageSquare} title="Your inbox, unified"
+                description="Pick a conversation on the left to read its full history, reply by text, or leave an internal note."
+                action={{ label: 'New message', onClick: openCompose }} />
             </div>
           )}
         </div>
       </div>
     </div>
-  )
-}
-
-function BulkBtn({ icon: Icon, label, onClick, danger }: { icon: typeof Archive; label: string; onClick: () => void; danger?: boolean }) {
-  return (
-    <button onClick={onClick} title={label}
-      className={cn('h-7 px-2 rounded-lg border text-[11px] font-medium flex items-center gap-1 hover:bg-black/10 active:scale-95 transition-transform',
-        danger ? 'border-red-500/30 text-red-400' : 'border-border text-ink-muted hover:text-ink')}>
-      <Icon className="w-3.5 h-3.5" /> {label}
-    </button>
   )
 }
 
@@ -580,20 +587,14 @@ interface RowActions {
 
 function ConversationRow({ c, selected, actions, query, selectMode, checked, onToggleSelect }: { c: Convo; selected: boolean; actions: RowActions; query: string; selectMode: boolean; checked: boolean; onToggleSelect: () => void }) {
   const router = useRouter()
-  const [menu, setMenu] = useState(false)
-  const menuRef = useRef<HTMLDivElement>(null)
+  // Long-press / right-click open the SAME shared menu as the ⋮ trigger; the render
+  // prop below keeps this ref pointed at the current open function.
+  const openMenu = useRef<() => void>(() => {})
   const startX = useRef(0)
   const longTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [dx, setDx] = useState(0)
 
-  useEffect(() => {
-    if (!menu) return
-    const h = (e: MouseEvent) => { if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenu(false) }
-    document.addEventListener('mousedown', h)
-    return () => document.removeEventListener('mousedown', h)
-  }, [menu])
-
-  function onTouchStart(e: React.TouchEvent) { startX.current = e.touches[0].clientX; longTimer.current = setTimeout(() => setMenu(true), 500) }
+  function onTouchStart(e: React.TouchEvent) { startX.current = e.touches[0].clientX; longTimer.current = setTimeout(() => openMenu.current(), 500) }
   function onTouchMove(e: React.TouchEvent) {
     const d = e.touches[0].clientX - startX.current
     if (Math.abs(d) > 8 && longTimer.current) { clearTimeout(longTimer.current); longTimer.current = null }
@@ -608,14 +609,25 @@ function ConversationRow({ c, selected, actions, query, selectMode, checked, onT
 
   const isSearch = !!query
   const match = c.match_type ? MATCH_META[c.match_type] : null
-  const preview = isSearch && c.match_type === 'message' && c.message_snippet ? c.message_snippet : (c.last_preview || '…')
+  const preview = isSearch && c.match_type === 'message' && c.message_snippet
+    ? c.message_snippet
+    : (c.last_preview || (c.lead_status === 'new' ? 'New website lead' : c.last_channel === 'portal' ? 'Portal request' : 'No messages yet'))
   const needsReply = !c.archived_at && c.last_direction === 'inbound'
-  const Item = ({ icon: Icon, label, onClick, danger }: { icon: typeof Pin; label: string; onClick: () => void; danger?: boolean }) => (
-    <button onClick={() => { setMenu(false); onClick() }}
-      className={cn('w-full text-left px-3 py-2 text-xs flex items-center gap-2 hover:bg-surface/60', danger ? 'text-red-400' : 'text-ink')}>
-      <Icon className="w-3.5 h-3.5 shrink-0" /> {label}
-    </button>
-  )
+  // Same items in the same order as before, rendered by the shared ui/Menu (portals
+  // to body so the row's overflow-hidden can never clip it; keyboard nav for free).
+  const menuItems: MenuItem[] = [
+    c.archived_at
+      ? { key: 'unarchive', label: 'Unarchive', icon: ArchiveRestore, onSelect: () => actions.unarchive(c) }
+      : { key: 'archive', label: 'Archive', icon: Archive, onSelect: () => actions.archive(c) },
+    c.pinned_at
+      ? { key: 'unpin', label: 'Unpin', icon: PinOff, onSelect: () => actions.unpin(c) }
+      : { key: 'pin', label: 'Pin to top', icon: Pin, onSelect: () => actions.pin(c) },
+    { key: 'unread', label: 'Mark unread', icon: MailOpen, onSelect: () => actions.markUnread(c) },
+    { key: 'mute', label: c.muted ? 'Unmute' : 'Mute notifications', icon: c.muted ? Bell : BellOff, onSelect: () => actions.toggleMute(c) },
+    { key: 'customer', label: 'View customer', icon: User, onSelect: () => router.push(`/dashboard/customers/${c.customer_id}`) },
+  ]
+  // Permanent delete only for ARCHIVED conversations — archive is the safe default.
+  if (c.archived_at) menuItems.push({ key: 'delete', label: 'Delete permanently', icon: Trash2, danger: true, onSelect: () => actions.del(c) })
 
   return (
     <div className="relative overflow-hidden border-b border-border" style={{ height: ROW_H }}>
@@ -628,10 +640,11 @@ function ConversationRow({ c, selected, actions, query, selectMode, checked, onT
         aria-label={`${nameOf(c)}${c.unread > 0 ? `, ${c.unread} unread` : ''}${c.archived_at ? ', archived' : ''}`}
         onClick={() => selectMode ? onToggleSelect() : actions.select(c)}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectMode ? onToggleSelect() : actions.select(c) } }}
-        onContextMenu={selectMode ? undefined : (e) => { e.preventDefault(); setMenu(true) }}
+        onContextMenu={selectMode ? undefined : (e) => { e.preventDefault(); openMenu.current() }}
         onTouchStart={selectMode ? undefined : onTouchStart} onTouchMove={selectMode ? undefined : onTouchMove} onTouchEnd={selectMode ? undefined : onTouchEnd}
         style={{ transform: `translateX(${dx}px)`, transition: dx === 0 ? 'transform 0.15s' : 'none', height: ROW_H }}
-        className={cn('relative bg-bg-secondary w-full text-left px-4 flex items-center gap-3 cursor-pointer hover:bg-surface/40 transition-colors outline-none focus-visible:bg-surface/60 focus-visible:ring-1 focus-visible:ring-accent focus-visible:ring-inset', selected && 'bg-accent/5', checked && 'bg-accent/10')}
+        className={cn('relative bg-bg-secondary w-full text-left px-4 flex items-center gap-3 cursor-pointer hover:bg-surface/40 transition-colors outline-none focus-visible:bg-surface/60 focus-visible:ring-1 focus-visible:ring-accent focus-visible:ring-inset',
+          selected && 'bg-accent/10 before:absolute before:left-0 before:inset-y-0 before:w-[3px] before:bg-accent before:content-[""]', checked && 'bg-accent/10')}
       >
         {selectMode && <input type="checkbox" readOnly checked={checked} className="accent-accent w-4 h-4 shrink-0 pointer-events-none" />}
         <div className="w-9 h-9 rounded-full bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0 text-xs font-bold text-accent">
@@ -641,50 +654,45 @@ function ConversationRow({ c, selected, actions, query, selectMode, checked, onT
           <div className="flex items-center gap-1.5">
             {c.pinned_at && <Pin className="w-3 h-3 text-accent shrink-0" />}
             <p className={cn('text-sm truncate flex-1', c.unread > 0 ? 'font-bold text-ink' : 'font-semibold text-ink')}><Highlight text={nameOf(c)} q={query} /></p>
-            {c.lead_status === 'new' && <span className="shrink-0 text-[9px] font-bold uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded px-1 leading-4">Lead</span>}
+            {c.lead_status === 'new' && <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded-full px-1.5 leading-4">Lead</span>}
             {c.muted && <BellOff className="w-3 h-3 text-ink-faint shrink-0" />}
             {c.archived_at && <Archive className="w-3 h-3 text-ink-faint shrink-0" />}
-            {c.unread > 0 && <span className="shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-accent text-black text-[10px] font-bold flex items-center justify-center">{c.unread > 9 ? '9+' : c.unread}</span>}
+            {c.unread > 0 && <span className="shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-accent text-black text-[10px] font-bold tabular-nums flex items-center justify-center">{c.unread > 9 ? '9+' : c.unread}</span>}
           </div>
           <p className={cn('text-xs truncate mt-0.5', c.unread > 0 ? 'text-ink font-medium' : 'text-ink-muted')}>
             {!isSearch && (c.last_direction === 'internal' ? 'Note: ' : c.last_direction && c.last_direction !== 'inbound' ? 'You: ' : '')}<Highlight text={preview} q={query} />
           </p>
-          <div className="flex items-center gap-2 mt-0.5">
+          <div className="flex items-center gap-1.5 mt-0.5">
+            {(() => {
+              const Ch = c.last_channel === 'portal' ? Globe : c.last_channel === 'email' ? Mail : MessageSquare
+              const lbl = c.last_channel === 'portal' ? 'Portal' : c.last_channel === 'email' ? 'Email' : 'SMS'
+              return <span title={lbl} className="shrink-0 flex"><Ch className="w-3 h-3 text-ink-faint" aria-label={lbl} /></span>
+            })()}
             <p className="text-[10px] text-ink-faint">{timeAgo(c.last_message_at)}</p>
             {isSearch && match
-              ? <span className="text-[10px] font-semibold text-accent flex items-center gap-0.5"><match.icon className="w-2.5 h-2.5" /> {match.label}</span>
-              : needsReply && <span className="text-[10px] font-semibold text-amber-400 flex items-center gap-0.5"><Reply className="w-2.5 h-2.5" /> Needs reply</span>}
+              ? <span className="text-[10px] font-semibold text-accent flex items-center gap-0.5 ml-1"><match.icon className="w-3 h-3" /> {match.label}</span>
+              : needsReply && <span className="text-[10px] font-semibold text-amber-400 flex items-center gap-0.5 ml-1"><Reply className="w-3 h-3" /> Needs reply</span>}
           </div>
         </div>
 
         {!selectMode && (
-          <button onClick={(e) => { e.stopPropagation(); setMenu(m => !m) }} aria-label="Conversation actions" aria-haspopup="menu" aria-expanded={menu}
-            className="shrink-0 -mr-1 h-7 w-7 rounded-lg text-ink-faint hover:text-ink hover:bg-black/10 flex items-center justify-center active:scale-90 transition-transform">
-            <MoreVertical className="w-4 h-4" />
-          </button>
+          // Stop propagation here: clicks/keys on the trigger — or on the portaled
+          // menu, whose events bubble through the React tree — must not select the row.
+          <span className="shrink-0 -mr-1" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+            <Menu align="end" width={192} items={menuItems} ariaLabel="Conversation actions">
+              {({ open, toggle, triggerProps }) => {
+                openMenu.current = () => { if (!open) toggle() }
+                return (
+                  <button type="button" onClick={toggle} aria-label="Conversation actions" {...triggerProps}
+                    className="h-7 w-7 rounded-lg text-ink-faint hover:text-ink hover:bg-black/10 flex items-center justify-center active:scale-90 transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+                    <MoreVertical className="w-4 h-4" />
+                  </button>
+                )
+              }}
+            </Menu>
+          </span>
         )}
       </div>
-
-      {menu && !selectMode && (
-        <div ref={menuRef} role="menu" onClick={e => e.stopPropagation()} className="absolute right-2 top-9 z-20 w-48 rounded-xl border border-border bg-bg-secondary shadow-xl overflow-hidden py-1 origin-top-right animate-[popIn_0.12s_ease-out]">
-          {c.archived_at
-            ? <Item icon={ArchiveRestore} label="Unarchive" onClick={() => actions.unarchive(c)} />
-            : <Item icon={Archive} label="Archive" onClick={() => actions.archive(c)} />}
-          {c.pinned_at
-            ? <Item icon={PinOff} label="Unpin" onClick={() => actions.unpin(c)} />
-            : <Item icon={Pin} label="Pin to top" onClick={() => actions.pin(c)} />}
-          <Item icon={MailOpen} label="Mark unread" onClick={() => actions.markUnread(c)} />
-          <Item icon={c.muted ? Bell : BellOff} label={c.muted ? 'Unmute' : 'Mute notifications'} onClick={() => actions.toggleMute(c)} />
-          <Item icon={User} label="View customer" onClick={() => router.push(`/dashboard/customers/${c.customer_id}`)} />
-          {/* Permanent delete only for ARCHIVED conversations — archive is the safe default. */}
-          {c.archived_at && (
-            <>
-              <div className="border-t border-border my-1" />
-              <Item icon={Trash2} label="Delete permanently" onClick={() => actions.del(c)} danger />
-            </>
-          )}
-        </div>
-      )}
     </div>
   )
 }

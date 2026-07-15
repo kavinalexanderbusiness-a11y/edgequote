@@ -26,7 +26,7 @@ export function DetailHeader({ title, description, action, backHref, onBack }: D
       <button
         onClick={back}
         aria-label="Back"
-        className="mt-1 shrink-0 text-ink-muted hover:text-ink transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        className="-mt-1 shrink-0 p-2 -m-2 text-ink-muted hover:text-ink transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       >
         <ArrowLeft className="w-4 h-4" />
       </button>

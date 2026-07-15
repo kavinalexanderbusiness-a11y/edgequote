@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Download, Share, X, Plus } from 'lucide-react'
+import { Button } from '@/components/ui/Button'
 import { isIos, isStandalone } from '@/lib/push'
 
 // Chrome/Android fire this before showing their own install UI; we capture it so
@@ -94,19 +95,18 @@ export function InstallPrompt() {
           )}
           {!iosHint && (
             <div className="mt-2.5 flex items-center gap-2">
-              <button onClick={install}
-                className="px-3.5 py-1.5 rounded-lg bg-accent text-black text-xs font-semibold hover:bg-accent/90 transition-colors">
-                Install
-              </button>
-              <button onClick={dismiss} className="px-3 py-1.5 rounded-lg text-xs font-medium text-ink-muted hover:text-ink transition-colors">
-                Not now
-              </button>
+              <Button size="sm" onClick={install}>Install</Button>
+              <Button size="sm" variant="ghost" onClick={dismiss}>Not now</Button>
             </div>
           )}
         </div>
-        <button onClick={dismiss} aria-label="Dismiss" className="shrink-0 text-ink-faint hover:text-ink transition-colors">
-          <X className="w-4 h-4" />
-        </button>
+        {/* Corner X only where there's no action row — the iOS hint has no
+            buttons of its own; Android dismisses via "Not now". */}
+        {iosHint && (
+          <button onClick={dismiss} aria-label="Dismiss" className="shrink-0 text-ink-faint hover:text-ink transition-colors">
+            <X className="w-4 h-4" />
+          </button>
+        )}
       </div>
     </div>
   )

@@ -14,6 +14,8 @@ import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
 import { Toggle } from '@/components/ui/Toggle'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { StickyActionBar } from '@/components/ui/StickyActionBar'
+import { Banner } from '@/components/ui/Banner'
 import { Collapsible } from '@/components/ui/Collapsible'
 import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
 import { sumServiceLines, serviceLineTotals, emptyServiceLine, SERVICE_UNITS } from '@/lib/quoteServices'
@@ -99,7 +101,7 @@ export function QuoteBuilder({
   const submit = handleSubmit(async v => { await onSubmit(v); autosave.clear() })
 
   const [calcLoading, setCalcLoading] = useState(false)
-  const [calcMsg, setCalcMsg] = useState<string | null>(null)
+  const [calcMsg, setCalcMsg] = useState<{ text: string; error?: boolean } | null>(null)
   const [showMeasure, setShowMeasure] = useState(false)
   const [includeTravel, setIncludeTravel] = useState(true)
   const [initialManual, setInitialManual] = useState<boolean>((defaultValues?.initial_price ?? 0) > 0)
@@ -334,8 +336,8 @@ export function QuoteBuilder({
     setCalcMsg(null)
     const base = settings?.base_address
     const dest = addr || address
-    if (!base) { setCalcMsg('Set your base address in Settings first.'); return }
-    if (!dest) { setCalcMsg('Enter a service address first.'); return }
+    if (!base) { setCalcMsg({ text: 'Set your base address in Settings first.', error: true }); return }
+    if (!dest) { setCalcMsg({ text: 'Enter a service address first.', error: true }); return }
     setCalcLoading(true)
     try {
       const res = await fetch('/api/distance', {
@@ -348,12 +350,12 @@ export function QuoteBuilder({
         setValue('distance_km', data.km)
         const sugg = suggestTravelFee(data.km, tiers)
         if (includeTravel && !sugg.isCustom && sugg.fee !== null) setValue('travel_fee', sugg.fee)
-        setCalcMsg(`${data.km} km${data.durationText ? ` · ${data.durationText} drive` : ''}`)
+        setCalcMsg({ text: `${data.km} km${data.durationText ? ` · ${data.durationText} drive` : ''}` })
       } else {
-        setCalcMsg(data.error || 'Could not calculate distance.')
+        setCalcMsg({ text: data.error || 'Could not calculate distance.', error: true })
       }
     } catch {
-      setCalcMsg('Distance lookup failed.')
+      setCalcMsg({ text: 'Distance lookup failed.', error: true })
     } finally {
       setCalcLoading(false)
     }
@@ -426,13 +428,13 @@ export function QuoteBuilder({
                   <p className="text-[11px] text-ink-muted flex items-center gap-1.5">
                     <CheckCircle2 className="w-3.5 h-3.5 text-accent" /> New person — we&apos;ll save them as a customer &amp; property automatically when you save.
                   </p>
-                  <Input label="Customer Name" placeholder="Full name"
+                  <Input label="Customer Name *" placeholder="Jane Smith"
                     error={errors.customer_name?.message}
                     {...register('customer_name', { required: 'Customer name is required' })} />
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <Input label="Phone (optional)" type="tel" placeholder="(403) 555-0100"
+                    <Input label="Phone" type="tel" placeholder="(403) 555-0100"
                       hint="Used to avoid duplicates" {...register('customer_phone')} />
-                    <Input label="Email (optional)" type="email" placeholder="jane@example.com"
+                    <Input label="Email" type="email" placeholder="jane@example.com"
                       {...register('customer_email')} />
                   </div>
 
@@ -449,7 +451,7 @@ export function QuoteBuilder({
                         </span>
                       </p>
                       <div className="flex items-center gap-2">
-                        <Button type="button" size="sm" onClick={() => setValue('customer_id', likelyMatch.customer.id)}>
+                        <Button type="button" variant="secondary" size="sm" onClick={() => setValue('customer_id', likelyMatch.customer.id)}>
                           Use {likelyMatch.customer.name.split(' ')[0]}
                         </Button>
                         <span className="text-[10px] text-ink-faint">or keep typing to save as new</span>
@@ -464,7 +466,7 @@ export function QuoteBuilder({
                 rules={{ required: 'Address is required' }}
                 render={({ field }) => (
                   <AddressAutocomplete
-                    label="Service Address"
+                    label="Service Address *"
                     placeholder="123 Main Street, Calgary, AB"
                     value={field.value || ''}
                     onChange={field.onChange}
@@ -478,7 +480,7 @@ export function QuoteBuilder({
                   the selected service. */}
               <Controller name="service_template_id" control={control}
                 render={({ field }) => (<Select label="Service" options={templateOptions} {...field} />)} />
-              <Input label="Service Name" placeholder="e.g. Lawn Mowing"
+              <Input label="Service Name *" placeholder="e.g. Lawn Mowing"
                 hint="Auto-fills when you pick a service above — edit to rename it on the quote."
                 error={errors.service_type?.message}
                 {...register('service_type', { required: 'Service is required' })} />
@@ -550,18 +552,24 @@ export function QuoteBuilder({
 
               {/* One-off / area services: the single service-appropriate price. */}
               {pricingKind !== 'lawn_recurring' && serviceRec && (
-                <div className="rounded-xl border border-accent/30 bg-accent/[0.06] p-3">
+                <div className="rounded-xl border border-accent/30 bg-accent/[0.06] p-3 animate-fade">
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Recommended price</p>
-                      <p className="text-xl font-bold text-ink leading-tight mt-0.5">{formatCurrency(serviceRec.price)}</p>
+                      <p className="text-xl font-bold text-ink leading-tight mt-0.5 tabular-nums">{formatCurrency(serviceRec.price)}</p>
                       <p className="text-[11px] text-ink-muted mt-0.5">
                         {serviceRec.basis}{serviceRec.materials ? ' · plus materials' : ''}
                       </p>
                     </div>
-                    <Button type="button" size="sm" onClick={applyServiceRec} className="shrink-0">
-                      <CheckCircle2 className="w-3.5 h-3.5" /> Accept
-                    </Button>
+                    {/* Same confirmation language as Pricing Intelligence — Accept
+                        flips to a green "Applied" once the price is in the field. */}
+                    {Math.abs((Number(initialPrice) || 0) - serviceRec.price) < 0.5
+                      ? <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 shrink-0 animate-fade"><CheckCircle2 className="w-3.5 h-3.5" /> Applied</span>
+                      : (
+                        <Button type="button" size="sm" onClick={applyServiceRec} className="shrink-0">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Accept
+                        </Button>
+                      )}
                   </div>
                   <p className="text-[10px] text-ink-faint mt-1.5">
                     {pricingKind === 'per_area'
@@ -586,16 +594,16 @@ export function QuoteBuilder({
                       const active = pickedCadence === opt.c && !initialManual
                       return (
                         <button key={opt.c} type="button" onClick={() => applySuggested(opt.c)}
-                          className={cn('rounded-xl border p-2.5 text-left transition-colors',
+                          className={cn('rounded-xl border p-2.5 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50', // transition-all so the selection ring eases in too
                             active ? 'border-accent bg-accent/10 ring-1 ring-accent' : 'border-border bg-surface hover:border-border-strong')}>
                           <span className="flex items-center justify-between gap-1">
                             <span className="text-[11px] font-medium text-ink-muted">{opt.label}</span>
                             {/* ONE recommendation on screen: when Pricing Intelligence is
                                 the primary card, the tile badge would be a second,
                                 differently-priced "Rec". */}
-                            {!(pricingKind === 'lawn_recurring' && measuredSqft > 0) && suggested.recommended === opt.c && <span className="text-[9px] font-bold uppercase tracking-wide text-accent">Rec</span>}
+                            {!(pricingKind === 'lawn_recurring' && measuredSqft > 0) && suggested.recommended === opt.c && <span className="text-[10px] font-bold uppercase tracking-wide text-accent">Rec</span>}
                           </span>
-                          <span className="block text-base font-bold text-ink mt-0.5 leading-tight">
+                          <span className="block text-base font-bold text-ink mt-0.5 leading-tight tabular-nums">
                             {formatCurrency(opt.price)}<span className="text-[10px] font-normal text-ink-faint">{opt.per}</span>
                           </span>
                         </button>
@@ -605,13 +613,14 @@ export function QuoteBuilder({
                   <div className="flex items-center justify-between gap-2 mt-1.5">
                     <p className="text-[10px] text-ink-faint">One tap fills One-Time + Weekly + Bi-Weekly together — every field stays editable below.</p>
                     <button type="button"
+                      aria-pressed={includeMonthly}
                       onClick={() => {
                         const next = !includeMonthly
                         setIncludeMonthly(next)
                         // Toggling applies immediately when suggestions already filled the fields.
                         if (suggested && !initialManual) setValue('monthly_price', next ? suggested.monthly : 0)
                       }}
-                      className={cn('shrink-0 text-[10px] font-semibold rounded-full px-2 py-0.5 border transition-colors',
+                      className={cn('shrink-0 text-[10px] font-semibold rounded-full px-2 py-0.5 border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
                         includeMonthly ? 'text-accent border-accent/40 bg-accent/10' : 'text-ink-faint border-border hover:text-ink')}>
                       {includeMonthly ? 'Monthly: on' : '+ Monthly'}
                     </button>
@@ -636,7 +645,7 @@ export function QuoteBuilder({
                 One-Time <span className="text-ink font-semibold">${savedRec.rec.one_time}</span> · Weekly <span className="text-ink font-semibold">${savedRec.rec.weekly}</span> · Bi-Weekly <span className="text-ink font-semibold">${savedRec.rec.biweekly}</span> · Monthly <span className="text-ink font-semibold">${savedRec.rec.monthly}</span>
               </p>
               <p className="text-[11px] text-ink-faint">Calculated {formatDate(savedRec.date)}</p>
-              <button type="button"
+              <Button type="button" variant="secondary" size="sm"
                 onClick={() => {
                   setValue('initial_price', savedRec.rec.one_time)
                   setValue('weekly_price', savedRec.rec.weekly)
@@ -645,10 +654,9 @@ export function QuoteBuilder({
                   setValue('measured_sqft', savedRec.sqft)
                   setValue('suggested_price', savedRec.rec.one_time)
                   setInitialManual(true)
-                }}
-                className="text-xs font-semibold text-accent hover:underline">
-                Use measured prices →
-              </button>
+                }}>
+                <CheckCircle2 className="w-3.5 h-3.5" /> Use measured prices
+              </Button>
               {recommendationIsStale(savedRec.date, Date.now()) && (
                 <p className="text-[11px] text-amber-400">⚠ Pricing recommendations may be outdated. Consider recalculating.</p>
               )}
@@ -661,10 +669,9 @@ export function QuoteBuilder({
               hint={initialManual ? 'Manual — overrides the labour suggestion.' : `Suggested ${formatCurrency(suggestedInitial)} from labour. Type to override.`}
               {...register('initial_price', { min: 0, onChange: () => setInitialManual(true) })} />
             {initialManual && (
-              <button type="button" onClick={() => setInitialManual(false)}
-                className="text-xs text-accent hover:underline mt-1.5">
+              <Button type="button" variant="ghost" size="sm" onClick={() => setInitialManual(false)} className="mt-1.5">
                 Use suggested ({formatCurrency(suggestedInitial)})
-              </button>
+              </Button>
             )}
           </div>
 
@@ -711,10 +718,10 @@ export function QuoteBuilder({
           <Collapsible title="Travel" icon={Car} summary={travelSummary}>
             <div className="flex justify-end">
               <Button type="button" variant="secondary" size="sm" onClick={() => calculateDistance()} loading={calcLoading}>
-                <MapPin className="w-3.5 h-3.5" /> Calculate Distance
+                <MapPin className="w-3.5 h-3.5" /> Calculate distance
               </Button>
             </div>
-            {calcMsg && <p className="text-xs text-accent">{calcMsg}</p>}
+            {calcMsg && <p className={cn('text-xs', calcMsg.error ? 'text-red-400' : 'text-accent')}>{calcMsg.text}</p>}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
               <Input label="Distance (km)" type="number" step="0.1" min="0" {...register('distance_km', { min: 0 })} />
               <Input label="Travel Fee ($)" type="number" step="5" min="0" {...register('travel_fee', { min: 0 })} />
@@ -729,14 +736,13 @@ export function QuoteBuilder({
               </div>
             )}
             {customTravelRequired && (
-              <div className="flex items-start gap-2 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
-                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              <Banner tone="warn" icon={AlertTriangle} className="text-xs">
                 Beyond your furthest travel tier — enter a custom travel fee above.
-              </div>
+              </Banner>
             )}
             {travelSuggestion && !travelSuggestion.isCustom && (
               <Button type="button" variant="secondary" size="sm" onClick={applySuggestedTravel}>
-                Apply suggested travel fee
+                <CheckCircle2 className="w-3.5 h-3.5" /> Apply suggested travel fee
               </Button>
             )}
             <div className="pt-1 space-y-2">
@@ -774,10 +780,11 @@ export function QuoteBuilder({
                       </div>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3">
-                      <Input label="Service" placeholder="e.g. Hedge Trimming"
+                      <Input label="Service *" placeholder="e.g. Hedge Trimming"
+                        error={errors.services?.[i]?.service_type ? 'Service is required' : undefined}
                         {...register(`services.${i}.service_type` as const, { required: true })} />
                       {templates.length > 0 && (
-                        <Select label="From template" placeholder="Pick…"
+                        <Select label="From template" placeholder="Select a template…"
                           options={templates.map(t => ({ value: t.id, label: t.name }))}
                           value={watch(`services.${i}.service_template_id`) || ''}
                           onChange={e => {
@@ -829,7 +836,7 @@ export function QuoteBuilder({
 
 
           <Collapsible title="Notes" icon={FileText} summary={notes ? String(notes).slice(0, 40) : 'None'}>
-            <Textarea label="Notes" placeholder="Job-specific details, access instructions, gate codes..."
+            <Textarea label="Notes" placeholder="Job-specific details, access instructions, gate codes…"
               {...register('notes')} />
           </Collapsible>
 
@@ -862,39 +869,39 @@ export function QuoteBuilder({
             <CardBody className="space-y-3">
               <div className="flex items-center justify-between text-sm">
                 <span className="flex items-center gap-2 text-ink-muted"><Clock className="w-3.5 h-3.5" /> Hours</span>
-                <span className="text-ink font-medium">{Number(hours).toFixed(1)} hrs · {crewSize} crew</span>
+                <span className="text-ink font-medium tabular-nums">{Number(hours).toFixed(1)} hrs · {crewSize} crew</span>
               </div>
               <div className="border-t border-border pt-3 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-ink-muted">First visit{initialManual ? ' (manual)' : ''}</span>
-                  <span className="text-ink font-semibold">{formatCurrency(initialPrice)}</span>
+                  <span className="text-ink font-semibold tabular-nums">{formatCurrency(initialPrice)}</span>
                 </div>
                 {extras.net > 0 && (
                   <div className="flex items-center justify-between text-sm">
                     <span className="flex items-center gap-2 text-ink-muted"><Layers className="w-3.5 h-3.5" /> Additional services ({serviceLines.fields.length})</span>
-                    <span className="text-ink font-medium">{formatCurrency(extras.net)}</span>
+                    <span className="text-ink font-medium tabular-nums">{formatCurrency(extras.net)}</span>
                   </div>
                 )}
                 <div className="flex items-center justify-between text-sm">
                   <span className="flex items-center gap-2 text-ink-muted"><Car className="w-3.5 h-3.5" /> Travel{showTravelSeparately ? ' (shown)' : ''}</span>
-                  <span className="text-ink font-medium">{formatCurrency(Number(travelFee))}</span>
+                  <span className="text-ink font-medium tabular-nums">{formatCurrency(Number(travelFee))}</span>
                 </div>
                 <div className="flex items-center justify-between pt-2 border-t border-border">
                   <span className="text-sm font-semibold text-ink">First visit total</span>
-                  <span className="text-2xl font-bold text-accent">{formatCurrency(effectiveTotal)}</span>
+                  <span className="text-2xl font-bold text-accent tabular-nums">{formatCurrency(effectiveTotal)}</span>
                 </div>
               </div>
               {(weeklyPrice > 0 || biweeklyPrice > 0 || monthlyPrice > 0) && (
                 <div className="border-t border-border pt-3 space-y-1.5">
                   <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Plan options</p>
-                  {weeklyPrice > 0 && <div className="flex justify-between text-sm"><span className="text-ink-muted">Weekly</span><span className="text-ink font-medium">{formatCurrency(weeklyPrice)}/visit</span></div>}
-                  {biweeklyPrice > 0 && <div className="flex justify-between text-sm"><span className="text-ink-muted">Bi-Weekly</span><span className="text-ink font-medium">{formatCurrency(biweeklyPrice)}/visit</span></div>}
-                  {monthlyPrice > 0 && <div className="flex justify-between text-sm"><span className="text-ink-muted">Monthly</span><span className="text-ink font-medium">{formatCurrency(monthlyPrice)}/visit</span></div>}
+                  {weeklyPrice > 0 && <div className="flex justify-between text-sm"><span className="text-ink-muted">Weekly</span><span className="text-ink font-medium tabular-nums">{formatCurrency(weeklyPrice)}/visit</span></div>}
+                  {biweeklyPrice > 0 && <div className="flex justify-between text-sm"><span className="text-ink-muted">Bi-Weekly</span><span className="text-ink font-medium tabular-nums">{formatCurrency(biweeklyPrice)}/visit</span></div>}
+                  {monthlyPrice > 0 && <div className="flex justify-between text-sm"><span className="text-ink-muted">Monthly</span><span className="text-ink font-medium tabular-nums">{formatCurrency(monthlyPrice)}/visit</span></div>}
                 </div>
               )}
               <div className="pt-2 space-y-2">
                 <Button type="submit" className="w-full" size="lg" loading={isSubmitting}>
-                  {isEdit ? 'Update Quote' : 'Save Quote'}
+                  {isEdit ? 'Update quote' : 'Save quote'}
                 </Button>
                 <Button type="button" variant="ghost" className="w-full" onClick={() => router.back()}>Cancel</Button>
               </div>
@@ -904,16 +911,16 @@ export function QuoteBuilder({
       </div>
 
       {/* Mobile sticky save bar — always reachable without scrolling */}
-      <div className="lg:hidden fixed bottom-0 left-0 right-0 z-30 px-4 py-2.5 bg-bg-secondary/95 backdrop-blur border-t border-border flex items-center justify-between gap-3">
+      <StickyActionBar fixed className="lg:hidden flex items-center justify-between gap-3">
         <div className="leading-tight min-w-0">
           <p className="text-[10px] uppercase tracking-wide text-ink-faint">First visit total</p>
-          <p className="text-xl font-bold text-accent leading-none">{formatCurrency(effectiveTotal)}</p>
+          <p className="text-xl font-bold text-accent leading-none tabular-nums">{formatCurrency(effectiveTotal)}</p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <Button type="button" variant="ghost" size="sm" onClick={() => router.back()}>Cancel</Button>
-          <Button type="submit" size="lg" loading={isSubmitting}>{isEdit ? 'Update' : 'Save Quote'}</Button>
+          <Button type="submit" size="lg" loading={isSubmitting}>{isEdit ? 'Update quote' : 'Save quote'}</Button>
         </div>
-      </div>
+      </StickyActionBar>
 
       {showMeasure && (
         <QuoteMeasure

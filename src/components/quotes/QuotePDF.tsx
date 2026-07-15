@@ -87,7 +87,7 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
   const initialPrice = quote.initial_price ?? quote.subtotal
   const hasMaintenance = !!(quote.weekly_price || quote.biweekly_price || quote.monthly_price)
   const lines = services && services.length ? services : null
-  const company = settings?.company_name || 'Edge Property Services'
+  const company = settings?.company_name || 'Your service provider'
   const contactLines = [
     settings?.phone,
     settings?.email_secondary || settings?.email_primary,
@@ -284,7 +284,7 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
         {/* Footer */}
         <View style={styles.footer} fixed>
           <Text style={styles.footerText}>{company}{contactLines.length ? '  ·  ' + contactLines.join('  ·  ') : ''}</Text>
-          <Text style={styles.footerText}>Thank you for your business</Text>
+          <Text style={styles.footerText}>We look forward to working with you</Text>
         </View>
       </Page>
     </Document>

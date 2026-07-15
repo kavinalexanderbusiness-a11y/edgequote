@@ -1,6 +1,6 @@
 'use client'
 
-import { Loader2, Wand2, RefreshCw, Minimize2, Maximize2, Briefcase, HeartHandshake, Flame, Crown, MapPin, Laugh, Search, Eraser, SmilePlus, Megaphone, type LucideIcon } from 'lucide-react'
+import { Loader2, Wand2, RefreshCw, Minimize2, Maximize2, Briefcase, HeartHandshake, Flame, Crown, MapPin, Laugh, Search, Eraser, SmilePlus, Megaphone, ChevronDown, type LucideIcon } from 'lucide-react'
 import { REWRITE_ACTIONS } from '@/lib/marketing/prompt'
 import { cn } from '@/lib/utils'
 import type { RewriteAction } from '@/lib/marketing/types'
@@ -58,9 +58,9 @@ export function RewriteToolbar({ disabled, busy, onRewrite }: {
           onClick={() => onRewrite('rewrite')}
           disabled={disabled || !!b}
           className={cn(
-            'inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold border transition-colors',
-            'bg-accent/10 text-accent border-accent/30 hover:bg-accent/15 disabled:opacity-40 disabled:cursor-not-allowed',
-            b === 'rewrite' && 'bg-accent/20',
+            'inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium border transition-colors whitespace-nowrap',
+            'bg-surface text-ink-muted border-border hover:text-ink hover:border-accent/50 disabled:opacity-40 disabled:cursor-not-allowed',
+            b === 'rewrite' && 'border-accent text-accent',
           )}
         >
           {b === 'rewrite' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
@@ -71,7 +71,7 @@ export function RewriteToolbar({ disabled, busy, onRewrite }: {
         {PRIMARY.map(a => <Pill key={a} action={a} busy={b} disabled={disabled} onRewrite={onRewrite} />)}
       </div>
       <details className="group">
-        <summary className="text-[11px] text-ink-faint cursor-pointer select-none hover:text-ink-muted list-none inline-flex items-center gap-1">More edits ↓</summary>
+        <summary className="text-[11px] text-ink-faint cursor-pointer select-none hover:text-ink-muted list-none inline-flex items-center gap-1">More edits <ChevronDown className="w-3 h-3 transition-transform group-open:rotate-180" /></summary>
         <div className="flex items-center gap-1.5 flex-wrap mt-2">
           {MORE.map(a => <Pill key={a} action={a} busy={b} disabled={disabled} onRewrite={onRewrite} />)}
         </div>

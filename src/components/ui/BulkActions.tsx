@@ -27,23 +27,23 @@ export function BulkActionBar({ count, actions, onClear, busyKey }: {
   if (count === 0) return null
   const visible = actions.filter(a => !a.hidden)
   return (
-    <div className="sticky top-2 z-20 flex items-center gap-1.5 flex-wrap bg-bg-secondary border border-accent/40 rounded-xl px-3 sm:px-4 py-2.5 shadow-lg">
+    <div className="sticky top-2 z-20 flex items-center gap-1.5 flex-wrap bg-bg-secondary border border-accent/40 rounded-xl px-3 sm:px-4 py-2.5 shadow-lg origin-top animate-pop">
       <span className="text-sm font-semibold text-ink mr-1">{count} selected</span>
       {visible.map(a => {
         const busy = busyKey === a.key
         return (
-          <button key={a.key} onClick={a.onClick} disabled={a.disabled || !!busyKey}
+          <button key={a.key} type="button" onClick={a.onClick} disabled={a.disabled || !!busyKey} aria-busy={busy || undefined}
             className={cn(
-              'inline-flex items-center gap-1.5 text-xs font-medium rounded-lg px-2.5 py-1.5 border transition-colors disabled:opacity-50 disabled:pointer-events-none',
+              'inline-flex items-center gap-1.5 text-xs font-medium rounded-lg px-2.5 py-1.5 border transition-colors disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
               a.tone === 'danger' ? 'border-red-500/30 text-red-300 hover:bg-red-500/10'
                 : a.tone === 'primary' ? 'border-accent bg-accent text-black hover:bg-accent-hover'
                 : 'border-border-strong text-ink-muted hover:text-ink hover:bg-black/10',
             )}>
-            {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <a.icon className="w-3.5 h-3.5" />} {a.label}
+            {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" /> : <a.icon className="w-3.5 h-3.5" aria-hidden="true" />} {a.label}
           </button>
         )
       })}
-      <button onClick={onClear} className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-ink-faint hover:text-ink">
+      <button type="button" onClick={onClear} className="ml-auto inline-flex items-center gap-1 text-xs font-medium text-ink-faint hover:text-ink rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
         <X className="w-3.5 h-3.5" /> Clear
       </button>
     </div>

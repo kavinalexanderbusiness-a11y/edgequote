@@ -4,6 +4,7 @@ import { confirm as confirmDialog } from '@/lib/confirm'
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { InlineEmpty } from '@/components/ui/EmptyState'
 import { formatDate, cn } from '@/lib/utils'
 import { MessageSquare, Mail, Check, Loader2 } from 'lucide-react'
 import { MSG_LABELS, MsgType } from '@/lib/comms/templates'
@@ -70,9 +71,9 @@ export function CustomerComms({ customerId, smsOptIn, emailOptIn }: { customerId
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-1.5">History</p>
           {loading ? (
-            <p className="text-xs text-ink-muted flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…</p>
+            <p role="status" aria-live="polite" className="text-xs text-ink-muted flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" /> Loading…</p>
           ) : log.length === 0 ? (
-            <p className="text-xs text-ink-muted">No messages sent yet.</p>
+            <InlineEmpty className="py-3">No messages sent yet.</InlineEmpty>
           ) : (
             <div className="space-y-1">
               {log.map(r => (
@@ -110,8 +111,8 @@ export function CustomerComms({ customerId, smsOptIn, emailOptIn }: { customerId
 
 function OptToggle({ label, icon: Icon, on, onChange }: { label: string; icon: typeof MessageSquare; on: boolean; onChange: (v: boolean) => void }) {
   return (
-    <button onClick={() => onChange(!on)}
-      className={cn('flex items-center gap-1.5 text-xs font-medium rounded-full px-3 py-1.5 border transition-colors',
+    <button onClick={() => onChange(!on)} aria-pressed={on}
+      className={cn('flex items-center gap-1.5 text-xs font-medium rounded-full px-3 py-1.5 border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
         on ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : 'text-ink-muted border-border bg-bg-tertiary hover:text-ink')}>
       <Icon className="w-3.5 h-3.5" /> {label}: {on ? <span className="inline-flex items-center gap-0.5">On <Check className="w-3 h-3" /></span> : 'Off'}
     </button>

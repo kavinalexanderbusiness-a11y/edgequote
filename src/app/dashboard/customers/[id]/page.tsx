@@ -10,7 +10,7 @@ import { queueOrRun } from '@/lib/offline/outbox'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { custCacheKey, type CustomerPrefetch } from '@/lib/prefetch'
-import { Customer, Property, Quote, Job, Invoice, JobRecurrence } from '@/types'
+import { Customer, Property, Quote, Job, Invoice, JobRecurrence, CustomerFormValues } from '@/types'
 import { WebsiteLead } from '@/lib/leads'
 import { LeadSummary } from '@/components/leads/LeadSummary'
 import { JobPhotos } from '@/components/photos/JobPhotos'
@@ -22,11 +22,17 @@ import { settingsToSeasons, DEFAULT_SEASONS, ServiceSeasons } from '@/lib/season
 import { resolvePrefs, prefSummary, hasAnyPref } from '@/lib/preferences'
 import { SchedulePrefsFields, PrefsDraft, EMPTY_DRAFT, toDraft, draftToRow } from '@/components/customers/SchedulePrefsFields'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
-import { PageHeader } from '@/components/layout/PageHeader'
+import { DetailHeader } from '@/components/layout/DetailHeader'
+import { Avatar } from '@/components/ui/Avatar'
+import { Modal } from '@/components/ui/Modal'
+import { CustomerForm } from '@/components/customers/CustomerForm'
+import { Banner } from '@/components/ui/Banner'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { InlineEmpty } from '@/components/ui/EmptyState'
 import { Button } from '@/components/ui/Button'
+import { Textarea } from '@/components/ui/Textarea'
 import { SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
-import { formatCurrency, formatDate, getInitials } from '@/lib/utils'
+import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { CustomerComms } from '@/components/customers/CustomerComms'
 import { CommsHealth } from '@/components/customers/CommsHealth'
@@ -35,14 +41,15 @@ import { ReferralPanel } from '@/components/customers/ReferralPanel'
 import { ConversationThread } from '@/components/messages/ConversationThread'
 import { PaymentMethodCard } from '@/components/payments/PaymentMethodCard'
 import {
-  ArrowLeft, Phone, MessageSquare, FilePlus, CalendarPlus, Mail, MapPin, Repeat,
+  Phone, MessageSquare, FilePlus, CalendarPlus, Mail, MapPin, Repeat,
   FileText, Send, RotateCw, CheckCircle2, Wrench, Receipt, DollarSign, Sparkles, Users,
   Edit2, ExternalLink, Ruler, AlertTriangle, StickyNote, Wallet, Timer, CalendarClock,
-  Link2, Check, Cake, PartyPopper, Camera,
+  Link2, Check, Cake, PartyPopper, Camera, History, Globe,
 } from 'lucide-react'
 
 const WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
 const OPEN_INVOICE = new Set(['unpaid', 'sent', 'partial'])
+const TIMELINE_CAP = 8   // recent events shown before "Show more"
 
 function localToday(): string {
   const d = new Date()
@@ -61,7 +68,7 @@ function mdLabel(dateStr: string | null | undefined): string | null {
 
 interface TimelineEvent {
   at: string
-  kind: 'quote_created' | 'quote_sent' | 'followup' | 'quote_accepted' | 'job_scheduled' | 'job_completed' | 'invoice_created' | 'invoice_paid' | 'message_in' | 'message_out' | 'payment' | 'portal_request'
+  kind: 'quote_created' | 'quote_sent' | 'followup' | 'quote_accepted' | 'job_scheduled' | 'job_completed' | 'invoice_created' | 'invoice_paid' | 'message_in' | 'message_out' | 'payment' | 'portal_request' | 'lead'
   title: string
   sub?: string
   href?: string
@@ -80,6 +87,20 @@ const EVENT_META: Record<TimelineEvent['kind'], { icon: typeof FileText; color: 
   message_out:     { icon: Send,         color: 'text-ink-muted bg-surface border-border' },
   payment:         { icon: DollarSign,   color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' },
   portal_request:  { icon: StickyNote,   color: 'text-amber-400 bg-amber-500/10 border-amber-500/20' },
+  lead:            { icon: Globe,         color: 'text-accent bg-accent/10 border-accent/25' },
+}
+
+// At-a-glance messaging eligibility beside a contact method: whether this channel
+// is allowed to send. No silent guessing — the profile says on or off.
+function ConsentBadge({ on, label }: { on: boolean; label: string }) {
+  return (
+    <span
+      title={on ? `${label} allowed — automatic and one-tap messages can send.` : `${label} off — turn it on in Communication below to message this customer here.`}
+      className={cn('text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 border shrink-0',
+        on ? 'text-emerald-400 border-emerald-500/25 bg-emerald-500/10' : 'text-ink-faint border-border bg-bg-tertiary')}>
+      {label} {on ? 'on' : 'off'}
+    </span>
+  )
 }
 
 export default function CustomerDetailPage() {
@@ -106,6 +127,13 @@ export default function CustomerDetailPage() {
   const [portalBusy, setPortalBusy] = useState(false)
   const [portalCopied, setPortalCopied] = useState(false)
   const [showMessage, setShowMessage] = useState(false)
+  // Edit core details in place — the profile could show a customer but not fix a
+  // typo in their email without leaving for the list. Same shared form, in a modal.
+  const [editing, setEditing] = useState(false)
+  const [allCustomers, setAllCustomers] = useState<Customer[]>([])
+  // Timeline can run to hundreds of events on a long-standing customer — show the
+  // recent slice, expand on demand.
+  const [showAllEvents, setShowAllEvents] = useState(false)
 
   async function copyPortalLink() {
     if (!customer) return
@@ -119,6 +147,44 @@ export default function CustomerDetailPage() {
       try { await navigator.clipboard.writeText(url) } catch { toast('Portal link (copy manually): ' + url, { duration: 20000 }) }
       setPortalCopied(true); setTimeout(() => setPortalCopied(false), 2500)
     } finally { setPortalBusy(false) }
+  }
+
+  async function openEdit() {
+    // Lazy-load the name list once so the "Referred by" picker works while editing
+    // (dup detection is off in edit mode, so id+name is all the form needs).
+    if (allCustomers.length === 0) {
+      const { data } = await supabase.from('customers').select('id, name').neq('id', id).order('name')
+      setAllCustomers((data as Customer[]) || [])
+    }
+    setEditing(true)
+  }
+
+  // Mirrors the list's edit: update the customer, and keep the primary property's
+  // address in sync when it changes. reload() re-runs the page's own load().
+  async function handleSaveEdit(values: CustomerFormValues) {
+    // Strip consent from the raw update — it's audited through the shared engine
+    // and owned by the profile's Communication card. Editing a name must never
+    // silently flip SMS/email opt-in. (The form hides these in edit mode anyway.)
+    const rest = { ...values }
+    delete rest.sms_opt_in
+    delete rest.email_opt_in
+    const patch = {
+      ...rest,
+      acquisition_source: values.acquisition_source || null,
+      referred_by_customer_id: values.referred_by_customer_id || null,
+      birthday: values.birthday || null,
+      anniversary: values.anniversary || null,
+    }
+    const { error } = await supabase.from('customers').update(patch).eq('id', id)
+    if (error) { toast.error('Could not save the customer: ' + error.message); return }   // keep the form open to retry
+    if (values.address) {
+      await supabase.from('properties').update({
+        address: values.address, city: values.city || null,
+        province: values.province || 'AB', postal_code: values.postal_code || null,
+      }).eq('customer_id', id).eq('is_primary', true)
+    }
+    setEditing(false)
+    reload()
   }
 
   const [editingNotes, setEditingNotes] = useState(false)
@@ -220,7 +286,9 @@ export default function CustomerDetailPage() {
       for (const sr of (srRes.data as { message: string; created_at: string }[]) || []) {
         const msg = sr.message || ''
         const isLead = /^new .* lead/i.test(msg)
-        extra.push({ at: sr.created_at, kind: 'portal_request', title: isLead ? 'Website lead' : 'Portal service request', sub: msg.slice(0, 160), href: '/dashboard/messages' })
+        // Strip the "New Website lead — " prefix so the sub isn't redundant with the title.
+        const sub = isLead ? msg.replace(/^new\b.*?\blead\b\s*[—-]?\s*/i, '').slice(0, 160) : msg.slice(0, 160)
+        extra.push({ at: sr.created_at, kind: isLead ? 'lead' : 'portal_request', title: isLead ? 'Website lead' : 'Portal service request', sub, href: '/dashboard/messages' })
       }
       setExtraTimeline(extra)
 
@@ -305,8 +373,13 @@ export default function CustomerDetailPage() {
     setSavingPropPrefs(true)
     const row = draftToRow(propPrefsDraft)
     const { error } = await supabase.from('properties').update(row).eq('id', propId)
-    if (!error) setProperties(prev => prev.map(p => p.id === propId ? { ...p, ...row } : p))
     setSavingPropPrefs(false)
+    if (error) {
+      // Keep the editor open so the edit isn't lost — same behavior as saveNotes/savePrefs.
+      toast.error('Could not save the override: ' + error.message)
+      return
+    }
+    setProperties(prev => prev.map(p => p.id === propId ? { ...p, ...row } : p))
     setEditingPropPrefs(null)
   }
 
@@ -377,13 +450,13 @@ export default function CustomerDetailPage() {
     return arr
   }, [quotes, jobs, invoices, extraTimeline, gstPercent])
 
-  if (loading) return <div className="max-w-5xl space-y-6"><SkeletonTiles count={4} /><SkeletonRows count={5} /></div>
+  if (loading) return <div className="max-w-5xl mx-auto space-y-6"><SkeletonTiles count={4} /><SkeletonRows count={5} /></div>
   // Cached customer (if any) keeps showing on a revalidation blip; only when there's
   // genuinely nothing to show do we branch error-vs-not-found.
   if (!customer) return loadError ? (
     <div className="text-center py-16 text-sm">
       <p className="text-red-400">{loadError}</p>
-      <button onClick={reload} className="mt-2 underline font-medium text-accent">Retry</button>
+      <Button size="sm" variant="secondary" className="mt-2" onClick={reload}>Retry</Button>
     </div>
   ) : (
     <div className="text-center py-16 text-sm">
@@ -446,7 +519,9 @@ export default function CustomerDetailPage() {
   }
   for (const inv of invoices.filter(i => OPEN_INVOICE.has(i.status))) {
     const overdue = !!inv.due_date && inv.due_date < today
-    openItems.push({ key: `inv-${inv.id}`, icon: Receipt, label: `${overdue ? 'Overdue' : 'Unpaid'} invoice ${inv.invoice_number}`, sub: `${formatCurrency(Math.round(Number(inv.amount) * custGstMult * 100) / 100)}${inv.due_date ? ` · due ${formatDate(inv.due_date)}` : ''}`, href: '/dashboard/invoices', tone: overdue ? 'text-red-400' : 'text-amber-400' })
+    // Deep-link straight to the focused invoice — landing on the unfiltered list
+    // meant re-finding the invoice you just tapped.
+    openItems.push({ key: `inv-${inv.id}`, icon: Receipt, label: `${overdue ? 'Overdue' : 'Unpaid'} invoice ${inv.invoice_number}`, sub: `${formatCurrency(Math.round(Number(inv.amount) * custGstMult * 100) / 100)}${inv.due_date ? ` · due ${formatDate(inv.due_date)}` : ''}`, href: `/dashboard/invoices?invoice=${encodeURIComponent(inv.invoice_number)}`, tone: overdue ? 'text-red-400' : 'text-amber-400' })
   }
 
   const phone = customer.phone
@@ -471,55 +546,77 @@ export default function CustomerDetailPage() {
   ]
 
   return (
-    <div className="max-w-5xl space-y-6">
-      <div className="flex items-center gap-3">
-        <button onClick={() => router.back()} className="text-ink-muted hover:text-ink transition-colors">
-          <ArrowLeft className="w-4 h-4" />
-        </button>
-        <PageHeader title={customer.name} description={`Customer since ${formatDate(customer.created_at)}`} />
-        <Button size="sm" variant="secondary" className="ml-auto shrink-0" loading={portalBusy}
-          title="Copy a private link the customer can use to view quotes, invoices, history & photos and accept quotes"
-          onClick={copyPortalLink}>
-          {portalCopied ? <><Check className="w-3.5 h-3.5" /> Link copied</> : <><Link2 className="w-3.5 h-3.5" /> Portal link</>}
-        </Button>
-      </div>
+    <div className="max-w-5xl mx-auto space-y-6">
+      {/* THE shared DetailHeader — same back/title/action anatomy as quotes/[id]. */}
+      <DetailHeader
+        title={customer.name}
+        description={`Customer since ${formatDate(customer.created_at)}`}
+        action={
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="secondary" onClick={openEdit} title="Edit name, contact and address">
+              <Edit2 className="w-3.5 h-3.5" /> Edit
+            </Button>
+            <Button size="sm" variant="secondary" loading={portalBusy}
+              title="Copy a private link the customer can use to view quotes, invoices, history & photos and accept quotes"
+              onClick={copyPortalLink}>
+              {portalCopied ? <><Check className="w-3.5 h-3.5" /> Link copied</> : <><Link2 className="w-3.5 h-3.5" /> Portal link</>}
+            </Button>
+          </div>
+        }
+      />
 
-      {/* Retention warnings — top, highly visible */}
+      {/* Retention warnings — top, highly visible (THE shared Banner) */}
       {warnings.map((w, i) => (
-        <div key={i} className={`flex items-center gap-2 text-sm rounded-xl px-4 py-2.5 border ${w.tone === 'red' ? 'text-red-400 bg-red-500/10 border-red-500/20' : 'text-amber-400 bg-amber-500/10 border-amber-500/20'}`}>
-          <AlertTriangle className="w-4 h-4 shrink-0" /> {w.text}
-        </div>
+        <Banner key={i} tone={w.tone === 'red' ? 'danger' : 'warn'} icon={AlertTriangle}>{w.text}</Banner>
       ))}
 
       {/* Identity + quick actions */}
       <Card>
         <CardBody className="space-y-4">
           <div className="flex items-start gap-4">
-            <div className="w-12 h-12 rounded-full bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-              <span className="text-base font-bold text-accent">{getInitials(customer.name)}</span>
-            </div>
+            <Avatar name={customer.name} seed={customer.id} size="lg" />
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2 flex-wrap">
-                <p className="text-lg font-bold text-ink">{customer.name}</p>
-                {isHighValue && (
-                  <span className="text-[10px] uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5 font-semibold flex items-center gap-1">
-                    <Sparkles className="w-3 h-3" /> High value
-                  </span>
-                )}
-                {recurringStatus && (
-                  <span className="text-[10px] uppercase tracking-wide text-emerald-400 border border-emerald-500/30 bg-emerald-500/10 rounded px-1.5 py-0.5 font-semibold flex items-center gap-1">
-                    <Repeat className="w-3 h-3" /> {recurringStatus}
-                  </span>
-                )}
-              </div>
+              {/* Name lives in the DetailHeader above — here we lead with status +
+                  contact so the same name isn't stacked twice. */}
+              {(isHighValue || recurringStatus) && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  {isHighValue && (
+                    <span className="text-[10px] uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5 font-semibold flex items-center gap-1">
+                      <Sparkles className="w-3 h-3" /> High value
+                    </span>
+                  )}
+                  {recurringStatus && (
+                    <span className="text-[10px] uppercase tracking-wide text-emerald-400 border border-emerald-500/30 bg-emerald-500/10 rounded px-1.5 py-0.5 font-semibold flex items-center gap-1">
+                      <Repeat className="w-3 h-3" /> {recurringStatus}
+                    </span>
+                  )}
+                </div>
+              )}
               <div className="flex items-center gap-x-4 gap-y-1 mt-1 flex-wrap text-sm">
-                {customer.phone && <a href={`tel:${customer.phone}`} className="flex items-center gap-1 text-accent hover:underline"><Phone className="w-3.5 h-3.5" />{customer.phone}</a>}
-                {customer.email && <a href={`mailto:${customer.email}`} className="flex items-center gap-1 text-ink-muted hover:text-ink"><Mail className="w-3.5 h-3.5" />{customer.email}</a>}
+                {customer.phone && (
+                  <span className="flex items-center gap-1.5">
+                    <a href={`tel:${customer.phone}`} className="flex items-center gap-1 text-accent hover:underline"><Phone className="w-3.5 h-3.5" />{customer.phone}</a>
+                    <ConsentBadge on={!!customer.sms_opt_in} label="Texts" />
+                  </span>
+                )}
+                {customer.email && (
+                  <span className="flex items-center gap-1.5">
+                    <a href={`mailto:${customer.email}`} className="flex items-center gap-1 text-ink-muted hover:text-ink"><Mail className="w-3.5 h-3.5" />{customer.email}</a>
+                    <ConsentBadge on={!!customer.email_opt_in} label="Email" />
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-x-3 gap-y-1 mt-1.5 flex-wrap">
-                {customer.acquisition_source && (
-                  <span className="text-[10px] uppercase tracking-wide text-ink-muted border border-border rounded px-1.5 py-0.5">{customer.acquisition_source}</span>
-                )}
+                {customer.acquisition_source && (() => {
+                  const src = customer.acquisition_source
+                  const isWeb = /website|formspree|webhook|online|booking|api|zapier/i.test(src)
+                  const label = /formspree|webhook|api|zapier/i.test(src) ? 'Website' : src
+                  return (
+                    <span className="text-[10px] uppercase tracking-wide text-ink-muted border border-border rounded px-1.5 py-0.5 inline-flex items-center gap-1">
+                      {isWeb && <Globe className="w-2.5 h-2.5 text-ink-faint" />}{isWeb ? `From ${label}` : label}
+                    </span>
+                  )
+                })()}
                 {referrer && (
                   <Link href={`/dashboard/customers/${referrer.id}`} className="text-xs text-ink-muted hover:text-ink flex items-center gap-1">
                     <Users className="w-3 h-3" /> Referred by {referrer.name}
@@ -540,19 +637,19 @@ export default function CustomerDetailPage() {
 
           {/* Quick actions — one tap, large targets */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            <Link href={`/dashboard/quotes/new?customer=${customer.id}`} className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium bg-accent text-black hover:opacity-90 transition-opacity">
-              <FilePlus className="w-4 h-4" /> New Quote
+            <Link href={`/dashboard/quotes/new?customer=${customer.id}`} className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium bg-accent text-black hover:opacity-90 transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+              <FilePlus className="w-4 h-4" /> New quote
             </Link>
-            <Link href={`/dashboard/schedule?customer=${customer.id}`} className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border border-border bg-surface text-ink hover:border-border-strong transition-colors">
+            <Link href={`/dashboard/schedule?customer=${customer.id}`} className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border border-border bg-surface text-ink hover:border-border-strong transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
               <CalendarPlus className="w-4 h-4" /> Schedule
             </Link>
-            <a href={phone ? `tel:${phone}` : undefined} aria-disabled={!phone} className={`h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border transition-colors ${phone ? 'bg-surface border-border text-ink hover:border-border-strong' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}>
+            <a href={phone ? `tel:${phone}` : undefined} aria-disabled={!phone} className={`h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${phone ? 'bg-surface border-border text-ink hover:border-border-strong' : 'border-border text-ink-faint pointer-events-none opacity-50'}`}>
               <Phone className="w-4 h-4" /> Call
             </a>
             {/* Opens the ONE shared Send Message dialog (templates + editable body,
                 logged to the thread) — not a device-only sms: deep link. */}
             <button onClick={() => setShowMessage(true)}
-              className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border bg-surface border-border text-ink hover:border-border-strong transition-colors">
+              className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-sm font-medium border bg-surface border-border text-ink hover:border-border-strong transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
               <MessageSquare className="w-4 h-4" /> Message
             </button>
           </div>
@@ -590,7 +687,7 @@ export default function CustomerDetailPage() {
         </CardHeader>
         <CardBody className="p-0">
           {openItems.length === 0 ? (
-            <p className="px-5 py-6 text-center text-sm text-ink-muted">Nothing needs action right now. 🎉</p>
+            <InlineEmpty className="py-6">Nothing needs action right now.</InlineEmpty>
           ) : (
             <div className="divide-y divide-border">
               {openItems.map(item => {
@@ -642,17 +739,16 @@ export default function CustomerDetailPage() {
         </CardHeader>
         <CardBody>
           {editingNotes ? (
-            <div className="space-y-2">
-              <textarea
+            <div className="space-y-3">
+              <Textarea
                 value={notesValue}
                 onChange={e => setNotesValue(e.target.value)}
                 rows={4}
                 autoFocus
                 placeholder="Gate codes, dog info, preferred contact, billing notes, access instructions, equipment restrictions..."
-                className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all"
               />
               <div className="flex items-center gap-2">
-                <Button size="sm" onClick={saveNotes} loading={savingNotes}>Save</Button>
+                <Button size="sm" onClick={saveNotes} loading={savingNotes}>Save note</Button>
                 <Button size="sm" variant="ghost" onClick={() => { setNotesValue(customer.notes || ''); setEditingNotes(false) }}>Cancel</Button>
               </div>
             </div>
@@ -681,7 +777,7 @@ export default function CustomerDetailPage() {
             <div className="space-y-3">
               <SchedulePrefsFields value={prefsDraft} onChange={setPrefsDraft} />
               <div className="flex items-center gap-2">
-                <Button size="sm" onClick={savePrefs} loading={savingPrefs}>Save</Button>
+                <Button size="sm" onClick={savePrefs} loading={savingPrefs}>Save preferences</Button>
                 <Button size="sm" variant="ghost" onClick={() => setEditingPrefs(false)}>Cancel</Button>
               </div>
             </div>
@@ -705,10 +801,10 @@ export default function CustomerDetailPage() {
           return (
             <Card key={c.label} className="p-4 sm:p-5">
               <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide">{c.label}</p>
+                <p className="text-[10px] font-semibold text-ink-muted uppercase tracking-[0.14em]">{c.label}</p>
                 <Icon className={`w-4 h-4 ${c.color}`} />
               </div>
-              <p className="text-xl sm:text-2xl font-bold text-ink tracking-tight mt-2">{c.value}</p>
+              <p className="text-xl sm:text-2xl font-bold text-ink tracking-tight tabular-nums mt-2">{c.value}</p>
               <p className="text-xs text-ink-faint mt-1">{c.sub}</p>
             </Card>
           )
@@ -717,7 +813,6 @@ export default function CustomerDetailPage() {
       <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-ink-muted -mt-2">
         <span>Accepted jobs: <span className="text-ink font-medium">{wonQuotes.length}</span> of {quotes.length}</span>
         <span>Avg job value: <span className="text-ink font-medium">{formatCurrency(avgJobValue)}</span></span>
-        <span>Invoices: <span className="text-ink font-medium">{invoices.length}</span></span>
       </div>
 
       {/* Current Service Plan — the recurring schedule at a glance */}
@@ -791,13 +886,16 @@ export default function CustomerDetailPage() {
       <div className="grid lg:grid-cols-2 gap-6">
         {/* Timeline */}
         <Card>
-          <CardHeader><h2 className="text-sm font-semibold text-ink">Timeline</h2></CardHeader>
+          <CardHeader className="flex items-center gap-2">
+            <History className="w-4 h-4 text-accent" />
+            <h2 className="text-sm font-semibold text-ink">Timeline</h2>
+          </CardHeader>
           <CardBody>
             {events.length === 0 ? (
-              <p className="text-sm text-ink-muted">No history yet.</p>
+              <InlineEmpty className="py-6">No history yet.</InlineEmpty>
             ) : (
               <div className="space-y-3">
-                {events.map((e, i) => {
+                {(showAllEvents ? events : events.slice(0, TIMELINE_CAP)).map((e, i) => {
                   const meta = EVENT_META[e.kind]
                   const Icon = meta.icon
                   const row = (
@@ -815,6 +913,12 @@ export default function CustomerDetailPage() {
                     ? <Link key={i} href={e.href} className="block hover:opacity-80 transition-opacity">{row}</Link>
                     : <div key={i}>{row}</div>
                 })}
+                {events.length > TIMELINE_CAP && (
+                  <button onClick={() => setShowAllEvents(s => !s)}
+                    className="text-xs font-medium text-accent hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                    {showAllEvents ? 'Show less' : `Show ${events.length - TIMELINE_CAP} more`}
+                  </button>
+                )}
               </div>
             )}
           </CardBody>
@@ -828,16 +932,16 @@ export default function CustomerDetailPage() {
           </CardHeader>
           <CardBody className="space-y-3">
             {properties.length === 0 ? (
-              <p className="text-sm text-ink-muted">No properties on file.</p>
+              <InlineEmpty className="py-6">No properties on file.</InlineEmpty>
             ) : properties.map(p => {
               const jobCount = jobs.filter(j => j.property_id === p.id).length
               const measures = [
-                p.lawn_sqft != null && `Lawn ${p.lawn_sqft} ft²`,
-                p.fence_length != null && `Fence ${p.fence_length} ft`,
-                p.mulch_area != null && `Mulch ${p.mulch_area} ft²`,
-                p.rock_area != null && `Rock ${p.rock_area} ft²`,
-                p.driveway_area != null && `Driveway ${p.driveway_area} ft²`,
-                p.lot_size != null && `Lot ${p.lot_size} ft²`,
+                p.lawn_sqft != null && `Lawn ${Number(p.lawn_sqft).toLocaleString()} ft²`,
+                p.fence_length != null && `Fence ${Number(p.fence_length).toLocaleString()} ft`,
+                p.mulch_area != null && `Mulch ${Number(p.mulch_area).toLocaleString()} ft²`,
+                p.rock_area != null && `Rock ${Number(p.rock_area).toLocaleString()} ft²`,
+                p.driveway_area != null && `Driveway ${Number(p.driveway_area).toLocaleString()} ft²`,
+                p.lot_size != null && `Lot ${Number(p.lot_size).toLocaleString()} ft²`,
               ].filter(Boolean) as string[]
               const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p.address)}`
               return (
@@ -874,12 +978,12 @@ export default function CustomerDetailPage() {
                   <div className="mt-3 pt-3 border-t border-border">
                     {editingPropPrefs === p.id ? (
                       <div className="space-y-3">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint flex items-center gap-1.5">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint flex items-center gap-1.5">
                           <CalendarClock className="w-3.5 h-3.5 text-accent" /> Scheduling override
                         </p>
                         <SchedulePrefsFields value={propPrefsDraft} onChange={setPropPrefsDraft} />
                         <div className="flex items-center gap-2">
-                          <Button size="sm" onClick={() => savePropPrefs(p.id)} loading={savingPropPrefs}>Save</Button>
+                          <Button size="sm" onClick={() => savePropPrefs(p.id)} loading={savingPropPrefs}>Save override</Button>
                           <Button size="sm" variant="ghost" onClick={() => setEditingPropPrefs(null)}>Cancel</Button>
                         </div>
                       </div>
@@ -906,6 +1010,31 @@ export default function CustomerDetailPage() {
 
       {/* Referrals — advocates this customer brought in (with statuses + rewards) */}
       <ReferralPanel customer={customer} referrer={referrer} referredRevenue={referredRevenue} />
+
+      {/* Edit core details — the ONE shared customer form, in a modal (no page leave) */}
+      <Modal open={editing} onClose={() => setEditing(false)} title="Edit customer" icon={Edit2} size="lg">
+        <CustomerForm
+          isEdit
+          customers={allCustomers}
+          autosaveKey={`customer:${customer.id}`}
+          defaultValues={{
+            name: customer.name || '',
+            email: customer.email || '',
+            phone: customer.phone || '',
+            address: customer.address || '',
+            city: customer.city || '',
+            province: customer.province || '',
+            postal_code: customer.postal_code || '',
+            notes: customer.notes || '',
+            acquisition_source: customer.acquisition_source || '',
+            referred_by_customer_id: customer.referred_by_customer_id || '',
+            birthday: customer.birthday || '',
+            anniversary: customer.anniversary || '',
+          }}
+          onSubmit={handleSaveEdit}
+          onCancel={() => setEditing(false)}
+        />
+      </Modal>
     </div>
   )
 }
@@ -944,25 +1073,21 @@ function ServicePlanRow({ plan, customerId, pausing, onPause }: {
         </div>
       </div>
       <div className="flex flex-wrap gap-2 mt-2.5">
-        <Link href={`/dashboard/schedule?customer=${customerId}`}
-          className="text-xs font-medium px-2.5 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong transition-colors">
-          View schedule
+        {/* One entry into the schedule — focuses this plan when it has an upcoming visit. */}
+        <Link
+          href={!plan.paused && plan.nextVisitDate ? `/dashboard/schedule?focus=${plan.recurrenceId}` : `/dashboard/schedule?customer=${customerId}`}
+          className="inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-surface border border-border-strong text-ink hover:bg-surface-raised active:scale-[0.98] px-3.5 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+          Open schedule
         </Link>
-        {!plan.paused && plan.nextVisitDate && (
-          <Link href={`/dashboard/schedule?focus=${plan.recurrenceId}`}
-            className="text-xs font-medium px-2.5 py-1 rounded-lg border border-border bg-surface text-ink hover:border-border-strong transition-colors">
-            Edit schedule
-          </Link>
-        )}
         {!plan.paused && plan.remaining > 0 && (
-          <Button variant="ghost" size="sm" loading={pausing} onClick={onPause} className="hover:text-amber-400">
+          <Button variant="ghost" size="sm" loading={pausing} onClick={onPause}>
             Pause schedule
           </Button>
         )}
         {plan.paused && (
           <Link href={`/dashboard/schedule?customer=${customerId}`}
-            className="text-xs font-medium px-2.5 py-1 rounded-lg border border-emerald-500/25 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors">
-            Resume / reschedule
+            className="inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-surface border border-border-strong text-ink hover:bg-surface-raised active:scale-[0.98] px-3.5 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+            Resume schedule
           </Link>
         )}
       </div>

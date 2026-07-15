@@ -17,7 +17,7 @@ import type { ContentPiece, ContentStatus, MarketingCampaign, MarketingChannel, 
 const STATUSES: ContentStatus[] = ['draft', 'scheduled', 'published', 'failed']
 const SEASONS: Season[] = ['spring', 'summer', 'fall', 'winter']
 const STATUS_TONE: Record<ContentStatus, string> = {
-  draft: 'text-ink-muted', approved: 'text-sky-300', scheduled: 'text-accent', published: 'text-emerald-300', failed: 'text-red-300',
+  draft: 'text-ink-muted', approved: 'text-sky-400', scheduled: 'text-accent', published: 'text-emerald-400', failed: 'text-red-400',
 }
 // Same words the calendar uses for a content piece ("Posted", not "Published").
 const STATUS_LABEL: Record<ContentStatus, string> = {
@@ -102,8 +102,8 @@ export function PostsManager({ userId, initialPieces, initialHasMore, campaigns,
         <div className="flex gap-1.5 flex-wrap items-center">
           {SEASONS.map(s => <FilterPill key={s} active={filters.season === s} onClick={() => patch({ season: filters.season === s ? null : s })}><span className="capitalize">{s}</span></FilterPill>)}
           {campaigns.length > 0 && (
-            <select value={filters.campaignId || ''} onChange={e => patch({ campaignId: e.target.value || null })}
-              className="bg-bg-tertiary border border-border rounded-full px-3 py-1.5 text-xs text-ink-muted focus:outline-none">
+            <select value={filters.campaignId || ''} onChange={e => patch({ campaignId: e.target.value || null })} aria-label="Filter by campaign"
+              className="bg-bg-tertiary border border-border rounded-full px-3 py-1.5 text-xs text-ink-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
               <option value="">All campaigns</option>
               {campaigns.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
@@ -123,7 +123,7 @@ export function PostsManager({ userId, initialPieces, initialHasMore, campaigns,
           ))}
         </div>
       ) : pieces.length === 0 ? (
-        <EmptyState icon={LayoutGrid} title="No posts found" description="Adjust the filters, or generate posts in Compose, Campaigns, or the calendar." />
+        <EmptyState icon={LayoutGrid} title="No posts match your filters" description="Adjust the filters, or generate posts in Compose, Campaigns, or the calendar." />
       ) : (
         // Dim while a filter/search reload is in flight, so the change registers instead
         // of the stale list just sitting there.
@@ -181,20 +181,22 @@ function PostCard({ piece, campaignName, supabase, onFavorite, onDuplicate, onAr
       <div className="flex items-center gap-2">
         <def.icon className="w-3.5 h-3.5 text-ink-muted shrink-0" />
         <span className="text-xs font-semibold text-ink">{def.label}</span>
-        <span className={cn('text-[10px]', STATUS_TONE[piece.status])}>· {STATUS_LABEL[piece.status]}</span>
-        <button onClick={onFavorite} className="ml-auto shrink-0" title="Favorite">
+        <span className={cn('inline-flex items-center gap-1 text-[10px] border border-border rounded-full px-1.5 py-0.5', STATUS_TONE[piece.status])}>
+          <span className="w-1.5 h-1.5 rounded-full bg-current" /> {STATUS_LABEL[piece.status]}
+        </span>
+        <button onClick={onFavorite} className="ml-auto shrink-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" title={piece.favorite ? 'Remove from favorites' : 'Favorite'} aria-label={piece.favorite ? 'Remove from favorites' : 'Favorite'}>
           <Star className={cn('w-4 h-4', piece.favorite ? 'fill-amber-400 text-amber-400' : 'text-ink-faint hover:text-ink')} />
         </button>
       </div>
 
       {editing ? (
         <div className="space-y-1.5">
-          {def.usesTitle && <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Headline" className="w-full bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-ink" />}
-          <textarea value={body} onChange={e => setBody(e.target.value)} rows={5} className="w-full bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-ink resize-y" />
-          {def.usesHashtags && <input value={tags} onChange={e => setTags(e.target.value)} placeholder="hashtags" className="w-full bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-accent" />}
+          {def.usesTitle && <input value={title} onChange={e => setTitle(e.target.value)} aria-label="Headline" placeholder="Headline" className="w-full bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />}
+          <textarea value={body} onChange={e => setBody(e.target.value)} rows={5} aria-label="Post text" placeholder="Write your post…" className="w-full bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-ink placeholder:text-ink-faint resize-y outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+          {def.usesHashtags && <input value={tags} onChange={e => setTags(e.target.value)} aria-label="Hashtags" placeholder="#hashtags — space-separated" className="w-full bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-accent placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />}
           <div className="flex gap-1.5">
             <Button size="sm" onClick={save} loading={saving}>Save</Button>
-            <Button size="sm" variant="ghost" onClick={() => setEditing(false)}><X className="w-3.5 h-3.5" /></Button>
+            <Button size="sm" variant="ghost" aria-label="Cancel editing" onClick={() => setEditing(false)}><X className="w-3.5 h-3.5" /></Button>
           </div>
         </div>
       ) : (
@@ -206,7 +208,7 @@ function PostCard({ piece, campaignName, supabase, onFavorite, onDuplicate, onAr
       )}
 
       <div className="flex items-center gap-1 flex-wrap pt-1 border-t border-border/60">
-        {campaignName && <span className="text-[9px] text-ink-faint truncate max-w-[90px]" title={campaignName}>◆ {campaignName}</span>}
+        {campaignName && <span className="inline-flex items-center gap-1 text-[9px] text-ink-faint max-w-[90px]" title={campaignName}><Star className="w-3 h-3 shrink-0" /> <span className="truncate">{campaignName}</span></span>}
         <div className="ml-auto flex items-center gap-0.5">
           <IconBtn title="Copy caption" onClick={copy}>{copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}</IconBtn>
           <IconBtn title="Edit" onClick={() => setEditing(e => !e)}><Pencil className="w-3.5 h-3.5" /></IconBtn>

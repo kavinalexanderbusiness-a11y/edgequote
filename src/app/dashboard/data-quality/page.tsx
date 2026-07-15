@@ -7,6 +7,9 @@ import { createClient } from '@/lib/supabase/client'
 import { Customer } from '@/types'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
+import { Banner } from '@/components/ui/Banner'
+import { SkeletonTiles } from '@/components/ui/Skeleton'
+import { StatTile } from '@/components/ui/StatTile'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import { format } from 'date-fns'
@@ -245,18 +248,23 @@ export default function DataQualityPage() {
     } finally { setWorking(null) }
   }
 
-  if (loading) return <div className="text-center py-16 text-sm text-ink-muted">Checking data quality…</div>
+  if (loading) return (
+    <div className="max-w-5xl mx-auto space-y-6">
+      <PageHeader title="Data Quality" description="Make the data clean and trustworthy before growth features rely on it" />
+      <SkeletonTiles count={4} />
+    </div>
+  )
 
   const allClean = m.quotesNoCustomer.length === 0 && m.quotesNoProperty.length === 0 && m.jobsNoCustomer.length === 0 && m.jobsNoPrice === 0 && m.jobsNoQuote === 0 && m.propsUngeocoded.length === 0 && m.propsUnnamed.length === 0
 
   return (
-    <div className="max-w-3xl space-y-6">
-      <PageHeader title="Data Quality" description="Make the data clean and trustworthy before growth features rely on it" />
+    <div className="max-w-5xl mx-auto space-y-6">
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Data Quality" description="Make the data clean and trustworthy before growth features rely on it." />
 
       {/* Score hero */}
       <Card>
         <CardBody className="flex items-center gap-4">
-          <div className="w-16 h-16 rounded-2xl flex items-center justify-center text-2xl font-black shrink-0"
+          <div className="w-16 h-16 rounded-2xl flex items-center justify-center text-2xl font-black tabular-nums shrink-0"
             style={{ backgroundColor: DQ_GRADE_COLORS[grade] + '22', color: DQ_GRADE_COLORS[grade], border: `1px solid ${DQ_GRADE_COLORS[grade]}55` }}>
             {m.score}
           </div>
@@ -277,23 +285,20 @@ export default function DataQualityPage() {
       </div>
 
       {allClean && (
-        <Card>
-          <CardBody className="flex items-center gap-3 text-sm text-emerald-400">
-            <CheckCircle2 className="w-5 h-5 shrink-0" />
-            Everything is linked and priced. Your data is clean — Saturation Map &amp; Neighbor Leads can trust it.
-          </CardBody>
-        </Card>
+        <Banner tone="success" icon={CheckCircle2}>
+          Everything is linked and priced. Your data is clean — Saturation Map &amp; Neighbor Leads can trust it.
+        </Banner>
       )}
 
       {/* Quotes missing a customer — manual review (identity matters) */}
       {m.quotesNoCustomer.length > 0 && (
         <Section icon={UserPlus} title={`${m.quotesNoCustomer.length} quote${m.quotesNoCustomer.length !== 1 ? 's' : ''} with no customer`}
           subtitle="Each quote needs a real customer. Link to an existing one if it's the same person, or create a new record.">
-          {m.quotesNoCustomer.map(q => {
+          {m.quotesNoCustomer.map((q, i) => {
             const match = findCustomerMatch(customers, { name: q.customer_name, address: q.address })
             const busy = working === q.id
             return (
-              <div key={q.id} className="rounded-xl border border-border p-3 space-y-2.5">
+              <div key={q.id} className={`rounded-card border border-border p-3 space-y-2.5 animate-rise stagger-${Math.min(i + 1, 6)}`}>
                 <div className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-ink truncate">{q.customer_name || 'Unnamed'} <span className="text-ink-faint font-normal">· {q.quote_number}</span></p>
@@ -302,14 +307,15 @@ export default function DataQualityPage() {
                 </div>
                 {match ? (
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className={cn('text-[11px] px-2 py-0.5 rounded-full border', match.confident ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : 'text-amber-400 border-amber-500/30 bg-amber-500/10')}>
+                    <span className="inline-flex items-center gap-1.5 text-[11px] text-ink-muted">
+                      <span className={cn('w-1.5 h-1.5 rounded-full shrink-0', match.confident ? 'bg-emerald-400' : 'bg-amber-400')} />
                       {match.confident ? `Matches ${match.customer.name} by ${match.reason}` : `Possible match: ${match.customer.name}`}
                     </span>
                     <Button size="sm" loading={busy} onClick={() => fixQuoteCustomer(q, 'link', match.customer.id)}>
                       <Link2 className="w-3.5 h-3.5" /> Link to {match.customer.name.split(' ')[0]}
                     </Button>
                     <Button size="sm" variant="ghost" disabled={busy} onClick={() => fixQuoteCustomer(q, 'new')}>
-                      Create new
+                      Create new customer
                     </Button>
                   </div>
                 ) : (
@@ -332,8 +338,8 @@ export default function DataQualityPage() {
               <Home className="w-3.5 h-3.5" /> Link all {m.quotesNoProperty.length}
             </Button>
           }>
-          {m.quotesNoProperty.map(q => (
-            <div key={q.id} className="flex items-center justify-between gap-2 rounded-xl border border-border p-3">
+          {m.quotesNoProperty.map((q, i) => (
+            <div key={q.id} className={`flex items-center justify-between gap-2 rounded-card border border-border p-3 animate-rise stagger-${Math.min(i + 1, 6)}`}>
               <div className="min-w-0">
                 <p className="text-sm font-medium text-ink truncate">{q.customer_name} <span className="text-ink-faint font-normal">· {q.quote_number}</span></p>
                 <p className="text-xs text-ink-muted truncate">{q.address || 'No address'}</p>
@@ -352,16 +358,16 @@ export default function DataQualityPage() {
           subtitle="No map coordinates — these vanish from routes, best-day suggestions and the saturation map."
           action={
             <Button size="sm" loading={working === 'geo-all'} onClick={geocodeAllProperties}>
-              <MapPin className="w-3.5 h-3.5" /> Geocode all {m.propsUngeocoded.length}
+              <MapPin className="w-3.5 h-3.5" /> Locate all {m.propsUngeocoded.length}
             </Button>
           }>
-          {m.propsUngeocoded.slice(0, 40).map(p => (
-            <div key={p.id} className="flex items-center gap-2 rounded-xl border border-border p-3">
+          {m.propsUngeocoded.slice(0, 40).map((p, i) => (
+            <div key={p.id} className={`flex items-center gap-2 rounded-card border border-border p-3 animate-rise stagger-${Math.min(i + 1, 6)}`}>
               <MapPin className="w-3.5 h-3.5 text-ink-faint shrink-0" />
               <p className="text-sm text-ink truncate">{p.address}</p>
             </div>
           ))}
-          {m.propsUngeocoded.length > 40 && <p className="text-xs text-ink-faint">+{m.propsUngeocoded.length - 40} more — all included in “Geocode all”.</p>}
+          {m.propsUngeocoded.length > 40 && <p className="text-xs text-ink-faint">+{m.propsUngeocoded.length - 40} more — all included in “Locate all”.</p>}
         </Section>
       )}
 
@@ -375,8 +381,8 @@ export default function DataQualityPage() {
               <MapPin className="w-3.5 h-3.5" /> Name all {m.propsUnnamed.length}
             </Button>
           }>
-          {m.propsUnnamed.slice(0, 40).map(p => (
-            <div key={p.id} className="flex items-center gap-2 rounded-xl border border-border p-3">
+          {m.propsUnnamed.slice(0, 40).map((p, i) => (
+            <div key={p.id} className={`flex items-center gap-2 rounded-card border border-border p-3 animate-rise stagger-${Math.min(i + 1, 6)}`}>
               <MapPin className="w-3.5 h-3.5 text-ink-faint shrink-0" />
               <p className="text-sm text-ink truncate">{p.address}</p>
             </div>
@@ -389,8 +395,8 @@ export default function DataQualityPage() {
       {m.customersNoContact.length > 0 && (
         <Section icon={Phone} title={`${m.customersNoContact.length} customer${m.customersNoContact.length !== 1 ? 's' : ''} with no contact info`}
           subtitle={`No phone or email — they can't receive quotes, reminders or invoices. (${m.customersNoPhone} missing a phone · ${m.customersNoEmail} missing an email in total.)`}>
-          {m.customersNoContact.slice(0, 40).map(c => (
-            <Link key={c.id} href={`/dashboard/customers/${c.id}`} className="flex items-center justify-between gap-2 rounded-xl border border-border p-3 hover:border-border-strong transition-colors">
+          {m.customersNoContact.slice(0, 40).map((c, i) => (
+            <Link key={c.id} href={`/dashboard/customers/${c.id}`} className={`flex items-center justify-between gap-2 rounded-card border border-border p-3 hover:border-border-strong transition-colors animate-rise stagger-${Math.min(i + 1, 6)}`}>
               <div className="min-w-0">
                 <p className="text-sm font-medium text-ink truncate">{c.name}</p>
                 <p className="text-xs text-ink-muted truncate">{c.address || 'No address'}</p>
@@ -406,8 +412,8 @@ export default function DataQualityPage() {
       {m.propsNoSize.length > 0 && (
         <Section icon={Ruler} title={`${m.propsNoSize.length} propert${m.propsNoSize.length !== 1 ? 'ies' : 'y'} with no lawn size`}
           subtitle="No lawn measurement on file — pricing recommendations need this. Measure to enable accurate quotes.">
-          {m.propsNoSize.slice(0, 40).map(p => (
-            <div key={p.id} className="flex items-center justify-between gap-2 rounded-xl border border-border p-3">
+          {m.propsNoSize.slice(0, 40).map((p, i) => (
+            <div key={p.id} className={`flex items-center justify-between gap-2 rounded-card border border-border p-3 animate-rise stagger-${Math.min(i + 1, 6)}`}>
               <p className="text-sm text-ink truncate min-w-0">{p.address}</p>
               <Link href={`/dashboard/properties/measure?id=${p.id}`}>
                 <Button size="sm" variant="secondary"><Ruler className="w-3.5 h-3.5" /> Measure</Button>
@@ -423,7 +429,7 @@ export default function DataQualityPage() {
         <Section icon={Copy} title={`${m.dupes.length} potential duplicate${m.dupes.length !== 1 ? 's' : ''}`}
           subtitle="These customer pairs share a phone, email or address. Open each to confirm and merge if they're the same person.">
           {m.dupes.slice(0, 40).map((d, i) => (
-            <div key={i} className="rounded-xl border border-border p-3">
+            <div key={i} className={`rounded-card border border-border p-3 animate-rise stagger-${Math.min(i + 1, 6)}`}>
               <span className="text-[10px] uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded-full px-2 py-0.5">Same {d.reason}</span>
               <div className="flex items-center justify-between gap-2 mt-2">
                 <Link href={`/dashboard/customers/${d.a.id}`} className="text-sm font-medium text-ink hover:text-accent truncate min-w-0 flex-1">{d.a.name}</Link>
@@ -440,14 +446,14 @@ export default function DataQualityPage() {
       {m.jobsNoCustomer.length > 0 && (
         <Section icon={Users} title={`${m.jobsNoCustomer.length} job${m.jobsNoCustomer.length !== 1 ? 's' : ''} with no customer`}
           subtitle="Backfill each job's customer from its property or linked quote.">
-          {m.jobsNoCustomer.slice(0, 40).map(j => (
-            <div key={j.id} className="flex items-center justify-between gap-2 rounded-xl border border-border p-3">
+          {m.jobsNoCustomer.slice(0, 40).map((j, i) => (
+            <div key={j.id} className={`flex items-center justify-between gap-2 rounded-card border border-border p-3 animate-rise stagger-${Math.min(i + 1, 6)}`}>
               <div className="min-w-0">
                 <p className="text-sm font-medium text-ink truncate">{j.title}</p>
                 <p className="text-xs text-ink-muted">{j.scheduled_date}</p>
               </div>
               <Button size="sm" variant="secondary" loading={working === j.id} onClick={() => repairJobCustomer(j)}>
-                Repair
+                <Link2 className="w-3.5 h-3.5" /> Link customer
               </Button>
             </div>
           ))}
@@ -459,12 +465,12 @@ export default function DataQualityPage() {
         <Card>
           <CardBody className="space-y-3">
             <div className="flex items-center gap-2">
-              <DollarSign className="w-4 h-4 text-amber-400" />
-              <h2 className="text-sm font-semibold text-ink">Pricing &amp; quote gaps</h2>
+              <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><DollarSign className="w-3.5 h-3.5 text-accent" /></span>
+              <h2 className="text-sm font-semibold text-ink tracking-tight">Pricing &amp; quote gaps</h2>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <Stat label="Jobs missing a price" value={m.jobsNoPrice} total={jobs.length} />
-              <Stat label="Jobs missing a quote" value={m.jobsNoQuote} total={jobs.length} />
+              <StatTile label="Jobs missing a price" value={m.jobsNoPrice} sub={`of ${jobs.length} jobs`} />
+              <StatTile label="Jobs missing a quote" value={m.jobsNoQuote} sub={`of ${jobs.length} jobs`} />
             </div>
             <p className="text-xs text-ink-muted">
               These are fixed in the dedicated tool — link jobs to quotes, set recurring prices, and create missing quotes in one click.
@@ -482,15 +488,11 @@ export default function DataQualityPage() {
       )}
 
       {/* Properties → customer (structural, FK-enforced) */}
-      <Card>
-        <CardBody className="flex items-center gap-3 text-sm">
-          {m.propsNoCustomer === 0 ? (
-            <><CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" /><span className="text-ink-muted">All {m.propertiesTotal} propert{m.propertiesTotal !== 1 ? 'ies are' : 'y is'} linked to a customer.</span></>
-          ) : (
-            <><AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" /><span className="text-ink-muted">{m.propsNoCustomer} propert{m.propsNoCustomer !== 1 ? 'ies have' : 'y has'} no customer.</span></>
-          )}
-        </CardBody>
-      </Card>
+      {m.propsNoCustomer === 0 ? (
+        <Banner tone="success" icon={CheckCircle2}>All {m.propertiesTotal} propert{m.propertiesTotal !== 1 ? 'ies are' : 'y is'} linked to a customer.</Banner>
+      ) : (
+        <Banner tone="warn" icon={AlertTriangle}>{m.propsNoCustomer} propert{m.propsNoCustomer !== 1 ? 'ies have' : 'y has'} no customer.</Banner>
+      )}
     </div>
   )
 }
@@ -501,12 +503,12 @@ function CoverageCard({ row }: { row: CoverageRow }) {
     <Card className="p-4">
       <div className="flex items-center justify-between gap-2">
         <p className="text-sm font-semibold text-ink">{row.label}</p>
-        <p className="text-sm font-bold" style={{ color }}>{row.pct}%</p>
+        <p className="text-sm font-bold tabular-nums" style={{ color }}>{row.pct}%</p>
       </div>
       <div className="h-1.5 rounded-full bg-bg-tertiary mt-2 overflow-hidden">
         <div className="h-full rounded-full transition-all" style={{ width: `${row.pct}%`, background: color }} />
       </div>
-      <p className="text-[11px] text-ink-faint mt-1.5">{row.covered}/{row.total} · {row.hint}</p>
+      <p className="text-[11px] text-ink-faint mt-1.5 tabular-nums">{row.covered}/{row.total} · {row.hint}</p>
     </Card>
   )
 }
@@ -518,9 +520,11 @@ function Section({ icon: Icon, title, subtitle, action, children }: {
     <Card>
       <div className="px-4 py-3 border-b border-border flex items-start justify-between gap-3">
         <div className="flex items-start gap-2 min-w-0">
-          <Icon className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+          <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
+            <Icon className="w-3.5 h-3.5 text-accent" />
+          </span>
           <div className="min-w-0">
-            <h2 className="text-sm font-semibold text-ink">{title}</h2>
+            <h2 className="text-sm font-semibold text-ink tracking-tight">{title}</h2>
             <p className="text-xs text-ink-muted mt-0.5">{subtitle}</p>
           </div>
         </div>
@@ -528,14 +532,5 @@ function Section({ icon: Icon, title, subtitle, action, children }: {
       </div>
       <CardBody className="space-y-2">{children}</CardBody>
     </Card>
-  )
-}
-
-function Stat({ label, value, total }: { label: string; value: number; total: number }) {
-  return (
-    <div className="rounded-lg border border-border bg-bg-tertiary px-3 py-2">
-      <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className="text-lg font-bold text-ink mt-0.5">{value}<span className="text-xs font-normal text-ink-faint"> / {total}</span></p>
-    </div>
   )
 }

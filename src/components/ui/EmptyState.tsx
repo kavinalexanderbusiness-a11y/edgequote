@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from './Button'
@@ -5,22 +6,32 @@ import { Button } from './Button'
 interface EmptyStateProps {
   icon: LucideIcon
   title: string
-  description: string
-  action?: { label: string; onClick: () => void }
+  description: React.ReactNode
+  // Either a handler or a plain navigation target — empty states that point
+  // somewhere else ("Open Properties") shouldn't need a wrapper component.
+  action?: { label: string; onClick?: () => void; href?: string }
+  // 'positive' = an "all clear" state (nothing needs attention) — ONE emerald
+  // celebration look shared by every surface, instead of per-page markup.
+  tone?: 'default' | 'positive'
   className?: string
 }
 
-export function EmptyState({ icon: Icon, title, description, action, className }: EmptyStateProps) {
+export function EmptyState({ icon: Icon, title, description, action, tone = 'default', className }: EmptyStateProps) {
   return (
-    <div className={cn('flex flex-col items-center justify-center py-20 text-center', className)}>
-      <div className="w-14 h-14 rounded-2xl bg-surface-raised border border-border-strong flex items-center justify-center mb-4">
-        <Icon className="w-6 h-6 text-ink-faint" />
+    <div className={cn('flex flex-col items-center justify-center py-20 text-center animate-fade', className)}>
+      <div className={cn('w-14 h-14 rounded-2xl border flex items-center justify-center mb-4',
+        tone === 'positive' ? 'bg-emerald-500/10 border-emerald-500/25' : 'bg-surface-raised border-border-strong')}>
+        <Icon className={cn('w-6 h-6', tone === 'positive' ? 'text-emerald-400' : 'text-ink-faint')} />
       </div>
       <h3 className="text-base font-semibold text-ink mb-1">{title}</h3>
       <p className="text-sm text-ink-muted max-w-xs mb-6">{description}</p>
-      {action && (
-        <Button onClick={action.onClick}>{action.label}</Button>
-      )}
+      {action && (action.href ? (
+        <Link href={action.href} className="rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+          <Button type="button" tabIndex={-1}>{action.label}</Button>
+        </Link>
+      ) : (
+        <Button type="button" onClick={action.onClick}>{action.label}</Button>
+      ))}
     </div>
   )
 }
@@ -30,7 +41,7 @@ export function EmptyState({ icon: Icon, title, description, action, className }
 // lines so they stop drifting on size, colour and padding.
 export function InlineEmpty({ icon: Icon, children, className }: { icon?: LucideIcon; children: React.ReactNode; className?: string }) {
   return (
-    <div className={cn('flex flex-col items-center justify-center gap-2 py-8 px-4 text-center text-sm text-ink-muted', className)}>
+    <div className={cn('flex flex-col items-center justify-center gap-2 py-8 px-4 text-center text-sm text-ink-muted animate-fade', className)}>
       {Icon && <Icon className="w-5 h-5 text-ink-faint" />}
       <span>{children}</span>
     </div>

@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -14,7 +13,7 @@ import { CampaignManager } from '@/components/grow/CampaignManager'
 import { reviewStatus, type ReviewStatus } from '@/lib/crm/reviews'
 import { loadFollowUpRadar } from '@/lib/crm/radar'
 import { Referral } from '@/types'
-import { ArrowLeft, Star, Gift, Zap, MessageSquare, Clock, HeartPulse, Cake, ArrowRight } from 'lucide-react'
+import { Star, Gift, Zap, MessageSquare, Clock, HeartPulse, Cake, ArrowRight } from 'lucide-react'
 
 // Grow → Customer Automation hub. Per-customer review/referral/birthday details
 // live on the customer profile + messaging; this page is the management + rollup
@@ -22,7 +21,6 @@ import { ArrowLeft, Star, Gift, Zap, MessageSquare, Clock, HeartPulse, Cake, Arr
 // campaign engine.
 export default function CrmAutomationPage() {
   const supabase = useMemo(() => createClient(), [])
-  const router = useRouter()
   const [uid, setUid] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [reviews, setReviews] = useState({ reviewed: 0, requested: 0, declined: 0, notAsked: 0, avg: 0 })
@@ -84,18 +82,25 @@ export default function CrmAutomationPage() {
   useRealtimeRefresh('referrals', uid ? `user_id=eq.${uid}` : null, load)
 
   return (
-    <div className="max-w-5xl space-y-6">
-      <div className="flex items-center gap-3">
-        <button onClick={() => router.back()} aria-label="Go back" className="text-ink-muted hover:text-ink transition-colors rounded p-1 -m-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><ArrowLeft className="w-4 h-4" /></button>
-        <PageHeader title="Customer Automation" description="Reviews, referrals, follow-ups and campaigns — all wired into your customers and messaging." />
-      </div>
+    <div className="max-w-5xl mx-auto space-y-6">
+      {/* No back arrow — the Grow rail above is the navigation, same as every
+          sibling subpage; "Automations" matches its rail pill and hub card. */}
+      <PageHeader title="Automations" description="Reviews, referrals, follow-ups and campaigns — all wired into your customers and messaging." />
 
       {/* Due now — proactive rollup of the SAME engines below (radar + campaign dates
           + review lifecycle). Only shows what actually needs action; every card is
           the action. Silent when everything is handled. */}
       {!loading && (due.unanswered + due.quiet + due.celebrations + reviews.notAsked) > 0 && (
-        <div className="rounded-card border border-accent/25 bg-gradient-to-br from-accent/[0.06] to-transparent p-4 sm:p-5">
-          <p className="text-sm font-bold text-ink flex items-center gap-2 mb-3"><Zap className="w-4 h-4 text-accent" /> Due now</p>
+        <div className="rounded-card border border-accent/25 hero-aurora p-4 sm:p-5 animate-rise">
+          <div className="flex items-center gap-2.5 mb-3">
+            <span className="w-7 h-7 rounded-lg bg-accent/15 border border-accent/25 icon-glow flex items-center justify-center shrink-0">
+              <Zap className="w-4 h-4 text-accent" />
+            </span>
+            <div>
+              <p className="text-sm font-bold tracking-tight text-ink">Due now</p>
+              <p className="text-[11px] text-ink-muted">What your customer engine says needs a human today.</p>
+            </div>
+          </div>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             {due.unanswered > 0 && (
               <Link href="/dashboard/messages" className="rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
@@ -130,12 +135,14 @@ export default function CrmAutomationPage() {
       )}
 
       {/* Pipeline rollups */}
-      <div className="grid sm:grid-cols-2 gap-3">
-        <Card className="p-5">
+      <div className="grid sm:grid-cols-2 gap-3 animate-rise stagger-2">
+        <Card className="p-5 card-lift">
           <div className="flex items-center gap-2 mb-3">
-            <Star className="w-4 h-4 text-amber-400" />
-            <p className="text-sm font-bold text-ink">Reviews</p>
-            {!loading && reviews.avg > 0 && <span className="ml-auto text-xs text-ink-muted flex items-center gap-1"><Star className="w-3 h-3 text-amber-400 fill-amber-400" /> {reviews.avg.toFixed(1)} avg</span>}
+            <div className="w-9 h-9 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
+              <Star className="w-4 h-4 text-amber-400" />
+            </div>
+            <p className="text-sm font-bold tracking-tight text-ink">Reviews</p>
+            {!loading && reviews.avg > 0 && <span className="ml-auto text-xs text-ink-muted tabular-nums flex items-center gap-1"><Star className="w-3 h-3 text-amber-400 fill-amber-400" /> {reviews.avg.toFixed(1)} avg</span>}
           </div>
           <div className="grid grid-cols-3 gap-2">
             <Stat label="Reviewed" value={reviews.reviewed} tone="success" loading={loading} />
@@ -145,10 +152,12 @@ export default function CrmAutomationPage() {
           <p className="text-[11px] text-ink-faint mt-3">Ask from any customer’s profile, or auto-ask after a completed visit (Settings → Automated messages).</p>
         </Card>
 
-        <Card className="p-5">
+        <Card className="p-5 card-lift">
           <div className="flex items-center gap-2 mb-3">
-            <Gift className="w-4 h-4 text-accent" />
-            <p className="text-sm font-bold text-ink">Referrals</p>
+            <div className="w-9 h-9 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
+              <Gift className="w-4 h-4 text-accent" />
+            </div>
+            <p className="text-sm font-bold tracking-tight text-ink">Referrals</p>
           </div>
           <div className="grid grid-cols-3 gap-2">
             <Stat label="Joined" value={refs.joined} tone="success" loading={loading} />

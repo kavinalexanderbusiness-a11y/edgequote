@@ -19,7 +19,7 @@ const DISCLAIMER = 'Estimated messaging cost. Actual carrier/provider charges ma
 // `text` changes. Encoding-aware (GSM-7 vs Unicode) and uses the owner's
 // configurable pricing (Business Settings → Messaging). Purely informational — it
 // never blocks longer messages. Renders nothing for an empty body.
-export function SmsCost({ text, recipients, mms, label = 'SMS Preview', className }: Props) {
+export function SmsCost({ text, recipients, mms, label = 'Estimated SMS cost', className }: Props) {
   const pricing = useSmsPricing()
   const info = analyzeSms(text)
 

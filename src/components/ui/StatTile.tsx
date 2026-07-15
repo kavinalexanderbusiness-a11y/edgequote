@@ -39,7 +39,8 @@ export function StatTile({ label, value, sub, icon: Icon, tone, accent, tonedSur
         {Icon && <Icon className={cn('w-3.5 h-3.5 shrink-0', tone ? toneText[tone] : 'text-ink-faint')} />}
         <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint truncate">{label}</p>
       </div>
-      <p className={cn('text-xl font-black tracking-tight mt-1.5', tone ? toneText[tone] : 'text-ink')}>{value}</p>
+      {/* tabular-nums so KPI digits never shift width as values change */}
+      <p className={cn('text-xl font-black tracking-tight tabular-nums mt-1.5', tone ? toneText[tone] : 'text-ink')}>{value}</p>
       {sub && <p className="text-[11px] text-ink-muted mt-1 truncate">{sub}</p>}
     </>
   )

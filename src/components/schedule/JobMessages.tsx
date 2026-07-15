@@ -7,9 +7,10 @@ import { MsgType, renderMessage, toDisplayBody, fromDisplayBody } from '@/lib/co
 import { summarizeSendOutcome as summarize, type SendOutcome as Outcome } from '@/lib/comms/sendOutcome'
 import { SmsCost } from '@/components/comms/SmsCost'
 import { localTodayISO, cn } from '@/lib/utils'
+import { Button } from '@/components/ui/Button'
 import {
   Navigation, Clock, MapPin, CheckCircle2, CalendarCheck, CalendarClock, CloudRain, Sparkles, Star,
-  MessageSquare, Mail, Smartphone, Send, Loader2, Check, AlertTriangle, X,
+  MessageSquare, Mail, Send, Check, AlertTriangle, X,
 } from 'lucide-react'
 
 // One-tap field messaging for a single visit, with an EDITABLE preview before
@@ -29,8 +30,8 @@ interface Props {
 // The scheduler quick actions, in field order. needsEta = uses the minutes input;
 // reschedule = exposes the date pickers (new date, and old date for weather delay).
 const ACTIONS: { type: MsgType; label: string; icon: typeof Navigation; tone?: string; needsEta?: boolean; reschedule?: 'date' | 'weather' }[] = [
-  { type: 'eta', label: 'Send ETA', icon: Clock, tone: 'text-accent border-accent/30 bg-accent/10 hover:bg-accent/20' },
-  { type: 'on_my_way', label: 'On the way', icon: Navigation, needsEta: true, tone: 'text-sky-300 border-sky-400/30 bg-sky-400/10 hover:bg-sky-400/20' },
+  { type: 'eta', label: 'Send ETA', icon: Clock },
+  { type: 'on_my_way', label: 'On my way', icon: Navigation, needsEta: true, tone: 'text-sky-300 border-sky-400/30 bg-sky-400/10 hover:bg-sky-400/20' },
   { type: 'running_late', label: 'Running late', icon: Clock, needsEta: true, tone: 'text-amber-300 border-amber-400/30 bg-amber-400/10 hover:bg-amber-400/20' },
   { type: 'arrived', label: 'Arrived', icon: MapPin },
   { type: 'early_arrival', label: 'Finished early', icon: Sparkles },
@@ -38,7 +39,7 @@ const ACTIONS: { type: MsgType; label: string; icon: typeof Navigation; tone?: s
   { type: 'job_complete', label: 'Completed', icon: CheckCircle2, tone: 'text-emerald-300 border-emerald-400/30 bg-emerald-400/10 hover:bg-emerald-400/20' },
   { type: 'review_request', label: 'Review request', icon: Star, tone: 'text-violet-300 border-violet-400/30 bg-violet-400/10 hover:bg-violet-400/20' },
   { type: 'rescheduled', label: 'Rescheduled', icon: CalendarClock, reschedule: 'date' },
-  { type: 'rain_delay', label: 'Weather delay', icon: CloudRain, reschedule: 'weather', tone: 'text-blue-300 border-blue-400/30 bg-blue-400/10 hover:bg-blue-400/20' },
+  { type: 'rain_delay', label: 'Weather delay', icon: CloudRain, reschedule: 'weather', tone: 'text-sky-300 border-sky-400/30 bg-sky-400/10 hover:bg-sky-400/20' },
 ]
 
 export function JobMessages({ jobId, customerId, customerName, visitDate, timeWindow, address }: Props) {
@@ -131,7 +132,7 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
       })
       setOutcome(summarize(await res.json()))
     } catch (e) {
-      setOutcome({ ok: false, text: e instanceof Error ? e.message : 'Failed to send.' })
+      setOutcome({ ok: false, text: e instanceof Error ? e.message : 'Could not send the message.' })
     }
     setBusy(false)
   }
@@ -143,7 +144,7 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
       {/* Action buttons — hide Review request once the customer has reviewed */}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
         {ACTIONS.filter(a => a.type !== 'review_request' || !reviewed).map(a => (
-          <button key={a.type} onClick={() => open(a.type)} disabled={busy}
+          <button key={a.type} type="button" onClick={() => open(a.type)} disabled={busy}
             className={cn('h-9 rounded-lg border text-xs font-medium flex items-center justify-center gap-1.5 active:scale-95 transition-transform disabled:opacity-50',
               active === a.type ? 'border-accent bg-accent/15 text-accent ring-1 ring-accent/40'
                 : a.tone || 'border-border text-ink-muted hover:text-ink hover:bg-black/10')}>
@@ -157,7 +158,7 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
         <div className="rounded-lg border border-border bg-bg-secondary p-2.5 space-y-2.5">
           <div className="flex items-center justify-between gap-2">
             <p className="text-[11px] font-semibold text-ink flex items-center gap-1.5"><activeAction.icon className="w-3.5 h-3.5 text-accent" /> {activeAction.label}</p>
-            <button onClick={() => setActive(null)} className="text-ink-faint hover:text-ink" aria-label="Close"><X className="w-3.5 h-3.5" /></button>
+            <button type="button" onClick={() => setActive(null)} className="text-ink-faint hover:text-ink" aria-label="Close"><X className="w-3.5 h-3.5" /></button>
           </div>
           <p className="text-[10px] text-ink-faint">
             To {customerName.split(' ')[0]}{visitDate ? ` · ${fmtDate(visitDate)}` : ''}{timeWindow ? ` · ${timeWindow}` : ''}
@@ -168,7 +169,7 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
             <label className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-ink-faint">
               ETA (min)
               <input type="number" min="1" step="5" value={eta} onChange={e => setEtaAndRecompose(e.target.value)}
-                className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1 text-sm text-ink outline-none focus:border-accent" />
+                className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
             </label>
           )}
           {activeAction.reschedule && (
@@ -176,19 +177,20 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
               {activeAction.reschedule === 'weather' && (
                 <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-ink-faint">From
                   <input type="date" value={oldDate} onChange={e => setOldDateAndRecompose(e.target.value)}
-                    className="bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1 text-sm text-ink outline-none focus:border-accent" />
+                    className="bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
                 </label>
               )}
               <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-ink-faint">To
                 <input type="date" value={newDate} onChange={e => setNewDateAndRecompose(e.target.value)}
-                  className="bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1 text-sm text-ink outline-none focus:border-accent" />
+                  className="bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
               </label>
             </div>
           )}
 
           {/* Editable message */}
           <textarea value={text} onChange={e => { setText(e.target.value); setOutcome(null) }} rows={4}
-            className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent resize-none" />
+            aria-label="Message text"
+            className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20 resize-none" />
           {ch.sms ? <SmsCost text={text} className="mt-0.5" /> : <p className="text-[10px] text-ink-faint">{text.length} characters · edit freely before sending</p>}
           {active === 'review_request' && !reviewUrl && (
             <p className="text-[10px] text-amber-400">Add your Google review link in Settings → Message templates so it&apos;s inserted automatically.</p>
@@ -198,22 +200,18 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
           <div className="flex items-center gap-1.5 flex-wrap">
             <ChannelChip label="SMS" icon={MessageSquare} on={ch.sms} onClick={() => setCh(c => ({ ...c, sms: !c.sms }))} />
             <ChannelChip label="Email" icon={Mail} on={ch.email} onClick={() => setCh(c => ({ ...c, email: !c.email }))} />
-            <span title="Push notifications — coming soon"
-              className="h-7 px-2 rounded-lg border border-dashed border-border text-[11px] font-medium text-ink-faint flex items-center gap-1 opacity-60 cursor-not-allowed">
-              <Smartphone className="w-3 h-3" /> Push · soon
-            </span>
+            <span className="text-[11px] text-ink-faint" title="Push notifications — coming soon">Push — coming soon</span>
             {/* After a successful send the action becomes Done (collapses the
                 panel) — no accidental double-send, clear next step. */}
             {outcome?.ok ? (
-              <button onClick={() => setActive(null)}
+              <button type="button" onClick={() => setActive(null)}
                 className="ml-auto h-8 px-3 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-semibold flex items-center gap-1.5 active:scale-95 transition-transform">
                 <Check className="w-3.5 h-3.5" /> Done
               </button>
             ) : (
-              <button onClick={send} disabled={busy}
-                className="ml-auto h-8 px-3 rounded-lg bg-accent text-black text-xs font-semibold flex items-center gap-1.5 active:scale-95 transition-transform disabled:opacity-50">
-                {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />} Send
-              </button>
+              <Button size="sm" className="ml-auto" loading={busy} disabled={busy} onClick={send}>
+                <Send className="w-3.5 h-3.5" /> Send
+              </Button>
             )}
           </div>
 
@@ -232,7 +230,7 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
 
 function ChannelChip({ label, icon: Icon, on, onClick }: { label: string; icon: typeof Mail; on: boolean; onClick: () => void }) {
   return (
-    <button onClick={onClick}
+    <button type="button" onClick={onClick}
       className={cn('h-7 px-2 rounded-lg border text-[11px] font-medium flex items-center gap-1 transition-colors',
         on ? 'border-accent/40 bg-accent/10 text-accent' : 'border-border text-ink-faint hover:text-ink')}>
       <Icon className="w-3 h-3" /> {label} {on && <Check className="w-3 h-3" />}

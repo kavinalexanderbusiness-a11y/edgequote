@@ -6,12 +6,14 @@ import { createClient } from '@/lib/supabase/client'
 import { MsgType, renderMessage } from '@/lib/comms/templates'
 import { SmsCost } from '@/components/comms/SmsCost'
 import { Button } from '@/components/ui/Button'
+import { InlineEmpty } from '@/components/ui/EmptyState'
 import { cn } from '@/lib/utils'
 import type { Job } from '@/types'
 import {
   Navigation, Clock, CalendarCheck, Bell, CloudRain, CalendarClock, Heart, Pencil,
-  X, Send, Loader2, Check, AlertTriangle, MessageSquare, Mail, Users,
+  Send, Check, AlertTriangle, MessageSquare, Mail, Users,
 } from 'lucide-react'
+import { Modal } from '@/components/ui/Modal'
 
 // One shared dialog to message everyone scheduled today — reuses the SAME comms
 // engine as the per-job composer (/api/comms/send + renderMessage), so there's no
@@ -35,6 +37,13 @@ interface Recipient { customerId: string; name: string; jobId: string }
 
 export function DayBulkMessage({ date, jobs, onClose }: { date: string; jobs: Job[]; onClose: () => void }) {
   const supabase = useMemo(() => createClient(), [])
+
+  // Same dialog hygiene as every other schedule modal: Escape closes.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
 
   // Everyone scheduled today (active), deduped by customer — one message per person.
   const recipients = useMemo<Recipient[]>(() => {
@@ -122,23 +131,19 @@ export function DayBulkMessage({ date, jobs, onClose }: { date: string; jobs: Jo
   }
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-start justify-center p-4 sm:p-6 bg-black/50 backdrop-blur-sm overflow-y-auto" onClick={onClose}>
-      <div className="w-full max-w-lg bg-bg-secondary rounded-card border border-border-strong shadow-xl mt-6 mb-6" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-          <p className="text-sm font-bold text-ink flex items-center gap-2"><Users className="w-4 h-4 text-accent" /> Message today’s customers</p>
-          <button onClick={onClose} className="text-ink-faint hover:text-ink" aria-label="Close"><X className="w-4 h-4" /></button>
-        </div>
-
+    // THE shared Modal — Escape, scroll-lock, aria-modal and the one scrim for free.
+    <Modal open onClose={onClose} title="Message today’s customers" icon={Users} size="lg">
         {recipients.length === 0 ? (
-          <div className="p-8 text-center text-sm text-ink-muted">No customers scheduled today.</div>
+          <InlineEmpty>No customers scheduled today.</InlineEmpty>
         ) : (
-          <div className="p-4 space-y-3 max-h-[70vh] overflow-y-auto">
+          <div className="space-y-3">
             {/* Recipients — everyone selected by default; deselect anyone */}
             <div className="flex items-center justify-between">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">{selectedCount} of {recipients.length} selected</p>
-              <div className="flex items-center gap-2 text-[11px]">
-                <button onClick={selectAll} className="text-accent hover:underline">All</button>
-                <button onClick={selectNone} className="text-ink-faint hover:text-ink">None</button>
+              <div className="flex items-center gap-2 text-[11px] font-medium">
+                <button type="button" onClick={selectAll} className="text-accent hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">All</button>
+                <span className="text-ink-faint">·</span>
+                <button type="button" onClick={selectNone} className="text-accent hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">None</button>
               </div>
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -169,18 +174,18 @@ export function DayBulkMessage({ date, jobs, onClose }: { date: string; jobs: Jo
             {tpl.needsEta && (
               <label className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-ink-faint">ETA (min)
                 <input type="number" min="1" step="5" value={eta} onChange={e => setEta(e.target.value)}
-                  className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1 text-sm text-ink outline-none focus:border-accent" />
+                  className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
               </label>
             )}
             {tpl.reschedule && (
               <div className="flex flex-wrap items-center gap-3">
                 {tpl.reschedule === 'weather' && (
                   <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-ink-faint">From
-                    <input type="date" value={oldDate} onChange={e => setOldDate(e.target.value)} className="bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1 text-sm text-ink outline-none focus:border-accent" />
+                    <input type="date" value={oldDate} onChange={e => setOldDate(e.target.value)} className="bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
                   </label>
                 )}
                 <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-ink-faint">To
-                  <input type="date" value={newDate} onChange={e => setNewDate(e.target.value)} className="bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1 text-sm text-ink outline-none focus:border-accent" />
+                  <input type="date" value={newDate} onChange={e => setNewDate(e.target.value)} className="bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
                 </label>
               </div>
             )}
@@ -188,7 +193,8 @@ export function DayBulkMessage({ date, jobs, onClose }: { date: string; jobs: Jo
             {/* Preview / custom editor */}
             {tpl.custom ? (
               <textarea value={custom} onChange={e => setCustom(e.target.value)} rows={4} placeholder="Write your message…"
-                className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent resize-none" />
+                aria-label="Message text"
+                className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20 resize-none" />
             ) : (
               <div className="rounded-lg border border-border bg-bg-tertiary px-3 py-2">
                 <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-1">Preview{sample ? ` · to ${sample.name.split(' ')[0]}` : ''} (each is personalised)</p>
@@ -202,7 +208,7 @@ export function DayBulkMessage({ date, jobs, onClose }: { date: string; jobs: Jo
               <ChannelChip label="SMS" icon={MessageSquare} on={ch.sms} onClick={() => setCh(c => ({ ...c, sms: !c.sms }))} />
               <ChannelChip label="Email" icon={Mail} on={ch.email} onClick={() => setCh(c => ({ ...c, email: !c.email }))} />
               <Button size="sm" className="ml-auto" onClick={sendAll} loading={busy} disabled={selectedCount === 0}>
-                {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />} Send to {selectedCount}
+                <Send className="w-3.5 h-3.5" /> Send to {selectedCount}
               </Button>
             </div>
 
@@ -215,8 +221,7 @@ export function DayBulkMessage({ date, jobs, onClose }: { date: string; jobs: Jo
             )}
           </div>
         )}
-      </div>
-    </div>
+    </Modal>
   )
 }
 

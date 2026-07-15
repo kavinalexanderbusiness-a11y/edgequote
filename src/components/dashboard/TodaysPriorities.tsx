@@ -11,7 +11,7 @@ import type { Quote } from '@/types'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import {
   ListChecks, CheckCircle2, ArrowRight,
-  DollarSign, FileText, Bell, MessageSquare, Repeat,
+  DollarSign, FileText, Bell, CalendarPlus, AlertTriangle, MessageSquare, Repeat,
 } from 'lucide-react'
 
 // ONE ranked queue of the highest-value things to do right now, distilled from the
@@ -90,9 +90,28 @@ export function TodaysPriorities() {
         })
       }
 
-      // (Accepted-but-unscheduled and missed visits are NOT queued here — the pinned
-      // UnscheduledAccepted and MissedJobs cards directly beneath this list carry the
-      // same signals WITH their one-tap actions; listing them twice was duplication.)
+      // 2) Accepted but not scheduled — committed revenue most at risk of slipping.
+      //    Cancelled jobs must NOT count as scheduled.
+      const scheduledQuoteIds = new Set(jobs.filter(j => j.quote_id && j.status !== 'cancelled').map(j => j.quote_id))
+      const acceptedUnscheduled = quotes.filter(q => q.status === 'accepted' && !scheduledQuoteIds.has(q.id))
+      const acceptedTotal = acceptedUnscheduled.reduce((s, q) => s + Number(q.total || 0), 0)
+      if (acceptedUnscheduled.length > 0) {
+        next.push({
+          key: 'unscheduled', icon: CalendarPlus, tone: 'text-amber-400 bg-amber-500/10 border-amber-500/20',
+          label: 'Schedule accepted jobs', detail: `${acceptedUnscheduled.length} · ${formatCurrency(acceptedTotal)}`,
+          href: '/dashboard/schedule', score: 80_000 + acceptedTotal,
+        })
+      }
+
+      // 3) Missed visits — past-date jobs still open, un-invoiced, customers falling behind.
+      const missed = jobs.filter(j => j.scheduled_date < today && (j.status === 'scheduled' || j.status === 'in_progress'))
+      if (missed.length > 0) {
+        next.push({
+          key: 'missed', icon: AlertTriangle, tone: 'text-red-400 bg-red-500/10 border-red-500/20',
+          label: 'Resolve missed jobs', detail: `${missed.length} past due`,
+          href: '/dashboard/schedule', score: 70_000 + missed.length * 200,
+        })
+      }
 
       // 4) Draft invoices to send — the auto-invoiced recurring pipeline that silently
       //    goes unsent (mirrors the Invoices "Drafts to review" card).
@@ -163,24 +182,41 @@ export function TodaysPriorities() {
   }, [supabase])
 
   // Reserve the top slot while loading — this card always renders once ready, so
-  // returning null here made the whole page jump down when it popped in.
-  if (loading) return <SkeletonRows count={4} />
+  // returning null here made the whole page jump down when it popped in. The
+  // skeleton keeps the hero shell + header so the page anchor never changes
+  // identity when the data lands.
+  if (loading) {
+    return (
+      <div className="rounded-card border border-accent/20 hero-aurora overflow-hidden">
+        <div className="px-4 sm:px-5 py-3.5 border-b border-border flex items-center gap-2.5">
+          <span className="w-7 h-7 rounded-lg bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
+            <ListChecks className="w-4 h-4 text-accent" />
+          </span>
+          <h2 className="text-sm font-bold tracking-tight text-ink">Today&rsquo;s Priorities</h2>
+        </div>
+        <div className="px-4 sm:px-5 py-3">
+          <SkeletonRows count={4} />
+        </div>
+      </div>
+    )
+  }
 
   return (
-    <div className="rounded-card border border-border bg-bg-secondary overflow-hidden">
-      <div className="px-4 sm:px-5 py-3 border-b border-border flex items-center gap-2">
-        <ListChecks className="w-4 h-4 text-accent" />
-        <h2 className="text-sm font-bold text-ink">Today&rsquo;s Priorities</h2>
-        {items.length > 0 && (
-          <span className="text-xs font-semibold text-accent bg-accent/10 border border-accent/20 rounded-full px-2 py-0.5">{items.length}</span>
-        )}
+    <div className="rounded-card border border-accent/20 hero-aurora overflow-hidden">
+      <div className="px-4 sm:px-5 py-3.5 border-b border-border flex items-center gap-2.5">
+        <span className="w-7 h-7 rounded-lg bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
+          <ListChecks className="w-4 h-4 text-accent" />
+        </span>
+        <h2 className="text-sm font-bold tracking-tight text-ink">Today&rsquo;s Priorities</h2>
       </div>
 
       {items.length === 0 ? (
-        <div className="px-5 py-8 text-center">
-          <CheckCircle2 className="w-6 h-6 mx-auto mb-2 text-emerald-400" />
-          <p className="text-sm font-medium text-ink">You&rsquo;re all caught up</p>
-          <p className="text-xs text-ink-muted mt-0.5">No follow-ups, unsent invoices, or unread replies right now.</p>
+        <div className="px-5 py-10 text-center">
+          <div className="w-11 h-11 mx-auto rounded-full bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center mb-3">
+            <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+          </div>
+          <p className="text-sm font-semibold text-ink">You&rsquo;re all caught up</p>
+          <p className="text-xs text-ink-muted mt-1">No follow-ups, unsent invoices, or unread replies right now.</p>
         </div>
       ) : (
         <ol className="divide-y divide-border">
@@ -188,17 +224,17 @@ export function TodaysPriorities() {
             <li key={p.key}>
               <Link
                 href={p.href}
-                className="flex items-center gap-3 px-4 sm:px-5 py-3.5 hover:bg-surface/40 active:bg-surface/60 transition-colors"
+                className="group flex items-center gap-3 px-4 sm:px-5 py-3.5 hover:bg-surface/40 active:bg-surface/60 transition-colors"
               >
-                <span className="shrink-0 w-5 text-center text-xs font-bold text-ink-faint tabular-nums">{i + 1}</span>
+                <span className={`shrink-0 w-5 h-5 rounded text-[10px] font-bold flex items-center justify-center tabular-nums ${i === 0 ? 'bg-accent/15 text-accent' : 'bg-bg-tertiary text-ink-faint'}`}>{i + 1}</span>
                 <span className={`shrink-0 w-9 h-9 rounded-lg border flex items-center justify-center ${p.tone}`}>
                   <p.icon className="w-4 h-4" />
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block text-sm font-semibold text-ink truncate">{p.label}</span>
-                  <span className="block text-xs text-ink-muted truncate mt-0.5">{p.detail}</span>
+                  <span className="block text-sm font-semibold tracking-tight text-ink truncate">{p.label}</span>
+                  <span className="block text-xs text-ink-muted truncate mt-0.5 tabular-nums">{p.detail}</span>
                 </span>
-                <ArrowRight className="w-4 h-4 text-ink-faint shrink-0" />
+                <ArrowRight className="w-4 h-4 text-ink-faint shrink-0 transition-transform group-hover:translate-x-0.5" />
               </Link>
             </li>
           ))}
