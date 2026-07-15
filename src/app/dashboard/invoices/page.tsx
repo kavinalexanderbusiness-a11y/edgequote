@@ -261,7 +261,14 @@ export default function InvoicesPage() {
     else {
       setInvoices(prev => prev.filter(i => i.id !== inv.id))
       const label = inv.status === 'paid' ? `Deleted PAID ${inv.invoice_number} (${formatCurrency(Number(inv.amount))})` : `Deleted ${inv.invoice_number}`
-      offerUndo(label, async () => { await supabase.from('invoices').insert(row) })
+      // Restoring a PAID invoice puts collected revenue back on the books. Unchecked, a
+      // failed insert (invoice_number conflict, RLS, expired session) dismissed the toast,
+      // fetchInvoices() re-rendered without the row, and the money left the books with no
+      // signal at all. InvoicePaymentControls already surfaces exactly this failure.
+      offerUndo(label, async () => {
+        const { error: rErr } = await supabase.from('invoices').insert(row)
+        if (rErr) notify.error('Could not restore the invoice: ' + rErr.message)
+      })
     }
     setDeletingId(null)
   }

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
+import { toast } from '@/lib/toast'
 import { PHOTO_BUCKET } from '@/lib/photos'
 import { formatDate } from '@/lib/utils'
 import {
@@ -588,7 +589,10 @@ export function BeforeAfterStudio() {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
-      await supabase.from('marketing_assets').upsert({
+      // Supabase resolves on a failed write, so the catch below can't see one — this
+      // painted the "Used" badge regardless and the owner believed the asset was recorded
+      // in Marketing Studio. The export genuinely worked; the record may not exist.
+      const { error } = await supabase.from('marketing_assets').upsert({
         user_id: user.id,
         job_id: pair.jobId,
         customer_id: pair.job.customer_id,
@@ -602,6 +606,7 @@ export function BeforeAfterStudio() {
         best_after_photo_id: after.id,
         status,
       }, { onConflict: 'user_id,job_id' })
+      if (error) return
       setAssetStatus(prev => ({ ...prev, [pair.jobId]: status }))
     } catch { /* table absent / not migrated — export still succeeds */ }
   }, [supabase, consentSupported])
@@ -610,7 +615,12 @@ export function BeforeAfterStudio() {
   async function allowPhotos() {
     if (!selected?.job.customer_id) return
     const cid = selected.job.customer_id
-    await supabase.from('customers').update({ photo_marketing_consent: true, photo_marketing_consent_at: new Date().toISOString() }).eq('id', cid)
+    // Consent gates whether this customer's photos may be promoted to 'used'/publishable.
+    // Flipping the UI on an unverified write would let us market their property on the
+    // strength of a permission the database never recorded.
+    const { error } = await supabase.from('customers')
+      .update({ photo_marketing_consent: true, photo_marketing_consent_at: new Date().toISOString() }).eq('id', cid)
+    if (error) { toast.error('Could not save this customer’s photo permission — please try again.'); return }
     setPairs(prev => prev.map(p => p.job.customer_id === cid ? { ...p, context: { ...p.context, consent: true } } : p))
   }
 

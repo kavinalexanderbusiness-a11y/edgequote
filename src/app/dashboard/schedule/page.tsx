@@ -410,16 +410,24 @@ export default function SchedulePage() {
       id: r.id, user_id: r.user_id, freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count,
       start_date: r.start_date, end_date: r.end_date, end_count: r.end_count, customer_id: r.customer_id,
     }))
-    if (futureJobs.length) await supabase.from('jobs').delete().in('id', futureJobs.map(j => j.id))
+    // The delete is the destructive step — if it fails there is nothing to merge and the
+    // toast must not say otherwise (removeHealth, its sibling, already checks this).
+    if (futureJobs.length) {
+      const { error } = await supabase.from('jobs').delete().in('id', futureJobs.map(j => j.id))
+      if (error) { setBanner('Could not merge these plans — nothing was changed.'); setHealthBusyKey(null); return }
+    }
     if (pastReattach.length) await supabase.from('jobs').update({ recurrence_id: null }).in('id', pastReattach.map(p => p.id))
     await supabase.from('job_recurrences').delete().in('id', others)
     await fetchJobs()
     setHealthBusyKey(null)
     offerUndo(`Merged ${others.length + 1} ${issue.isMow ? 'mowing ' : ''}plans into one`, async () => {
-      if (recRows.length) await supabase.from('job_recurrences').insert(recRows)
-      if (futureRows.length) await supabase.from('jobs').insert(futureRows)
-      if (futureAddons.length) await supabase.from('job_line_items').insert(futureAddons)
-      for (const p of pastReattach) await supabase.from('jobs').update({ recurrence_id: p.recurrence_id }).eq('id', p.id)
+      const res: { error: unknown }[] = []
+      if (recRows.length) res.push(await supabase.from('job_recurrences').insert(recRows))
+      if (futureRows.length) res.push(await supabase.from('jobs').insert(futureRows))
+      if (futureAddons.length) res.push(await supabase.from('job_line_items').insert(futureAddons))
+      for (const p of pastReattach) res.push(await supabase.from('jobs').update({ recurrence_id: p.recurrence_id }).eq('id', p.id))
+      await fetchJobs()
+      if (res.some(r => r.error)) setBanner('Could not fully unmerge these plans — check the affected visits.')
     })
   }
 
@@ -531,8 +539,11 @@ export default function SchedulePage() {
     })
     setDayMenu(null); setSelectedDays(new Set())
     const res = await Promise.all(dates.map(dt => setDayStatus(supabase, uid, dt, { status })))
-    if (res.some(r => r.error)) { setBanner('Could not save the day status — please try again.'); reloadDayStatuses() }
-    else reloadDayStatuses()
+    reloadDayStatuses()
+    // Report the outcome: rainDisableAndOptimize goes on to tell the owner the day is
+    // blocked and print a "Revenue protected" figure, so it has to know if this failed.
+    if (res.some(r => r.error)) { setBanner('Could not save the day status — please try again.'); return { ok: false } }
+    return { ok: true }
   }
   async function clearDayStatusFor(dates: string[]) {
     if (!uid) return
@@ -543,8 +554,12 @@ export default function SchedulePage() {
       return { byDate, blockedDates }
     })
     setDayMenu(null); setSelectedDays(new Set())
-    await Promise.all(dates.map(dt => clearDayStatus(supabase, uid, dt)))
+    // The optimistic clear above already told the owner the day is open again. Its sibling
+    // applyDayStatus checks this; unchecked, a failure let the day flicker available and
+    // then silently snap back to blocked with no explanation.
+    const res = await Promise.all(dates.map(dt => clearDayStatus(supabase, uid, dt)))
     reloadDayStatuses()
+    if (res.some(r => r.error)) setBanner('Could not clear the day status — please try again.')
   }
 
   // ── Proactive Weather Ops: detect a rainy day with work, offer a one-click fix ──
@@ -577,30 +592,39 @@ export default function SchedulePage() {
       unmovable: plan.unmovable.length,
     }
   }
-  async function applyRainMoves(date: string): Promise<ReturnType<typeof planRainDelay>> {
+  // Returns the plan AND whether the moves actually persisted — "Revenue protected: $X"
+  // is derived from plan.moves, so summarizing an unapplied plan invents that number.
+  async function applyRainMoves(date: string): Promise<{ plan: ReturnType<typeof planRainDelay>; ok: boolean }> {
     const plan = planRainDelay(optJobsAll, date, optBaseOpts)
     const moves = plan.moves.map(m => ({ jobId: m.jobId, from: m.from, to: m.to }))
-    if (moves.length) await applyOptimization(moves)
-    return plan
+    if (!moves.length) return { plan, ok: true }
+    const res = await applyOptimization(moves)
+    return { plan, ok: res.ok }
   }
   async function rainDisableAndOptimize(date: string) {
     setRainBusy(date)
-    await applyDayStatus([date], 'rain')
-    const plan = await applyRainMoves(date)
-    setRainSummary(summarizeRain(date, true, plan))
+    // `blocked` must reflect the day_statuses write, not our intent: if it failed the day
+    // is still open, the optimizer will keep routing work onto a rained-out day, and the
+    // card would say otherwise. Same for the moves behind "Revenue protected".
+    const blockRes = await applyDayStatus([date], 'rain')
+    const { plan, ok } = await applyRainMoves(date)
+    if (!ok) { setBanner('Could not move this day’s visits — they’re still on the rained-out day.'); setRainBusy(null); return }
+    setRainSummary(summarizeRain(date, !!blockRes?.ok, plan))
     setDismissedRain(prev => new Set(prev).add(date))
     setRainBusy(null)
   }
   async function rainDisableOnly(date: string) {
     setRainBusy(date)
-    await applyDayStatus([date], 'rain')
+    const blockRes = await applyDayStatus([date], 'rain')
+    if (!blockRes?.ok) { setRainBusy(null); return }   // applyDayStatus already banner'd
     setRainSummary({ date, blocked: true, byDay: [], revenueProtected: 0, unmovable: 0 })
     setDismissedRain(prev => new Set(prev).add(date))
     setRainBusy(null)
   }
   async function rainOptimizeOnly(date: string) {
     setRainBusy(date)
-    const plan = await applyRainMoves(date)
+    const { plan, ok } = await applyRainMoves(date)
+    if (!ok) { setBanner('Could not move this day’s visits — they’re still on the rained-out day.'); setRainBusy(null); return }
     setRainSummary(summarizeRain(date, false, plan))
     setDismissedRain(prev => new Set(prev).add(date))
     setRainBusy(null)
@@ -891,8 +915,9 @@ export default function SchedulePage() {
     // second draft, never a stale amount. Sent/paid/cancelled invoices are locked
     // (the sync engine only touches drafts); scope-wide edits sync every visit.
     if (Number(values.price) !== Number(job.price)) {
-      const synced = await syncDraftInvoiceAmounts(supabase, targets.map(t => t.id))
-      if (synced > 0) setBanner(`Saved — ${synced} draft invoice${synced !== 1 ? 's' : ''} updated to match the new price.`)
+      const { changed, failed } = await syncDraftInvoiceAmounts(supabase, targets.map(t => t.id))
+      if (failed > 0) setBanner(`Saved the new price, but ${failed} draft invoice${failed !== 1 ? 's' : ''} still show${failed === 1 ? 's' : ''} the old amount — open the invoice to re-price it.`)
+      else if (changed > 0) setBanner(`Saved — ${changed} draft invoice${changed !== 1 ? 's' : ''} updated to match the new price.`)
     }
   }
 
@@ -1019,14 +1044,21 @@ export default function SchedulePage() {
     const delta = dayDelta(job.scheduled_date, newDate)
     const targets = jobsInScope(job, jobs, scope)
     const prev = targets.map(t => ({ id: t.id, scheduled_date: t.scheduled_date, route_order: t.route_order ?? null }))
-    await Promise.all(targets.map(t =>
+    // fetchJobs() below re-reads from the server, so the CALENDAR self-heals on failure —
+    // but the toast doesn't: it claimed "Moved 12 visits" and offered an Undo for a no-op.
+    // The single-job path (proceedMoveJobToDate) already checks this; same gesture, so the
+    // recurring path must too, or the owner closes the laptop believing the season moved.
+    const res = await Promise.all(targets.map(t =>
       supabase.from('jobs').update({ scheduled_date: shiftDate(t.scheduled_date, delta) }).eq('id', t.id)
     ))
     await fetchJobs()
+    if (res.some(r => r.error)) { setBanner('Could not move these visits — the schedule is unchanged.'); return }
     offerUndo(`Moved ${targets.length} visit${targets.length !== 1 ? 's' : ''}`, async () => {
       // Restore dates AND manual route positions (the trigger nulled them on the
       // way out; it keeps an explicitly-set route_order in the same update).
-      await Promise.all(prev.map(p => supabase.from('jobs').update({ scheduled_date: p.scheduled_date, route_order: p.route_order }).eq('id', p.id)))
+      const undoRes = await Promise.all(prev.map(p => supabase.from('jobs').update({ scheduled_date: p.scheduled_date, route_order: p.route_order }).eq('id', p.id)))
+      await fetchJobs()
+      if (undoRes.some(r => r.error)) setBanner('Could not undo the move — check the affected days.')
     })
   }
 
@@ -1044,15 +1076,22 @@ export default function SchedulePage() {
       id: r.id, user_id: r.user_id, freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count,
       start_date: r.start_date, end_date: r.end_date, end_count: r.end_count, customer_id: r.customer_id,
     } : null
-    await supabase.from('jobs').delete().in('id', targets.map(t => t.id))
+    const { error: delErr } = await supabase.from('jobs').delete().in('id', targets.map(t => t.id))
+    if (delErr) { setBanner('Could not delete these visits — the schedule is unchanged.'); return }
     if (recRow) await supabase.from('job_recurrences').delete().eq('id', job.recurrence_id)
     await fetchJobs()
     setEditing(null)
     offerUndo(`Deleted ${targets.length} visit${targets.length !== 1 ? 's' : ''}`, async () => {
-      if (recRow) await supabase.from('job_recurrences').insert(recRow)
-      if (snapshot.length) await supabase.from('jobs').insert(snapshot)
-      if (addons.length) await supabase.from('job_line_items').insert(addons)
-      for (const inv of linkedInv) await supabase.from('invoices').update({ job_id: inv.job_id }).eq('id', inv.id)
+      // A partial restore is worse than none: jobs without their priced add-ons, or
+      // invoices left unlinked, silently under-bill. Report it rather than let the toast
+      // dismiss as though the visits came back whole.
+      const res: { error: unknown }[] = []
+      if (recRow) res.push(await supabase.from('job_recurrences').insert(recRow))
+      if (snapshot.length) res.push(await supabase.from('jobs').insert(snapshot))
+      if (addons.length) res.push(await supabase.from('job_line_items').insert(addons))
+      for (const inv of linkedInv) res.push(await supabase.from('invoices').update({ job_id: inv.job_id }).eq('id', inv.id))
+      await fetchJobs()
+      if (res.some(r => r.error)) setBanner('Could not fully restore these visits — check the day and re-add anything missing.')
     })
   }
 
@@ -1161,9 +1200,16 @@ export default function SchedulePage() {
       const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed' })
       if (res.created) setBanner(`Saved — draft invoice ${res.invoiceNumber} created.`)
       else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
+      // The quick-edit dropdown completes a job through the same transition as the Complete
+      // button, which DOES report this (completeJob below). Without it a failed draft leaves
+      // the visit out of the un-invoiced queue and it is never billed, with no trace.
+      else if (res.reason === 'error') setBanner('Job completed, but the draft invoice could not be created — invoice it manually from the job.')
     }
     // If the inline edit changed the price, keep its draft invoice in sync.
-    if (Number(patch.price) !== Number(job.price)) await syncDraftInvoiceAmounts(supabase, [job.id])
+    if (Number(patch.price) !== Number(job.price)) {
+      const { failed } = await syncDraftInvoiceAmounts(supabase, [job.id])
+      if (failed > 0) setBanner('Saved, but its draft invoice still shows the old amount — open the invoice to re-price it.')
+    }
     await fetchJobs()
   }
 
@@ -1183,9 +1229,10 @@ export default function SchedulePage() {
     // Audit trail (old → new, reason on raises) for upsell analytics later.
     await recordPriceChange(supabase, { userId: user!.id, jobId: job.id, scope: null, oldAmount, newAmount: price, reason, changedByEmail: user?.email })
     // The job is the source of truth — re-price its draft invoice automatically.
-    const synced = await syncDraftInvoiceAmounts(supabase, [job.id], { reason })
+    const { changed, failed } = await syncDraftInvoiceAmounts(supabase, [job.id], { reason })
     await fetchJobs()
-    if (synced > 0) setBanner('Price updated — its draft invoice was re-priced to match.')
+    if (failed > 0) setBanner('Price updated, but its draft invoice still shows the old amount — open the invoice to re-price it.')
+    else if (changed > 0) setBanner('Price updated — its draft invoice was re-priced to match.')
   }
 
   // The quote cadence column a recurring job's price maps to (interval-aware).
@@ -1244,16 +1291,25 @@ export default function SchedulePage() {
     await recordPriceChange(supabase, { userId: cu!.id, jobId: job.id, quoteId: writesQuote ? job.quote_id : null, scope, oldAmount, newAmount: newPrice, reason, changedByEmail: cu?.email })
 
     // Job = source of truth → re-price the affected visits' draft invoices.
-    const synced = await syncDraftInvoiceAmounts(supabase, affectedIds, { reason })
+    const { changed, failed } = await syncDraftInvoiceAmounts(supabase, affectedIds, { reason })
     await fetchJobs()
     const dest = writesQuote ? `the quote's ${freq} price` : scope === 'this' ? 'this visit' : 'the series visits'
-    offerUndo(`Price saved to ${dest}${synced > 0 ? ` · ${synced} draft invoice${synced !== 1 ? 's' : ''} re-priced` : ''}`, async () => {
-      if (quoteSnap) await supabase.from('quotes').update({ [quoteSnap.field]: quoteSnap.value }).eq('id', quoteSnap.id)
+    // Only claim the re-price we verified; a failed one is called out, not rounded into the count.
+    const invNote = failed > 0
+      ? ` · ${failed} draft invoice${failed !== 1 ? 's' : ''} still show${failed === 1 ? 's' : ''} the old amount`
+      : changed > 0 ? ` · ${changed} draft invoice${changed !== 1 ? 's' : ''} re-priced` : ''
+    offerUndo(`Price saved to ${dest}${invNote}`, async () => {
+      // Undo restores MONEY. Unchecked, a failed restore dismissed the toast and left the
+      // new price in place with no error — the owner believes they reverted and they didn't.
+      const restores: { error: unknown }[] = []
+      if (quoteSnap) restores.push(await supabase.from('quotes').update({ [quoteSnap.field]: quoteSnap.value }).eq('id', quoteSnap.id))
       const nullIds = jobSnap.filter(s => s.price == null).map(s => s.id)
-      if (nullIds.length) await supabase.from('jobs').update({ price: null }).in('id', nullIds)
-      for (const s of jobSnap.filter(s => s.price != null)) await supabase.from('jobs').update({ price: s.price }).eq('id', s.id)
-      await syncDraftInvoiceAmounts(supabase, affectedIds) // restore invoice amounts to match
+      if (nullIds.length) restores.push(await supabase.from('jobs').update({ price: null }).in('id', nullIds))
+      for (const s of jobSnap.filter(s => s.price != null)) restores.push(await supabase.from('jobs').update({ price: s.price }).eq('id', s.id))
+      const restore = await syncDraftInvoiceAmounts(supabase, affectedIds) // restore invoice amounts to match
       await fetchJobs()
+      if (restores.some(r => r.error)) setBanner('Could not undo the price change — please set the price back manually.')
+      else if (restore.failed > 0) setBanner('Price restored, but a draft invoice still shows the changed amount — open it to re-price.')
     })
   }
 
@@ -1347,25 +1403,36 @@ export default function SchedulePage() {
 
   // Apply a batch of date moves (optimizer or rain delay): grouped by target
   // day, with one Undo that restores every original date.
-  async function applyOptimization(moves: Pick<PlannedMove, 'jobId' | 'from' | 'to'>[]) {
-    if (!moves.length) return
+  //
+  // Returns an outcome — callers must be able to SEE a failure, not just have it
+  // banner'd behind them. RainDelayCenter renders over this page and then texts every
+  // affected customer their new date; if it can't observe the write failing it tells
+  // customers about a reschedule that never persisted, which is unrecallable.
+  async function applyOptimization(moves: Pick<PlannedMove, 'jobId' | 'from' | 'to'>[]): Promise<{ ok: boolean; error?: string }> {
+    if (!moves.length) return { ok: true }
     const byTo: Record<string, string[]> = {}
     for (const m of moves) (byTo[m.to] ||= []).push(m.jobId)
+    let failure: string | undefined
     for (const [to, ids] of Object.entries(byTo)) {
       const { error } = await supabase.from('jobs').update({ scheduled_date: to }).in('id', ids)
-      if (error) { setBanner('Optimization partially applied — ' + error.message); break }
+      if (error) { setBanner('Optimization partially applied — ' + error.message); failure = error.message; break }
     }
     await fetchJobs()
+    if (failure) return { ok: false, error: failure }
     // Capture each moved job's manual route position so undo restores it (the
     // date-move trigger nulls route_order on the way out).
     const prevOrder = new Map(moves.map(m => [m.jobId, jobs.find(j => j.id === m.jobId)?.route_order ?? null]))
     const byFrom: Record<string, string[]> = {}
     for (const m of moves) (byFrom[m.from] ||= []).push(m.jobId)
     offerUndo(`${moves.length} job${moves.length !== 1 ? 's' : ''} moved`, async () => {
+      const res: { error: unknown }[] = []
       for (const [from, ids] of Object.entries(byFrom)) {
-        await Promise.all(ids.map(id => supabase.from('jobs').update({ scheduled_date: from, route_order: prevOrder.get(id) ?? null }).eq('id', id)))
+        res.push(...await Promise.all(ids.map(id => supabase.from('jobs').update({ scheduled_date: from, route_order: prevOrder.get(id) ?? null }).eq('id', id))))
       }
+      await fetchJobs()
+      if (res.some(r => r.error)) setBanner('Could not undo every move — check the affected days.')
     })
+    return { ok: true }
   }
 
   // Next date on/after `fromISO`+1 whose weekday is a preferred work day AND

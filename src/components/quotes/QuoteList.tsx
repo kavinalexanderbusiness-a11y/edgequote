@@ -202,8 +202,18 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
     setBusyKey(null)
     if (error) { toast.error('Could not delete: ' + error.message); return }
     sel.clear(); router.refresh()
+    // Restore must OMIT the GENERATED columns (man_hours/subtotal/total) — Postgres
+    // rejects an insert that supplies them, so the old `({ ...q }) => q` no-op made this
+    // Undo fail EVERY time: the toast dismissed, router.refresh() ran, and the quotes were
+    // gone with no error. Same omit the single-quote delete already does (quotes/page.tsx:69).
+    const insertable = rows.map(q => {
+      const row = { ...(q as unknown as Record<string, unknown>) }
+      delete row.man_hours; delete row.subtotal; delete row.total
+      return row
+    })
     toast.undo(`Deleted ${rows.length} quote${rows.length !== 1 ? 's' : ''}`, async () => {
-      await supabase.from('quotes').insert(rows.map(({ ...q }) => q))
+      const { error: rErr } = await supabase.from('quotes').insert(insertable)
+      if (rErr) { toast.error('Could not restore the quotes: ' + rErr.message); return }
       router.refresh()
     })
   }

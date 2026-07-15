@@ -213,7 +213,16 @@ export default function PricingRecoveryPage() {
     const { data: q, error } = await supabase.from('quotes').insert(insert).select('id').single()
     if (error || !q) { setWorking(null); toast.error('Could not create quote: ' + (error?.message ?? '')); return }
     const ids = jobs.filter(j => j.recurrence_id === recId).map(j => j.id)
-    await supabase.from('jobs').update({ quote_id: q.id }).in('id', ids)
+    // If the link fails, load() correctly re-shows the series as unpriced — but a real
+    // status:'accepted' quote is now orphaned, and accepted quotes feed revenue reports.
+    // Clicking again would mint a second and a third. Roll the orphan back instead: this
+    // page exists so reports run on real revenue, so it must not inflate them itself.
+    const { error: linkErr } = await supabase.from('jobs').update({ quote_id: q.id }).in('id', ids)
+    if (linkErr) {
+      await supabase.from('quotes').delete().eq('id', q.id)
+      toast.error('Could not price these visits — please try again.')
+      setWorking(null); return
+    }
     await load(); setWorking(null)
   }
 
@@ -243,12 +252,31 @@ export default function PricingRecoveryPage() {
       const q = quotes.find(x => x.id === s.quoteId)
       const freezeVal = Math.round(quoteVisitAmount(q as unknown as Record<string, unknown>, s.cadence))
       const completedNull = series.filter(j => j.status === 'completed' && j.price == null).map(j => j.id)
-      if (completedNull.length && freezeVal > 0) await supabase.from('jobs').update({ price: freezeVal }).in('id', completedNull)
-      await supabase.from('quotes').update({ [field]: price }).eq('id', s.quoteId)
-      if (nonCompleted.length) await supabase.from('jobs').update({ price: null }).in('id', nonCompleted)
+      // The freeze is a PRECONDITION for the raise, not a companion to it: completed
+      // visits with price == null derive their amount from the quote cadence, so raising
+      // the quote before they're pinned silently re-prices already-billed history upward
+      // — the exact thing the comment above promises never happens. Supabase resolves on
+      // a failed write, so unchecked, that promise held only when nothing went wrong.
+      if (completedNull.length && freezeVal > 0) {
+        const { error } = await supabase.from('jobs').update({ price: freezeVal }).in('id', completedNull)
+        if (error) {
+          toast.error('Couldn’t protect this customer’s billed visits, so the price wasn’t raised. Nothing changed — please try again.')
+          setWorking(null); return
+        }
+      }
+      const { error: raiseErr } = await supabase.from('quotes').update({ [field]: price }).eq('id', s.quoteId)
+      if (raiseErr) { toast.error('Couldn’t raise the price — please try again.'); setWorking(null); return }
+      // Future visits keep billing the OLD rate until their override is cleared, so a
+      // failure here means the raise silently doesn't apply — say so rather than let the
+      // row disappear from "Priced below recommended" as though it were captured.
+      if (nonCompleted.length) {
+        const { error } = await supabase.from('jobs').update({ price: null }).in('id', nonCompleted)
+        if (error) toast.error('Price raised on the quote, but its upcoming visits still bill the old rate — open the series and clear their price overrides.')
+      }
     } else if (nonCompleted.length) {
       // No quote owns this series — the price lives on the future visits themselves.
-      await supabase.from('jobs').update({ price }).in('id', nonCompleted)
+      const { error } = await supabase.from('jobs').update({ price }).in('id', nonCompleted)
+      if (error) { toast.error('Couldn’t raise the price — please try again.'); setWorking(null); return }
     }
     await load(); setWorking(null)
   }

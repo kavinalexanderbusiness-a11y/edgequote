@@ -31,7 +31,9 @@ interface Props {
   capacityHours: number
   dayStatusMap?: DayStatusMap
   capacityForDate?: (dateISO: string) => number
-  onApply: (moves: { jobId: string; from: string; to: string }[]) => Promise<void>
+  // Returns an outcome — this screen texts customers about the moves, so it must be
+  // able to tell a persisted move from a rejected one.
+  onApply: (moves: { jobId: string; from: string; to: string }[]) => Promise<{ ok: boolean; error?: string }>
   onClose: () => void
 }
 
@@ -56,6 +58,7 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
   const [selectedJobIds, setSelectedJobIds] = useState<Set<string>>(new Set())
   const [applying, setApplying] = useState(false)
   const [applied, setApplied] = useState(false)
+  const [applyError, setApplyError] = useState<string | null>(null)
 
   // Same dialog hygiene as every other schedule modal: Escape closes.
   useEffect(() => {
@@ -242,7 +245,18 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
     if (!plan || plan.moves.length === 0) return
     const snapshot = { moved: plan.moves.length, recipients }
     setApplying(true)
-    await onApply(plan.moves.map(m => ({ jobId: m.jobId, from: m.from, to: m.to })))
+    // The moves must be PERSISTED before we claim them or text anyone about them. A
+    // customer SMS saying "your visit moved to Thursday" cannot be unsent — sending it
+    // for a move the database rejected is the worst failure this screen can produce.
+    const res = await onApply(plan.moves.map(m => ({ jobId: m.jobId, from: m.from, to: m.to })))
+    if (!res?.ok) {
+      setApplyError(res?.error
+        ? `Couldn’t move these visits — ${res.error}. Nothing was changed and no one was messaged.`
+        : 'Couldn’t move these visits. Nothing was changed and no one was messaged.')
+      setApplying(false)
+      return
+    }
+    setApplyError(null)
     setResult(snapshot)
     setApplied(true)
     if (notify && snapshot.recipients.length) { await notifyRecipients(snapshot.recipients) }
@@ -485,6 +499,12 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
                 </div>
 
                 {/* Apply */}
+                {applyError && (
+                  <div className="rounded-xl border border-red-500/30 bg-red-500/[0.06] px-4 py-3 flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                    <p className="text-sm text-red-400">{applyError}</p>
+                  </div>
+                )}
                 <div className="flex items-center gap-2 pt-1">
                   <Button onClick={apply} loading={applying} disabled={plan.moves.length === 0}>
                     <Check className="w-4 h-4" /> {notify && recipients.length ? `Move ${plan.moves.length} & notify` : `Move ${plan.moves.length} job${plan.moves.length !== 1 ? 's' : ''}`}

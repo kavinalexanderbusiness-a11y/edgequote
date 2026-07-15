@@ -192,7 +192,18 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
     setPhotos(prev => prev.filter(p => p.id !== photo.id))
     let undone = false
     toast.undo('Photo deleted.', () => { undone = true; setPhotos(prev => { const c = [...prev]; c.splice(Math.min(idx, c.length), 0, photo); return c }) })
-    if (typeof window !== 'undefined') window.setTimeout(() => { if (!undone) deletePhoto(supabase, photo) }, 7000)
+    // The delete is deferred so Undo costs no write — but its result was never inspected,
+    // so a failure meant the tile stayed gone, "Photo deleted." stood, and the photo
+    // reappeared on the next load with no explanation. retag/saveCaption below both roll
+    // back and surface the error; this path was the only one that didn't.
+    if (typeof window !== 'undefined') window.setTimeout(async () => {
+      if (undone) return
+      const ok = await deletePhoto(supabase, photo)
+      if (!ok) {
+        setPhotos(prev => { const c = [...prev]; c.splice(Math.min(idx, c.length), 0, photo); return c })
+        toast.error('Could not delete that photo — it’s still here.')
+      }
+    }, 7000)
   }
 
   async function retag(photo: JobPhotoView, kind: PhotoKind) {

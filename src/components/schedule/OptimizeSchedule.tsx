@@ -55,7 +55,7 @@ interface Props {
   // Duplicate stops the optimizer CAN'T fix by moving (they need deleting in
   // Schedule Health) — reported so the owner resolves them first.
   duplicateNote?: { stops: number; minutes: number }
-  onApply: (moves: PlannedMove[]) => Promise<void>
+  onApply: (moves: PlannedMove[]) => Promise<{ ok: boolean; error?: string }>
   onClose: () => void
 }
 

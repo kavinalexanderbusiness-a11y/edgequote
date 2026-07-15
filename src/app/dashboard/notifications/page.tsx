@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { formatDistanceToNow } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
+import { toast } from '@/lib/toast'
 import { AppNotification } from '@/components/notifications/NotificationBell'
 import { MorningBriefing } from '@/components/notifications/MorningBriefing'
 import { groupNotifications, notificationActionLabel, type NotifGroup } from '@/lib/notifications'
@@ -89,22 +90,32 @@ export default function NotificationsPage() {
   const snoozedCount = items.length - visible.length
   const { actionNeeded, activity, totalUnread } = useMemo(() => groupNotifications(visible), [visible])
 
+  // These three act optimistically and the realtime channel only fires on SUCCESSFUL
+  // changes — so a failed write produces no correction event at all. Unchecked, items
+  // vanished on tap and silently resurrected on the next visit. Roll the list back to what
+  // the server actually holds rather than leave a cleared inbox that isn't cleared.
   async function markRead(ids: string[]) {
     if (!ids.length) return
+    const prevItems = items
     setItems(prev => prev.map(n => ids.includes(n.id) ? { ...n, read: true } : n))
-    await supabase.from('notifications').update({ read: true, read_at: new Date().toISOString() }).in('id', ids)
+    const { error } = await supabase.from('notifications').update({ read: true, read_at: new Date().toISOString() }).in('id', ids)
+    if (error) { setItems(prevItems); toast.error('Could not mark these as read — please try again.') }
   }
   async function snooze(ids: string[]) {
     if (!supportsManage || !ids.length) return
     const until = tomorrow8am()
+    const prevItems = items
     setItems(prev => prev.map(n => ids.includes(n.id) ? { ...n, snoozed_until: until } : n))
-    await supabase.from('notifications').update({ snoozed_until: until }).in('id', ids)
+    const { error } = await supabase.from('notifications').update({ snoozed_until: until }).in('id', ids)
+    if (error) { setItems(prevItems); toast.error('Could not snooze these — please try again.') }
   }
   async function dismiss(ids: string[]) {
     if (!ids.length) return
     if (!supportsManage) { await markRead(ids); return } // pre-migration: dismiss = mark read
+    const prevItems = items
     setItems(prev => prev.filter(n => !ids.includes(n.id)))
-    await supabase.from('notifications').update({ archived_at: new Date().toISOString() }).in('id', ids)
+    const { error } = await supabase.from('notifications').update({ archived_at: new Date().toISOString() }).in('id', ids)
+    if (error) { setItems(prevItems); toast.error('Could not archive these — please try again.') }
   }
   function openItem(n: AppNotification) { markRead([n.id]); if (n.href) router.push(n.href) }
   function toggle(key: string) { setExpanded(prev => { const s = new Set(prev); s.has(key) ? s.delete(key) : s.add(key); return s }) }

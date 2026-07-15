@@ -200,9 +200,17 @@ export default function NeighborsPage() {
 
   async function deleteLead(lead: Lead) {
     const { data: row } = await supabase.from('neighbor_leads').select('*').eq('id', lead.id).maybeSingle()
-    await supabase.from('neighbor_leads').delete().eq('id', lead.id)
+    const { error } = await supabase.from('neighbor_leads').delete().eq('id', lead.id)
+    if (error) { toast.error('Could not delete this lead: ' + error.message); return }
     setLeads(prev => prev.filter(l => l.id !== lead.id))
-    if (row) toast.undo(`Deleted lead ${lead.address}`, async () => { await supabase.from('neighbor_leads').insert(row); setLeads(prev => [lead, ...prev]) })
+    // This list is local-state only — there's no reload to correct a failed restore, so an
+    // unchecked insert let the card visibly REAPPEAR while the row was gone for good. Only
+    // put it back on screen once the database actually has it again.
+    if (row) toast.undo(`Deleted lead ${lead.address}`, async () => {
+      const { error: rErr } = await supabase.from('neighbor_leads').insert(row)
+      if (rErr) { toast.error('Could not restore this lead: ' + rErr.message); return }
+      setLeads(prev => [lead, ...prev])
+    })
   }
 
   const counts = useMemo(() => {

@@ -15,7 +15,7 @@ import { receiptNumberFor } from '@/lib/payments/ledger'
 import {
   Home, History, Image as ImageIcon, FileText, Receipt, MessageSquarePlus, Check, Loader2,
   Phone, Globe, Mail, Leaf, CheckCircle2, Navigation, Play, CalendarClock, Repeat, MapPin, Ruler, Sparkles, CreditCard, MessageSquare,
-  Eye, Download, Printer, FolderOpen, Search, ArrowUpDown, Activity, Wallet, Star, Zap, ShieldCheck, Trash2, X, Landmark, Banknote, Copy,
+  Eye, Download, Printer, FolderOpen, Search, ArrowUpDown, Activity, Wallet, Star, Zap, ShieldCheck, Trash2, X, Landmark, Banknote, Copy, Clock,
 } from 'lucide-react'
 
 // ── Premium Customer Portal ─────────────────────────────────────────────────────
@@ -91,7 +91,9 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   const [reqSent, setReqSent] = useState<string | null>(null)
   const [paymentsEnabled, setPaymentsEnabled] = useState(false)
   const [payingId, setPayingId] = useState<string | null>(null)
-  const [justPaid, setJustPaid] = useState(false)
+  // 'confirming' = the customer came back from Stripe but our ledger hasn't recorded it
+  // yet; 'confirmed' = a new payment row actually landed. Never conflate the two.
+  const [justPaid, setJustPaid] = useState<'confirming' | 'confirmed' | null>(null)
   const [justAccepted, setJustAccepted] = useState(false)
   // The Documents tab opens pre-filtered to what the customer came for (the
   // signpost filters to quotes, the balance path to invoices).
@@ -111,6 +113,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     setData(pd)
     if (pd) setConsentState({ sms: !!pd.customer?.sms_opt_in, email: !!pd.customer?.email_opt_in })
     setLoading(false)
+    return pd
   }
 
   // Self-serve consent — updates the customer record immediately (token-scoped RPC).
@@ -145,9 +148,19 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     if (typeof window !== 'undefined') {
       const sp = new URLSearchParams(window.location.search)
       if (sp.get('paid') === '1') {
-        setJustPaid(true)
+        // ?paid=1 only means the customer reached Stripe's return URL — the WEBHOOK is
+        // what records the money. Asserting "Payment received" from this param alone is a
+        // guess: if the webhook is misconfigured, Stripe took the payment, our ledger never
+        // learned, and the customer holds a green success banner while the balance below it
+        // still reads the full amount. Confirm against the reloaded ledger before claiming
+        // it — the dashboard already refuses to tell this lie (invoices/page.tsx:164-167).
+        const before = data?.payments.length ?? 0
+        setJustPaid('confirming')
         window.history.replaceState({}, '', `/portal/${token}`)
-        setTimeout(() => load(), 1500)
+        setTimeout(async () => {
+          const pd = await load()
+          setJustPaid((pd?.payments.length ?? 0) > before ? 'confirmed' : 'confirming')
+        }, 1500)
       }
       // Back from the hosted card-setup page — the webhook saves the card a beat
       // later, so reload shortly to show it.
@@ -322,17 +335,26 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
         </div>
 
         <div className="mt-4">
-          {justPaid && (
+          {justPaid === 'confirmed' && (
             <div className="mb-3 rounded-card border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-sm px-4 py-3 flex items-start justify-between gap-3">
               <span className="flex items-start gap-2 font-medium">
                 <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
                 <span>Payment received — thank you!{' '}
-                  {data.payments.length > 0
-                    ? <button onClick={() => setTab('payments')} className="underline underline-offset-2 hover:opacity-80">View your receipt →</button>
-                    : <span className="font-normal">Your receipt will be ready here shortly.</span>}
+                  <button onClick={() => setTab('payments')} className="underline underline-offset-2 hover:opacity-80">View your receipt →</button>
                 </span>
               </span>
-              <button onClick={() => setJustPaid(false)} aria-label="Dismiss" className="shrink-0 opacity-70 hover:opacity-100"><X className="w-4 h-4" /></button>
+              <button onClick={() => setJustPaid(null)} aria-label="Dismiss" className="shrink-0 opacity-70 hover:opacity-100"><X className="w-4 h-4" /></button>
+            </div>
+          )}
+          {justPaid === 'confirming' && (
+            <div className="mb-3 rounded-card border border-border bg-bg-tertiary text-ink-muted text-sm px-4 py-3 flex items-start justify-between gap-3">
+              <span className="flex items-start gap-2 font-medium">
+                <Clock className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>Checkout completed — confirming your payment…{' '}
+                  <span className="font-normal">Your receipt will appear here once it&rsquo;s confirmed. You don&rsquo;t need to pay again.</span>
+                </span>
+              </span>
+              <button onClick={() => setJustPaid(null)} aria-label="Dismiss" className="shrink-0 opacity-70 hover:opacity-100"><X className="w-4 h-4" /></button>
             </div>
           )}
           {justAccepted && (

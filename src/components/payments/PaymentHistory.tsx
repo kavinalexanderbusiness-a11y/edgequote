@@ -19,6 +19,7 @@ export function PaymentHistory({ settings }: { settings?: BusinessSettings | nul
   const supabase = createClient()
   const [rows, setRows] = useState<PaymentRow[]>([])
   const [loaded, setLoaded] = useState(false)
+  const [loadError, setLoadError] = useState(false)
   const [receiptId, setReceiptId] = useState<string | null>(null)
 
   useEffect(() => {
@@ -27,10 +28,13 @@ export function PaymentHistory({ settings }: { settings?: BusinessSettings | nul
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
       if (!user) { if (active) setLoaded(true); return }
-      const { data } = await supabase.from('payments')
+      const { data, error } = await supabase.from('payments')
         .select('*, invoices(*)')
         .eq('user_id', user.id).order('created_at', { ascending: false }).limit(25)
-      if (active) { setRows((data as unknown as PaymentRow[]) || []); setLoaded(true) }
+      // A failed read must not render as "no payments" — someone reconciling their books
+      // can't tell an empty ledger from a query that never ran. The invoices list guards
+      // this same hazard explicitly; this card silently vanished instead.
+      if (active) { setRows((data as unknown as PaymentRow[]) || []); setLoadError(!!error); setLoaded(true) }
     })()
     return () => { active = false }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -47,6 +51,17 @@ export function PaymentHistory({ settings }: { settings?: BusinessSettings | nul
     setReceiptId(null)
   }
 
+  if (loaded && loadError && rows.length === 0) return (
+    <Card>
+      <CardBody className="flex items-start gap-2">
+        <Wallet className="w-4 h-4 text-ink-faint shrink-0 mt-0.5" />
+        <div>
+          <p className="text-sm font-medium text-ink">Payment timeline unavailable</p>
+          <p className="text-xs text-ink-faint mt-0.5">We couldn’t load your payments just now — this isn’t a record of $0 received. Refresh to try again.</p>
+        </div>
+      </CardBody>
+    </Card>
+  )
   if (!loaded || rows.length === 0) return null
   const paidRows = rows.filter(r => r.kind === 'payment' && Number(r.amount) > 0)
   // Net of refunds (negative payment rows) — matches the ledger's amount_paid.

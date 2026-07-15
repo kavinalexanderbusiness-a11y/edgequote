@@ -274,9 +274,11 @@ export default function MessagesPage() {
     // it in one tap (recovering from the Archived filter costs 4+ clicks otherwise).
     archive: async (c: Convo) => {
       const now = new Date().toISOString(); mutate(c, { archived_at: now })
-      await supabase.from('conversations').update({ archived_at: now }).eq('id', c.id)
+      const { error } = await supabase.from('conversations').update({ archived_at: now }).eq('id', c.id)
+      if (error) { mutate(c, { archived_at: c.archived_at }); toast.error('Could not archive this conversation.'); return }
       toast.undo(`Archived conversation with ${nameOf(c)}`, async () => {
-        await supabase.from('conversations').update({ archived_at: null }).eq('id', c.id)
+        const { error: rErr } = await supabase.from('conversations').update({ archived_at: null }).eq('id', c.id)
+        if (rErr) { toast.error('Could not unarchive this conversation.'); return }
         if (uid) loadPage(uid, filterRef.current, true)
       })
     },
@@ -292,8 +294,14 @@ export default function MessagesPage() {
         confirmLabel: 'Delete permanently', destructive: true,
       })
       if (!ok) return
+      // Delete BEFORE removing it from the list. The dialog just promised this "erases the
+      // entire message history and cannot be undone" — a customer may have asked for that
+      // erasure. Optimistically hiding the row made a failed delete look identical to a
+      // successful one, leaving the history fully intact while the owner is certain it's
+      // gone. This action is confirm-gated, so waiting for the write costs nothing.
+      const { error } = await supabase.from('conversations').delete().eq('id', c.id)
+      if (error) { toast.error('Could not delete this conversation: ' + error.message); return }
       removeLocal(c.id)
-      await supabase.from('conversations').delete().eq('id', c.id)
     },
     select: (c: Convo) => { setSel(c); if (c.unread > 0) { patch(c.id, { unread: 0 }); if (uid) loadCounts(uid) } },
   }
@@ -325,16 +333,22 @@ export default function MessagesPage() {
         confirmLabel: 'Delete permanently', destructive: true,
       })
       if (!ok) return
+      // Verify before hiding — the dialog promised "erases their message history and
+      // cannot be undone", and the rows silently vanishing IS the only success signal
+      // this path has. A failed delete left every conversation intact.
+      const { error } = await supabase.from('conversations').delete().in('id', ids)
+      if (error) { toast.error('Could not delete these conversations: ' + error.message); return }
       setRows(cs => cs.filter(c => !selectedIds.has(c.id)))
       setSearchResults(rs => rs ? rs.filter(c => !selectedIds.has(c.id)) : rs)
-      await supabase.from('conversations').delete().in('id', ids)
     } else {
       const now = new Date().toISOString()
       const p: Partial<Convo> = op === 'archive' ? { archived_at: now } : op === 'unarchive' ? { archived_at: null }
         : op === 'read' ? { unread: 0 } : op === 'unread' ? { unread: 1 } : op === 'mute' ? { muted: true } : op === 'unmute' ? { muted: false } : { pinned_at: now }
+      const prevRows = rows
       setRows(cs => sortConvos(cs.map(c => selectedIds.has(c.id) ? { ...c, ...p } : c).filter(c => inFilter(c, filter))))
       setSearchResults(rs => rs ? rs.map(c => selectedIds.has(c.id) ? { ...c, ...p } : c) : rs)
-      await supabase.from('conversations').update(p).in('id', ids)
+      const { error } = await supabase.from('conversations').update(p).in('id', ids)
+      if (error) { setRows(prevRows); toast.error('Could not update these conversations: ' + error.message); return }
     }
     if (uid) loadCounts(uid)
     exitSelect()

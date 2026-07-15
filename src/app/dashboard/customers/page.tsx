@@ -110,7 +110,10 @@ export default function CustomersPage() {
 
     // Auto-create a primary property from the customer's address
     if (values.address) {
-      await supabase.from('properties').insert({
+      // The customer is already saved, so this can't abort — but it can't be silent
+      // either: the primary property is what maps, routes and prices this customer, and
+      // an unchecked failure surfaced only much later as a Data Quality gap.
+      const { error: propErr } = await supabase.from('properties').insert({
         customer_id: c.id,
         user_id: user!.id,
         address: values.address,
@@ -119,6 +122,7 @@ export default function CustomersPage() {
         postal_code: values.postal_code || null,
         is_primary: true,
       })
+      if (propErr) toast.error(`${c.name.split(' ')[0] || 'The customer'} was added, but their address couldn’t be saved — add it from their profile so they can be scheduled and priced.`)
     }
 
     // Persist the consent captured on the form through the shared engine (writes

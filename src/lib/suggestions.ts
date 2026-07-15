@@ -1818,12 +1818,21 @@ export async function applyPriceRaise(
   if (!user) return { ok: false, error: 'Not signed in' }
   try {
     if (payload.quoteId && payload.cadenceField) {
+      // Freeze FIRST and only proceed if it stuck: billed visits with price == null
+      // derive from the quote cadence, so raising the quote after a failed freeze
+      // retroactively re-prices history the customer was already invoiced for.
       if (payload.freezeJobIds.length && payload.oldVisitValue > 0) {
-        await supabase.from('jobs').update({ price: payload.oldVisitValue }).in('id', payload.freezeJobIds)
+        const { error: fErr } = await supabase.from('jobs').update({ price: payload.oldVisitValue }).in('id', payload.freezeJobIds)
+        if (fErr) return { ok: false, error: `Couldn’t protect already-billed visits, so the price wasn’t raised: ${fErr.message}` }
       }
       const { error: qErr } = await supabase.from('quotes').update({ [payload.cadenceField]: payload.newPrice }).eq('id', payload.quoteId)
       if (qErr) return { ok: false, error: qErr.message }
-      if (payload.clearJobIds.length) await supabase.from('jobs').update({ price: null }).in('id', payload.clearJobIds)
+      // A failed clear means future visits keep billing the old rate — the raise silently
+      // doesn't apply, so it must not report ok.
+      if (payload.clearJobIds.length) {
+        const { error: cErr } = await supabase.from('jobs').update({ price: null }).in('id', payload.clearJobIds)
+        if (cErr) return { ok: false, error: `Price raised, but upcoming visits still bill the old rate: ${cErr.message}` }
+      }
       await recordPriceChange(supabase, { userId: user.id, jobId: payload.repJobId ?? payload.clearJobIds[0] ?? null, quoteId: payload.quoteId, scope: 'future', oldAmount: payload.oldVisitValue, newAmount: payload.newPrice, reason, changedByEmail: user.email })
       // Re-sync the draft invoices of BOTH the cleared (future) and frozen (past)
       // visits so jobs.price and invoice.amount can't drift apart (idempotent).
