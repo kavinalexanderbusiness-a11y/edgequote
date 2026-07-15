@@ -16,6 +16,7 @@ import { FilterPill } from '@/components/ui/FilterPill'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { formatCurrency, cn } from '@/lib/utils'
 import { TrendingUp, Check, X, Trophy, ArrowRight, Sparkles, AlertTriangle, RefreshCw, HelpCircle } from 'lucide-react'
+import { scrollBehavior } from '@/lib/motion'
 
 // Confidence is a quiet dot + label (same language as the Suggestions advisor);
 // the loud tinted pill is reserved for the churn-risk badge where alarm is the point.
@@ -91,7 +92,7 @@ export default function RevenueIntelligencePage() {
           // Tappable — opens + scrolls to the LTV forecast where the at-risk names live.
           return (
             <StatTile label="Revenue at churn risk" value={formatCurrency(atRisk)} sub="/yr — tap to see who" tone={atRisk > 0 ? 'danger' : undefined} tonedSurface={atRisk > 0}
-              onClick={() => { setShowForecast(true); setTimeout(() => document.getElementById('ltv-forecast')?.scrollIntoView({ behavior: 'smooth' }), 50) }} />
+              onClick={() => { setShowForecast(true); setTimeout(() => document.getElementById('ltv-forecast')?.scrollIntoView({ behavior: scrollBehavior() }), 50) }} />
           )
         })()}
       </div>

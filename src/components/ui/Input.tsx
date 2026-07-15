@@ -16,6 +16,10 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
     // breaking label↔input association); an explicit `id` still wins.
     const generatedId = useId()
     const inputId = id ?? generatedId
+    // Tie the error/hint text to the field so a screen reader reads it on focus,
+    // and mark an errored field invalid — otherwise the message is visual-only.
+    const errorId = `${inputId}-error`
+    const hintId = `${inputId}-hint`
     return (
       <div className="flex flex-col gap-1.5">
         {label && (
@@ -26,6 +30,8 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
         <input
           ref={ref}
           id={inputId}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? errorId : hint ? hintId : undefined}
           className={cn(
             'w-full bg-bg-tertiary border text-ink placeholder:text-ink-faint outline-none transition-all',
             fieldSize === 'sm' ? 'rounded-lg px-3 py-2 text-sm' : 'rounded-xl px-3.5 py-3 text-base sm:text-sm',
@@ -36,8 +42,8 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
           )}
           {...props}
         />
-        {error && <p className="text-xs text-red-400 animate-fade">{error}</p>}
-        {hint && !error && <p className="text-xs text-ink-faint animate-fade">{hint}</p>}
+        {error && <p id={errorId} className="text-xs text-red-400 animate-fade">{error}</p>}
+        {hint && !error && <p id={hintId} className="text-xs text-ink-faint animate-fade">{hint}</p>}
       </div>
     )
   }

@@ -18,6 +18,7 @@ import Link from 'next/link'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Plus, X, Upload, Archive, RotateCcw, Trash2 } from 'lucide-react'
+import { scrollBehavior } from '@/lib/motion'
 
 // Bound the archived DOM too — a long-lived company can accumulate hundreds of
 // churned customers; render a page's worth and note the rest.
@@ -209,7 +210,7 @@ export default function CustomersPage() {
   // The add/edit form renders inline at the top of the page. Editing from a row
   // deep in a long list would otherwise open it off-screen — bring it into view.
   function scrollToTop() {
-    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' })
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: scrollBehavior() })
   }
   function openAdd() { setEditing(null); setShowForm(true); scrollToTop() }
   function openEdit(c: Customer) { setEditing(c); setShowForm(false); scrollToTop() }

@@ -21,6 +21,7 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
+import { scrollBehavior } from '@/lib/motion'
 import {
   Download, Images, Loader2, Wand2, Tag, BadgeCheck, AlertTriangle,
   SlidersHorizontal, RefreshCw, Layers, ShieldCheck, ChevronDown, ChevronUp, Camera,
@@ -437,7 +438,7 @@ export function BeforeAfterStudio() {
   // Keep the selected pair scrolled into view (centered) in the gallery strip.
   useEffect(() => {
     const el = galleryRef.current?.querySelector(`[data-pair="${selectedJobId}"]`) as HTMLElement | null
-    el?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' })
+    el?.scrollIntoView({ behavior: scrollBehavior(), inline: 'center', block: 'nearest' })
   }, [selectedJobId])
 
   // ── Export ──────────────────────────────────────────────────────────────────

@@ -18,6 +18,7 @@ import { useForm } from 'react-hook-form'
 import { formatServicePrice, priceInputLabel, priceInputStep } from '@/lib/servicePricing'
 import { toast } from '@/lib/toast'
 import { Plus, Edit2, Trash2, X } from 'lucide-react'
+import { scrollBehavior } from '@/lib/motion'
 
 export default function ServiceTemplatesPage() {
   const { templates, loading, refresh } = useBusinessData()
@@ -41,7 +42,7 @@ export default function ServiceTemplatesPage() {
   // above the fold — so it looks like "nothing happened". Bring it into view
   // whenever it opens, and when switching which service is being edited.
   useEffect(() => {
-    if (showForm) formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    if (showForm) formRef.current?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' })
   }, [showForm, editing])
 
   function openNew() {

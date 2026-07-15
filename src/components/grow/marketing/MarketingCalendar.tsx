@@ -15,6 +15,7 @@ import { Skeleton } from '@/components/ui/Skeleton'
 import { cn } from '@/lib/utils'
 import { ChevronLeft, ChevronRight, CalendarDays, CalendarRange, Calendar as CalIcon, Sparkles, CalendarPlus, ListChecks, ExternalLink, Copy, Check, X, CheckCircle2, Clock, FileText, TriangleAlert, GripVertical, Star } from 'lucide-react'
 import type { ContentPiece, ContentStatus, MarketingChannel } from '@/lib/marketing/types'
+import { scrollBehavior } from '@/lib/motion'
 
 type View = 'month' | 'week' | 'day'
 
@@ -92,7 +93,7 @@ export function MarketingCalendar({ userId, aiEnabled, openPlan }: { userId: str
   // On mobile the detail panel stacks below the grid — bring it into view when a chip
   // is tapped so the tap gives a visible response instead of silently changing off-screen.
   useEffect(() => {
-    if (selected) detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    if (selected) detailRef.current?.scrollIntoView({ behavior: scrollBehavior(), block: 'nearest' })
   }, [selected?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Bucket pieces by day.
