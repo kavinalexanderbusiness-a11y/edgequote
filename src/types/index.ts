@@ -783,6 +783,10 @@ export interface BusinessSettings {
   id: string
   created_at: string
   updated_at: string
+  // Trade/vertical key (registry: src/lib/trades). Selects seed data and default
+  // copy ONLY — engines never branch on it. Optional because rows predate the
+  // column in older local snapshots; the DB default is 'lawn_landscaping'.
+  business_type?: string
   company_name: string
   owner_name: string | null
   phone: string | null
