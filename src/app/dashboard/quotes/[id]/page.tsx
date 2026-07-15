@@ -18,12 +18,13 @@ import { SkeletonRows } from '@/components/ui/Skeleton'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { formatCurrency, formatDate, applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
 import { nextInvoiceNumber } from '@/lib/invoicing'
+import { isQuoteExpired, isExpiringSoon, daysUntilExpiry, defaultValidUntil, DEFAULT_QUOTE_VALID_DAYS } from '@/lib/quoteStatus'
 import { toast } from '@/lib/toast'
 import { addDays, format as formatDfn, parseISO } from 'date-fns'
 import { needsFollowUp, daysSince, logFollowUpPatch, markWonPatch } from '@/lib/followup'
 import { scheduleQuoteAsJob } from '@/lib/scheduleQuote'
 import { ensureCustomerAndProperty } from '@/lib/customers'
-import { Edit2, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Send, Camera, Globe } from 'lucide-react'
+import { Edit2, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Send, Camera, Globe, CalendarClock } from 'lucide-react'
 
 export default function QuoteDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -41,6 +42,7 @@ export default function QuoteDetailPage() {
   const [scheduling, setScheduling] = useState(false)
   const [converting, setConverting] = useState(false)
   const [duplicating, setDuplicating] = useState(false)
+  const [extending, setExtending] = useState(false)
   const [showMessage, setShowMessage] = useState(false)
   const [savedCustomerMsg, setSavedCustomerMsg] = useState<string | null>(null)
   const [dupMsg, setDupMsg] = useState<string | null>(null)
@@ -241,6 +243,21 @@ export default function QuoteDetailPage() {
     }
   }
 
+  // Extending is the honest counterpart to expiry: the owner decides the old price
+  // still stands, and the quote re-enters the follow-up queue by itself (the cron
+  // reads the same lib/quoteStatus overlay). Dated from TODAY, not from the lapsed
+  // date, so "extend 30 days" means 30 days from now.
+  async function extendValidity(days: number) {
+    if (!quote) return
+    setExtending(true)
+    const validUntil = defaultValidUntil(localTodayISO(), days)
+    const { error } = await supabase.from('quotes').update({ valid_until: validUntil }).eq('id', quote.id)
+    setExtending(false)
+    if (error) { toast.error('Could not extend the quote: ' + error.message); return }
+    setQuote({ ...quote, valid_until: validUntil })
+    toast.success(`${quote.quote_number} now stands until ${formatDate(validUntil)}.`)
+  }
+
   // One tap to "send": hand the PDF to the device AND mark the quote sent
   // (stamping sent_at arms the follow-up clock) — instead of two separate steps.
   async function handleSendQuote() {
@@ -249,9 +266,13 @@ export default function QuoteDetailPage() {
     if (!delivered) return   // PDF failed → never claim (or record) that it was sent
     if (quote.status === 'draft') {
       const nowIso = new Date().toISOString()
+      // Expiry starts the moment it goes out, and only if the owner hasn't already
+      // set a date — never silently overwrite a deliberate one.
+      const validUntil = quote.valid_until ?? defaultValidUntil(localTodayISO())
       await supabase.from('quotes').update({ status: 'sent' }).eq('id', quote.id)
       await supabase.from('quotes').update({ sent_at: nowIso }).eq('id', quote.id).is('sent_at', null)
-      setQuote({ ...quote, status: 'sent', sent_at: quote.sent_at ?? nowIso })
+      await supabase.from('quotes').update({ valid_until: validUntil }).eq('id', quote.id).is('valid_until', null)
+      setQuote({ ...quote, status: 'sent', sent_at: quote.sent_at ?? nowIso, valid_until: validUntil })
       // Be honest about what just happened: the PDF is on YOUR device, and the
       // customer still hasn't heard from you.
       toast(`${quote.quote_number} marked as sent — the PDF is on your device. The customer hasn’t been messaged yet.`, {
@@ -648,6 +669,30 @@ export default function QuoteDetailPage() {
           leaves "accepted"), so the next step is never lost by dismissing a prompt.
           Rendered ABOVE the send card: once the customer approved, scheduling is
           the next step — not re-sending the quote. */}
+      {/* Expiry — the price, not just the paperwork. An expired quote is honoured
+          only if the owner chooses to; the automatic chaser has already stopped. */}
+      {isQuoteExpired(quote, localTodayISO()) && (
+        <Banner tone="warn" icon={CalendarClock}>
+          <span className="flex items-center justify-between gap-3 flex-wrap w-full">
+            <span>
+              This quote expired on <span className="font-semibold">{formatDate(quote.valid_until!)}</span> — follow-ups have stopped. Extend it if you&rsquo;ll still honour the price.
+            </span>
+            <Button size="sm" variant="secondary" type="button" loading={extending}
+              onClick={() => extendValidity(DEFAULT_QUOTE_VALID_DAYS)}>
+              Extend {DEFAULT_QUOTE_VALID_DAYS} days
+            </Button>
+          </span>
+        </Banner>
+      )}
+      {isExpiringSoon(quote, localTodayISO()) && (
+        <Banner tone="warn" icon={CalendarClock}>
+          {(() => {
+            const d = daysUntilExpiry(quote, localTodayISO())!
+            return `This quote ${d === 0 ? 'expires today' : `expires in ${d} day${d !== 1 ? 's' : ''}`} (${formatDate(quote.valid_until!)}) — worth a nudge while it still stands.`
+          })()}
+        </Banner>
+      )}
+
       {quote.status === 'accepted' && (
         <div className="flex items-center justify-between flex-wrap gap-3 text-sm bg-accent/10 border border-accent/20 rounded-xl px-4 py-3">
           <span className="text-ink font-medium flex items-center gap-2">

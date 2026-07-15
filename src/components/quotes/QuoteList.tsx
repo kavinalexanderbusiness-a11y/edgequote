@@ -8,6 +8,7 @@ import { hoverIntent } from '@/lib/prefetch'
 import { Quote, QuoteStatus } from '@/types'
 import { formatCurrency, formatDate, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
 import { needsFollowUp, daysSince, compareFollowUp } from '@/lib/followup'
+import { isQuoteExpired } from '@/lib/quoteStatus'
 import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -301,8 +302,16 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
                         shown as "Sent Xd ago · follow up" under the customer name. */}
                     <td className="px-3 sm:px-5 py-3.5 font-mono text-xs text-ink-muted hidden sm:table-cell">
                       <span className="flex items-center gap-1.5">
-                        {needsFollowUp(q) && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" title="Needs follow-up" />}
+                        {/* An expired quote is NOT a follow-up: the automatic chaser
+                            has stopped on it, so the dot would promise work the app
+                            has already abandoned. Show why instead. */}
+                        {needsFollowUp(q) && !isQuoteExpired(q, localTodayISO()) && (
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" title="Needs follow-up" />
+                        )}
                         {q.quote_number}
+                        {isQuoteExpired(q, localTodayISO()) && (
+                          <span className="text-[9px] font-semibold uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1 py-0.5 shrink-0" title={`Expired ${formatDate(q.valid_until!)}`}>Expired</span>
+                        )}
                       </span>
                     </td>
                     <td className="px-3 sm:px-5 py-3.5 font-medium text-ink">

@@ -5,6 +5,7 @@ import { dueForAutoFollowUp, needsFollowUp, quoteIsQuiet, resolveFollowUpPolicy,
 import { dueForAutoReminder, resolveReminderPolicy, remindersExhausted, reminderAnchor, REMINDER_DELAY_DAYS, REMINDER_MAX } from '@/lib/payments/dunning'
 import { displayInvoiceStatus, invoiceBalance } from '@/lib/payments/ledger'
 import { resolveAutomations } from '@/lib/comms/automations'
+import { displayQuoteStatus, isQuoteExpired, isExpiringSoon, daysUntilExpiry, defaultValidUntil } from '@/lib/quoteStatus'
 import { prefAllows, msgCategory } from '@/lib/comms/templates'
 import { dispatchToCustomer } from '@/lib/comms/dispatch'
 import type { Quote } from '@/types'
@@ -205,6 +206,29 @@ H('16. PAYMENT IMMEDIATELY AFTER CLAIM — the residual window')
   check('window', 't2: a re-check WOULD catch it (basis for a pre-send guard)', dueForAutoReminder(paidAfterClaim, FEES, TODAY, RP), false)
   // And the claim itself is not repeatable, so the next run stays quiet.
   check('window', 't3: next cron run does not re-chase', dueForAutoReminder(paidAfterClaim, FEES, TODAY, RP), false)
+}
+
+H('17. QUOTE EXPIRY — only a live quote expires, and expiry stops the chaser')
+{
+  const eq = (over: Partial<Quote> & { valid_until?: string | null }) => quote(over) as Quote & { valid_until?: string | null }
+  check('expiry', 'sent + past valid_until → expired', displayQuoteStatus(eq({ valid_until: dateNDaysAgo(1) }), TODAY), 'expired')
+  check('expiry', 'sent + valid_until today → still valid (last day)', displayQuoteStatus(eq({ valid_until: TODAY }), TODAY), 'sent')
+  check('expiry', 'sent + future valid_until → sent', displayQuoteStatus(eq({ valid_until: dateNDaysAgo(-5) }), TODAY), 'sent')
+  check('expiry', 'no valid_until → never expires (pre-existing quotes)', displayQuoteStatus(eq({ valid_until: null }), TODAY), 'sent')
+  // Only a live quote can expire — an "expired" badge on a won job is nonsense.
+  for (const s of ['accepted', 'declined', 'scheduled', 'completed', 'paid', 'draft'] as const) {
+    check('expiry', `status='${s}' + past date → NOT expired`, isQuoteExpired(eq({ status: s, valid_until: dateNDaysAgo(30) }), TODAY), false)
+  }
+  check('expiry', 'daysUntilExpiry: 5 days out', daysUntilExpiry(eq({ valid_until: dateNDaysAgo(-5) }), TODAY), 5)
+  check('expiry', 'daysUntilExpiry: expired reads negative', daysUntilExpiry(eq({ valid_until: dateNDaysAgo(3) }), TODAY), -3)
+  check('expiry', 'expiring soon at 5 days', isExpiringSoon(eq({ valid_until: dateNDaysAgo(-5) }), TODAY), true)
+  check('expiry', 'NOT "soon" at 6 days', isExpiringSoon(eq({ valid_until: dateNDaysAgo(-6) }), TODAY), false)
+  check('expiry', 'already expired is not "expiring soon"', isExpiringSoon(eq({ valid_until: dateNDaysAgo(1) }), TODAY), false)
+  check('expiry', 'defaultValidUntil is 30 days out', defaultValidUntil(TODAY), dateNDaysAgo(-30))
+  // The chaser and the list must agree: expiry is what stops the follow-up.
+  const expired = eq({ sent_at: isoNDaysAgo(20), valid_until: dateNDaysAgo(1), follow_up_count: 0 })
+  check('expiry', 'engine still calls it stale (staleness != expiry)', dueForAutoFollowUp(expired, P), true)
+  check('expiry', '➜ but the cron skips it on isQuoteExpired', isQuoteExpired(expired, TODAY), true)
 }
 
 H('14. OPT-OUT — dispatchToCustomer skips (no network: these must not send)')

@@ -7,6 +7,8 @@ import { logDispatch, logSend } from '@/lib/comms/log'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { resolveAutomations, Automations } from '@/lib/comms/automations'
 import { dueForAutoFollowUp, compareFollowUp, resolveFollowUpPolicy, type FollowUpPolicy } from '@/lib/followup'
+import { isQuoteExpired } from '@/lib/quoteStatus'
+import { localTodayISO } from '@/lib/utils'
 import type { Quote } from '@/types'
 
 export const dynamic = 'force-dynamic'
@@ -28,16 +30,16 @@ export const dynamic = 'force-dynamic'
 //   accepted / declined / scheduled / completed / paid → status leaves 'sent',
 //     which needsFollowUp already treats as terminal.
 //   invoiced  → an invoice row references the quote (checked below).
+//   expired   → past its valid_until (lib/quoteStatus, the same overlay the list
+//               and the detail page show). Chasing a price you will not honour is
+//               worse than silence.
 //   exhausted → follow_up_count reached the owner's maximum.
-// NOTE: quotes have no expiry column or 'expired' status in this schema, so
-// there is nothing to read for it — the maximum count is what bounds a chase
-// (delayDays × maxCount after sending, then silence).
 
 interface FollowUpCustomer {
   name: string; phone: string | null; email: string | null
   sms_opt_in: boolean; email_opt_in: boolean; message_prefs?: MessagePrefs | null
 }
-type FollowUpQuote = Pick<Quote, 'id' | 'user_id' | 'customer_id' | 'quote_number' | 'total' | 'status' | 'sent_at' | 'last_followed_up_at' | 'follow_up_count'>
+type FollowUpQuote = Pick<Quote, 'id' | 'user_id' | 'customer_id' | 'quote_number' | 'total' | 'status' | 'sent_at' | 'valid_until' | 'last_followed_up_at' | 'follow_up_count'>
   & { customers: FollowUpCustomer | null }
 
 export async function GET(req: NextRequest) {
@@ -54,9 +56,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: true, skipped: true, note: 'Set SUPABASE_SERVICE_ROLE_KEY to enable scheduled sends.' })
   }
   const supabase = createClient(url, svc)
+  const today = localTodayISO()
 
   // Only quotes still awaiting an answer can be chased at all.
-  const sel = 'id, user_id, customer_id, quote_number, total, status, sent_at, last_followed_up_at, follow_up_count, customers(name, phone, email, sms_opt_in, email_opt_in, message_prefs)'
+  const sel = 'id, user_id, customer_id, quote_number, total, status, sent_at, valid_until, last_followed_up_at, follow_up_count, customers(name, phone, email, sms_opt_in, email_opt_in, message_prefs)'
   const { data: rows } = await supabase.from('quotes').select(sel).eq('status', 'sent')
   const quotes = ((rows as unknown as FollowUpQuote[]) || []).filter(q => q.customer_id && q.customers)
   if (quotes.length === 0) return NextResponse.json({ ok: true, chased: 0, sent: 0, skipped: 0, failed: 0 })
@@ -87,6 +90,7 @@ export async function GET(req: NextRequest) {
   // always chases the stalest money first.
   for (const q of [...quotes].sort((a, b) => compareFollowUp(a as unknown as Quote, b as unknown as Quote))) {
     if (invoiced.has(q.id)) continue
+    if (isQuoteExpired(q, today)) continue   // ONE expiry engine — never chase a price we won't honour
     const info = await bizInfo(q.user_id)
     if (!info.automations.quote_followup) continue                        // owner hasn't switched it on
     if (!dueForAutoFollowUp(q as unknown as Quote, info.policy)) continue  // ONE engine decides staleness + cap
