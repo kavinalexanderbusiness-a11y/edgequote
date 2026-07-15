@@ -37,10 +37,24 @@ export function registerOfflineHandlers(): void {
   // P2 + P3 — Customer notes AND profile edits are the same mutation: a patch on
   // customers. One handler covers name/phone/email/address/notes — no per-field queue.
   registerHandler('customer.update', async (payload) => {
-    const p = payload as { id: string; patch: Record<string, unknown> }
+    const p = payload as {
+      id: string; patch: Record<string, unknown>
+      /** Editing a customer's address ALSO moves their primary property (see below). */
+      primaryProperty?: Record<string, unknown>
+    }
     const supabase = createClient()
     const { error } = await supabase.from('customers').update(p.patch).eq('id', p.id)
     if (error) throw new Error(error.message)
+    // The address lives in two places: on the customer AND on their primary property
+    // (which is what the schedule, routing and measurements actually read). The edit
+    // form writes both, so a replay that only patched the customer would leave the
+    // crew driving to the OLD address — a patch that arrives without its follow-up
+    // isn't the same mutation, just a piece of one. Same rule as job.complete.
+    if (p.primaryProperty) {
+      const { error: propErr } = await supabase.from('properties')
+        .update(p.primaryProperty).eq('customer_id', p.id).eq('is_primary', true)
+      if (propErr) throw new Error(propErr.message)
+    }
   })
 
   // P4 — Quote edits/status. A patch on quotes (same shape as customer.update).
