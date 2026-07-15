@@ -42,6 +42,10 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
   const [sendingReceipt, setSendingReceipt] = useState<string | null>(null)
   // Per-row busy state for the PERMANENT ledger list (receipt download / revert).
   const [rowBusy, setRowBusy] = useState<string | null>(null)
+  // Refunding money already collected (distinct from the overpayment resolver
+  // below, which only exists when they paid MORE than the invoice).
+  const [refundOpen, setRefundOpen] = useState(false)
+  const [refundAmount, setRefundAmount] = useState('')
 
   // Revert = remove the ledger row through the engine; the trigger re-derives the
   // invoice (paid → partial/unpaid) naturally. Undo re-inserts the same row.
@@ -71,13 +75,14 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
   }
 
   const applyable = Math.min(credit, balance)
-  // How the overpayment actually arrived. A cash/e-transfer overpayment must never be
-  // sent to Stripe (no charge exists there), and "Record refund" must never imply the
-  // app moved the money — it only records money the owner moved.
+  // How the money actually arrived. A cash/e-transfer payment must never be sent to
+  // Stripe (no charge exists there), and "Record refund" must never imply the app
+  // moved the money — it only records money the owner moved. Shared by the refund
+  // form and the overpayment resolver, so both tell the same story about the money.
   const lastMoneyIn = [...payments]
     .filter(p => p.kind !== 'credit' && Number(p.amount) > 0)
     .sort((a, b) => String(b.paid_at || b.created_at).localeCompare(String(a.paid_at || a.created_at)))[0]
-  const overpaidViaCard = !!lastMoneyIn && (lastMoneyIn.provider === 'stripe' || lastMoneyIn.method === 'card')
+  const refundViaCard = !!lastMoneyIn && (lastMoneyIn.provider === 'stripe' || lastMoneyIn.method === 'card')
 
   async function save() {
     setBusy(true)
@@ -235,6 +240,53 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
         </div>
       )}
 
+      {/* Refund money already collected. The ledger has recordRefund and the whole
+          downstream (refund receipt PDF, netted totals, the portal's "Refunded"
+          row) already handles negatives — but the only way in was the overpayment
+          resolver below, which needs the customer to have OVERpaid. So an owner who
+          refunded $50 of a normal $150 payment had no truthful way to record it:
+          their only option was Revert, which deletes the row and claims the payment
+          never happened. This is the missing door, not a second engine. */}
+      {paid > 0 && overpaid <= 0 && (
+        refundOpen ? (
+          <div className="rounded-lg border border-border bg-bg-tertiary/50 p-2.5 space-y-2">
+            <label className="block text-[11px] font-semibold text-ink-muted">
+              Refund amount
+              <div className="relative mt-1">
+                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-faint text-sm" aria-hidden="true">$</span>
+                <input type="number" min="0" step="0.01" max={paid} value={refundAmount} autoFocus
+                  onChange={e => setRefundAmount(e.target.value)}
+                  aria-label="Refund amount"
+                  className="w-full bg-bg-tertiary border border-border-strong rounded-lg pl-6 pr-2 py-2 text-base sm:text-sm font-normal text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+              </div>
+            </label>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button size="sm" loading={busy} disabled={!(Number(refundAmount) > 0) || Number(refundAmount) > paid}
+                title={!(Number(refundAmount) > 0) ? 'Enter a refund amount.' : Number(refundAmount) > paid ? `You can’t refund more than the ${formatCurrency(paid)} collected.` : undefined}
+                onClick={() => run(
+                  () => recordRefund(supabase, { userId: uid, invoice, amount: Number(refundAmount) }),
+                  `Refund of ${formatCurrency(Number(refundAmount) || 0)} recorded.`,
+                ).then(() => { setRefundOpen(false); setRefundAmount('') })}>
+                <Banknote className="w-3.5 h-3.5" /> Record refund
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => { setRefundOpen(false); setRefundAmount('') }}>Cancel</Button>
+              {Number(refundAmount) > paid && <span className="text-[10px] text-amber-400">Only {formatCurrency(paid)} was collected.</span>}
+            </div>
+            {/* Never imply we moved money — we didn't. */}
+            <p className="text-[10px] text-ink-faint">
+              {refundViaCard
+                ? 'Card refunds are issued in your Stripe dashboard; this records it so your balances stay correct.'
+                : 'Recording a refund doesn’t move any money — return it the way it came in, then record it here so your balances stay correct.'}
+            </p>
+          </div>
+        ) : (
+          <button type="button" onClick={() => { setRefundOpen(true); setRefundAmount('') }}
+            className="text-[11px] font-medium text-ink-faint hover:text-ink rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 inline-flex items-center gap-1">
+            <Banknote className="w-3 h-3" /> Record a refund
+          </button>
+        )
+      )}
+
       {/* Overpayment resolver */}
       {overpaid > 0 && (
         <div className="rounded-lg border border-violet-500/30 bg-violet-500/[0.06] p-2.5 space-y-2">
@@ -250,7 +302,7 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
               <TrendingUp className="w-3.5 h-3.5" /> Raise total
             </Button>
           </div>
-          <p className="text-[10px] text-ink-faint">{overpaidViaCard
+          <p className="text-[10px] text-ink-faint">{refundViaCard
             ? 'Card refunds are issued in your Stripe dashboard; this records it so your balances stay correct.'
             : `Recording a refund doesn’t move any money — return the ${formatCurrency(overpaid)} the way it came in, then record it here so your balances stay correct.`}</p>
         </div>
