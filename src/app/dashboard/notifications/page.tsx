@@ -6,7 +6,6 @@ import { formatDistanceToNow } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from '@/lib/toast'
 import { AppNotification } from '@/components/notifications/NotificationBell'
-import { MorningBriefing } from '@/components/notifications/MorningBriefing'
 import { groupNotifications, notificationActionLabel, type NotifGroup } from '@/lib/notifications'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
@@ -152,7 +151,8 @@ export default function NotificationsPage() {
           </div>
         ) : undefined} />
 
-      <MorningBriefing />
+      {/* The morning briefing that used to sit here now IS the dashboard (money,
+          weather, priorities) — one morning digest, not two competing ones. */}
 
       {loadError && (
         <Banner tone="danger">

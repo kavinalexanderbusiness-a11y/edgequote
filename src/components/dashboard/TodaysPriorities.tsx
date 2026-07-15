@@ -5,14 +5,16 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency, localTodayISO } from '@/lib/utils'
 import { needsFollowUp } from '@/lib/followup'
-import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
 import { invoiceBalance } from '@/lib/payments/ledger'
+import { computeReactivation, type RQuote, type RJob, type RRecurrence } from '@/lib/reactivation'
+import { loadLeadsNeedingResponse, type LeadResponseReport } from '@/lib/leadResponse'
+import { settingsToSeasons } from '@/lib/seasons'
 import type { Quote } from '@/types'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
 import {
   ListChecks, CheckCircle2, ArrowRight,
-  DollarSign, FileText, Bell, CalendarPlus, AlertTriangle, MessageSquare, Repeat,
+  DollarSign, FileText, Bell, CalendarPlus, AlertTriangle, MessageSquare, Repeat, UserPlus, HeartPulse,
 } from 'lucide-react'
 
 // ONE ranked queue of the highest-value things to do right now, distilled from the
@@ -31,7 +33,6 @@ interface Priority {
   score: number           // urgency × value — higher sorts first
 }
 
-interface JobLite { quote_id: string | null; customer_id: string | null; status: string; scheduled_date: string; recurrence_id: string | null; price: number | null }
 interface InvoiceLite { amount: number; status: string; amount_paid?: number; discount_type: 'amount' | 'percent' | null; discount_value: number | null }
 
 export function TodaysPriorities() {
@@ -48,26 +49,35 @@ export function TodaysPriorities() {
       if (!user) { setLoading(false); return }
       const today = localTodayISO()
 
-      const [qRes, iRes, jRes, rRes, cRes, sRes] = await Promise.all([
+      const [qRes, iRes, jRes, rRes, cRes, sRes, custRes, leads] = await Promise.all([
         // Quotes drive follow-ups + accepted-not-scheduled (reuse those exact signals).
         supabase.from('quotes').select('*').eq('user_id', user.id),
         supabase.from('invoices').select('amount, status, amount_paid, discount_type, discount_value').eq('user_id', user.id),
-        supabase.from('jobs').select('quote_id, customer_id, status, scheduled_date, recurrence_id, price').eq('user_id', user.id),
+        // service_type is required by the reactivation engine's season gate.
+        supabase.from('jobs').select('quote_id, customer_id, status, scheduled_date, recurrence_id, price, service_type').eq('user_id', user.id),
         supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user.id),
         // Unread conversations — same source as the Messages inbox.
         supabase.from('conversations').select('unread').eq('user_id', user.id).is('archived_at', null).gt('unread', 0),
         // GST — so the owed figure below agrees with the Invoices page and the
-        // Outstanding stat (both are ledger-derived, GST-inclusive).
-        supabase.from('business_settings').select('gst_percent').eq('user_id', user.id).maybeSingle(),
+        // Outstanding stat (both are ledger-derived, GST-inclusive). service_seasons
+        // feeds the reactivation engine's off-season suppression.
+        supabase.from('business_settings').select('gst_percent, service_seasons').eq('user_id', user.id).maybeSingle(),
+        // Ids only — the reactivation engine is generic, and this row needs counts,
+        // not customer records. Archived customers are never re-engagement targets.
+        supabase.from('customers').select('id').eq('user_id', user.id).is('archived_at', null),
+        loadLeadsNeedingResponse(supabase),
       ])
 
       const quotes = (qRes.data as Quote[]) || []
       const invoices = (iRes.data as InvoiceLite[]) || []
-      const jobs = (jRes.data as JobLite[]) || []
-      const recById: Record<string, { freq: string | null; interval_unit: string | null; interval_count: number | null }> = {}
-      for (const r of (rRes.data as { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null }[]) || []) recById[r.id] = r
+      const jobs = (jRes.data as RJob[]) || []
+      const recById: Record<string, RRecurrence> = {}
+      for (const r of (rRes.data as RRecurrence[]) || []) recById[r.id] = r
       const conversations = (cRes.data as { unread: number }[]) || []
-      const feeSettings = sRes.data as { gst_percent: number | null } | null
+      const settingsRow = sRes.data as { gst_percent: number | null; service_seasons: unknown } | null
+      const feeSettings = settingsRow
+      const seasons = settingsToSeasons(settingsRow?.service_seasons)
+      const customers = (custRes.data as { id: string }[]) || []
 
       const next: Priority[] = []
 
@@ -133,29 +143,54 @@ export function TodaysPriorities() {
         })
       }
 
-      // 6) Recurring series ran out — a recurring customer with no upcoming visit
-      //    booked. Per-visit value at stake (same valuation engine as Reactivation).
-      const futureByCust = new Set(
-        jobs.filter(j => j.customer_id && j.scheduled_date >= today && (j.status === 'scheduled' || j.status === 'in_progress'))
-          .map(j => j.customer_id),
-      )
-      const ranOutCusts = new Set<string>()
-      let ranOutValue = 0
-      for (const j of jobs) {
-        if (!j.recurrence_id || !j.customer_id) continue
-        if (futureByCust.has(j.customer_id)) continue
-        if (j.scheduled_date > today) continue // a future-dated visit means it isn't dry
-        if (ranOutCusts.has(j.customer_id)) continue // first (most recent enough) hit per customer
-        ranOutCusts.add(j.customer_id)
-        const rec = j.recurrence_id ? recById[j.recurrence_id] : null
-        const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
-        ranOutValue += Math.round(jobVisitValue(j.price, null, freq))
-      }
-      if (ranOutCusts.size > 0) {
+      // 6) Recurring series ran out — via THE reactivation engine (lib/reactivation),
+      //    the same one the Reactivation page renders, so this row's count can never
+      //    disagree with the page it links to. (It used to re-derive "ran out" here
+      //    with no season gate and no cadence window, which quietly overcounted.)
+      //    The pure core is fed the rows already loaded above — no second fetch.
+      const react = computeReactivation({
+        customers, jobs, quotes: quotes as unknown as RQuote[], recById, seasons, today,
+      })
+      const ranOutValue = react.ranOuts.reduce((s, r) => s + r.perVisit, 0)
+      if (react.ranOuts.length > 0) {
         next.push({
           key: 'reactivation', icon: Repeat, tone: 'text-accent-text bg-accent/10 border-accent/20',
-          label: 'Re-book recurring customers', detail: ranOutValue > 0 ? `${ranOutCusts.size} · ${formatCurrency(ranOutValue)}/visit` : `${ranOutCusts.size} customer${ranOutCusts.size !== 1 ? 's' : ''}`,
+          label: 'Re-book recurring customers', detail: ranOutValue > 0 ? `${react.ranOuts.length} · ${formatCurrency(ranOutValue)}/visit` : `${react.ranOuts.length} customer${react.ranOuts.length !== 1 ? 's' : ''}`,
           href: '/dashboard/reactivation', score: 40_000 + ranOutValue,
+        })
+      }
+
+      // 6b) Lapsed customers — the slower half of the same engine. Only surfaces
+      //     when there's no urgent re-book queue competing for the same click.
+      if (react.risks.length > 0 && react.ranOuts.length === 0) {
+        const recover = react.risks.reduce((s, r) => s + r.potentialRecovery, 0)
+        next.push({
+          key: 'lapsed', icon: HeartPulse, tone: 'text-violet-400 bg-violet-500/10 border-violet-500/20',
+          label: 'Win back lapsed customers', detail: `${react.risks.length} · ${formatCurrency(recover)} recoverable`,
+          href: '/dashboard/reactivation', score: 20_000 + recover,
+        })
+      }
+
+      // 7) Leads waiting on a reply — a new customer is the most perishable thing
+      //    on this list: website form, an unanswered inbound, or an online booking
+      //    (which creates NO lead record, only a draft quote — invisible until now).
+      if (leads.total > 0) {
+        const parts = [
+          leads.bySource.website ? `${leads.bySource.website} website` : null,
+          leads.bySource.booking ? `${leads.bySource.booking} booking` : null,
+          leads.bySource.reply ? `${leads.bySource.reply} awaiting reply` : null,
+        ].filter(Boolean).join(' · ')
+        const stale = leads.oldestHours != null && leads.oldestHours >= 24
+        next.push({
+          key: 'leads', icon: UserPlus,
+          tone: stale ? 'text-red-400 bg-red-500/10 border-red-500/20' : 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20',
+          label: leads.total === 1 ? 'Respond to a new lead' : 'Respond to new leads',
+          detail: leads.oldestHours != null && leads.oldestHours >= 1
+            ? `${parts} · oldest ${leads.oldestHours >= 48 ? `${Math.floor(leads.oldestHours / 24)}d` : `${leads.oldestHours}h`}`
+            : parts,
+          href: leads.items[0]?.href || '/dashboard/messages',
+          // Above follow-ups: an unworked lead goes cold fastest. Ages up as it waits.
+          score: 90_000 + Math.min(leads.oldestHours ?? 0, 72) * 100,
         })
       }
 

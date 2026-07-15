@@ -1,3 +1,4 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type { createClient } from '@/lib/supabase/client'
 import type { Invoice, InvoiceDisplayStatus } from '@/types'
 import { invoiceTotals, type FeeSettings, type DiscountInput } from '@/lib/invoiceTotals'
@@ -120,6 +121,51 @@ export async function restorePayment(sb: Supa, payment: import('@/types').Paymen
 export async function availableCredit(sb: Supa, customerId: string): Promise<number> {
   const { data } = await sb.from('payments').select('amount').eq('customer_id', customerId).eq('kind', 'credit')
   return round2(((data as { amount: number }[]) || []).reduce((s, r) => s + Number(r.amount || 0), 0))
+}
+
+// Local-midnight ISO bounds for a yyyy-MM-dd day — the mirror of dateToIso's
+// local-day convention, so a payment the owner dated "today" lands in today.
+export function dayBoundsIso(dateISO: string): { start: string; end: string } {
+  const start = new Date(`${dateISO}T00:00:00`)
+  const end = new Date(start.getTime())
+  end.setDate(end.getDate() + 1)
+  return { start: start.toISOString(), end: end.toISOString() }
+}
+
+// ── Money actually received in a window ──────────────────────────────────────
+// THE date-range cash figure (today / this week / any span). It must read the
+// `payments` rows, NOT invoices.amount_paid: that column is a trigger rollup with
+// the time dimension collapsed, so it can answer "how much in total" but never
+// "how much today". Summed over all time this agrees exactly with the dashboard's
+// lifetime Collected — same rows, same trigger source.
+//
+// The sum is SIGNED on purpose: a refund is stored as a negative kind='payment'
+// row (recordRefund), so refunds net themselves out with no special handling.
+// `kind='credit'` rows are excluded because applying credit writes BOTH a +payment
+// and a −credit for one event — counting the credit leg would double-count.
+//
+// includeCreditApplications=false (the default) also drops the +payment leg of
+// applyCreditToInvoice (provider='credit'): settling an invoice from credit the
+// customer already paid earlier is not new cash arriving today.
+// Typed against the generic SupabaseClient (like lib/crm/radar) so the SERVER
+// dashboard can call it too — the money lands in the first paint, no spinner.
+export async function collectedBetween(sb: SupabaseClient, p: {
+  userId: string; startIso: string; endIso: string; includeCreditApplications?: boolean
+}): Promise<{ total: number; count: number }> {
+  const { data } = await sb.from('payments')
+    .select('amount, provider')
+    .eq('user_id', p.userId)
+    .eq('kind', 'payment')
+    .eq('status', 'paid')
+    .gte('paid_at', p.startIso)
+    .lt('paid_at', p.endIso)
+  const rows = ((data as { amount: number; provider: string | null }[]) || [])
+    .filter(r => p.includeCreditApplications || r.provider !== 'credit')
+  return {
+    total: round2(rows.reduce((s, r) => s + (Number(r.amount) || 0), 0)),
+    // Money-in events only — a refund shouldn't read as "1 payment today".
+    count: rows.filter(r => (Number(r.amount) || 0) > 0).length,
+  }
 }
 
 // Apply available credit to an invoice (double-entry): a +payment toward the invoice
