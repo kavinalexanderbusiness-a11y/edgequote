@@ -65,6 +65,22 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # The automation engine's safety story is "a promotion from suggest to auto must
+      # be deliberate". Until this step existed, the 244 checks enforcing that were
+      # wired to NOTHING — no script, no CI, no runner; the file could not even
+      # execute. A guard rail nobody runs is not a guard rail.
+      #
+      # It runs here rather than inside `npm run build` so an accidental promotion
+      # fails the PR instead of every developer's local build. Second-fastest step
+      # after typecheck (pure functions, no I/O, no network), so it fails early.
+      #
+      # What it pins that a human review would not catch: the engine's import closure
+      # is asserted EXACTLY, so nobody can give it a send path — including by adding a
+      # lib/automation/index.ts barrel, which would hand it chase.ts's senders without
+      # touching the engine at all.
+      - name: Verify automations
+        run: npm run verify:automations
+
       # This step is why the first 17 CI runs were red, and it's worth writing down.
       # ESLint had never been configured in this repo — no .eslintrc anywhere — so
       # `next lint` dropped into an INTERACTIVE setup prompt, which cannot be

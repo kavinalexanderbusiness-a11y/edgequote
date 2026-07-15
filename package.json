@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "verify:automations": "tsx scripts/verify-automations.ts",
-    "build": "npm run verify:automations && next build",
+    "build": "next build",
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit"
