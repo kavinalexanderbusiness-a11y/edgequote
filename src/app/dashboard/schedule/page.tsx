@@ -135,6 +135,19 @@ export default function SchedulePage() {
     if (isError) toast.error(msg)
     else toast.success(msg)
   }
+  // Completing a visit drafts an invoice on a page the owner isn't looking at. The
+  // three callsites that do it each announced it as an instruction — "review it in
+  // Invoices" — naming a document and leaving the owner to go find it, on the
+  // surface where money quietly waits to be sent. Quote conversion already
+  // announces the SAME event with a link (quotes/[id] → "View invoice"), and the
+  // invoices page already deep-links on ?invoice=. Same event, same shape, once.
+  function draftInvoiceToast(invoiceNumber: string | undefined, msg: string) {
+    if (!invoiceNumber) { toast.success(msg); return }   // nothing to link to
+    toast(msg, {
+      tone: 'success',
+      action: { label: 'Review it', run: () => router.push(`/dashboard/invoices?invoice=${encodeURIComponent(invoiceNumber)}`) },
+    })
+  }
   const [recurrenceLabels, setRecurrenceLabels] = useState<Record<string, string>>({})
   const [recurrences, setRecurrences] = useState<Record<string, JobRecurrence>>({})
   const [quotesById, setQuotesById] = useState<Record<string, QuoteLite>>({})
@@ -1040,7 +1053,7 @@ export default function SchedulePage() {
 
     if (values.status === 'completed' && job.status !== 'completed') {
       const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed' })
-      if (res.created) setBanner(`Draft invoice ${res.invoiceNumber} created from the completed job — review it in Invoices.`)
+      if (res.created) draftInvoiceToast(res.invoiceNumber, `Draft invoice ${res.invoiceNumber} created from the completed job.`)
       else if (res.reason === 'exists') setBanner('That job already has an invoice.')
       else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
     }
@@ -1334,7 +1347,7 @@ export default function SchedulePage() {
           const { error } = await supabase.from('jobs').update(patch).eq('id', job.id)
           if (error) throw new Error(error.message)
           const res = await createDraftInvoiceForCompletedJob(supabase, completed)
-          if (res.created) { invoiceCreated = true; setBanner(`Draft invoice ${res.invoiceNumber} created. Review in Invoices.`) }
+          if (res.created) { invoiceCreated = true; draftInvoiceToast(res.invoiceNumber, `Draft invoice ${res.invoiceNumber} created.`) }
           else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
           // A failed draft used to say NOTHING, which is indistinguishable from the success
           // banner you scrolled past — the visit leaves the un-invoiced queue and the money
@@ -1395,7 +1408,7 @@ export default function SchedulePage() {
           if (error) throw new Error(error.message)
           if (completing) {
             const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed' })
-            if (res.created) setBanner(`Saved — draft invoice ${res.invoiceNumber} created.`)
+            if (res.created) draftInvoiceToast(res.invoiceNumber, `Saved — draft invoice ${res.invoiceNumber} created.`)
             else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
             // The quick-edit dropdown completes a job through the same transition as the Complete
             // button, which DOES report this (completeJob below). Without it a failed draft leaves
