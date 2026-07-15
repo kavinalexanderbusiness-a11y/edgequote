@@ -6,8 +6,8 @@
  *  reactivation, customerHealth and revenueIntelligence. */
 export const VIP_LTV = 1500
 
-/** Days of silence before a sent quote is worth chasing again. */
-export const FOLLOW_UP_DAYS = 3
+// FOLLOW_UP_DAYS deliberately lives in lib/followup.ts, next to the chase policy
+// that clamps against it — not mirrored here. One home per rule.
 
 /** How far past its own cadence a series must drift before it reads as at-risk.
  *  `warn` and `high` were the 1.25 / 1.6 ratios repeated across four engines. */

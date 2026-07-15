@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
+import { toast } from '@/lib/toast'
 import { PHOTO_BUCKET } from '@/lib/photos'
 import { formatDate } from '@/lib/utils'
 import {
@@ -21,6 +22,7 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
+import { scrollBehavior } from '@/lib/motion'
 import {
   Download, Images, Loader2, Wand2, Tag, BadgeCheck, AlertTriangle,
   SlidersHorizontal, RefreshCw, Layers, ShieldCheck, ChevronDown, ChevronUp, Camera,
@@ -437,7 +439,7 @@ export function BeforeAfterStudio() {
   // Keep the selected pair scrolled into view (centered) in the gallery strip.
   useEffect(() => {
     const el = galleryRef.current?.querySelector(`[data-pair="${selectedJobId}"]`) as HTMLElement | null
-    el?.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' })
+    el?.scrollIntoView({ behavior: scrollBehavior(), inline: 'center', block: 'nearest' })
   }, [selectedJobId])
 
   // ── Export ──────────────────────────────────────────────────────────────────
@@ -587,7 +589,10 @@ export function BeforeAfterStudio() {
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
-      await supabase.from('marketing_assets').upsert({
+      // Supabase resolves on a failed write, so the catch below can't see one — this
+      // painted the "Used" badge regardless and the owner believed the asset was recorded
+      // in Marketing Studio. The export genuinely worked; the record may not exist.
+      const { error } = await supabase.from('marketing_assets').upsert({
         user_id: user.id,
         job_id: pair.jobId,
         customer_id: pair.job.customer_id,
@@ -601,6 +606,7 @@ export function BeforeAfterStudio() {
         best_after_photo_id: after.id,
         status,
       }, { onConflict: 'user_id,job_id' })
+      if (error) return
       setAssetStatus(prev => ({ ...prev, [pair.jobId]: status }))
     } catch { /* table absent / not migrated — export still succeeds */ }
   }, [supabase, consentSupported])
@@ -609,7 +615,12 @@ export function BeforeAfterStudio() {
   async function allowPhotos() {
     if (!selected?.job.customer_id) return
     const cid = selected.job.customer_id
-    await supabase.from('customers').update({ photo_marketing_consent: true, photo_marketing_consent_at: new Date().toISOString() }).eq('id', cid)
+    // Consent gates whether this customer's photos may be promoted to 'used'/publishable.
+    // Flipping the UI on an unverified write would let us market their property on the
+    // strength of a permission the database never recorded.
+    const { error } = await supabase.from('customers')
+      .update({ photo_marketing_consent: true, photo_marketing_consent_at: new Date().toISOString() }).eq('id', cid)
+    if (error) { toast.error('Could not save this customer’s photo permission — please try again.'); return }
     setPairs(prev => prev.map(p => p.job.customer_id === cid ? { ...p, context: { ...p.context, consent: true } } : p))
   }
 
@@ -677,7 +688,7 @@ export function BeforeAfterStudio() {
               On a completed visit, snap a <span className="text-amber-300 font-medium">Before</span> and an{' '}
               <span className="text-emerald-300 font-medium">After</span> photo — any completed job with both lands
               here, ready to turn into a branded post in one tap.
-              <Link href="/dashboard/schedule" className="flex items-center justify-center gap-1.5 mt-4 text-xs font-semibold text-accent hover:underline">
+              <Link href="/dashboard/schedule" className="flex items-center justify-center gap-1.5 mt-4 text-xs font-semibold text-accent-text hover:underline">
                 <CalendarDays className="w-3.5 h-3.5" /> Go to today’s jobs
               </Link>
             </>} />
@@ -740,11 +751,11 @@ export function BeforeAfterStudio() {
                     )}
                     <span className="text-xs font-medium text-ink truncate">{p.context.customerName || p.job.title}</span>
                   </span>
-                  <span className={`text-[10px] font-bold tabular-nums shrink-0 ${rank ? 'text-accent' : 'text-ink-faint'}`}>{score}</span>
+                  <span className={`text-[10px] font-bold tabular-nums shrink-0 ${rank ? 'text-accent-text' : 'text-ink-faint'}`}>{score}</span>
                 </div>
                 <p className="text-[10px] text-ink-faint truncate">{p.job.service_type || 'Service'} · {formatDate(p.job.completed_at || p.job.scheduled_date)}</p>
                 {assetStatus[p.jobId] === 'used' && (
-                  <span className="mt-1 inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent"><BookMarked className="w-3 h-3" /> Used</span>
+                  <span className="mt-1 inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent-text"><BookMarked className="w-3 h-3" /> Used</span>
                 )}
                 {rank?.rationale && <p className="text-[10px] text-ink-muted mt-1 line-clamp-2">{rank.rationale}</p>}
               </div>
@@ -777,7 +788,7 @@ export function BeforeAfterStudio() {
       {/* Property Intelligence — reused from the shared brain (never re-analysed). */}
       {pi && (pi.summary || (pi.detections || []).length > 0) && (
         <div className="rounded-xl border border-accent/20 bg-accent/[0.06] px-4 py-3 flex items-start gap-3">
-          <Brain className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+          <Brain className="w-4 h-4 text-accent-text shrink-0 mt-0.5" />
           <div className="min-w-0 text-xs">
             <span className="font-semibold text-ink">Property intelligence</span>
             {pi.summary && <span className="text-ink-muted"> — {pi.summary}</span>}
@@ -894,7 +905,7 @@ export function BeforeAfterStudio() {
                     )}
                     <FocusRow label="Before" focus={beforeFocus} onChange={setBeforeFocus} />
                     <FocusRow label="After" focus={afterFocus} onChange={setAfterFocus} />
-                    <button onClick={resetFraming} className={`text-[11px] text-accent hover:underline flex items-center gap-1 rounded ${FOCUS_RING}`}>
+                    <button onClick={resetFraming} className={`text-[11px] text-accent-text hover:underline flex items-center gap-1 rounded ${FOCUS_RING}`}>
                       <RefreshCw className="w-3 h-3" /> Reset framing
                     </button>
                     {selected.beforeOptions.length > 1 && (
@@ -924,7 +935,7 @@ const FOCUS_RING = 'focus-visible:outline-none focus-visible:ring-2 focus-visibl
 function Chip({ active, onClick, children, title, subtle }: { active: boolean; onClick: () => void; children: React.ReactNode; title?: string; subtle?: boolean }) {
   return (
     <button onClick={onClick} title={title} aria-pressed={active}
-      className={`font-medium rounded-lg border transition-colors ${FOCUS_RING} ${subtle ? 'text-[11px] px-2 py-1' : 'text-xs px-2.5 py-1.5'} ${active ? 'bg-accent/15 border-accent/40 text-accent' : 'border-border text-ink-muted hover:text-ink hover:border-border-strong'}`}>
+      className={`font-medium rounded-lg border transition-colors ${FOCUS_RING} ${subtle ? 'text-[11px] px-2 py-1' : 'text-xs px-2.5 py-1.5'} ${active ? 'bg-accent/15 border-accent/40 text-accent-text' : 'border-border text-ink-muted hover:text-ink hover:border-border-strong'}`}>
       {children}
     </button>
   )

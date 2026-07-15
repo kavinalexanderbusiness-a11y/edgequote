@@ -24,7 +24,7 @@ function pieceQuality(piece: ContentPiece | null): { score: QualityScore; note: 
 }
 function scoreTone(total: number): string {
   if (total >= 85) return 'text-emerald-400'
-  if (total >= 72) return 'text-accent'
+  if (total >= 72) return 'text-accent-text'
   return 'text-amber-400'
 }
 
@@ -180,7 +180,7 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
     return (
       <div className="rounded-card border border-dashed border-border-strong bg-surface p-6 text-center space-y-3">
         <div className="w-11 h-11 rounded-xl bg-accent/10 border border-accent/20 flex items-center justify-center mx-auto">
-          <Sparkles className="w-5 h-5 text-accent" />
+          <Sparkles className="w-5 h-5 text-accent-text" />
         </div>
         <p className="text-sm text-ink-muted max-w-xs mx-auto">
           Draft a {def.label} post for this job in your brand voice — ready to review and post.
@@ -214,7 +214,7 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
           a read-only mock, so the caption only ever lives here. */}
       <div className="space-y-3 rounded-card border border-accent/30 bg-accent/[0.03] p-3">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-bold uppercase tracking-wide text-accent inline-flex items-center gap-1.5">
+          <span className="text-xs font-bold uppercase tracking-wide text-accent-text inline-flex items-center gap-1.5">
             <Pencil className="w-3.5 h-3.5" /> Your caption
           </span>
           <span className="text-[11px] text-ink-faint">{def.label}</span>
@@ -249,7 +249,7 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
             readOnly={streaming}
             aria-label="Hashtags"
             placeholder="#hashtags — space-separated"
-            className="w-full bg-bg-tertiary border border-border rounded-xl px-3.5 py-2 text-sm text-accent placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/50"
+            className="w-full bg-bg-tertiary border border-border rounded-xl px-3.5 py-2 text-sm text-accent-text placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/50"
           />
         )}
         <div className="flex items-center gap-3 flex-wrap">
@@ -257,7 +257,7 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
             <RefreshCw className="w-3.5 h-3.5" /> Regenerate
           </Button>
           <span className="text-[11px] text-ink-faint inline-flex items-center gap-1.5">
-            {polishing ? <><Sparkles className="w-3 h-3 text-accent animate-pulse" /> Polishing for quality…</>
+            {polishing ? <><Sparkles className="w-3 h-3 text-accent-text animate-pulse" /> Polishing for quality…</>
               : streaming ? <><Loader2 className="w-3 h-3 animate-spin" /> Writing…</>
               : rewriting ? <><Loader2 className="w-3 h-3 animate-spin" /> Rewriting…</>
               : saving ? 'Saving…' : saved ? 'Saved' : `${body.length} chars · target ~${charTarget}`}

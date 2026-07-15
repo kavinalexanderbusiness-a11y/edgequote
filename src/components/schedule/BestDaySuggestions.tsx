@@ -95,7 +95,7 @@ export function BestDaySuggestions({ coord, address, excludeJobId, onPick, onTop
       <div className="w-full rounded-xl border border-accent/40 bg-accent/10 p-3">
         <div className="flex items-center justify-between gap-2">
           <span className="flex items-center gap-1.5 text-sm font-semibold text-ink">
-            <Sparkles className="w-3.5 h-3.5 text-accent" /> Recommended: {best.weekday}
+            <Sparkles className="w-3.5 h-3.5 text-accent-text" /> Recommended: {best.weekday}
           </span>
           {onPick && (
             <Button size="sm" className="shrink-0" onClick={() => onPick(best.date, best)}>

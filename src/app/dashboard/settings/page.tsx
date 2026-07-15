@@ -77,9 +77,13 @@ export default function SettingsPage() {
   function pickTheme(p: ThemePref) { setThemePref(p); applyThemePref(p) }
 
   async function persistLogoScale(v: number) {
+    const prev = logoScale
     setLogoScale(v)
     const { data: { user } } = await supabase.auth.getUser()
-    await supabase.from('business_settings').update({ logo_scale: v }).eq('user_id', user!.id)
+    const { error } = await supabase.from('business_settings').update({ logo_scale: v }).eq('user_id', user!.id)
+    // Same trap as the logo url: caching a scale the DB rejected would look right here
+    // and wrong on every document + device, permanently.
+    if (error) { setLogoScale(prev); toast.error('Could not save the logo size — please try again.'); return }
     // Sidebar/login read this cache so the logo scales everywhere immediately.
     try { window.localStorage.setItem('eq-logo', JSON.stringify({ url: logoUrl, scale: v })) } catch { /* ignore */ }
   }
@@ -137,13 +141,21 @@ export default function SettingsPage() {
       .from('branding')
       .upload(path, file, { upsert: true })
 
-    if (!upErr) {
-      const { data } = supabase.storage.from('branding').getPublicUrl(path)
-      const url = `${data.publicUrl}?t=${Date.now()}`
-      setLogoUrl(url)
-      await supabase.from('business_settings')
-        .update({ logo_url: url })
-        .eq('user_id', user!.id)
+    if (upErr) { toast.error('Could not upload the logo — please try again.'); setUploading(false); return }
+    const { data } = supabase.storage.from('branding').getPublicUrl(path)
+    const url = `${data.publicUrl}?t=${Date.now()}`
+    const prevLogo = logoUrl
+    setLogoUrl(url)
+    // The DB write is what quotes/invoices/other devices read. If it fails we must NOT
+    // cache the url locally — that would show the logo correctly on this browser
+    // forever while every document renders without it, with no way to notice.
+    const { error } = await supabase.from('business_settings')
+      .update({ logo_url: url })
+      .eq('user_id', user!.id)
+    if (error) {
+      setLogoUrl(prevLogo)
+      toast.error('Your logo uploaded but couldn’t be applied — please try again.')
+    } else {
       try { window.localStorage.setItem('eq-logo', JSON.stringify({ url, scale: logoScale })) } catch { /* ignore */ }
     }
     setUploading(false)
@@ -151,8 +163,15 @@ export default function SettingsPage() {
 
   async function onSubmit(values: BusinessSettingsFormValues) {
     const { data: { user } } = await supabase.auth.getUser()
-    await supabase.from('business_settings')
-      .update({
+    // UPSERT, not update: nothing else in the app (and no auth.users trigger) ever
+    // creates this row, so for an account that doesn't have one yet an .update()
+    // matches zero rows, reports no error, and silently discards every field —
+    // while the UI still says "Saved". Keyed on the existing unique(user_id).
+    // And Supabase RESOLVES on a failed write (RLS, constraint, expired session) —
+    // it never throws — so the error MUST be checked before we claim "Saved".
+    const { error } = await supabase.from('business_settings')
+      .upsert({
+        user_id: user!.id,
         ...values,
         default_rate: Number(values.default_rate),
         crew_cost_per_hour: Number(values.crew_cost_per_hour) > 0 ? Number(values.crew_cost_per_hour) : 40,
@@ -174,15 +193,25 @@ export default function SettingsPage() {
         daily_capacity_hours: Number(capacityHours) > 0 ? Number(capacityHours) : 8,
         service_seasons: seasons,
         base_lat: null, base_lng: null,
-      })
-      .eq('user_id', user!.id)
+      }, { onConflict: 'user_id' })
+    // Never claim a save that didn't happen — the old code reported "Saved"
+    // unconditionally, so a failure looked identical to success.
+    if (error) { toast.error('Could not save settings: ' + error.message); return }
     // The sticky footer promises "save everything" — so it must also persist any
     // edited travel-fee tier rows (they previously needed their own per-row save).
-    await Promise.all(localTiers.filter(t => t.id).map(t =>
+    // The footer makes the promise, so the footer has to verify it: one failed tier
+    // must not hide behind a green check.
+    const tierResults = await Promise.all(localTiers.filter(t => t.id).map(t =>
       supabase.from('travel_fee_tiers')
         .update({ min_km: t.min_km, max_km: t.max_km, fee: t.fee, is_custom: t.fee === null })
         .eq('id', t.id),
     ))
+    if (tierResults.some(r => r.error)) {
+      // Return before refresh() so the owner's edited tiers stay on screen to retry —
+      // re-syncing from the server here would erase what they just entered.
+      toast.error('Your settings saved, but a travel-fee tier didn’t — please try again.')
+      return
+    }
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
     refresh()
@@ -258,7 +287,7 @@ export default function SettingsPage() {
           what people come here to check; branding follows below. */}
       <div className={cn('order-2 space-y-6', tab !== 'business' && 'hidden')}>
       <Card>
-        <CardHeader><h2 className="text-sm font-semibold text-ink flex items-center gap-2"><ImageIcon className="w-4 h-4 text-accent" /> Branding</h2></CardHeader>
+        <CardHeader><h2 className="text-sm font-semibold text-ink flex items-center gap-2"><ImageIcon className="w-4 h-4 text-accent-text" /> Branding</h2></CardHeader>
         <CardBody className="space-y-5">
           <div className="flex items-center gap-5 flex-wrap">
             <div className="w-32 h-32 rounded-xl border border-border-strong bg-black flex items-center justify-center overflow-hidden shrink-0">
@@ -310,7 +339,7 @@ export default function SettingsPage() {
       <Card>
         <CardHeader>
           <div>
-            <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Palette className="w-4 h-4 text-accent" /> Appearance</h2>
+            <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Palette className="w-4 h-4 text-accent-text" /> Appearance</h2>
             <p className="text-xs text-ink-faint mt-0.5">Applies across the whole app and is remembered on this device.</p>
           </div>
         </CardHeader>
@@ -340,7 +369,7 @@ export default function SettingsPage() {
           page, submits via form=) saves every field. */}
       <form id="settings-form" onSubmit={handleSubmit(onSubmit)} className="order-1 space-y-6">
         <Card className={cn(tab !== 'business' && 'hidden')}>
-          <CardHeader><h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Building2 className="w-4 h-4 text-accent" /> Company Information</h2></CardHeader>
+          <CardHeader><h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Building2 className="w-4 h-4 text-accent-text" /> Company Information</h2></CardHeader>
           <CardBody className="space-y-4">
             <Input label="Company Name" {...register('company_name')} />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -382,7 +411,7 @@ export default function SettingsPage() {
         <Card className={cn(tab !== 'pricing' && 'hidden')}>
           <CardHeader>
             <div>
-              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><CreditCard className="w-4 h-4 text-accent" /> Payment &amp; Fees</h2>
+              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><CreditCard className="w-4 h-4 text-accent-text" /> Payment &amp; Fees</h2>
               <p className="text-xs text-ink-faint mt-0.5">How card-processing cost is recovered. The default bakes a small increase into NEW quotes — never a card surcharge (compliant in Alberta; no separate fee line is shown to customers).</p>
             </div>
           </CardHeader>
@@ -409,7 +438,7 @@ export default function SettingsPage() {
 
             {/* ── Recurring AutoPay ── */}
             <div className="pt-4 mt-2 border-t border-border">
-              <h3 className="text-sm font-semibold text-ink flex items-center gap-2"><Zap className="w-4 h-4 text-accent" /> Recurring AutoPay</h3>
+              <h3 className="text-sm font-semibold text-ink flex items-center gap-2"><Zap className="w-4 h-4 text-accent-text" /> Recurring AutoPay</h3>
               <p className="text-xs text-ink-faint mt-0.5 mb-3">For customers with a saved card and AutoPay enabled. A customer can override the timing on their profile.</p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="flex flex-col gap-1.5">
@@ -432,7 +461,7 @@ export default function SettingsPage() {
         <Card className={cn(tab !== 'scheduling' && 'hidden')}>
           <CardHeader>
             <div>
-              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Clock className="w-4 h-4 text-accent" /> Work Schedule</h2>
+              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Clock className="w-4 h-4 text-accent-text" /> Work Schedule</h2>
               <p className="text-xs text-ink-faint mt-0.5">Drives the weekly scheduler, per-stop arrival times and the day-load signal.</p>
             </div>
           </CardHeader>
@@ -469,7 +498,7 @@ export default function SettingsPage() {
         <Card className={cn(tab !== 'scheduling' && 'hidden')}>
           <CardHeader>
             <div>
-              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><CalendarRange className="w-4 h-4 text-accent" /> Service Seasons</h2>
+              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><CalendarRange className="w-4 h-4 text-accent-text" /> Service Seasons</h2>
               <p className="text-xs text-ink-faint mt-0.5">Recurring lawn &amp; snow services default to ending at season end. Off-season customers won&apos;t show as lapsed in Reactivation.</p>
             </div>
           </CardHeader>
@@ -497,7 +526,7 @@ export default function SettingsPage() {
         <Card className={cn(tab !== 'pricing' && 'hidden')}>
           <CardHeader>
             <div>
-              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><DollarSign className="w-4 h-4 text-accent" /> Lawn Pricing</h2>
+              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><DollarSign className="w-4 h-4 text-accent-text" /> Lawn Pricing</h2>
               <p className="text-xs text-ink-faint mt-0.5">Drives suggested measurement prices. Recommended = base price × multiplier.</p>
             </div>
           </CardHeader>
@@ -533,7 +562,7 @@ export default function SettingsPage() {
       <Card className={cn('order-3', tab !== 'pricing' && 'hidden')}>
         <CardHeader className="flex items-center justify-between">
           <div>
-            <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><MapPin className="w-4 h-4 text-accent" /> Travel Fee Tiers</h2>
+            <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><MapPin className="w-4 h-4 text-accent-text" /> Travel Fee Tiers</h2>
             <p className="text-xs text-ink-faint mt-0.5">Fully configurable. Leave fee blank for &quot;custom quote&quot;.</p>
           </div>
           <Button variant="secondary" size="sm" onClick={addTier}><Plus className="w-3.5 h-3.5" /> Add tier</Button>
@@ -617,7 +646,7 @@ function SeasonEditor({ icon, title, hint, season, onChange }: {
       <div className="flex items-center gap-2 mb-1">
         {icon}
         <span className="text-sm font-semibold text-ink">{title}</span>
-        <span className="ml-auto text-xs font-medium text-accent">{seasonLabel(season)}</span>
+        <span className="ml-auto text-xs font-medium text-accent-text">{seasonLabel(season)}</span>
       </div>
       <p className="text-[11px] text-ink-faint mb-2">{hint}</p>
       <div className="flex items-center gap-2 flex-wrap text-xs text-ink-muted">

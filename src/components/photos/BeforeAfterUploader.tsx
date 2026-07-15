@@ -313,7 +313,7 @@ export function BeforeAfterUploader({
       {/* ── Single-visit context (hidden in multi mode — groups own their context) ── */}
       {!multi && (fixedContext ? (
         <div className="flex items-center gap-2 text-xs text-ink-muted">
-          <MapPin className="w-3.5 h-3.5 text-accent" />
+          <MapPin className="w-3.5 h-3.5 text-accent-text" />
           <span className="font-medium text-ink">{ctxLabel || 'This property'}</span>
           {job && <span className="text-ink-faint">· {job.title || job.service_type || 'job'}</span>}
         </div>
@@ -324,7 +324,7 @@ export function BeforeAfterUploader({
             {propertyId ? (
               <div className="flex items-center gap-2 flex-1 min-w-0">
                 <span className="text-sm font-medium text-ink truncate">{ctxLabel}</span>
-                <button type="button" onClick={() => { setPropertyId(null); setCtxLabel(null); setJobId(null); setJob(null) }} className="text-[11px] text-accent hover:underline shrink-0">Change</button>
+                <button type="button" onClick={() => { setPropertyId(null); setCtxLabel(null); setJobId(null); setJob(null) }} className="text-[11px] text-accent-text hover:underline shrink-0">Change</button>
               </div>
             ) : (
               <input autoFocus value={query} onChange={e => setQuery(e.target.value)} placeholder="Search property by address…"
@@ -354,7 +354,7 @@ export function BeforeAfterUploader({
           <div className="flex flex-wrap gap-1.5">
             {jobChoices.map(c => (
               <button key={c.id} type="button" onClick={() => { setJobId(c.id); setJob(c); setNeedsJobAsk(false) }}
-                className={cn('text-[11px] rounded-lg px-2 py-1 border', jobId === c.id ? 'border-accent bg-accent/10 text-accent' : 'border-border text-ink-muted hover:text-ink')}>
+                className={cn('text-[11px] rounded-lg px-2 py-1 border', jobId === c.id ? 'border-accent bg-accent/10 text-accent-text' : 'border-border text-ink-muted hover:text-ink')}>
                 {c.title || c.service_type || 'Job'} · {c.completed_at ? new Date(c.completed_at).toLocaleDateString() : c.scheduled_date}
               </button>
             ))}
@@ -374,7 +374,7 @@ export function BeforeAfterUploader({
         className={cn('flex flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed p-6 cursor-pointer transition-colors',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
           dragOver ? 'border-accent bg-accent/10' : 'border-border hover:border-border-strong bg-bg-tertiary')}>
-        <UploadCloud className={cn('w-6 h-6', dragOver ? 'text-accent' : 'text-ink-faint')} />
+        <UploadCloud className={cn('w-6 h-6', dragOver ? 'text-accent-text' : 'text-ink-faint')} />
         <p className="text-sm font-medium text-ink">Drag photos here, or click to choose</p>
         <p className="text-[11px] text-ink-faint">Drop a whole day at once — EdgeQuote splits it into visits and sorts before/after</p>
       </label>
@@ -387,7 +387,7 @@ export function BeforeAfterUploader({
             Existing match found — {dups.length} photo{dups.length !== 1 ? 's look' : ' looks'} already uploaded.
           </p>
           <button type="button" onClick={() => setIncludeDups(v => !v)} aria-pressed={includeDups}
-            className={cn('text-[11px] font-semibold rounded-lg px-2 py-1 border shrink-0', includeDups ? 'border-accent bg-accent/10 text-accent' : 'border-border text-ink-muted hover:text-ink')}>
+            className={cn('text-[11px] font-semibold rounded-lg px-2 py-1 border shrink-0', includeDups ? 'border-accent bg-accent/10 text-accent-text' : 'border-border text-ink-muted hover:text-ink')}>
             {includeDups ? 'Including duplicates' : 'Include duplicates'}
           </button>
         </div>
@@ -404,7 +404,7 @@ export function BeforeAfterUploader({
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-xs font-bold text-ink">{groupLabel(g, gi)}</span>
                 {g.property ? (
-                  <span className="text-[11px] text-ink-muted flex items-center gap-1"><MapPin className="w-3 h-3 text-accent" /> {g.property.address || 'Property'}</span>
+                  <span className="text-[11px] text-ink-muted flex items-center gap-1"><MapPin className="w-3 h-3 text-accent-text" /> {g.property.address || 'Property'}</span>
                 ) : (
                   <span className="text-[11px] text-amber-300 flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> Which property?</span>
                 )}
@@ -419,7 +419,7 @@ export function BeforeAfterUploader({
                   ))}
                   {propertyId && ctxLabel && (
                     <button type="button" onClick={() => setGroupProperty(gi, { id: propertyId, address: ctxLabel, customer_id: customerId })}
-                      className="text-[11px] rounded-lg px-2 py-1 border border-accent/40 bg-accent/10 text-accent">{ctxLabel}</button>
+                      className="text-[11px] rounded-lg px-2 py-1 border border-accent/40 bg-accent/10 text-accent-text">{ctxLabel}</button>
                   )}
                 </div>
               )}

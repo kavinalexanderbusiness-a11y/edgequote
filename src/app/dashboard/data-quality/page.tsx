@@ -401,7 +401,7 @@ export default function DataQualityPage() {
                 <p className="text-sm font-medium text-ink truncate">{c.name}</p>
                 <p className="text-xs text-ink-muted truncate">{c.address || 'No address'}</p>
               </div>
-              <span className="text-[11px] text-accent shrink-0 flex items-center gap-1">Add contact <ArrowRight className="w-3 h-3" /></span>
+              <span className="text-[11px] text-accent-text shrink-0 flex items-center gap-1">Add contact <ArrowRight className="w-3 h-3" /></span>
             </Link>
           ))}
           {m.customersNoContact.length > 40 && <p className="text-xs text-ink-faint">+{m.customersNoContact.length - 40} more.</p>}
@@ -432,9 +432,9 @@ export default function DataQualityPage() {
             <div key={i} className={`rounded-card border border-border p-3 animate-rise stagger-${Math.min(i + 1, 6)}`}>
               <span className="text-[10px] uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded-full px-2 py-0.5">Same {d.reason}</span>
               <div className="flex items-center justify-between gap-2 mt-2">
-                <Link href={`/dashboard/customers/${d.a.id}`} className="text-sm font-medium text-ink hover:text-accent truncate min-w-0 flex-1">{d.a.name}</Link>
+                <Link href={`/dashboard/customers/${d.a.id}`} className="text-sm font-medium text-ink hover:text-accent-text truncate min-w-0 flex-1">{d.a.name}</Link>
                 <Copy className="w-3.5 h-3.5 text-ink-faint shrink-0" />
-                <Link href={`/dashboard/customers/${d.b.id}`} className="text-sm font-medium text-ink hover:text-accent truncate min-w-0 flex-1 text-right">{d.b.name}</Link>
+                <Link href={`/dashboard/customers/${d.b.id}`} className="text-sm font-medium text-ink hover:text-accent-text truncate min-w-0 flex-1 text-right">{d.b.name}</Link>
               </div>
             </div>
           ))}
@@ -465,7 +465,7 @@ export default function DataQualityPage() {
         <Card>
           <CardBody className="space-y-3">
             <div className="flex items-center gap-2">
-              <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><DollarSign className="w-3.5 h-3.5 text-accent" /></span>
+              <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><DollarSign className="w-3.5 h-3.5 text-accent-text" /></span>
               <h2 className="text-sm font-semibold text-ink tracking-tight">Pricing &amp; quote gaps</h2>
             </div>
             <div className="grid grid-cols-2 gap-3">
@@ -521,7 +521,7 @@ function Section({ icon: Icon, title, subtitle, action, children }: {
       <div className="px-4 py-3 border-b border-border flex items-start justify-between gap-3">
         <div className="flex items-start gap-2 min-w-0">
           <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-            <Icon className="w-3.5 h-3.5 text-accent" />
+            <Icon className="w-3.5 h-3.5 text-accent-text" />
           </span>
           <div className="min-w-0">
             <h2 className="text-sm font-semibold text-ink tracking-tight">{title}</h2>

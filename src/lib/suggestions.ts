@@ -14,9 +14,10 @@ import { ProfitJob, ProfitContext, neighborhoodProfitability, neighborhoodKey } 
 import { OptJob, OptOptions, OptimizeScope, OptimizeMode, analyzeSchedule, optimizeSchedule } from '@/lib/optimizer'
 import { dayProfitability } from '@/lib/profitability'
 import {
-  CHURN_RATIO_HIGH, FOLLOW_UP_DAYS, cadenceDays, churnRisk, isSeasonallyDormant, isVip,
-  lifetimeValue, needsFollowUp, ranOut, startOfDayMs,
+  CHURN_RATIO_HIGH, cadenceDays, churnRisk, isSeasonallyDormant, isVip,
+  lifetimeValue, ranOut,
 } from '@/lib/signals'
+import { FOLLOW_UP_DAYS, quoteIsQuiet, startOfDayMs } from '@/lib/followup'
 import { generateOccurrences, dayDelta } from '@/lib/recurrence'
 import { ServiceSeasons, serviceCategory, seasonForService, seasonEndDateFor, isWithinSeason } from '@/lib/seasons'
 import { addDays, parseISO, format, getDay } from 'date-fns'
@@ -1032,9 +1033,10 @@ function retention(ctx: SuggestionContext): Suggestion[] {
       action: { kind: 'navigate', label: 'Win them back', href: '/dashboard/reactivation' },
     })
   }
-  // Sent quotes gone quiet ≥ the follow-up window, measured against the start of
-  // ctx.today so a feed built in the morning is still correct at night.
-  const toChase = ctx.quotes.filter(q => needsFollowUp(q, startOfDayMs(ctx.today)))
+  // Sent quotes gone quiet ≥ the follow-up window — THE shared staleness rule,
+  // measured against the start of ctx.today so a feed built in the morning is
+  // still correct at night.
+  const toChase = ctx.quotes.filter(q => quoteIsQuiet(q, FOLLOW_UP_DAYS, startOfDayMs(ctx.today)))
   if (toChase.length) {
     const atRisk = toChase.reduce((s, q) => s + Number(q.total || 0), 0)
     out.push({
@@ -1815,12 +1817,21 @@ export async function applyPriceRaise(
   if (!user) return { ok: false, error: 'Not signed in' }
   try {
     if (payload.quoteId && payload.cadenceField) {
+      // Freeze FIRST and only proceed if it stuck: billed visits with price == null
+      // derive from the quote cadence, so raising the quote after a failed freeze
+      // retroactively re-prices history the customer was already invoiced for.
       if (payload.freezeJobIds.length && payload.oldVisitValue > 0) {
-        await supabase.from('jobs').update({ price: payload.oldVisitValue }).in('id', payload.freezeJobIds)
+        const { error: fErr } = await supabase.from('jobs').update({ price: payload.oldVisitValue }).in('id', payload.freezeJobIds)
+        if (fErr) return { ok: false, error: `Couldn’t protect already-billed visits, so the price wasn’t raised: ${fErr.message}` }
       }
       const { error: qErr } = await supabase.from('quotes').update({ [payload.cadenceField]: payload.newPrice }).eq('id', payload.quoteId)
       if (qErr) return { ok: false, error: qErr.message }
-      if (payload.clearJobIds.length) await supabase.from('jobs').update({ price: null }).in('id', payload.clearJobIds)
+      // A failed clear means future visits keep billing the old rate — the raise silently
+      // doesn't apply, so it must not report ok.
+      if (payload.clearJobIds.length) {
+        const { error: cErr } = await supabase.from('jobs').update({ price: null }).in('id', payload.clearJobIds)
+        if (cErr) return { ok: false, error: `Price raised, but upcoming visits still bill the old rate: ${cErr.message}` }
+      }
       await recordPriceChange(supabase, { userId: user.id, jobId: payload.repJobId ?? payload.clearJobIds[0] ?? null, quoteId: payload.quoteId, scope: 'future', oldAmount: payload.oldVisitValue, newAmount: payload.newPrice, reason, changedByEmail: user.email })
       // Re-sync the draft invoices of BOTH the cleared (future) and frozen (past)
       // visits so jobs.price and invoice.amount can't drift apart (idempotent).

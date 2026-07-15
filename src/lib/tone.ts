@@ -8,7 +8,7 @@ export type Tone = 'accent' | 'success' | 'warn' | 'danger' | 'info' | 'neutral'
 
 /** Soft tinted chip: background + text + subtle border. Badges & pills. */
 export const toneSoft: Record<Tone, string> = {
-  accent:  'bg-accent/10 text-accent border-accent/30',
+  accent:  'bg-accent/10 text-accent-text border-accent/30',
   success: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/25',
   warn:    'bg-amber-500/10 text-amber-400 border-amber-500/20',
   danger:  'bg-red-500/10 text-red-400 border-red-500/20',
@@ -18,7 +18,7 @@ export const toneSoft: Record<Tone, string> = {
 
 /** Foreground only — for big numbers and icons that carry a tone. */
 export const toneText: Record<Tone, string> = {
-  accent:  'text-accent',
+  accent:  'text-accent-text',
   success: 'text-emerald-400',
   warn:    'text-amber-400',
   danger:  'text-red-400',

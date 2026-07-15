@@ -418,7 +418,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
           {...register('price', { min: 0 })} />
         {measuredPrice != null && measuredPrice > 0 && (
           <button type="button" onClick={() => setValue('price', measuredPrice)}
-            className="text-xs text-accent hover:underline mt-1.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            className="text-xs text-accent-text hover:underline mt-1.5 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
             Use measured price ({formatCurrency(measuredPrice)})
           </button>
         )}
@@ -462,7 +462,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
       {(propCoord || selProp?.address) && (
         <div className="bg-bg-tertiary border border-border rounded-xl p-4 space-y-3">
           <div className="flex items-center gap-2 text-xs font-semibold text-ink-muted uppercase tracking-wide">
-            <Sparkles className="w-3.5 h-3.5 text-accent" /> Plan this job into your week
+            <Sparkles className="w-3.5 h-3.5 text-accent-text" /> Plan this job into your week
           </div>
           <WeeklyScheduler
             coord={propCoord}
@@ -479,7 +479,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
 
       {!isEdit && (
         <button type="button" onClick={() => setShowMore(v => !v)}
-          className="text-xs font-medium text-accent hover:underline">
+          className="text-xs font-medium text-accent-text hover:underline">
           {showMore ? '− Fewer options' : '+ More options (property, time, crew, repeat, notes)'}
         </button>
       )}
@@ -596,7 +596,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
                 { kind: 'monthly', label: 'Monthly Service' },
               ] as const).map(p => (
                 <button key={p.kind} type="button" onClick={() => applyLawnPreset(p.kind)}
-                  className="text-xs font-medium px-3 py-1.5 rounded-lg border border-accent/30 bg-accent/10 text-accent hover:bg-accent/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                  className="text-xs font-medium px-3 py-1.5 rounded-lg border border-accent/30 bg-accent/10 text-accent-text hover:bg-accent/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                   {p.label}
                 </button>
               ))}
@@ -630,7 +630,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
                   ]} />
                 {endMode === 'season' && (
                   <div className="rounded-xl border border-accent/20 bg-accent/5 px-3 py-2 flex items-center gap-2">
-                    <CalendarRange className="w-4 h-4 text-accent shrink-0" />
+                    <CalendarRange className="w-4 h-4 text-accent-text shrink-0" />
                     <p className="text-xs text-ink">
                       Ends at season end{serviceSeason ? ` (${seasonLabel(serviceSeason)})` : ''}
                       {seasonEndDate ? <span className="text-ink-muted"> · {formatDate(seasonEndDate)}</span> : <span className="text-amber-400"> · set a start date to compute</span>}
@@ -646,7 +646,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
                 )}
                 {/* Live visit-count estimate — the ONE cadence restatement. */}
                 {visitEstimate != null && visitEstimate > 0 && (
-                  <p className="text-xs font-semibold text-accent">
+                  <p className="text-xs font-semibold text-accent-text">
                     {recurrenceLabel(interval!.unit, interval!.count)} · {scheduledDate ? formatDate(scheduledDate) : '?'} → {effectiveEndDate ? formatDate(effectiveEndDate) : '?'} · ≈ {visitEstimate} visit{visitEstimate !== 1 ? 's' : ''}
                   </p>
                 )}

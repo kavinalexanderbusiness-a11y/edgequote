@@ -63,7 +63,7 @@ export function OfflineStatus() {
         text: `Synced ${justSynced} change${justSynced !== 1 ? 's' : ''}` }
 
   return (
-    <div className="fixed bottom-4 left-4 z-[90] pointer-events-none animate-toast">
+    <div className="fixed bottom-4 left-4 z-notice pointer-events-none animate-toast">
       <div className={cn('flex items-center gap-2 rounded-full border px-3.5 py-2 text-xs font-medium shadow-lg', cls)}>
         <Icon className={cn('w-4 h-4 shrink-0', spin && 'animate-spin')} />
         <span>{text}</span>

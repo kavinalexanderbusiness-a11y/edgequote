@@ -20,7 +20,7 @@ export function PageHeader({ title, description, action, crumb }: PageHeaderProp
       <div className="flex-1 min-w-0">
         {crumb && (
           <Link href={crumb.href}
-            className="inline-flex items-center gap-1 mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint hover:text-accent transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            className="inline-flex items-center gap-1 mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint hover:text-accent-text transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
             <ArrowLeft className="w-3 h-3" />
             {crumb.label}
           </Link>

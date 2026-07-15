@@ -137,7 +137,7 @@ export function ConversationInfo({ customerId }: Props) {
           }))}>
           {({ toggle, triggerProps }) => (
             <button type="button" onClick={toggle} {...triggerProps}
-              className="h-7 px-2.5 rounded-lg border border-accent/30 bg-accent/10 text-accent font-medium flex items-center gap-1 hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+              className="h-7 px-2.5 rounded-lg border border-accent/30 bg-accent/10 text-accent-text font-medium flex items-center gap-1 hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
               {followDone ? <><Check className="w-3 h-3" /> Added</> : <><Plus className="w-3 h-3" /> Follow up</>}
             </button>
           )}
@@ -163,7 +163,7 @@ export function ConversationInfo({ customerId }: Props) {
                 <span className={cn('flex items-center gap-0.5', c?.email_opt_in ? 'text-emerald-400' : 'text-ink-faint')}><Mail className="w-3 h-3" /> Email</span>
               </span>
             </Cell>
-            <Cell label="Active quotes">{derived.activeQuotes.length ? <Link href={`/dashboard/customers/${c?.id}`} className="text-accent hover:underline">{derived.activeQuotes.length} open</Link> : <span className="text-ink-faint">None</span>}</Cell>
+            <Cell label="Active quotes">{derived.activeQuotes.length ? <Link href={`/dashboard/customers/${c?.id}`} className="text-accent-text hover:underline">{derived.activeQuotes.length} open</Link> : <span className="text-ink-faint">None</span>}</Cell>
             <Cell label="Open jobs">{derived.openJobs ? <span className="text-ink">{derived.openJobs}</span> : <span className="text-ink-faint">None</span>}</Cell>
             <Cell label="Invoices owing">{derived.unpaid.length ? <Link href={`/dashboard/customers/${c?.id}`} className="text-amber-400 hover:underline">{formatCurrency(derived.unpaidTotal)}</Link> : <span className="text-ink-faint">Paid up</span>}</Cell>
             <Cell label="Last service">{derived.lastService ? <span className="text-ink">{derived.lastService.service_type || 'Service'} · {format(parseISO((derived.lastService.completed_at || derived.lastService.scheduled_date).slice(0, 10) + 'T00:00:00'), 'MMM d')}</span> : <span className="text-ink-faint">—</span>}</Cell>

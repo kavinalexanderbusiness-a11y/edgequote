@@ -116,7 +116,7 @@ export function SuggestionsCenter() {
       <div className="px-5 py-5 border-b border-border flex items-start justify-between gap-3">
         <div className="flex items-start gap-3.5 min-w-0">
           <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 icon-glow flex items-center justify-center shrink-0">
-            <Sparkles className="w-5 h-5 text-accent" />
+            <Sparkles className="w-5 h-5 text-accent-text" />
           </div>
           <div className="min-w-0">
             <p className="text-lg font-bold tracking-tight text-ink">What should I do next?</p>
@@ -125,7 +125,7 @@ export function SuggestionsCenter() {
                 : items.length === 0 ? 'You’re all caught up — nothing pressing right now.'
                 : <>
                     {items.length} opportunit{items.length !== 1 ? 'ies' : 'y'} found in your data
-                    {totalAnnual > 0 && <> · worth up to <span className="font-semibold text-accent tabular-nums">{formatCurrency(totalAnnual)}/yr</span></>}
+                    {totalAnnual > 0 && <> · worth up to <span className="font-semibold text-accent-text tabular-nums">{formatCurrency(totalAnnual)}/yr</span></>}
                   </>}
             </p>
           </div>
@@ -135,14 +135,14 @@ export function SuggestionsCenter() {
 
       {note && (
         <div className="px-5 py-2 bg-accent/5 border-b border-border text-xs text-ink flex items-center gap-2">
-          <Check className="w-3.5 h-3.5 text-accent" /> {note}
+          <Check className="w-3.5 h-3.5 text-accent-text" /> {note}
         </div>
       )}
 
       {undo && (
         <div className="px-5 py-2 bg-bg-tertiary border-b border-border text-xs text-ink-muted flex items-center justify-between gap-2">
           <span className="truncate">Dismissed “{undo.label}”.</span>
-          <button onClick={undoDismiss} className="shrink-0 inline-flex items-center gap-1 font-semibold text-accent hover:underline">
+          <button onClick={undoDismiss} className="shrink-0 inline-flex items-center gap-1 font-semibold text-accent-text hover:underline">
             <Undo2 className="w-3.5 h-3.5" /> Undo
           </button>
         </div>
@@ -188,7 +188,7 @@ export function SuggestionsCenter() {
             {(filtered.length > visible.length || lowHidden > 0) && (
               <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
                 {filtered.length > visible.length && (
-                  <button onClick={() => setShowAll(true)} className="text-xs font-medium text-accent hover:underline">
+                  <button onClick={() => setShowAll(true)} className="text-xs font-medium text-accent-text hover:underline">
                     Show {filtered.length - visible.length} more
                   </button>
                 )}
@@ -248,7 +248,7 @@ function SuggestionCard({ s, index, applying, applied, onAction, onDismiss }: { 
 
       <div className="flex flex-wrap items-center gap-2 mt-2">
         {s.impact > 0 && (
-          <span className="text-sm font-bold text-accent flex items-center gap-1 tabular-nums">
+          <span className="text-sm font-bold text-accent-text flex items-center gap-1 tabular-nums">
             <TrendingUp className="w-3.5 h-3.5" /> +{formatCurrency(s.impact)}{s.oneTime ? ' one-time' : '/yr'}
           </span>
         )}
@@ -298,7 +298,7 @@ function SuggestionCard({ s, index, applying, applied, onAction, onDismiss }: { 
       {showWhy && s.why.length > 0 && (
         <ul className="mt-2 space-y-0.5 border-t border-border pt-2">
           {s.why.map((w, i) => (
-            <li key={i} className="text-xs text-ink-muted flex gap-1.5"><span className="text-accent/60 shrink-0">•</span><span>{w}</span></li>
+            <li key={i} className="text-xs text-ink-muted flex gap-1.5"><span className="text-accent-text/60 shrink-0">•</span><span>{w}</span></li>
           ))}
         </ul>
       )}

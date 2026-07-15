@@ -521,7 +521,7 @@ export function DayOpsPanel({
 
       {/* Daily revenue forecast — the first thing you see */}
       <div className="grid grid-cols-3 sm:grid-cols-5 sm:divide-x divide-border border-b border-border">
-        <Metric icon={DollarSign} label="Planned" value={formatCurrency(totalRevenue)} tone="text-accent" />
+        <Metric icon={DollarSign} label="Planned" value={formatCurrency(totalRevenue)} tone="text-accent-text" />
         <Metric icon={Wallet} label="Completed" value={formatCurrency(revenueCompleted)} tone="text-emerald-400" />
         <Metric icon={DollarSign} label="Remaining" value={formatCurrency(revenueRemaining)} tone="text-amber-400" />
         <Metric icon={ListChecks} label="Stops left" value={String(remaining.length)} />
@@ -555,7 +555,7 @@ export function DayOpsPanel({
           <div className="rounded-xl border border-border bg-bg-tertiary px-3 py-2.5">
             <div className="flex items-center justify-between gap-2">
               <span className="flex items-center gap-1.5 text-xs font-semibold text-ink-muted uppercase tracking-wide">
-                <RouteIcon className="w-3.5 h-3.5 text-accent" /> Route
+                <RouteIcon className="w-3.5 h-3.5 text-accent-text" /> Route
                 {manualSeq && (
                   <span className="normal-case tracking-normal text-[10px] font-semibold text-amber-300 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5">
                     Custom order
@@ -575,7 +575,7 @@ export function DayOpsPanel({
                 {effMapsUrl && (
                   <a href={effMapsUrl} target="_blank" rel="noopener noreferrer"
                     title={mapsCapped ? `Google Maps caps directions at ${MAX_MAPS_WAYPOINTS} stops — this opens your next ${MAX_MAPS_WAYPOINTS}; reopen as you complete stops for the rest.` : 'Directions for the remaining stops, in order'}
-                    className="text-xs text-accent font-medium flex items-center gap-1 hover:underline">
+                    className="text-xs text-accent-text font-medium flex items-center gap-1 hover:underline">
                     <ExternalLink className="w-3 h-3" /> {mapsCapped ? `Open in Maps (next ${MAX_MAPS_WAYPOINTS})` : 'Open in Maps'}
                   </a>
                 )}
@@ -676,7 +676,7 @@ export function DayOpsPanel({
                       {priceId === job.id && (
                         <div className="mt-2 rounded-lg border border-border bg-bg-secondary p-2.5 space-y-2" onClick={e => e.stopPropagation()}>
                           {job.recurrence_id && (
-                            <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-accent">
+                            <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-accent-text">
                               <Repeat className="w-3 h-3" /> Recurring series pricing
                             </div>
                           )}
@@ -697,7 +697,7 @@ export function DayOpsPanel({
                               <p className="text-xs text-ink">
                                 <span className="text-ink-faint">{formatCurrency(current)}</span>
                                 <span className="text-ink-faint mx-1">→</span>
-                                <span className="font-semibold text-accent">{formatCurrency(next)}</span>
+                                <span className="font-semibold text-accent-text">{formatCurrency(next)}</span>
                               </p>
                             )
                           })()}
@@ -736,7 +736,7 @@ export function DayOpsPanel({
                           {qVal > 0 && (
                             <div className="flex items-center justify-between gap-2 text-[11px]">
                               <span className="text-ink-faint">From quote · {cadenceLabelFor(job)}: <span className="text-ink-muted font-medium">{formatCurrency(qVal)}</span></span>
-                              <button type="button" onClick={() => setPriceVal('')} className="text-accent hover:underline font-medium">Use quote price</button>
+                              <button type="button" onClick={() => setPriceVal('')} className="text-accent-text hover:underline font-medium">Use quote price</button>
                             </div>
                           )}
                           <div className="flex items-center gap-2">
@@ -751,7 +751,7 @@ export function DayOpsPanel({
                       )}
                       <div className="flex items-center gap-1.5 text-xs opacity-80 mt-0.5 flex-wrap">
                         {job.status === 'scheduled' && etaByJob[job.id] && (
-                          <span className="font-semibold text-accent shrink-0">ETA {etaByJob[job.id]}</span>
+                          <span className="font-semibold text-accent-text shrink-0">ETA {etaByJob[job.id]}</span>
                         )}
                         {job.status === 'in_progress' && job.started_at && (
                           <span className="font-semibold text-sky-300 shrink-0">▶ {tsTo12(job.started_at)} · {elapsedMin(job.started_at)}m</span>
@@ -770,7 +770,7 @@ export function DayOpsPanel({
                         {addons.length > 0 && (
                           <button onClick={e => { e.stopPropagation(); setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setAddonsId(addonsId === job.id ? null : job.id) }}
                             title={addons.map(a => `${a.description} ${formatCurrency(Number(a.amount))}`).join(' · ')}
-                            className="text-[10px] font-semibold text-accent border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5 shrink-0 hover:bg-accent/20">
+                            className="text-[10px] font-semibold text-accent-text border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5 shrink-0 hover:bg-accent/20">
                             +{addons.length <= 2 ? addons.map(a => a.description).join(' + ') : `${addons.length} services`}
                           </button>
                         )}

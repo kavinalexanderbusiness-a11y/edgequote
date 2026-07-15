@@ -18,6 +18,7 @@ import { useForm } from 'react-hook-form'
 import { formatServicePrice, priceInputLabel, priceInputStep } from '@/lib/servicePricing'
 import { toast } from '@/lib/toast'
 import { Plus, Edit2, Trash2, X } from 'lucide-react'
+import { scrollBehavior } from '@/lib/motion'
 
 export default function ServiceTemplatesPage() {
   const { templates, loading, refresh } = useBusinessData()
@@ -41,7 +42,7 @@ export default function ServiceTemplatesPage() {
   // above the fold — so it looks like "nothing happened". Bring it into view
   // whenever it opens, and when switching which service is being edited.
   useEffect(() => {
-    if (showForm) formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    if (showForm) formRef.current?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' })
   }, [showForm, editing])
 
   function openNew() {
@@ -140,7 +141,7 @@ export default function ServiceTemplatesPage() {
                   error={errors.default_rate ? 'A price is required' : undefined}
                   {...register('default_rate', { required: true })} />
                 <div className="sm:pt-7">
-                  <p className="text-xs text-ink-muted">Shows as <span className="font-semibold text-accent">{formatServicePrice({ pricing_display_type: pdType, default_rate: Number(priceVal) || 0 })}</span></p>
+                  <p className="text-xs text-ink-muted">Shows as <span className="font-semibold text-accent-text">{formatServicePrice({ pricing_display_type: pdType, default_rate: Number(priceVal) || 0 })}</span></p>
                 </div>
               </div>
               <Textarea label="Default Description" {...register('default_description')} />
@@ -178,7 +179,7 @@ export default function ServiceTemplatesPage() {
                       </div>
                       {t.default_description && <p className="text-xs text-ink-muted truncate mt-0.5">{t.default_description}</p>}
                     </div>
-                    <span className="text-sm font-semibold text-accent shrink-0">{formatServicePrice(t)}</span>
+                    <span className="text-sm font-semibold text-accent-text shrink-0">{formatServicePrice(t)}</span>
                     <span onClick={e => e.stopPropagation()}><Toggle checked={t.is_active} onChange={() => toggleActive(t)} /></span>
                     <Button variant="ghost" size="sm" aria-label="Edit service" title="Edit" onClick={e => { e.stopPropagation(); openEdit(t) }}><Edit2 className="w-4 h-4" /></Button>
                     <Button variant="ghost" size="sm" aria-label="Delete service" title="Delete" onClick={e => { e.stopPropagation(); remove(t) }} className="text-red-400/70 hover:text-red-400"><Trash2 className="w-4 h-4" /></Button>

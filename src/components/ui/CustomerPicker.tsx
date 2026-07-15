@@ -115,7 +115,7 @@ export function CustomerPicker({
           <ChevronDown className="w-4 h-4 text-ink-faint absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
         )}
         {open && (
-          <div className="absolute z-50 mt-1 w-full bg-bg-secondary border border-border-strong rounded-xl shadow-xl overflow-hidden origin-top animate-pop max-h-72 overflow-y-auto">
+          <div className="absolute z-overlay mt-1 w-full bg-bg-secondary border border-border-strong rounded-xl shadow-xl overflow-hidden origin-top animate-pop max-h-72 overflow-y-auto">
             {rows.length === 0 ? (
               <p className="px-3.5 py-2.5 text-sm text-ink-faint">{query.trim() ? `No customers match “${query.trim()}”.` : 'No customers yet — add one to start a conversation.'}</p>
             ) : rows.map((r, i) => (
@@ -127,11 +127,11 @@ export function CustomerPicker({
                     <span className="block text-ink truncate">{r.c.name}</span>
                     {(r.c.phone || r.c.address) && <span className="block text-[11px] text-ink-faint truncate">{[r.c.phone, r.c.address].filter(Boolean).join(' · ')}</span>}
                   </span>
-                  {value === r.c.id && <Check className="w-4 h-4 text-accent shrink-0" />}
+                  {value === r.c.id && <Check className="w-4 h-4 text-accent-text shrink-0" />}
                 </button>
               ) : (
                 <button key="manual" type="button" onMouseEnter={() => setHi(i)} onClick={() => choose(i)}
-                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 border-t border-border text-accent transition-colors', i === hi ? 'bg-surface' : 'hover:bg-surface')}>
+                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 border-t border-border text-accent-text transition-colors', i === hi ? 'bg-surface' : 'hover:bg-surface')}>
                   <Plus className="w-3.5 h-3.5 shrink-0" /> Enter manually
                 </button>
               )

@@ -210,7 +210,16 @@ export async function updatePhoto(
 }
 
 // Delete a photo — removes both the catalogue row and the stored file.
-export async function deletePhoto(supabase: SupabaseClient, photo: JobPhoto): Promise<void> {
-  await supabase.from('job_photos').delete().eq('id', photo.id)
+// Row FIRST, and only remove the file once the row is actually gone: the reverse order
+// (or an unchecked row delete) strands a catalogue row pointing at a deleted object, and
+// the gallery then renders that tile from getPublicUrl forever — a permanently broken
+// image that every retry fails to clear. uploadPhoto already rolls back its own two-phase
+// write; this is its mirror and must be just as careful.
+export async function deletePhoto(supabase: SupabaseClient, photo: JobPhoto): Promise<boolean> {
+  const { error } = await supabase.from('job_photos').delete().eq('id', photo.id)
+  if (error) return false
+  // The row is gone, so the photo is gone from the product's point of view. A failed
+  // object removal only leaks storage — it must not report the delete as failed.
   await supabase.storage.from(PHOTO_BUCKET).remove([photo.storage_path])
+  return true
 }

@@ -18,6 +18,7 @@ import Link from 'next/link'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Plus, X, Upload, Archive, RotateCcw, Trash2 } from 'lucide-react'
+import { scrollBehavior } from '@/lib/motion'
 
 // Bound the archived DOM too — a long-lived company can accumulate hundreds of
 // churned customers; render a page's worth and note the rest.
@@ -109,7 +110,10 @@ export default function CustomersPage() {
 
     // Auto-create a primary property from the customer's address
     if (values.address) {
-      await supabase.from('properties').insert({
+      // The customer is already saved, so this can't abort — but it can't be silent
+      // either: the primary property is what maps, routes and prices this customer, and
+      // an unchecked failure surfaced only much later as a Data Quality gap.
+      const { error: propErr } = await supabase.from('properties').insert({
         customer_id: c.id,
         user_id: user!.id,
         address: values.address,
@@ -118,6 +122,7 @@ export default function CustomersPage() {
         postal_code: values.postal_code || null,
         is_primary: true,
       })
+      if (propErr) toast.error(`${c.name.split(' ')[0] || 'The customer'} was added, but their address couldn’t be saved — add it from their profile so they can be scheduled and priced.`)
     }
 
     // Persist the consent captured on the form through the shared engine (writes
@@ -209,7 +214,7 @@ export default function CustomersPage() {
   // The add/edit form renders inline at the top of the page. Editing from a row
   // deep in a long list would otherwise open it off-screen — bring it into view.
   function scrollToTop() {
-    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' })
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: scrollBehavior() })
   }
   function openAdd() { setEditing(null); setShowForm(true); scrollToTop() }
   function openEdit(c: Customer) { setEditing(c); setShowForm(false); scrollToTop() }

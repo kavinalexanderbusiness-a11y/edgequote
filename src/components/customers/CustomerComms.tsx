@@ -57,7 +57,7 @@ export function CustomerComms({ customerId, smsOptIn, emailOptIn }: { customerId
   return (
     <Card>
       <CardHeader>
-        <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><MessageSquare className="w-4 h-4 text-accent" /> Communication</h2>
+        <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><MessageSquare className="w-4 h-4 text-accent-text" /> Communication</h2>
         <p className="text-xs text-ink-faint mt-0.5">Consent controls every automated and one-tap message to this customer.</p>
       </CardHeader>
       <CardBody className="space-y-4">

@@ -17,7 +17,7 @@ import type { ContentPiece, ContentStatus, MarketingCampaign, MarketingChannel, 
 const STATUSES: ContentStatus[] = ['draft', 'scheduled', 'published', 'failed']
 const SEASONS: Season[] = ['spring', 'summer', 'fall', 'winter']
 const STATUS_TONE: Record<ContentStatus, string> = {
-  draft: 'text-ink-muted', approved: 'text-sky-400', scheduled: 'text-accent', published: 'text-emerald-400', failed: 'text-red-400',
+  draft: 'text-ink-muted', approved: 'text-sky-400', scheduled: 'text-accent-text', published: 'text-emerald-400', failed: 'text-red-400',
 }
 // Same words the calendar uses for a content piece ("Posted", not "Published").
 const STATUS_LABEL: Record<ContentStatus, string> = {
@@ -193,7 +193,7 @@ function PostCard({ piece, campaignName, supabase, onFavorite, onDuplicate, onAr
         <div className="space-y-1.5">
           {def.usesTitle && <input value={title} onChange={e => setTitle(e.target.value)} aria-label="Headline" placeholder="Headline" className="w-full bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />}
           <textarea value={body} onChange={e => setBody(e.target.value)} rows={5} aria-label="Post text" placeholder="Write your post…" className="w-full bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-ink placeholder:text-ink-faint resize-y outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
-          {def.usesHashtags && <input value={tags} onChange={e => setTags(e.target.value)} aria-label="Hashtags" placeholder="#hashtags — space-separated" className="w-full bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-accent placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />}
+          {def.usesHashtags && <input value={tags} onChange={e => setTags(e.target.value)} aria-label="Hashtags" placeholder="#hashtags — space-separated" className="w-full bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-xs text-accent-text placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />}
           <div className="flex gap-1.5">
             <Button size="sm" onClick={save} loading={saving}>Save</Button>
             <Button size="sm" variant="ghost" aria-label="Cancel editing" onClick={() => setEditing(false)}><X className="w-3.5 h-3.5" /></Button>
@@ -203,7 +203,7 @@ function PostCard({ piece, campaignName, supabase, onFavorite, onDuplicate, onAr
         <>
           {piece.title && <p className="text-sm font-medium text-ink line-clamp-1">{piece.title}</p>}
           <p className="text-xs text-ink-muted line-clamp-4 whitespace-pre-wrap leading-relaxed flex-1">{piece.body || '(empty)'}</p>
-          {piece.hashtags.length > 0 && <p className="text-[10px] text-accent line-clamp-1 break-words">{piece.hashtags.map(h => `#${h}`).join(' ')}</p>}
+          {piece.hashtags.length > 0 && <p className="text-[10px] text-accent-text line-clamp-1 break-words">{piece.hashtags.map(h => `#${h}`).join(' ')}</p>}
         </>
       )}
 

@@ -112,7 +112,7 @@ export function Sidebar() {
   const linkClass = (active: boolean) =>
     cn(
       'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-      active ? 'bg-accent/10 text-accent' : 'text-ink-muted hover:text-ink hover:bg-surface'
+      active ? 'bg-accent/10 text-accent-text' : 'text-ink-muted hover:text-ink hover:bg-surface'
     )
 
   function navBody(onNavigate?: () => void) {
@@ -208,7 +208,7 @@ export function Sidebar() {
 
       {/* Mobile drawer */}
       {open && (
-        <div className="lg:hidden fixed inset-0 z-50">
+        <div className="lg:hidden fixed inset-0 z-overlay">
           <div className="absolute inset-0 bg-black/60 animate-fade" onClick={() => setOpen(false)} />
           <aside ref={drawerRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Menu" className="absolute left-0 top-0 h-full w-64 max-w-[80%] bg-bg-secondary border-r border-border flex flex-col animate-drawer focus:outline-none">
             <div className="h-14 flex items-center justify-between px-4 border-b border-border">

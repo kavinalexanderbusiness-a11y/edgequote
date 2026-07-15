@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { renderMessage, MsgType, type MessagePrefs } from '@/lib/comms/templates'
 import { commsEnabled } from '@/lib/comms/send'
 import { dispatchToCustomer } from '@/lib/comms/dispatch'
+import { logDispatch } from '@/lib/comms/log'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import {
   CAMPAIGN_KINDS, campaignPeriodKey, dateFieldFiresToday, broadcastFiresToday, type CampaignKind,
@@ -142,12 +143,7 @@ export async function GET(req: NextRequest) {
       })
 
       // Comms audit (per channel) — appears in the customer's message history.
-      for (const a of res.attempts) {
-        await supabase.from('notification_log').insert({
-          user_id: camp.user_id, customer_id: c.id, channel: a.channel, template: templateKey,
-          status: a.status, detail: a.detail ?? null, message_id: a.sent ? res.messageId : null,
-        })
-      }
+      await logDispatch(supabase, res, { userId: camp.user_id, customerId: c.id, template: templateKey })
       // Finalize the claimed row (UPDATE, not a second insert) with the real outcome.
       const overall = res.sentChannels.length ? 'sent' : (res.attempts.every(a => a.status === 'skipped') ? 'skipped' : 'failed')
       const firstDetail = res.attempts.find(a => !a.sent)?.detail ?? null

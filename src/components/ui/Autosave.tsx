@@ -39,12 +39,12 @@ export function DraftRestoreBanner({ savedAt, onRestore, onDiscard, label = 'uns
 }) {
   return (
     <div className="rounded-xl border border-accent/30 bg-accent/[0.07] px-3.5 py-2.5 flex items-center gap-3">
-      <FileClock className="w-4 h-4 text-accent shrink-0" />
+      <FileClock className="w-4 h-4 text-accent-text shrink-0" />
       <p className="text-xs text-ink flex-1 min-w-0">
         You have an {label}{savedAt ? <span className="text-ink-muted"> from {ago(savedAt)}</span> : ''}. Restore it?
       </p>
       <div className="flex items-center gap-1.5 shrink-0">
-        <button type="button" onClick={onRestore} className="inline-flex items-center gap-1 text-xs font-semibold text-accent rounded-lg px-2.5 py-1.5 border border-accent/30 hover:bg-accent/10 transition-colors">
+        <button type="button" onClick={onRestore} className="inline-flex items-center gap-1 text-xs font-semibold text-accent-text rounded-lg px-2.5 py-1.5 border border-accent/30 hover:bg-accent/10 transition-colors">
           <RotateCcw className="w-3.5 h-3.5" /> Restore
         </button>
         <button type="button" onClick={onDiscard} aria-label="Discard draft" className="inline-flex items-center gap-1 text-xs font-medium text-ink-faint rounded-lg px-2 py-1.5 hover:text-red-400 transition-colors">

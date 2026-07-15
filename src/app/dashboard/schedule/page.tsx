@@ -37,7 +37,7 @@ import type { HealthIssue, HealthJob } from '@/lib/scheduleHealth'
 import { ScheduleHealthCard } from '@/components/schedule/ScheduleHealthCard'
 import { DayStatusMenu } from '@/components/schedule/DayStatusMenu'
 import { buildDayStatusMap, buildCapacityForDate, dayStartTime, isDayBlocked, loadDayStatuses, setDayStatus, setDayCapacity, clearDayStatus, DAY_STATUS_META, DAY_STATUS_SELECT, type DayStatusMap, type DayStatusRow, type DayStatus } from '@/lib/dayStatus'
-import { directionsUrl } from '@/lib/route'
+import { directionsUrl, estimateDayLoad } from '@/lib/route'
 import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { useFocusTrap } from '@/hooks/useFocusTrap'
@@ -121,7 +121,10 @@ export default function SchedulePage() {
   const [workStartTime, setWorkStartTime] = useState('08:00')
   const [capacityHours, setCapacityHours] = useState(8)
   const [defaultCrew, setDefaultCrew] = useState(1)
-  const [automations, setAutomations] = useState<Automations>({ reminder: true, job_complete: true, review: true, marketing_draft: true })
+  // Defaults come from the resolver, not a hand-copied literal — otherwise every
+  // new automation has to be remembered here too (and this is loaded from
+  // settings a moment later anyway).
+  const [automations, setAutomations] = useState<Automations>(() => resolveAutomations(null))
   const [showOptimize, setShowOptimize] = useState(false)
   const [showRainCenter, setShowRainCenter] = useState(false)
   // Pre-scoped launch from an auto-suggestion (vs. the manual Optimize button).
@@ -407,16 +410,24 @@ export default function SchedulePage() {
       id: r.id, user_id: r.user_id, freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count,
       start_date: r.start_date, end_date: r.end_date, end_count: r.end_count, customer_id: r.customer_id,
     }))
-    if (futureJobs.length) await supabase.from('jobs').delete().in('id', futureJobs.map(j => j.id))
+    // The delete is the destructive step — if it fails there is nothing to merge and the
+    // toast must not say otherwise (removeHealth, its sibling, already checks this).
+    if (futureJobs.length) {
+      const { error } = await supabase.from('jobs').delete().in('id', futureJobs.map(j => j.id))
+      if (error) { setBanner('Could not merge these plans — nothing was changed.'); setHealthBusyKey(null); return }
+    }
     if (pastReattach.length) await supabase.from('jobs').update({ recurrence_id: null }).in('id', pastReattach.map(p => p.id))
     await supabase.from('job_recurrences').delete().in('id', others)
     await fetchJobs()
     setHealthBusyKey(null)
     offerUndo(`Merged ${others.length + 1} ${issue.isMow ? 'mowing ' : ''}plans into one`, async () => {
-      if (recRows.length) await supabase.from('job_recurrences').insert(recRows)
-      if (futureRows.length) await supabase.from('jobs').insert(futureRows)
-      if (futureAddons.length) await supabase.from('job_line_items').insert(futureAddons)
-      for (const p of pastReattach) await supabase.from('jobs').update({ recurrence_id: p.recurrence_id }).eq('id', p.id)
+      const res: { error: unknown }[] = []
+      if (recRows.length) res.push(await supabase.from('job_recurrences').insert(recRows))
+      if (futureRows.length) res.push(await supabase.from('jobs').insert(futureRows))
+      if (futureAddons.length) res.push(await supabase.from('job_line_items').insert(futureAddons))
+      for (const p of pastReattach) res.push(await supabase.from('jobs').update({ recurrence_id: p.recurrence_id }).eq('id', p.id))
+      await fetchJobs()
+      if (res.some(r => r.error)) setBanner('Could not fully unmerge these plans — check the affected visits.')
     })
   }
 
@@ -436,14 +447,37 @@ export default function SchedulePage() {
   // When arriving from a customer (?customer=…), open a new-job form for them.
   const [customerPrefill, setCustomerPrefill] = useState<Partial<JobFormValues> | null>(null)
 
+  // Read EVERY job, in pages. PostgREST caps a response at 1000 rows and does not
+  // raise an error, so the previous unbounded select silently dropped everything
+  // past the cap — and because the order is scheduled_date ASCENDING, what got
+  // dropped was the FURTHEST-FUTURE work. Once a season of pre-generated recurring
+  // visits passes the cap, upcoming jobs simply vanish from the calendar, the
+  // optimizer, cadence validation and Schedule Health, with no error to see: the
+  // owner double-books against a timeline that looks empty. `id` is a stable
+  // tiebreak — dozens of stops share one date, and without it the row order across
+  // pages isn't deterministic, so rows could repeat or be skipped at a boundary.
+  const fetchAllJobs = useCallback(async (userId: string): Promise<{ rows: Job[]; error: string | null }> => {
+    const PAGE_ROWS = 1000
+    const rows: Job[] = []
+    for (let from = 0; ; from += PAGE_ROWS) {
+      const { data, error } = await supabase
+        .from('jobs')
+        .select('*, customers(id, name, phone, preferred_days, avoid_days, pref_time_start, pref_time_end), properties(id, address, lat, lng, neighborhood, preferred_days, avoid_days, pref_time_start, pref_time_end)')
+        .eq('user_id', userId)
+        .order('scheduled_date')
+        .order('id')
+        .range(from, from + PAGE_ROWS - 1)
+      if (error) return { rows, error: error.message }
+      const batch = (data as Job[]) || []
+      rows.push(...batch)
+      if (batch.length < PAGE_ROWS) return { rows, error: null }
+    }
+  }, [supabase])
+
   const fetchJobs = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
     const [jRes, cRes, rRes, qRes, sRes, iRes, hRes, dRes] = await Promise.all([
-      supabase
-        .from('jobs')
-        .select('*, customers(id, name, phone, preferred_days, avoid_days, pref_time_start, pref_time_end), properties(id, address, lat, lng, neighborhood, preferred_days, avoid_days, pref_time_start, pref_time_end)')
-        .eq('user_id', user!.id)
-        .order('scheduled_date'),
+      fetchAllJobs(user!.id),
       supabase.from('customers').select('*').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — can't schedule an archived customer without restoring
       supabase.from('job_recurrences').select('*').eq('user_id', user!.id),
       supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
@@ -454,10 +488,18 @@ export default function SchedulePage() {
     ])
     setUid(user!.id)
     setDayStatusMap(buildDayStatusMap((dRes.data as DayStatusRow[]) || []))
-    const loadedJobs = (jRes.data as Job[]) || []
-    setJobs(loadedJobs)
+    // A failed jobs read must NEVER paint an empty schedule: "no work today" is
+    // indistinguishable from a clear day, and that's how a stop gets missed. Keep
+    // whatever is already on screen, say so plainly, and let the rest of the page
+    // finish refreshing (so loading always resolves).
+    if (jRes.error) {
+      setBanner('Could not load the schedule — check your connection and refresh. Showing the last data loaded.')
+    } else {
+      const loadedJobs = jRes.rows
+      setJobs(loadedJobs)
+      setAddonsByJobId(await listLineItemsByJob(supabase, user!.id, loadedJobs.map(j => j.id)))
+    }
     setInvoicedJobIds(new Set(((iRes.data as { job_id: string }[]) || []).map(r => r.job_id)))
-    setAddonsByJobId(await listLineItemsByJob(supabase, user!.id, loadedJobs.map(j => j.id)))
     setIgnoredHealthKeys(new Set(((hRes.data as { issue_key: string }[] | null) || []).map(r => r.issue_key)))
     setCustomers((cRes.data as Customer[]) || [])
     const labels: Record<string, string> = {}
@@ -489,7 +531,7 @@ export default function SchedulePage() {
       }
     }
     setLoading(false)
-  }, [supabase])
+  }, [supabase, fetchAllJobs])
 
   useEffect(() => { fetchJobs() }, [fetchJobs])
 
@@ -528,8 +570,11 @@ export default function SchedulePage() {
     })
     setDayMenu(null); setSelectedDays(new Set())
     const res = await Promise.all(dates.map(dt => setDayStatus(supabase, uid, dt, { status })))
-    if (res.some(r => r.error)) { setBanner('Could not save the day status — please try again.'); reloadDayStatuses() }
-    else reloadDayStatuses()
+    reloadDayStatuses()
+    // Report the outcome: rainDisableAndOptimize goes on to tell the owner the day is
+    // blocked and print a "Revenue protected" figure, so it has to know if this failed.
+    if (res.some(r => r.error)) { setBanner('Could not save the day status — please try again.'); return { ok: false } }
+    return { ok: true }
   }
   async function clearDayStatusFor(dates: string[]) {
     if (!uid) return
@@ -540,8 +585,12 @@ export default function SchedulePage() {
       return { byDate, blockedDates }
     })
     setDayMenu(null); setSelectedDays(new Set())
-    await Promise.all(dates.map(dt => clearDayStatus(supabase, uid, dt)))
+    // The optimistic clear above already told the owner the day is open again. Its sibling
+    // applyDayStatus checks this; unchecked, a failure let the day flicker available and
+    // then silently snap back to blocked with no explanation.
+    const res = await Promise.all(dates.map(dt => clearDayStatus(supabase, uid, dt)))
     reloadDayStatuses()
+    if (res.some(r => r.error)) setBanner('Could not clear the day status — please try again.')
   }
 
   // ── Proactive Weather Ops: detect a rainy day with work, offer a one-click fix ──
@@ -574,30 +623,39 @@ export default function SchedulePage() {
       unmovable: plan.unmovable.length,
     }
   }
-  async function applyRainMoves(date: string): Promise<ReturnType<typeof planRainDelay>> {
+  // Returns the plan AND whether the moves actually persisted — "Revenue protected: $X"
+  // is derived from plan.moves, so summarizing an unapplied plan invents that number.
+  async function applyRainMoves(date: string): Promise<{ plan: ReturnType<typeof planRainDelay>; ok: boolean }> {
     const plan = planRainDelay(optJobsAll, date, optBaseOpts)
     const moves = plan.moves.map(m => ({ jobId: m.jobId, from: m.from, to: m.to }))
-    if (moves.length) await applyOptimization(moves)
-    return plan
+    if (!moves.length) return { plan, ok: true }
+    const res = await applyOptimization(moves)
+    return { plan, ok: res.ok }
   }
   async function rainDisableAndOptimize(date: string) {
     setRainBusy(date)
-    await applyDayStatus([date], 'rain')
-    const plan = await applyRainMoves(date)
-    setRainSummary(summarizeRain(date, true, plan))
+    // `blocked` must reflect the day_statuses write, not our intent: if it failed the day
+    // is still open, the optimizer will keep routing work onto a rained-out day, and the
+    // card would say otherwise. Same for the moves behind "Revenue protected".
+    const blockRes = await applyDayStatus([date], 'rain')
+    const { plan, ok } = await applyRainMoves(date)
+    if (!ok) { setBanner('Could not move this day’s visits — they’re still on the rained-out day.'); setRainBusy(null); return }
+    setRainSummary(summarizeRain(date, !!blockRes?.ok, plan))
     setDismissedRain(prev => new Set(prev).add(date))
     setRainBusy(null)
   }
   async function rainDisableOnly(date: string) {
     setRainBusy(date)
-    await applyDayStatus([date], 'rain')
+    const blockRes = await applyDayStatus([date], 'rain')
+    if (!blockRes?.ok) { setRainBusy(null); return }   // applyDayStatus already banner'd
     setRainSummary({ date, blocked: true, byDay: [], revenueProtected: 0, unmovable: 0 })
     setDismissedRain(prev => new Set(prev).add(date))
     setRainBusy(null)
   }
   async function rainOptimizeOnly(date: string) {
     setRainBusy(date)
-    const plan = await applyRainMoves(date)
+    const { plan, ok } = await applyRainMoves(date)
+    if (!ok) { setBanner('Could not move this day’s visits — they’re still on the rained-out day.'); setRainBusy(null); return }
     setRainSummary(summarizeRain(date, false, plan))
     setDismissedRain(prev => new Set(prev).add(date))
     setRainBusy(null)
@@ -888,8 +946,9 @@ export default function SchedulePage() {
     // second draft, never a stale amount. Sent/paid/cancelled invoices are locked
     // (the sync engine only touches drafts); scope-wide edits sync every visit.
     if (Number(values.price) !== Number(job.price)) {
-      const synced = await syncDraftInvoiceAmounts(supabase, targets.map(t => t.id))
-      if (synced > 0) setBanner(`Saved — ${synced} draft invoice${synced !== 1 ? 's' : ''} updated to match the new price.`)
+      const { changed, failed } = await syncDraftInvoiceAmounts(supabase, targets.map(t => t.id))
+      if (failed > 0) setBanner(`Saved the new price, but ${failed} draft invoice${failed !== 1 ? 's' : ''} still show${failed === 1 ? 's' : ''} the old amount — open the invoice to re-price it.`)
+      else if (changed > 0) setBanner(`Saved — ${changed} draft invoice${changed !== 1 ? 's' : ''} updated to match the new price.`)
     }
   }
 
@@ -1016,14 +1075,21 @@ export default function SchedulePage() {
     const delta = dayDelta(job.scheduled_date, newDate)
     const targets = jobsInScope(job, jobs, scope)
     const prev = targets.map(t => ({ id: t.id, scheduled_date: t.scheduled_date, route_order: t.route_order ?? null }))
-    await Promise.all(targets.map(t =>
+    // fetchJobs() below re-reads from the server, so the CALENDAR self-heals on failure —
+    // but the toast doesn't: it claimed "Moved 12 visits" and offered an Undo for a no-op.
+    // The single-job path (proceedMoveJobToDate) already checks this; same gesture, so the
+    // recurring path must too, or the owner closes the laptop believing the season moved.
+    const res = await Promise.all(targets.map(t =>
       supabase.from('jobs').update({ scheduled_date: shiftDate(t.scheduled_date, delta) }).eq('id', t.id)
     ))
     await fetchJobs()
+    if (res.some(r => r.error)) { setBanner('Could not move these visits — the schedule is unchanged.'); return }
     offerUndo(`Moved ${targets.length} visit${targets.length !== 1 ? 's' : ''}`, async () => {
       // Restore dates AND manual route positions (the trigger nulled them on the
       // way out; it keeps an explicitly-set route_order in the same update).
-      await Promise.all(prev.map(p => supabase.from('jobs').update({ scheduled_date: p.scheduled_date, route_order: p.route_order }).eq('id', p.id)))
+      const undoRes = await Promise.all(prev.map(p => supabase.from('jobs').update({ scheduled_date: p.scheduled_date, route_order: p.route_order }).eq('id', p.id)))
+      await fetchJobs()
+      if (undoRes.some(r => r.error)) setBanner('Could not undo the move — check the affected days.')
     })
   }
 
@@ -1041,15 +1107,22 @@ export default function SchedulePage() {
       id: r.id, user_id: r.user_id, freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count,
       start_date: r.start_date, end_date: r.end_date, end_count: r.end_count, customer_id: r.customer_id,
     } : null
-    await supabase.from('jobs').delete().in('id', targets.map(t => t.id))
+    const { error: delErr } = await supabase.from('jobs').delete().in('id', targets.map(t => t.id))
+    if (delErr) { setBanner('Could not delete these visits — the schedule is unchanged.'); return }
     if (recRow) await supabase.from('job_recurrences').delete().eq('id', job.recurrence_id)
     await fetchJobs()
     setEditing(null)
     offerUndo(`Deleted ${targets.length} visit${targets.length !== 1 ? 's' : ''}`, async () => {
-      if (recRow) await supabase.from('job_recurrences').insert(recRow)
-      if (snapshot.length) await supabase.from('jobs').insert(snapshot)
-      if (addons.length) await supabase.from('job_line_items').insert(addons)
-      for (const inv of linkedInv) await supabase.from('invoices').update({ job_id: inv.job_id }).eq('id', inv.id)
+      // A partial restore is worse than none: jobs without their priced add-ons, or
+      // invoices left unlinked, silently under-bill. Report it rather than let the toast
+      // dismiss as though the visits came back whole.
+      const res: { error: unknown }[] = []
+      if (recRow) res.push(await supabase.from('job_recurrences').insert(recRow))
+      if (snapshot.length) res.push(await supabase.from('jobs').insert(snapshot))
+      if (addons.length) res.push(await supabase.from('job_line_items').insert(addons))
+      for (const inv of linkedInv) res.push(await supabase.from('invoices').update({ job_id: inv.job_id }).eq('id', inv.id))
+      await fetchJobs()
+      if (res.some(r => r.error)) setBanner('Could not fully restore these visits — check the day and re-add anything missing.')
     })
   }
 
@@ -1127,6 +1200,11 @@ export default function SchedulePage() {
     const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed', actual_minutes: actual })
     if (res.created) { invoiceCreated = true; setBanner(`Draft invoice ${res.invoiceNumber} created. Review in Invoices.`) }
     else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
+    // A failed draft used to say NOTHING, which is indistinguishable from the success
+    // banner you scrolled past — the visit leaves the un-invoiced queue and the money
+    // is never billed, with no trace pointing at it. ('exists' stays quiet: an invoice
+    // does exist, so nothing is misclaimed.)
+    else if (res.reason === 'error') setBanner('Job completed, but the draft invoice could not be created — invoice it manually from the job.')
     // Automated job-complete message (opt-in + dedupe are enforced by the route).
     if (automations.job_complete && job.customer_id) {
       fetch('/api/comms/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ customerId: job.customer_id, template: 'job_complete', jobId: job.id, dedupe: true }) }).catch(() => {})
@@ -1153,9 +1231,16 @@ export default function SchedulePage() {
       const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed' })
       if (res.created) setBanner(`Saved — draft invoice ${res.invoiceNumber} created.`)
       else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
+      // The quick-edit dropdown completes a job through the same transition as the Complete
+      // button, which DOES report this (completeJob below). Without it a failed draft leaves
+      // the visit out of the un-invoiced queue and it is never billed, with no trace.
+      else if (res.reason === 'error') setBanner('Job completed, but the draft invoice could not be created — invoice it manually from the job.')
     }
     // If the inline edit changed the price, keep its draft invoice in sync.
-    if (Number(patch.price) !== Number(job.price)) await syncDraftInvoiceAmounts(supabase, [job.id])
+    if (Number(patch.price) !== Number(job.price)) {
+      const { failed } = await syncDraftInvoiceAmounts(supabase, [job.id])
+      if (failed > 0) setBanner('Saved, but its draft invoice still shows the old amount — open the invoice to re-price it.')
+    }
     await fetchJobs()
   }
 
@@ -1175,9 +1260,10 @@ export default function SchedulePage() {
     // Audit trail (old → new, reason on raises) for upsell analytics later.
     await recordPriceChange(supabase, { userId: user!.id, jobId: job.id, scope: null, oldAmount, newAmount: price, reason, changedByEmail: user?.email })
     // The job is the source of truth — re-price its draft invoice automatically.
-    const synced = await syncDraftInvoiceAmounts(supabase, [job.id], { reason })
+    const { changed, failed } = await syncDraftInvoiceAmounts(supabase, [job.id], { reason })
     await fetchJobs()
-    if (synced > 0) setBanner('Price updated — its draft invoice was re-priced to match.')
+    if (failed > 0) setBanner('Price updated, but its draft invoice still shows the old amount — open the invoice to re-price it.')
+    else if (changed > 0) setBanner('Price updated — its draft invoice was re-priced to match.')
   }
 
   // The quote cadence column a recurring job's price maps to (interval-aware).
@@ -1236,16 +1322,25 @@ export default function SchedulePage() {
     await recordPriceChange(supabase, { userId: cu!.id, jobId: job.id, quoteId: writesQuote ? job.quote_id : null, scope, oldAmount, newAmount: newPrice, reason, changedByEmail: cu?.email })
 
     // Job = source of truth → re-price the affected visits' draft invoices.
-    const synced = await syncDraftInvoiceAmounts(supabase, affectedIds, { reason })
+    const { changed, failed } = await syncDraftInvoiceAmounts(supabase, affectedIds, { reason })
     await fetchJobs()
     const dest = writesQuote ? `the quote's ${freq} price` : scope === 'this' ? 'this visit' : 'the series visits'
-    offerUndo(`Price saved to ${dest}${synced > 0 ? ` · ${synced} draft invoice${synced !== 1 ? 's' : ''} re-priced` : ''}`, async () => {
-      if (quoteSnap) await supabase.from('quotes').update({ [quoteSnap.field]: quoteSnap.value }).eq('id', quoteSnap.id)
+    // Only claim the re-price we verified; a failed one is called out, not rounded into the count.
+    const invNote = failed > 0
+      ? ` · ${failed} draft invoice${failed !== 1 ? 's' : ''} still show${failed === 1 ? 's' : ''} the old amount`
+      : changed > 0 ? ` · ${changed} draft invoice${changed !== 1 ? 's' : ''} re-priced` : ''
+    offerUndo(`Price saved to ${dest}${invNote}`, async () => {
+      // Undo restores MONEY. Unchecked, a failed restore dismissed the toast and left the
+      // new price in place with no error — the owner believes they reverted and they didn't.
+      const restores: { error: unknown }[] = []
+      if (quoteSnap) restores.push(await supabase.from('quotes').update({ [quoteSnap.field]: quoteSnap.value }).eq('id', quoteSnap.id))
       const nullIds = jobSnap.filter(s => s.price == null).map(s => s.id)
-      if (nullIds.length) await supabase.from('jobs').update({ price: null }).in('id', nullIds)
-      for (const s of jobSnap.filter(s => s.price != null)) await supabase.from('jobs').update({ price: s.price }).eq('id', s.id)
-      await syncDraftInvoiceAmounts(supabase, affectedIds) // restore invoice amounts to match
+      if (nullIds.length) restores.push(await supabase.from('jobs').update({ price: null }).in('id', nullIds))
+      for (const s of jobSnap.filter(s => s.price != null)) restores.push(await supabase.from('jobs').update({ price: s.price }).eq('id', s.id))
+      const restore = await syncDraftInvoiceAmounts(supabase, affectedIds) // restore invoice amounts to match
       await fetchJobs()
+      if (restores.some(r => r.error)) setBanner('Could not undo the price change — please set the price back manually.')
+      else if (restore.failed > 0) setBanner('Price restored, but a draft invoice still shows the changed amount — open it to re-price.')
     })
   }
 
@@ -1339,25 +1434,36 @@ export default function SchedulePage() {
 
   // Apply a batch of date moves (optimizer or rain delay): grouped by target
   // day, with one Undo that restores every original date.
-  async function applyOptimization(moves: Pick<PlannedMove, 'jobId' | 'from' | 'to'>[]) {
-    if (!moves.length) return
+  //
+  // Returns an outcome — callers must be able to SEE a failure, not just have it
+  // banner'd behind them. RainDelayCenter renders over this page and then texts every
+  // affected customer their new date; if it can't observe the write failing it tells
+  // customers about a reschedule that never persisted, which is unrecallable.
+  async function applyOptimization(moves: Pick<PlannedMove, 'jobId' | 'from' | 'to'>[]): Promise<{ ok: boolean; error?: string }> {
+    if (!moves.length) return { ok: true }
     const byTo: Record<string, string[]> = {}
     for (const m of moves) (byTo[m.to] ||= []).push(m.jobId)
+    let failure: string | undefined
     for (const [to, ids] of Object.entries(byTo)) {
       const { error } = await supabase.from('jobs').update({ scheduled_date: to }).in('id', ids)
-      if (error) { setBanner('Optimization partially applied — ' + error.message); break }
+      if (error) { setBanner('Optimization partially applied — ' + error.message); failure = error.message; break }
     }
     await fetchJobs()
+    if (failure) return { ok: false, error: failure }
     // Capture each moved job's manual route position so undo restores it (the
     // date-move trigger nulls route_order on the way out).
     const prevOrder = new Map(moves.map(m => [m.jobId, jobs.find(j => j.id === m.jobId)?.route_order ?? null]))
     const byFrom: Record<string, string[]> = {}
     for (const m of moves) (byFrom[m.from] ||= []).push(m.jobId)
     offerUndo(`${moves.length} job${moves.length !== 1 ? 's' : ''} moved`, async () => {
+      const res: { error: unknown }[] = []
       for (const [from, ids] of Object.entries(byFrom)) {
-        await Promise.all(ids.map(id => supabase.from('jobs').update({ scheduled_date: from, route_order: prevOrder.get(id) ?? null }).eq('id', id)))
+        res.push(...await Promise.all(ids.map(id => supabase.from('jobs').update({ scheduled_date: from, route_order: prevOrder.get(id) ?? null }).eq('id', id))))
       }
+      await fetchJobs()
+      if (res.some(r => r.error)) setBanner('Could not undo every move — check the affected days.')
     })
+    return { ok: true }
   }
 
   // Next date on/after `fromISO`+1 whose weekday is a preferred work day AND
@@ -1382,10 +1488,21 @@ export default function SchedulePage() {
     const to = nextWorkday(dateISO)
     const ids = dayJobs.map(j => j.id)
     const prevOrders = dayJobs.map(j => ({ id: j.id, route_order: j.route_order ?? null }))
+    // What the target day will look like AFTER the bump. nextWorkday already skips
+    // blocked days, but it can't know the day is already full — landing 6 stops on a
+    // booked day silently creates an overloaded day. Same shared engine as the
+    // calendar bar + day board, so the hours quoted here match what you'll see there.
+    const landing = estimateDayLoad(
+      [...jobs.filter(j => j.scheduled_date === to && j.status !== 'cancelled'), ...dayJobs],
+      optBaseOpts.capacityForDate(to),
+    )
     const { error } = await supabase.from('jobs').update({ scheduled_date: to }).in('id', ids)
     if (error) { setBanner('Could not bump the day: ' + error.message); return }
     await fetchJobs()
     setCursor(parseISO(to + 'T00:00:00'))
+    if (landing.state === 'overloaded') {
+      toast(`${format(parseISO(to + 'T00:00:00'), 'EEE, MMM d')} is now overbooked by ~${Math.round(-landing.spareMin / 6) / 10}h — optimize or move a stop.`)
+    }
     offerUndo(`Rain delay — bumped ${ids.length} job${ids.length !== 1 ? 's' : ''} to ${format(parseISO(to + 'T00:00:00'), 'EEE, MMM d')}`,
       async () => {
         // Per-job so each visit gets back its own manual route position.
@@ -1500,7 +1617,7 @@ export default function SchedulePage() {
       <WeatherStrip />
 
       {quoteCtx && (
-        <div className="text-sm text-accent bg-accent/10 border border-accent/20 rounded-xl px-4 py-2.5">
+        <div className="text-sm text-accent-text bg-accent/10 border border-accent/20 rounded-xl px-4 py-2.5">
           Scheduling from accepted quote <span className="font-semibold">{quoteCtx.quote_number}</span> — pick a date and set recurrence below.
         </div>
       )}
@@ -1560,8 +1677,8 @@ export default function SchedulePage() {
                 : s.kind === 'stuck'
                   ? <Info className="w-4 h-4 text-ink-muted shrink-0 mt-0.5" />
                   : s.kind === 'recurring'
-                    ? <Repeat className="w-4 h-4 text-accent shrink-0 mt-0.5" />
-                    : <Lightbulb className="w-4 h-4 text-accent shrink-0 mt-0.5" />}
+                    ? <Repeat className="w-4 h-4 text-accent-text shrink-0 mt-0.5" />
+                    : <Lightbulb className="w-4 h-4 text-accent-text shrink-0 mt-0.5" />}
               <div className="min-w-0 flex-1">
                 <p className={cn('text-sm font-semibold', s.kind === 'stuck' ? 'text-ink' : s.severity === 'high' ? 'text-amber-300' : 'text-ink')}>{s.title}</p>
                 <p className="text-xs text-ink-muted mt-0.5">{s.detail}</p>
@@ -1616,7 +1733,7 @@ export default function SchedulePage() {
 
       {/* Edit/New job — modal overlay so Open always brings the correct job into view */}
       {(showForm || editing) && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/50" onClick={closeForm}>
+        <div className="fixed inset-0 z-overlay overflow-y-auto bg-black/50" onClick={closeForm}>
           <div className="min-h-full flex items-start justify-center p-4 sm:p-6">
             <Card role="dialog" aria-modal="true" aria-labelledby="job-form-title" className="w-full max-w-2xl my-2 shadow-2xl" onClick={e => e.stopPropagation()}>
           <CardHeader className="flex items-center justify-between">
@@ -1768,6 +1885,7 @@ export default function SchedulePage() {
           onDayMenu={openDayMenu}
           selectedDays={selectedDays}
           onToggleDaySelect={toggleDaySelect}
+          capacityForDate={optBaseOpts.capacityForDate}
         />
       )}
 
@@ -1783,7 +1901,7 @@ export default function SchedulePage() {
 
       {/* Soft cadence / preference warning before a hand move */}
       {moveConfirm && (
-        <div ref={moveConfirmRef} className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4" onClick={() => setMoveConfirm(null)}>
+        <div ref={moveConfirmRef} className="fixed inset-0 z-overlay-top flex items-center justify-center bg-black/50 p-4" onClick={() => setMoveConfirm(null)}>
           <Card role="dialog" aria-modal="true" aria-labelledby="move-confirm-title" tabIndex={-1} className="w-full max-w-md shadow-2xl focus:outline-none" onClick={e => e.stopPropagation()}>
             <CardHeader className="flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 text-amber-400" aria-hidden="true" />

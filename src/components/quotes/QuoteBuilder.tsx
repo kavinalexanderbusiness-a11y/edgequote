@@ -426,7 +426,7 @@ export function QuoteBuilder({
               {showManualName && (
                 <div className="space-y-3 rounded-xl border border-accent/20 bg-accent/5 p-3">
                   <p className="text-[11px] text-ink-muted flex items-center gap-1.5">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-accent" /> New person — we&apos;ll save them as a customer &amp; property automatically when you save.
+                    <CheckCircle2 className="w-3.5 h-3.5 text-accent-text" /> New person — we&apos;ll save them as a customer &amp; property automatically when you save.
                   </p>
                   <Input label="Customer Name *" placeholder="Jane Smith"
                     error={errors.customer_name?.message}
@@ -601,7 +601,7 @@ export function QuoteBuilder({
                             {/* ONE recommendation on screen: when Pricing Intelligence is
                                 the primary card, the tile badge would be a second,
                                 differently-priced "Rec". */}
-                            {!(pricingKind === 'lawn_recurring' && measuredSqft > 0) && suggested.recommended === opt.c && <span className="text-[10px] font-bold uppercase tracking-wide text-accent">Rec</span>}
+                            {!(pricingKind === 'lawn_recurring' && measuredSqft > 0) && suggested.recommended === opt.c && <span className="text-[10px] font-bold uppercase tracking-wide text-accent-text">Rec</span>}
                           </span>
                           <span className="block text-base font-bold text-ink mt-0.5 leading-tight tabular-nums">
                             {formatCurrency(opt.price)}<span className="text-[10px] font-normal text-ink-faint">{opt.per}</span>
@@ -621,7 +621,7 @@ export function QuoteBuilder({
                         if (suggested && !initialManual) setValue('monthly_price', next ? suggested.monthly : 0)
                       }}
                       className={cn('shrink-0 text-[10px] font-semibold rounded-full px-2 py-0.5 border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-                        includeMonthly ? 'text-accent border-accent/40 bg-accent/10' : 'text-ink-faint border-border hover:text-ink')}>
+                        includeMonthly ? 'text-accent-text border-accent/40 bg-accent/10' : 'text-ink-faint border-border hover:text-ink')}>
                       {includeMonthly ? 'Monthly: on' : '+ Monthly'}
                     </button>
                   </div>
@@ -638,7 +638,7 @@ export function QuoteBuilder({
               engine — never two copies of the price list on screen). */}
           {savedRec && !suggested && (
             <div className="rounded-xl border border-accent/30 bg-accent/5 p-3 space-y-2">
-              <p className="text-[11px] font-semibold text-accent uppercase tracking-wide">
+              <p className="text-[11px] font-semibold text-accent-text uppercase tracking-wide">
                 Measured property · {savedRec.sqft.toLocaleString()} ft² · {formatCurrency(savedRec.rec[savedRec.rec.cadence === 'one_time' ? 'one_time' : savedRec.rec.cadence])}/{savedRec.rec.cadence === 'one_time' ? 'visit' : savedRec.rec.cadence} recommended
               </p>
               <p className="text-xs text-ink-muted">
@@ -721,7 +721,7 @@ export function QuoteBuilder({
                 <MapPin className="w-3.5 h-3.5" /> Calculate distance
               </Button>
             </div>
-            {calcMsg && <p className={cn('text-xs', calcMsg.error ? 'text-red-400' : 'text-accent')}>{calcMsg.text}</p>}
+            {calcMsg && <p className={cn('text-xs', calcMsg.error ? 'text-red-400' : 'text-accent-text')}>{calcMsg.text}</p>}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
               <Input label="Distance (km)" type="number" step="0.1" min="0" {...register('distance_km', { min: 0 })} />
               <Input label="Travel Fee ($)" type="number" step="5" min="0" {...register('travel_fee', { min: 0 })} />
@@ -731,7 +731,7 @@ export function QuoteBuilder({
                 {travelSuggestion.isCustom ? (
                   <span className="text-amber-400">{travelSuggestion.tierLabel}: custom fee required</span>
                 ) : (
-                  <span className="text-ink-muted">{travelSuggestion.tierLabel}: <span className="text-accent font-semibold">{formatCurrency(travelSuggestion.fee || 0)}</span></span>
+                  <span className="text-ink-muted">{travelSuggestion.tierLabel}: <span className="text-accent-text font-semibold">{formatCurrency(travelSuggestion.fee || 0)}</span></span>
                 )}
               </div>
             )}
@@ -845,7 +845,7 @@ export function QuoteBuilder({
               render={({ field }) => (<Select label="Quote Status" options={statusOptions} {...field} />)} />
             <div className="pt-1">
               <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide flex items-center gap-2 mb-2">
-                <Sparkles className="w-3.5 h-3.5 text-accent" /> Best days to schedule
+                <Sparkles className="w-3.5 h-3.5 text-accent-text" /> Best days to schedule
               </p>
               {!address ? (
                 <p className="text-xs text-ink-faint">Enter a service address to see the best days near your existing jobs.</p>
@@ -863,7 +863,7 @@ export function QuoteBuilder({
         <div className="hidden lg:block space-y-4">
           <Card className="sticky top-6">
             <CardHeader className="flex items-center gap-2">
-              <Calculator className="w-4 h-4 text-accent" />
+              <Calculator className="w-4 h-4 text-accent-text" />
               <h2 className="text-sm font-semibold text-ink">Quote Preview</h2>
             </CardHeader>
             <CardBody className="space-y-3">
@@ -888,7 +888,7 @@ export function QuoteBuilder({
                 </div>
                 <div className="flex items-center justify-between pt-2 border-t border-border">
                   <span className="text-sm font-semibold text-ink">First visit total</span>
-                  <span className="text-2xl font-bold text-accent tabular-nums">{formatCurrency(effectiveTotal)}</span>
+                  <span className="text-2xl font-bold text-accent-text tabular-nums">{formatCurrency(effectiveTotal)}</span>
                 </div>
               </div>
               {(weeklyPrice > 0 || biweeklyPrice > 0 || monthlyPrice > 0) && (
@@ -914,7 +914,7 @@ export function QuoteBuilder({
       <StickyActionBar fixed className="lg:hidden flex items-center justify-between gap-3">
         <div className="leading-tight min-w-0">
           <p className="text-[10px] uppercase tracking-wide text-ink-faint">First visit total</p>
-          <p className="text-xl font-bold text-accent leading-none tabular-nums">{formatCurrency(effectiveTotal)}</p>
+          <p className="text-xl font-bold text-accent-text leading-none tabular-nums">{formatCurrency(effectiveTotal)}</p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <Button type="button" variant="ghost" size="sm" onClick={() => router.back()}>Cancel</Button>

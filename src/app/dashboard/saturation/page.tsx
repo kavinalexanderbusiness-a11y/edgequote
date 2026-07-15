@@ -308,7 +308,7 @@ export default function SaturationPage() {
       {(m.intel.revenue || m.intel.density || m.intel.recurring || m.intel.conversion || m.intel.growth) && (
         <Card>
           <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><Trophy className="w-3.5 h-3.5 text-accent" /></span>
+            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><Trophy className="w-3.5 h-3.5 text-accent-text" /></span>
             <h2 className="text-sm font-semibold text-ink tracking-tight">Neighborhood intelligence</h2>
             <span className="flex-1 h-px bg-border" aria-hidden />
           </div>
@@ -329,7 +329,7 @@ export default function SaturationPage() {
         {/* Where to get more customers */}
         <Card>
           <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><Sprout className="w-3.5 h-3.5 text-accent" /></span>
+            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><Sprout className="w-3.5 h-3.5 text-accent-text" /></span>
             <h2 className="text-sm font-semibold text-ink tracking-tight">Where to get more customers</h2>
             <span className="flex-1 h-px bg-border" aria-hidden />
           </div>
@@ -356,7 +356,7 @@ export default function SaturationPage() {
         {/* Best neighborhoods */}
         <Card>
           <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><Trophy className="w-3.5 h-3.5 text-accent" /></span>
+            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><Trophy className="w-3.5 h-3.5 text-accent-text" /></span>
             <h2 className="text-sm font-semibold text-ink tracking-tight">Best neighborhoods</h2>
             <span className="flex-1 h-px bg-border" aria-hidden />
           </div>
@@ -369,7 +369,7 @@ export default function SaturationPage() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-sm font-bold text-ink">{h.key}</p>
-                    <p className="text-sm font-bold text-accent tabular-nums">{formatCurrency(h.revenue)}</p>
+                    <p className="text-sm font-bold text-accent-text tabular-nums">{formatCurrency(h.revenue)}</p>
                   </div>
                   <p className="text-[11px] text-ink-muted mt-0.5 flex items-center gap-x-3 flex-wrap tabular-nums">
                     <span className="flex items-center gap-1"><Users className="w-3 h-3" />{h.customers}</span>
@@ -389,7 +389,7 @@ export default function SaturationPage() {
       <div className="grid lg:grid-cols-2 gap-4">
         <Card>
           <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><TrendingUp className="w-3.5 h-3.5 text-accent" /></span>
+            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><TrendingUp className="w-3.5 h-3.5 text-accent-text" /></span>
             <h2 className="text-sm font-semibold text-ink tracking-tight">Strongest routes</h2>
             <span className="flex-1 h-px bg-border" aria-hidden />
           </div>
@@ -400,7 +400,7 @@ export default function SaturationPage() {
         </Card>
         <Card>
           <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><TrendingDown className="w-3.5 h-3.5 text-accent" /></span>
+            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><TrendingDown className="w-3.5 h-3.5 text-accent-text" /></span>
             <h2 className="text-sm font-semibold text-ink tracking-tight">Weakest routes</h2>
             <span className="flex-1 h-px bg-border" aria-hidden />
           </div>
@@ -418,7 +418,7 @@ export default function SaturationPage() {
         </p>
       )}
       <p className="text-xs text-ink-faint">
-        Neighborhood = postal area (FSA), valued by the same engines as <Link href="/dashboard/profitability" className="text-accent hover:underline">Profitability</Link> and <Link href="/dashboard/routes" className="text-accent hover:underline">Routes</Link>. Area $/hr excludes drive time, so area grades cap at C — day grades on Profitability include driving.
+        Neighborhood = postal area (FSA), valued by the same engines as <Link href="/dashboard/profitability" className="text-accent-text hover:underline">Profitability</Link> and <Link href="/dashboard/routes" className="text-accent-text hover:underline">Routes</Link>. Area $/hr excludes drive time, so area grades cap at C — day grades on Profitability include driving.
       </p>
     </div>
   )
@@ -429,7 +429,7 @@ function IntelRow({ label, hood, stat }: { label: string; hood: string; stat: st
     <div className="px-4 py-2.5 flex items-center gap-3">
       <span className="text-xs text-ink-muted w-44 shrink-0">{label}</span>
       <span className="text-sm font-bold text-ink min-w-0 truncate flex items-center gap-1.5">
-        <MapPin className="w-3.5 h-3.5 text-accent shrink-0" /> {hood}
+        <MapPin className="w-3.5 h-3.5 text-accent-text shrink-0" /> {hood}
       </span>
       <span className="ml-auto text-xs text-ink-muted shrink-0 tabular-nums">{stat}</span>
     </div>
@@ -447,7 +447,7 @@ function RouteLine({ date, grade, revenue, revPerHour, stops }: { date: string; 
         <p className="text-sm font-semibold text-ink">{formatDate(date)}</p>
         <p className="text-[11px] text-ink-muted tabular-nums">{stops} stops · ${revPerHour}/hr</p>
       </div>
-      <p className="text-sm font-bold text-accent shrink-0 tabular-nums">{formatCurrency(revenue)}</p>
+      <p className="text-sm font-bold text-accent-text shrink-0 tabular-nums">{formatCurrency(revenue)}</p>
       <Link href="/dashboard/routes" className="text-ink-faint hover:text-ink shrink-0" title="Analyze this route" aria-label="Analyze this route">
         <Navigation className="w-4 h-4" />
       </Link>

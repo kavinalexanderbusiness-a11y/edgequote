@@ -753,7 +753,7 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
       {/* Live breakdown + total — tabular figures so digits don't wobble while tracing */}
       <div className="bg-bg-secondary border border-border rounded-card px-4 py-3.5 space-y-2">
         <div className="flex items-center gap-2 mb-1">
-          <Ruler className="w-4 h-4 text-accent" />
+          <Ruler className="w-4 h-4 text-accent-text" />
           <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Measurement</span>
         </div>
         {SECTIONS.filter(s => breakdown[s.key] > 0).map(s => (
@@ -764,7 +764,7 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
         ))}
         <div className="flex items-center justify-between pt-2 border-t border-border">
           <span className="text-sm font-semibold text-ink">Total</span>
-          <span className="text-xl font-bold text-accent tabular-nums transition-colors">{totalSqft > 0 ? `${totalSqft.toLocaleString()} sq ft` : '—'}</span>
+          <span className="text-xl font-bold text-accent-text tabular-nums transition-colors">{totalSqft > 0 ? `${totalSqft.toLocaleString()} sq ft` : '—'}</span>
         </div>
       </div>
 
@@ -780,7 +780,7 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
             <span>
               Condition<span className="block text-[10px] text-ink-faint">1.0 standard · 1.25 overgrown</span>
               {/* A value ≠ 1 changes every price — say so instead of adjusting silently. */}
-              {overgrowth !== 1 && <span className="block text-[10px] font-semibold text-accent">×{overgrowth} applied to prices</span>}
+              {overgrowth !== 1 && <span className="block text-[10px] font-semibold text-accent-text">×{overgrowth} applied to prices</span>}
             </span>
             <input type="number" min="0" step="0.05" value={overgrowthRaw} onChange={e => setOvergrowthRaw(e.target.value)}
               className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1.5 text-sm text-ink tabular-nums outline-none focus:border-accent" />
@@ -799,7 +799,7 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
                   : t.recommended ? 'border-accent/40 bg-accent/5' : 'border-border hover:border-border-strong'
                 }`}
               >
-                <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1">{t.label}{t.recommended && <span className="text-accent">★</span>}</p>
+                <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1">{t.label}{t.recommended && <span className="text-accent-text">★</span>}</p>
                 <p className="text-lg font-bold text-ink tabular-nums">${t.amount.toLocaleString()}</p>
               </button>
             ))}
@@ -856,7 +856,7 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
               type="button"
               aria-pressed={includeTravel}
               onClick={() => setIncludeTravel(v => !v)}
-              className={`text-xs font-medium px-2.5 py-1 rounded-lg border transition-colors ${includeTravel ? 'border-accent/40 bg-accent/10 text-accent' : 'border-border text-ink-muted'}`}
+              className={`text-xs font-medium px-2.5 py-1 rounded-lg border transition-colors ${includeTravel ? 'border-accent/40 bg-accent/10 text-accent-text' : 'border-border text-ink-muted'}`}
             >
               {includeTravel ? 'Travel fee on' : 'Travel fee off'}
             </button>
@@ -904,7 +904,7 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
             <div className="flex items-center justify-between"><span className="text-ink-muted">Travel</span><span className="text-ink font-medium tabular-nums">{formatCurrency(effectiveTravel)}</span></div>
             <div className="flex items-center justify-between pt-1.5 border-t border-border">
               <span className="text-sm font-semibold text-ink">Recommended total</span>
-              <span className="text-2xl font-bold text-accent tabular-nums transition-colors">{formatCurrency(chosenTotal)}</span>
+              <span className="text-2xl font-bold text-accent-text tabular-nums transition-colors">{formatCurrency(chosenTotal)}</span>
             </div>
           </div>
           {/* "one-time" in the label — the recommendation card's "Use <plan>" button
@@ -932,7 +932,7 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
         <div className="bg-bg-secondary border border-accent/30 rounded-card px-4 py-3.5 space-y-3 animate-pop">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Measured area</span>
-            <span className="text-2xl font-bold text-accent tabular-nums">{totalSqft.toLocaleString()} ft²</span>
+            <span className="text-2xl font-bold text-accent-text tabular-nums">{totalSqft.toLocaleString()} ft²</span>
           </div>
           <Button onClick={save} loading={saving} size="lg" className="w-full">
             <Check className="w-4 h-4" /> Save measurement
@@ -962,7 +962,7 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
                 <span className="text-ink-muted shrink-0">{formatDate(h.date)}</span>
                 {/* Recommendation history — see how pricing evolved over time */}
                 {h.recommendation && (
-                  <span className="text-xs text-accent font-medium truncate">Wk ${h.recommendation.weekly} · Bi ${h.recommendation.biweekly} · Mo ${h.recommendation.monthly}</span>
+                  <span className="text-xs text-accent-text font-medium truncate">Wk ${h.recommendation.weekly} · Bi ${h.recommendation.biweekly} · Mo ${h.recommendation.monthly}</span>
                 )}
                 <span className="text-ink font-medium shrink-0">{(h.total_sqft ?? h.lawn_sqft ?? 0).toLocaleString()} sq ft</span>
               </div>

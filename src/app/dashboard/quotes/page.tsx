@@ -9,12 +9,14 @@ import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { Quote } from '@/types'
 import { QuoteList } from '@/components/quotes/QuoteList'
 import { SkeletonRows } from '@/components/ui/Skeleton'
+import { EmptyState } from '@/components/ui/EmptyState'
 import { PageHeader } from '@/components/layout/PageHeader'
-import { Plus } from 'lucide-react'
+import { Plus, AlertTriangle } from 'lucide-react'
 
 export default function QuotesPage() {
   const [quotes, setQuotes] = useState<Quote[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [uid, setUid] = useState<string | null>(null)
 
   const supabase = useMemo(() => createClient(), [])
@@ -24,11 +26,16 @@ export default function QuotesPage() {
     const { data: { session } } = await supabase.auth.getSession()
     const user = session?.user
     if (user) setUid(user.id)
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('quotes')
       .select('*')
       .eq('user_id', user!.id)
       .order('created_at', { ascending: false })
+    // A failed load must NEVER fall through to "No quotes yet" — telling an owner with
+    // 200 quotes that they have none (and inviting them to start over) is a false
+    // statement, not a missing reassurance.
+    if (error) { setLoadError('Check your connection and try again — nothing has been lost.'); setLoading(false); return }
+    setLoadError(null)
     setQuotes(data || [])
     // Cache only the first screenful — enough for an instant revisit paint, without
     // JSON-serializing thousands of rows into sessionStorage on every fetch. The full
@@ -73,7 +80,7 @@ export default function QuotesPage() {
     <div className="max-w-5xl mx-auto space-y-6">
       <PageHeader
         title="Quotes"
-        description={`${quotes.length} quote${quotes.length !== 1 ? 's' : ''} total`}
+        description={loading ? 'Loading your quotes…' : `${quotes.length} quote${quotes.length !== 1 ? 's' : ''} total`}
         action={
           <Link
             href="/dashboard/quotes/new"
@@ -85,6 +92,10 @@ export default function QuotesPage() {
       />
       {loading ? (
         <SkeletonRows count={6} />
+      ) : loadError && quotes.length === 0 ? (
+        // Only when we have nothing real to show — a warm cache still beats an error.
+        <EmptyState icon={AlertTriangle} title="Couldn't load your quotes" description={loadError}
+          action={{ label: 'Retry', onClick: () => { setLoading(true); fetchQuotes() } }} />
       ) : (
         <QuoteList quotes={quotes} onDelete={handleDelete} />
       )}

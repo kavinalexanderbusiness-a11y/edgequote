@@ -105,7 +105,7 @@ export function PaymentMethodCard({ customer, onCustomerChange }: {
   return (
     <Card>
       <CardHeader className="flex items-center gap-2">
-        <CreditCard className="w-4 h-4 text-accent" />
+        <CreditCard className="w-4 h-4 text-accent-text" />
         <h2 className="text-sm font-semibold text-ink">Payment Method &amp; AutoPay</h2>
         {autopay && card && (
           <span className="ml-auto text-[10px] uppercase tracking-wide text-emerald-400 border border-emerald-500/30 bg-emerald-500/10 rounded px-1.5 py-0.5 font-semibold flex items-center gap-1">

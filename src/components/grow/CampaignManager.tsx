@@ -139,7 +139,7 @@ export function CampaignManager() {
     <div className="rounded-card border border-border bg-bg-secondary overflow-hidden animate-rise">
       <div className="px-5 py-4 border-b border-border flex items-start gap-3">
         <div className="w-9 h-9 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
-          <Megaphone className="w-4 h-4 text-accent" />
+          <Megaphone className="w-4 h-4 text-accent-text" />
         </div>
         <div className="min-w-0 flex-1">
           <p className="text-base font-bold tracking-tight text-ink">Automated messages</p>
@@ -189,7 +189,7 @@ export function CampaignManager() {
               <div key={c.id} className="px-4 py-3">
                 <div className="flex items-center gap-3">
                   <div className="w-9 h-9 rounded-xl bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-                    <Icon className="w-4 h-4 text-accent" />
+                    <Icon className="w-4 h-4 text-accent-text" />
                   </div>
                   <button onClick={() => (isEditing ? setEditingId(null) : startEdit(c))} aria-expanded={isEditing} className="min-w-0 flex-1 text-left rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                     <p className="text-sm font-semibold text-ink truncate flex items-center gap-1.5">{c.name} <ChevronDown className={cn('w-3.5 h-3.5 text-ink-faint transition-transform', isEditing && 'rotate-180')} /></p>

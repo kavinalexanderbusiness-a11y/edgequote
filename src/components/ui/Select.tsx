@@ -15,6 +15,9 @@ const Select = forwardRef<HTMLSelectElement, SelectProps>(
   ({ className, label, error, hint, options, placeholder, id, fieldSize = 'md', ...props }, ref) => {
     const generatedId = useId()
     const inputId = id ?? generatedId
+    // Tie the error/hint text to the field so a screen reader reads it on focus.
+    const errorId = `${inputId}-error`
+    const hintId = `${inputId}-hint`
     return (
       <div className="flex flex-col gap-1.5">
         {label && (
@@ -25,6 +28,8 @@ const Select = forwardRef<HTMLSelectElement, SelectProps>(
         <select
           ref={ref}
           id={inputId}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? errorId : hint ? hintId : undefined}
           className={cn(
             'w-full bg-bg-tertiary border text-ink outline-none transition-all appearance-none',
             fieldSize === 'sm' ? 'rounded-lg px-3 py-2 pr-8 text-sm' : 'rounded-xl px-3.5 py-3 text-base sm:text-sm',
@@ -43,8 +48,8 @@ const Select = forwardRef<HTMLSelectElement, SelectProps>(
             </option>
           ))}
         </select>
-        {error && <p className="text-xs text-red-400 animate-fade">{error}</p>}
-        {hint && !error && <p className="text-xs text-ink-faint animate-fade">{hint}</p>}
+        {error && <p id={errorId} className="text-xs text-red-400 animate-fade">{error}</p>}
+        {hint && !error && <p id={hintId} className="text-xs text-ink-faint animate-fade">{hint}</p>}
       </div>
     )
   }

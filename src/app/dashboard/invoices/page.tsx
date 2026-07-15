@@ -160,8 +160,11 @@ export default function InvoicesPage() {
   // later, so we refetch after a short delay.
   useEffect(() => {
     fetch('/api/payments/status').then(r => r.json()).then(d => setPaymentsEnabled(!!d.enabled)).catch(() => {})
+    // ?paid=1 only means the customer reached Stripe's return URL — the WEBHOOK is
+    // what records the money. Claiming "Payment received" here would be a guess, and
+    // if the webhook isn't configured it would be a lie the invoice never corrects.
     if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('paid') === '1') {
-      notify('Payment received — updating the invoice…')
+      notify('Checkout completed — confirming the payment…')
       window.history.replaceState({}, '', '/dashboard/invoices')
       setTimeout(() => fetchInvoices(), 1500)
           }
@@ -258,7 +261,14 @@ export default function InvoicesPage() {
     else {
       setInvoices(prev => prev.filter(i => i.id !== inv.id))
       const label = inv.status === 'paid' ? `Deleted PAID ${inv.invoice_number} (${formatCurrency(Number(inv.amount))})` : `Deleted ${inv.invoice_number}`
-      offerUndo(label, async () => { await supabase.from('invoices').insert(row) })
+      // Restoring a PAID invoice puts collected revenue back on the books. Unchecked, a
+      // failed insert (invoice_number conflict, RLS, expired session) dismissed the toast,
+      // fetchInvoices() re-rendered without the row, and the money left the books with no
+      // signal at all. InvoicePaymentControls already surfaces exactly this failure.
+      offerUndo(label, async () => {
+        const { error: rErr } = await supabase.from('invoices').insert(row)
+        if (rErr) notify.error('Could not restore the invoice: ' + rErr.message)
+      })
     }
     setDeletingId(null)
   }
@@ -343,7 +353,7 @@ export default function InvoicesPage() {
         <div className="flex items-center gap-2 text-xs text-ink-muted">
           <span>Showing {focus.invoice ? `invoice ${focus.invoice}` : 'the invoice for that job'}</span>
           <button onClick={() => { setFocus(null); if (typeof window !== 'undefined') window.history.replaceState({}, '', '/dashboard/invoices') }}
-            className="font-semibold text-accent hover:underline">Show all</button>
+            className="font-semibold text-accent-text hover:underline">Show all</button>
         </div>
       )}
 
@@ -370,7 +380,7 @@ export default function InvoicesPage() {
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
                   <div className="flex items-start gap-3 min-w-0">
                     <div className="w-9 h-9 rounded-lg bg-accent/10 flex items-center justify-center shrink-0 mt-0.5">
-                      <FileText className="w-4 h-4 text-accent" />
+                      <FileText className="w-4 h-4 text-accent-text" />
                     </div>
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
@@ -408,7 +418,7 @@ export default function InvoicesPage() {
                           {t.hasGst && (
                             <p className="text-[10px] text-ink-faint tabular-nums">incl. {formatCurrency(t.gstAmount)} GST</p>
                           )}
-                          {addonN > 0 && <p className="text-[10px] font-semibold text-accent">+{addonN} service{addonN !== 1 ? 's' : ''}</p>}
+                          {addonN > 0 && <p className="text-[10px] font-semibold text-accent-text">+{addonN} service{addonN !== 1 ? 's' : ''}</p>}
                         </div>
                       )
                     })()}
@@ -461,6 +471,12 @@ export default function InvoicesPage() {
                             >
                               {ds === 'paid' && <Check className="w-3 h-3" />}
                               {INVOICE_STATUS_LABELS[ds]}
+                              {/* "Overdue" collapses "never opened, nothing paid" and "part-paid,
+                                  chase the rest" into one identical red word. Show what's LEFT so
+                                  the owner knows which conversation to have. */}
+                              {ds === 'overdue' && (Number(inv.amount_paid) || 0) > 0.01 && (
+                                <span className="normal-case font-medium opacity-90">· {formatCurrency(invoiceBalance(inv, settings).balance)} left</span>
+                              )}
                               {clickable && <ChevronDown aria-hidden className="w-3 h-3 opacity-60" />}
                             </button>
                           )}
@@ -500,9 +516,24 @@ export default function InvoicesPage() {
                     {inv.status === 'paid' && inv.payment_method && (
                       <span className="text-[10px] text-ink-faint">{paymentMethodLabel(inv.payment_method)}</span>
                     )}
-                    {/* Send — the primary outbound action, in the cluster (not exiled below). */}
+                    {/* Send — the primary outbound action, in the cluster (not exiled below).
+                        A draft AutoPay HELD for review is an amount the system itself
+                        distrusted — never let one tap put it in front of the customer
+                        without naming the anomaly first. */}
                     {inv.customer_id && inv.status !== 'cancelled' && (
-                      <Button variant="secondary" size="sm" onClick={() => setMsgInvoice(inv)} title="Send this invoice to the customer">
+                      <Button variant="secondary" size="sm" title="Send this invoice to the customer"
+                        onClick={async () => {
+                          const held = inv.status === 'draft' && (inv.notes || '').includes('AutoPay held')
+                          if (held) {
+                            const ok = await confirmDialog({
+                              title: 'Send an invoice that was held for review?',
+                              message: `${inv.invoice_number} was held because the amount looks unusual for this customer${inv.notes ? ` — ${inv.notes}` : ''}. Send it as-is?`,
+                              confirmLabel: 'Send it anyway',
+                            })
+                            if (!ok) return
+                          }
+                          setMsgInvoice(inv)
+                        }}>
                         <MessageSquare className="w-3.5 h-3.5" /> Send
                       </Button>
                     )}
@@ -550,11 +581,13 @@ export default function InvoicesPage() {
 
       {!loading && !loadError && invoices.length > 0 && <PaymentHistory settings={settings} />}
 
-      {/* ONE shared Send Message dialog — sending marks the invoice sent. */}
+      {/* ONE shared Send Message dialog — sending marks the invoice sent. The amount
+          is what's actually OWED (the ledger balance), never the original total: a
+          customer who has already part-paid must never be asked for the full amount. */}
       {msgInvoice?.customer_id && (
         <SendMessageDialog open onClose={() => setMsgInvoice(null)}
           customerId={msgInvoice.customer_id} customerName={msgInvoice.customer_name}
-          defaultTemplate="invoice" vars={{ amount: formatCurrency(invoiceTotals(msgInvoice.amount, settings, { type: msgInvoice.discount_type, value: msgInvoice.discount_value }).total) }}
+          defaultTemplate="invoice" vars={{ amount: formatCurrency(invoiceBalance(msgInvoice, settings).balance) }}
           onSent={() => markSent(msgInvoice)} />
       )}
     </div>
@@ -630,7 +663,7 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
     // type="button" — the untyped-button-submits-the-form trap).
     <form onSubmit={e => { e.preventDefault(); if (!saving) save() }} className="mt-3 pt-3 border-t border-border space-y-3">
       <div className="flex items-center justify-between">
-        <p className="text-xs font-semibold text-ink uppercase tracking-wide flex items-center gap-1.5"><Pencil className="w-3.5 h-3.5 text-accent" /> Edit draft</p>
+        <p className="text-xs font-semibold text-ink uppercase tracking-wide flex items-center gap-1.5"><Pencil className="w-3.5 h-3.5 text-accent-text" /> Edit draft</p>
         <button type="button" onClick={onCancel} className="h-7 w-7 rounded-lg flex items-center justify-center text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" aria-label="Close editor"><X className="w-4 h-4" /></button>
       </div>
 
@@ -674,7 +707,7 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
       <button type="button" onClick={() => setItems(prev => prev.length
           ? [...prev, { description: '', amount: '0', kind: 'addon' }]
           : [{ description: service.trim() || inv.service_type || 'Service', amount: base || '0', kind: 'service' }, { description: '', amount: '0', kind: 'addon' }])}
-        className="text-xs font-semibold text-accent hover:underline rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+        className="text-xs font-semibold text-accent-text hover:underline rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
         + Add line item
       </button>
 
@@ -709,7 +742,7 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
         {t.hasDiscount && <Row label={`Discount${t.discountLabel ? ` (${t.discountLabel})` : ''}`} value={`−${formatCurrency(t.discountAmount)}`} tone="text-emerald-400" />}
         {t.hasDiscount && <Row label="After discount" value={formatCurrency(t.discountedSubtotal)} muted />}
         {t.hasGst && <Row label={`GST (${t.gstPercent}% — set in Settings)`} value={formatCurrency(t.gstAmount)} muted />}
-        <div className="flex justify-between pt-1.5 border-t border-border"><span className="font-semibold text-ink">Total</span><span className="font-bold text-accent">{formatCurrency(t.total)}</span></div>
+        <div className="flex justify-between pt-1.5 border-t border-border"><span className="font-semibold text-ink">Total</span><span className="font-bold text-accent-text">{formatCurrency(t.total)}</span></div>
       </div>
 
       <div className="flex items-center gap-2">

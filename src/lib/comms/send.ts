@@ -43,16 +43,30 @@ function sendError(provider: string, e: unknown): SendResult {
   return { sent: false, reason: 'error', error: aborted ? `${provider} request timed out after ${COMMS_TIMEOUT_MS / 1000}s` : (e instanceof Error ? e.message : `${provider.toLowerCase()} failed`) }
 }
 
+// Where Twilio should report delivery. Twilio only calls the status webhook if
+// the send passes StatusCallback, so without this the app could never know more
+// than "the provider accepted it". Requires a PUBLIC https URL (Twilio won't call
+// localhost) — when absent we simply send without it: no delivery updates, never
+// a failed send.
+function smsStatusCallbackUrl(): string | null {
+  const base = (process.env.NEXT_PUBLIC_APP_URL || '').replace(/\/$/, '')
+  if (!/^https:\/\//i.test(base)) return null
+  return `${base}/api/sms/status`
+}
+
 export async function sendSms(to: string, body: string): Promise<SendResult> {
   if (!commsEnabled().sms) return { sent: false, reason: 'disabled' }
   if (!to) return { sent: false, reason: 'error', error: 'no recipient' }
   try {
     const sid = process.env.TWILIO_ACCOUNT_SID!
     const auth = Buffer.from(`${sid}:${process.env.TWILIO_AUTH_TOKEN!}`).toString('base64')
+    const params = new URLSearchParams({ To: to, From: process.env.TWILIO_FROM!, Body: body })
+    const cb = smsStatusCallbackUrl()
+    if (cb) params.set('StatusCallback', cb)
     const res = await fetchWithTimeout(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
       method: 'POST',
       headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ To: to, From: process.env.TWILIO_FROM!, Body: body }),
+      body: params,
     })
     if (!res.ok) {
       // Surface Twilio's exact error (e.g. {"code":21211,"message":"Invalid 'To' Number"}).

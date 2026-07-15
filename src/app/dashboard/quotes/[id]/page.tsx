@@ -212,8 +212,10 @@ export default function QuoteDetailPage() {
     }
   }
 
- async function handleOpenPdf() {
-    if (!quote) return
+ // Returns TRUE only when the PDF actually reached the device — the caller gates the
+ // "mark sent" write on it, so a failed render can never flip the quote to Sent.
+ async function handleOpenPdf(): Promise<boolean> {
+    if (!quote) return false
     setPdfLoading(true)
     try {
       const { renderQuoteBlob } = await import('@/components/quotes/QuotePDF')
@@ -229,8 +231,10 @@ export default function QuoteDetailPage() {
       a.click()
       a.remove()
       setTimeout(() => URL.revokeObjectURL(url), 10000)
+      return true
     } catch {
       toast.error('Could not generate the PDF. Please try again.')
+      return false
     } finally {
       setPdfLoading(false)
     }
@@ -240,12 +244,19 @@ export default function QuoteDetailPage() {
   // (stamping sent_at arms the follow-up clock) — instead of two separate steps.
   async function handleSendQuote() {
     if (!quote) return
-    await handleOpenPdf()
+    const delivered = await handleOpenPdf()
+    if (!delivered) return   // PDF failed → never claim (or record) that it was sent
     if (quote.status === 'draft') {
       const nowIso = new Date().toISOString()
       await supabase.from('quotes').update({ status: 'sent' }).eq('id', quote.id)
       await supabase.from('quotes').update({ sent_at: nowIso }).eq('id', quote.id).is('sent_at', null)
       setQuote({ ...quote, status: 'sent', sent_at: quote.sent_at ?? nowIso })
+      // Be honest about what just happened: the PDF is on YOUR device, and the
+      // customer still hasn't heard from you.
+      toast(`${quote.quote_number} marked as sent — the PDF is on your device. The customer hasn’t been messaged yet.`, {
+        tone: 'success',
+        action: quote.customer_id ? { label: 'Send it to them', run: () => setShowMessage(true) } : undefined,
+      })
     }
   }
 
@@ -443,6 +454,7 @@ export default function QuoteDetailPage() {
       const patch = logFollowUpPatch(quote)
       await supabase.from('quotes').update(patch).eq('id', quote.id)
       setQuote({ ...quote, ...patch })
+      toast.success('Follow-up logged — we’ll flag this quote again in 3 days.')
     } finally { setActionBusy(false) }
   }
 
@@ -453,15 +465,24 @@ export default function QuoteDetailPage() {
       const patch = markWonPatch(quote.follow_up_count)
       await supabase.from('quotes').update(patch).eq('id', quote.id)
       setQuote({ ...quote, ...patch })   // status → accepted; the persistent banner shows automatically
+      toast.success('Marked as won — schedule the job to lock it in.')
     } finally { setActionBusy(false) }
   }
 
   async function markLost() {
     if (!quote || actionBusy) return
+    const prev = quote.status
     setActionBusy(true)
     try {
       await supabase.from('quotes').update({ status: 'declined' }).eq('id', quote.id)
       setQuote({ ...quote, status: 'declined' })
+      // Lost sits one tap from Won and hides the card holding both — always offer the
+      // way back (same undo idiom as every other destructive action here).
+      toast.undo('Marked as lost.', async () => {
+        const { error } = await supabase.from('quotes').update({ status: prev }).eq('id', quote.id)
+        if (error) { toast.error('Could not restore the quote: ' + error.message); return }
+        setQuote(q => q ? { ...q, status: prev } : q)
+      })
     } finally { setActionBusy(false) }
   }
 
@@ -618,7 +639,7 @@ export default function QuoteDetailPage() {
           <Card>
             <CardBody className="space-y-2">
               <p className="text-sm font-semibold text-ink flex items-center gap-2">
-                <Camera className="w-4 h-4 text-accent" /> Customer photos
+                <Camera className="w-4 h-4 text-accent-text" /> Customer photos
                 <span className="ml-auto text-xs font-normal text-ink-faint">{photos.length} attached at booking</span>
               </p>
               <JobPhotos propertyId={null} variant="gallery" readOnly initialPhotos={photos} />
@@ -634,7 +655,7 @@ export default function QuoteDetailPage() {
       {quote.status === 'accepted' && (
         <div className="flex items-center justify-between flex-wrap gap-3 text-sm bg-accent/10 border border-accent/20 rounded-xl px-4 py-3">
           <span className="text-ink font-medium flex items-center gap-2">
-            <CalendarPlus className="w-4 h-4 shrink-0 text-accent" /> Accepted — this job isn’t scheduled yet.
+            <CalendarPlus className="w-4 h-4 shrink-0 text-accent-text" /> Accepted — this job isn’t scheduled yet.
           </span>
           <div className="flex items-center gap-2">
             {/* Honest label — this books the job on TODAY's route (move it after). */}
@@ -711,7 +732,7 @@ export default function QuoteDetailPage() {
               <a
                 href={customerPhone ? `tel:${customerPhone}` : undefined}
                 aria-disabled={!customerPhone}
-                className={`h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${customerPhone ? 'bg-accent/10 border-accent/20 text-accent hover:bg-accent/20' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}
+                className={`h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${customerPhone ? 'bg-accent/10 border-accent/20 text-accent-text hover:bg-accent/20' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}
               >
                 <Phone className="w-4 h-4" /> Call
               </a>
@@ -830,7 +851,7 @@ export default function QuoteDetailPage() {
             )}
             <div className="flex justify-between items-center pt-2 border-t border-border">
               <span className="text-sm font-semibold text-ink">{(quote.weekly_price || quote.biweekly_price || quote.monthly_price) ? 'First Visit Total' : 'Quote Total'}</span>
-              <span className="text-3xl font-bold text-accent tabular-nums">{formatCurrency(quote.total)}</span>
+              <span className="text-3xl font-bold text-accent-text tabular-nums">{formatCurrency(quote.total)}</span>
             </div>
             {(quote.weekly_price || quote.biweekly_price || quote.monthly_price) ? (
               <div className="pt-3 border-t border-border space-y-1.5">

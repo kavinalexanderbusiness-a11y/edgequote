@@ -83,7 +83,7 @@ export function PushNotificationSettings() {
       <CardHeader>
         <div>
           <h2 className="text-sm font-semibold text-ink flex items-center gap-2">
-            <BellRing className="w-4 h-4 text-accent" /> Push Notifications
+            <BellRing className="w-4 h-4 text-accent-text" /> Push Notifications
           </h2>
           <p className="text-xs text-ink-faint mt-0.5">
             Get alerts on this device — even when EdgeQuote is closed. Delivered through your existing notifications, so nothing is doubled up.
@@ -95,7 +95,7 @@ export function PushNotificationSettings() {
         <div className="flex items-center justify-between gap-4 rounded-xl border border-border p-4">
           <div className="flex items-start gap-3 min-w-0">
             <div className={cn('w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border',
-              enabled ? 'border-accent/30 bg-accent/10 text-accent' : 'border-border text-ink-muted')}>
+              enabled ? 'border-accent/30 bg-accent/10 text-accent-text' : 'border-border text-ink-muted')}>
               <Bell className="w-4 h-4" />
             </div>
             <div className="min-w-0">
@@ -126,7 +126,7 @@ export function PushNotificationSettings() {
 
         {iosNeedsInstall && (
           <div className="flex items-start gap-2.5 rounded-xl border border-accent/25 bg-accent/[0.06] p-3.5">
-            <Smartphone className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+            <Smartphone className="w-4 h-4 text-accent-text shrink-0 mt-0.5" />
             <p className="text-xs text-ink-muted leading-relaxed">
               <span className="font-semibold text-ink">On iPhone &amp; iPad,</span> first install EdgeQuote: tap the
               Share button, choose <span className="font-medium text-ink">Add to Home Screen</span>, then open it from

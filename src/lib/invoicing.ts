@@ -102,18 +102,24 @@ export function buildInvoiceLineItems(opts: {
 // truth, so changing a visit's price (anywhere) re-prices its not-yet-issued
 // invoice automatically. Only DRAFT invoices are touched; sent/paid invoices are
 // immutable history. Idempotent: an invoice whose amount already matches is left
-// alone. Optionally records the reason on the invoice note. Returns how many it
-// changed.
+// alone. Optionally records the reason on the invoice note.
+//
+// Returns { changed, failed } — NOT a bare count. Supabase resolves on a failed
+// write, so the old `changed++`-after-an-unchecked-update counted invoices it had
+// no evidence it re-priced, and callers then told the owner "its draft invoice was
+// re-priced to match" while the draft still held the old amount — which AutoPay
+// would go on to charge. A caller that ignores the result is unchanged; a caller
+// that reports to the owner MUST distinguish these two numbers.
 export async function syncDraftInvoiceAmounts(
   supabase: Supa,
   jobIds: string[],
   opts?: { reason?: string },
-): Promise<number> {
+): Promise<{ changed: number; failed: number }> {
   const ids = [...new Set(jobIds.filter(Boolean))]
-  if (ids.length === 0) return 0
+  if (ids.length === 0) return { changed: 0, failed: 0 }
   const { data: invData } = await supabase.from('invoices').select('id, job_id, amount, notes, line_items, discount_type, discount_value').in('job_id', ids).eq('status', 'draft')
   const invoices = (invData as { id: string; job_id: string; amount: number; notes: string | null; line_items: InvoiceLineItem[] | null; discount_type: DiscountType | null; discount_value: number | null }[] | null) || []
-  if (invoices.length === 0) return 0
+  if (invoices.length === 0) return { changed: 0, failed: 0 }
 
   const jobIdsWithInv = [...new Set(invoices.map(i => i.job_id))]
   type JobRow = { id: string; price: number | null; quote_id: string | null; recurrence_id: string | null; is_initial_visit: boolean; service_type: string | null }
@@ -135,7 +141,7 @@ export async function syncDraftInvoiceAmounts(
     (async () => { const { data } = await supabase.from('job_line_items').select('job_id, description, amount').in('job_id', jobIdsWithInv); for (const a of (data as { job_id: string; description: string; amount: number }[]) || []) (addonsByJob[a.job_id] ||= []).push({ description: a.description, amount: a.amount }) })(),
   ])
 
-  let changed = 0
+  let changed = 0, failed = 0
   for (const inv of invoices) {
     const j = jobsById[inv.job_id]
     if (!j) continue
@@ -153,10 +159,11 @@ export async function syncDraftInvoiceAmounts(
     if (!(amount > 0) || (amount === prev && sameLines)) continue
     const patch: Record<string, unknown> = { amount, line_items: lineItems }
     if (opts?.reason?.trim() && amount !== prev) patch.notes = `${inv.notes ? inv.notes + ' · ' : ''}Re-priced $${prev} → $${amount} — ${opts.reason.trim()}`
-    await supabase.from('invoices').update(patch).eq('id', inv.id)
+    const { error } = await supabase.from('invoices').update(patch).eq('id', inv.id)
+    if (error) { failed++; continue }
     changed++
   }
-  return changed
+  return { changed, failed }
 }
 
 // When a billable job is completed — a one-time job OR a recurring visit — create a

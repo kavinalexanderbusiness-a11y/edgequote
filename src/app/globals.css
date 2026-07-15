@@ -18,8 +18,30 @@
     --c-accent: 0 200 150;
     --c-accent-hover: 0 219 166;
     --c-accent-dim: rgba(0, 200, 150, 0.12);
+    /* Accent as TEXT (links, prices, emphasis) — see the light theme for why this
+       is a separate token. On dark it IS the brand accent: already 6.95:1–9.05:1
+       on every dark surface, so nothing changes visually here. */
+    --c-accent-text: 0 200 150;
     --c-ink: 240 244 255;
     --c-ink-muted: 138 154 184;
+    /* ── ink-faint: a MEASURED, INTENTIONAL deviation from WCAG AA ──────────────
+       Used for micro-labels, timestamps and hints. It lands at 2.67:1–3.48:1 on
+       our dark surfaces (light: 2.34:1–2.56:1) — under the 4.5:1 AA floor for
+       small text. It is knowingly left as-is:
+         • Raising it to AA on dark means #838ea0, which sits only 4.6 L* from
+           ink-muted (#8a9ab8) — down from 19.6. The faint/muted tiers become
+           indistinguishable, i.e. we'd trade a contrast failure for the loss of
+           a whole level of the type hierarchy.
+         • Restoring the gap would additionally require moving ink-muted, which
+           already passes comfortably (5.30:1–6.90:1) — churn for no a11y gain.
+         • On light a hierarchy-preserving AA value does exist (#677180, 11.6 L*
+           from muted), but dark is the DEFAULT theme and has no such value, and
+           at that lightness "faint" no longer reads as de-emphasised.
+       Decision (owner, 2026-07-14): keep the hierarchy; revisit if the palette is
+       ever re-tuned. Nothing load-bearing is faint-only — every faint string is a
+       secondary restatement of adjacent ink/ink-muted content.
+       NOTE: accent-as-text was a DIFFERENT problem and IS fixed — see
+       --c-accent-text below/above. */
     --c-ink-faint: 90 104 128;
     --scrollbar-thumb: rgba(255, 255, 255, 0.1);
     --scrollbar-thumb-hover: rgba(255, 255, 255, 0.2);
@@ -39,8 +61,20 @@
     --c-accent: 0 169 127; /* slightly deeper green for contrast on white */
     --c-accent-hover: 0 150 113;
     --c-accent-dim: rgba(0, 169, 127, 0.12);
+    /* Accent as TEXT — a SEPARATE token because one green can't do both jobs on
+       white: the brand accent above is tuned as a FILL (black-on-accent = 6.98:1,
+       and 3.01:1 vs white satisfies the 3:1 non-text rule for chips/borders), but
+       as text it only reaches 2.75:1–3.01:1 — well under the 4.5:1 AA floor.
+       Darkening the FILL to fix that would have broken the button's black label
+       (drops to 4.26:1). Same hue, deeper. Tuned against the WORST background this
+       text ever lands on — an accent-tinted chip (bg-accent/10–/20), where a green
+       tint eats the contrast a plain white bg would give: clears 4.5:1 everywhere,
+       worst case 4.67:1. Use for text/links ONLY; fills keep --c-accent. */
+    --c-accent-text: 0 110 83;
     --c-ink: 15 23 42;
     --c-ink-muted: 71 85 105;
+    /* 2.34:1–2.56:1 — an intentional deviation; see the dark theme's ink-faint
+       note for the measurements and the reasoning. */
     --c-ink-faint: 148 163 184;
     --scrollbar-thumb: rgba(15, 23, 42, 0.15);
     --scrollbar-thumb-hover: rgba(15, 23, 42, 0.28);

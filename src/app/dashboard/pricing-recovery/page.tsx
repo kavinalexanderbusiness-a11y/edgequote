@@ -213,7 +213,16 @@ export default function PricingRecoveryPage() {
     const { data: q, error } = await supabase.from('quotes').insert(insert).select('id').single()
     if (error || !q) { setWorking(null); toast.error('Could not create quote: ' + (error?.message ?? '')); return }
     const ids = jobs.filter(j => j.recurrence_id === recId).map(j => j.id)
-    await supabase.from('jobs').update({ quote_id: q.id }).in('id', ids)
+    // If the link fails, load() correctly re-shows the series as unpriced — but a real
+    // status:'accepted' quote is now orphaned, and accepted quotes feed revenue reports.
+    // Clicking again would mint a second and a third. Roll the orphan back instead: this
+    // page exists so reports run on real revenue, so it must not inflate them itself.
+    const { error: linkErr } = await supabase.from('jobs').update({ quote_id: q.id }).in('id', ids)
+    if (linkErr) {
+      await supabase.from('quotes').delete().eq('id', q.id)
+      toast.error('Could not price these visits — please try again.')
+      setWorking(null); return
+    }
     await load(); setWorking(null)
   }
 
@@ -243,12 +252,31 @@ export default function PricingRecoveryPage() {
       const q = quotes.find(x => x.id === s.quoteId)
       const freezeVal = Math.round(quoteVisitAmount(q as unknown as Record<string, unknown>, s.cadence))
       const completedNull = series.filter(j => j.status === 'completed' && j.price == null).map(j => j.id)
-      if (completedNull.length && freezeVal > 0) await supabase.from('jobs').update({ price: freezeVal }).in('id', completedNull)
-      await supabase.from('quotes').update({ [field]: price }).eq('id', s.quoteId)
-      if (nonCompleted.length) await supabase.from('jobs').update({ price: null }).in('id', nonCompleted)
+      // The freeze is a PRECONDITION for the raise, not a companion to it: completed
+      // visits with price == null derive their amount from the quote cadence, so raising
+      // the quote before they're pinned silently re-prices already-billed history upward
+      // — the exact thing the comment above promises never happens. Supabase resolves on
+      // a failed write, so unchecked, that promise held only when nothing went wrong.
+      if (completedNull.length && freezeVal > 0) {
+        const { error } = await supabase.from('jobs').update({ price: freezeVal }).in('id', completedNull)
+        if (error) {
+          toast.error('Couldn’t protect this customer’s billed visits, so the price wasn’t raised. Nothing changed — please try again.')
+          setWorking(null); return
+        }
+      }
+      const { error: raiseErr } = await supabase.from('quotes').update({ [field]: price }).eq('id', s.quoteId)
+      if (raiseErr) { toast.error('Couldn’t raise the price — please try again.'); setWorking(null); return }
+      // Future visits keep billing the OLD rate until their override is cleared, so a
+      // failure here means the raise silently doesn't apply — say so rather than let the
+      // row disappear from "Priced below recommended" as though it were captured.
+      if (nonCompleted.length) {
+        const { error } = await supabase.from('jobs').update({ price: null }).in('id', nonCompleted)
+        if (error) toast.error('Price raised on the quote, but its upcoming visits still bill the old rate — open the series and clear their price overrides.')
+      }
     } else if (nonCompleted.length) {
       // No quote owns this series — the price lives on the future visits themselves.
-      await supabase.from('jobs').update({ price }).in('id', nonCompleted)
+      const { error } = await supabase.from('jobs').update({ price }).in('id', nonCompleted)
+      if (error) { toast.error('Couldn’t raise the price — please try again.'); setWorking(null); return }
     }
     await load(); setWorking(null)
   }
@@ -390,7 +418,7 @@ function Section({ title, sub, icon: Icon, children }: { title: string; sub: str
     <div className="space-y-2">
       <div className="flex items-center gap-2">
         <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-          <Icon className="w-3.5 h-3.5 text-accent" />
+          <Icon className="w-3.5 h-3.5 text-accent-text" />
         </span>
         <h2 className="text-sm font-semibold text-ink tracking-tight">{title}</h2>
         <span className="text-xs text-ink-faint">{sub}</span>
@@ -415,7 +443,7 @@ function RecoveryRow({ title, sub, source, price, onPrice, missing, primary, sec
           <div className="min-w-0">
             <p className="text-sm font-bold text-ink truncate">{title}</p>
             <p className="text-xs text-ink-muted mt-0.5 truncate">{sub}</p>
-            <p className="text-[11px] text-ink-faint mt-0.5 flex items-center gap-1"><Sparkles className="w-3 h-3 text-accent" /> Suggested from {source}</p>
+            <p className="text-[11px] text-ink-faint mt-0.5 flex items-center gap-1"><Sparkles className="w-3 h-3 text-accent-text" /> Suggested from {source}</p>
           </div>
           <div className="text-right shrink-0">
             <p className="text-[10px] uppercase tracking-wide text-ink-faint">At risk</p>

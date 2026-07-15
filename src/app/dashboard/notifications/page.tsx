@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { formatDistanceToNow } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
+import { toast } from '@/lib/toast'
 import { AppNotification } from '@/components/notifications/NotificationBell'
 import { MorningBriefing } from '@/components/notifications/MorningBriefing'
 import { groupNotifications, notificationActionLabel, type NotifGroup } from '@/lib/notifications'
@@ -89,22 +90,32 @@ export default function NotificationsPage() {
   const snoozedCount = items.length - visible.length
   const { actionNeeded, activity, totalUnread } = useMemo(() => groupNotifications(visible), [visible])
 
+  // These three act optimistically and the realtime channel only fires on SUCCESSFUL
+  // changes — so a failed write produces no correction event at all. Unchecked, items
+  // vanished on tap and silently resurrected on the next visit. Roll the list back to what
+  // the server actually holds rather than leave a cleared inbox that isn't cleared.
   async function markRead(ids: string[]) {
     if (!ids.length) return
+    const prevItems = items
     setItems(prev => prev.map(n => ids.includes(n.id) ? { ...n, read: true } : n))
-    await supabase.from('notifications').update({ read: true, read_at: new Date().toISOString() }).in('id', ids)
+    const { error } = await supabase.from('notifications').update({ read: true, read_at: new Date().toISOString() }).in('id', ids)
+    if (error) { setItems(prevItems); toast.error('Could not mark these as read — please try again.') }
   }
   async function snooze(ids: string[]) {
     if (!supportsManage || !ids.length) return
     const until = tomorrow8am()
+    const prevItems = items
     setItems(prev => prev.map(n => ids.includes(n.id) ? { ...n, snoozed_until: until } : n))
-    await supabase.from('notifications').update({ snoozed_until: until }).in('id', ids)
+    const { error } = await supabase.from('notifications').update({ snoozed_until: until }).in('id', ids)
+    if (error) { setItems(prevItems); toast.error('Could not snooze these — please try again.') }
   }
   async function dismiss(ids: string[]) {
     if (!ids.length) return
     if (!supportsManage) { await markRead(ids); return } // pre-migration: dismiss = mark read
+    const prevItems = items
     setItems(prev => prev.filter(n => !ids.includes(n.id)))
-    await supabase.from('notifications').update({ archived_at: new Date().toISOString() }).in('id', ids)
+    const { error } = await supabase.from('notifications').update({ archived_at: new Date().toISOString() }).in('id', ids)
+    if (error) { setItems(prevItems); toast.error('Could not archive these — please try again.') }
   }
   function openItem(n: AppNotification) { markRead([n.id]); if (n.href) router.push(n.href) }
   function toggle(key: string) { setExpanded(prev => { const s = new Set(prev); s.has(key) ? s.delete(key) : s.add(key); return s }) }
@@ -117,7 +128,7 @@ export default function NotificationsPage() {
       <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
         {g.count === 1 && g.href && (
           <button onClick={() => openItem(g.items[0])}
-            className="text-[11px] font-semibold text-accent hover:underline px-1.5 py-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{actionLabel ?? notificationActionLabel(g.type)}</button>
+            className="text-[11px] font-semibold text-accent-text hover:underline px-1.5 py-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{actionLabel ?? notificationActionLabel(g.type)}</button>
         )}
         {supportsManage && (
           <button onClick={() => snooze(g.ids)} title="Remind me tomorrow" aria-label="Snooze"
@@ -196,7 +207,7 @@ export default function NotificationsPage() {
                   return (
                     <div key={g.key}>
                       <div className={cn('px-4 py-3.5 flex items-start gap-3', lead ? 'bg-accent/[0.06]' : g.unread && 'bg-accent/[0.04]')}>
-                        <div className={cn('w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border', emphasise ? 'border-accent/30 bg-accent/10 text-accent' : 'border-border text-ink-muted')}><Icon className="w-4 h-4" /></div>
+                        <div className={cn('w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border', emphasise ? 'border-accent/30 bg-accent/10 text-accent-text' : 'border-border text-ink-muted')}><Icon className="w-4 h-4" /></div>
                         <button onClick={onMain} className="min-w-0 flex-1 text-left rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                           <p className={cn('text-sm flex items-center gap-2', emphasise ? 'font-semibold text-ink' : 'text-ink-muted')}>
                             {title}
@@ -221,7 +232,7 @@ export default function NotificationsPage() {
                                 <p className="text-[10px] text-ink-faint mt-0.5">{timeAgo(n.created_at)}</p>
                               </button>
                               <div className="flex items-center gap-1 shrink-0">
-                                {n.href && <button onClick={() => openItem(n)} className="text-[11px] font-semibold text-accent hover:underline px-1.5 py-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{nLead ? 'Build quote' : notificationActionLabel(n.type)}</button>}
+                                {n.href && <button onClick={() => openItem(n)} className="text-[11px] font-semibold text-accent-text hover:underline px-1.5 py-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{nLead ? 'Build quote' : notificationActionLabel(n.type)}</button>}
                                 {supportsManage && <button onClick={() => snooze([n.id])} title="Remind me tomorrow" aria-label="Snooze" className="h-6 w-6 rounded-lg text-ink-faint hover:text-ink hover:bg-surface flex items-center justify-center"><Clock className="w-3 h-3" /></button>}
                                 <button onClick={() => dismiss([n.id])} title={supportsManage ? 'Dismiss' : 'Mark read'} aria-label="Dismiss" className="h-6 w-6 rounded-lg text-ink-faint hover:text-ink hover:bg-surface flex items-center justify-center"><X className="w-3 h-3" /></button>
                               </div>

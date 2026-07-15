@@ -107,11 +107,11 @@ export function SmartLaborField({
   return (
     <div className="rounded-xl border border-accent/20 bg-accent/[0.04] p-3 space-y-2.5 animate-fade">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-bold text-ink flex items-center gap-1.5"><Sparkles className="w-3.5 h-3.5 text-accent" /> Smart Labor Estimate</span>
+        <span className="text-xs font-bold text-ink flex items-center gap-1.5"><Sparkles className="w-3.5 h-3.5 text-accent-text" /> Smart Labor Estimate</span>
         {/* ON/OFF toggle (hidden in read-only / quote mode) */}
         {!readOnly && (
           <button type="button" aria-pressed={enabled} onClick={() => setEnabled(e => !e)}
-            className={cn('text-[10px] font-semibold rounded-full px-2 py-0.5 border transition-colors', enabled ? 'text-accent border-accent/40 bg-accent/10' : 'text-ink-faint border-border')}>
+            className={cn('text-[10px] font-semibold rounded-full px-2 py-0.5 border transition-colors', enabled ? 'text-accent-text border-accent/40 bg-accent/10' : 'text-ink-faint border-border')}>
             {enabled ? 'Auto-fill ON' : 'Auto-fill OFF'}
           </button>
         )}
@@ -141,7 +141,7 @@ export function SmartLaborField({
         {!readOnly && (applied
           ? <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 animate-fade"><Check className="w-3.5 h-3.5" /> Applied</span>
           : isOverride
-            ? <button type="button" onClick={recalc} className="inline-flex items-center gap-1 text-[11px] font-semibold text-accent hover:underline"><RotateCw className="w-3 h-3" /> Recalculate ({est.minutes} min)</button>
+            ? <button type="button" onClick={recalc} className="inline-flex items-center gap-1 text-[11px] font-semibold text-accent-text hover:underline"><RotateCw className="w-3 h-3" /> Recalculate ({est.minutes} min)</button>
             : <Button type="button" variant="ghost" size="sm" onClick={recalc}>Use estimate ({est.minutes} min)</Button>)}
         {readOnly && <span className="text-[10px] text-ink-faint">Reference only — doesn’t change your price</span>}
         <button type="button" aria-expanded={showWhy} onClick={() => setShowWhy(v => !v)} className="ml-auto text-[11px] font-medium text-ink-faint hover:text-ink flex items-center gap-1"><HelpCircle className="w-3 h-3" /> Why?</button>
@@ -150,7 +150,7 @@ export function SmartLaborField({
 
       {showWhy && (
         <ul className="space-y-0.5 border-t border-border pt-2">
-          {est.reasons.map((r, i) => <li key={i} className="text-[11px] text-ink-muted flex gap-1.5"><span className="text-accent/60 shrink-0">•</span><span>{r}</span></li>)}
+          {est.reasons.map((r, i) => <li key={i} className="text-[11px] text-ink-muted flex gap-1.5"><span className="text-accent-text/60 shrink-0">•</span><span>{r}</span></li>)}
           <li className="text-[10px] text-ink-faint flex gap-1.5 pt-0.5"><Gauge className="w-3 h-3 shrink-0 mt-0.5" /><span>Estimate feeds scheduling &amp; capacity only — it never changes your price. Edit the field to override.</span></li>
         </ul>
       )}

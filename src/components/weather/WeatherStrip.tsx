@@ -37,7 +37,7 @@ export function WeatherStrip() {
       ) : (
         <p className="text-xs text-ink-muted">No rain risk to booked work this week</p>
       )}
-      <span className="ml-auto text-[11px] font-medium text-accent flex items-center gap-1 shrink-0">Weather <ArrowRight className="w-3 h-3" /></span>
+      <span className="ml-auto text-[11px] font-medium text-accent-text flex items-center gap-1 shrink-0">Weather <ArrowRight className="w-3 h-3" /></span>
     </Link>
   )
 }

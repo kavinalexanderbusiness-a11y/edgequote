@@ -200,11 +200,17 @@ export async function ensurePair(
       if (!existing.has_after) patch.has_after = true
       if (!existing.best_before_photo_id) patch.best_before_photo_id = input.beforePhotoId
       if (!existing.best_after_photo_id) patch.best_after_photo_id = input.afterPhotoId
-      if (Object.keys(patch).length) await supabase.from('marketing_assets').update(patch).eq('id', existing.id)
+      // Supabase RESOLVES on a failed write, so the catch below never sees an RLS denial
+      // or constraint violation — this returned true regardless and the crew was told
+      // "before/after paired" for an asset that doesn't exist in Marketing Studio.
+      if (Object.keys(patch).length) {
+        const { error: upErr } = await supabase.from('marketing_assets').update(patch).eq('id', existing.id)
+        if (upErr) return false
+      }
       return true
     }
 
-    await supabase.from('marketing_assets').insert({
+    const { error: insErr } = await supabase.from('marketing_assets').insert({
       user_id: userId,
       job_id: job.id,
       customer_id: job.customer_id ?? null,
@@ -219,7 +225,7 @@ export async function ensurePair(
       best_after_photo_id: input.afterPhotoId,
       status: 'candidate',
     })
-    return true
+    return !insErr
   } catch {
     return false
   }

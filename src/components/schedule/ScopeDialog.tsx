@@ -29,7 +29,7 @@ export function ScopeDialog({ title, verb, destructive, onChoose, onCancel }: Sc
     return () => { document.body.style.overflow = prev }
   }, [])
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-4" onClick={onCancel}>
+    <div className="fixed inset-0 z-overlay flex items-end sm:items-center justify-center bg-black/50 p-4" onClick={onCancel}>
       <div
         ref={panelRef}
         tabIndex={-1}
@@ -40,7 +40,7 @@ export function ScopeDialog({ title, verb, destructive, onChoose, onCancel }: Sc
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-5 pt-5 pb-3 flex items-center gap-2 border-b border-border">
-          <Repeat className="w-4 h-4 text-accent" aria-hidden="true" />
+          <Repeat className="w-4 h-4 text-accent-text" aria-hidden="true" />
           <div>
             <p className="text-sm font-semibold text-ink">{verb} recurring job</p>
             <p className="text-xs text-ink-muted mt-0.5 truncate">{title}</p>

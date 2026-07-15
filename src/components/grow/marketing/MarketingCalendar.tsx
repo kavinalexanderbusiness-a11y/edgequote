@@ -15,6 +15,7 @@ import { Skeleton } from '@/components/ui/Skeleton'
 import { cn } from '@/lib/utils'
 import { ChevronLeft, ChevronRight, CalendarDays, CalendarRange, Calendar as CalIcon, Sparkles, CalendarPlus, ListChecks, ExternalLink, Copy, Check, X, CheckCircle2, Clock, FileText, TriangleAlert, GripVertical, Star } from 'lucide-react'
 import type { ContentPiece, ContentStatus, MarketingChannel } from '@/lib/marketing/types'
+import { scrollBehavior } from '@/lib/motion'
 
 type View = 'month' | 'week' | 'day'
 
@@ -36,7 +37,7 @@ function pieceDayKey(p: ContentPiece): string | null {
 const STATUS_META: Record<ContentStatus, { label: string; dot: string; chip: string }> = {
   draft:     { label: 'Draft',     dot: 'bg-ink-faint',    chip: 'border-border text-ink-muted' },
   approved:  { label: 'Ready',     dot: 'bg-sky-400',      chip: 'border-sky-500/30 text-sky-400' },
-  scheduled: { label: 'Scheduled', dot: 'bg-accent',       chip: 'border-accent/40 text-accent' },
+  scheduled: { label: 'Scheduled', dot: 'bg-accent',       chip: 'border-accent/40 text-accent-text' },
   published: { label: 'Posted',    dot: 'bg-emerald-400',  chip: 'border-emerald-500/30 text-emerald-400' },
   failed:    { label: 'Failed',    dot: 'bg-red-400',      chip: 'border-red-500/30 text-red-400' },
 }
@@ -92,7 +93,7 @@ export function MarketingCalendar({ userId, aiEnabled, openPlan }: { userId: str
   // On mobile the detail panel stacks below the grid — bring it into view when a chip
   // is tapped so the tap gives a visible response instead of silently changing off-screen.
   useEffect(() => {
-    if (selected) detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    if (selected) detailRef.current?.scrollIntoView({ behavior: scrollBehavior(), block: 'nearest' })
   }, [selected?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Bucket pieces by day.
@@ -261,12 +262,12 @@ function MonthGrid({ cursor, byDay, markers, todayKey, onDropDay, setDragId, onS
               className={cn('min-h-[60px] sm:min-h-[88px] rounded-lg border p-1 flex flex-col gap-1', out ? 'border-border/50 bg-bg-tertiary/30' : 'border-border bg-bg-secondary', k === todayKey && 'ring-1 ring-accent/50')}
             >
               <div className="flex items-center justify-between">
-                <span className={cn('text-[11px] font-medium', out ? 'text-ink-faint/60' : 'text-ink-muted', k === todayKey && 'text-accent font-bold')}>{d.getDate()}</span>
+                <span className={cn('text-[11px] font-medium', out ? 'text-ink-faint/60' : 'text-ink-muted', k === todayKey && 'text-accent-text font-bold')}>{d.getDate()}</span>
               </div>
               {mk.slice(0, 1).map(m => <span key={m} className="inline-flex items-center gap-1 text-[9px] text-amber-300/90 truncate" title={m}><Star className="w-3 h-3 shrink-0" /> {m}</span>)}
               {dayPieces.slice(0, 3).map(p => <CalChip key={p.id} piece={p} setDragId={setDragId} onSelect={onSelect} />)}
               {dayPieces.length > 3 && (
-                <button onClick={() => onOpenDay(d)} className="text-[10px] text-ink-faint hover:text-accent text-left" title="See all posts this day">
+                <button onClick={() => onOpenDay(d)} className="text-[10px] text-ink-faint hover:text-accent-text text-left" title="See all posts this day">
                   +{dayPieces.length - 3} more
                 </button>
               )}
@@ -300,7 +301,7 @@ function WeekColumns({ from, byDay, markers, todayKey, onDropDay, setDragId, onS
             className={cn('min-h-[55vh] rounded-lg border p-1.5 flex flex-col gap-1.5 bg-bg-secondary border-border', k === todayKey && 'ring-1 ring-accent/50')}>
             <div className="text-center">
               <p className="text-[10px] uppercase tracking-wide text-ink-faint">{WEEKDAYS[d.getDay()]}</p>
-              <p className={cn('text-sm font-bold', k === todayKey ? 'text-accent' : 'text-ink')}>{d.getDate()}</p>
+              <p className={cn('text-sm font-bold', k === todayKey ? 'text-accent-text' : 'text-ink')}>{d.getDate()}</p>
             </div>
             {mk.slice(0, 1).map(m => <span key={m} className="inline-flex items-center gap-1 text-[9px] text-amber-300/90 truncate" title={m}><Star className="w-3 h-3 shrink-0" /> {m}</span>)}
             {dayPieces.map(p => <CalChip key={p.id} piece={p} setDragId={setDragId} onSelect={onSelect} />)}
@@ -406,7 +407,7 @@ function PieceDetail({ piece, onClose, onUnschedule, onPublish, onFail, onSchedu
       </div>
       {piece.title && <p className="text-sm font-semibold text-ink">{piece.title}</p>}
       <p className="text-xs text-ink-muted whitespace-pre-wrap max-h-40 overflow-y-auto leading-relaxed">{piece.body}</p>
-      {piece.hashtags.length > 0 && <p className="text-[11px] text-accent break-words">{piece.hashtags.map(h => `#${h}`).join(' ')}</p>}
+      {piece.hashtags.length > 0 && <p className="text-[11px] text-accent-text break-words">{piece.hashtags.map(h => `#${h}`).join(' ')}</p>}
       <div className="flex flex-wrap gap-1.5 pt-1">
         <Button size="sm" onClick={copy}>{copied ? <><Check className="w-3.5 h-3.5" /> Copied</> : <><Copy className="w-3.5 h-3.5" /> Copy</>}</Button>
         <Button size="sm" variant="secondary" onClick={() => window.open(def.openUrl, '_blank')}><ExternalLink className="w-3.5 h-3.5" /> Open {def.label}</Button>
@@ -452,7 +453,7 @@ function PlanPanel({ aiEnabled, onClose, onDone, defaultStart }: { aiEnabled: bo
   return (
     <Card className="p-4 space-y-3 border-accent/30">
       <div className="flex items-center justify-between">
-        <p className="text-sm font-bold text-ink inline-flex items-center gap-2"><Sparkles className="w-4 h-4 text-accent" /> Plan a month of content</p>
+        <p className="text-sm font-bold text-ink inline-flex items-center gap-2"><Sparkles className="w-4 h-4 text-accent-text" /> Plan a month of content</p>
         <button type="button" onClick={onClose} aria-label="Close" className="h-7 w-7 rounded-lg flex items-center justify-center text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><X className="w-4 h-4" /></button>
       </div>
       <p className="text-xs text-ink-muted">Generate varied posts across your platforms and spread them across the calendar — one click, no repetition.</p>

@@ -69,7 +69,7 @@ export function CommunicationsTest() {
       <CardHeader>
         <div className="flex items-center justify-between gap-3">
           <div>
-            <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><MessageSquare className="w-4 h-4 text-accent" /> Communications test</h2>
+            <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><MessageSquare className="w-4 h-4 text-accent-text" /> Communications test</h2>
             <p className="text-xs text-ink-faint mt-0.5">Verify Twilio/Resend setup. Test messages go ONLY to the number you enter — customers are never messaged here.</p>
           </div>
           <Button size="sm" variant="ghost" onClick={loadDiag} disabled={loadingDiag} title="Refresh diagnostics" aria-label="Refresh diagnostics"><RefreshCw className={cn('w-3.5 h-3.5', loadingDiag && 'animate-spin')} /></Button>

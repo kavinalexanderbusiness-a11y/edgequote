@@ -117,7 +117,7 @@ export function CampaignBuilder({ aiEnabled, initialCampaigns, initialKind, init
               <button key={c.kind} onClick={() => pickKind(c.kind)} className="text-left">
                 <Card className={cn('p-3 h-full transition-colors', active ? 'border-accent ring-1 ring-accent/30' : 'hover:border-accent/40')}>
                   <div className="flex items-center gap-2 mb-1">
-                    <Icon className={cn('w-4 h-4', active ? 'text-accent' : 'text-ink-muted')} />
+                    <Icon className={cn('w-4 h-4', active ? 'text-accent-text' : 'text-ink-muted')} />
                     <span className="text-sm font-semibold text-ink">{c.label}</span>
                   </div>
                   <p className="text-xs text-ink-muted leading-snug">{c.description}</p>
@@ -131,7 +131,7 @@ export function CampaignBuilder({ aiEnabled, initialCampaigns, initialKind, init
       {/* Configure */}
       <Card className="p-4 space-y-4">
         <div className="flex items-center gap-2">
-          <def.icon className="w-4 h-4 text-accent" />
+          <def.icon className="w-4 h-4 text-accent-text" />
           <span className="text-sm font-bold text-ink">{def.label}</span>
           {initialHoliday && <span className="text-xs text-ink-muted">· {initialHoliday}</span>}
         </div>
@@ -145,7 +145,7 @@ export function CampaignBuilder({ aiEnabled, initialCampaigns, initialKind, init
         <div>
           <div className="flex items-center justify-between mb-1.5">
             <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-faint">Platforms · {count} selected</p>
-            <button type="button" onClick={allSelected ? clearAll : selectAll} className="text-[11px] text-accent hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            <button type="button" onClick={allSelected ? clearAll : selectAll} className="text-[11px] text-accent-text hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
               {allSelected ? 'Clear all' : 'Select all'}
             </button>
           </div>
@@ -205,7 +205,7 @@ export function CampaignBuilder({ aiEnabled, initialCampaigns, initialKind, init
                     <p className="text-sm font-semibold text-ink truncate">{c.name}</p>
                     <p className="text-xs text-ink-muted">{cd.label} · {c.channels.length} platform{c.channels.length === 1 ? '' : 's'} · {c.status}</p>
                   </div>
-                  <Link href={`/dashboard/grow/posts?campaign=${c.id}`} className="text-xs text-accent inline-flex items-center gap-1 hover:underline shrink-0">
+                  <Link href={`/dashboard/grow/posts?campaign=${c.id}`} className="text-xs text-accent-text inline-flex items-center gap-1 hover:underline shrink-0">
                     View posts <ArrowRight className="w-3 h-3 transition-transform group-hover:translate-x-0.5" />
                   </Link>
                   <button onClick={() => archive(c)} className="text-ink-faint hover:text-ink shrink-0" title="Archive"><Archive className="w-4 h-4" /></button>

@@ -99,7 +99,7 @@ export function MessageTemplateEditor() {
       <CardHeader>
         <div className="flex items-center justify-between gap-3">
           <div>
-            <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><MessageSquare className="w-4 h-4 text-accent" /> Message templates</h2>
+            <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><MessageSquare className="w-4 h-4 text-accent-text" /> Message templates</h2>
             <p className="text-xs text-ink-faint mt-0.5">Customise your appointment, quote and invoice messages. Leave a box blank to use our default wording.</p>
           </div>
           <Button size="sm" onClick={save} loading={saving}>{saved ? <><Check className="w-3.5 h-3.5" /> Saved</> : 'Save templates'}</Button>
@@ -140,7 +140,7 @@ export function MessageTemplateEditor() {
                 const usingDefault = !val.trim()
                 return (
                   <Collapsible key={t} title={MSG_LABELS[t]}
-                    badge={!usingDefault ? <span className="text-[10px] font-semibold uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5">Customised</span> : undefined}
+                    badge={!usingDefault ? <span className="text-[10px] font-semibold uppercase tracking-wide text-accent-text border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5">Customised</span> : undefined}
                     summary={usingDefault ? 'Using default' : (val.split('\n').find(l => l.trim()) || '').slice(0, 60)}>
                     <div>
                       <div className="flex items-start justify-between gap-3 mb-1.5">

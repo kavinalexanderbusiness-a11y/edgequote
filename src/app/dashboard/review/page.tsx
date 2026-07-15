@@ -225,7 +225,7 @@ export default function WeeklyReviewPage() {
       {/* Next week's moves */}
       <Card>
         <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-          <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><CalendarCheck className="w-3.5 h-3.5 text-accent" /></span>
+          <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><CalendarCheck className="w-3.5 h-3.5 text-accent-text" /></span>
           <h2 className="text-sm font-semibold text-ink tracking-tight">Next week&apos;s moves</h2>
           <span className="flex-1 h-px bg-border" aria-hidden />
         </div>
@@ -240,7 +240,7 @@ export default function WeeklyReviewPage() {
             <ReviewRow icon={Sprout} tone="text-violet-300" label="Growth opportunity"
               value={m.growth ? `${m.growth.key} — ${formatCurrency(m.growth.revPerJob)}/job, ${m.growth.customers} customer${m.growth.customers !== 1 ? 's' : ''}` : 'Add located, priced jobs to surface one'}
               href="/dashboard/neighbors" cta={m.growth ? 'Knock doors' : undefined} />
-            <ReviewRow icon={DollarSign} tone="text-accent" label="Pending quote pipeline"
+            <ReviewRow icon={DollarSign} tone="text-accent-text" label="Pending quote pipeline"
               value={m.pending > 0 ? `${m.pending} open · ${formatCurrency(m.pendingValue)}` : 'No open quotes'}
               href="/dashboard/quotes?status=sent" cta={m.pending > 0 ? 'Close them' : undefined} />
           </div>
@@ -261,7 +261,7 @@ function ReviewRow({ icon: Icon, tone, label, value, href, cta }: {
         <p className="text-sm font-medium text-ink truncate tabular-nums">{value}</p>
       </div>
       {cta && (
-        <Link href={href} className="shrink-0 text-xs font-semibold text-accent flex items-center gap-1 hover:underline">
+        <Link href={href} className="shrink-0 text-xs font-semibold text-accent-text flex items-center gap-1 hover:underline">
           {cta} <ArrowRight className="w-3 h-3 transition-transform group-hover:translate-x-0.5" />
         </Link>
       )}

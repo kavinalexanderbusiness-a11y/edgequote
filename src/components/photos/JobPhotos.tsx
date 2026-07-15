@@ -192,7 +192,18 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
     setPhotos(prev => prev.filter(p => p.id !== photo.id))
     let undone = false
     toast.undo('Photo deleted.', () => { undone = true; setPhotos(prev => { const c = [...prev]; c.splice(Math.min(idx, c.length), 0, photo); return c }) })
-    if (typeof window !== 'undefined') window.setTimeout(() => { if (!undone) deletePhoto(supabase, photo) }, 7000)
+    // The delete is deferred so Undo costs no write — but its result was never inspected,
+    // so a failure meant the tile stayed gone, "Photo deleted." stood, and the photo
+    // reappeared on the next load with no explanation. retag/saveCaption below both roll
+    // back and surface the error; this path was the only one that didn't.
+    if (typeof window !== 'undefined') window.setTimeout(async () => {
+      if (undone) return
+      const ok = await deletePhoto(supabase, photo)
+      if (!ok) {
+        setPhotos(prev => { const c = [...prev]; c.splice(Math.min(idx, c.length), 0, photo); return c })
+        toast.error('Could not delete that photo — it’s still here.')
+      }
+    }, 7000)
   }
 
   async function retag(photo: JobPhotoView, kind: PhotoKind) {
@@ -249,7 +260,7 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
         </>}
         <span className="text-[11px] ml-auto inline-flex items-center gap-1.5">
           {uploadingCount > 0
-            ? <span className="text-accent inline-flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Uploading {uploadingCount}…</span>
+            ? <span className="text-accent-text inline-flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Uploading {uploadingCount}…</span>
             : photos.length > 0 ? <span className="text-ink-faint">{photos.length} photo{photos.length !== 1 ? 's' : ''}</span> : null}
         </span>
       </div>
@@ -308,7 +319,7 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
             ))}
           </div>
           {filtered.length > shown && (
-            <button type="button" onClick={() => setShown(s => s + 24)} className="mt-2 w-full text-xs font-medium text-accent hover:underline py-1.5">
+            <button type="button" onClick={() => setShown(s => s + 24)} className="mt-2 w-full text-xs font-medium text-accent-text hover:underline py-1.5">
               Show {Math.min(24, filtered.length - shown)} more ({filtered.length - shown} hidden)
             </button>
           )}
@@ -317,7 +328,7 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
 
       {/* Lightbox */}
       {current && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" onClick={() => setLightboxId(null)}>
+        <div className="fixed inset-0 z-overlay bg-black/80 flex items-center justify-center p-4" onClick={() => setLightboxId(null)}>
           {/* Prev / next across the current (filtered) set — no open-close per photo. */}
           {filtered.length > 1 && (
             <>
@@ -363,7 +374,7 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
               ) : null}
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
-                  <a href={current.url} target="_blank" rel="noopener noreferrer" className="text-xs text-accent hover:underline">Open full size</a>
+                  <a href={current.url} target="_blank" rel="noopener noreferrer" className="text-xs text-accent-text hover:underline">Open full size</a>
                   <button type="button" onClick={() => download(current)} disabled={downloading === current.id}
                     className="text-xs font-medium text-ink-muted hover:text-ink flex items-center gap-1 disabled:opacity-50">
                     {downloading === current.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />} Download

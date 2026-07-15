@@ -29,6 +29,10 @@ const config: Config = {
           DEFAULT: 'rgb(var(--c-accent) / <alpha-value>)',
           hover: 'rgb(var(--c-accent-hover) / <alpha-value>)',
           dim: 'var(--c-accent-dim)',
+          // Accent as TEXT only (`text-accent-text`). The DEFAULT above is a FILL
+          // colour and fails AA as text on white; this one passes in both themes.
+          // Never use for fills/borders/rings — see globals.css for the rationale.
+          text: 'rgb(var(--c-accent-text) / <alpha-value>)',
         },
         ink: {
           DEFAULT: 'rgb(var(--c-ink) / <alpha-value>)',
@@ -43,6 +47,19 @@ const config: Config = {
       borderRadius: {
         card: '14px',
         xl2: '20px',
+      },
+      // ── Layering contract ──────────────────────────────────────────────────
+      // Everything that floats above the page stacks here. The numbers are the
+      // ones the app already used — this only NAMES them, so a new overlay reads
+      // the order instead of guessing it (guessing is how a stray `z-[55]` got
+      // added). Local/in-card stacking keeps plain z-10…z-40; anything global
+      // must use one of these.
+      zIndex: {
+        overlay: '50',        // dialogs, drawers, lightboxes + their scrims
+        'overlay-top': '60',  // an overlay that must clear another overlay
+        notice: '90',         // offline / install system notices
+        toast: '100',         // toasts + the notification popover
+        menu: '200',          // menus, popovers, command palette, skip link — always top
       },
       // 18px step — w-4.5/h-4.5 icons inside 32px chips were silently falling
       // back to lucide's 24px default because this step didn't exist.

@@ -129,11 +129,11 @@ export function LibraryClient({ candidates }: { candidates: MarketingCandidate[]
                       {[c.neighborhood || c.city, c.date ? formatDate(c.date) : null].filter(Boolean).join(' · ') || '—'}
                     </p>
                     <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
-                      {c.hasBefore && c.hasAfter && <span className="inline-flex items-center gap-1 text-[10px] text-accent"><ArrowLeftRight className="w-3 h-3" /> Before &amp; after</span>}
+                      {c.hasBefore && c.hasAfter && <span className="inline-flex items-center gap-1 text-[10px] text-accent-text"><ArrowLeftRight className="w-3 h-3" /> Before &amp; after</span>}
                       {c.hasReview && <span className="inline-flex items-center gap-1 text-[10px] text-amber-400"><Star className="w-3 h-3 fill-amber-400" /> Review</span>}
                       {c.season && <span className="text-[10px] text-ink-faint capitalize">{c.season}</span>}
                     </div>
-                    <span className="mt-auto inline-flex items-center justify-center gap-1.5 rounded-xl bg-accent/10 border border-accent/20 text-accent text-xs font-semibold py-2 group-hover:bg-accent/15 transition-colors">
+                    <span className="mt-auto inline-flex items-center justify-center gap-1.5 rounded-xl bg-accent/10 border border-accent/20 text-accent-text text-xs font-semibold py-2 group-hover:bg-accent/15 transition-colors">
                       <Sparkles className="w-3.5 h-3.5" /> Use in Studio
                     </span>
                   </div>

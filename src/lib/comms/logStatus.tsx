@@ -26,11 +26,12 @@ const META: Record<string, StatusMeta> = {
   spam:         { key: 'spam',         label: 'Spam report',  Icon: Ban,               tone: 'fail' },
 }
 
-// Unknown/legacy statuses default to a neutral "Sent" only when explicitly 'sent';
-// anything else unrecognized is treated as a non-delivery so we never falsely claim Sent.
+// Only an explicit 'sent' reads as Sent. An absent/unknown status is NOT evidence of a
+// send — it used to resolve to a green "Sent" check, which contradicted the very
+// invariant this comment claims. Absent → Queued (honest: we don't know yet).
 export function statusMeta(status: string | null | undefined): StatusMeta {
   const s = (status || '').toLowerCase()
-  return META[s] || (s === '' ? META.sent : { key: s, label: s.charAt(0).toUpperCase() + s.slice(1), Icon: AlertTriangle, tone: 'warn' })
+  return META[s] || (s === '' ? META.queued : { key: s, label: s.charAt(0).toUpperCase() + s.slice(1), Icon: AlertTriangle, tone: 'warn' })
 }
 
 export const TONE_CLASS: Record<StatusTone, string> = {

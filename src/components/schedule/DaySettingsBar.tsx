@@ -72,8 +72,8 @@ export function DaySettingsBar({
       <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open}
         className="w-full flex items-center justify-between gap-2 px-3.5 py-2.5 text-left">
         <p className="text-xs font-bold text-ink uppercase tracking-wide flex items-center gap-1.5 min-w-0">
-          <Gauge className="w-3.5 h-3.5 text-accent shrink-0" /> Day Settings
-          {hasOverride && <span className="text-[10px] font-medium text-accent normal-case tracking-normal">· override</span>}
+          <Gauge className="w-3.5 h-3.5 text-accent-text shrink-0" /> Day Settings
+          {hasOverride && <span className="text-[10px] font-medium text-accent-text normal-case tracking-normal">· override</span>}
           {blocked && row && <span className={cn('text-[10px] px-1.5 py-0.5 rounded border font-semibold normal-case tracking-normal', dayStatusMeta(row.status).badge)}>{dayStatusMeta(row.status).emoji} {dayStatusMeta(row.status).label}</span>}
         </p>
         <span className="flex items-center gap-3 text-xs text-ink-muted shrink-0">

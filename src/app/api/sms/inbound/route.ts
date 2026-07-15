@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import crypto from 'crypto'
 import { createClient } from '@supabase/supabase-js'
+import { verifyTwilioSignature } from '@/lib/comms/twilioSignature'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -12,14 +12,6 @@ export const runtime = 'nodejs'
 // customer's thread. Returns empty TwiML (no auto-reply). Wrapped so a thrown
 // error can't 500 Twilio into a retry storm; only operational errors are logged
 // (never message content / phone numbers).
-
-function verifyTwilio(url: string, params: Record<string, string>, signature: string | null): boolean {
-  const token = process.env.TWILIO_AUTH_TOKEN
-  if (!token || !signature) return false
-  const data = url + Object.keys(params).sort().map(k => k + params[k]).join('')
-  const expected = crypto.createHmac('sha1', token).update(Buffer.from(data, 'utf-8')).digest('base64')
-  try { return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature)) } catch { return false }
-}
 
 function twiml(message?: string) {
   const inner = message ? `<Message>${message.replace(/[<&>]/g, '')}</Message>` : ''
@@ -37,7 +29,7 @@ export async function POST(req: NextRequest) {
     const params: Record<string, string> = {}
     form.forEach((v, k) => { params[k] = String(v) })
     const url = `${(process.env.NEXT_PUBLIC_APP_URL || '').replace(/\/$/, '')}/api/sms/inbound`
-    if (!verifyTwilio(url, params, req.headers.get('x-twilio-signature'))) {
+    if (!verifyTwilioSignature(url, params, req.headers.get('x-twilio-signature'))) {
       return new NextResponse('forbidden', { status: 403 })
     }
 

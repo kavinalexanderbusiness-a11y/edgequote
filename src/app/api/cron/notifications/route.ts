@@ -2,7 +2,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { addDays, format } from 'date-fns'
 import { renderMessage, MsgType, prefAllows, type MessagePrefs } from '@/lib/comms/templates'
-import { sendSms, sendEmail, commsEnabled } from '@/lib/comms/send'
+import { sendSms, sendEmail, commsEnabled, type SendResult } from '@/lib/comms/send'
+import { SKIP_REASON } from '@/lib/comms/skipReasons'
+import { SENT_STATES } from '@/lib/comms/delivery'
+import { logSend } from '@/lib/comms/log'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { resolveAutomations, Automations } from '@/lib/comms/automations'
 
@@ -45,7 +48,10 @@ export async function GET(req: NextRequest) {
   async function alreadySent(userId: string, jobId: string, template: string): Promise<boolean> {
     // Only a SUCCESSFUL prior send blocks a resend — otherwise a failed attempt
     // (Resend/Twilio down) would log a row and never be retried on the next run.
-    const { data } = await supabase.from('notification_log').select('id').eq('user_id', userId).eq('job_id', jobId).eq('template', template).eq('status', 'sent').limit(1)
+    // SENT_STATES, not status='sent': a delivery webhook may have already carried
+    // that row to 'delivered'/'bounced', and an equality check on 'sent' would miss
+    // it and text the customer a second time.
+    const { data } = await supabase.from('notification_log').select('id').eq('user_id', userId).eq('job_id', jobId).eq('template', template).in('status', SENT_STATES as unknown as string[]).limit(1)
     return !!(data && data.length)
   }
   const sel = 'id, user_id, customer_id, scheduled_date, customers(name, phone, email, sms_opt_in, email_opt_in, message_prefs, reviewed_at, review_declined_at)'
@@ -63,8 +69,29 @@ export async function GET(req: NextRequest) {
       if (!prefAllows(c.message_prefs, template)) continue  // customer declined this category of message
       const token = await ensurePortalToken(supabase, j.user_id, j.customer_id)
       const msg = renderMessage(template, info.templates, { firstName: c.name, businessName: info.name, dateLabel, portalLink: token ? portalUrl(token) : undefined, reviewLink: info.reviewUrl || undefined, directPhone: info.phone || undefined, logoUrl: info.logoUrl || undefined, website: info.website || undefined })
-      if (c.sms_opt_in && c.phone) { const r = await sendSms(c.phone, msg.sms); await supabase.from('notification_log').insert({ user_id: j.user_id, customer_id: j.customer_id, job_id: j.id, channel: 'sms', template, status: r.reason, detail: r.error ?? null }); if (r.sent) sent++ }
-      if (c.email_opt_in && c.email) { const r = await sendEmail(c.email, msg.subject, msg.html, msg.text); await supabase.from('notification_log').insert({ user_id: j.user_id, customer_id: j.customer_id, job_id: j.id, channel: 'email', template, status: r.reason, detail: r.error ?? null }); if (r.sent) sent++ }
+      // Log EVERY outcome, including the skips. These two branches used to be bare
+      // `if (opted_in && contact)` with no else: an opted-out customer produced no
+      // send AND no notification_log row, so the timeline showed nothing at all and
+      // the owner had no way to know a reminder/review request never went out. The
+      // canonical reasons + branch order mirror lib/comms/dispatch.ts so automatic
+      // sends read identically to manual ones. alreadySent() blocks only on a real
+      // prior send (SENT_STATES), so a skipped row never suppresses a later one.
+      const logRow = (channel: 'sms' | 'email', status: string, detail: string | null, r?: SendResult) =>
+        logSend(supabase, {
+          userId: j.user_id, customerId: j.customer_id, jobId: j.id, channel, template, status, detail,
+          // The provider's id — without it these rows could never be corrected past
+          // 'sent', so a bounced reminder would read as delivered forever.
+          provider: r?.sent ? (channel === 'sms' ? 'twilio' : 'resend') : null,
+          providerId: r?.id ?? null,
+        })
+
+      if (!c.sms_opt_in) await logRow('sms', 'skipped', SKIP_REASON.NO_OPT_IN)
+      else if (!c.phone) await logRow('sms', 'skipped', SKIP_REASON.NO_PHONE)
+      else { const r = await sendSms(c.phone, msg.sms); await logRow('sms', r.reason, r.error ?? null, r); if (r.sent) sent++ }
+
+      if (!c.email_opt_in) await logRow('email', 'skipped', SKIP_REASON.NO_OPT_IN)
+      else if (!c.email) await logRow('email', 'skipped', SKIP_REASON.NO_EMAIL)
+      else { const r = await sendEmail(c.email, msg.subject, msg.html, msg.text); await logRow('email', r.reason, r.error ?? null, r); if (r.sent) sent++ }
     }
   }
 

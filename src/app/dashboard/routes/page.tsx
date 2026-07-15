@@ -179,12 +179,12 @@ export default function RoutesPage() {
                   <p className="text-xs text-ink-muted">
                     {profit.stops} stop{profit.stops !== 1 ? 's' : ''}
                     {route && route.ordered.length > 0 && ` · ~${route.totalKm} km ${route.usedGoogle ? 'real-road' : 'est.'} round trip`}
-                    {etas && <span className="text-accent font-medium"> · done ~{etas.finish}</span>}
+                    {etas && <span className="text-accent-text font-medium"> · done ~{etas.finish}</span>}
                   </p>
                 </div>
               </div>
               <div className="flex items-center gap-3">
-                <p className="text-xl font-bold text-accent tabular-nums">{formatCurrency(profit.revenue)}</p>
+                <p className="text-xl font-bold text-accent-text tabular-nums">{formatCurrency(profit.revenue)}</p>
                 {route?.mapsUrl && (
                   <a href={route.mapsUrl} target="_blank" rel="noopener noreferrer"
                     className="inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-surface border border-border-strong text-ink hover:bg-surface-raised active:scale-[0.98] px-3.5 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
@@ -231,7 +231,7 @@ export default function RoutesPage() {
           {/* Cluster read-out */}
           <Card>
             <CardBody className="flex items-start gap-3">
-              <Layers className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+              <Layers className="w-4 h-4 text-accent-text shrink-0 mt-0.5" />
               <p className="text-sm text-ink-muted">
                 {clusters <= 1 && profit.locatedStops > 1
                   ? <>All {profit.locatedStops} located stops fall in <span className="text-ink font-medium">one tight cluster</span> — dense and efficient to service.</>
@@ -252,7 +252,7 @@ export default function RoutesPage() {
           {route && route.ordered.length > 0 && (
             <Card>
               <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-                <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><Navigation className="w-3.5 h-3.5 text-accent" /></span>
+                <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><Navigation className="w-3.5 h-3.5 text-accent-text" /></span>
                 <h2 className="text-sm font-semibold text-ink tracking-tight">Route breakdown</h2>
                 <span className="flex-1 h-px bg-border" aria-hidden />
                 <span className="text-xs text-ink-faint">arrival · value · leg</span>
@@ -276,7 +276,7 @@ export default function RoutesPage() {
                         <p className="text-xs text-ink-muted truncate">{stop.address}</p>
                       </div>
                       <div className="text-right shrink-0">
-                        {etaByJob[stop.jobId] && <p className="text-[11px] text-accent font-semibold">{etaByJob[stop.jobId]}</p>}
+                        {etaByJob[stop.jobId] && <p className="text-[11px] text-accent-text font-semibold">{etaByJob[stop.jobId]}</p>}
                         <p className="text-sm font-semibold text-ink">{v > 0 ? formatCurrency(v) : '—'}</p>
                         {stop.legKm != null && <p className="text-[11px] text-ink-faint">{stop.legKm} km leg</p>}
                       </div>
@@ -318,7 +318,7 @@ function Metric({ label, value, accent }: { label: string; value: string; accent
   return (
     <div className="rounded-lg border border-border bg-bg-tertiary px-2 py-1.5">
       <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">{label}</p>
-      <p className={cn('text-sm font-bold mt-0.5 tabular-nums', accent ? 'text-accent' : 'text-ink')}>{value}</p>
+      <p className={cn('text-sm font-bold mt-0.5 tabular-nums', accent ? 'text-accent-text' : 'text-ink')}>{value}</p>
     </div>
   )
 }

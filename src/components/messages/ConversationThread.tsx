@@ -115,7 +115,10 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
   useEffect(() => {
     const channel = supabase
       .channel(`thread:${customerId}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `customer_id=eq.${customerId}` }, () => scheduleLoad())
+      // '*' not 'INSERT': the delivery webhooks UPDATE a row's status (sent →
+      // delivered/bounced), and an INSERT-only subscription would never show it.
+      // Volume is tiny (a few status hops per message) and reloads are debounced.
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages', filter: `customer_id=eq.${customerId}` }, () => scheduleLoad())
       .subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [customerId]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -212,6 +215,19 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
   )
 }
 
+// An outbound bubble's real delivery state, via THE shared status vocabulary — so
+// 'delivered'/'opened'/'bounced' from the provider webhooks read as themselves.
+// Absent status falls back to 'sent' (what we knew at hand-off). Only warnings and
+// failures take colour; success stays as quiet as the rest of the footer.
+function DeliveryMark({ status }: { status?: string | null }) {
+  const m = statusMeta(status || 'sent')
+  return (
+    <span className={cn('inline-flex items-center gap-1', m.tone === 'fail' && 'text-red-400', m.tone === 'warn' && 'text-amber-400')}>
+      <m.Icon className="w-3 h-3 shrink-0" /> {m.label}
+    </span>
+  )
+}
+
 // Memoized: `it` refs are stable between reloads, so typing in the reply box no longer
 // re-renders (and re-formats the date of) every bubble in a long thread.
 const Bubble = memo(function Bubble({ it, customerId }: { it: Item; customerId: string }) {
@@ -229,7 +245,7 @@ const Bubble = memo(function Bubble({ it, customerId }: { it: Item; customerId: 
           {meta.label}{reason && it.status !== 'sent' ? ` (${reason})` : ''} · {templateLabel} · {it.channel} · {time}
         </span>
         {skip?.action && (
-          <Link href={`/dashboard/customers/${customerId}`} className="block text-[10px] text-accent hover:underline">
+          <Link href={`/dashboard/customers/${customerId}`} className="block text-[10px] text-accent-text hover:underline">
             {skip.action === 'add_email' ? 'Add an email address →' : 'Add a phone number →'}
           </Link>
         )}
@@ -268,7 +284,9 @@ const Bubble = memo(function Bubble({ it, customerId }: { it: Item; customerId: 
         </>
       )}
       <p className="text-[10px] text-ink-faint mt-0.5 flex items-center gap-1">
-        {sending ? <><Clock className="w-3 h-3" /> Sending…</> : queued ? <><Clock className="w-3 h-3" /> Queued · sends when online</> : <><Icon className="w-3 h-3" /> {inbound ? (it.channel === 'portal' ? 'Portal' : 'Received') : 'Sent'} · {time}{!inbound && it.status && it.status !== 'sent' && <span className="text-amber-400">· {it.status}</span>}</>}
+        {sending ? <><Clock className="w-3 h-3" /> Sending…</> : queued ? <><Clock className="w-3 h-3" /> Queued · sends when online</>
+          : inbound ? <><Icon className="w-3 h-3" /> {it.channel === 'portal' ? 'Portal' : 'Received'} · {time}</>
+          : <><Icon className="w-3 h-3" /> <DeliveryMark status={it.status} /> · {time}</>}
       </p>
     </div>
   )

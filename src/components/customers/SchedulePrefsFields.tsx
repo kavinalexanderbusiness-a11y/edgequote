@@ -85,7 +85,7 @@ function DayRow({ label, tone, selected, onToggle }: { label: string; tone: 'acc
         {DAYS.map(d => {
           const on = selected.includes(d)
           const onClasses = tone === 'accent'
-            ? 'border-accent bg-accent/15 text-accent'
+            ? 'border-accent bg-accent/15 text-accent-text'
             : 'border-amber-500/50 bg-amber-500/15 text-amber-300'
           return (
             <button key={d} type="button" onClick={() => onToggle(d)} aria-pressed={on}

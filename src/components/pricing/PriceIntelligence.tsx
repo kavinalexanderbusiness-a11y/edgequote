@@ -114,7 +114,7 @@ export function PriceIntelligence({
     <div className={cn('rounded-xl border p-3 space-y-2.5 animate-fade', rec.enoughData ? 'border-accent/25 bg-accent/[0.05]' : 'border-border bg-bg-tertiary')}>
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-bold text-ink flex items-center gap-1.5">
-          <Brain className={cn('w-3.5 h-3.5', rec.enoughData ? 'text-accent' : 'text-ink-faint')} /> Pricing Intelligence
+          <Brain className={cn('w-3.5 h-3.5', rec.enoughData ? 'text-accent-text' : 'text-ink-faint')} /> Pricing Intelligence
         </span>
         <span className={cn('text-[10px] font-semibold rounded-full px-2 py-0.5 border', CONF_TONE[rec.confidence])}>
           {rec.confidencePct}% · {CONF_LABEL[rec.confidence]}
@@ -141,7 +141,7 @@ export function PriceIntelligence({
       <div className="border-t border-border pt-2">
         <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint mb-1">Because</p>
         <ul className="space-y-0.5">
-          {rec.reasons.map((r, i) => <li key={i} className="text-[11px] text-ink-muted flex gap-1.5"><span className="text-accent/60 shrink-0">•</span><span>{r}</span></li>)}
+          {rec.reasons.map((r, i) => <li key={i} className="text-[11px] text-ink-muted flex gap-1.5"><span className="text-accent-text/60 shrink-0">•</span><span>{r}</span></li>)}
         </ul>
       </div>
       <p className="text-[10px] text-ink-faint text-right">Never below your ${rec.floor} minimum</p>

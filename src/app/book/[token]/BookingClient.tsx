@@ -222,7 +222,10 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
     })
     setSubmitting(false)
     const res = data as { quote_number?: string; quote_id?: string } | null
-    if (rpcErr || !res?.quote_number) { setError(`Something went wrong — please try again${biz?.phone ? `, or call us at ${biz.phone}` : ' or contact us directly'}.`); return }
+    // "Something went wrong" at this exact moment reads as "did it save? will I be
+    // double-booked if I retry?" — this returns before setStep('done'), so nothing was
+    // submitted, and saying so is what makes retrying feel safe.
+    if (rpcErr || !res?.quote_number) { setError(`That didn’t go through — nothing was submitted, so you won’t be double-booked. Please try once more${biz?.phone ? `, or call us at ${biz.phone} and we’ll take your details over the phone` : ''}.`); return }
     setQuoteNumber(res.quote_number)
     // Sync messaging consent into the customer record (best-effort). Channel
     // opt-in = they gave us that contact method + at least one category on.
@@ -245,7 +248,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
 
   if (loading) return (
     <Center>
-      <div className="w-11 h-11 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center mb-3"><Leaf className="w-5 h-5 text-accent" /></div>
+      <div className="w-11 h-11 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center mb-3"><Leaf className="w-5 h-5 text-accent-text" /></div>
       <p className="text-sm text-ink-muted flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading your instant quote…</p>
     </Center>
   )
@@ -265,7 +268,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
         {/* Brand header */}
         <div className="flex items-center gap-3 mb-5">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          {biz.logo_url ? <img src={biz.logo_url} alt="" className="h-10 w-auto object-contain" /> : <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center"><Leaf className="w-5 h-5 text-accent" /></div>}
+          {biz.logo_url ? <img src={biz.logo_url} alt="" className="h-10 w-auto object-contain" /> : <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center"><Leaf className="w-5 h-5 text-accent-text" /></div>}
           <div className="min-w-0">
             <p className="text-base font-bold text-ink truncate tracking-tight">{biz.company_name || 'Get an instant quote'}</p>
             <p className="text-xs text-ink-muted">Instant lawn-care quote · book in minutes</p>
@@ -306,13 +309,13 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
                 <div className="rounded-card overflow-hidden border border-border-strong">
                   <div ref={previewEl} className="w-full h-56 bg-bg-tertiary" />
                   <div className="px-4 py-2.5 bg-bg-secondary border-t border-border flex items-center gap-2">
-                    <MapPin className="w-3.5 h-3.5 text-accent shrink-0" />
+                    <MapPin className="w-3.5 h-3.5 text-accent-text shrink-0" />
                     <p className="text-xs text-ink truncate">{parsed?.formatted || parsed?.address}</p>
                   </div>
                 </div>
                 <div className="rounded-card border border-accent/30 bg-accent/5 px-4 py-4">
                   <div className="flex items-center justify-between gap-3">
-                    <span className="text-sm text-ink-muted flex items-center gap-2"><Ruler className="w-4 h-4 text-accent" /> Estimated lawn size</span>
+                    <span className="text-sm text-ink-muted flex items-center gap-2"><Ruler className="w-4 h-4 text-accent-text" /> Estimated lawn size</span>
                     <ConfidenceBadge confidence={autoResult.confidence} />
                   </div>
                   <div className="flex items-end gap-2 mt-2">
@@ -348,7 +351,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
                 <div ref={mapEl} className="w-full h-72 rounded-xl overflow-hidden border border-border-strong bg-bg-tertiary" />
                 <div className="flex items-center justify-between mt-3">
                   <div className="flex items-center gap-2 text-sm text-ink tabular-nums">
-                    <Ruler className="w-4 h-4 text-accent" /> {sqft > 0 ? `${sqft.toLocaleString()} sq ft` : 'Tap 3+ corners to start'}
+                    <Ruler className="w-4 h-4 text-accent-text" /> {sqft > 0 ? `${sqft.toLocaleString()} sq ft` : 'Tap 3+ corners to start'}
                   </div>
                   <div className="flex items-center gap-1.5">
                     <Button variant="ghost" size="sm" onClick={undo} title="Undo last point"><Undo2 className="w-4 h-4" /></Button>
@@ -374,7 +377,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
                   className={cn('w-full text-left rounded-card border px-4 py-3 transition-all flex items-center justify-between gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
                     plan?.key === p.key ? 'border-accent bg-accent/10' : 'border-border hover:border-accent/40')}>
                   <div>
-                    <p className="text-sm font-semibold text-ink flex items-center gap-2">{p.label}{p.recommended && <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-accent border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5">Best value</span>}</p>
+                    <p className="text-sm font-semibold text-ink flex items-center gap-2">{p.label}{p.recommended && <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-accent-text border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5">Best value</span>}</p>
                     {p.annual ? <p className="text-xs text-ink-faint mt-0.5 tabular-nums">{formatCurrency(p.price)}/visit · ~{formatCurrency(p.annual)}/season</p> : <p className="text-xs text-ink-faint mt-0.5">single visit</p>}
                   </div>
                   <div className="text-right shrink-0">
@@ -417,7 +420,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
               <div className="flex flex-col gap-1.5">
                 <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Photos <span className="font-normal text-ink-faint normal-case">(optional)</span></label>
                 <p className="text-[11px] text-ink-faint -mt-0.5">Show us gates, slopes, or problem areas so we can quote accurately. Up to 6.</p>
-                <label className={cn('inline-flex items-center gap-1.5 text-xs font-medium w-fit rounded-md focus-within:ring-2 focus-within:ring-accent/50', photoUrls.length >= 6 ? 'text-ink-faint cursor-not-allowed' : 'text-accent cursor-pointer')}>
+                <label className={cn('inline-flex items-center gap-1.5 text-xs font-medium w-fit rounded-md focus-within:ring-2 focus-within:ring-accent/50', photoUrls.length >= 6 ? 'text-ink-faint cursor-not-allowed' : 'text-accent-text cursor-pointer')}>
                   {uploadingPhotos ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Camera className="w-3.5 h-3.5" />} {uploadingPhotos ? 'Uploading…' : photoUrls.length >= 6 ? 'Maximum 6 photos added' : 'Add photos of your lawn'}
                   <input type="file" accept="image/*" multiple onChange={addPhotos} className="sr-only" disabled={uploadingPhotos || photoUrls.length >= 6} />
                 </label>
@@ -453,7 +456,10 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
                     {label}
                   </label>
                 ))}
-                <p className="text-[10px] text-ink-faint">Reply STOP to any text to opt out. Change these anytime in your customer portal.</p>
+                {/* "your customer portal" — I've never logged into anything. Did I just
+                    create an account? Describe it as the thing they'll receive, not a
+                    place they're assumed to already know. */}
+                <p className="text-[10px] text-ink-faint">Reply STOP to any text to opt out. Once you&rsquo;re booked we&rsquo;ll send you a private link where you can change these anytime.</p>
               </div>
             </div>
             {plan && (
@@ -498,7 +504,11 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
               {sqft > 0 && <SummaryRow label="Lawn size" value={`~${sqft.toLocaleString()} sq ft`} />}
               {quoteNumber && <SummaryRow label="Confirmation #" value={quoteNumber} />}
             </div>
-            {quoteNumber && <p className="text-[11px] text-ink-faint text-center -mt-2">Keep your confirmation number for your records.</p>}
+            {/* Nothing is emailed to the customer at this stage (the only send in the
+                booking path goes to the OWNER's inbox — api/booking/notify), so "keep this
+                for your records" quietly put the burden on them without saying why. Tell
+                them what it's actually for; the request is safe either way. */}
+            {quoteNumber && <p className="text-[11px] text-ink-faint text-center -mt-2">That&rsquo;s your reference if you call or email us — your request is saved either way.</p>}
 
             {/* What happens next — the #1 anxiety point, answered with a concrete SLA. */}
             <div className="rounded-card border border-accent/25 bg-accent/[0.06] px-4 py-3.5">
@@ -512,7 +522,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
               <div className="text-center">
                 <p className="text-xs text-ink-faint mb-1.5">Questions before then?</p>
                 <div className="flex flex-col items-center gap-1.5">
-                  {biz.phone && <a href={`tel:${biz.phone}`} className="text-sm text-accent flex items-center gap-1.5"><Phone className="w-4 h-4" /> {biz.phone}</a>}
+                  {biz.phone && <a href={`tel:${biz.phone}`} className="text-sm text-accent-text flex items-center gap-1.5"><Phone className="w-4 h-4" /> {biz.phone}</a>}
                   {biz.email_primary && <a href={`mailto:${biz.email_primary}`} className="text-sm text-ink-muted flex items-center gap-1.5"><Mail className="w-4 h-4" /> {biz.email_primary}</a>}
                 </div>
               </div>
@@ -547,13 +557,15 @@ function Section({ title, sub, children }: { title: string; sub?: string; childr
   )
 }
 function ConfidenceBadge({ confidence }: { confidence?: string }) {
-  // Customer-facing: never tell a prospect their estimate is "low confidence" at
-  // the conversion moment. High reads as verified; anything else reads as an
-  // editable estimate (which it is — the field right beside it).
+  // Customer-facing: never tell a prospect their estimate is "low confidence" at the
+  // conversion moment — the tiering below keeps that. But "Verified" claimed a human
+  // checked this, and none did: it's a satellite measurement. If the price moves after
+  // the first visit, a customer who was shown "Verified" reads the whole quote as bait.
+  // Naming the source keeps the confidence signal ("Measured" > "Estimated") and is true.
   if (confidence === 'high') {
-    return <span className="text-[10px] font-semibold uppercase tracking-[0.14em] rounded-full px-2 py-0.5 border text-emerald-400 border-emerald-500/30 bg-emerald-500/10">Verified estimate</span>
+    return <span className="text-[10px] font-semibold uppercase tracking-[0.14em] rounded-full px-2 py-0.5 border text-emerald-400 border-emerald-500/30 bg-emerald-500/10">Measured from satellite</span>
   }
-  return <span className="text-[10px] font-semibold uppercase tracking-[0.14em] rounded-full px-2 py-0.5 border text-ink-muted border-border bg-bg-tertiary">Estimated</span>
+  return <span className="text-[10px] font-semibold uppercase tracking-[0.14em] rounded-full px-2 py-0.5 border text-ink-muted border-border bg-bg-tertiary">Estimated from satellite</span>
 }
 function Field({ label, value, onChange, placeholder, type, autoFocus, autoComplete, inputMode }: {
   label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string; autoFocus?: boolean

@@ -18,7 +18,7 @@ export function DashboardKpis({ collected, outstanding, jobsThisMonth, conversio
   const tiles = [
     { label: 'Collected', value: formatCurrency(collected), sub: 'Payments received', icon: Wallet, color: 'text-emerald-400', bg: 'bg-emerald-500/10', href: '/dashboard/invoices' },
     { label: 'Outstanding', value: formatCurrency(outstanding), sub: 'Billed, unpaid', icon: AlertCircle, color: 'text-amber-400', bg: 'bg-amber-500/10', href: '/dashboard/invoices' },
-    { label: 'Jobs This Month', value: String(jobsThisMonth), sub: 'Completed', icon: CalendarCheck, color: 'text-accent', bg: 'bg-accent-dim', href: '/dashboard/schedule' },
+    { label: 'Jobs This Month', value: String(jobsThisMonth), sub: 'Completed', icon: CalendarCheck, color: 'text-accent-text', bg: 'bg-accent-dim', href: '/dashboard/schedule' },
     { label: 'Conversion', value: `${conversionRate}%`, sub: 'Quotes accepted', icon: Percent, color: 'text-teal-400', bg: 'bg-teal-500/10', href: '/dashboard/quotes' },
   ]
   return (
