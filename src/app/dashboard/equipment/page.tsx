@@ -1,9 +1,11 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { listEquipmentDocs } from '@/lib/equipmentDocs'
+import { type Part } from '@/lib/parts'
 import {
   Equipment, EquipmentService, EquipmentStatus, STATUS_LABELS, STATUS_TONE,
   categoryMeta, serviceStatus, serviceKindLabel, costOfOwnership, fleetSummary, warrantyStatus, bookValue, type EquipmentDoc,
@@ -24,7 +26,7 @@ import { Banner } from '@/components/ui/Banner'
 import { EquipmentDialog } from '@/components/equipment/EquipmentDialog'
 import { EquipmentDocs } from '@/components/equipment/EquipmentDocs'
 import { ServiceLogDialog } from '@/components/equipment/ServiceLogDialog'
-import { Wrench, Plus, AlertTriangle, CircleDollarSign, Gauge, Pencil, Trash2, History, Clock, ShieldCheck } from 'lucide-react'
+import { Wrench, Plus, AlertTriangle, CircleDollarSign, Gauge, Pencil, Trash2, History, Clock, ShieldCheck, Package } from 'lucide-react'
 
 // ── Equipment ────────────────────────────────────────────────────────────────
 // The fleet: what you own, what it's costing, and what needs servicing before it
@@ -37,6 +39,7 @@ export default function EquipmentPage() {
   const [equipment, setEquipment] = useState<Equipment[]>([])
   const [services, setServices] = useState<EquipmentService[]>([])
   const [docs, setDocs] = useState<EquipmentDoc[]>([])
+  const [parts, setParts] = useState<Part[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [uid, setUid] = useState<string | null>(null)
@@ -67,6 +70,9 @@ export default function EquipmentPage() {
       setServices((sRes.data as EquipmentService[]) || [])
       // Paperwork is optional — a tree without the docs migration still works.
       setDocs(await listEquipmentDocs(supabase, user.id).catch(() => []))
+      // The shelf, so a service can consume it. Absent migration → simply no parts.
+      const pRes = await supabase.from('parts').select('*').eq('user_id', user.id).order('name')
+      setParts((pRes.data as Part[]) || [])
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : 'Could not load your equipment.')
     } finally {
@@ -122,7 +128,14 @@ export default function EquipmentPage() {
       <PageHeader
         title="Equipment"
         description="Your fleet, what it costs to run, and what's due for service before it strands a crew."
-        action={<Button onClick={() => setEditing('new')}><Plus className="w-4 h-4" /> Add equipment</Button>}
+        action={
+          <div className="flex items-center gap-2">
+            <Link href="/dashboard/equipment/parts">
+              <Button variant="secondary"><Package className="w-4 h-4" /> Parts</Button>
+            </Link>
+            <Button onClick={() => setEditing('new')}><Plus className="w-4 h-4" /> Add equipment</Button>
+          </div>
+        }
       />
 
       {loadError && (
@@ -215,6 +228,7 @@ export default function EquipmentPage() {
         <ServiceLogDialog
           open userId={uid} equipment={logFor}
           services={summary.servicesByEquipment.get(logFor.id) ?? []}
+          parts={parts}
           onClose={() => setLogFor(null)}
           // The DB trigger derives last_service_* from the log — refetch rather
           // than guess, so the machine's due-date is always the database's answer.
