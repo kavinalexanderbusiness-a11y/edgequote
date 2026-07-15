@@ -903,6 +903,9 @@ export function QuoteBuilder({
                       task: 'quote_scope',
                       serviceType: watch('service_type') || undefined,
                       services: (watchedServices || []).map(s => ({ name: s?.service_type, notes: s?.notes })),
+                      propertyId: defaultPropertyId || undefined,
+                      measuredSqft: measuredSqft || undefined,
+                      address: address || undefined,
                       draft: prior,
                     }, { onDelta: d => setValue('notes', String(watch('notes') || '') + d) })
                     if (full === null) setValue('notes', prior)

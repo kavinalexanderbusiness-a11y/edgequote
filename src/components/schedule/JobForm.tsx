@@ -521,7 +521,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
               aiNotes.clearError()
               setValue('notes', '')
               const full = await aiNotes.run(
-                { task: 'job_notes', draft: prior },
+                { task: 'job_notes', draft: prior, serviceType: serviceType || undefined },
                 { onDelta: d => setValue('notes', String(watch('notes') || '') + d) },
               )
               if (full === null) setValue('notes', prior)

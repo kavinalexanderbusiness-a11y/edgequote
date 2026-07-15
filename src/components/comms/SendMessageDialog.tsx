@@ -100,6 +100,8 @@ export function SendMessageDialog({
       channels: (['sms', 'email'] as const).filter(c => ch[c]),
       currentText: mode === 'rewrite' ? prior : '',
       bulk,
+      jobId: jobId ?? undefined,
+      vars: { ...vars, ...(needsEta && eta ? { timeWindow: `${eta} min ETA` } : {}) },
     }, { onDelta: d => setText(prev => prev + d) })
     if (full === null) { setText(prior); return }   // error — restore, message shows below
     setEdited(true)

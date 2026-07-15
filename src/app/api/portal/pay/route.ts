@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { createInvoiceCheckoutSession, stripeEnabled } from '@/lib/stripe/config'
+import { ensureStripeCustomerId, type CardCustomer } from '@/lib/payments/cards'
 import { invoiceTotals } from '@/lib/invoiceTotals'
 
 export const dynamic = 'force-dynamic'
@@ -41,11 +42,30 @@ export async function POST(req: NextRequest) {
   const balance = Math.round((total - (Number(invoice.amount_paid) || 0)) * 100) / 100
   if (balance <= 0) return NextResponse.json({ error: 'This invoice is already paid.' }, { status: 409 })
 
+  // The customer paying their own invoice is the ONE moment they already have the
+  // card out — so it's the only moment worth offering to keep it. Needs a Stripe
+  // Customer to attach to, which needs the service role (anon can't touch
+  // customers). Best-effort throughout: if any of it fails the invoice must still
+  // be payable, so we fall back to a plain session with no save offered.
+  let stripeCustomerId: string | null = null
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL, svc = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (url && svc && invoice.customer_id) {
+    const admin = createClient(url, svc)
+    const { data: cRow } = await admin.from('customers')
+      .select('id, name, email, stripe_customer_id').eq('id', invoice.customer_id).eq('user_id', invoice.user_id).maybeSingle()
+    if (cRow) {
+      const ensured = await ensureStripeCustomerId(admin, cRow as CardCustomer, { userId: invoice.user_id })
+      stripeCustomerId = ensured.id ?? null
+    }
+  }
+
   const base = (process.env.NEXT_PUBLIC_APP_URL || '').replace(/\/$/, '')
   const result = await createInvoiceCheckoutSession(invoice, {
     successUrl: `${base}/portal/${token}?paid=1`,
     cancelUrl: `${base}/portal/${token}`,
     chargeCents: Math.round(balance * 100),
+    stripeCustomerId,
+    offerSaveCard: !!stripeCustomerId,
   })
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 502 })
   return NextResponse.json({ url: result.url })
