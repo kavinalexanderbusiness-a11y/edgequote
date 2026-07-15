@@ -99,7 +99,9 @@ export default function PricingRecoveryPage() {
       const hist = customerPriced(customerId)
       if (hist > 0) return { price: hist, source: 'this customer’s pricing' }
       if (businessAvg > 0) return { price: businessAvg, source: 'your average visit' }
-      return { price: recommendedJobPrice(DEFAULT_SQFT, cfg), source: 'typical lawn (set sqft to refine)' }
+      // Copy only — the fallback price is unchanged. "typical lawn" named a trade;
+      // the number is just this business's default-size job, whatever it services.
+      return { price: recommendedJobPrice(DEFAULT_SQFT, cfg), source: 'typical job (set the area to refine)' }
     }
 
     // group recurring series

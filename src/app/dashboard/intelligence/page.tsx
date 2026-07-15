@@ -319,7 +319,7 @@ export default function IntelligencePage() {
         ) : (
           <div className="rounded-card border border-border bg-bg-secondary">
             <EmptyState icon={Gauge} className="py-10" title="No timed jobs yet"
-              description="Start and complete jobs in Day Ops (check-in / check-out) and the model learns automatically. The Smart Estimate falls back to lawn size until then." />
+              description="Start and complete jobs in Day Ops (check-in / check-out) and the model learns automatically. The Smart Estimate falls back to property size until then." />
           </div>
         )}
       </Collapsible>
