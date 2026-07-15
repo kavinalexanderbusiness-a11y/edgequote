@@ -545,6 +545,10 @@ export interface Quote {
   status: QuoteStatus
   // Follow-up / missed-quote recovery
   sent_at: string | null
+  // Calendar date the quote stops standing. Null = never expires (every quote
+  // sent before expiry existed). 'expired' is DERIVED by lib/quoteStatus and is
+  // never stored in `status` — see the invoice 'overdue' overlay it mirrors.
+  valid_until: string | null
   last_followed_up_at: string | null
   follow_up_count: number
   // Captured at acceptance so recovery impact can be measured later
