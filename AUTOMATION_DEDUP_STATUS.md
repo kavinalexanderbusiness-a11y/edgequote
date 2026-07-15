@@ -210,6 +210,26 @@ One subtlety worth recording: `render` runs *after* `claim`, and the meta needs 
 pre-claim count. The row object isn't mutated by the CAS, so `(count ?? 0) + 1` in
 `render` is the same number the CAS wrote — no threading of state required.
 
+## Owner settings — one read, one fallback
+
+`bizInfo` was hand-rolled in **4 crons**, each re-typing `company_name || 'Edge Property
+Services'` underneath it. That fallback is the name a **customer** reads when an owner
+hasn't set theirs — it signs their reminders and review requests. Four copies aren't a
+default; they're four defaults that agree until someone re-words one.
+
+`lib/automation/owner.ts loadOwnerContext` is now the single read: the union of all four
+select lists in **one query per owner per run** (unchanged — a wider column list rides
+along free on a row already being fetched). The two chasers get caching free from
+`runChaseCron`; campaigns/notifications keep their own loop caches. `api/comms/send` (the
+manual path, a 5th copy) folded in too — so a manual message and an automatic one can
+never sign off as different businesses.
+
+**Remaining `'Edge Property Services'` (5, deliberately):** client-side `useState` seeds
+in `JobMessages`, `DayBulkMessage`, `RainDelayCenter`, `BeforeAfterStudio`. They seed a
+**preview** while settings load; the message that actually sends re-renders server-side
+through the loader. Routing a settings fetch into client components is a real change, not
+a de-dup — and page metadata / static marketing copy elsewhere aren't fallbacks at all.
+
 ## The engine — built, and deliberately unable to send
 
 The full loop now exists end to end, in **observe mode**:

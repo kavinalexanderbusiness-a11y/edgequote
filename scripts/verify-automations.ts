@@ -9,8 +9,15 @@ import { displayQuoteStatus, isQuoteExpired, isExpiringSoon, daysUntilExpiry, de
 import { prefAllows, msgCategory } from '@/lib/comms/templates'
 import { dispatchToCustomer, sendResultsFromAttempts, type DispatchAttempt } from '@/lib/comms/dispatch'
 import { SKIP_REASON } from '@/lib/comms/skipReasons'
+import { decide } from '@/lib/automation/decide'
+import { AUTOMATION_RULES } from '@/lib/automation/rules'
+import type { AutomationRule } from '@/lib/automation/types'
 import type { Quote } from '@/types'
 import type { FeeSettings } from '@/lib/invoiceTotals'
+
+// The signals /api/cron/signals actually writes. Kept here so a rule watching a
+// signal nothing emits fails the registry check below rather than sitting dead.
+const EMITTED_SIGNALS = ['recurring_ran_out', 'churn_risk']
 
 let pass = 0, fail = 0
 const fails: string[] = []
@@ -275,6 +282,55 @@ async function run() {
   check('results-map', 'disabled provider → reason=disabled', sendResultsFromAttempts([asAttempt({ status: 'disabled' })]), { sms: { sent: false, reason: 'disabled' } })
   // Multi-channel: sms-before-email order is preserved into the map.
   check('results-map', 'both channels keep sms-first key order', Object.keys(sendResultsFromAttempts([asAttempt({ status: 'sent', sent: true, providerId: 'SM1' }), asAttempt({ channel: 'email', detail: SKIP_REASON.NO_EMAIL })])), ['sms', 'email'])
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  H('19. AUTOMATION ENGINE — the gate that decides whether a rule may act')
+  // decide() is the most safety-critical function in the engine: it is the only
+  // thing standing between a detected condition and a real customer. Test it like it.
+  const RULE: AutomationRule = {
+    key: 'test', label: 'test', signal: 'sig',
+    action: { kind: 'notify', notificationType: 'x' },
+    mode: 'auto', holdMinutes: 0,
+    constraints: { sendWindowHours: [9, 19], maxPerCustomerPer: { count: 1, days: 14 }, maxPerRun: 25 },
+  }
+  const D = (over: Partial<Parameters<typeof decide>[0]>) => decide({
+    rule: RULE, hour: 12, recentActionsForSubject: 0, actionsThisRun: 0, alreadyDeduped: false, ...over,
+  })
+
+  check('decide', 'auto + all clear → fires', D({}), { fire: true })
+  check('decide', 'off → suppressed(mode_off)', D({ rule: { ...RULE, mode: 'off' } }), { fire: false, reason: 'mode_off' })
+  // The distinction the whole safety model rests on: 'suggest' is NOT 'off'. A run
+  // log that conflates "waiting to be trusted" with "switched off" is useless.
+  check('decide', 'suggest → suppressed(mode_suggest), NOT mode_off', D({ rule: { ...RULE, mode: 'suggest' } }), { fire: false, reason: 'mode_suggest' })
+
+  check('decide', 'deduped → suppressed(deduped)', D({ alreadyDeduped: true }), { fire: false, reason: 'deduped' })
+  // Order matters: a duplicate must not burn the frequency quota on its way out.
+  check('decide', 'deduped is checked BEFORE the caps', D({ alreadyDeduped: true, recentActionsForSubject: 99 }), { fire: false, reason: 'deduped' })
+  // …and authority outranks everything, so an off rule never reports a lesser reason.
+  check('decide', 'off outranks deduped + quiet hours', D({ rule: { ...RULE, mode: 'off' }, alreadyDeduped: true, hour: 3 }), { fire: false, reason: 'mode_off' })
+
+  check('decide', '3am → quiet_hours (a correct message at 3am is a wrong message)', D({ hour: 3 }), { fire: false, reason: 'quiet_hours' })
+  check('decide', '9am (window opens) → fires', D({ hour: 9 }), { fire: true })
+  check('decide', '18:xx (last hour) → fires', D({ hour: 18 }), { fire: true })
+  check('decide', '19:00 (window closes, end-exclusive) → quiet_hours', D({ hour: 19 }), { fire: false, reason: 'quiet_hours' })
+
+  check('decide', 'per-customer cap reached → frequency_cap', D({ recentActionsForSubject: 1 }), { fire: false, reason: 'frequency_cap' })
+  check('decide', 'under the per-customer cap → fires', D({ recentActionsForSubject: 0 }), { fire: true })
+  check('decide', 'per-run blast radius reached → frequency_cap', D({ actionsThisRun: 25 }), { fire: false, reason: 'frequency_cap' })
+  check('decide', 'quiet hours outrank the caps', D({ hour: 3, recentActionsForSubject: 99 }), { fire: false, reason: 'quiet_hours' })
+
+  H('20. AUTOMATION ENGINE — the registry is an inventory, and nothing is promoted')
+  // This is a GUARD RAIL, not a description. Promoting a rule to 'auto' is an owner
+  // decision that must be deliberate; if a promotion ever lands by accident, this
+  // fails loudly instead of a customer finding out.
+  check('registry', 'NO rule is promoted to auto', AUTOMATION_RULES.filter(r => r.mode === 'auto').map(r => r.key), [])
+  check('registry', 'every rule declares a signal', AUTOMATION_RULES.every(r => !!r.signal), true)
+  check('registry', 'every rule has a send window', AUTOMATION_RULES.every(r => r.constraints.sendWindowHours.length === 2), true)
+  check('registry', 'every rule caps its blast radius', AUTOMATION_RULES.every(r => r.constraints.maxPerRun > 0), true)
+  check('registry', 'rule keys are unique', new Set(AUTOMATION_RULES.map(r => r.key)).size, AUTOMATION_RULES.length)
+  // Every rule in the registry fires on a signal the sweep can actually emit —
+  // otherwise it is a rule that can never run, quietly.
+  check('registry', 'every rule watches a signal the sweep emits', AUTOMATION_RULES.every(r => EMITTED_SIGNALS.includes(r.signal)), true)
 
   console.log(`\n${'═'.repeat(60)}\n  PASS ${pass}   FAIL ${fail}`)
   if (fails.length) { console.log('\n  FAILURES:'); fails.forEach(f => console.log('   • ' + f)) }

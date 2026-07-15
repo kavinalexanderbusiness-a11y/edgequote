@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
-import { renderMessage, MsgType, type MessagePrefs } from '@/lib/comms/templates'
+import { renderMessage, type MessagePrefs } from '@/lib/comms/templates'
 import { commsEnabled } from '@/lib/comms/send'
 import { runChaseCron } from '@/lib/automation/chase'
+import { loadOwnerContext, type OwnerContext } from '@/lib/automation/owner'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
-import { resolveAutomations, Automations } from '@/lib/comms/automations'
 import { dueForAutoReminder, resolveReminderPolicy, type ReminderPolicy, type RemindableInvoice } from '@/lib/payments/dunning'
 import { invoiceBalance } from '@/lib/payments/ledger'
-import type { FeeSettings } from '@/lib/invoiceTotals'
 import { formatCurrency, localTodayISO } from '@/lib/utils'
 
 export const dynamic = 'force-dynamic'
@@ -44,17 +43,9 @@ type ReminderRow = RemindableInvoice & {
   customers: ReminderCustomer | null
 }
 
-// This chaser's per-owner settings — the only context the shared loop hands back.
-interface InvoiceChaseCtx {
-  name: string
-  templates: Partial<Record<MsgType, string>> | null
-  logoUrl: string | null
-  website: string | null
-  phone: string | null
-  automations: Automations
-  policy: ReminderPolicy
-  fees: FeeSettings
-}
+// The shared per-owner settings (lib/automation/owner — `fees` included, which is
+// what every balance here is computed with) plus this chaser's own cadence.
+type InvoiceChaseCtx = OwnerContext & { policy: ReminderPolicy }
 
 export async function GET(req: NextRequest) {
   if (!cronSecretOk(req)) return NextResponse.json({ error: 'forbidden' }, { status: 403 })
@@ -81,25 +72,12 @@ export async function GET(req: NextRequest) {
   const invoices = ((rows as unknown as ReminderRow[]) || []).filter(i => i.customer_id && i.customers)
   if (invoices.length === 0) return NextResponse.json({ ok: true, chased: 0, sent: 0, skipped: 0, failed: 0 })
 
-  // Per-owner settings. runChaseCron caches this per user_id, so it's resolved once
-  // per owner per run exactly as the local cache did.
+  // Per-owner settings. THE shared settings read (lib/automation/owner) plus this
+  // chaser's own cadence. runChaseCron caches loadContext per user_id, so this is
+  // one query per owner per run — a local cache here would be dead weight.
   async function bizInfo(userId: string): Promise<InvoiceChaseCtx> {
-    const { data } = await supabase.from('business_settings')
-      .select('company_name, phone, website, logo_url, message_templates, automations, payment_fee_strategy, fee_recovery_percent, gst_percent')
-      .eq('user_id', userId).maybeSingle()
-    const d = data as ({ company_name: string | null; phone: string | null; website: string | null; logo_url: string | null; message_templates: Partial<Record<MsgType, string>> | null; automations: unknown } & FeeSettings) | null
-    return {
-      name: d?.company_name || 'Edge Property Services',
-      templates: d?.message_templates ?? null,
-      logoUrl: d?.logo_url ?? null,
-      website: d?.website ?? null,
-      phone: d?.phone ?? null,
-      automations: resolveAutomations(d?.automations),
-      policy: resolveReminderPolicy(d?.automations),
-      // The SAME fee/GST settings every balance is computed with, so the reminder
-      // can never disagree with the amount shown on the invoice or the portal.
-      fees: { payment_fee_strategy: d?.payment_fee_strategy ?? null, fee_recovery_percent: d?.fee_recovery_percent ?? null, gst_percent: d?.gst_percent ?? null },
-    }
+    const o = await loadOwnerContext(supabase, userId)
+    return { ...o, policy: resolveReminderPolicy(o.automationsRaw) }
   }
 
   // THE shared chase loop (lib/automation/chase) — same claim-before-send,

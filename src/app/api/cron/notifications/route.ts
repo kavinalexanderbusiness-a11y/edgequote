@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
 import { addDays, format } from 'date-fns'
-import { renderMessage, MsgType, prefAllows, type MessagePrefs } from '@/lib/comms/templates'
+import { renderMessage, prefAllows, type MessagePrefs } from '@/lib/comms/templates'
 import { commsEnabled } from '@/lib/comms/send'
 import { dispatchToCustomer } from '@/lib/comms/dispatch'
 import { SENT_STATES } from '@/lib/comms/delivery'
 import { logDispatch } from '@/lib/comms/log'
+import { loadOwnerContext, type OwnerContext } from '@/lib/automation/owner'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
-import { resolveAutomations, Automations } from '@/lib/comms/automations'
 
 export const dynamic = 'force-dynamic'
 
@@ -35,12 +35,11 @@ export async function GET(req: NextRequest) {
 
   const tomorrow = format(addDays(new Date(), 1), 'yyyy-MM-dd')
   const yesterday = format(addDays(new Date(), -1), 'yyyy-MM-dd')
-  const bizCache: Record<string, { name: string; templates: Partial<Record<MsgType, string>> | null; reviewUrl: string | null; logoUrl: string | null; website: string | null; phone: string | null; automations: Automations }> = {}
-  async function bizInfo(userId: string) {
-    if (bizCache[userId]) return bizCache[userId]
-    const { data } = await supabase.from('business_settings').select('company_name, phone, website, logo_url, review_url, message_templates, automations').eq('user_id', userId).maybeSingle()
-    const d = data as { company_name: string | null; phone: string | null; website: string | null; logo_url: string | null; review_url: string | null; message_templates: Partial<Record<MsgType, string>> | null; automations: unknown } | null
-    return (bizCache[userId] = { name: d?.company_name || 'Edge Property Services', templates: d?.message_templates ?? null, reviewUrl: d?.review_url ?? null, logoUrl: d?.logo_url ?? null, website: d?.website ?? null, phone: d?.phone ?? null, automations: resolveAutomations(d?.automations) })
+  // Per-owner settings — THE shared read, lib/automation/owner. Cached because
+  // both batches below ask per job: one settings query per owner per run.
+  const bizCache: Record<string, OwnerContext> = {}
+  async function bizInfo(userId: string): Promise<OwnerContext> {
+    return (bizCache[userId] ??= await loadOwnerContext(supabase, userId))
   }
   async function alreadySent(userId: string, jobId: string, template: string): Promise<boolean> {
     // Only a SUCCESSFUL prior send blocks a resend — otherwise a failed attempt

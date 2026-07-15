@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { renderMessage, renderBody, MsgType, MSG_LABELS, type MessagePrefs } from '@/lib/comms/templates'
 import { commsEnabled } from '@/lib/comms/send'
 import { dispatchToCustomer, sendResultsFromAttempts } from '@/lib/comms/dispatch'
+import { loadOwnerContext } from '@/lib/automation/owner'
 import { SENT_STATES } from '@/lib/comms/delivery'
 import { logSend, logDispatch } from '@/lib/comms/log'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
@@ -57,9 +58,10 @@ export async function POST(req: NextRequest) {
     if (!claimed) return NextResponse.json({ enabled: commsEnabled(), results: {}, deduped: true })
   }
 
-  const { data: bizRow } = await supabase.from('business_settings')
-    .select('company_name, phone, website, logo_url, review_url, message_templates').eq('user_id', user.id).maybeSingle()
-  const biz = bizRow as { company_name: string | null; phone: string | null; website: string | null; logo_url: string | null; review_url: string | null; message_templates: Partial<Record<MsgType, string>> | null } | null
+  // THE per-owner settings read (lib/automation/owner) — the same one every
+  // scheduled sender uses, so a manual message and an automatic one can never sign
+  // off as different businesses. Session-scoped client here; RLS narrows it further.
+  const biz = await loadOwnerContext(supabase, user.id)
 
   // "On my way" also stamps the job so the customer portal can show a live status.
   if (template === 'on_my_way' && jobId) {
@@ -72,20 +74,20 @@ export async function POST(req: NextRequest) {
   const origin = req.nextUrl?.origin || process.env.NEXT_PUBLIC_APP_URL || ''
   const msgVars = {
     firstName: c.name,
-    businessName: biz?.company_name || 'Edge Property Services',
+    businessName: biz.name,
     eta: vars.eta,
-    reviewLink: biz?.review_url || undefined,
+    reviewLink: biz.reviewUrl || undefined,
     portalLink: token ? portalUrl(token, origin) : undefined,
     dateLabel: vars.dateLabel,
     amount: vars.amount,
     timeWindow: vars.timeWindow,
     oldDateLabel: vars.oldDateLabel,
     address: vars.address,
-    directPhone: biz?.phone || undefined,
-    logoUrl: biz?.logo_url || undefined,
-    website: biz?.website || undefined,
+    directPhone: biz.phone || undefined,
+    logoUrl: biz.logoUrl || undefined,
+    website: biz.website || undefined,
   }
-  const rendered = renderMessage(template, biz?.message_templates, msgVars)
+  const rendered = renderMessage(template, biz.templates, msgVars)
   // The text we actually send: the owner's edit (or a caller-supplied body such
   // as the payment receipt) when present, else the rendered template. An
   // override may still carry {{portal_link}}/{{first_name}}-style tokens — only

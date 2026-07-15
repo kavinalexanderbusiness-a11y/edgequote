@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
-import { renderMessage, MsgType, type MessagePrefs } from '@/lib/comms/templates'
+import { renderMessage, type MessagePrefs } from '@/lib/comms/templates'
 import { commsEnabled } from '@/lib/comms/send'
 import { runChaseCron } from '@/lib/automation/chase'
+import { loadOwnerContext, type OwnerContext } from '@/lib/automation/owner'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
-import { resolveAutomations, Automations } from '@/lib/comms/automations'
 import { dueForAutoFollowUp, compareFollowUp, resolveFollowUpPolicy, type FollowUpPolicy } from '@/lib/followup'
 import { isQuoteExpired } from '@/lib/quoteStatus'
 import { localTodayISO } from '@/lib/utils'
@@ -41,16 +41,9 @@ interface FollowUpCustomer {
 type FollowUpQuote = Pick<Quote, 'id' | 'user_id' | 'customer_id' | 'quote_number' | 'total' | 'status' | 'sent_at' | 'valid_until' | 'last_followed_up_at' | 'follow_up_count'>
   & { customers: FollowUpCustomer | null }
 
-// This chaser's per-owner settings — the only context the shared loop hands back.
-interface QuoteChaseCtx {
-  name: string
-  templates: Partial<Record<MsgType, string>> | null
-  logoUrl: string | null
-  website: string | null
-  phone: string | null
-  automations: Automations
-  policy: FollowUpPolicy
-}
+// The shared per-owner settings (lib/automation/owner) plus the one thing that is
+// genuinely this chaser's own: its follow-up cadence.
+type QuoteChaseCtx = OwnerContext & { policy: FollowUpPolicy }
 
 export async function GET(req: NextRequest) {
   if (!cronSecretOk(req)) return NextResponse.json({ error: 'forbidden' }, { status: 403 })
@@ -76,20 +69,12 @@ export async function GET(req: NextRequest) {
   const { data: invRows } = await supabase.from('invoices').select('quote_id').in('quote_id', quotes.map(q => q.id))
   const invoiced = new Set(((invRows as { quote_id: string | null }[]) || []).map(i => i.quote_id))
 
-  // Per-owner settings. runChaseCron caches this per user_id, so it's resolved once
-  // per owner per run exactly as the local cache did.
+  // Per-owner settings. THE shared settings read (lib/automation/owner) plus this
+  // chaser's own cadence. runChaseCron caches loadContext per user_id, so this is
+  // one query per owner per run — a local cache here would be dead weight.
   async function bizInfo(userId: string): Promise<QuoteChaseCtx> {
-    const { data } = await supabase.from('business_settings').select('company_name, phone, website, logo_url, message_templates, automations').eq('user_id', userId).maybeSingle()
-    const d = data as { company_name: string | null; phone: string | null; website: string | null; logo_url: string | null; message_templates: Partial<Record<MsgType, string>> | null; automations: unknown } | null
-    return {
-      name: d?.company_name || 'Edge Property Services',
-      templates: d?.message_templates ?? null,
-      logoUrl: d?.logo_url ?? null,
-      website: d?.website ?? null,
-      phone: d?.phone ?? null,
-      automations: resolveAutomations(d?.automations),
-      policy: resolveFollowUpPolicy(d?.automations),
-    }
+    const o = await loadOwnerContext(supabase, userId)
+    return { ...o, policy: resolveFollowUpPolicy(o.automationsRaw) }
   }
 
   // THE shared chase loop (lib/automation/chase) owns the parts that are dangerous
