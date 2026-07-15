@@ -151,8 +151,13 @@ export default function SettingsPage() {
 
   async function onSubmit(values: BusinessSettingsFormValues) {
     const { data: { user } } = await supabase.auth.getUser()
-    await supabase.from('business_settings')
-      .update({
+    // UPSERT, not update: nothing else in the app (and no auth.users trigger) ever
+    // creates this row, so for an account that doesn't have one yet an .update()
+    // matches zero rows, reports no error, and silently discards every field —
+    // while the UI still says "Saved". Keyed on the existing unique(user_id).
+    const { error } = await supabase.from('business_settings')
+      .upsert({
+        user_id: user!.id,
         ...values,
         default_rate: Number(values.default_rate),
         crew_cost_per_hour: Number(values.crew_cost_per_hour) > 0 ? Number(values.crew_cost_per_hour) : 40,
@@ -174,8 +179,10 @@ export default function SettingsPage() {
         daily_capacity_hours: Number(capacityHours) > 0 ? Number(capacityHours) : 8,
         service_seasons: seasons,
         base_lat: null, base_lng: null,
-      })
-      .eq('user_id', user!.id)
+      }, { onConflict: 'user_id' })
+    // Never claim a save that didn't happen — the old code reported "Saved"
+    // unconditionally, so a failure looked identical to success.
+    if (error) { toast.error('Could not save settings: ' + error.message); return }
     // The sticky footer promises "save everything" — so it must also persist any
     // edited travel-fee tier rows (they previously needed their own per-row save).
     await Promise.all(localTiers.filter(t => t.id).map(t =>
