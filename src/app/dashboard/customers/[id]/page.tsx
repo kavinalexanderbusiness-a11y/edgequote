@@ -44,7 +44,7 @@ import {
   Phone, MessageSquare, FilePlus, CalendarPlus, Mail, MapPin, Repeat,
   FileText, Send, RotateCw, CheckCircle2, Wrench, Receipt, DollarSign, Sparkles, Users,
   Edit2, ExternalLink, Ruler, AlertTriangle, StickyNote, Wallet, Timer, CalendarClock,
-  Link2, Check, Cake, PartyPopper, Camera, History,
+  Link2, Check, Cake, PartyPopper, Camera, History, Globe,
 } from 'lucide-react'
 
 const WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
@@ -68,7 +68,7 @@ function mdLabel(dateStr: string | null | undefined): string | null {
 
 interface TimelineEvent {
   at: string
-  kind: 'quote_created' | 'quote_sent' | 'followup' | 'quote_accepted' | 'job_scheduled' | 'job_completed' | 'invoice_created' | 'invoice_paid' | 'message_in' | 'message_out' | 'payment' | 'portal_request'
+  kind: 'quote_created' | 'quote_sent' | 'followup' | 'quote_accepted' | 'job_scheduled' | 'job_completed' | 'invoice_created' | 'invoice_paid' | 'message_in' | 'message_out' | 'payment' | 'portal_request' | 'lead'
   title: string
   sub?: string
   href?: string
@@ -87,6 +87,7 @@ const EVENT_META: Record<TimelineEvent['kind'], { icon: typeof FileText; color: 
   message_out:     { icon: Send,         color: 'text-ink-muted bg-surface border-border' },
   payment:         { icon: DollarSign,   color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' },
   portal_request:  { icon: StickyNote,   color: 'text-amber-400 bg-amber-500/10 border-amber-500/20' },
+  lead:            { icon: Globe,         color: 'text-accent bg-accent/10 border-accent/25' },
 }
 
 // At-a-glance messaging eligibility beside a contact method: whether this channel
@@ -285,7 +286,9 @@ export default function CustomerDetailPage() {
       for (const sr of (srRes.data as { message: string; created_at: string }[]) || []) {
         const msg = sr.message || ''
         const isLead = /^new .* lead/i.test(msg)
-        extra.push({ at: sr.created_at, kind: 'portal_request', title: isLead ? 'Website lead' : 'Portal service request', sub: msg.slice(0, 160), href: '/dashboard/messages' })
+        // Strip the "New Website lead — " prefix so the sub isn't redundant with the title.
+        const sub = isLead ? msg.replace(/^new\b.*?\blead\b\s*[—-]?\s*/i, '').slice(0, 160) : msg.slice(0, 160)
+        extra.push({ at: sr.created_at, kind: isLead ? 'lead' : 'portal_request', title: isLead ? 'Website lead' : 'Portal service request', sub, href: '/dashboard/messages' })
       }
       setExtraTimeline(extra)
 
@@ -604,9 +607,16 @@ export default function CustomerDetailPage() {
                 )}
               </div>
               <div className="flex items-center gap-x-3 gap-y-1 mt-1.5 flex-wrap">
-                {customer.acquisition_source && (
-                  <span className="text-[10px] uppercase tracking-wide text-ink-muted border border-border rounded px-1.5 py-0.5">{customer.acquisition_source}</span>
-                )}
+                {customer.acquisition_source && (() => {
+                  const src = customer.acquisition_source
+                  const isWeb = /website|formspree|webhook|online|booking|api|zapier/i.test(src)
+                  const label = /formspree|webhook|api|zapier/i.test(src) ? 'Website' : src
+                  return (
+                    <span className="text-[10px] uppercase tracking-wide text-ink-muted border border-border rounded px-1.5 py-0.5 inline-flex items-center gap-1">
+                      {isWeb && <Globe className="w-2.5 h-2.5 text-ink-faint" />}{isWeb ? `From ${label}` : label}
+                    </span>
+                  )
+                })()}
                 {referrer && (
                   <Link href={`/dashboard/customers/${referrer.id}`} className="text-xs text-ink-muted hover:text-ink flex items-center gap-1">
                     <Users className="w-3 h-3" /> Referred by {referrer.name}

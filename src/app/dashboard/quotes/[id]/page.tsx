@@ -22,7 +22,7 @@ import { addDays, format as formatDfn, parseISO } from 'date-fns'
 import { needsFollowUp, daysSince, logFollowUpPatch, markWonPatch } from '@/lib/followup'
 import { scheduleQuoteAsJob } from '@/lib/scheduleQuote'
 import { ensureCustomerAndProperty } from '@/lib/customers'
-import { Edit2, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Send, Camera } from 'lucide-react'
+import { Edit2, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Send, Camera, Globe } from 'lucide-react'
 
 export default function QuoteDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -55,11 +55,12 @@ export default function QuoteDetailPage() {
     window.sessionStorage.removeItem('eq_quote_save_customer')
     try {
       const m = JSON.parse(raw) as { created: boolean; name: string; matchedBy: string | null }
+      const matchedByLabel: Record<string, string> = { phone: 'phone number', email: 'email address', address: 'address' }
       setSavedCustomerMsg(
         m.created
           ? `New customer ${m.name} and their property were created and linked to this quote.`
           : m.matchedBy
-            ? `Linked to existing customer ${m.name} (matched by ${m.matchedBy}) — no duplicate created.`
+            ? `Linked to existing customer ${m.name} (matched by ${matchedByLabel[m.matchedBy] || m.matchedBy}) — no duplicate created.`
             : null
       )
     } catch { /* ignore */ }
@@ -592,6 +593,22 @@ export default function QuoteDetailPage() {
         }
       />
 
+      {/* One-shot confirmations from the create/duplicate flow — greet the owner at
+          the top (was buried below the send card), then dismiss. */}
+      {savedCustomerMsg && (
+        <Banner tone="success" icon={Check} onDismiss={() => setSavedCustomerMsg(null)}>{savedCustomerMsg}</Banner>
+      )}
+      {dupMsg && (
+        <Banner tone="accent" icon={Copy} onDismiss={() => setDupMsg(null)}>{dupMsg}</Banner>
+      )}
+      {/* This draft was created by a customer's online booking — frame it as a review,
+          not something the owner authored. */}
+      {quote.status === 'draft' && !!(quote as { lead_meta?: unknown }).lead_meta && (
+        <Banner tone="accent" icon={Globe}>
+          <span className="font-semibold text-ink">Customer booking — review this draft.</span> {(quote.customer_name || 'A customer').split(' ')[0]} requested this online. Check the price, then send it for approval.
+        </Banner>
+      )}
+
       {/* Photos the customer attached when booking this quote (lead_meta.photos) —
           shown read-only through the shared gallery/lightbox so the owner reviews
           exactly what the customer sent. */}
@@ -662,15 +679,6 @@ export default function QuoteDetailPage() {
               }
             }} />
         </Card>
-      )}
-
-      {/* One-shot confirmations — THE shared Banner (one radius/padding/dismiss). */}
-      {savedCustomerMsg && (
-        <Banner tone="success" icon={Check} onDismiss={() => setSavedCustomerMsg(null)}>{savedCustomerMsg}</Banner>
-      )}
-
-      {dupMsg && (
-        <Banner tone="accent" icon={Copy} onDismiss={() => setDupMsg(null)}>{dupMsg}</Banner>
       )}
 
       {/* Schedule/convert results flow through the ONE toast system — inline

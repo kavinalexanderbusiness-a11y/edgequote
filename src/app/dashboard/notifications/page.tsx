@@ -23,6 +23,11 @@ const ICON: Record<string, typeof FileText> = {
   payment_refunded: RotateCcw, payment_disputed: ShieldAlert,
 }
 const timeAgo = (iso: string) => { try { return formatDistanceToNow(new Date(iso), { addSuffix: true }) } catch { return '' } }
+// A website lead arrives as a portal_request whose body is the "New … lead — …"
+// summary. Detect it at the render layer so a hot prospect gets the lead treatment
+// (title, Build-quote action, accent) instead of reading like ordinary portal chatter.
+const isLeadNotif = (n: AppNotification | undefined): boolean =>
+  !!n && n.type === 'portal_request' && /new\b[^]*\blead/i.test(n.body || '')
 // "Remind me later" → tomorrow at 8am local.
 function tomorrow8am(): string { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(8, 0, 0, 0); return d.toISOString() }
 
@@ -107,12 +112,12 @@ export default function NotificationsPage() {
   const readVisible = visible.filter(n => n.read)
 
   // Per-row action cluster: one-click action (navigate) + snooze + dismiss.
-  function Controls({ g, compact }: { g: NotifGroup; compact?: boolean }) {
+  function Controls({ g, actionLabel }: { g: NotifGroup; actionLabel?: string; compact?: boolean }) {
     return (
       <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
         {g.count === 1 && g.href && (
           <button onClick={() => openItem(g.items[0])}
-            className="text-[11px] font-semibold text-accent hover:underline px-1.5 py-1">{notificationActionLabel(g.type)}</button>
+            className="text-[11px] font-semibold text-accent hover:underline px-1.5 py-1">{actionLabel ?? notificationActionLabel(g.type)}</button>
         )}
         {supportsManage && (
           <button onClick={() => snooze(g.ids)} title="Remind me tomorrow" aria-label="Snooze"
@@ -148,7 +153,7 @@ export default function NotificationsPage() {
         <SkeletonRows count={5} />
       ) : loadError ? null : visible.length === 0 ? (
         <EmptyState icon={Bell} tone="positive" className="py-16" title="You're all caught up"
-          description={<>Quote accepted, invoice paid, customer replies and alerts will appear here — grouped.
+          description={<>New website leads, quotes accepted, invoices paid, customer replies and alerts will appear here — grouped.
             {snoozedCount > 0 && <span className="block text-[11px] text-ink-faint mt-2">{snoozedCount} snoozed for later</span>}</>} />
       ) : (
         <div className="space-y-4">
@@ -182,40 +187,46 @@ export default function NotificationsPage() {
                 action={snoozedCount > 0 ? <span className="text-[10px] text-ink-faint flex items-center gap-1"><Clock className="w-3 h-3" /> {snoozedCount} snoozed</span> : undefined} />
               <div className="rounded-card border border-border bg-bg-secondary divide-y divide-border overflow-hidden">
                 {activity.map(g => {
-                  const Icon = ICON[g.type] || Bell
+                  const lead = isLeadNotif(g.items[0])
+                  const Icon = lead ? Globe : (ICON[g.type] || Bell)
                   const isOpen = expanded.has(g.key)
                   const onMain = () => g.count === 1 ? openItem(g.items[0]) : toggle(g.key)
+                  const title = lead ? (g.count > 1 ? `${g.count} new website leads` : 'New website lead') : g.title
+                  const emphasise = lead || g.unread
                   return (
                     <div key={g.key}>
-                      <div className={cn('px-4 py-3.5 flex items-start gap-3', g.unread && 'bg-accent/[0.04]')}>
-                        <div className={cn('w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border', g.unread ? 'border-accent/30 bg-accent/10 text-accent' : 'border-border text-ink-muted')}><Icon className="w-4 h-4" /></div>
+                      <div className={cn('px-4 py-3.5 flex items-start gap-3', lead ? 'bg-accent/[0.06]' : g.unread && 'bg-accent/[0.04]')}>
+                        <div className={cn('w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border', emphasise ? 'border-accent/30 bg-accent/10 text-accent' : 'border-border text-ink-muted')}><Icon className="w-4 h-4" /></div>
                         <button onClick={onMain} className="min-w-0 flex-1 text-left">
-                          <p className={cn('text-sm flex items-center gap-2', g.unread ? 'font-semibold text-ink' : 'text-ink-muted')}>
-                            {g.title}
+                          <p className={cn('text-sm flex items-center gap-2', emphasise ? 'font-semibold text-ink' : 'text-ink-muted')}>
+                            {title}
+                            {lead && <span className="text-[9px] font-bold text-black bg-accent rounded-full px-1.5 py-px leading-none tracking-wider shrink-0">NEW</span>}
                             {g.count > 1 && <span className="text-[10px] font-semibold text-ink-faint border border-border rounded-full px-1.5 py-0.5">{g.count}</span>}
                           </p>
                           {g.body && <p className="text-xs text-ink-muted mt-0.5 truncate">{g.body}</p>}
                           <p className="text-[10px] text-ink-faint mt-0.5">{timeAgo(g.latestAt)}</p>
                         </button>
                         {g.count > 1 && <ChevronDown aria-hidden="true" className={cn('w-4 h-4 text-ink-faint shrink-0 mt-1.5 transition-transform', isOpen && 'rotate-180')} />}
-                        <Controls g={g} compact />
+                        <Controls g={g} actionLabel={lead ? 'Build quote' : undefined} compact />
                       </div>
                       {isOpen && g.count > 1 && (
                         <div className="bg-bg-tertiary/40 divide-y divide-border/60 border-t border-border">
-                          {g.items.map(n => (
+                          {g.items.map(n => {
+                            const nLead = isLeadNotif(n)
+                            return (
                             <div key={n.id} className="pl-16 pr-3 py-2.5 flex items-start gap-2">
                               <button onClick={() => openItem(n)} className="min-w-0 flex-1 text-left">
-                                <p className="text-xs text-ink">{n.title}</p>
+                                <p className="text-xs text-ink">{nLead ? 'New website lead' : n.title}</p>
                                 {n.body && <p className="text-[11px] text-ink-muted truncate">{n.body}</p>}
                                 <p className="text-[10px] text-ink-faint mt-0.5">{timeAgo(n.created_at)}</p>
                               </button>
                               <div className="flex items-center gap-1 shrink-0">
-                                {n.href && <button onClick={() => openItem(n)} className="text-[11px] font-semibold text-accent hover:underline px-1.5 py-1">{notificationActionLabel(n.type)}</button>}
+                                {n.href && <button onClick={() => openItem(n)} className="text-[11px] font-semibold text-accent hover:underline px-1.5 py-1">{nLead ? 'Build quote' : notificationActionLabel(n.type)}</button>}
                                 {supportsManage && <button onClick={() => snooze([n.id])} title="Remind me tomorrow" aria-label="Snooze" className="h-6 w-6 rounded-lg text-ink-faint hover:text-ink hover:bg-surface flex items-center justify-center"><Clock className="w-3 h-3" /></button>}
                                 <button onClick={() => dismiss([n.id])} title={supportsManage ? 'Dismiss' : 'Mark read'} aria-label="Dismiss" className="h-6 w-6 rounded-lg text-ink-faint hover:text-ink hover:bg-surface flex items-center justify-center"><X className="w-3 h-3" /></button>
                               </div>
                             </div>
-                          ))}
+                            )})}
                         </div>
                       )}
                     </div>
