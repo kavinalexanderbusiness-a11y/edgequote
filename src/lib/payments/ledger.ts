@@ -48,7 +48,14 @@ export function displayInvoiceStatus(
 // Cancel an invoice (terminal — the ledger trigger never revives it). Guarded:
 // an invoice with money received must be refunded first, so the books balance.
 export async function cancelInvoice(sb: Supa, invoice: Invoice): Promise<{ error?: string }> {
-  if ((Number(invoice.amount_paid) || 0) > 0.01) {
+  // Ask the DB, not the prop it was rendered from. This guard is the only thing
+  // standing between "cancelled" (terminal) and an invoice holding real money, and
+  // it used to trust a value that goes stale the moment a payment lands — the exact
+  // moment the guard most needs to fire.
+  const { data, error: readErr } = await sb.from('invoices').select('amount_paid').eq('id', invoice.id).maybeSingle()
+  if (readErr) return { error: 'Could not check this invoice’s payments — try again.' }
+  if (!data) return { error: 'This invoice no longer exists.' }
+  if ((Number((data as { amount_paid: number | null }).amount_paid) || 0) > 0.01) {
     return { error: 'This invoice has payments — refund them before cancelling.' }
   }
   const { error } = await sb.from('invoices').update({ status: 'cancelled' }).eq('id', invoice.id)
@@ -122,6 +129,36 @@ export async function availableCredit(sb: Supa, customerId: string): Promise<num
   return round2(((data as { amount: number }[]) || []).reduce((s, r) => s + Number(r.amount || 0), 0))
 }
 
+// ── Stale-view guard for the amount-derived movements ────────────────────────
+// applyCredit / overpaymentToCredit / recordRefund are all handed an amount the
+// CALLER derived from the invoice it last rendered (min(credit, balance), overpaid,
+// paid). If that view is stale the amount is wrong, and these three don't just
+// mis-record — they INVENT money. Two tabs open on an invoice overpaid by $50, both
+// clicking "Apply as credit", book that invoice −$100 and grant $100 of credit that
+// never existed. The button's loading state only ever protected a double-click in ONE
+// tab; nothing protected a second tab, a stale page, or a payment landing via
+// realtime between render and click.
+//
+// amount_paid is the natural version token: it's trigger-maintained from the ledger,
+// so it changes on ANY movement against this invoice. Compare-and-swap on it — no new
+// column, no migration, and it catches every staleness case rather than the ones we
+// thought to enumerate. Cheap: one indexed read on a path that's about to write.
+//
+// This narrows the race, it doesn't erase it: two callers reading the same value
+// concurrently still both pass. Closing that properly needs the DB to own the
+// invariant (see the note on availableCredit below).
+async function assertCurrent(sb: Supa, invoice: Invoice): Promise<string | null> {
+  const { data, error } = await sb.from('invoices').select('amount_paid, status').eq('id', invoice.id).maybeSingle()
+  // A failed read must NOT be treated as "unchanged" — that's the exact assumption
+  // this guard exists to remove.
+  if (error) return 'Could not confirm the invoice’s current balance — try again.'
+  if (!data) return 'This invoice no longer exists.'
+  const now = round2(Number((data as { amount_paid: number | null }).amount_paid) || 0)
+  const seen = round2(Number(invoice.amount_paid) || 0)
+  if (now !== seen) return 'This invoice changed while you had it open — refresh to see the current balance, then try again.'
+  return null
+}
+
 // Apply available credit to an invoice (double-entry): a +payment toward the invoice
 // (drops its balance) and a −credit movement (consumes the credit). Audit trail in notes.
 export async function applyCreditToInvoice(sb: Supa, p: {
@@ -130,6 +167,17 @@ export async function applyCreditToInvoice(sb: Supa, p: {
   const amt = round2(p.amount)
   if (!(amt > 0)) return { error: 'Nothing to apply.' }
   if (!p.invoice.customer_id) return { error: 'This invoice has no customer.' }
+  const stale = await assertCurrent(sb, p.invoice)
+  if (stale) return { error: stale }
+  // Credit lives on the CUSTOMER, not this invoice, so amount_paid can't speak for it:
+  // the same credit spent on a different invoice leaves this one untouched. Re-read the
+  // balance we're about to draw down.
+  const available = await availableCredit(sb, p.invoice.customer_id)
+  if (amt > available + 0.005) {
+    return { error: available > 0
+      ? `Only ${available.toFixed(2)} of credit is left — refresh and try again.`
+      : 'This customer has no credit left to apply.' }
+  }
   const at = new Date().toISOString()
   const common = { user_id: p.userId, customer_id: p.invoice.customer_id, invoice_id: p.invoice.id, currency: 'cad', provider: 'credit', method: 'credit', status: 'paid', paid_at: at }
   const { error } = await sb.from('payments').insert([
@@ -147,6 +195,10 @@ export async function overpaymentToCredit(sb: Supa, p: {
   const amt = round2(p.amount)
   if (!(amt > 0)) return { error: 'No overpayment to move.' }
   if (!p.invoice.customer_id) return { error: 'This invoice has no customer.' }
+  // The one that invents money outright: `overpaid` is derived from amount_paid, so a
+  // stale view grants credit against an overpayment that's already been resolved.
+  const stale = await assertCurrent(sb, p.invoice)
+  if (stale) return { error: stale }
   const at = new Date().toISOString()
   const common = { user_id: p.userId, customer_id: p.invoice.customer_id, invoice_id: p.invoice.id, currency: 'cad', provider: 'credit', method: 'credit', status: 'paid', paid_at: at }
   const { error } = await sb.from('payments').insert([
@@ -163,6 +215,17 @@ export async function recordRefund(sb: Supa, p: {
 }): Promise<{ error?: string }> {
   const amt = round2(Math.abs(p.amount))
   if (!(amt > 0)) return { error: 'Enter a refund amount.' }
+  const stale = await assertCurrent(sb, p.invoice)
+  if (stale) return { error: stale }
+  // The UI caps the field at `paid`, but that cap is only as fresh as the render it
+  // came from. Refunding more than was ever collected is not a thing that can be
+  // true, so the engine says so rather than trusting the form.
+  const collected = round2(Number(p.invoice.amount_paid) || 0)
+  if (amt > collected + 0.005) {
+    return { error: collected > 0
+      ? `Only ${collected.toFixed(2)} was collected on this invoice — you can’t refund more than that.`
+      : 'Nothing has been collected on this invoice yet, so there’s nothing to refund.' }
+  }
   const { error } = await sb.from('payments').insert({
     user_id: p.userId, customer_id: p.invoice.customer_id, invoice_id: p.invoice.id,
     amount: -amt, currency: 'cad', provider: 'refund', kind: 'payment', method: 'refund',

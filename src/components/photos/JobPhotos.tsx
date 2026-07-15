@@ -1,9 +1,14 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { PhotoKind, PHOTO_KIND_LABELS } from '@/types'
-import { JobPhotoView, listPhotos, uploadPhotos, deletePhoto, updatePhoto, thumbUrl } from '@/lib/photos'
+import { JobPhotoView, listPhotos, deletePhoto, updatePhoto, thumbUrl } from '@/lib/photos'
+import { captureMetaFor } from '@/lib/exif'
+import {
+  enqueueUploads, subscribeUploads, getUploadItems, getUploadServerSnapshot,
+  retryUpload, dismissUpload,
+} from '@/lib/uploadQueue'
 import { downloadBlob } from '@/lib/portalPdf'
 import { toast } from '@/lib/toast'
 import { formatDate } from '@/lib/utils'
@@ -11,7 +16,7 @@ import { Skeleton } from '@/components/ui/Skeleton'
 import { InlineEmpty } from '@/components/ui/EmptyState'
 import { Button } from '@/components/ui/Button'
 import { FilterPill } from '@/components/ui/FilterPill'
-import { Camera, ImagePlus, Trash2, X, Loader2, Check, ChevronLeft, ChevronRight, Download } from 'lucide-react'
+import { Camera, ImagePlus, Trash2, X, Loader2, Check, ChevronLeft, ChevronRight, Download, WifiOff } from 'lucide-react'
 
 interface Props {
   propertyId: string | null
@@ -41,14 +46,23 @@ const KIND_BADGE: Record<PhotoKind, string> = {
 const GALLERY_FETCH_LIMIT = 60
 const PAGE = 12 // tiles shown before "Show more"
 
-// An in-flight upload rendered instantly from a local blob URL (no wait for the network).
-interface PendingTile { tempId: string; url: string; kind: PhotoKind; status: 'uploading' | 'error'; file: File }
-
 export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', initialPhotos, readOnly = false, className }: Props) {
   const supabase = createClient()
   const [photos, setPhotos] = useState<JobPhotoView[]>(initialPhotos ?? [])
   const [loading, setLoading] = useState(!initialPhotos)
-  const [pending, setPending] = useState<PendingTile[]>([])
+  const [reloadTick, setReloadTick] = useState(0)
+
+  // In-flight tiles come straight from the ONE upload queue rather than a private
+  // copy of the same state. This surface used to call uploadPhotos directly — no
+  // retry, no backoff, no offline pause, nothing surviving a reload — which meant
+  // the outdoor, bad-signal gallery was the only one WITHOUT the resilient path.
+  // Matching on ctx (not a group id we happen to remember) means photos restored
+  // from disk after an app restart reappear in the job they belong to, on their own.
+  const queued = useSyncExternalStore(subscribeUploads, getUploadItems, getUploadServerSnapshot)
+  const pending = useMemo(
+    () => queued.filter(i => i.status !== 'done' && (jobId ? i.ctx.jobId === jobId : i.ctx.propertyId === propertyId)),
+    [queued, jobId, propertyId],
+  )
   const [kindFilter, setKindFilter] = useState<'all' | PhotoKind>('all')
   const [shown, setShown] = useState(PAGE)
   const [downloading, setDownloading] = useState<string | null>(null)
@@ -56,6 +70,7 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
   // the lightbox silently jump to a different photo — it stays on the same one or closes.
   const [lightboxId, setLightboxId] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const cameraRef = useRef<HTMLInputElement>(null)
   const pendingKind = useRef<PhotoKind>('after')
   const userIdRef = useRef<string | null>(null)
   const objectUrls = useRef<Set<string>>(new Set())
@@ -77,6 +92,20 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
     load()
     return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobId, propertyId, reloadTick])
+
+  // The queue finishing a group is what tells this gallery its photos have landed.
+  // (uploadQueue has always dispatched this event "so any open gallery can refresh";
+  // until now nothing listened, so it was dead code.) Re-listing rather than
+  // splicing keeps the DB the one source of truth for what's actually stored.
+  useEffect(() => {
+    function onDone(e: Event) {
+      const d = (e as CustomEvent<{ propertyIds: (string | null)[]; jobIds: (string | null)[] }>).detail
+      const mine = jobId ? d.jobIds?.includes(jobId) : d.propertyIds?.includes(propertyId)
+      if (mine) setReloadTick(t => t + 1)
+    }
+    window.addEventListener('eq:upload-complete', onDone)
+    return () => window.removeEventListener('eq:upload-complete', onDone)
   }, [jobId, propertyId])
 
   // Free any preview blob URLs on unmount so a big session doesn't leak memory.
@@ -121,13 +150,14 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lightboxId, filtered.length])
 
-  function releaseTile(t: PendingTile) {
-    URL.revokeObjectURL(t.url); objectUrls.current.delete(t.url)
-  }
-
-  function pick(kind: PhotoKind) {
+  // Before/After are taken standing on the lawn, so they go straight to the
+  // camera: `capture="environment"` opens the rear shutter instead of the OS
+  // "Take Photo / Photo Library" chooser, cutting a tap and a decision out of the
+  // action a contractor repeats at every stop. "Add photo" keeps the plain picker
+  // for attaching from the library, so neither capability is lost.
+  function pick(kind: PhotoKind, source: 'camera' | 'library' = 'camera') {
     pendingKind.current = kind
-    fileRef.current?.click()
+    ;(source === 'camera' ? cameraRef : fileRef).current?.click()
   }
 
   async function onFiles(e: React.ChangeEvent<HTMLInputElement>) {
@@ -135,47 +165,28 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
     e.target.value = '' // allow re-picking the same file
     if (!files.length) return
     const kind = pendingKind.current
-    // Optimistic tiles appear INSTANTLY (before any compression / auth / upload),
-    // each rendered from a local blob URL with an uploading overlay — so the grid
-    // fills the moment you pick, and nothing ever looks frozen.
-    const tiles: PendingTile[] = files.map(f => {
-      const url = URL.createObjectURL(f)
-      objectUrls.current.add(url)
-      return { tempId: `t${seq.current++}`, url, kind, status: 'uploading', file: f }
-    })
-    setPending(prev => [...tiles, ...prev])
 
     let uid = userIdRef.current
     if (!uid) { const { data: { session } } = await supabase.auth.getSession(); uid = session?.user?.id ?? null; userIdRef.current = uid }
-    if (!uid) { setPending(prev => prev.filter(t => !tiles.some(x => x.tempId === t.tempId))); tiles.forEach(releaseTile); return }
-
-    await uploadPhotos(supabase, files, { userId: uid, propertyId, jobId, customerId, kind }, {
-      concurrency: 3,
-      onUploaded: (row, i) => {
-        const t = tiles[i]
-        setPhotos(prev => [row, ...prev])
-        setPending(prev => prev.filter(x => x.tempId !== t.tempId))
-        releaseTile(t)
-      },
-      onError: (_f, i) => {
-        const id = tiles[i].tempId
-        setPending(prev => prev.map(x => x.tempId === id ? { ...x, status: 'error' } : x))
-      },
-    })
-  }
-
-  async function retryTile(t: PendingTile) {
-    const uid = userIdRef.current
     if (!uid) return
-    setPending(prev => prev.map(x => x.tempId === t.tempId ? { ...x, status: 'uploading' } : x))
-    await uploadPhotos(supabase, [t.file], { userId: uid, propertyId, jobId, customerId, kind: t.kind }, {
-      onUploaded: row => { setPhotos(prev => [row, ...prev]); setPending(prev => prev.filter(x => x.tempId !== t.tempId)); releaseTile(t) },
-      onError: () => setPending(prev => prev.map(x => x.tempId === t.tempId ? { ...x, status: 'error' } : x)),
-    })
-  }
 
-  function dismissTile(t: PendingTile) {
-    setPending(prev => prev.filter(x => x.tempId !== t.tempId)); releaseTile(t)
+    // Read EXIF BEFORE handing over: the queue downscales to persist, and the canvas
+    // re-encode drops EXIF. Without a takenAt the row falls back to now(), so a batch
+    // uploaded at end-of-job all lands within a second and the Studio's "earliest
+    // before / latest after" pairing quietly degrades to upload order — nothing
+    // errors, the pairs are just wrong.
+    const items = await Promise.all(files.map(async f => {
+      const meta = await captureMetaFor(f).catch(() => null)
+      return { file: f, kind, takenAt: meta?.ms ? new Date(meta.ms).toISOString() : null }
+    }))
+
+    // Hand off to the ONE queue: durable (bytes on disk), concurrent, backed off,
+    // offline-aware, and resumed after a restart. Tiles render from its state.
+    enqueueUploads({
+      ctx: { userId: uid, propertyId: propertyId ?? null, jobId: jobId ?? null, customerId: customerId ?? null },
+      items,
+      label: variant === 'gallery' ? 'Photos' : 'Visit photos',
+    })
   }
 
   // Delete the app way: remove now, offer Undo, commit only after the undo window
@@ -247,6 +258,10 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
   return (
     <div className={className}>
       <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={onFiles} />
+      {/* Separate node: `capture` can't be toggled per click — the attribute has to
+          be on the input at the moment it's activated, so camera and library are
+          two inputs sharing one handler. */}
+      <input ref={cameraRef} type="file" accept="image/*" capture="environment" multiple className="hidden" onChange={onFiles} />
 
       {/* Capture buttons — never disabled during upload, so you can keep adding.
           Hidden in read-only mode (a pure viewer for customer-attached photos). */}
@@ -255,7 +270,7 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
           <CaptureBtn label="Before" icon={Camera} busy={busyOf('before')} onClick={() => pick('before')} tone="amber" />
           <CaptureBtn label="After" icon={Camera} busy={busyOf('after')} onClick={() => pick('after')} tone="emerald" />
           {variant === 'gallery' && (
-            <CaptureBtn label="Add photo" icon={ImagePlus} busy={busyOf('general')} onClick={() => pick('general')} />
+            <CaptureBtn label="Add photo" icon={ImagePlus} busy={busyOf('general')} onClick={() => pick('general', 'library')} />
           )}
         </>}
         <span className="text-[11px] ml-auto inline-flex items-center gap-1.5">
@@ -287,22 +302,29 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
           <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 mt-2.5">
             {/* Optimistic upload tiles first — visible instantly, with progress / retry. */}
             {pending.map(t => (
-              <div key={t.tempId} className="relative aspect-square rounded-lg overflow-hidden border border-border bg-bg-tertiary">
+              <div key={t.id} className="relative aspect-square rounded-lg overflow-hidden border border-border bg-bg-tertiary">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={t.url} alt="" className={`w-full h-full object-cover ${t.status === 'error' ? 'opacity-40' : 'opacity-70'}`} />
+                <img src={t.previewUrl} alt="" className={`w-full h-full object-cover ${t.status === 'error' ? 'opacity-40' : 'opacity-70'}`} />
                 <span className={`absolute top-1 left-1 text-[10px] font-semibold uppercase tracking-wide rounded px-1 py-0.5 border ${KIND_BADGE[t.kind]}`}>
                   {PHOTO_KIND_LABELS[t.kind]}
                 </span>
-                {t.status === 'uploading' ? (
-                  <div className="absolute inset-0 flex items-center justify-center bg-black/25"><Loader2 className="w-5 h-5 text-white animate-spin" /></div>
-                ) : (
+                {t.status === 'error' ? (
                   <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-black/45">
                     <span className="text-[10px] font-medium text-white">Upload failed</span>
                     <div className="flex items-center gap-1.5">
-                      <button type="button" onClick={() => retryTile(t)} className="text-[10px] font-semibold text-white bg-white/20 hover:bg-white/30 rounded px-2 py-0.5">Retry</button>
-                      <button type="button" onClick={() => dismissTile(t)} className="text-white/80 hover:text-white" title="Dismiss" aria-label="Dismiss"><X className="w-3.5 h-3.5" /></button>
+                      <button type="button" onClick={() => retryUpload(t.id)} className="text-[10px] font-semibold text-white bg-white/20 hover:bg-white/30 rounded px-2 py-0.5">Retry</button>
+                      <button type="button" onClick={() => dismissUpload(t.id)} className="text-white/80 hover:text-white" title="Dismiss" aria-label="Dismiss"><X className="w-3.5 h-3.5" /></button>
                     </div>
                   </div>
+                ) : t.status === 'paused' ? (
+                  // Honest: it's not stuck, there's no signal. It'll go on reconnect —
+                  // and it's on disk, so closing the app won't lose it.
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-black/45 px-1 text-center">
+                    <WifiOff className="w-4 h-4 text-white/90" />
+                    <span className="text-[9px] font-medium text-white leading-tight">Saved — uploads when you&apos;re back</span>
+                  </div>
+                ) : (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/25"><Loader2 className="w-5 h-5 text-white animate-spin" /></div>
                 )}
               </div>
             ))}
@@ -398,8 +420,9 @@ function CaptureBtn({ label, icon: Icon, busy, disabled, onClick, tone }: {
   label: string; icon: typeof Camera; busy: boolean; disabled?: boolean; onClick: () => void; tone?: 'amber' | 'emerald'
 }) {
   return (
+    // tap-target: 44px on a phone (gloves, sun, one hand), unchanged 32px with a mouse.
     <button type="button" onClick={onClick} disabled={disabled}
-      className={`h-8 px-2.5 rounded-lg border text-xs font-medium flex items-center gap-1.5 active:scale-95 transition-transform disabled:opacity-50 ${
+      className={`tap-target h-8 px-2.5 rounded-lg border text-xs font-medium flex items-center justify-center gap-1.5 active:scale-95 transition-transform disabled:opacity-50 ${
         tone === 'amber' ? 'bg-amber-500/15 border-amber-500/30 text-amber-300 hover:bg-amber-500/25'
           : tone === 'emerald' ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25'
             : 'border-border text-ink-muted hover:text-ink hover:bg-black/10'

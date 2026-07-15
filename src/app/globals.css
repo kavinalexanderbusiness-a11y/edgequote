@@ -138,6 +138,28 @@ body { min-height: 100dvh; overscroll-behavior-y: none; }
   body { padding-bottom: env(safe-area-inset-bottom); }
 }
 
+/* ── Field touch handling ────────────────────────────────────────────────────
+   Every interactive element opts out of double-tap-to-zoom. Without this a
+   browser waits ~300ms after each tap to see if a second one is coming, so every
+   button in the app felt a beat behind a native one. `manipulation` keeps pan +
+   pinch-zoom (a contractor still needs to zoom a map/photo) and drops only the
+   double-tap gesture. Costs nothing on desktop. */
+button, a, [role="button"], [role="switch"], [role="menuitem"], label, select, summary {
+  touch-action: manipulation;
+}
+
+/* `.tap-target` — the 44×44 minimum, applied ONLY where a gloved thumb acts.
+   Gated on `pointer: coarse` so mouse-driven desktop density is untouched: the
+   same markup stays compact with a cursor and grows on a phone. Opt-in per
+   control rather than a blanket rule, so dense inline badges don't get blown
+   apart. Use on the primary field actions, not on everything. */
+@media (pointer: coarse) {
+  .tap-target { min-height: 44px; min-width: 44px; }
+  /* Inline text/number controls only need the vertical hit area — forcing 44px
+     of width would stretch a "$65" chip into a slab. */
+  .tap-target-y { min-height: 44px; }
+}
+
 /* Subtle entrance for menus / dropdowns / action bars — keeps UI feeling crisp. */
 @keyframes popIn {
   from { opacity: 0; transform: scale(0.96); }

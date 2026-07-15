@@ -13,15 +13,40 @@ import { ScopeDialog } from '@/components/schedule/ScopeDialog'
 import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel } from '@/lib/recurrence'
 import type { JobRecurrence } from '@/types'
 import { createDraftInvoiceForCompletedJob, quoteVisitAmount, jobVisitValue, effectiveFreq, syncDraftInvoiceAmounts } from '@/lib/invoicing'
+import { queueOrRun } from '@/lib/offline/outbox'
+import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
+
+// ── The offline field bundle ──────────────────────────────────────────────────
+// Everything the day board needs to be TRUE with no signal, for the window a
+// contractor works out of (today ± a week), persisted across app kills.
+const FIELD_BUNDLE_KEY = 'schedule-field-bundle'
+
+// The settings the board actually reads. Narrow on purpose: caching the whole
+// settings row would drag pricing/branding/API config onto disk for no benefit.
+interface FieldSettings {
+  base_lat: number | null; base_lng: number | null; base_address: string | null
+  preferred_work_days: number[] | null; work_start_time: string | null
+  daily_capacity_hours: number | null; automations: unknown
+}
+
+interface FieldBundle {
+  jobs: Job[]
+  addons: Record<string, JobLineItem[]>
+  quotes: QuoteLite[]          // prices for recurring visits derive from these
+  recurrences: JobRecurrence[] // cadence labels
+  dayStatuses: DayStatusRow[]
+  settings: FieldSettings | null
+}
 import { resolveAutomations, Automations } from '@/lib/comms/automations'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
+import { StickyActionBar } from '@/components/ui/StickyActionBar'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Skeleton, SkeletonRows } from '@/components/ui/Skeleton'
-import { cn, minutesBetween } from '@/lib/utils'
+import { cn, minutesBetween, localTodayISO } from '@/lib/utils'
 import { toast } from '@/lib/toast'
 import { format, addMonths, addWeeks, addDays, subMonths, subWeeks, subDays, parseISO, getDay } from 'date-fns'
-import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repeat, Lightbulb, Info, Phone, MessageSquare, Navigation, User as UserIcon, FileText, Receipt } from 'lucide-react'
+import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repeat, Lightbulb, Info, Phone, MessageSquare, Navigation, User as UserIcon, FileText, Receipt, CheckCircle2, Play } from 'lucide-react'
 import { OptimizeSchedule } from '@/components/schedule/OptimizeSchedule'
 import { RainDelayCenter } from '@/components/schedule/RainDelayCenter'
 import { WeatherStrip } from '@/components/weather/WeatherStrip'
@@ -92,6 +117,9 @@ export default function SchedulePage() {
   // finished / am I behind" lives there, not in a passive month grid.
   const [view, setView] = useState<CalendarView>('day')
   const [cursor, setCursor] = useState(new Date())
+  // In-flight guard for the field bar's primary (it shares startJob/completeJob
+  // with the cards, which keep their own `acting` guard inside the panel).
+  const [fieldActing, setFieldActing] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Job | null>(null)
   const [formDate, setFormDate] = useState<string>('')
@@ -106,6 +134,19 @@ export default function SchedulePage() {
     const isError = /could not|please try again|nothing was scheduled|partially applied/i.test(msg)
     if (isError) toast.error(msg)
     else toast.success(msg)
+  }
+  // Completing a visit drafts an invoice on a page the owner isn't looking at. The
+  // three callsites that do it each announced it as an instruction — "review it in
+  // Invoices" — naming a document and leaving the owner to go find it, on the
+  // surface where money quietly waits to be sent. Quote conversion already
+  // announces the SAME event with a link (quotes/[id] → "View invoice"), and the
+  // invoices page already deep-links on ?invoice=. Same event, same shape, once.
+  function draftInvoiceToast(invoiceNumber: string | undefined, msg: string) {
+    if (!invoiceNumber) { toast.success(msg); return }   // nothing to link to
+    toast(msg, {
+      tone: 'success',
+      action: { label: 'Review it', run: () => router.push(`/dashboard/invoices?invoice=${encodeURIComponent(invoiceNumber)}`) },
+    })
   }
   const [recurrenceLabels, setRecurrenceLabels] = useState<Record<string, string>>({})
   const [recurrences, setRecurrences] = useState<Record<string, JobRecurrence>>({})
@@ -475,7 +516,12 @@ export default function SchedulePage() {
   }, [supabase])
 
   const fetchJobs = useCallback(async () => {
-    const { data: { user } } = await supabase.auth.getUser()
+    // Local session read, not getUser(): getUser() is a network round-trip, so with
+    // no signal the whole loader used to throw here and the day never painted at
+    // all — before any cached rows could be shown.
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
+    if (!user) { setLoading(false); return }
     const [jRes, cRes, rRes, qRes, sRes, iRes, hRes, dRes] = await Promise.all([
       fetchAllJobs(user!.id),
       supabase.from('customers').select('*').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — can't schedule an archived customer without restoring
@@ -487,33 +533,70 @@ export default function SchedulePage() {
       supabase.from('day_statuses').select(DAY_STATUS_SELECT).eq('user_id', user!.id),
     ])
     setUid(user!.id)
-    setDayStatusMap(buildDayStatusMap((dRes.data as DayStatusRow[]) || []))
+    // Every setter below is guarded on its own error. They used to write `|| []`
+    // unconditionally, so ONE offline load flattened the whole board: prices
+    // vanished (they derive from quotes), cadence labels vanished, and the day's
+    // capacity/work-start silently reverted to the 8h Fri–Sun defaults that the ETA
+    // chain and the day-load signal read. The schedule looked authoritative and was
+    // wrong. A read that failed now changes nothing.
+    if (!dRes.error) setDayStatusMap(buildDayStatusMap((dRes.data as DayStatusRow[]) || []))
     // A failed jobs read must NEVER paint an empty schedule: "no work today" is
     // indistinguishable from a clear day, and that's how a stop gets missed. Keep
     // whatever is already on screen, say so plainly, and let the rest of the page
     // finish refreshing (so loading always resolves).
+    let fieldJobs: Job[] | null = null
+    let fieldAddons: Record<string, JobLineItem[]> | null = null
     if (jRes.error) {
       setBanner('Could not load the schedule — check your connection and refresh. Showing the last data loaded.')
     } else {
       const loadedJobs = jRes.rows
       setJobs(loadedJobs)
-      setAddonsByJobId(await listLineItemsByJob(supabase, user!.id, loadedJobs.map(j => j.id)))
+      // Field window — today ± a week, what a contractor actually works out of.
+      // Bounded by date so a 200-job/week book stays well inside quota instead of
+      // serializing the whole year.
+      const from = shiftDate(localTodayISO(), -1), to = shiftDate(localTodayISO(), 7)
+      fieldJobs = loadedJobs.filter(j => j.scheduled_date >= from && j.scheduled_date <= to)
+      const addons = await listLineItemsByJob(supabase, user!.id, loadedJobs.map(j => j.id))
+      setAddonsByJobId(addons)
+      // Only the field window's add-ons — the map is keyed by every job id in the book.
+      fieldAddons = Object.fromEntries(fieldJobs.map(j => [j.id, addons[j.id]]).filter(([, v]) => v)) as Record<string, JobLineItem[]>
     }
-    setInvoicedJobIds(new Set(((iRes.data as { job_id: string }[]) || []).map(r => r.job_id)))
-    setIgnoredHealthKeys(new Set(((hRes.data as { issue_key: string }[] | null) || []).map(r => r.issue_key)))
-    setCustomers((cRes.data as Customer[]) || [])
-    const labels: Record<string, string> = {}
-    const recMap: Record<string, JobRecurrence> = {}
-    for (const r of (rRes.data as JobRecurrence[]) || []) {
-      labels[r.id] = recurrenceLabel(r.interval_unit, r.interval_count, r.freq)
-      recMap[r.id] = r
+    if (!iRes.error) setInvoicedJobIds(new Set(((iRes.data as { job_id: string }[]) || []).map(r => r.job_id)))
+    if (!hRes.error) setIgnoredHealthKeys(new Set(((hRes.data as { issue_key: string }[] | null) || []).map(r => r.issue_key)))
+    if (!cRes.error) setCustomers((cRes.data as Customer[]) || [])
+    if (!rRes.error) {
+      const labels: Record<string, string> = {}
+      const recMap: Record<string, JobRecurrence> = {}
+      for (const r of (rRes.data as JobRecurrence[]) || []) {
+        labels[r.id] = recurrenceLabel(r.interval_unit, r.interval_count, r.freq)
+        recMap[r.id] = r
+      }
+      setRecurrenceLabels(labels)
+      setRecurrences(recMap)
     }
-    setRecurrenceLabels(labels)
-    setRecurrences(recMap)
 
     const qMap: Record<string, QuoteLite> = {}
-    for (const q of (qRes.data as QuoteLite[]) || []) qMap[q.id] = q
-    setQuotesById(qMap)
+    if (!qRes.error) {
+      for (const q of (qRes.data as QuoteLite[]) || []) qMap[q.id] = q
+      setQuotesById(qMap)
+    }
+
+    // ONE persisted bundle, written only from reads that actually succeeded. Jobs
+    // alone weren't enough: the board derives a recurring visit's price from its
+    // quote, so a cached day without quotes shows real work at "$0 · Set price".
+    if (fieldJobs && !qRes.error && !rRes.error && !sRes.error) {
+      const quoteIds = new Set(fieldJobs.map(j => j.quote_id).filter(Boolean))
+      const recIds = new Set(fieldJobs.map(j => j.recurrence_id).filter(Boolean))
+      writeCache<FieldBundle>(FIELD_BUNDLE_KEY, {
+        jobs: fieldJobs,
+        addons: fieldAddons ?? {},
+        // Only what this window references — the whole quote book would blow quota.
+        quotes: ((qRes.data as QuoteLite[]) || []).filter(q => quoteIds.has(q.id)),
+        recurrences: ((rRes.data as JobRecurrence[]) || []).filter(r => recIds.has(r.id)),
+        dayStatuses: dRes.error ? [] : ((dRes.data as DayStatusRow[]) || []),
+        settings: (sRes.data as FieldSettings | null) ?? null,
+      }, { persist: true })
+    }
 
     // Base coordinate for route optimization (geocode the address once if needed).
     const s = sRes.data as { base_lat: number | null; base_lng: number | null; base_address: string | null; preferred_work_days: number[] | null; work_start_time: string | null; daily_capacity_hours: number | null; automations: unknown } | null
@@ -533,7 +616,40 @@ export default function SchedulePage() {
     setLoading(false)
   }, [supabase, fetchAllJobs])
 
-  useEffect(() => { fetchJobs() }, [fetchJobs])
+  // Paint the cached field bundle first so the day is on screen instantly — and,
+  // with no signal, at all. fetchJobs revalidates right behind it, so this is never
+  // stale-stuck; it only ever front-runs the network. Restores the DERIVED inputs
+  // too (quotes/recurrences/settings), because a day board with jobs but no quotes
+  // is worse than no board: it shows real work priced at $0.
+  useEffect(() => {
+    const b = readCache<FieldBundle>(FIELD_BUNDLE_KEY, CACHE_TTL.field, { persist: true })
+    if (b?.jobs?.length) {
+      setJobs(b.jobs)
+      setAddonsByJobId(b.addons || {})
+      const qMap: Record<string, QuoteLite> = {}
+      for (const q of b.quotes || []) qMap[q.id] = q
+      setQuotesById(qMap)
+      const labels: Record<string, string> = {}
+      const recMap: Record<string, JobRecurrence> = {}
+      for (const r of b.recurrences || []) {
+        labels[r.id] = recurrenceLabel(r.interval_unit, r.interval_count, r.freq)
+        recMap[r.id] = r
+      }
+      setRecurrenceLabels(labels)
+      setRecurrences(recMap)
+      setDayStatusMap(buildDayStatusMap(b.dayStatuses || []))
+      const s = b.settings
+      if (s) {
+        setAutomations(resolveAutomations(s.automations))
+        setPreferredWorkDays(s.preferred_work_days?.length ? s.preferred_work_days : [5, 6, 0])
+        setWorkStartTime(s.work_start_time || '08:00')
+        setCapacityHours(s.daily_capacity_hours && s.daily_capacity_hours > 0 ? s.daily_capacity_hours : 8)
+        if (s.base_lat != null && s.base_lng != null) setBaseCoord({ lat: s.base_lat, lng: s.base_lng })
+      }
+      setLoading(false)
+    }
+    fetchJobs()
+  }, [fetchJobs])
 
   // ── Day Status: live sync + optimistic set/clear (source of truth = day_statuses) ──
   const reloadDayStatuses = useCallback(async () => {
@@ -937,7 +1053,7 @@ export default function SchedulePage() {
 
     if (values.status === 'completed' && job.status !== 'completed') {
       const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed' })
-      if (res.created) setBanner(`Draft invoice ${res.invoiceNumber} created from the completed job — review it in Invoices.`)
+      if (res.created) draftInvoiceToast(res.invoiceNumber, `Draft invoice ${res.invoiceNumber} created from the completed job.`)
       else if (res.reason === 'exists') setBanner('That job already has an invoice.')
       else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
     }
@@ -1176,14 +1292,35 @@ export default function SchedulePage() {
   }
 
   // ▶ Check in: stamps arrival/start, status becomes In Progress.
+  // Queued when there's no signal — checking in is the single most common field
+  // tap and it happens in exactly the places with the worst coverage. The row
+  // flips locally either way, so the contractor is never blocked by a bar of LTE.
   async function startJob(job: Job) {
     const prev = { status: job.status, started_at: job.started_at }
     const now = new Date().toISOString()
-    const { error } = await supabase.from('jobs').update({ status: 'in_progress', started_at: now }).eq('id', job.id)
-    if (error) { setBanner('Could not start the job: ' + error.message); return }
-    await fetchJobs()
-    offerUndo('Job started', async () => {
-      await supabase.from('jobs').update(prev).eq('id', job.id)
+    const patch = { status: 'in_progress' as const, started_at: now }
+    let outcome: 'ran' | 'queued'
+    try {
+      outcome = await queueOrRun(
+        { kind: 'job.update', payload: { id: job.id, patch }, label: `Start ${job.title || 'job'}` },
+        async () => {
+          const { error } = await supabase.from('jobs').update(patch).eq('id', job.id)
+          if (error) throw new Error(error.message)
+        },
+      )
+    } catch (e) {
+      setBanner('Could not start the job: ' + (e instanceof Error ? e.message : 'please try again.'))
+      return
+    }
+    // Paint the new state immediately; a refetch would stall (or wipe it) offline.
+    setJobs(prev2 => prev2.map(j => (j.id === job.id ? { ...j, ...patch } : j)))
+    if (outcome === 'ran') await fetchJobs()
+    offerUndo(outcome === 'queued' ? 'Job started — will sync' : 'Job started', async () => {
+      setJobs(prev2 => prev2.map(j => (j.id === job.id ? { ...j, ...prev } : j)))
+      await queueOrRun(
+        { kind: 'job.update', payload: { id: job.id, patch: prev }, label: `Undo start ${job.title || 'job'}` },
+        async () => { await supabase.from('jobs').update(prev).eq('id', job.id) },
+      )
     })
   }
 
@@ -1194,54 +1331,104 @@ export default function SchedulePage() {
     const prev = { status: job.status, completed_at: job.completed_at, actual_minutes: job.actual_minutes }
     const now = new Date().toISOString()
     const actual = job.started_at ? minutesBetween(job.started_at, now) : job.actual_minutes
-    const { error } = await supabase.from('jobs').update({ status: 'completed', completed_at: now, actual_minutes: actual }).eq('id', job.id)
-    if (error) { setBanner('Could not complete the job: ' + error.message); return }
+    const patch = { status: 'completed' as const, completed_at: now, actual_minutes: actual }
+    const completed = { ...job, ...patch }
+    const notify = !!(automations.job_complete && job.customer_id)
     let invoiceCreated = false
-    const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed', actual_minutes: actual })
-    if (res.created) { invoiceCreated = true; setBanner(`Draft invoice ${res.invoiceNumber} created. Review in Invoices.`) }
-    else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
-    // A failed draft used to say NOTHING, which is indistinguishable from the success
-    // banner you scrolled past — the visit leaves the un-invoiced queue and the money
-    // is never billed, with no trace pointing at it. ('exists' stays quiet: an invoice
-    // does exist, so nothing is misclaimed.)
-    else if (res.reason === 'error') setBanner('Job completed, but the draft invoice could not be created — invoice it manually from the job.')
-    // Automated job-complete message (opt-in + dedupe are enforced by the route).
-    if (automations.job_complete && job.customer_id) {
-      fetch('/api/comms/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ customerId: job.customer_id, template: 'job_complete', jobId: job.id, dedupe: true }) }).catch(() => {})
+
+    // Completing is patch + draft invoice + courtesy text. Offline, all three
+    // queue together as ONE op (kind 'job.complete') so reconnecting can never
+    // leave a finished job un-billed. Online this runs exactly as it always did.
+    let outcome: 'ran' | 'queued'
+    try {
+      outcome = await queueOrRun(
+        { kind: 'job.complete', payload: { id: job.id, patch, job: completed, notify }, label: `Complete ${job.title || 'job'}` },
+        async () => {
+          const { error } = await supabase.from('jobs').update(patch).eq('id', job.id)
+          if (error) throw new Error(error.message)
+          const res = await createDraftInvoiceForCompletedJob(supabase, completed)
+          if (res.created) { invoiceCreated = true; draftInvoiceToast(res.invoiceNumber, `Draft invoice ${res.invoiceNumber} created.`) }
+          else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
+          // A failed draft used to say NOTHING, which is indistinguishable from the success
+          // banner you scrolled past — the visit leaves the un-invoiced queue and the money
+          // is never billed, with no trace pointing at it. ('exists' stays quiet: an invoice
+          // does exist, so nothing is misclaimed.)
+          else if (res.reason === 'error') setBanner('Job completed, but the draft invoice could not be created — invoice it manually from the job.')
+          // Automated job-complete message (opt-in + dedupe are enforced by the route).
+          if (notify) {
+            fetch('/api/comms/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ customerId: job.customer_id, template: 'job_complete', jobId: job.id, dedupe: true }) }).catch(() => {})
+          }
+        },
+      )
+    } catch (e) {
+      setBanner('Could not complete the job: ' + (e instanceof Error ? e.message : 'please try again.'))
+      return
     }
-    await fetchJobs()
-    offerUndo('Job completed', async () => {
-      await supabase.from('jobs').update(prev).eq('id', job.id)
-      if (invoiceCreated) await supabase.from('invoices').delete().eq('job_id', job.id).eq('status', 'draft')
+    setJobs(prev2 => prev2.map(j => (j.id === job.id ? { ...j, ...patch } : j)))
+    if (outcome === 'queued') setBanner('Completed offline — it’ll sync and draft the invoice when you’re back in signal.')
+    if (outcome === 'ran') await fetchJobs()
+    offerUndo(outcome === 'queued' ? 'Job completed — will sync' : 'Job completed', async () => {
+      setJobs(prev2 => prev2.map(j => (j.id === job.id ? { ...j, ...prev } : j)))
+      await queueOrRun(
+        { kind: 'job.update', payload: { id: job.id, patch: prev }, label: `Undo complete ${job.title || 'job'}` },
+        async () => {
+          await supabase.from('jobs').update(prev).eq('id', job.id)
+          if (invoiceCreated) await supabase.from('invoices').delete().eq('job_id', job.id).eq('status', 'draft')
+        },
+      )
     })
   }
 
   // Inline quick-edit from the day panel — small per-visit changes, no full form.
+  // Queues offline like the rest of the day. The kind is chosen by what the edit
+  // actually DOES, so replay reuses the same engines the online path just ran:
+  // completing the job → 'job.complete' (patch + draft invoice); a plain edit →
+  // 'job.update', carrying a price change through to an existing draft.
   async function quickSaveJob(job: Job, patch: QuickPatch) {
-    const { error } = await supabase.from('jobs').update({
+    const fields = {
       start_time: patch.start_time,
       crew_size: patch.crew_size,
       duration_minutes: patch.duration_minutes,
       status: patch.status,
       notes: patch.notes,
       price: patch.price,
-    }).eq('id', job.id)
-    if (error) { setBanner('Could not save the job: ' + error.message); return }
-    if (patch.status === 'completed' && job.status !== 'completed') {
-      const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed' })
-      if (res.created) setBanner(`Saved — draft invoice ${res.invoiceNumber} created.`)
-      else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
-      // The quick-edit dropdown completes a job through the same transition as the Complete
-      // button, which DOES report this (completeJob below). Without it a failed draft leaves
-      // the visit out of the un-invoiced queue and it is never billed, with no trace.
-      else if (res.reason === 'error') setBanner('Job completed, but the draft invoice could not be created — invoice it manually from the job.')
     }
-    // If the inline edit changed the price, keep its draft invoice in sync.
-    if (Number(patch.price) !== Number(job.price)) {
-      const { failed } = await syncDraftInvoiceAmounts(supabase, [job.id])
-      if (failed > 0) setBanner('Saved, but its draft invoice still shows the old amount — open the invoice to re-price it.')
+    const completing = patch.status === 'completed' && job.status !== 'completed'
+    const repriced = Number(patch.price) !== Number(job.price)
+    const completed = { ...job, ...fields }
+
+    let outcome: 'ran' | 'queued'
+    try {
+      outcome = await queueOrRun(
+        completing
+          ? { kind: 'job.complete', payload: { id: job.id, patch: fields, job: completed, notify: false }, label: `Complete ${job.title || 'job'}` }
+          : { kind: 'job.update', payload: { id: job.id, patch: fields, syncPrice: repriced }, label: `Edit ${job.title || 'job'}` },
+        async () => {
+          const { error } = await supabase.from('jobs').update(fields).eq('id', job.id)
+          if (error) throw new Error(error.message)
+          if (completing) {
+            const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed' })
+            if (res.created) draftInvoiceToast(res.invoiceNumber, `Saved — draft invoice ${res.invoiceNumber} created.`)
+            else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
+            // The quick-edit dropdown completes a job through the same transition as the Complete
+            // button, which DOES report this (completeJob below). Without it a failed draft leaves
+            // the visit out of the un-invoiced queue and it is never billed, with no trace.
+            else if (res.reason === 'error') setBanner('Job completed, but the draft invoice could not be created — invoice it manually from the job.')
+          }
+          // If the inline edit changed the price, keep its draft invoice in sync.
+          if (repriced) {
+            const { failed } = await syncDraftInvoiceAmounts(supabase, [job.id])
+            if (failed > 0) setBanner('Saved, but its draft invoice still shows the old amount — open the invoice to re-price it.')
+          }
+        },
+      )
+    } catch (e) {
+      setBanner('Could not save the job: ' + (e instanceof Error ? e.message : 'please try again.'))
+      return
     }
-    await fetchJobs()
+    setJobs(prev => prev.map(j => (j.id === job.id ? { ...j, ...fields } : j)))
+    if (outcome === 'queued') setBanner('Saved offline — it’ll sync when you’re back in signal.')
+    if (outcome === 'ran') await fetchJobs()
   }
 
   // First-class price edit from the Day panel.
@@ -1254,16 +1441,35 @@ export default function SchedulePage() {
       return
     }
     const oldAmount = valueByJobId[job.id] ?? null
-    const { data: { user } } = await supabase.auth.getUser()
-    const { error } = await supabase.from('jobs').update({ price }).eq('id', job.id)
-    if (error) { setBanner('Could not update price: ' + error.message); return }
-    // Audit trail (old → new, reason on raises) for upsell analytics later.
-    await recordPriceChange(supabase, { userId: user!.id, jobId: job.id, scope: null, oldAmount, newAmount: price, reason, changedByEmail: user?.email })
-    // The job is the source of truth — re-price its draft invoice automatically.
-    const { changed, failed } = await syncDraftInvoiceAmounts(supabase, [job.id], { reason })
-    await fetchJobs()
-    if (failed > 0) setBanner('Price updated, but its draft invoice still shows the old amount — open the invoice to re-price it.')
-    else if (changed > 0) setBanner('Price updated — its draft invoice was re-priced to match.')
+    // Local session read: getUser() is a network call, so pricing a job in a driveway
+    // used to die here — before the price, the audit row or the draft sync happened.
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
+    if (!user) { setBanner('Session expired — sign in again.'); return }
+    const audit = { userId: user.id, jobId: job.id, scope: null, oldAmount, newAmount: price, reason, changedByEmail: user.email }
+
+    let outcome: 'ran' | 'queued'
+    try {
+      outcome = await queueOrRun(
+        { kind: 'job.update', payload: { id: job.id, patch: { price }, syncPrice: true, syncReason: reason, priceAudit: audit }, label: `Price ${job.title || 'job'}` },
+        async () => {
+          const { error } = await supabase.from('jobs').update({ price }).eq('id', job.id)
+          if (error) throw new Error(error.message)
+          // Audit trail (old → new, reason on raises) for upsell analytics later.
+          await recordPriceChange(supabase, audit)
+          // The job is the source of truth — re-price its draft invoice automatically.
+          const { changed, failed } = await syncDraftInvoiceAmounts(supabase, [job.id], { reason })
+          if (failed > 0) setBanner('Price updated, but its draft invoice still shows the old amount — open the invoice to re-price it.')
+          else if (changed > 0) setBanner('Price updated — its draft invoice was re-priced to match.')
+        },
+      )
+    } catch (e) {
+      setBanner('Could not update price: ' + (e instanceof Error ? e.message : 'please try again.'))
+      return
+    }
+    setJobs(prev => prev.map(j => (j.id === job.id ? { ...j, price } : j)))
+    if (outcome === 'queued') setBanner('Price saved offline — it’ll sync when you’re back in signal.')
+    if (outcome === 'ran') await fetchJobs()
   }
 
   // The quote cadence column a recurring job's price maps to (interval-aware).
@@ -1348,19 +1554,41 @@ export default function SchedulePage() {
   // Add an extra service to this visit / future / the whole plan, then keep the
   // affected draft invoices in sync (the JOB — base + add-ons — is the truth).
   async function addLineItemToJob(job: Job, input: { description: string; amount: number; serviceKey: string; scope: RecurrenceScope }) {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
+    // Local session read: getUser() is a network call, so selling an add-on in a
+    // driveway used to fall straight through the `!user` guard and do nothing at
+    // all — no row, no error, no clue. Billable work just evaporated.
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
+    if (!user) { setBanner('Session expired — sign in again.'); return }
     const targets = input.scope === 'this'
       ? [job.id]
       : jobsInScope(job, jobs, input.scope).filter(j => j.status !== 'completed' && j.status !== 'cancelled').map(j => j.id)
     const ids = targets.length ? targets : [job.id]
-    await addLineItems(supabase, {
+    const opts = {
       userId: user.id, targetJobIds: ids,
       description: input.description, amount: input.amount, serviceKey: input.serviceKey,
       serviceType: job.service_type, recurring: input.scope !== 'this',
-    })
-    await syncDraftInvoiceAmounts(supabase, ids)
-    await fetchJobs()
+    }
+    let outcome: 'ran' | 'queued'
+    try {
+      outcome = await queueOrRun(
+        { kind: 'job.addons.add', payload: { opts, syncJobIds: ids }, label: `Add “${input.description}” to ${job.title || 'job'}` },
+        async () => {
+          await addLineItems(supabase, opts)
+          await syncDraftInvoiceAmounts(supabase, ids)
+        },
+        // Inserting line items is NOT idempotent — a replay would bill the mulch
+        // twice. Queue only when we're definitively offline (so nothing was sent);
+        // a request that failed mid-flight with the network still up is rethrown for
+        // the contractor to retry deliberately, exactly like an SMS send.
+        { queueOnRunError: false },
+      )
+    } catch (e) {
+      setBanner('Could not add that service: ' + (e instanceof Error ? e.message : 'please try again.'))
+      return
+    }
+    if (outcome === 'queued') setBanner('Service added offline — it’ll sync and bill when you’re back in signal.')
+    if (outcome === 'ran') await fetchJobs()
   }
   async function removeLineItem(item: JobLineItem) {
     // Snapshot BEFORE deleting: a grouped (plan-wide) add-on removes rows across
@@ -1593,8 +1821,26 @@ export default function SchedulePage() {
     : pendingAction?.type === 'move' ? 'Move'
     : pendingAction?.type === 'price' ? 'Update price for' : 'Save changes to'
 
+  // THE next stop for the field bar: whatever you're on now, else the first one
+  // still to do — in the same route order the cards are listed in, so the bar and
+  // the board can never disagree about what's next. Undefined once the day's done,
+  // which is what hides the bar.
+  const fieldNext = useMemo(() => {
+    const dayISO = format(cursor, 'yyyy-MM-dd')
+    const open = jobs
+      .filter(j => j.scheduled_date === dayISO && (j.status === 'in_progress' || j.status === 'scheduled'))
+      .sort((a, b) => {
+        const oa = a.route_order ?? 999, ob = b.route_order ?? 999
+        if (oa !== ob) return oa - ob
+        return (a.start_time || '').localeCompare(b.start_time || '')
+      })
+    return open.find(j => j.status === 'in_progress') ?? open[0]
+  }, [jobs, cursor])
+
   return (
-    <div className="max-w-6xl mx-auto space-y-6">
+    // Reserve the field bar's height on phones so the last job card can still be
+    // scrolled clear of it — a fixed bar is out of flow and would sit on top of it.
+    <div className={cn('max-w-6xl mx-auto space-y-6', view === 'day' && fieldNext && 'pb-24 lg:pb-0')}>
       <PageHeader
         title="Schedule"
         description={`${jobs.length} job${jobs.length !== 1 ? 's' : ''} on the calendar`}
@@ -1985,6 +2231,44 @@ export default function SchedulePage() {
           <Button size="sm" variant="secondary" onClick={() => clearDayStatusFor(Array.from(selectedDays))}>Clear status</Button>
           <Button size="sm" variant="ghost" onClick={() => setSelectedDays(new Set())}>Cancel</Button>
         </div>
+      )}
+
+      {/* ── Field bar ────────────────────────────────────────────────────────────
+          The day's ONE next action, pinned in thumb reach. Every primary action on
+          this page lives in the job card or the header — i.e. the top half of a
+          scrolling page — so a contractor holding a trimmer had to two-hand the
+          phone and hunt for the card they were standing in front of. This restates
+          the SAME stage-primary the card shows (On my way → Start → Complete) and
+          calls the SAME engines; it adds reach, not a second way to do things.
+          Phone-only, day-view-only, and it hides itself once the day is done. */}
+      {view === 'day' && fieldNext && (
+        <StickyActionBar fixed className="lg:hidden">
+          <div className="flex items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
+                {fieldNext.status === 'in_progress' ? 'In progress' : 'Next stop'}
+              </p>
+              <p className="text-sm font-semibold text-ink truncate">{fieldNext.customers?.name || fieldNext.title}</p>
+            </div>
+            <Button
+              size="lg"
+              className="shrink-0 tap-target"
+              loading={fieldActing}
+              onClick={async () => {
+                if (fieldActing) return
+                setFieldActing(true)
+                try {
+                  if (fieldNext.status === 'in_progress') await completeJob(fieldNext)
+                  else await startJob(fieldNext)
+                } finally { setFieldActing(false) }
+              }}
+            >
+              {fieldNext.status === 'in_progress'
+                ? <><CheckCircle2 className="w-4 h-4" /> Complete</>
+                : <><Play className="w-4 h-4" /> Start</>}
+            </Button>
+          </div>
+        </StickyActionBar>
       )}
     </div>
   )

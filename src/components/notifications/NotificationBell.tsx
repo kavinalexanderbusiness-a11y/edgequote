@@ -11,7 +11,7 @@ import { toast } from '@/lib/toast'
 import { scheduleQuoteAsJob } from '@/lib/scheduleQuote'
 import type { Quote } from '@/types'
 import { InlineEmpty } from '@/components/ui/EmptyState'
-import { Bell, Check, FileText, DollarSign, MessageSquare, Globe, Star, CreditCard, AlertTriangle, RotateCcw, ShieldAlert, CalendarPlus, Loader2 } from 'lucide-react'
+import { Bell, Check, FileText, DollarSign, MessageSquare, Globe, Star, CreditCard, AlertTriangle, RotateCcw, ShieldAlert, ShieldCheck, CalendarPlus, Loader2 } from 'lucide-react'
 
 export interface AppNotification {
   id: string
@@ -35,6 +35,7 @@ const ICON: Record<string, typeof FileText> = {
   new_message: MessageSquare, portal_request: Globe, review_received: Star,
   payment_failed: CreditCard, autopay_review: AlertTriangle, website_lead: Globe,
   payment_refunded: RotateCcw, payment_disputed: ShieldAlert,
+  payment_dispute_lost: ShieldAlert, payment_dispute_won: ShieldCheck,
 }
 const timeAgo = (iso: string) => { try { return formatDistanceToNow(new Date(iso), { addSuffix: true }) } catch { return '' } }
 

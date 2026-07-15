@@ -19,7 +19,7 @@ import { needsFollowUp, daysSince } from '@/lib/followup'
 import { recurrenceLabel, recurringCustomerLabel, buildServicePlans, ServicePlan } from '@/lib/recurrence'
 import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
 import { settingsToSeasons, DEFAULT_SEASONS, ServiceSeasons } from '@/lib/seasons'
-import { resolvePrefs, prefSummary, hasAnyPref } from '@/lib/preferences'
+import { resolvePrefs, prefSummary, hasAnyPref, monthShort } from '@/lib/preferences'
 import { SchedulePrefsFields, PrefsDraft, EMPTY_DRAFT, toDraft, draftToRow } from '@/components/customers/SchedulePrefsFields'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { DetailHeader } from '@/components/layout/DetailHeader'
@@ -32,7 +32,7 @@ import { InlineEmpty } from '@/components/ui/EmptyState'
 import { Button } from '@/components/ui/Button'
 import { Textarea } from '@/components/ui/Textarea'
 import { SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
-import { formatCurrency, formatDate, cn } from '@/lib/utils'
+import { formatCurrency, formatDate, cn, localTodayISO } from '@/lib/utils'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { CustomerComms } from '@/components/customers/CustomerComms'
 import { CommsHealth } from '@/components/customers/CommsHealth'
@@ -51,19 +51,13 @@ const WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
 const OPEN_INVOICE = new Set(['unpaid', 'sent', 'partial'])
 const TIMELINE_CAP = 8   // recent events shown before "Show more"
 
-function localToday(): string {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
-
-const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 // Month + day from a 'YYYY-MM-DD' string (no timezone drift) — e.g. "Jun 25".
 function mdLabel(dateStr: string | null | undefined): string | null {
   if (!dateStr) return null
   const p = String(dateStr).slice(0, 10).split('-')
   const m = Number(p[1]), d = Number(p[2])
   if (!m || !d) return null
-  return `${MONTHS[m - 1]} ${d}`
+  return `${monthShort(m - 1)} ${d}`
 }
 
 interface TimelineEvent {
@@ -392,7 +386,7 @@ export default function CustomerDetailPage() {
   // and the recurrence row are preserved, so it can be rebuilt later). Reuses the
   // jobs.status='cancelled' system — no new "paused" state needed.
   async function pauseSchedule(plan: ServicePlan) {
-    const todayISO = localToday()
+    const todayISO = localTodayISO()
     const futureIds = jobs
       .filter(j => j.recurrence_id === plan.recurrenceId && j.scheduled_date >= todayISO && (j.status === 'scheduled' || j.status === 'in_progress'))
       .map(j => j.id)
@@ -418,7 +412,7 @@ export default function CustomerDetailPage() {
   const bookingPhotos = useMemo(() => bookingPhotosFromQuotes(quotes as unknown as { lead_meta?: unknown; created_at?: string | null }[]), [quotes])
 
   const servicePlans = useMemo(() => {
-    const t = localToday()
+    const t = localTodayISO()
     const quotesById: Record<string, Quote> = {}
     for (const q of quotes) quotesById[q.id] = q
     const recsById: Record<string, JobRecurrence> = {}
@@ -470,7 +464,7 @@ export default function CustomerDetailPage() {
     </div>
   )
 
-  const today = localToday()
+  const today = localTodayISO()
 
   // ── Revenue (three separate truths) ──
   const wonQuotes = quotes.filter(q => WON.has(q.status))

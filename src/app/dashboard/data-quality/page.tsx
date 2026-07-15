@@ -21,6 +21,7 @@ import { geocodeAddressDetailed, reverseNeighborhood } from '@/lib/geo'
 import {
   CoverageRow, coveragePct, overallScore, scoreGrade, scoreLabel, DQ_GRADE_COLORS,
 } from '@/lib/dataQuality'
+import { GradeBadge } from '@/components/ui/GradeBadge'
 import {
   ShieldCheck, UserPlus, Home, AlertTriangle, CheckCircle2, ArrowRight, DollarSign, Link2, Users, FileText, MapPin, Phone, Ruler, Copy,
 } from 'lucide-react'
@@ -264,10 +265,7 @@ export default function DataQualityPage() {
       {/* Score hero */}
       <Card>
         <CardBody className="flex items-center gap-4">
-          <div className="w-16 h-16 rounded-2xl flex items-center justify-center text-2xl font-black tabular-nums shrink-0"
-            style={{ backgroundColor: DQ_GRADE_COLORS[grade] + '22', color: DQ_GRADE_COLORS[grade], border: `1px solid ${DQ_GRADE_COLORS[grade]}55` }}>
-            {m.score}
-          </div>
+          <GradeBadge grade={grade} size="lg">{m.score}</GradeBadge>
           <div className="min-w-0">
             <p className="text-sm font-bold text-ink flex items-center gap-2">
               <ShieldCheck className="w-4 h-4" style={{ color: DQ_GRADE_COLORS[grade] }} /> Data health: {scoreLabel(m.score)}

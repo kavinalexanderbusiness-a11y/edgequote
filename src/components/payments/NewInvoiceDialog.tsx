@@ -101,7 +101,10 @@ export function NewInvoiceDialog({ open, onClose, onCreated }: {
         // the editor on the single "Amount" box instead, hiding the qty/unit-price
         // rows that are the whole reason to bill manually behind an "+ Add line
         // item" link. A manual invoice starts as a line item, because it is one.
-        line_items: [{ description: service.trim() || '', amount: 0, kind: 'service' }],
+        // Seeded WITH a description, matching the editor's own "+ Add line item"
+        // fallback: the editor drops blank-description lines on save, so a blank
+        // seed is a trapdoor — you price it, and the line disappears.
+        line_items: [{ description: service.trim() || 'Service', amount: 0, kind: 'service' }],
         status: 'draft',
         issued_date: today,
         due_date: due || null,

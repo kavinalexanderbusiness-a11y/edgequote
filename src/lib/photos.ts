@@ -84,7 +84,11 @@ export async function listPhotosForProperties(
 // Downscale a phone photo before upload so the gallery loads fast and storage
 // stays small. Falls back to the original file on any failure (unsupported
 // format, no canvas, etc.) — never blocks an upload over a resize hiccup.
-async function downscale(file: File, maxDim = 1600, quality = 0.82): Promise<Blob> {
+// Exported so the upload queue can shrink a photo BEFORE persisting it to disk
+// (~300KB instead of ~4MB per pending shot). Safe to run twice: once an image is
+// within maxDim this returns the input untouched, so the upload's own call on an
+// already-downscaled blob is a pass-through, not a second lossy re-encode.
+export async function downscale(file: File, maxDim = 1600, quality = 0.82): Promise<Blob> {
   if (!file.type.startsWith('image/') || typeof document === 'undefined') return file
   try {
     // `imageOrientation: 'from-image'` bakes the EXIF rotation into the bitmap BEFORE
@@ -181,7 +185,16 @@ export async function uploadPhotos(
   supabase: SupabaseClient,
   files: File[],
   base: Omit<Parameters<typeof uploadPhoto>[1], 'file'>,
-  opts?: { concurrency?: number; onUploaded?: (row: JobPhotoView, index: number) => void; onError?: (file: File, index: number) => void },
+  opts?: {
+    concurrency?: number
+    onUploaded?: (row: JobPhotoView, index: number) => void
+    onError?: (file: File, index: number) => void
+    // Per-file fields resolved INSIDE the pool (e.g. reading EXIF capture time).
+    // `base` is shared by every file, so anything derived from the file itself has
+    // to come from here — and doing it in the worker keeps the read overlapped with
+    // the uploads instead of serialising a pass over every file up front.
+    perFile?: (file: File, index: number) => Promise<Partial<UploadPhotoOpts>>
+  },
 ): Promise<JobPhotoView[]> {
   const concurrency = Math.max(1, Math.min(opts?.concurrency ?? 3, files.length))
   const results: JobPhotoView[] = []
@@ -189,7 +202,9 @@ export async function uploadPhotos(
   async function worker(): Promise<void> {
     while (next < files.length) {
       const i = next++
-      const row = await uploadPhoto(supabase, { ...base, file: files[i] })
+      // A failing per-file resolver must never cost the photo — fall back to base.
+      const extra = opts?.perFile ? await opts.perFile(files[i], i).catch(() => ({})) : {}
+      const row = await uploadPhoto(supabase, { ...base, ...extra, file: files[i] })
       if (row) { results.push(row); opts?.onUploaded?.(row, i) }
       else opts?.onError?.(files[i], i)
     }

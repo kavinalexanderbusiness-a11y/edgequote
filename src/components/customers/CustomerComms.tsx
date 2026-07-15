@@ -5,8 +5,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { InlineEmpty } from '@/components/ui/EmptyState'
+import { SkeletonRows } from '@/components/ui/Skeleton'
 import { formatDate, cn } from '@/lib/utils'
-import { MessageSquare, Mail, Check, Loader2 } from 'lucide-react'
+import { MessageSquare, Mail, Check } from 'lucide-react'
 import { MSG_LABELS, MsgType } from '@/lib/comms/templates'
 import { applyConsent, SMS_CONSENT_WARNING } from '@/lib/consent'
 
@@ -71,7 +72,7 @@ export function CustomerComms({ customerId, smsOptIn, emailOptIn }: { customerId
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-1.5">History</p>
           {loading ? (
-            <p role="status" aria-live="polite" className="text-xs text-ink-muted flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" /> Loading…</p>
+            <SkeletonRows count={3} />
           ) : log.length === 0 ? (
             <InlineEmpty className="py-3">No messages sent yet.</InlineEmpty>
           ) : (

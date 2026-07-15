@@ -13,11 +13,14 @@ export const runtime = 'nodejs'
 // event is a no-op. A client can't forge this: without the webhook secret the
 // signature check fails and nothing is written.
 //
-// Handles four event shapes, all sharing the same payments table + invoice flip:
+// Money-in events share the same payments table + invoice flip; the rest report on
+// money that moved (or was taken back) outside this app:
 //   • checkout.session.completed (mode=payment)  — one-time Pay Now (UNCHANGED)
 //   • checkout.session.completed (mode=setup)    — AutoPay card saved
 //   • payment_intent.succeeded   (source=autopay)— AutoPay charge succeeded
 //   • payment_intent.payment_failed (source=autopay) — AutoPay charge declined
+//   • charge.refunded            — refund → negative ledger row (THE only writer)
+//   • charge.dispute.created / .closed — chargeback opened / decided (notify only)
 export async function POST(req: NextRequest) {
   const raw = await req.text()
   const sig = req.headers.get('stripe-signature')
@@ -280,6 +283,41 @@ export async function POST(req: NextRequest) {
       if (p) {
         await notifyOnce(p.user_id, 'payment_disputed', p.invoice_id ?? p.id, 'Payment disputed',
           `${p.invoiceNumber ? p.invoiceNumber + ': ' : ''}A ${cad((d.amount ?? 0) / 100)} payment was disputed${d.reason ? ` (${d.reason})` : ''}. Respond in your Stripe dashboard.`, p.customer_id)
+      }
+    }
+  }
+
+  // ── Dispute resolved ────────────────────────────────────────────────────────
+  // 'created' told the owner to go respond and then went silent forever, so the
+  // outcome — the part that decides whether they still have the money — only ever
+  // existed in Stripe. A LOST dispute is the dangerous one: Stripe withdraws the
+  // funds and this invoice keeps reading 'paid', so the books show money that is
+  // gone.
+  //
+  // We still don't auto-write the reversal, and here that restraint is load-bearing
+  // rather than inherited: a negative row reopens the balance, the due date is long
+  // past by the time a dispute closes, so dueForAutoReminder would go true and the
+  // chaser would start texting payment reminders at the customer who just won the
+  // chargeback. That is the one thing this must never do on its own. So: tell the
+  // owner precisely what happened and let them decide.
+  if (event.type === 'charge.dispute.closed') {
+    const d = event.data.object as { id: string; payment_intent?: string | null; amount?: number; status?: string }
+    const piId = typeof d.payment_intent === 'string' ? d.payment_intent : null
+    if (piId) {
+      const p = await paymentForIntent(piId)
+      if (p) {
+        const amount = cad((d.amount ?? 0) / 100)
+        const ref = p.invoiceNumber ? p.invoiceNumber + ': ' : ''
+        const lost = d.status === 'lost'
+        // Distinct type per outcome so the 'created' notification never dedupes this
+        // one away, and a won dispute can't be mistaken for a lost one in the list.
+        if (lost) {
+          await notifyOnce(p.user_id, 'payment_dispute_lost', p.invoice_id ?? p.id, 'Dispute lost — money withdrawn',
+            `${ref}the ${amount} dispute was decided for the customer and Stripe has taken the money back. This invoice still shows as paid — nothing was changed automatically, because reopening the balance would start chasing them for it.`, p.customer_id)
+        } else {
+          await notifyOnce(p.user_id, 'payment_dispute_won', p.invoice_id ?? p.id, 'Dispute resolved in your favour',
+            `${ref}the ${amount} dispute closed${d.status === 'won' ? ' in your favour' : ''} — you keep the payment. Nothing to do.`, p.customer_id)
+        }
       }
     }
   }

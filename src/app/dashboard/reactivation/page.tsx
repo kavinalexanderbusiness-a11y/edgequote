@@ -6,11 +6,14 @@ import { createClient } from '@/lib/supabase/client'
 import { Customer } from '@/types'
 import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
 import { settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
+// seasonForService/isWithinSeason are reached through signals' isSeasonallyDormant —
+// the ONE dormancy rule, so this page and the dashboard can't disagree about a snow
+// customer in July.
 import {
   VIP_LTV, LAPSE_BUCKET_DAYS, cadenceDays, lifetimeValue, visitValue,
   isSeasonallyDormant, ranOut as ranOutSignal, daysBetween,
 } from '@/lib/signals'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatCurrency, formatDate, localTodayISO } from '@/lib/utils'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { StatTile } from '@/components/ui/StatTile'
@@ -51,10 +54,8 @@ interface RanOutCustomer {
   isVip: boolean
 }
 
-function localTodayISO() {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
+// localTodayISO comes from lib/utils and daysBetween from lib/signals — both were
+// local copies here; neither needs to be.
 
 const BUCKETS: { key: Bucket; label: string; sub: string; tone: string }[] = [
   { key: '12+', label: '12+ months', sub: 'Top priority — long lapsed', tone: 'text-red-400' },

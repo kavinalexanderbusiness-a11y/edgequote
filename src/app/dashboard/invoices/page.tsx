@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
+import { usePaymentsStatus } from '@/hooks/usePaymentsStatus'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { Invoice, InvoiceStatus, InvoiceDisplayStatus, INVOICE_STATUS_LABELS, INVOICE_STATUS_COLORS, BusinessSettings, Payment, paymentMethodLabel } from '@/types'
 import { InvoicePaymentControls } from '@/components/payments/InvoicePaymentControls'
@@ -19,6 +20,7 @@ import { Input } from '@/components/ui/Input'
 import { Textarea } from '@/components/ui/Textarea'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { PaymentHistory } from '@/components/payments/PaymentHistory'
+import { ReconcilePanel } from '@/components/payments/ReconcilePanel'
 import { invoiceTotals, applyDiscount, type DiscountType } from '@/lib/invoiceTotals'
 import { toast as notify } from '@/lib/toast'
 import { confirm as confirmDialog } from '@/lib/confirm'
@@ -62,9 +64,16 @@ export default function InvoicesPage() {
     const job = p.get('job') || undefined
     return invoice || job ? { invoice, job } : null
   })
+  // `?pay=1` — the field "Get paid" tap on a completed job card. Lands on that one
+  // invoice with the record-payment form already open, so collecting in the driveway
+  // is one tap from the schedule instead of a hunt through the invoice list.
+  const [payIntent] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    return new URLSearchParams(window.location.search).get('pay') === '1'
+  })
   // The ONE shared Send Message dialog, opened for a specific invoice's customer.
   const [msgInvoice, setMsgInvoice] = useState<Invoice | null>(null)
-  const [paymentsEnabled, setPaymentsEnabled] = useState(false)
+  const { enabled: paymentsEnabled, webhook: webhookReady } = usePaymentsStatus()
   const [payingId, setPayingId] = useState<string | null>(null)
   const [chargingId, setChargingId] = useState<string | null>(null)
   const [cardCustomers, setCardCustomers] = useState<Set<string>>(new Set())
@@ -164,7 +173,6 @@ export default function InvoicesPage() {
   // customer just completed checkout; the webhook marks the invoice paid a beat
   // later, so we refetch after a short delay.
   useEffect(() => {
-    fetch('/api/payments/status').then(r => r.json()).then(d => setPaymentsEnabled(!!d.enabled)).catch(() => {})
     // ?paid=1 only means the customer reached Stripe's return URL — the WEBHOOK is
     // what records the money. Claiming "Payment received" here would be a guess, and
     // if the webhook isn't configured it would be a lie the invoice never corrects.
@@ -321,6 +329,20 @@ export default function InvoicesPage() {
         <Banner tone="danger" icon={AlertTriangle}
           action={<button type="button" onClick={() => { setLoading(true); fetchInvoices() }} className="shrink-0 underline font-semibold">Retry</button>}>
           {loadError}
+        </Banner>
+      )}
+
+      {/* Stripe key set, webhook secret missing — the worst possible half-state, and
+          until now a completely silent one. Checkout links keep working, so customers
+          pay in full; but the webhook is the single writer of paid-state, so nothing
+          ever records it and the invoice sits here as outstanding forever. The owner
+          chases a customer who already paid. Warn on the page where those links get
+          sent, since Stripe is env-configured and has no settings screen to warn on. */}
+      {paymentsEnabled && !webhookReady && (
+        <Banner tone="warn" icon={AlertTriangle}>
+          Card payments will be <strong>taken but not recorded</strong> — the Stripe webhook isn&rsquo;t configured
+          (STRIPE_WEBHOOK_SECRET), so paid invoices won&rsquo;t mark themselves paid and AutoPay won&rsquo;t charge.
+          Add the endpoint in your Stripe dashboard, or record these payments by hand for now.
         </Banner>
       )}
 
@@ -601,8 +623,12 @@ export default function InvoicesPage() {
                     onSaved={patch => { setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, ...patch } as Invoice : i)); setEditId(null) }}
                   />
                 )}
-                {/* Record payments, resolve overpayments, apply credit — issued invoices only */}
-                {inv.status !== 'draft' && uid && (
+                {/* Record payments, resolve overpayments, apply credit. Drafts are
+                    included: completing a job auto-drafts the invoice, so gating this
+                    on "issued" meant a contractor holding cash in the driveway had to
+                    Send the invoice to their own customer before the app would let
+                    them write the payment down. Recording a payment issues it (below). */}
+                {uid && (
                   <InvoicePaymentControls
                     invoice={inv}
                     settings={settings}
@@ -610,6 +636,8 @@ export default function InvoicesPage() {
                     credit={inv.customer_id ? (creditByCustomer[inv.customer_id] || 0) : 0}
                     payments={paymentsByInvoice[inv.id] || []}
                     onChanged={fetchInvoices}
+                    onIssueDraft={() => markSent(inv)}
+                    defaultOpen={payIntent && focused?.length === 1 && focused[0].id === inv.id}
                   />
                 )}
               </CardBody>
@@ -619,6 +647,9 @@ export default function InvoicesPage() {
       )}
 
       {!loading && !loadError && invoices.length > 0 && <PaymentHistory settings={settings} />}
+      {/* Sits with the ledger it checks. Only offered once Stripe is connected —
+          without it there is no second set of books to compare against. */}
+      {!loading && !loadError && paymentsEnabled && invoices.length > 0 && <ReconcilePanel />}
 
       {/* ONE shared Send Message dialog — sending marks the invoice sent. The amount
           is what's actually OWED (the ledger balance), never the original total: a
@@ -682,6 +713,16 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
   const t = invoiceTotals(net, settings, discount)
 
   async function save() {
+    // A priced line with no description is the one case where dropping it silently
+    // diverges the books: the filter below removes the LINE, but `amount` is summed
+    // from every row — so the money stayed on the invoice with nothing to explain
+    // it, and the PDF's breakdown no longer added up to its own total. Blank rows
+    // worth $0 are still dropped silently: they contribute nothing either way, so
+    // filtering them changes no number.
+    if (editItems && items.some(li => lineAmount(li) !== 0 && !li.description.trim())) {
+      notify.error('Every priced line needs a description — otherwise it won’t appear on the invoice.')
+      return
+    }
     setSaving(true)
     const hasD = !!dType && Number(dValue) > 0
     const patch: Record<string, unknown> = {

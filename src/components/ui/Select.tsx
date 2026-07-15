@@ -1,10 +1,11 @@
-import { SelectHTMLAttributes, forwardRef, useId } from 'react'
+import { SelectHTMLAttributes, ReactNode, forwardRef, useId } from 'react'
 import { cn } from '@/lib/utils'
 
 interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
   label?: string
   error?: string
-  hint?: string
+  /** ReactNode to match Input's hint — the form primitives take the same shapes. */
+  hint?: ReactNode
   options: { value: string; label: string; disabled?: boolean }[]
   placeholder?: string
   /** 'sm' = the blessed compact field (rounded-lg px-3 py-2 text-sm) — matches Input's. */

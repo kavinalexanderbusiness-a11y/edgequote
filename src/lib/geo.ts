@@ -1,6 +1,7 @@
 import { parseISO, addDays, format } from 'date-fns'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
+import { localTodayISO } from '@/lib/utils'
 
 // ── Single source of truth for geo math shared by the Route Planner and the
 // Best-Day Suggester. Keep all distance/geocode logic here so route ordering
@@ -8,12 +9,11 @@ import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
 
 export interface Coord { lat: number; lng: number }
 
-// Local (not UTC) yyyy-MM-dd — the one place this is defined so every
-// "scheduled_date >= today" window stays in lock-step.
-export function todayLocalISO(): string {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
+// Local (not UTC) yyyy-MM-dd lives in lib/utils — aliased here under its historical
+// name so every "scheduled_date >= today" window stays in lock-step. (It used to be
+// DEFINED here too, its comment claiming to be "the one place this is defined",
+// while utils.ts said the same thing above an identical body.)
+export const todayLocalISO = localTodayISO
 
 export interface LocatedJob { id: string; scheduled_date: string; lat: number | null; lng: number | null }
 

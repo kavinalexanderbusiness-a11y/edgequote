@@ -639,6 +639,7 @@ export function DayOpsPanel({
               stops={timelineStops}
               nowMin={isToday ? new Date().getHours() * 60 + new Date().getMinutes() : undefined}
               onSelectStop={jumpToStop}
+              omitted={active.length - timelineStops.length}
             />
           )}
 
@@ -705,12 +706,12 @@ export function DayOpsPanel({
                           {total > 0
                             ? <button onClick={e => { e.stopPropagation(); priceId === job.id ? setPriceId(null) : openPrice(job) }}
                                 title={addons.length ? `Base ${formatCurrency(value)} + add-ons ${formatCurrency(addonsTotal(addons))} · tap to edit base price` : 'Edit price'}
-                                className="flex items-center gap-1 text-sm font-bold text-ink rounded-md px-1.5 py-0.5 hover:bg-black/10 transition-colors">
+                                className="tap-target-y flex items-center gap-1 text-sm font-bold text-ink rounded-md px-1.5 py-0.5 hover:bg-black/10 transition-colors">
                                 {formatCurrency(total)}<Pencil className="w-3 h-3 opacity-40" />
                               </button>
                             : <button onClick={e => { e.stopPropagation(); priceId === job.id ? setPriceId(null) : openPrice(job) }}
                                 title="Set price"
-                                className="text-[10px] font-semibold uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5 flex items-center gap-1 hover:bg-amber-500/20">
+                                className="tap-target-y text-[10px] font-semibold uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5 flex items-center gap-1 hover:bg-amber-500/20">
                                 <AlertTriangle className="w-3 h-3" /> Set price
                               </button>}
                           {/* Delete lives in the job form (Open → trash) — a 28px
@@ -829,8 +830,16 @@ export function DayOpsPanel({
                           cards collapse to the three that still matter. */}
                       {done ? (
                         <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                          {/* Get paid before you drive away. Lands on this job's invoice
+                              with the record-payment form open (`?pay=1`) — cash or
+                              e-transfer goes down while you're still standing there,
+                              which is the only moment the customer is in front of you. */}
+                          <a href={`/dashboard/invoices?job=${job.id}&pay=1`}
+                            className="tap-target h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg bg-emerald-500 border border-emerald-500 text-black text-xs font-semibold flex items-center justify-center gap-1 hover:opacity-90 active:scale-95 transition-transform">
+                            <Wallet className="w-3.5 h-3.5" /> Get paid
+                          </a>
                           <a href={`/dashboard/invoices?job=${job.id}`}
-                            className="h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border border-current/30 text-xs font-medium flex items-center gap-1 hover:bg-black/10">
+                            className="tap-target h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border border-current/30 text-xs font-medium flex items-center justify-center gap-1 hover:bg-black/10">
                             <Receipt className="w-3.5 h-3.5" /> Invoice
                           </a>
                           <ActionBtn onClick={() => onOpenJob(job)} icon={Pencil} label="Edit" />
@@ -852,7 +861,7 @@ export function DayOpsPanel({
                         <a
                           href={directionsUrl({ lat: job.properties?.lat ?? null, lng: job.properties?.lng ?? null, address: job.properties?.address }, baseCoord)}
                           target="_blank" rel="noopener noreferrer"
-                          className="h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border border-current/30 text-xs font-medium flex items-center gap-1 hover:bg-black/10"
+                          className="tap-target h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border border-current/30 text-xs font-medium flex items-center justify-center gap-1 hover:bg-black/10"
                         >
                           <Navigation className="w-3.5 h-3.5" /> Route to
                         </a>
@@ -989,6 +998,8 @@ function Metric({ icon: Icon, label, value, tone }: { icon: typeof DollarSign; l
 }
 
 // h-10 on touch screens (one-thumb, in a driveway), compact h-8 on desktop.
+// `tap-target` lifts that 40px to the 44px minimum on a coarse pointer — the last
+// 4px matter with a glove on — while `sm:h-8` keeps the mouse density identical.
 // 'primary' = THE next action for the stage; 'complete' = the finish action.
 function ActionBtn({ onClick, icon: Icon, label, tone, disabled }: { onClick: () => void; icon: typeof Pencil; label: string; tone?: 'emerald' | 'sky' | 'primary' | 'complete'; disabled?: boolean }) {
   return (
@@ -996,7 +1007,7 @@ function ActionBtn({ onClick, icon: Icon, label, tone, disabled }: { onClick: ()
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        'h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border text-xs font-medium flex items-center gap-1 active:scale-95 transition-transform disabled:opacity-50 disabled:pointer-events-none',
+        'tap-target h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border text-xs font-medium flex items-center justify-center gap-1 active:scale-95 transition-transform disabled:opacity-50 disabled:pointer-events-none',
         tone === 'primary'
           ? 'bg-accent border-accent text-black font-semibold hover:opacity-90'
           : tone === 'complete'

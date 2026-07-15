@@ -7,6 +7,8 @@
 // registered by `kind`. The service worker already covers offline *reads*; this is
 // the write half.
 
+import { toast } from '@/lib/toast'
+
 export interface OutboxOp {
   id: string
   kind: string            // handler key, e.g. 'message.send'
@@ -91,6 +93,18 @@ interface FlushResult { done: number; failed: number; left: number }
 // attempts so the queue can't get stuck with a poison op.
 const MAX_ATTEMPTS = 6
 
+// …but never drop it QUIETLY. Dropping is the only path here that destroys work, and
+// it used to happen with no trace at all: a queued "Complete Jane's lawn" that kept
+// failing simply disappeared — the job stayed open, its invoice was never drafted,
+// and the contractor had already driven away certain it was done. The op is still
+// dropped (a poison op must not retry forever), but the person who made it is told
+// exactly what didn't stick, so they can redo it. Named `label` for that reason.
+function reportDropped(op: OutboxOp): void {
+  // Long duration + error tone: this is the one message here a contractor cannot
+  // afford to scroll past — the work is gone and only they can redo it.
+  toast(`Couldn’t sync “${op.label}” — it didn’t save. Please do it again.`, { tone: 'error', duration: 12000 })
+}
+
 // Replay everything, OLDEST FIRST (FIFO) — so a create always replays before the
 // edits that depend on it. A succeeded op is removed; a failed one stays for the
 // next flush (attempts incremented) until it exhausts MAX_ATTEMPTS, then it's dropped.
@@ -107,7 +121,7 @@ async function doFlush(): Promise<FlushResult> {
       if (!h) continue
       try { await h(op.payload); await remove(op.id); done++ }
       catch {
-        if (op.attempts + 1 >= MAX_ATTEMPTS) await remove(op.id)   // poison op — stop retrying forever
+        if (op.attempts + 1 >= MAX_ATTEMPTS) { await remove(op.id); reportDropped(op) }  // poison op — stop retrying forever, but say so
         else await bumpAttempts(op)
         failed++
       }

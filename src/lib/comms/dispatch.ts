@@ -1,8 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { sendSms, sendEmail } from './send'
 import { getOrCreateConversation } from './conversation'
+import { reachCheck } from './reach'
 import { SKIP_REASON } from './skipReasons'
-import { prefAllows, type MessagePrefs } from './templates'
+import { type MessagePrefs } from './templates'
 
 // ── Shared customer dispatch ─────────────────────────────────────────────────
 // Sends an already-rendered message to ONE customer over the requested channels,
@@ -102,30 +103,38 @@ export async function dispatchToCustomer(sb: SupabaseClient, inp: DispatchInput)
   const c = inp.customer
   const attempts: DispatchAttempt[] = []
 
-  // Granular consent: the customer declined this CATEGORY of message (e.g. opted
-  // into invoices but out of marketing). One check, every sender inherits it.
   const skip = (channel: string, detail: string): DispatchAttempt =>
     ({ channel, status: 'skipped', detail, sent: false, provider: null, providerId: null })
 
-  if (!inp.transactional && !prefAllows(c.message_prefs, inp.template)) {
-    for (const ch of inp.channels) attempts.push(skip(ch, SKIP_REASON.UNSUBSCRIBED))
+  // Granular consent + channel opt-in + contact-on-file, resolved by the ONE
+  // shared predicate (lib/comms/reach) so the campaign audience preview can
+  // predict this exact outcome without re-deriving the rules. `transactional`
+  // rides through it too — otherwise the predicate and the send path would
+  // disagree about receipts, which is the exact drift reach.ts exists to prevent.
+  const gate = reachCheck(c, inp.channels, inp.template, { transactional: inp.transactional })
+  const blocked = new Map(gate.map(g => [g.channel, g.blocked]))
+
+  // The customer declined this CATEGORY of message — nothing goes out at all.
+  // Reported per requested channel, in the caller's order.
+  if (gate.length && gate.every(g => g.blocked === SKIP_REASON.UNSUBSCRIBED)) {
+    for (const g of gate) attempts.push(skip(g.channel, g.blocked!))
     return { attempts, messageId: null, sentChannels: [] }
   }
 
-  // Caller order — the bubble below records the first channel that sent.
+  // Caller order — the bubble below records the first channel that SENT, so this
+  // is meaningful, not cosmetic (the receipt asks for email first).
   for (const ch of inp.channels) {
+    const b = blocked.get(ch)
     if (ch === 'sms') {
-      if (!c.sms_opt_in) attempts.push(skip('sms', SKIP_REASON.NO_OPT_IN))
-      else if (!c.phone) attempts.push(skip('sms', SKIP_REASON.NO_PHONE))
+      if (b) attempts.push(skip('sms', b))
       else {
-        const r = await sendSms(c.phone, inp.smsText)
+        const r = await sendSms(c.phone!, inp.smsText)
         attempts.push({ channel: 'sms', status: r.reason, detail: r.error ?? null, sent: r.sent, provider: r.sent ? PROVIDER.sms : null, providerId: r.id ?? null })
       }
     } else if (ch === 'email') {
-      if (!inp.transactional && !c.email_opt_in) attempts.push(skip('email', SKIP_REASON.NO_OPT_IN))
-      else if (!c.email) attempts.push(skip('email', SKIP_REASON.NO_EMAIL))
+      if (b) attempts.push(skip('email', b))
       else {
-        const r = await sendEmail(c.email, inp.emailSubject, inp.emailHtml, inp.emailText)
+        const r = await sendEmail(c.email!, inp.emailSubject, inp.emailHtml, inp.emailText)
         attempts.push({ channel: 'email', status: r.reason, detail: r.error ?? null, sent: r.sent, provider: r.sent ? PROVIDER.email : null, providerId: r.id ?? null })
       }
     }

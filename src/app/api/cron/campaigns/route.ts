@@ -7,8 +7,9 @@ import { logDispatch } from '@/lib/comms/log'
 import { loadOwnerContext, type OwnerContext } from '@/lib/automation/owner'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import {
-  CAMPAIGN_KINDS, campaignPeriodKey, dateFieldFiresToday, campaignFiresToday, type CampaignKind,
+  CAMPAIGN_KINDS, campaignPeriodKey, campaignFiresToday, type CampaignKind,
 } from '@/lib/crm/campaigns'
+import { resolveAudience, MAX_AUDIENCE, type AudienceCustomer } from '@/lib/crm/audience'
 import type { CampaignAudience, CampaignSchedule } from '@/types'
 
 export const dynamic = 'force-dynamic'
@@ -25,29 +26,12 @@ export const dynamic = 'force-dynamic'
 // Date matching uses the SERVER (UTC) day; the cron is scheduled mid-morning
 // North-American time so the UTC day lines up with the local day.
 
-const MAX_AUDIENCE = 2000   // safety bound; logged if exceeded (no silent cap)
-// Postgrest puts `.in()` lists in the URI, so a single 2000-id filter blows the
-// URL length limit and the query fails outright. Chunk any id list through this.
-const IN_CHUNK = 100
-
 interface CampaignRow {
   id: string; user_id: string; name: string; kind: CampaignKind; enabled: boolean
   channels: string[]; template_key: string | null; custom_body: string | null
   subject: string | null
   audience: CampaignAudience | null
   schedule: CampaignSchedule | null
-}
-interface Cand {
-  id: string; name: string; phone: string | null; email: string | null
-  sms_opt_in: boolean; email_opt_in: boolean; message_prefs?: MessagePrefs | null
-  birthday: string | null; anniversary: string | null
-}
-
-// Split an id list into URI-safe chunks.
-function chunked<T>(xs: T[], size = IN_CHUNK): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < xs.length; i += size) out.push(xs.slice(i, i + size))
-  return out
 }
 
 export async function GET(req: NextRequest) {
@@ -85,46 +69,14 @@ export async function GET(req: NextRequest) {
     // it actually sends. Birthday/anniversary/win-back evaluate candidates daily.
     if (!campaignFiresToday({ kind: camp.kind, schedule }, today)) continue
 
-    // ── Candidate query ──
-    let q = supabase.from('customers')
-      .select('id, name, phone, email, sms_opt_in, email_opt_in, message_prefs, birthday, anniversary')
-      .eq('user_id', camp.user_id).is('archived_at', null).limit(MAX_AUDIENCE + 1)
-    if (camp.kind === 'birthday') q = q.not('birthday', 'is', null)
-    if (camp.kind === 'anniversary') q = q.not('anniversary', 'is', null)
-    if (camp.kind === 'win_back') {
-      const cutoff = new Date(today.getTime() - (schedule.days || 45) * 86400000).toISOString()
-      // Only customers we used to talk to and have gone quiet on — never blast a
-      // brand-new, never-contacted lead.
-      q = q.not('last_contacted_at', 'is', null).lt('last_contacted_at', cutoff)
-    }
-    // Audience narrowing that lives on `customers` — done in the query rather
-    // than in JS so it also shrinks what counts against MAX_AUDIENCE.
-    if (camp.audience?.not_reviewed) {
-      // Never chase a review from someone who already left one or said no.
-      q = q.is('reviewed_at', null).is('review_declined_at', null)
-    }
-    if (camp.audience?.happy_only) {
-      // Only ask for a referral from someone who already rated us well.
-      q = q.not('reviewed_at', 'is', null).gte('review_rating', 4)
-    }
-    const { data: candRows } = await q
-    let cands = (candRows as Cand[]) || []
-    if (cands.length > MAX_AUDIENCE) { notes.push(`Campaign "${camp.name}" matched >${MAX_AUDIENCE} customers — only the first ${MAX_AUDIENCE} were processed this run.`); cands = cands.slice(0, MAX_AUDIENCE) }
-
-    // Day-of matching for date campaigns.
-    if (camp.kind === 'birthday') cands = cands.filter(c => dateFieldFiresToday(c.birthday, today, leadDays))
-    else if (camp.kind === 'anniversary') cands = cands.filter(c => dateFieldFiresToday(c.anniversary, today, leadDays))
-
-    // Audience filter: recurring customers only. Chunked — a single .in() with a
-    // full 2000-customer audience overflows the request URI and fails the query.
-    if (camp.audience?.recurring_only && cands.length) {
-      const recurringIds = new Set<string>()
-      for (const ids of chunked(cands.map(c => c.id))) {
-        const { data: recs } = await supabase.from('job_recurrences').select('customer_id').in('customer_id', ids)
-        for (const r of ((recs as { customer_id: string }[]) || [])) recurringIds.add(r.customer_id)
-      }
-      cands = cands.filter(c => recurringIds.has(c.id))
-    }
+    // ── Candidate resolution ──
+    // THE shared audience resolver (lib/crm/audience) — the Campaign Manager's
+    // preview calls the same code, so what the owner is shown before enabling
+    // and who actually receives this can't drift apart.
+    const { customers: cands, capped } = await resolveAudience(supabase, {
+      userId: camp.user_id, kind: camp.kind, schedule, audience: camp.audience || {}, today,
+    })
+    if (capped) notes.push(`Campaign "${camp.name}" matched >${MAX_AUDIENCE} customers — only the first ${MAX_AUDIENCE} were processed this run.`)
     if (!cands.length) { await supabase.from('crm_campaigns').update({ last_run_at: new Date().toISOString() }).eq('id', camp.id); continue }
 
     // Per-period dedupe: pull already-logged customers for this campaign+period.

@@ -10,9 +10,16 @@ import { invoiceTotals } from '@/lib/invoiceTotals'
 //   2. /api/cron/autopay      — the safety-net sweep that catches charges the
 //      fire-and-forget missed (closed tab / dropped request).
 // It ONLY initiates the charge; the existing Stripe webhook records the payment +
-// flips the invoice to paid (one writer of paid-state). Idempotent + safe to call
-// repeatedly: the pre-charge DB dedupe + the Stripe Idempotency-Key ('autopay:<id>')
-// guarantee an invoice is charged at most once no matter how many entry points fire.
+// flips the invoice to paid (one writer of paid-state).
+//
+// Safe to call repeatedly. Two independent guards, and it's worth knowing which does
+// what:
+//   • the pre-charge DB dedupe below ('autopay:<invoiceId>' in payments) stops any
+//     retry once a charge has actually been RECORDED — the durable guarantee;
+//   • the Stripe Idempotency-Key collapses entry points racing before the webhook has
+//     landed (see offSessionIdempotencyKey — stable per invoice for the automatic
+//     path; per-attempt for a manual charge, because a stable key made retrying after
+//     a decline impossible for 24h).
 //
 // Result codes: 'charged' (PaymentIntent submitted), 'held' (anomaly — needs owner),
 // 'skipped' (+reason: ineligible/no-op), 'declined' (charge failed → owner notified,
@@ -110,6 +117,9 @@ export async function attemptAutoPayCharge(
   const charge = await chargeSavedCardOffSession({
     stripeCustomerId, paymentMethodId: pm.stripe_payment_method_id, amountCents: cents,
     invoiceId, userId, customerId: customer.id,
+    // Tells the Stripe layer this is a deliberate new attempt, not the cron and the
+    // fire-and-forget racing over the same one — see offSessionIdempotencyKey.
+    manual,
   })
 
   // Success (incl. 'processing') → the webhook records payment + flips the invoice +
