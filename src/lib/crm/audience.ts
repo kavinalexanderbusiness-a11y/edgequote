@@ -91,12 +91,29 @@ export function applyCustomerFilters<Q extends Filterable>(q: Q, spec: AudienceS
 
 // `recurring_only` can't be expressed on the customers row — it's a join. Chunked
 // so a full audience can't overflow the request URI.
-async function narrowToRecurring<T extends { id: string }>(sb: SupabaseClient, rows: T[]): Promise<T[]> {
+//
+// "Recurring" means a recurrence that is still RUNNING. This used to accept the
+// mere existence of a job_recurrences row, so a contract that ended months ago
+// counted forever: with 10 of 14 recurrences ending Oct 31, a December campaign
+// ticked "only recurring customers" would have messaged people who stopped being
+// customers six weeks earlier — the exact opposite of what the switch promises.
+// end_count isn't evaluated here: it needs an occurrence count, and nothing in
+// production sets it. `user_id` is stated explicitly because the cron runs under a
+// service-role key, where RLS is not there to catch a cross-tenant row.
+async function narrowToRecurring<T extends { id: string }>(
+  sb: SupabaseClient, rows: T[], spec: AudienceSpec,
+): Promise<T[]> {
   if (!rows.length) return rows
+  const todayIso = spec.today.toISOString().slice(0, 10)
   const recurring = new Set<string>()
   for (let i = 0; i < rows.length; i += IN_CHUNK) {
     const ids = rows.slice(i, i + IN_CHUNK).map(r => r.id)
-    const { data } = await sb.from('job_recurrences').select('customer_id').in('customer_id', ids)
+    const { data, error } = await sb.from('job_recurrences')
+      .select('customer_id')
+      .eq('user_id', spec.userId)
+      .in('customer_id', ids)
+      .or(`end_date.is.null,end_date.gte.${todayIso}`)
+    if (error) throw new Error(`recurring lookup failed: ${error.message}`)
     for (const r of ((data as { customer_id: string }[]) || [])) recurring.add(r.customer_id)
   }
   return rows.filter(r => recurring.has(r.id))
@@ -137,7 +154,7 @@ export async function resolveAudience(
   if (spec.kind === 'birthday') out = out.filter(c => dateFieldFiresToday(c.birthday, spec.today, leadDays))
   else if (spec.kind === 'anniversary') out = out.filter(c => dateFieldFiresToday(c.anniversary, spec.today, leadDays))
 
-  if (spec.audience?.recurring_only) out = await narrowToRecurring(sb, out)
+  if (spec.audience?.recurring_only) out = await narrowToRecurring(sb, out, spec)
   return { customers: out, capped }
 }
 
@@ -170,7 +187,7 @@ export async function previewAudience(
   sb: SupabaseClient, spec: AudienceSpec, channels: string[], template: MsgType,
 ): Promise<AudiencePreview> {
   const { rows, capped } = await loadPool(sb, spec)
-  const pool = spec.audience?.recurring_only ? await narrowToRecurring(sb, rows) : rows
+  const pool = spec.audience?.recurring_only ? await narrowToRecurring(sb, rows, spec) : rows
 
   const counts = new Map<string, number>()
   let reachable = 0

@@ -724,6 +724,10 @@ export interface CrmCampaign {
   audience: CampaignAudience
   schedule: CampaignSchedule
   last_run_at: string | null
+  // Soft delete. A hard DELETE cascades crm_campaign_log, which is BOTH the audit
+  // trail (who we messaged, when) and the per-period dedupe ledger — so an undo
+  // would restore a live campaign with an empty ledger and message everyone again.
+  archived_at: string | null
 }
 
 // A saved campaign configuration the owner can spin up again. Same shape as a

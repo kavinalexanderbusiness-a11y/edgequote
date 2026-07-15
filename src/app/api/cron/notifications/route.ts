@@ -8,6 +8,7 @@ import { SENT_STATES } from '@/lib/comms/delivery'
 import { logSend } from '@/lib/comms/log'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { resolveAutomations, Automations } from '@/lib/comms/automations'
+import { canAskForReview } from '@/lib/crm/reviews'
 
 export const dynamic = 'force-dynamic'
 
@@ -18,7 +19,7 @@ export const dynamic = 'force-dynamic'
 //   • needs SUPABASE_SERVICE_ROLE_KEY to read across customers,
 //   • de-dupes via notification_log and honours per-customer opt-in.
 
-interface CronCustomer { name: string; phone: string | null; email: string | null; sms_opt_in: boolean; email_opt_in: boolean; message_prefs?: MessagePrefs | null; reviewed_at: string | null; review_declined_at: string | null }
+interface CronCustomer { name: string; phone: string | null; email: string | null; sms_opt_in: boolean; email_opt_in: boolean; message_prefs?: MessagePrefs | null; reviewed_at: string | null; review_declined_at: string | null; review_requested_at: string | null }
 interface CronJob { id: string; user_id: string; customer_id: string | null; scheduled_date: string; customers: CronCustomer | null }
 
 export async function GET(req: NextRequest) {
@@ -54,10 +55,17 @@ export async function GET(req: NextRequest) {
     const { data } = await supabase.from('notification_log').select('id').eq('user_id', userId).eq('job_id', jobId).eq('template', template).in('status', SENT_STATES as unknown as string[]).limit(1)
     return !!(data && data.length)
   }
-  const sel = 'id, user_id, customer_id, scheduled_date, customers(name, phone, email, sms_opt_in, email_opt_in, message_prefs, reviewed_at, review_declined_at)'
+  const sel = 'id, user_id, customer_id, scheduled_date, customers(name, phone, email, sms_opt_in, email_opt_in, message_prefs, reviewed_at, review_declined_at, review_requested_at)'
   let sent = 0
 
   async function runBatch(rows: CronJob[], template: 'reminder' | 'review_request', dateLabel?: string) {
+    // A review ask is per PERSON, not per job. alreadySent() dedupes on job_id, and
+    // every visit is a new job row — so a weekly-mow customer was asked again every
+    // single week, all season, until they reviewed or the owner marked them declined.
+    // This set stops the same customer being asked twice in one run (two properties,
+    // or a mow + a hedge trim finished the same day); canAskForReview below stops it
+    // across runs.
+    const askedThisRun = new Set<string>()
     for (const j of rows) {
       const c = j.customers
       if (!c || !j.customer_id) continue
@@ -65,7 +73,20 @@ export async function GET(req: NextRequest) {
       const info = await bizInfo(j.user_id)
       if (template === 'reminder' && !info.automations.reminder) continue       // automation off for this owner
       if (template === 'review_request' && !info.automations.review) continue
-      if (template === 'review_request' && (c.reviewed_at || c.review_declined_at)) continue  // already reviewed or opted out — don't ask again
+      if (template === 'review_request') {
+        // THE review lifecycle rule (lib/crm/reviews) — reviewed, declined, OR
+        // already asked. review_requested_at is stamped by trg_crm_stamp_review_requested
+        // on every successful ask, and canAskForReview() was written to read it;
+        // nothing called it, so the one column that tracks "we've asked" was ignored
+        // by the only thing that asks.
+        if (!canAskForReview(c)) continue
+        if (askedThisRun.has(j.customer_id)) continue
+        // An ask with nowhere to go is worse than no ask — it burns the request and
+        // stamps them Requested, so they'd never be asked again once the link exists.
+        // ReviewLifecycle already refuses to send without a link; the cron didn't.
+        if (!(info.reviewUrl || '').trim()) continue
+        askedThisRun.add(j.customer_id)
+      }
       if (!prefAllows(c.message_prefs, template)) continue  // customer declined this category of message
       const token = await ensurePortalToken(supabase, j.user_id, j.customer_id)
       const msg = renderMessage(template, info.templates, { firstName: c.name, businessName: info.name, dateLabel, portalLink: token ? portalUrl(token) : undefined, reviewLink: info.reviewUrl || undefined, directPhone: info.phone || undefined, logoUrl: info.logoUrl || undefined, website: info.website || undefined })

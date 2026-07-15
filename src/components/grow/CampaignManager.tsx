@@ -78,7 +78,7 @@ export function CampaignManager() {
     if (!user) { setLoading(false); return }
     const head = { count: 'exact' as const, head: true }
     const [campRes, presetRes, totalRes, bdayRes, annivRes, notRevRes, happyRes, bizRes] = await Promise.all([
-      supabase.from('crm_campaigns').select('*').eq('user_id', user.id).order('created_at', { ascending: true }),
+      supabase.from('crm_campaigns').select('*').eq('user_id', user.id).is('archived_at', null).order('created_at', { ascending: true }),
       supabase.from('crm_campaign_presets').select('*').eq('user_id', user.id).order('name'),
       supabase.from('customers').select('id', head).eq('user_id', user.id).is('archived_at', null),
       supabase.from('customers').select('id', head).eq('user_id', user.id).is('archived_at', null).not('birthday', 'is', null),
@@ -220,12 +220,22 @@ export function CampaignManager() {
     await load()
     startEdit(data as CrmCampaign)
   }
+  // Archive, never DELETE. crm_campaign_log.campaign_id cascades, so a hard delete
+  // destroyed the campaign's whole send history — which is simultaneously the CASL
+  // audit trail AND the per-period dedupe ledger. The Undo then re-inserted the row
+  // enabled, with an empty ledger, so the next run happily messaged every customer a
+  // second time. Archiving keeps the log, so Undo is just a flag flip.
   async function del(c: CrmCampaign) {
-    const { data: row } = await supabase.from('crm_campaigns').select('*').eq('id', c.id).maybeSingle()
-    await supabase.from('crm_campaigns').delete().eq('id', c.id)
+    const wasEnabled = c.enabled
+    const { error } = await supabase.from('crm_campaigns')
+      .update({ archived_at: new Date().toISOString(), enabled: false }).eq('id', c.id)
+    if (error) { toast.error('Could not delete: ' + error.message); return }
     if (editingId === c.id) { setEditingId(null); setDraft(null) }
     load()
-    if (row) toast.undo(`Deleted "${c.name}"`, async () => { await supabase.from('crm_campaigns').insert(row); load() })
+    toast.undo(`Deleted "${c.name}"`, async () => {
+      await supabase.from('crm_campaigns').update({ archived_at: null, enabled: wasEnabled }).eq('id', c.id)
+      load()
+    })
   }
   async function delPreset(p: CrmCampaignPreset) {
     await supabase.from('crm_campaign_presets').delete().eq('id', p.id)
