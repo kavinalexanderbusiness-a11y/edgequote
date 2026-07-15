@@ -1,35 +1,38 @@
 import type { Quote } from '@/types'
+import {
+  compareFollowUp as compareFollowUpOn,
+  daysSinceOn,
+  followUpAnchor as followUpAnchorOn,
+  localToday,
+  needsFollowUp as needsFollowUpOn,
+} from '@/lib/signals'
+
+// Quote-shaped façade over the signals/followup engine (which owns the rule and
+// takes an injectable `today`), plus the DB patch builders the quote screens use.
 
 // Fixed for v1 — intentionally not configurable yet (use it in the real world
 // first, then decide if a Settings knob is worth the dev time).
-export const FOLLOW_UP_DAYS = 3
-
-const DAY_MS = 86_400_000
+export { FOLLOW_UP_DAYS } from '@/lib/signals'
 
 // The clock a follow-up resets: the later of "when sent" and "last nudged".
 export function followUpAnchor(q: Quote): string | null {
-  return q.last_followed_up_at || q.sent_at
+  return followUpAnchorOn(q)
 }
 
+// Calendar days since — the SAME counter needsFollowUp uses, so a quote can never
+// read "2 days" while sitting in the 3-day follow-up queue beside it.
 export function daysSince(dateStr: string | null): number | null {
-  if (!dateStr) return null
-  return Math.floor((Date.now() - new Date(dateStr).getTime()) / DAY_MS)
+  return daysSinceOn(dateStr, localToday())
 }
 
 // A sent quote that's gone quiet long enough to chase again.
 export function needsFollowUp(q: Quote): boolean {
-  if (q.status !== 'sent') return false
-  const anchor = followUpAnchor(q)
-  if (!anchor) return true // sent but never timestamped → surface it
-  return (daysSince(anchor) ?? 0) >= FOLLOW_UP_DAYS
+  return needsFollowUpOn(q)
 }
 
 // Oldest first; ties broken by highest quote value (chase the stale money first).
 export function compareFollowUp(a: Quote, b: Quote): number {
-  const aa = followUpAnchor(a) ? new Date(followUpAnchor(a)!).getTime() : 0
-  const bb = followUpAnchor(b) ? new Date(followUpAnchor(b)!).getTime() : 0
-  if (aa !== bb) return aa - bb
-  return Number(b.total) - Number(a.total)
+  return compareFollowUpOn(a, b)
 }
 
 // DB patch to log a manual follow-up (snoozes the quote another FOLLOW_UP_DAYS).

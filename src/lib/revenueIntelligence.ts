@@ -6,7 +6,8 @@ import { serviceCategory, seasonForService, isWithinSeason, settingsToSeasons, S
 import { densityFor, locatedStops, DensityTier } from '@/lib/routeDensity'
 import { normalizeServiceKey, isRecurringProgramService } from '@/lib/jobPricing'
 import { Coord } from '@/lib/geo'
-import { jobValue, neighborhoodKey, ProfitJob, ProfitContext, ProfitQuote, RecInfo } from '@/lib/profitability'
+import { neighborhoodKey, ProfitJob, ProfitContext, ProfitQuote, RecInfo } from '@/lib/profitability'
+import { VIP_LTV, cadenceDays, churnRisk, daysBetween, lifetimeValue, type ChurnRisk } from '@/lib/signals'
 
 // ── Revenue Intelligence engine (Growth) ────────────────────────────────────────
 // Predictive + prescriptive layer on top of the BI dashboard. Scores every
@@ -82,8 +83,12 @@ const round5 = (n: number) => Math.round(n / 5) * 5
 const clamp = (n: number, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, n))
 const SEASON_VISITS_BIWEEKLY = SEASON_VISITS.biweekly
 
+// Lifetime value prices a first visit at the initial rate, so jobs carry
+// `is_initial_visit` here — the route/density engines don't need it.
+type RIJob = ProfitJob & { is_initial_visit?: boolean | null }
+
 interface RIInput {
-  jobs: ProfitJob[]
+  jobs: RIJob[]
   pctx: ProfitContext
   customers: { id: string; name: string; created_at: string; referred_by_customer_id: string | null }[]
   properties: { id: string; customer_id: string; lat: number | null; lng: number | null; postal_code: string | null; city: string | null; neighborhood: string | null }[]
@@ -116,18 +121,10 @@ interface Agg {
   isReferrer: boolean
   prop?: { lat: number | null; lng: number | null; postal_code: string | null; city: string | null; neighborhood: string | null }
   addOns: Set<string>          // normalized add-on keys this customer buys
-  overdueRatio: number         // days-since-last ÷ cadence interval (recurring only)
+  churn: ChurnRisk             // how far past their own cadence (recurring only)
   inSeason: boolean
 }
 
-function intervalDays(cadence: string | null, rec: RecInfo | null): number {
-  if (cadence === 'weekly') return 7
-  if (cadence === 'biweekly') return 14
-  if (cadence === 'monthly') return 30
-  if (!rec) return 14
-  const c = Math.max(1, rec.interval_count ?? 1)
-  return rec.interval_unit === 'day' ? c : rec.interval_unit === 'week' ? 7 * c : rec.interval_unit === 'month' ? 30 * c : 14
-}
 function visitsPerSeason(cadence: string | null): number {
   if (cadence === 'weekly') return SEASON_VISITS.weekly
   if (cadence === 'biweekly') return SEASON_VISITS.biweekly
@@ -137,7 +134,7 @@ function visitsPerSeason(cadence: string | null): number {
 
 export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
   const { jobs, pctx, customers, properties, recurrences, invoices, lineItems, jobCustomerById, seasons, capacityHours, preferredDays, today } = inp
-  const dDays = (iso: string) => Math.round((new Date(today + 'T00:00:00').getTime() - new Date(iso + 'T00:00:00').getTime()) / 86_400_000)
+  const dDays = (iso: string) => daysBetween(iso, today)
 
   const propByCust: Record<string, RIInput['properties'][number]> = {}
   for (const p of properties) if (p.customer_id && !propByCust[p.customer_id]) propByCust[p.customer_id] = p
@@ -161,7 +158,7 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
   }
 
   // Recurring series → representative cadence/value per customer.
-  const byRec: Record<string, ProfitJob[]> = {}
+  const byRec: Record<string, RIJob[]> = {}
   for (const j of jobs) if (j.recurrence_id) (byRec[j.recurrence_id] ||= []).push(j)
   const recByCust: Record<string, { cadence: string | null; perVisit: number; hasFuture: boolean; serviceType: string | null; lastCompleted: string | null; rec: RecInfo | null }> = {}
   for (const [rid, list] of Object.entries(byRec)) {
@@ -194,9 +191,11 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
       hasActiveRecurring: false, cadence: null, perVisit: 0, annualRecurring: 0, recServiceType: null,
       futureBooked: futureCust.has(c.id), unpaidCount: unpaidByCust[c.id] || 0,
       isReferrer: referrers.has(c.id), prop: propByCust[c.id], addOns: addOnByCust[c.id] || new Set(),
-      overdueRatio: 0, inSeason: true,
+      churn: churnRisk({ hasActiveRecurring: false, daysSinceLastService: null, cadenceDays: 0 }),
+      inSeason: true,
     }
   }
+  const completedByCust: Record<string, RIJob[]> = {}
   for (const j of jobs) {
     if (!j.customer_id) continue
     const a = aggs[j.customer_id]
@@ -205,10 +204,11 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
     a.cats.add(serviceCategory(j.service_type))
     if (j.status === 'completed') {
       a.completedCount++
-      a.ltv += jobValue(j, pctx)
+      ;(completedByCust[j.customer_id] ||= []).push(j)
       if (!a.lastCompleted || j.scheduled_date > a.lastCompleted) a.lastCompleted = j.scheduled_date
     }
   }
+  for (const a of Object.values(aggs)) a.ltv = lifetimeValue(completedByCust[a.id] || [], pctx.quotesById, recurrences)
   for (const [cid, r] of Object.entries(recByCust)) {
     const a = aggs[cid]
     if (!a) continue
@@ -217,10 +217,11 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
     a.annualRecurring = round(r.perVisit * visitsPerSeason(r.cadence))
     const season = seasonForService(r.serviceType, seasons)
     a.inSeason = !season || isWithinSeason(today, season)
-    if (r.lastCompleted) {
-      const intv = intervalDays(r.cadence, r.rec)
-      a.overdueRatio = dDays(r.lastCompleted) / intv
-    }
+    a.churn = churnRisk({
+      hasActiveRecurring: r.hasFuture,
+      daysSinceLastService: r.lastCompleted ? dDays(r.lastCompleted) : null,
+      cadenceDays: cadenceDays(r.cadence, r.rec),
+    })
   }
 
   const allStops: Coord[] = locatedStops(jobs.map(j => ({ lat: j.lat, lng: j.lng })))
@@ -247,7 +248,7 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
       let s = 55
       if (a.tenureDays >= 365) s += 15; else if (a.tenureDays >= 180) s += 8
       if (a.completedCount >= 6) s += 12; else if (a.completedCount >= 3) s += 6
-      if (a.overdueRatio > 1.6) s -= 25; else if (a.overdueRatio > 1.25) s -= 12
+      if (a.churn.level === 'high') s -= 25; else if (a.churn.level === 'watch') s -= 12
       if (a.unpaidCount > 0) s -= 10
       const score = clamp(s)
       push({
@@ -255,10 +256,10 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
         score, confidence: conf(a.completedCount), expectedValue: a.annualRecurring, oneTime: false,
         why: [
           `${a.cadence || 'recurring'} customer · ${a.completedCount} visits · ${a.tenureDays >= 365 ? '1+ yr' : Math.round(a.tenureDays / 30) + ' mo'} tenure`,
-          a.overdueRatio > 1.25 ? 'Slipping behind cadence — renewal at risk' : 'On cadence — strong renewal candidate',
+          a.churn.level !== 'none' ? 'Slipping behind cadence — renewal at risk' : 'On cadence — strong renewal candidate',
           `$${a.annualRecurring}/yr recurring at stake`,
         ],
-        action: a.overdueRatio > 1.25 ? 'Reach out now and re-book the season' : 'Lock in next season before the gap',
+        action: a.churn.level !== 'none' ? 'Reach out now and re-book the season' : 'Lock in next season before the gap',
         actionHref: `/dashboard/customers/${a.id}`,
       })
     }
@@ -361,11 +362,11 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
           if (a.isReferrer) s += 25
           if (a.hasActiveRecurring) s += 12
           if (a.tenureDays >= 365) s += 10
-          if (a.ltv >= 1500) s += 8
+          if (a.ltv >= VIP_LTV) s += 8
           const score = clamp(s)
           push({
             key: `referral:${a.id}`, kind: 'referral', customerId: a.id, customerName: a.name,
-            score, confidence: a.isReferrer || a.ltv >= 1500 ? 'high' : 'medium', expectedValue: expected, oneTime: false,
+            score, confidence: a.isReferrer || a.ltv >= VIP_LTV ? 'high' : 'medium', expectedValue: expected, oneTime: false,
             why: [
               `$${round(a.ltv)} lifetime · ${a.completedCount} visits${a.isReferrer ? ' · proven referrer' : ''}`,
               hoodOf(a) !== 'Unknown' ? `A referral in ${hoodOf(a)} adds route density` : 'Warm referrals close cheap',
@@ -416,7 +417,7 @@ export function computeRevenueIntel(inp: RIInput): RevenueIntelReport {
 
   // ── LTV forecast ──
   const ltvForecast: LtvForecast[] = Object.values(aggs).filter(a => a.ltv > 0 || a.hasActiveRecurring).map(a => {
-    const churnProb = !a.hasActiveRecurring ? 0.5 : a.overdueRatio > 1.6 ? 0.6 : a.overdueRatio > 1.25 ? 0.4 : 0.2
+    const churnProb = a.churn.probability
     const remainingYears = a.hasActiveRecurring ? 3 * (1 - churnProb) : 0.5
     const forecast = round(a.ltv + a.annualRecurring * remainingYears)
     const churnRiskImpact = round(a.annualRecurring * churnProb)
@@ -486,7 +487,7 @@ export async function loadRevenueIntel(supabase: SupabaseClient): Promise<Revenu
   if (!user) return null
   const uid = user.id
   const [jRes, qRes, rRes, pRes, cRes, iRes, liRes, sRes, fRes] = await Promise.all([
-    supabase.from('jobs').select('id, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, property_id, properties(lat, lng, city, postal_code, neighborhood)').eq('user_id', uid),
+    supabase.from('jobs').select('id, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, is_initial_visit, customer_id, property_id, properties(lat, lng, city, postal_code, neighborhood)').eq('user_id', uid),
     supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', uid),
     supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', uid),
     supabase.from('properties').select('id, customer_id, lat, lng, postal_code, city, neighborhood').eq('user_id', uid),
@@ -508,10 +509,11 @@ export async function loadRevenueIntel(supabase: SupabaseClient): Promise<Revenu
   const pctx: ProfitContext = { quotesById, recById: recurrences, base: baseLat != null && baseLng != null ? { lat: baseLat, lng: baseLng } : null, today }
 
   const rawJobs = (jRes.data as unknown as Array<Record<string, any>>) || []
-  const jobs: ProfitJob[] = rawJobs.map(j => ({
+  const jobs: RIJob[] = rawJobs.map(j => ({
     id: j.id, scheduled_date: j.scheduled_date, status: j.status, service_type: j.service_type,
     quote_id: j.quote_id, recurrence_id: j.recurrence_id, duration_minutes: j.duration_minutes,
-    actual_minutes: j.actual_minutes, price: j.price, customer_id: j.customer_id,
+    actual_minutes: j.actual_minutes, price: j.price, is_initial_visit: j.is_initial_visit,
+    customer_id: j.customer_id,
     lat: j.properties?.lat ?? null, lng: j.properties?.lng ?? null,
     city: j.properties?.city ?? null, postal_code: j.properties?.postal_code ?? null, neighborhood: j.properties?.neighborhood ?? null,
   }))

@@ -5,7 +5,11 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { Customer } from '@/types'
 import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
-import { seasonForService, isWithinSeason, settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
+import { settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
+import {
+  VIP_LTV, LAPSE_BUCKET_DAYS, cadenceDays, lifetimeValue, visitValue,
+  isSeasonallyDormant, ranOut as ranOutSignal, daysBetween,
+} from '@/lib/signals'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
@@ -14,14 +18,10 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { Skeleton, SkeletonTiles } from '@/components/ui/Skeleton'
 import { Phone, MessageSquare, FileText, CalendarPlus, HeartPulse, DollarSign, Percent, TrendingUp, AlertTriangle, Repeat } from 'lucide-react'
 
-interface JobLite { customer_id: string | null; scheduled_date: string; status: string; service_type: string | null; quote_id: string | null; recurrence_id: string | null; price: number | null }
+interface JobLite { customer_id: string | null; scheduled_date: string; status: string; service_type: string | null; quote_id: string | null; recurrence_id: string | null; price: number | null; is_initial_visit: boolean | null }
 interface QuoteLite { id: string; customer_id: string | null; status: string; total: number | null; service_type: string; created_at: string; initial_price: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null }
 
 type Bucket = '12+' | '6+' | '3+'
-
-// Lifetime revenue at/above this marks a VIP — losing one is worth more than many
-// one-off lapses, so VIPs sort to the top of every at-risk list.
-const VIP_THRESHOLD = 1500
 
 interface RiskCustomer {
   customer: Customer
@@ -52,9 +52,6 @@ function localTodayISO() {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
-function daysBetween(aISO: string, bISO: string) {
-  return Math.floor((new Date(bISO + 'T00:00:00').getTime() - new Date(aISO + 'T00:00:00').getTime()) / 86400000)
-}
 
 const BUCKETS: { key: Bucket; label: string; sub: string; tone: string }[] = [
   { key: '12+', label: '12+ months', sub: 'Top priority — long lapsed', tone: 'text-red-400' },
@@ -76,7 +73,7 @@ export default function ReactivationPage() {
       const user = session?.user
       const [cRes, jRes, qRes, rRes, sRes] = await Promise.all([
         supabase.from('customers').select('*').eq('user_id', user!.id).is('archived_at', null), // don't suggest re-engaging deliberately-archived customers
-        supabase.from('jobs').select('customer_id, scheduled_date, status, service_type, quote_id, recurrence_id, price').eq('user_id', user!.id),
+        supabase.from('jobs').select('customer_id, scheduled_date, status, service_type, quote_id, recurrence_id, price, is_initial_visit').eq('user_id', user!.id),
         supabase.from('quotes').select('id, customer_id, status, total, service_type, created_at, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
         supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user!.id),
         supabase.from('business_settings').select('service_seasons').eq('user_id', user!.id).maybeSingle(),
@@ -96,13 +93,10 @@ export default function ReactivationPage() {
       const quotesByCust: Record<string, QuoteLite[]> = {}
       for (const q of quotes) if (q.customer_id) (quotesByCust[q.customer_id] ||= []).push(q)
 
-      // Reuse the ONE valuation engine for "what is this visit worth".
-      const jobValue = (j: JobLite): number => {
-        const q = j.quote_id ? quotesById[j.quote_id] : null
-        const rec = j.recurrence_id ? recById[j.recurrence_id] : null
-        const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
-        return jobVisitValue(j.price, q as unknown as Record<string, unknown>, freq)
-      }
+      // Reuse the ONE valuation engine for "what is this visit worth" — the same
+      // one lifetimeValue uses, so an initial visit is never valued two ways on
+      // the same screen.
+      const jobValue = (j: JobLite): number => visitValue(j, quotesById, recById)
 
       const risks: RiskCustomer[] = []
       const ranOuts: RanOutCustomer[] = []
@@ -116,8 +110,8 @@ export default function ReactivationPage() {
         // Most RECENT recurring activity — find() returns arbitrary DB order and
         // can pick a dead 2024 series over the customer's current cadence.
         const recJob = cj.filter(j => j.recurrence_id).sort((a, b) => b.scheduled_date.localeCompare(a.scheduled_date))[0]
-        const lifetimeRevenue = completed.reduce((s, j) => s + jobValue(j), 0)
-        const isVip = lifetimeRevenue >= VIP_THRESHOLD
+        const lifetimeRevenue = lifetimeValue(completed, quotesById, recById)
+        const isVip = lifetimeRevenue >= VIP_LTV
 
         // "Comeback" history: a gap >= 90 days then another completed job = a
         // reactivation. Runs for EVERY customer with history — including recurring
@@ -131,64 +125,62 @@ export default function ReactivationPage() {
         }
         if (hadComeback) reactivated++
 
+        // Last date they were ACTUALLY serviced: a completed visit, else any
+        // non-cancelled, non-future one. A series cancelled before any service
+        // isn't a re-book.
+        const pastReal = cj
+          .filter(j => j.status !== 'cancelled' && j.scheduled_date <= today)
+          .map(j => j.scheduled_date).sort()
+        const lastDate = completed.length ? completed[completed.length - 1].scheduled_date
+          : (pastReal.length ? pastReal[pastReal.length - 1] : null)
+        const recService = recJob?.service_type ?? completed[completed.length - 1]?.service_type ?? null
+        const rec = recJob?.recurrence_id ? recById[recJob.recurrence_id] : null
+        const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
+
+        // THE ran-out detector — one rule, shared with the dashboard and the weekly
+        // review, so the same customer can't read as adrift on one screen and
+        // dormant on another.
+        const signal = ranOutSignal({
+          hasRecurring: !!recJob,
+          hasUpcoming: upcoming,
+          lastServiceDate: lastDate,
+          cadenceDays: cadenceDays(freq, rec),
+          seasonallyDormant: isSeasonallyDormant(recService, seasons, today),
+          today,
+        })
+
         // SEASONAL DORMANCY: a recurring lawn/snow customer whose series ended
         // because the SEASON ended is not lost — they're dormant until next
         // season. Suppress them from every at-risk list while we're OUT of their
         // service season. They only resurface once their season has arrived again
         // and they STILL have no schedule (handled because `upcoming` is false and
-        // isWithinSeason(today) becomes true, so this guard stops suppressing).
-        const recService = recJob?.service_type ?? completed[completed.length - 1]?.service_type ?? null
-        const recSeason = recJob ? seasonForService(recService, seasons) : null
-        const seasonallyDormant = !!recSeason && !isWithinSeason(today, recSeason)
-        if (recJob && !upcoming && seasonallyDormant) {
-          continue // off-season — don't treat a naturally-ended seasonal series as lost
-        }
+        // the season gate stops firing, so the signal turns back into a ran-out).
+        if (signal.reason === 'seasonally_dormant') continue
+        if (signal.reason === 'never_serviced') continue
 
         // RAN-OUT (urgent): a recurring customer with no future visit booked. Caught
-        // here regardless of days-since, so it can't slip through the 90-day buckets.
-        // Only customers who were actually visited (a non-cancelled, non-future
-        // visit) — a series cancelled before any service isn't a re-book.
-        if (recJob && !upcoming) {
-          const pastReal = cj
-            .filter(j => j.status !== 'cancelled' && j.scheduled_date <= today)
-            .map(j => j.scheduled_date).sort()
-          const lastDate = completed.length ? completed[completed.length - 1].scheduled_date
-            : (pastReal.length ? pastReal[pastReal.length - 1] : null)
-          if (lastDate) {
-            const rec = recJob.recurrence_id ? recById[recJob.recurrence_id] : null
-            const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
-            // Urgent re-book ONLY while the series is plausibly still active —
-            // past ~3 cadences they're a lapsed customer and age into the normal
-            // buckets below instead of sitting in the red queue forever.
-            const cadDays = rec?.interval_unit === 'day' ? Math.max(1, rec.interval_count ?? 1)
-              : rec?.interval_unit === 'week' ? 7 * Math.max(1, rec.interval_count ?? 1)
-              : rec?.interval_unit === 'month' ? 30 * Math.max(1, rec.interval_count ?? 1)
-              : freq === 'weekly' ? 7 : freq === 'biweekly' ? 14 : freq === 'monthly' ? 30 : 14
-            const daysSince = Math.max(0, daysBetween(lastDate, today))
-            if (daysSince <= Math.max(21, cadDays * 3)) {
-              // Per-visit at stake = the CURRENT quote cadence price (source of truth),
-              // never an arbitrary visit's frozen historical override.
-              const q = recJob.quote_id ? quotesById[recJob.quote_id] : null
-              const perVisit = q
-                ? Math.round(jobVisitValue(null, q as unknown as Record<string, unknown>, freq))
-                : Math.round(jobValue(recJob))
-              ranOuts.push({
-                customer: c, lastServiceDate: lastDate, daysSince,
-                cadence: freq || 'recurring', perVisit, lifetimeRevenue, isVip,
-              })
-              continue
-            }
-            // fall through: long-dead series → ordinary lapse buckets
-          } else {
-            continue // never actually serviced — not a re-book candidate
-          }
+        // regardless of days-since, so it can't slip through the 90-day buckets. Past
+        // ~3 cadences the series isn't plausibly active — those fall through to the
+        // normal buckets instead of sitting in the red queue forever.
+        if (signal.isRanOut && signal.isUrgent && lastDate) {
+          // Per-visit at stake = the CURRENT quote cadence price (source of truth),
+          // never an arbitrary visit's frozen historical override.
+          const q = recJob.quote_id ? quotesById[recJob.quote_id] : null
+          const perVisit = q
+            ? Math.round(jobVisitValue(null, q as unknown as Record<string, unknown>, freq))
+            : Math.round(jobValue(recJob))
+          ranOuts.push({
+            customer: c, lastServiceDate: lastDate, daysSince: signal.daysSince ?? 0,
+            cadence: freq || 'recurring', perVisit, lifetimeRevenue, isVip,
+          })
+          continue
         }
 
         if (completed.length === 0) continue // only customers with real service history
         const lastServiceDate = completed[completed.length - 1].scheduled_date
         const days = daysBetween(lastServiceDate, today)
 
-        if (!upcoming && days >= 90) {
+        if (!upcoming && days >= LAPSE_BUCKET_DAYS['3+']) {
           // A DECLINED quote is not recoverable revenue — don't let a rejected
           // $4,000 hedge job inflate "Potential recovery".
           const cq = (quotesByCust[c.id] || []).filter(q => q.status !== 'declined').sort((a, b) => b.created_at.localeCompare(a.created_at))
@@ -203,7 +195,7 @@ export default function ReactivationPage() {
             lastQuoteAmount,
             lastServiceType: completed[completed.length - 1].service_type || cq[0]?.service_type || 'Lawn Mowing',
             potentialRecovery: lastQuoteAmount || Math.round(avgValue),
-            bucket: days >= 365 ? '12+' : days >= 180 ? '6+' : '3+',
+            bucket: days >= LAPSE_BUCKET_DAYS['12+'] ? '12+' : days >= LAPSE_BUCKET_DAYS['6+'] ? '6+' : '3+',
             isVip,
           })
         }

@@ -6,6 +6,8 @@ import { createClient } from '@/lib/supabase/client'
 import { formatCurrency } from '@/lib/utils'
 import { needsFollowUp } from '@/lib/followup'
 import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
+import { settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
+import { ranOut, cadenceDays, isSeasonallyDormant } from '@/lib/signals'
 import { invoiceBalance } from '@/lib/payments/ledger'
 import type { Quote } from '@/types'
 import { SkeletonRows } from '@/components/ui/Skeleton'
@@ -35,7 +37,7 @@ function localTodayISO(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-interface JobLite { quote_id: string | null; customer_id: string | null; status: string; scheduled_date: string; recurrence_id: string | null; price: number | null }
+interface JobLite { quote_id: string | null; customer_id: string | null; status: string; scheduled_date: string; service_type: string | null; recurrence_id: string | null; price: number | null }
 interface InvoiceLite { amount: number; status: string; amount_paid?: number; discount_type: 'amount' | 'percent' | null; discount_value: number | null }
 
 export function TodaysPriorities() {
@@ -56,13 +58,14 @@ export function TodaysPriorities() {
         // Quotes drive follow-ups + accepted-not-scheduled (reuse those exact signals).
         supabase.from('quotes').select('*').eq('user_id', user.id),
         supabase.from('invoices').select('amount, status, amount_paid, discount_type, discount_value').eq('user_id', user.id),
-        supabase.from('jobs').select('quote_id, customer_id, status, scheduled_date, recurrence_id, price').eq('user_id', user.id),
+        supabase.from('jobs').select('quote_id, customer_id, status, scheduled_date, service_type, recurrence_id, price').eq('user_id', user.id),
         supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user.id),
         // Unread conversations — same source as the Messages inbox.
         supabase.from('conversations').select('unread').eq('user_id', user.id).is('archived_at', null).gt('unread', 0),
         // GST — so the owed figure below agrees with the Invoices page and the
-        // Outstanding stat (both are ledger-derived, GST-inclusive).
-        supabase.from('business_settings').select('gst_percent').eq('user_id', user.id).maybeSingle(),
+        // Outstanding stat (both are ledger-derived, GST-inclusive). Seasons ride
+        // along on the same row: the ran-out signal is season-gated.
+        supabase.from('business_settings').select('gst_percent, service_seasons').eq('user_id', user.id).maybeSingle(),
       ])
 
       const quotes = (qRes.data as Quote[]) || []
@@ -71,7 +74,8 @@ export function TodaysPriorities() {
       const recById: Record<string, { freq: string | null; interval_unit: string | null; interval_count: number | null }> = {}
       for (const r of (rRes.data as { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null }[]) || []) recById[r.id] = r
       const conversations = (cRes.data as { unread: number }[]) || []
-      const feeSettings = sRes.data as { gst_percent: number | null } | null
+      const feeSettings = sRes.data as { gst_percent: number | null; service_seasons: unknown } | null
+      const seasons: ServiceSeasons = settingsToSeasons(feeSettings?.service_seasons)
 
       const next: Priority[] = []
 
@@ -138,22 +142,36 @@ export function TodaysPriorities() {
       }
 
       // 6) Recurring series ran out — a recurring customer with no upcoming visit
-      //    booked. Per-visit value at stake (same valuation engine as Reactivation).
-      const futureByCust = new Set(
-        jobs.filter(j => j.customer_id && j.scheduled_date >= today && (j.status === 'scheduled' || j.status === 'in_progress'))
-          .map(j => j.customer_id),
-      )
+      //    booked. THE shared ran-out detector, so this count is the same queue the
+      //    Reactivation page alarms on: season-gated (an off-season snow customer is
+      //    dormant, not adrift), only customers actually serviced, and only while the
+      //    series is plausibly still active. Per-visit value at stake.
+      const jobsByCust: Record<string, JobLite[]> = {}
+      for (const j of jobs) if (j.customer_id) (jobsByCust[j.customer_id] ||= []).push(j)
       const ranOutCusts = new Set<string>()
       let ranOutValue = 0
-      for (const j of jobs) {
-        if (!j.recurrence_id || !j.customer_id) continue
-        if (futureByCust.has(j.customer_id)) continue
-        if (j.scheduled_date > today) continue // a future-dated visit means it isn't dry
-        if (ranOutCusts.has(j.customer_id)) continue // first (most recent enough) hit per customer
-        ranOutCusts.add(j.customer_id)
-        const rec = j.recurrence_id ? recById[j.recurrence_id] : null
+      for (const [custId, cj] of Object.entries(jobsByCust)) {
+        // Most RECENT recurring activity — DB order can pick a dead series over the
+        // customer's current cadence.
+        const recJob = cj.filter(j => j.recurrence_id).sort((a, b) => b.scheduled_date.localeCompare(a.scheduled_date))[0]
+        const upcoming = cj.some(j => j.scheduled_date >= today && (j.status === 'scheduled' || j.status === 'in_progress'))
+        const completed = cj.filter(j => j.status === 'completed').map(j => j.scheduled_date).sort()
+        const pastReal = cj.filter(j => j.status !== 'cancelled' && j.scheduled_date <= today).map(j => j.scheduled_date).sort()
+        const lastDate = completed.length ? completed[completed.length - 1]
+          : (pastReal.length ? pastReal[pastReal.length - 1] : null)
+        const rec = recJob?.recurrence_id ? recById[recJob.recurrence_id] : null
         const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
-        ranOutValue += Math.round(jobVisitValue(j.price, null, freq))
+        const signal = ranOut({
+          hasRecurring: !!recJob,
+          hasUpcoming: upcoming,
+          lastServiceDate: lastDate,
+          cadenceDays: cadenceDays(freq, rec),
+          seasonallyDormant: isSeasonallyDormant(recJob?.service_type ?? null, seasons, today),
+          today,
+        })
+        if (!signal.isRanOut || !signal.isUrgent) continue
+        ranOutCusts.add(custId)
+        ranOutValue += Math.round(jobVisitValue(recJob.price, null, freq))
       }
       if (ranOutCusts.size > 0) {
         next.push({
