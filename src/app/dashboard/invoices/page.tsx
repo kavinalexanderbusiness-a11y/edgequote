@@ -247,9 +247,25 @@ export default function InvoicesPage() {
   // Never downgrades an already-sent/partly-paid/paid invoice.
   async function markSent(inv: Invoice) {
     if (inv.status !== 'draft' && inv.status !== 'unpaid') return
-    setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: 'sent' as InvoiceStatus } : i))
-    const { error } = await supabase.from('invoices').update({ status: 'sent' }).eq('id', inv.id)
-    if (error) { setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: inv.status } : i)); notify.error('Could not mark sent: ' + error.message) }
+    // Sending a DRAFT is the moment it is issued, so stamp the date it was issued.
+    //
+    // Completing a job auto-drafts an invoice stamped with THAT day's issued_date.
+    // Send it in a later quarter and it fell through every report: the tax summary
+    // excludes drafts (correctly — nobody had been asked to pay), so it was out of
+    // Q1 at filing time; and its issued_date still said Q1, so `inPeriod` kept it
+    // out of Q2 as well. The invoice existed in NO period and its GST was never
+    // remitted. The comment above already says sending IS issuing — this makes the
+    // stored date agree with it.
+    //
+    // ONLY from 'draft'. An 'unpaid' invoice is already inside the reports (they
+    // exclude drafts and cancelled, nothing else), so re-dating it on send would
+    // yank it out of a quarter that may already be filed — trading this defect for
+    // a worse one. A draft is in no report by definition, so stamping it is free.
+    const patch: { status: InvoiceStatus; issued_date?: string } = { status: 'sent' }
+    if (inv.status === 'draft') patch.issued_date = todayISO()
+    setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, ...patch, status: 'sent' as InvoiceStatus } : i))
+    const { error } = await supabase.from('invoices').update(patch).eq('id', inv.id)
+    if (error) { setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: inv.status, issued_date: inv.issued_date } : i)); notify.error('Could not mark sent: ' + error.message) }
   }
 
   // ── Undo — the ONE shared toast system (lib/toast), same as the rest of the app ──
@@ -479,7 +495,15 @@ export default function InvoicesPage() {
                       // locked (partial/paid/overpaid belong to the payments ledger).
                       const clickable = inv.status === 'draft' || inv.status === 'unpaid' || inv.status === 'sent' || inv.status === 'cancelled'
                       const setStatus = async (status: InvoiceStatus, msg: string) => {
-                        const { error } = await supabase.from('invoices').update({ status }).eq('id', inv.id)
+                        // Same rule as markSent: a draft becoming 'sent' is being ISSUED
+                        // today, and its creation-day stamp would otherwise leave it in
+                        // no reporting period at all. Only from 'draft' — an 'unpaid'
+                        // invoice is already counted in a period that may be filed.
+                        const patch: { status: InvoiceStatus; issued_date?: string } =
+                          status === 'sent' && inv.status === 'draft'
+                            ? { status, issued_date: todayISO() }
+                            : { status }
+                        const { error } = await supabase.from('invoices').update(patch).eq('id', inv.id)
                         if (error) { notify.error('Could not update the status: ' + error.message); return }
                         fetchInvoices()
                         notify.success(msg)
