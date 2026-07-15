@@ -11,6 +11,7 @@ import { ConversationThread } from '@/components/messages/ConversationThread'
 import { ConversationInfo } from '@/components/messages/ConversationInfo'
 import { LeadCard } from '@/components/messages/LeadCard'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
+import { Modal } from '@/components/ui/Modal'
 import { CustomerPicker } from '@/components/ui/CustomerPicker'
 import type { Customer } from '@/types'
 import { Button } from '@/components/ui/Button'
@@ -381,20 +382,18 @@ export default function MessagesPage() {
         } />
 
       {/* Start a conversation without leaving the inbox: pick a customer → THE shared
-          Send-Message dialog (same engine; the sent message threads into this list). */}
-      {composeOpen && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center p-4 pt-24" onClick={() => setComposeOpen(false)}>
-          <div className="bg-bg-secondary border border-border-strong rounded-card max-w-md w-full p-5 space-y-3" onClick={e => e.stopPropagation()}>
-            <p className="text-sm font-bold text-ink">Who do you want to message?</p>
-            <CustomerPicker customers={composeCustomers} value={''} allowManual={false}
-              onChange={id => {
-                const c = composeCustomers.find(x => x.id === id)
-                if (c) { setComposeOpen(false); setComposeTo({ id: c.id, name: c.name }) }
-              }} />
-            <Button variant="ghost" size="sm" onClick={() => setComposeOpen(false)}>Cancel</Button>
-          </div>
+          Send-Message dialog (same engine; the sent message threads into this list).
+          The picker uses the shared Modal so both compose steps share one chrome
+          (backdrop, Escape, scroll-lock, mobile bottom-sheet). */}
+      <Modal open={composeOpen} onClose={() => setComposeOpen(false)} title="Who do you want to message?" icon={MessageSquare} size="md">
+        <div className="min-h-[16rem]">
+          <CustomerPicker customers={composeCustomers} value={''} allowManual={false}
+            onChange={id => {
+              const c = composeCustomers.find(x => x.id === id)
+              if (c) { setComposeOpen(false); setComposeTo({ id: c.id, name: c.name }) }
+            }} />
         </div>
-      )}
+      </Modal>
       {composeTo && (
         <SendMessageDialog open onClose={() => { setComposeTo(null); if (uid) loadPage(uid, filterRef.current, true) }}
           customerId={composeTo.id} customerName={composeTo.name} />
