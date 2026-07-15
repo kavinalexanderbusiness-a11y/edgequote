@@ -476,6 +476,26 @@ export function dayLoad(totalWorkMin: number, capacityHours: number | null | und
   return { state: spare < 0 ? 'overloaded' : spare >= 60 ? 'room' : 'full', spareMin: spare }
 }
 
+export interface EstimatedDayLoad { state: 'overloaded' | 'full' | 'room'; spareMin: number; usedMin: number; capMin: number; pct: number }
+
+// A day's load estimated from its VISITS ALONE — for surfaces that don't have a
+// computed route (the month/week calendar, the rain-delay target check). Mirrors
+// what the day board does before its own route resolves: each visit's
+// duration_minutes (or DEFAULT_JOB_MIN) plus a ~10-min-per-stop drive allowance.
+// ONE definition so the calendar's workload bar, the rain-delay warning and the
+// day board can never quote different numbers for the same day.
+export function estimateDayLoad(
+  visits: { duration_minutes?: number | null; status?: string | null }[],
+  capacityHours: number | null | undefined,
+): EstimatedDayLoad {
+  const active = visits.filter(v => v.status !== 'cancelled')
+  const laborMin = active.reduce((s, v) => s + (v.duration_minutes || DEFAULT_JOB_MIN), 0)
+  const usedMin = laborMin + active.length * 10
+  const l = dayLoad(usedMin, capacityHours)
+  const capMin = usedMin + l.spareMin
+  return { ...l, usedMin, capMin, pct: capMin > 0 ? Math.round((usedMin / capMin) * 100) : 100 }
+}
+
 // Google Maps directions URL from base to a single stop. Uses the stop's street
 // ADDRESS as the destination when available (a named place, not a dropped pin),
 // falling back to coordinates.

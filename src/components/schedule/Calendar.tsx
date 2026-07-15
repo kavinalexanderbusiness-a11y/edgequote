@@ -9,6 +9,7 @@ import { Job, JOB_STATUS_COLORS } from '@/types'
 import { ScheduleItem, ITEM_META } from '@/lib/scheduleItems'
 import { cn } from '@/lib/utils'
 import { DayStatusMap, dayStatusMeta, dayStatusLabel, isDayBlocked } from '@/lib/dayStatus'
+import { estimateDayLoad, type EstimatedDayLoad } from '@/lib/route'
 import { toast } from '@/lib/toast'
 import { Repeat, Check } from 'lucide-react'
 
@@ -39,6 +40,32 @@ interface CalendarProps {
   onDayMenu?: (dateISO: string, pos: { x: number; y: number }) => void
   selectedDays?: Set<string>
   onToggleDaySelect?: (dateISO: string) => void
+  // Effective labour-hours for a day (crew × working hours, after any per-day
+  // override) — the SAME function the day board and optimizer use. Supplying it
+  // turns on the per-day workload bar; omit it and the calendar renders as before.
+  capacityForDate?: (dateISO: string) => number
+}
+
+// The workload bar: how full a day is, readable without opening it. Answers the
+// planning question the month/week grids couldn't — "which day is overbooked?" —
+// without having to click into each one. The numbers come from the shared
+// estimateDayLoad engine, so they match the day board's own load pill.
+function LoadBar({ load, className }: { load: EstimatedDayLoad; className?: string }) {
+  const h = (min: number) => Math.round(min / 6) / 10
+  const title = load.state === 'overloaded'
+    ? `Overbooked by ~${h(-load.spareMin)}h — ~${h(load.usedMin)}h of ${h(load.capMin)}h capacity`
+    : load.state === 'room'
+      ? `Room for ~${h(load.spareMin)}h — ~${h(load.usedMin)}h of ${h(load.capMin)}h booked`
+      : `Full day — ~${h(load.usedMin)}h of ${h(load.capMin)}h booked`
+  return (
+    <div className={cn('h-1 rounded-full bg-border/70 overflow-hidden', className)} title={title} aria-label={title}>
+      <div
+        className={cn('h-full rounded-full',
+          load.state === 'overloaded' ? 'bg-red-400' : load.state === 'full' ? 'bg-accent' : 'bg-emerald-400/70')}
+        style={{ width: `${Math.min(100, Math.max(4, load.pct))}%` }}
+      />
+    </div>
+  )
 }
 
 // What a pointer-drag is carrying — generalised so a Job and a ScheduleItem share
@@ -123,7 +150,7 @@ function ItemChip({ item, onSelect, onDragStart }: { item: ScheduleItem; onSelec
   )
 }
 
-export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkDone, onMoveJob, recurrenceLabels, valueByJobId, addonCountByJobId, scheduleItems, onSelectItem, onMoveItem, dayStatusMap, onDayMenu, selectedDays, onToggleDaySelect }: CalendarProps) {
+export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkDone, onMoveJob, recurrenceLabels, valueByJobId, addonCountByJobId, scheduleItems, onSelectItem, onMoveItem, dayStatusMap, onDayMenu, selectedDays, onToggleDaySelect, capacityForDate }: CalendarProps) {
   const recurLabelFor = (job: Job) => job.recurrence_id ? recurrenceLabels?.[job.recurrence_id] : undefined
   const weekdayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
   const dragEnabled = !!(onMoveJob || onMoveItem)
@@ -189,6 +216,19 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
     return m
   }, [jobs])
   const dayJobsFor = (day: Date) => jobsByDate[format(day, 'yyyy-MM-dd')] || []
+
+  // Per-day workload, computed ONCE per jobs/capacity change via the shared
+  // estimateDayLoad engine — so the bar here and the load pill on the open day
+  // can never quote different numbers for the same date.
+  const loadByDate = useMemo(() => {
+    if (!capacityForDate) return null
+    const m: Record<string, EstimatedDayLoad> = {}
+    for (const date in jobsByDate) {
+      if (!jobsByDate[date].some(j => j.status !== 'cancelled')) continue
+      m[date] = estimateDayLoad(jobsByDate[date], capacityForDate(date))
+    }
+    return m
+  }, [jobsByDate, capacityForDate])
 
   const itemsByDate = useMemo(() => {
     const m: Record<string, ScheduleItem[]> = {}
@@ -334,6 +374,7 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
                     </span>
                   )}
                 </div>
+                {loadByDate?.[dateISO] && <LoadBar load={loadByDate[dateISO]} className="mb-1" />}
                 <div className="space-y-0.5">
                   {shownJobs.map(job => (
                     <JobChip key={job.id} job={job} onSelect={selectJob} onDragStart={jobDragStart ? (e) => jobDragStart(e, job) : undefined} recurLabel={recurLabelFor(job)} value={valueByJobId?.[job.id]} addonCount={addonCountByJobId?.[job.id]} onMarkDone={onMarkDone} />
@@ -395,6 +436,7 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
                     </span>
                   )}
                 </div>
+                {loadByDate?.[dateISO] && <LoadBar load={loadByDate[dateISO]} className="mb-2" />}
                 <div className="space-y-1">
                   {dayJobs.map(job => (
                     <JobChip key={job.id} job={job} onSelect={selectJob} onDragStart={jobDragStart ? (e) => jobDragStart(e, job) : undefined} recurLabel={recurLabelFor(job)} value={valueByJobId?.[job.id]} addonCount={addonCountByJobId?.[job.id]} onMarkDone={onMarkDone} />

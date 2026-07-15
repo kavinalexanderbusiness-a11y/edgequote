@@ -37,7 +37,7 @@ import type { HealthIssue, HealthJob } from '@/lib/scheduleHealth'
 import { ScheduleHealthCard } from '@/components/schedule/ScheduleHealthCard'
 import { DayStatusMenu } from '@/components/schedule/DayStatusMenu'
 import { buildDayStatusMap, buildCapacityForDate, dayStartTime, isDayBlocked, loadDayStatuses, setDayStatus, setDayCapacity, clearDayStatus, DAY_STATUS_META, DAY_STATUS_SELECT, type DayStatusMap, type DayStatusRow, type DayStatus } from '@/lib/dayStatus'
-import { directionsUrl } from '@/lib/route'
+import { directionsUrl, estimateDayLoad } from '@/lib/route'
 import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { useFocusTrap } from '@/hooks/useFocusTrap'
@@ -1382,10 +1382,21 @@ export default function SchedulePage() {
     const to = nextWorkday(dateISO)
     const ids = dayJobs.map(j => j.id)
     const prevOrders = dayJobs.map(j => ({ id: j.id, route_order: j.route_order ?? null }))
+    // What the target day will look like AFTER the bump. nextWorkday already skips
+    // blocked days, but it can't know the day is already full — landing 6 stops on a
+    // booked day silently creates an overloaded day. Same shared engine as the
+    // calendar bar + day board, so the hours quoted here match what you'll see there.
+    const landing = estimateDayLoad(
+      [...jobs.filter(j => j.scheduled_date === to && j.status !== 'cancelled'), ...dayJobs],
+      optBaseOpts.capacityForDate(to),
+    )
     const { error } = await supabase.from('jobs').update({ scheduled_date: to }).in('id', ids)
     if (error) { setBanner('Could not bump the day: ' + error.message); return }
     await fetchJobs()
     setCursor(parseISO(to + 'T00:00:00'))
+    if (landing.state === 'overloaded') {
+      toast(`${format(parseISO(to + 'T00:00:00'), 'EEE, MMM d')} is now overbooked by ~${Math.round(-landing.spareMin / 6) / 10}h — optimize or move a stop.`)
+    }
     offerUndo(`Rain delay — bumped ${ids.length} job${ids.length !== 1 ? 's' : ''} to ${format(parseISO(to + 'T00:00:00'), 'EEE, MMM d')}`,
       async () => {
         // Per-job so each visit gets back its own manual route position.
@@ -1768,6 +1779,7 @@ export default function SchedulePage() {
           onDayMenu={openDayMenu}
           selectedDays={selectedDays}
           onToggleDaySelect={toggleDaySelect}
+          capacityForDate={optBaseOpts.capacityForDate}
         />
       )}
 
