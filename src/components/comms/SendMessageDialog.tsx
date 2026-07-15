@@ -8,9 +8,6 @@ import { SmsCost } from '@/components/comms/SmsCost'
 import { Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
 import { FilterPill } from '@/components/ui/FilterPill'
-import { AssistButton } from '@/components/ai/AssistButton'
-import { useAiAssist } from '@/hooks/useAiAssist'
-import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import { MessageSquare, Mail, Send, Check, AlertTriangle } from 'lucide-react'
 
@@ -83,28 +80,6 @@ export function SendMessageDialog({
 
   const chosen = useMemo(() => all.filter(r => selected.has(r.customerId)), [all, selected])
   const toggle = (id: string) => setSelected(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
-
-  // AI writer — drafts/rewrites INTO the editable box; sending still goes
-  // through the same consent-gated route, so the model never sends anything.
-  const ai = useAiAssist()
-  async function aiWrite(mode: 'draft' | 'rewrite') {
-    if (busy || ai.running) return
-    const prior = text
-    ai.clearError()
-    setText('')
-    const full = await ai.run({
-      task: 'draft_message',
-      customerId: !bulk ? (chosen[0]?.customerId ?? all[0]?.customerId) : undefined,
-      template: active,
-      channels: (['sms', 'email'] as const).filter(c => ch[c]),
-      currentText: mode === 'rewrite' ? prior : '',
-      bulk,
-    }, { onDelta: d => setText(prev => prev + d) })
-    if (full === null) { setText(prior); return }   // error — restore, message shows below
-    setEdited(true)
-    setOutcome(null)
-    if (prior.trim()) toast.undo('Replaced your message.', () => { setText(prior); setEdited(true) })
-  }
 
   const offered = useMemo(() => {
     const base = templates ?? DEFAULT_SET
@@ -264,23 +239,10 @@ export function SendMessageDialog({
 
         {/* Editable message — starts from the owner's template, edit freely. */}
         <div>
-          <div className="flex items-end justify-between gap-2 mb-1">
-            {bulk
-              ? <p className="text-[10px] uppercase tracking-wide text-ink-faint">Preview · as {sampleName.split(' ')[0]} will see it</p>
-              : <span />}
-            {ai.enabled === true && (
-              <div className="flex items-center gap-1.5 shrink-0">
-                <AssistButton label={ai.running ? 'Writing…' : 'Write with AI'} onClick={() => aiWrite('draft')} busy={ai.running} disabled={busy} />
-                {text.trim() !== '' && !ai.running && (
-                  <AssistButton label="Polish" onClick={() => aiWrite('rewrite')} disabled={busy} title="Rewrite the current draft — keeps every fact, improves the wording" />
-                )}
-              </div>
-            )}
-          </div>
+          {bulk && <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-1">Preview · as {sampleName.split(' ')[0]} will see it</p>}
           <textarea value={text} onChange={e => { setText(e.target.value); setEdited(true); setOutcome(null) }} rows={6} aria-label="Message"
             placeholder="Write your message…"
             className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink outline-none focus:border-accent resize-none" />
-          {ai.error && <p className="text-[11px] text-amber-400 mt-1" role="alert">{ai.error}</p>}
           {ch.sms && <SmsCost text={text} recipients={chosen.length || 1} className="mt-1" />}
           {ch.email && custom !== null && (
             <p className="text-[11px] text-ink-muted mt-1 flex items-center gap-1.5">
