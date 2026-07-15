@@ -106,6 +106,18 @@ export function DayOpsPanel({
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [dragOverId, setDragOverId] = useState<string | null>(null)
 
+  // What the one-tap "On my way" promises the customer, in minutes.
+  //
+  // It is a fixed guess and cannot honestly be anything else: there is no GPS fix
+  // on the truck, and the route's leg times run from the PREVIOUS stop rather than
+  // from wherever the owner actually is. So the number stays a default — but the
+  // button that sends it now NAMES it, because the template turns this into a
+  // specific, falsifiable promise ("arrive in approximately 15 minutes") that the
+  // owner otherwise never saw and never chose. Label and payload both read from
+  // here, so the button can never drift from what the customer is told. A
+  // different ETA goes through Message, which has an input for it.
+  const ONE_TAP_ETA_MIN = '15'
+
   // One-tap "On my way" — no composer, no typing. Sends the owner's on_my_way
   // template with the default ETA through the SAME pipeline as the editable
   // composer (/api/comms/send: opt-in-gated, logged, threaded, and it stamps
@@ -121,7 +133,7 @@ export function DayOpsPanel({
         body: JSON.stringify({
           customerId: job.customer_id, template: 'on_my_way', jobId: job.id,
           channels: ['sms', 'email'],
-          vars: { eta: '15', address: job.properties?.address ?? undefined },
+          vars: { eta: ONE_TAP_ETA_MIN, address: job.properties?.address ?? undefined },
         }),
       })
       const data = (await res.json().catch(() => ({}))) as { results?: Record<string, { sent?: boolean; reason?: string }> }
@@ -871,7 +883,8 @@ export function DayOpsPanel({
                         {/* Stage primary. on_my_way_at stamps when the text sends, so the
                             primary advances On my way → Start on its own. */}
                         {job.status === 'scheduled' && !job.on_my_way_at && (
-                          <ActionBtn disabled={sendingEta !== null} onClick={() => sendOnMyWay(job)} icon={Send} label={sendingEta === job.id ? 'Sending…' : 'On my way'} tone="primary" />
+                          <ActionBtn disabled={sendingEta !== null} onClick={() => sendOnMyWay(job)} icon={Send} label={sendingEta === job.id ? 'Sending…' : `On my way · ${ONE_TAP_ETA_MIN}m`}
+                            title={`Texts ${job.customers?.name || 'the customer'} that you'll arrive in about ${ONE_TAP_ETA_MIN} minutes. Use Message to send a different ETA.`} tone="primary" />
                         )}
                         {job.status === 'scheduled' && (
                           <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onStartJob(job) } finally { setActing(null) } }} icon={Play} label="Start" tone={job.on_my_way_at ? 'primary' : undefined} />
@@ -888,7 +901,8 @@ export function DayOpsPanel({
                         </a>
                         <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setAddonsId(null); setMessageId(messageId === job.id ? null : job.id) }} icon={MessageSquare} label="Message" />
                         {job.status === 'scheduled' && job.on_my_way_at && (
-                          <ActionBtn disabled={sendingEta !== null} onClick={() => sendOnMyWay(job)} icon={Send} label={sendingEta === job.id ? 'Sending…' : 'On my way'} />
+                          <ActionBtn disabled={sendingEta !== null} onClick={() => sendOnMyWay(job)} icon={Send} label={sendingEta === job.id ? 'Sending…' : `On my way · ${ONE_TAP_ETA_MIN}m`}
+                            title={`Texts ${job.customers?.name || 'the customer'} that you'll arrive in about ${ONE_TAP_ETA_MIN} minutes. Use Message to send a different ETA.`} />
                         )}
                         {/* Complete a scheduled visit without a check-in (no time tracked);
                             completeJob handles the missing started_at and offers Undo. */}
@@ -1022,11 +1036,12 @@ function Metric({ icon: Icon, label, value, tone }: { icon: typeof DollarSign; l
 // `tap-target` lifts that 40px to the 44px minimum on a coarse pointer — the last
 // 4px matter with a glove on — while `sm:h-8` keeps the mouse density identical.
 // 'primary' = THE next action for the stage; 'complete' = the finish action.
-function ActionBtn({ onClick, icon: Icon, label, tone, disabled }: { onClick: () => void; icon: typeof Pencil; label: string; tone?: 'emerald' | 'sky' | 'primary' | 'complete'; disabled?: boolean }) {
+function ActionBtn({ onClick, icon: Icon, label, tone, disabled, title }: { onClick: () => void; icon: typeof Pencil; label: string; tone?: 'emerald' | 'sky' | 'primary' | 'complete'; disabled?: boolean; title?: string }) {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
+      title={title}
       className={cn(
         'tap-target h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border text-xs font-medium flex items-center justify-center gap-1 active:scale-95 transition-transform disabled:opacity-50 disabled:pointer-events-none',
         tone === 'primary'
