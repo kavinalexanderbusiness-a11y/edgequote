@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { stripeEnabled, createStripeCustomer, createSetupCheckoutSession } from '@/lib/stripe/config'
+import { stripeEnabled, createSetupCheckoutSession } from '@/lib/stripe/config'
+import { ensureStripeCustomerId } from '@/lib/payments/cards'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -24,13 +25,12 @@ export async function POST(req: NextRequest) {
   const customer = cRow as { id: string; name: string; email: string | null; stripe_customer_id: string | null } | null
   if (!customer) return NextResponse.json({ error: 'customer not found' }, { status: 404 })
 
-  let stripeCustomerId = customer.stripe_customer_id
-  if (!stripeCustomerId) {
-    const made = await createStripeCustomer({ internalCustomerId: customer.id, name: customer.name, email: customer.email })
-    if (!made.ok || !made.id) return NextResponse.json({ error: made.error || 'Could not start card setup.' }, { status: 502 })
-    stripeCustomerId = made.id
-    await supabase.from('customers').update({ stripe_customer_id: stripeCustomerId }).eq('id', customer.id).eq('user_id', user.id)
-  }
+  // ONE ensure-the-Stripe-Customer path, shared with the portal setup route and
+  // both invoice-checkout routes — a second copy is a second way to mint a
+  // duplicate Customer and attach the card to the wrong one.
+  const ensured = await ensureStripeCustomerId(supabase, customer, { userId: user.id })
+  if (!ensured.id) return NextResponse.json({ error: ensured.error || 'Could not start card setup.' }, { status: 502 })
+  const stripeCustomerId = ensured.id
 
   const origin = (req.nextUrl?.origin || process.env.NEXT_PUBLIC_APP_URL || '').replace(/\/$/, '')
   const result = await createSetupCheckoutSession({

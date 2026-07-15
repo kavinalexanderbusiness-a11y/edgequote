@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
-import { constructWebhookEvent, fetchSetupIntentCard, detachPaymentMethod } from '@/lib/stripe/config'
+import { constructWebhookEvent, fetchSetupIntentCard, fetchPaymentIntentCard } from '@/lib/stripe/config'
+import { saveCardForCustomer } from '@/lib/payments/cards'
 import { sendPaymentReceipt } from '@/lib/comms/receipt'
 
 export const dynamic = 'force-dynamic'
@@ -132,30 +133,42 @@ export async function POST(req: NextRequest) {
       const setupIntentId = typeof s.setup_intent === 'string' ? s.setup_intent : null
       if (userId && customerId && setupIntentId) {
         const card = await fetchSetupIntentCard(setupIntentId)
-        if (card.ok && card.paymentMethodId) {
-          const stripeCustomerId = card.stripeCustomerId || (typeof s.customer === 'string' ? s.customer : null)
-          if (stripeCustomerId) {
-            await sb.from('customers').update({ stripe_customer_id: stripeCustomerId }).eq('id', customerId).eq('user_id', userId)
-          }
-          // Keep exactly ONE card per customer. Save the NEW card FIRST, then detach +
-          // delete any previous cards — so a failure mid-way can never leave the
-          // customer with NO card while AutoPay is still on (the worst case is a
-          // harmless stale row, and the charge path always picks is_default + newest).
-          const upRes = await sb.from('payment_methods').upsert({
-            user_id: userId, customer_id: customerId, stripe_customer_id: stripeCustomerId,
-            stripe_payment_method_id: card.paymentMethodId, brand: card.brand ?? null, last4: card.last4 ?? null,
-            exp_month: card.expMonth ?? null, exp_year: card.expYear ?? null, is_default: true,
-          }, { onConflict: 'stripe_payment_method_id' })
-          if (upRes.error) {
-            console.error('[stripe] payment_method upsert failed:', upRes.error.message)
+        const stripeCustomerId = card.stripeCustomerId || (typeof s.customer === 'string' ? s.customer : null)
+        if (card.ok && card.paymentMethodId && stripeCustomerId) {
+          const res = await saveCardForCustomer(sb, {
+            userId, customerId,
+            card: { paymentMethodId: card.paymentMethodId, stripeCustomerId, brand: card.brand, last4: card.last4, expMonth: card.expMonth, expYear: card.expYear },
+          })
+          if (res.error) {
+            console.error('[stripe] payment_method upsert failed:', res.error)
             return NextResponse.json({ error: 'db write failed' }, { status: 500 })
           }
-          const { data: prior } = await sb.from('payment_methods')
-            .select('stripe_payment_method_id').eq('customer_id', customerId).neq('stripe_payment_method_id', card.paymentMethodId)
-          for (const p of (prior as { stripe_payment_method_id: string }[] | null) || []) {
-            await detachPaymentMethod(p.stripe_payment_method_id)
-          }
-          await sb.from('payment_methods').delete().eq('customer_id', customerId).neq('stripe_payment_method_id', card.paymentMethodId)
+        }
+      }
+    }
+
+    // ── Card saved WHILE paying an invoice (mode=payment + ticked consent) ─────
+    // Runs after the payment is recorded above, and is deliberately separate from
+    // it: a card that fails to save must never cast doubt on money that was taken.
+    // fetchPaymentIntentCard.consented reads Stripe's setup_future_usage, which is
+    // set ONLY if the customer ticked the box — so an untick lands here and saves
+    // nothing. Same save path as the portal's Add-a-card, so AutoPay and "Charge
+    // saved card" pick the card up with no extra wiring.
+    if (s.mode === 'payment') {
+      const userId = s.metadata?.user_id
+      const customerId = s.metadata?.customer_id
+      const paymentIntentId = typeof s.payment_intent === 'string' ? s.payment_intent : null
+      if (userId && customerId && paymentIntentId) {
+        const card = await fetchPaymentIntentCard(paymentIntentId)
+        const stripeCustomerId = card.stripeCustomerId || (typeof s.customer === 'string' ? s.customer : null)
+        if (card.ok && card.consented && card.paymentMethodId && stripeCustomerId) {
+          const res = await saveCardForCustomer(sb, {
+            userId, customerId,
+            card: { paymentMethodId: card.paymentMethodId, stripeCustomerId, brand: card.brand, last4: card.last4, expMonth: card.expMonth, expYear: card.expYear },
+          })
+          // The invoice IS paid regardless — log and move on rather than 500 and
+          // make Stripe replay a payment we already recorded.
+          if (res.error) console.error('[stripe] saving the card offered at checkout failed:', res.error)
         }
       }
     }
