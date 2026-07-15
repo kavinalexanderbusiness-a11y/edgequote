@@ -11,8 +11,10 @@ import { Select } from '@/components/ui/Select'
 import { Customer } from '@/types'
 import { reviewStatus, REVIEW_STATUS_META, REVIEW_SOURCES } from '@/lib/crm/reviews'
 import { newClientMessageId } from '@/lib/comms/idempotency'
+import { AssistButton } from '@/components/ai/AssistButton'
+import { useAiAssist } from '@/hooks/useAiAssist'
 import { formatDate } from '@/lib/utils'
-import { Star, Send, ThumbsDown, RotateCcw, Loader2, Check } from 'lucide-react'
+import { Star, Send, ThumbsDown, RotateCcw, Loader2, Check, Copy } from 'lucide-react'
 
 // Per-customer review lifecycle on the profile. Reuses the existing review flag
 // (customers.reviewed_at) — these controls just layer the
@@ -110,6 +112,27 @@ export function ReviewLifecycle({ customer, onChange }: {
     onChange(patch); setEditing(false); setRating(0); setSource('Google'); setDate(today)
   }
 
+  // AI reply drafter — writes the owner's PUBLIC response to this review; the
+  // owner copies it to Google/Facebook themselves. Nothing is posted or stored.
+  const ai = useAiAssist()
+  const [reply, setReply] = useState('')
+  const [replyOpen, setReplyOpen] = useState(false)
+  async function draftReply() {
+    setReplyOpen(true)
+    setReply('')
+    ai.clearError()
+    await ai.run({
+      task: 'review_response',
+      customerId: customer.id,
+      rating: customer.review_rating || 5,
+      source: customer.review_source || 'Google',
+    }, { onDelta: d => setReply(prev => prev + d) })
+  }
+  async function copyReply() {
+    try { await navigator.clipboard.writeText(reply); toast.success('Reply copied — paste it on ' + (customer.review_source || 'Google') + '.') }
+    catch { toast.error('Could not copy — select the text and copy manually.') }
+  }
+
   return (
     <Card>
       <CardHeader className="flex items-center gap-2">
@@ -120,19 +143,43 @@ export function ReviewLifecycle({ customer, onChange }: {
       <CardBody className="space-y-3">
         {/* Reviewed — show the captured details */}
         {status === 'reviewed' && !editing && (
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5" role="img" aria-label={`${customer.review_rating || 0} out of 5 stars`}>
-                {[1, 2, 3, 4, 5].map(n => (
-                  <Star key={n} className={`w-4 h-4 ${customer.review_rating && n <= customer.review_rating ? 'text-amber-400 fill-amber-400' : 'text-ink-faint'}`} />
-                ))}
+          <>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5" role="img" aria-label={`${customer.review_rating || 0} out of 5 stars`}>
+                  {[1, 2, 3, 4, 5].map(n => (
+                    <Star key={n} className={`w-4 h-4 ${customer.review_rating && n <= customer.review_rating ? 'text-amber-400 fill-amber-400' : 'text-ink-faint'}`} />
+                  ))}
+                </div>
+                <p className="text-xs text-ink-muted mt-1">
+                  {customer.review_source || 'Review'}{customer.reviewed_at ? ` · ${formatDate(customer.reviewed_at)}` : ''}
+                </p>
               </div>
-              <p className="text-xs text-ink-muted mt-1">
-                {customer.review_source || 'Review'}{customer.reviewed_at ? ` · ${formatDate(customer.reviewed_at)}` : ''}
-              </p>
+              <div className="flex items-center gap-2 shrink-0">
+                {ai.enabled === true && !replyOpen && (
+                  <AssistButton label="Draft a reply" onClick={draftReply} busy={ai.running}
+                    title={`Write a public response to post on ${customer.review_source || 'Google'}`} />
+                )}
+                <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>Edit</Button>
+              </div>
             </div>
-            <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>Edit</Button>
-          </div>
+            {replyOpen && (
+              <div className="rounded-xl border border-accent/20 bg-accent/[0.04] p-3 space-y-2">
+                <p className="text-[10px] uppercase tracking-wide text-ink-faint">Suggested public reply · edit before posting</p>
+                <textarea value={reply} onChange={e => setReply(e.target.value)} rows={3} aria-label="Suggested review reply"
+                  readOnly={ai.running}
+                  className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3 py-2.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20 resize-none" />
+                {ai.error && <p className="text-xs text-amber-400" role="alert">{ai.error}</p>}
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="secondary" onClick={copyReply} disabled={ai.running || !reply.trim()}>
+                    <Copy className="w-3.5 h-3.5" /> Copy reply
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={draftReply} loading={ai.running}>Try again</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setReplyOpen(false)} disabled={ai.running}>Close</Button>
+                </div>
+              </div>
+            )}
+          </>
         )}
 
         {/* Declined */}

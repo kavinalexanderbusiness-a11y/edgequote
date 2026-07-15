@@ -37,6 +37,7 @@ import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { CustomerComms } from '@/components/customers/CustomerComms'
 import { CommsHealth } from '@/components/customers/CommsHealth'
 import { ReviewLifecycle } from '@/components/customers/ReviewLifecycle'
+import { CustomerAiSummary } from '@/components/ai/CustomerAiSummary'
 import { ReferralPanel } from '@/components/customers/ReferralPanel'
 import { ConversationThread } from '@/components/messages/ConversationThread'
 import { PaymentMethodCard } from '@/components/payments/PaymentMethodCard'
@@ -708,6 +709,10 @@ export default function CustomerDetailPage() {
 
       {/* Communication health — opt-in/contact mismatches (only shows when relevant) */}
       <CommsHealth customer={customer} onChange={patch => setCustomer({ ...customer, ...patch })} />
+
+      {/* AI brief — on-demand summary of this customer's history (renders nothing
+          when no AI key is configured; never automatic, never stored) */}
+      <CustomerAiSummary customerId={customer.id} />
 
       {/* Conversation — two-way SMS + portal thread */}
       <Card>
