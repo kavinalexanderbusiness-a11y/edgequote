@@ -42,6 +42,11 @@ const styles = StyleSheet.create({
   td: { fontSize: 10, color: COLORS.ink },
   cellDesc: { width: '70%' },
   cellAmt: { width: '30%', textAlign: 'right' },
+  // Narrower description only when a line actually carries qty/unit_price, so a
+  // job- or quote-generated invoice keeps the exact 70/30 layout it has today.
+  cellDescU: { width: '46%' },
+  cellQty: { width: '12%', textAlign: 'right' },
+  cellUnit: { width: '18%', textAlign: 'right' },
 
   grandRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 12, marginLeft: 'auto', width: '50%', paddingTop: 8, borderTopWidth: 1, borderTopColor: COLORS.dark },
   grandLabel: { fontSize: 12, fontFamily: 'Helvetica-Bold', color: COLORS.dark },
@@ -136,23 +141,36 @@ export function InvoiceDocument({ invoice, settings }: InvoicePDFProps) {
         </View>
 
         <Text style={styles.sectionTitle}>Details</Text>
-        <View style={styles.table}>
-          <View style={styles.tableHead}>
-            <Text style={[styles.th, styles.cellDesc]}>Description</Text>
-            <Text style={[styles.th, styles.cellAmt]}>Amount</Text>
-          </View>
-          {(invoice.line_items && invoice.line_items.length > 0
+        {(() => {
+          const rows = invoice.line_items && invoice.line_items.length > 0
             ? invoice.line_items
             : [{ description: invoice.service_type || 'Services rendered', amount: invoiceTotals(invoice.amount, settings, { type: invoice.discount_type, value: invoice.discount_value }).subtotal, kind: 'service' as const }]
-          ).map((li, i) => (
-            <View style={styles.tableRow} key={i}>
-              <View style={styles.cellDesc}>
-                <Text style={styles.td}>{li.description}</Text>
+          // Qty/Unit are a manual-invoice breakdown. Only grow the columns when a
+          // line actually has them — an engine-priced invoice renders exactly as
+          // it did before this existed.
+          const showUnits = rows.some(li => li.qty != null && li.unit_price != null)
+          const descStyle = showUnits ? styles.cellDescU : styles.cellDesc
+          return (
+            <View style={styles.table}>
+              <View style={styles.tableHead}>
+                <Text style={[styles.th, descStyle]}>Description</Text>
+                {showUnits && <Text style={[styles.th, styles.cellQty]}>Qty</Text>}
+                {showUnits && <Text style={[styles.th, styles.cellUnit]}>Unit price</Text>}
+                <Text style={[styles.th, styles.cellAmt]}>Amount</Text>
               </View>
-              <Text style={[styles.td, styles.cellAmt]}>{money(Number(li.amount))}</Text>
+              {rows.map((li, i) => (
+                <View style={styles.tableRow} key={i}>
+                  <View style={descStyle}>
+                    <Text style={styles.td}>{li.description}</Text>
+                  </View>
+                  {showUnits && <Text style={[styles.td, styles.cellQty]}>{li.qty != null ? String(li.qty) : ''}</Text>}
+                  {showUnits && <Text style={[styles.td, styles.cellUnit]}>{li.unit_price != null ? money(Number(li.unit_price)) : ''}</Text>}
+                  <Text style={[styles.td, styles.cellAmt]}>{money(Number(li.amount))}</Text>
+                </View>
+              ))}
             </View>
-          ))}
-        </View>
+          )
+        })()}
 
         {(() => {
           const t = invoiceTotals(invoice.amount, settings, { type: invoice.discount_type, value: invoice.discount_value })

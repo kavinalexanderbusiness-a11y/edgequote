@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/Button'
 import { Menu } from '@/components/ui/Menu'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { JobPhotos } from '@/components/photos/JobPhotos'
+import { RouteTimeline, type TimelineStop } from '@/components/schedule/RouteTimeline'
 import { JobAddons } from '@/components/schedule/JobAddons'
 import { JobMessages } from '@/components/schedule/JobMessages'
 import { SendMessageDialog, type MessageRecipient } from '@/components/comms/SendMessageDialog'
@@ -448,6 +449,21 @@ export function DayOpsPanel({
   const dayCapMin = usedMin + load.spareMin
   const loadPct = dayCapMin > 0 ? Math.round((usedMin / dayCapMin) * 100) : null
 
+  // The timeline reads the ETA chain the route engine already produced above —
+  // no second ordering, no second distance lookup. Capacity ends at work start +
+  // the day's labour budget, which is the same number the load pill uses.
+  const timelineStops: TimelineStop[] = etas
+    ? etas.stops
+        .map(s => {
+          const job = active.find(j => j.id === s.jobId)
+          return job
+            ? { jobId: job.id, name: job.customers?.name || job.title, arrivalMin: s.arrivalMin, durMin: durByJob[job.id] ?? DEFAULT_JOB_MIN, status: job.status }
+            : null
+        })
+        .filter((s): s is TimelineStop => s !== null)
+    : []
+  const capacityEndMin = (etas?.startMin ?? timeToMinutes(workStartTime)) + Math.round((capacityHours > 0 ? capacityHours : 8) * 60)
+
   // ── Live day tracking (check-in/check-out data) ──
   const isToday = date === localTodayISO()
   const inProgress = active.find(j => j.status === 'in_progress') ?? null
@@ -457,13 +473,15 @@ export function DayOpsPanel({
   const workedMin = completed.reduce((s, j) => s + (j.actual_minutes || 0), 0)
     + (inProgress?.started_at ? elapsedMin(inProgress.started_at) : 0)
   const live = isToday && (!!inProgress || (!!firstStart && completed.length > 0))
-  // Re-render each minute while a job is running so elapsed/finish stay current.
+  // Re-render each minute on TODAY so elapsed, finish and the timeline's "now"
+  // line stay current — the now line has to keep moving before the first
+  // check-in, which is exactly when you're deciding whether you're already late.
   const [, setTick] = useState(0)
   useEffect(() => {
-    if (!isToday || !inProgress) return
+    if (!isToday) return
     const t = setInterval(() => setTick(x => x + 1), 60000)
     return () => clearInterval(t)
-  }, [isToday, inProgress])
+  }, [isToday])
   // Finish estimate: live (now + what's left) once the day is underway, else the
   // planned route ETAs from work start.
   let estFinish: string
@@ -504,15 +522,21 @@ export function DayOpsPanel({
             </span>
           )}
         </div>
+        {/* On a phone the two SECONDARY actions collapse to their icons (the same
+            pattern the message thread header uses) — three full labels here are
+            ~330px on a 360px screen, which squeezed the date out of its own
+            header. The primary action keeps its label. */}
         <div className="flex items-center gap-2 shrink-0">
           {dayRecipients.length > 0 && (
-            <Button size="sm" variant="secondary" onClick={() => setShowDayMsg(true)} title="Message everyone scheduled today">
-              <MessageSquare className="w-4 h-4" /> Message all
+            <Button size="sm" variant="secondary" onClick={() => setShowDayMsg(true)}
+              title="Message everyone scheduled today" aria-label="Message everyone scheduled today">
+              <MessageSquare className="w-4 h-4" /> <span className="hidden sm:inline">Message all</span>
             </Button>
           )}
           {remaining.length > 0 && (
-            <Button size="sm" variant="secondary" onClick={onRainDelay} title="Bump all remaining jobs to your next work day">
-              <CloudRain className="w-4 h-4" /> Delay remaining
+            <Button size="sm" variant="secondary" onClick={onRainDelay}
+              title="Bump all remaining jobs to your next work day" aria-label="Delay remaining jobs to the next work day">
+              <CloudRain className="w-4 h-4" /> <span className="hidden sm:inline">Delay remaining</span>
             </Button>
           )}
           <Button size="sm" onClick={onAddJob}><Plus className="w-4 h-4" /> Add job</Button>
@@ -596,6 +620,18 @@ export function DayOpsPanel({
               <p className="text-xs text-ink-faint mt-1.5">No locatable stops yet.</p>
             )}
           </div>
+
+          {/* The same route, as time: where the day goes, how much is driving,
+              and whether it runs past capacity. Reads the ETAs computed above. */}
+          {etas && timelineStops.length > 0 && (
+            <RouteTimeline
+              startMin={etas.startMin}
+              finishMin={etas.finishMin}
+              capacityEndMin={capacityEndMin}
+              stops={timelineStops}
+              nowMin={isToday ? new Date().getHours() * 60 + new Date().getMinutes() : undefined}
+            />
+          )}
 
           {/* Jobs in route order, with one-tap actions */}
           <div className="space-y-2">

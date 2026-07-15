@@ -381,8 +381,17 @@ export const ADDON_TEMPLATES: AddonTemplate[] = [
 export type InvoiceLineKind = 'service' | 'addon' | 'travel'
 export interface InvoiceLineItem {
   description: string
+  // The line total, and the ONLY figure any total/balance/PDF math reads. qty and
+  // unit_price below are the manual breakdown that produced it — they never
+  // re-derive a total, so engine-priced lines (which have no qty) are unaffected.
   amount: number
   kind: InvoiceLineKind
+  // Optional, manual-invoice only: how the owner arrived at `amount`
+  // (qty x unit_price). Absent on job/quote-generated lines, and the PDF only
+  // grows Qty/Unit columns when a line actually carries them — so a generated
+  // invoice renders byte-identically to before.
+  qty?: number | null
+  unit_price?: number | null
 }
 
 // Stored statuses. partial/overpaid are derived by the recompute_invoice_paid DB
@@ -536,6 +545,10 @@ export interface Quote {
   status: QuoteStatus
   // Follow-up / missed-quote recovery
   sent_at: string | null
+  // Calendar date the quote stops standing. Null = never expires (every quote
+  // sent before expiry existed). 'expired' is DERIVED by lib/quoteStatus and is
+  // never stored in `status` — see the invoice 'overdue' overlay it mirrors.
+  valid_until: string | null
   last_followed_up_at: string | null
   follow_up_count: number
   // Captured at acceptance so recovery impact can be measured later

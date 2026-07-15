@@ -13,7 +13,7 @@ import { MessageSquare, Check, RotateCcw } from 'lucide-react'
 import { Skeleton } from '@/components/ui/Skeleton'
 
 const TYPES: MsgType[] = [
-  'introduction',
+  'booking_received', 'introduction',
   'confirm', 'reminder', 'eta', 'on_my_way', 'running_late', 'arrived', 'early_arrival',
   'rescheduled', 'rain_delay', 'job_complete', 'thanks', 'review_request', 'quote', 'invoice',
   'estimate_reminder', 'payment_reminder', 'estimate_followup',
@@ -22,6 +22,7 @@ const TYPES: MsgType[] = [
 // One plain-English line per template: when it fires / what it's for — so the owner
 // isn't guessing what "Finished early" or "Estimate follow-up" actually sends.
 const TEMPLATE_DESC: Partial<Record<MsgType, string>> = {
+  booking_received: 'Sent automatically the moment someone books online — their confirmation number, in writing.',
   introduction: 'A first hello when you add a new customer.',
   confirm: 'Confirms an upcoming visit.',
   reminder: 'Reminds the customer the day before their visit.',

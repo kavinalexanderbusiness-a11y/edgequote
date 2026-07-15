@@ -8,7 +8,9 @@ import { ConfirmHost } from '@/components/ui/ConfirmHost'
 import { recurrenceLabel } from '@/lib/recurrence'
 import { invoiceTotals } from '@/lib/invoiceTotals'
 import { serviceLineTotals } from '@/lib/quoteServices'
-import { formatCurrency, formatDate, cn } from '@/lib/utils'
+import { formatCurrency, formatDate, cn, localTodayISO } from '@/lib/utils'
+import { displayQuoteStatus } from '@/lib/quoteStatus'
+import type { QuoteStatus } from '@/types'
 import { Button } from '@/components/ui/Button'
 import { renderPortalQuoteBlob, renderPortalInvoiceBlob, renderPortalReceiptBlob, downloadBlob, viewBlob, printBlob } from '@/lib/portalPdf'
 import { receiptNumberFor } from '@/lib/payments/ledger'
@@ -24,7 +26,11 @@ import {
 // with photos & invoices, a before/after gallery, and quick service requests.
 
 interface PortalQuoteService { service_type: string; quantity: number; unit: string | null; unit_price: number; est_minutes: number | null; discount_type: 'amount' | 'percent' | null; discount_value: number | null; notes: string | null; sort_order: number }
-interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null }
+// `valid_until` is the date this price stops standing. Null = it never lapses (every
+// quote sent before expiry stamping began). Expiry is DERIVED from it via
+// lib/quoteStatus — never stored on status — so the portal reads the same field and
+// reaches the same answer as the owner's screens, with no second rule to drift.
+interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; valid_until: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null }
 interface PortalInvoice { id: string; invoice_number: string; service_type: string | null; amount: number; status: string; issued_date: string | null; due_date: string | null; notes: string | null; address: string | null; line_items: { description: string; amount: number; kind: string }[] | null; job_id: string | null; created_at: string; discount_type?: 'amount' | 'percent' | null; discount_value?: number | null; amount_paid?: number | null }
 interface PortalJob { id: string; recurrence_id: string | null; service_type: string | null; title: string; scheduled_date: string; status: string; on_my_way_at: string | null; started_at: string | null; completed_at: string | null; notes: string | null }
 interface PortalRec { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null; end_date: string | null }
@@ -45,7 +51,7 @@ type LiveStatus = 'scheduled' | 'on_my_way' | 'in_progress' | 'completed'
 interface Derived {
   upcoming: PortalJob[]; completed: PortalJob[]; nextService: PortalJob | null
   lastCompleted: PortalJob | null; outstanding: number
-  plans: { id: string; label: string; service: string }[]
+  plans: { id: string; label: string; service: string; nextDate: string | null; endDate: string | null }[]
 }
 
 const REQUEST_PRESETS = ['Mulch', 'Spring Cleanup', 'Fall Cleanup', 'Weed Control', 'Landscaping']
@@ -269,7 +275,19 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     const plans = activeRecIds.map(id => {
       const r = recById.get(id)
       const sample = jobs.find(j => j.recurrence_id === id)
-      return { id, label: r ? recurrenceLabel(r.interval_unit as 'day' | 'week' | 'month' | null, r.interval_count, r.freq) : 'Recurring', service: sample?.service_type || sample?.title || 'Service' }
+      // `upcoming` is already date-sorted, so the first match IS this plan's next visit.
+      // "Every 2 weeks" without a date is a cadence, not an answer — the question someone
+      // actually has about their plan is "when are you next coming?".
+      const next = upcoming.find(j => j.recurrence_id === id) || null
+      return {
+        id,
+        label: r ? recurrenceLabel(r.interval_unit as 'day' | 'week' | 'month' | null, r.interval_count, r.freq) : 'Recurring',
+        service: sample?.service_type || sample?.title || 'Service',
+        nextDate: next?.scheduled_date || null,
+        // A plan with an end date is a season, and knowing when it stops is part of not
+        // feeling locked in. Only shown when the owner actually set one.
+        endDate: r?.end_date || null,
+      }
     })
     return { upcoming, completed, nextService, lastCompleted, outstanding, plans }
   }, [data])
@@ -306,7 +324,9 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   const hasProperty = !!(data.property && (data.property.address || data.property.lawn_sqft || data.property.fence_length || data.property.neighborhood))
   const TABS: { key: Tab; label: string; icon: typeof Home; n?: number }[] = ([
     { key: 'home', label: 'Home', icon: Home },
-    { key: 'documents', label: 'Documents', icon: FolderOpen, n: data.quotes.length + data.invoices.length },
+    // Count what the tab actually SHOWS — DocumentsTab hides draft invoices (the owner's
+    // unfinished work), so counting them here would promise a document that isn't there.
+    { key: 'documents', label: 'Documents', icon: FolderOpen, n: data.quotes.length + data.invoices.filter(i => i.status !== 'draft').length },
     { key: 'payments', label: 'Payments', icon: Wallet, n: data.payments.length },
     { key: 'service', label: 'Service', icon: History, n: derived.completed.length },
     { key: 'photos', label: 'Photos', icon: ImageIcon, n: data.photos.length },
@@ -404,7 +424,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
           {tab === 'property' && <PropertyTab property={data.property} />}
           {tab === 'payments' && <PaymentsTab customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} business={biz} payments={data.payments} invoices={data.invoices} outstanding={derived.outstanding}
             token={token} paymentsEnabled={paymentsEnabled} card={data.payment_method ?? null} autopayEnabled={!!data.customer.autopay_enabled} onChanged={load} />}
-          {tab === 'documents' && <DocumentsTab quotes={data.quotes} invoices={data.invoices} customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} business={biz} onInvoiceOpen={markInvoiceViewed}
+          {tab === 'documents' && <DocumentsTab quotes={data.quotes} invoices={data.invoices} customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} lawnSqft={Number(data.property?.lawn_sqft) || null} business={biz} onInvoiceOpen={markInvoiceViewed}
             paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} accept={accept} accepting={accepting} initialCat={docsCat} />}
           {tab === 'request' && (
             <RequestTab presets={REQUEST_PRESETS} reqMsg={reqMsg} setReqMsg={setReqMsg} request={request} reqBusy={reqBusy} reqSent={reqSent} biz={biz} />
@@ -453,7 +473,11 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
   const next = derived.nextService
   // A quote awaiting approval is usually WHY the customer opened this link —
   // signpost it up top instead of making them discover the Documents tab.
-  const awaiting = (data.quotes || []).filter(q => q.status === 'sent')
+  // An EXPIRED quote is not awaiting anything: this hero says "Your quote is ready ·
+  // $2,150 — review and approve when you're ready" and taps through to a Documents row
+  // that now says the price has lapsed. Same engine as that row, so the two agree.
+  const awaiting = (data.quotes || []).filter(q =>
+    displayQuoteStatus({ status: q.status as QuoteStatus, valid_until: q.valid_until }, localTodayISO()) === 'sent')
   // A pure prospect (quote in hand, no visits or invoices yet) came to review
   // the quote — skip the empty "no visit scheduled" hero and $0/— stat cards
   // that would push it down and invite the wrong action.
@@ -569,10 +593,21 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
           <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint mb-2">Active plan{derived.plans.length !== 1 ? 's' : ''}</p>
           <div className="space-y-1.5">
             {derived.plans.map(p => (
-              <div key={p.id} className="flex items-center gap-2 text-sm">
-                <Repeat className="w-3.5 h-3.5 text-accent-text shrink-0" />
-                <span className="text-ink font-medium">{p.service}</span>
-                <span className="text-ink-muted">· {p.label}</span>
+              <div key={p.id} className="flex items-start gap-2 text-sm">
+                <Repeat className="w-3.5 h-3.5 text-accent-text shrink-0 mt-1" />
+                <div className="min-w-0">
+                  <p>
+                    <span className="text-ink font-medium">{p.service}</span>
+                    <span className="text-ink-muted"> · {p.label}</span>
+                  </p>
+                  {(p.nextDate || p.endDate) && (
+                    <p className="text-xs text-ink-muted mt-0.5">
+                      {p.nextDate ? <>Next visit <span className="text-ink font-medium">{formatDate(p.nextDate)}</span></> : null}
+                      {p.nextDate && p.endDate ? ' · ' : null}
+                      {p.endDate ? <>Runs until {formatDate(p.endDate)}</> : null}
+                    </p>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -635,6 +670,27 @@ function ServiceTab({ completed, photosByJob, invoiceByJob, photoUrl, gstPct }: 
               <p className="text-sm font-semibold text-ink tracking-tight flex items-center gap-1.5"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> {j.service_type || j.title}</p>
               <span className="text-xs text-ink-muted">{formatDate(j.scheduled_date)}</span>
             </div>
+            {/* started_at/completed_at were already in the payload and never rendered — so
+                "we were there" was an assertion with no substance behind it. Showing the
+                real window is the difference between a claim and a record. Only shown when
+                both stamps exist and the span is sane (a forgotten 'start' would otherwise
+                report an 11-hour visit). */}
+            {(() => {
+              const st = j.started_at ? new Date(j.started_at).getTime() : null
+              const en = j.completed_at ? new Date(j.completed_at).getTime() : null
+              if (!st || !en || en <= st) return null
+              const mins = Math.round((en - st) / 60000)
+              if (mins < 1 || mins > 600) return null
+              const span = mins < 60 ? `${mins} min` : `${Number((mins / 60).toFixed(1))} hr`
+              return (
+                <p className="text-xs text-ink-muted mt-1 flex items-center gap-1.5">
+                  <Clock className="w-3 h-3 text-ink-faint shrink-0" />
+                  On site {new Date(j.started_at!).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                  {' – '}{new Date(j.completed_at!).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                  <span className="text-ink-faint">· {span}</span>
+                </p>
+              )
+            })()}
             {photos.length > 0 && (
               <div className="grid grid-cols-4 gap-1.5 mt-3">
                 {photos.slice(0, 4).map(p => (
@@ -719,15 +775,25 @@ type DocKind = 'quote' | 'invoice'
 // different kinds of number in identical type: invoice amounts include GST, quote totals
 // don't. The PDF says "Plus GST — added on your invoice"; the row a customer actually
 // approves from said nothing, so the first bill looked like a bait-and-switch.
-interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; amount: number; amountNote?: string; balance: number; filename: string; getBlob: () => Promise<Blob>; lines?: { label: string; amount: number }[] }
+// `explain` answers "why does this cost this?" in the customer's own terms. It carries
+// only facts about THEIR property and THEIR job — never the owner's rate, margin, floor
+// or win-rate. (`rate` isn't in the portal projection, and deriving it from
+// subtotal ÷ man_hours would expose the owner's hourly pricing to the person paying it.)
+// `status` on a quote is the DISPLAY status (lib/quoteStatus), not the stored one — so
+// an expired quote arrives here as 'expired' rather than 'sent'. That is what makes the
+// Accept button disappear on its own: `canAccept` already tests for 'sent', so there is
+// no second expiry check anywhere in the render path to forget or contradict.
+// `expiredOn` is the date it lapsed, shown so the customer knows this isn't a glitch.
+interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; expiredOn?: string; amount: number; amountNote?: string; balance: number; filename: string; getBlob: () => Promise<Blob>; lines?: { label: string; amount: number }[]; explain?: string[] }
 const KIND_META: Record<DocKind, { label: string; icon: typeof FileText; tone: string }> = {
   quote: { label: 'Quote', icon: FileText, tone: 'text-accent-text border-accent/25 bg-accent/10' },
   invoice: { label: 'Invoice', icon: Receipt, tone: 'text-sky-400 border-sky-500/25 bg-sky-500/10' },
 }
 
 
-function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, business, onInvoiceOpen, paymentsEnabled, pay, payingId, accept, accepting, initialCat }: {
-  quotes: PortalQuote[]; invoices: PortalInvoice[]; customerName: string; fallbackAddress: string | null; business: PortalData['business']
+function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, lawnSqft, business, onInvoiceOpen, paymentsEnabled, pay, payingId, accept, accepting, initialCat }: {
+  quotes: PortalQuote[]; invoices: PortalInvoice[]; customerName: string; fallbackAddress: string | null
+  lawnSqft: number | null; business: PortalData['business']
   onInvoiceOpen?: (invoiceId: string) => void
   paymentsEnabled: boolean; pay: (invoiceId: string) => void; payingId: string | null
   accept: (quoteId: string) => void; accepting: string | null
@@ -740,6 +806,7 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, busines
   const [sort, setSort] = useState<'newest' | 'oldest'>('newest')
 
   const gstPct = Number(business?.gst_percent) || 0
+  const today = localTodayISO()
   const docs = useMemo<DocItem[]>(() => {
     const q: DocItem[] = quotes.map(qq => {
       // Multi-service quotes get a per-service breakdown on the row (same
@@ -768,14 +835,48 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, busines
       ].filter((l): l is { label: string; amount: number } => l !== null)
       const allLines = [...svcLines, ...planLines]
       const lines = allLines.length > 0 ? allLines : undefined
+      // "Why does it cost this?" — answered from what we measured about THIS property and
+      // THIS job. The line-item breakdown above only renders for multi-service quotes,
+      // which in practice is almost none of them, so for a typical quote the customer was
+      // handed a single number and no reasoning at all. Every fact here is about them:
+      // their lawn, their visit, their crew. Nothing here exposes the owner's rate.
+      const manHours = Number(qq.hours) > 0 && Number(qq.crew_size) > 0 ? Number(qq.hours) * Number(qq.crew_size) : 0
+      const fmtHrs = (h: number) => h < 1 ? `${Math.round(h * 60)} minutes` : h === 1 ? '1 hour' : `${Number(h.toFixed(1))} hours`
+      const explainBits = [
+        lawnSqft && lawnSqft > 0 ? `Priced for your ${lawnSqft.toLocaleString()} sq ft lawn — measured, not guessed.` : null,
+        manHours > 0
+          ? `About ${fmtHrs(manHours)} of work${Number(qq.crew_size) > 1 ? `, with a crew of ${Number(qq.crew_size)}` : ''}.`
+          : null,
+        Number(qq.travel_fee) > 0 ? `Includes a ${formatCurrency(Number(qq.travel_fee))} travel charge to reach your property.` : null,
+        planLines.length > 0 ? 'Your first visit is priced above; ongoing visits are charged at the plan rate shown.' : null,
+        'Nothing is charged when you approve — you’ll get an invoice once the work is done.',
+      ].filter((s): s is string => !!s)
+      // THE shared expiry engine — the same call the owner's quote page and quote list
+      // make. A lapsed quote surfaces as 'expired' here, which is what removes the Accept
+      // button (canAccept tests for 'sent') and swaps the pill, with no separate check.
+      // PortalQuote.status is `string` on purpose — it's RPC JSON, so the portal doesn't
+      // presume the union. displayQuoteStatus only branches on 'sent', and any other
+      // value falls through unchanged, so narrowing here is safe rather than a guess.
+      const display = displayQuoteStatus({ status: qq.status as QuoteStatus, valid_until: qq.valid_until }, today)
+      const expired = display === 'expired'
       return {
         id: 'q' + qq.id, rawId: qq.id, kind: 'quote' as const, number: qq.quote_number, title: qq.service_type || 'Quote',
-        date: qq.issued_date || qq.created_at, status: qq.status, amount: Number(qq.total) || 0,
+        date: qq.issued_date || qq.created_at, status: display, expiredOn: expired ? qq.valid_until || undefined : undefined,
+        amount: Number(qq.total) || 0,
         amountNote: gstPct > 0 ? `+ GST (${gstPct}%) — added on your invoice` : undefined, balance: 0,
         filename: `${qq.quote_number}.pdf`, getBlob: () => renderPortalQuoteBlob(qq, customerName, business), lines,
+        // Don't justify a price that no longer stands — explaining it would invite the
+        // customer to act on a number we're about to tell them we can't honour.
+        explain: !expired && explainBits.length > 1 ? explainBits : undefined,
       }
     })
-    const inv: DocItem[] = invoices.map(ii => {
+    // A DRAFT invoice is the owner's unfinished work — a number they're still deciding on.
+    // get_portal_data filters draft QUOTES (`status <> 'draft'`) but its invoices
+    // projection has no status filter, and two other places compensate client-side (the
+    // outstanding balance, and the pay gate) — this list was simply missed, so a customer
+    // could sit looking at a bill that hadn't been issued and couldn't be paid. Quotes set
+    // the precedent: drafts are private until sent.
+    const inv: DocItem[] = invoices.filter(ii => ii.status !== 'draft').map(ii => {
       // Same balance math as the dashboard: discounted+GST total − payments recorded.
       const total = invoiceTotals(ii.amount, { gst_percent: gstPct }, { type: ii.discount_type, value: ii.discount_value }).total
       const balance = Math.max(0, Math.round((total - (Number(ii.amount_paid) || 0)) * 100) / 100)
@@ -851,7 +952,10 @@ function DocRow({ d, paymentsEnabled, pay, payingId, accept, accepting }: {
   const m = KIND_META[d.kind]
   // The one action each document actually needs, right on the row: a sent quote
   // can be accepted; an invoice with a balance can be paid.
+  // `d.status` is the DISPLAY status, so an expired quote is not 'sent' and loses its
+  // Accept button here without a second expiry test.
   const canAccept = d.kind === 'quote' && d.status === 'sent'
+  const isExpired = d.kind === 'quote' && d.status === 'expired'
   const canPay = d.kind === 'invoice' && paymentsEnabled && d.balance > 0 && d.status !== 'draft' && d.status !== 'cancelled'
   return (
     <div className="rounded-card border border-border bg-bg-secondary p-4 card-lift">
@@ -877,6 +981,33 @@ function DocRow({ d, paymentsEnabled, pay, payingId, accept, accepting }: {
               <span className="text-ink shrink-0 tabular-nums">{formatCurrency(l.amount)}</span>
             </div>
           ))}
+        </div>
+      )}
+      {/* What's behind the number. Shown on the quote the customer is deciding on — a
+          price with no reasoning is the thing people call to argue about. */}
+      {d.explain && d.explain.length > 0 && canAccept && (
+        <div className="mt-3 pt-3 border-t border-border/60">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint mb-1.5">What&rsquo;s behind this price</p>
+          <ul className="space-y-1">
+            {d.explain.map((line, i) => (
+              <li key={i} className="text-xs text-ink-muted flex items-start gap-1.5">
+                <Check className="w-3 h-3 text-emerald-400 shrink-0 mt-0.5" /> {line}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {/* An expired quote takes the Accept button's place — the customer is told plainly
+          that the price no longer stands, rather than being left to tap a button that
+          would commit them to a number we can't honour. No extension is offered here:
+          whether to stand by an old price is the owner's call, made on their side. */}
+      {isExpired && (
+        <div className="mt-3 rounded-xl border border-amber-500/25 bg-amber-500/[0.06] px-3.5 py-3 flex items-start gap-2">
+          <Clock className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+          <p className="text-xs text-ink-muted">
+            <span className="text-ink font-medium">This quote has expired.</span> Please contact us for an updated quote.
+            {d.expiredOn ? <span className="text-ink-faint"> It was valid until {formatDate(d.expiredOn)}.</span> : null}
+          </p>
         </div>
       )}
       {(canAccept || canPay) && (
@@ -1399,6 +1530,10 @@ function QuoteStatusPill({ status }: { status: string }) {
     paid:      { label: 'Completed',              tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' },
     declined:  { label: 'Declined',               tone: 'text-red-400 border-red-500/30 bg-red-500/10' },
     sent:      { label: 'Awaiting your approval', tone: 'text-amber-400 border-amber-500/30 bg-amber-500/10' },
+    // Derived, never stored (lib/quoteStatus). Deliberately NOT red: an expired quote
+    // isn't a rejection or a failure — the price simply lapsed, and asking for a fresh
+    // one is a normal thing to do.
+    expired:   { label: 'Expired',                tone: 'text-ink-muted border-border bg-bg-tertiary' },
   }
   const m = map[status] ?? { label: 'Quote', tone: 'text-ink-muted border-border bg-bg-tertiary' }
   return <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', m.tone)}>{m.label}</span>
