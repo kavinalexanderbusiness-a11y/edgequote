@@ -18,8 +18,16 @@ export interface DecisionInput {
   /** Local hour (0-23) the evaluation is happening at. */
   hour: number
   /** How many times this rule has already acted on this subject inside the
-   *  rule's own frequency window. */
-  recentActionsForSubject: number
+   *  rule's own frequency window.
+   *
+   *  `'unknown'` is a first-class value, not a convenience: a caller that has not
+   *  counted MUST say so rather than pass a plausible-looking 0. The engine used to
+   *  hardcode 0, which made `0 >= count` false forever — the per-customer cap could
+   *  never trip, so a promoted rule would re-fire on the same customer every night
+   *  the sweep re-emitted their signal. The cap was fully written and the caller
+   *  defeated it. Unknown fails CLOSED (see decide), so the count query has to be
+   *  real before anything can fire. */
+  recentActionsForSubject: number | 'unknown'
   /** How many times this rule has already acted in THIS run. */
   actionsThisRun: number
   /** A prior action already exists for this exact dedupe key. */
@@ -50,7 +58,10 @@ export function decide(inp: DecisionInput): Decision {
   if (inp.hour < from || inp.hour >= to) return { fire: false, reason: 'quiet_hours' }
 
   // 4. Frequency caps — per subject, then the run's blast radius. Being right is
-  //    not a licence to be relentless.
+  //    not a licence to be relentless. An uncounted history is treated as a cap hit:
+  //    "I don't know how often we've already bothered them" is a reason to stay
+  //    quiet, never a reason to send.
+  if (inp.recentActionsForSubject === 'unknown') return { fire: false, reason: 'frequency_cap' }
   if (inp.recentActionsForSubject >= rule.constraints.maxPerCustomerPer.count) {
     return { fire: false, reason: 'frequency_cap' }
   }

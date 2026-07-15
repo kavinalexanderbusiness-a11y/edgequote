@@ -10,6 +10,9 @@ import { invoiceBalance } from '@/lib/payments/ledger'
 import { formatCurrency, localTodayISO } from '@/lib/utils'
 
 export const dynamic = 'force-dynamic'
+// Each reminder costs up to two sequential provider round-trips, so the platform
+// default (10–15s) would kill the run mid-batch and leave the tally a lie.
+export const maxDuration = 300
 
 // ── Automatic invoice reminders (Vercel Cron → see vercel.json) ──────────────
 // Chases invoices that are past due and still owe money, using the existing
@@ -47,6 +50,13 @@ type ReminderRow = RemindableInvoice & {
 // what every balance here is computed with) plus this chaser's own cadence.
 type InvoiceChaseCtx = OwnerContext & { policy: ReminderPolicy }
 
+// Blast-radius guard on the scan, not on who gets reminded. Truncating is SAFE
+// here: claim-before-send means an invoice this run never reached keeps its
+// reminder_count and is simply picked up by the next run — nothing is skipped,
+// only deferred. Do not "fix" this by removing the cap; an unbounded scan is what
+// makes a run time out mid-batch.
+const MAX_PER_RUN = 500
+
 export async function GET(req: NextRequest) {
   if (!cronSecretOk(req)) return NextResponse.json({ error: 'forbidden' }, { status: 403 })
   const enabled = commsEnabled()
@@ -62,15 +72,23 @@ export async function GET(req: NextRequest) {
 
   // Only invoices that can still owe money. 'overdue' is then decided by the
   // ledger, not by this query — the filter is just to keep the scan small.
+  // Longest-overdue first, so a truncated scan still holds the stalest money. One
+  // row over the cap is how truncation is detected without paying for a count query.
   const sel = 'id, user_id, customer_id, invoice_number, status, due_date, amount, amount_paid, discount_type, discount_value, viewed_at, last_reminded_at, reminder_count, customers(name, phone, email, sms_opt_in, email_opt_in, message_prefs)'
   const { data: rows, error } = await supabase.from('invoices').select(sel).in('status', ['unpaid', 'sent', 'partial'])
+    .order('due_date', { ascending: true })
+    .limit(MAX_PER_RUN + 1)
   if (error) {
+    console.error('[cron/invoice-reminders] invoice query failed:', error.message)
     // Most likely the reminder columns aren't there yet — say so plainly instead
     // of failing as an opaque 500.
     return NextResponse.json({ ok: false, error: error.message, note: 'Run supabase/RUN-2026-07-14-invoice-reminders.sql.' }, { status: 500 })
   }
-  const invoices = ((rows as unknown as ReminderRow[]) || []).filter(i => i.customer_id && i.customers)
-  if (invoices.length === 0) return NextResponse.json({ ok: true, chased: 0, sent: 0, skipped: 0, failed: 0 })
+  const fetched = (rows as unknown as ReminderRow[]) || []
+  const truncated = fetched.length > MAX_PER_RUN
+  const invoices = fetched.slice(0, MAX_PER_RUN).filter(i => i.customer_id && i.customers)
+  if (truncated) console.warn(`[cron/invoice-reminders] hit MAX_PER_RUN=${MAX_PER_RUN}; the rest are chased on the next run.`)
+  if (invoices.length === 0) return NextResponse.json({ ok: true, chased: 0, sent: 0, skipped: 0, failed: 0, truncated })
 
   // Per-owner settings. THE shared settings read (lib/automation/owner) plus this
   // chaser's own cadence. runChaseCron caches loadContext per user_id, so this is
@@ -104,6 +122,18 @@ export async function GET(req: NextRequest) {
         .select('id')
       return !!data && data.length > 0
     },
+    // Hand the attempt back when the send never happened for a reason that could
+    // resolve itself (provider down, timing out, rate-limiting) — otherwise a bad
+    // provider day burns reminders on money that is still owed, in silence.
+    // Guarded on seen + 1 — the value the claim wrote — so a concurrent run that has
+    // since re-claimed this invoice can't have its attempt clobbered.
+    // last_reminded_at deliberately STAYS moved: it is the backoff.
+    refund: async inv => {
+      const seen = inv.reminder_count ?? 0
+      await supabase.from('invoices')
+        .update({ reminder_count: seen })
+        .eq('id', inv.id).eq('reminder_count', seen + 1)
+    },
     render: async (inv, ctx) => {
       const token = await ensurePortalToken(supabase, inv.user_id, inv.customer_id!)
       const { balance } = invoiceBalance(inv, ctx.fees)
@@ -125,5 +155,9 @@ export async function GET(req: NextRequest) {
     },
   })
 
-  return NextResponse.json({ ok: true, ...tally })
+  const summary = { ok: true, ...tally, truncated }
+  // Log only when there was something to do, so quiet runs stay quiet in the logs.
+  if (tally.chased > 0) console.log('[cron/invoice-reminders] run:', JSON.stringify(summary))
+  if (tally.failed > 0) console.error(`[cron/invoice-reminders] ${tally.failed} reminder(s) threw — see notification_log rows with status 'error' (still retryable).`)
+  return NextResponse.json(summary)
 }

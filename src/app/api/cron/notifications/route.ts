@@ -10,6 +10,9 @@ import { loadOwnerContext, type OwnerContext } from '@/lib/automation/owner'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 
 export const dynamic = 'force-dynamic'
+// Each job costs up to two sequential provider round-trips, so the platform
+// default (10–15s) would kill the run mid-batch and leave the tally a lie.
+export const maxDuration = 300
 
 // Scheduled sends (Vercel Cron → see vercel.json). Sends TOMORROW reminders and
 // REVIEW requests for yesterday's completed visits. Fully guarded:
@@ -20,6 +23,13 @@ export const dynamic = 'force-dynamic'
 
 interface CronCustomer { name: string; phone: string | null; email: string | null; sms_opt_in: boolean; email_opt_in: boolean; message_prefs?: MessagePrefs | null; reviewed_at: string | null; review_declined_at: string | null }
 interface CronJob { id: string; user_id: string; customer_id: string | null; scheduled_date: string; customers: CronCustomer | null }
+
+// Blast-radius guard, applied to each batch's scan. Truncating is SAFE here:
+// alreadySent() is the dedupe, so a job this run never reached is simply picked up
+// by the next run — nothing is skipped, only deferred. (A reminder for tomorrow
+// still has every run until tomorrow.) Do not "fix" this by removing the cap; an
+// unbounded scan is what makes a run time out mid-batch.
+const MAX_PER_RUN = 500
 
 export async function GET(req: NextRequest) {
   if (!cronSecretOk(req)) return NextResponse.json({ error: 'forbidden' }, { status: 403 })
@@ -51,49 +61,96 @@ export async function GET(req: NextRequest) {
     return !!(data && data.length)
   }
   const sel = 'id, user_id, customer_id, scheduled_date, customers(name, phone, email, sms_opt_in, email_opt_in, message_prefs, reviewed_at, review_declined_at)'
-  let sent = 0
+  // What the run actually did. `sent` counts CHANNELS (its long-standing meaning);
+  // `errors` counts channel attempts that failed, plus any job that threw;
+  // `skipped` counts jobs passed over without a send. Counting only successes is
+  // what let an outage read as a quiet night.
+  let sent = 0, skipped = 0, errors = 0
 
   async function runBatch(rows: CronJob[], template: 'reminder' | 'review_request', dateLabel?: string) {
     for (const j of rows) {
       const c = j.customers
-      if (!c || !j.customer_id) continue
-      if (await alreadySent(j.user_id, j.id, template)) continue
+      if (!c || !j.customer_id) { skipped++; continue }
+      if (await alreadySent(j.user_id, j.id, template)) { skipped++; continue }
       const info = await bizInfo(j.user_id)
-      if (template === 'reminder' && !info.automations.reminder) continue       // automation off for this owner
-      if (template === 'review_request' && !info.automations.review) continue
-      if (template === 'review_request' && (c.reviewed_at || c.review_declined_at)) continue  // already reviewed or opted out — don't ask again
+      if (template === 'reminder' && !info.automations.reminder) { skipped++; continue }       // automation off for this owner
+      if (template === 'review_request' && !info.automations.review) { skipped++; continue }
+      if (template === 'review_request' && (c.reviewed_at || c.review_declined_at)) { skipped++; continue }  // already reviewed or opted out — don't ask again
       // Category consent. dispatchToCustomer checks this too (and would return a
       // logged 'unsubscribed' skip); this pre-check keeps THIS cron's long-standing
       // behaviour of passing over the customer silently. It is the one outcome here
       // that isn't logged — see AUTOMATION_DEDUP_STATUS.md, pending an owner call.
-      if (!prefAllows(c.message_prefs, template)) continue
-      const token = await ensurePortalToken(supabase, j.user_id, j.customer_id)
-      const msg = renderMessage(template, info.templates, { firstName: c.name, businessName: info.name, dateLabel, portalLink: token ? portalUrl(token) : undefined, reviewLink: info.reviewUrl || undefined, directPhone: info.phone || undefined, logoUrl: info.logoUrl || undefined, website: info.website || undefined })
+      if (!prefAllows(c.message_prefs, template)) { skipped++; continue }
 
-      // THE one dispatch pipeline — same opt-in checks, same branch order, same
-      // canonical skip reasons and provider capture every other sender gets.
-      // `thread: false` preserves this cron's behaviour: reminders and review
-      // requests have never written a conversation bubble (unlike campaigns).
-      // alreadySent() blocks only on a real prior send (SENT_STATES), so a skipped
-      // row never suppresses a later one.
-      const res = await dispatchToCustomer(supabase, {
-        userId: j.user_id,
-        customer: { id: j.customer_id, phone: c.phone, email: c.email, sms_opt_in: c.sms_opt_in, email_opt_in: c.email_opt_in, message_prefs: c.message_prefs },
-        channels: ['sms', 'email'],
-        smsText: msg.sms, emailSubject: msg.subject, emailHtml: msg.html, emailText: msg.text,
-        template,
-        thread: false,
-      })
-      await logDispatch(supabase, res, { userId: j.user_id, customerId: j.customer_id, jobId: j.id, template })
-      sent += res.sentChannels.length
+      // One bad row must not abort the batch — otherwise a single malformed job
+      // takes the rest of tomorrow's reminders (and the whole review batch after
+      // it) down with it. alreadySent() blocks only on a real prior send, so a job
+      // that threw here is retried on the next run.
+      try {
+        const token = await ensurePortalToken(supabase, j.user_id, j.customer_id)
+        const msg = renderMessage(template, info.templates, { firstName: c.name, businessName: info.name, dateLabel, portalLink: token ? portalUrl(token) : undefined, reviewLink: info.reviewUrl || undefined, directPhone: info.phone || undefined, logoUrl: info.logoUrl || undefined, website: info.website || undefined })
+
+        // THE one dispatch pipeline — same opt-in checks, same branch order, same
+        // canonical skip reasons and provider capture every other sender gets.
+        // `thread: false` preserves this cron's behaviour: reminders and review
+        // requests have never written a conversation bubble (unlike campaigns).
+        // alreadySent() blocks only on a real prior send (SENT_STATES), so a skipped
+        // row never suppresses a later one.
+        const res = await dispatchToCustomer(supabase, {
+          userId: j.user_id,
+          customer: { id: j.customer_id, phone: c.phone, email: c.email, sms_opt_in: c.sms_opt_in, email_opt_in: c.email_opt_in, message_prefs: c.message_prefs },
+          channels: ['sms', 'email'],
+          smsText: msg.sms, emailSubject: msg.subject, emailHtml: msg.html, emailText: msg.text,
+          template,
+          thread: false,
+        })
+        await logDispatch(supabase, res, { userId: j.user_id, customerId: j.customer_id, jobId: j.id, template })
+        if (res.sentChannels.length) sent += res.sentChannels.length
+        else skipped++
+        // Only a real send FAILURE is noise worth making: no phone, opted out or
+        // unsubscribed are ordinary outcomes and stay quiet.
+        const broke = res.attempts.filter(a => a.status === 'error')
+        if (broke.length) {
+          errors += broke.length
+          console.error(`[cron/notifications] ${template} failed for job ${j.id}:`, broke.map(a => `${a.channel}: ${a.detail || 'no detail'}`).join(', '))
+        }
+      } catch (e) {
+        errors++
+        console.error(`[cron/notifications] ${template} threw for job ${j.id}:`, e)
+      }
     }
   }
 
-  const { data: reminders } = await supabase.from('jobs').select(sel).eq('scheduled_date', tomorrow).eq('status', 'scheduled')
-  await runBatch((reminders as unknown as CronJob[]) || [], 'reminder', `tomorrow (${format(addDays(new Date(), 1), 'EEE, MMM d')})`)
+  const { data: reminders, error: remErr } = await supabase.from('jobs').select(sel)
+    .eq('scheduled_date', tomorrow).eq('status', 'scheduled')
+    .order('id', { ascending: true })
+    .limit(MAX_PER_RUN + 1)
+  if (remErr) {
+    // A failed read is NOT a quiet night — say so, or an outage is indistinguishable
+    // from having nothing to send.
+    console.error('[cron/notifications] reminder job query failed:', remErr.message)
+    return NextResponse.json({ ok: false, error: remErr.message, note: 'Could not read tomorrow\'s jobs — nothing was sent this run.' }, { status: 500 })
+  }
+  const remRows = (reminders as unknown as CronJob[]) || []
+  const remTruncated = remRows.length > MAX_PER_RUN
+  await runBatch(remRows.slice(0, MAX_PER_RUN), 'reminder', `tomorrow (${format(addDays(new Date(), 1), 'EEE, MMM d')})`)
 
-  const { data: reviews } = await supabase.from('jobs').select(sel).eq('scheduled_date', yesterday).eq('status', 'completed')
-  await runBatch((reviews as unknown as CronJob[]) || [], 'review_request')
+  const { data: reviews, error: revErr } = await supabase.from('jobs').select(sel)
+    .eq('scheduled_date', yesterday).eq('status', 'completed')
+    .order('id', { ascending: true })
+    .limit(MAX_PER_RUN + 1)
+  if (revErr) {
+    console.error('[cron/notifications] review job query failed:', revErr.message)
+    return NextResponse.json({ ok: false, error: revErr.message, note: 'Could not read yesterday\'s jobs — reminders ran, review requests did not.', sent, skipped, errors }, { status: 500 })
+  }
+  const revRows = (reviews as unknown as CronJob[]) || []
+  const revTruncated = revRows.length > MAX_PER_RUN
+  await runBatch(revRows.slice(0, MAX_PER_RUN), 'review_request')
 
-  return NextResponse.json({ ok: true, sent })
+  const truncated = remTruncated || revTruncated
+  if (truncated) console.warn(`[cron/notifications] hit MAX_PER_RUN=${MAX_PER_RUN} (reminders: ${remTruncated}, reviews: ${revTruncated}); the rest go out on the next run.`)
+  const summary = { ok: true, sent, skipped, errors, truncated }
+  // Log only when there was something to do, so quiet runs stay quiet in the logs.
+  if (remRows.length || revRows.length) console.log('[cron/notifications] run:', JSON.stringify(summary))
+  return NextResponse.json(summary)
 }

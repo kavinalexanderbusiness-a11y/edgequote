@@ -9,18 +9,37 @@ import { logDispatch, logSend } from '@/lib/comms/log'
 //
 //   • CLAIM BEFORE SENDING. The compare-and-swap has to happen before dispatch, or
 //     two overlapping cron runs both send. Order is the safety property.
-//   • 'error', NOT 'failed'. A throw means we don't know whether a provider got the
-//     message, so it must stay retryable. 'failed' is reserved for a provider
-//     telling us delivery failed (lib/comms/delivery SENT_STATES) and suppresses
-//     future attempts. Getting this backwards silently stops chasing real money.
+//   • REFUND THE ATTEMPT WHEN THE PROVIDER — NOT THE MESSAGE — FAILED. Claiming
+//     first means the attempt is spent before we know whether anything went out,
+//     and sendSms/sendEmail report an outage by RETURNING { sent:false }, not by
+//     throwing. So a Twilio outage silently burned attempts: two failed runs
+//     retired a quote forever having never sent one message. Now a retryable
+//     failure (see lib/comms/send: network/timeout/429/5xx) hands the attempt back
+//     via spec.refund, and the item is due again next run.
+//     A NON-retryable failure keeps the attempt spent, deliberately: a permanently
+//     bad number is a fact about the customer, and refunding it would chase a typo
+//     forever.
+//     Only the ATTEMPT BUDGET is refunded — never the anchor
+//     (last_followed_up_at / last_reminded_at). The anchor moved on purpose: it is
+//     the backoff that stops a broken provider from being hammered on every run.
+//     Refunding it would turn an outage into a retry storm.
 //   • ONE BAD ITEM MUST NOT ABORT THE BATCH — otherwise the rest of the owner's
-//     book goes unchased until tomorrow, from one malformed row.
-//   • The tally means something: `chased` counts CLAIMS (attempts consumed),
-//     `sent`/`skipped` count what dispatch actually did.
+//     book goes unchased until tomorrow, from one malformed row. A throw is also
+//     refunded: a render that dies (e.g. ensurePortalToken failing) has definitely
+//     sent nothing, so the attempt was never really taken.
+//   • 'error', NOT 'failed', on the log row. A throw means we don't know whether a
+//     provider got the message, so it must stay retryable. 'failed' is reserved for
+//     a provider telling us delivery failed (lib/comms/delivery SENT_STATES) and
+//     suppresses future attempts. NOTE: that distinction lives in notification_log
+//     for the delivery webhooks — no chaser reads it back, so it is not what
+//     protects the attempt budget. spec.refund is.
+//   • The tally means something: `chased` counts CLAIMS, `sent`/`skipped` count
+//     what dispatch actually did, and `failed` counts attempts handed back — so a
+//     provider outage reads as `failed`, not as a quiet pile of `skipped`.
 //
 // A third chaser gets all of that by construction instead of by remembering. What
 // stays with each chaser is only what's genuinely its own: the query, its stop
-// conditions, its policy, its CAS statement, and its message.
+// conditions, its policy, its CAS statements, and its message.
 
 export interface ChaseTally { chased: number; sent: number; skipped: number; failed: number }
 
@@ -63,6 +82,15 @@ export interface ChaseSpec<T extends ChaseItem, Ctx> {
   due(item: T, ctx: Ctx): boolean
   /** Compare-and-swap. True only if THIS run won the claim. */
   claim(item: T): Promise<boolean>
+  /** Give the claimed ATTEMPT back when the provider failed in a way that could
+   *  succeed later, or when nothing was even attempted. Mirror `claim`'s CAS and
+   *  guard on the value the claim WROTE (seen + 1), so a concurrent run that has
+   *  since re-claimed the row can't be clobbered — losing the guard is better than
+   *  handing back an attempt someone else is spending.
+   *  Do NOT restore the anchor here: the backoff it provides is what keeps a
+   *  retry loop from becoming a hammer. Optional — a chaser with no budget to
+   *  refund simply omits it. */
+  refund?(item: T): Promise<void>
   render(item: T, ctx: Ctx): Promise<ChaseMessage>
 }
 
@@ -76,6 +104,14 @@ export async function runChaseCron<T extends ChaseItem, Ctx>(
     (cache[userId] ??= await spec.loadContext(userId))
 
   const ordered = spec.sort ? [...spec.items].sort(spec.sort) : spec.items
+
+  // Best-effort by construction. A refund runs on the failure path — including
+  // inside the catch below — so letting it throw would abort the batch from the
+  // exact position that exists to stop one bad row doing that. Worst case if it
+  // fails: one attempt stays spent, which is merely the old behaviour.
+  const refund = async (item: T): Promise<void> => {
+    try { await spec.refund?.(item) } catch { /* an un-refunded attempt is not worth the batch */ }
+  }
 
   for (const item of ordered) {
     if (spec.skip?.(item)) continue
@@ -103,9 +139,24 @@ export async function runChaseCron<T extends ChaseItem, Ctx>(
         meta: msg.meta,
       })
       await logDispatch(sb, res, { userId: item.user_id, customerId: item.customer_id, template: spec.template })
-      if (res.sentChannels.length) tally.sent++; else tally.skipped++
+
+      // Nothing went out AND at least one channel failed in a way that could work
+      // later (provider down / timed out / rate-limited) → the attempt bought us
+      // nothing, so hand it back.
+      const sentAny = res.sentChannels.length > 0
+      const retryableFail = !sentAny && res.attempts.some(a => !a.sent && a.status === 'error' && a.retryable)
+
+      if (sentAny) tally.sent++
+      else if (retryableFail) { await refund(item); tally.failed++ }
+      // A genuine skip: opted out, no contact on file, or a hard provider rejection.
+      // The attempt is CORRECTLY spent — there is nothing here a retry would fix.
+      else tally.skipped++
     } catch (e) {
+      // Thrown before or during dispatch (a render that dies, a client blowing up).
+      // Nothing was sent, so the attempt was never really taken — refund it, or one
+      // bad portal token would retire the quote with zero messages.
       tally.failed++
+      await refund(item)
       await logSend(sb, {
         userId: item.user_id, customerId: item.customer_id, channel: 'sms',
         template: spec.template, status: 'error',

@@ -49,6 +49,12 @@ export interface DispatchInput {
 // MessageSid / Resend id). They're what the delivery webhooks match on later to
 // turn 'sent' (provider accepted) into 'delivered'/'bounced' — so callers must
 // persist them alongside the status. Null when nothing was sent.
+//
+// `retryable` carries the send layer's verdict on a FAILURE (see lib/comms/send):
+// would this exact message plausibly go through later? Automated callers spend a
+// finite attempt budget, so they need to tell "the provider is down" apart from
+// "the provider says no". Always false for a skip — a skip isn't a failure, it's
+// the consent gate working, and there is nothing to retry.
 export interface DispatchAttempt {
   channel: string
   status: string
@@ -56,6 +62,7 @@ export interface DispatchAttempt {
   sent: boolean
   provider: string | null
   providerId: string | null
+  retryable: boolean
 }
 export interface DispatchResult { attempts: DispatchAttempt[]; messageId: string | null; sentChannels: string[] }
 
@@ -72,6 +79,11 @@ const PROVIDER: Record<string, string> = { sms: 'twilio', email: 'resend' }
 // SendResult, where a skip carried only { sent, reason } and a success carried no
 // `error` key at all. Emitting `error: null` would change the response bytes and
 // `'error' in result` for every caller.
+//
+// This builds its output field by field for exactly that reason — never by
+// spreading an attempt. `retryable` is internal to the automated senders and must
+// NOT appear here; a spread would have published it to all nine callers the day it
+// was added.
 const LEGACY_REASON: Record<string, string> = {
   [SKIP_REASON.NO_OPT_IN]: 'no-optin',
   [SKIP_REASON.UNSUBSCRIBED]: 'no-optin',   // a declined CATEGORY reads as no-optin to callers
@@ -104,7 +116,7 @@ export async function dispatchToCustomer(sb: SupabaseClient, inp: DispatchInput)
   const attempts: DispatchAttempt[] = []
 
   const skip = (channel: string, detail: string): DispatchAttempt =>
-    ({ channel, status: 'skipped', detail, sent: false, provider: null, providerId: null })
+    ({ channel, status: 'skipped', detail, sent: false, provider: null, providerId: null, retryable: false })
 
   // Granular consent + channel opt-in + contact-on-file, resolved by the ONE
   // shared predicate (lib/comms/reach) so the campaign audience preview can
@@ -129,13 +141,13 @@ export async function dispatchToCustomer(sb: SupabaseClient, inp: DispatchInput)
       if (b) attempts.push(skip('sms', b))
       else {
         const r = await sendSms(c.phone!, inp.smsText)
-        attempts.push({ channel: 'sms', status: r.reason, detail: r.error ?? null, sent: r.sent, provider: r.sent ? PROVIDER.sms : null, providerId: r.id ?? null })
+        attempts.push({ channel: 'sms', status: r.reason, detail: r.error ?? null, sent: r.sent, provider: r.sent ? PROVIDER.sms : null, providerId: r.id ?? null, retryable: r.retryable ?? false })
       }
     } else if (ch === 'email') {
       if (b) attempts.push(skip('email', b))
       else {
         const r = await sendEmail(c.email!, inp.emailSubject, inp.emailHtml, inp.emailText)
-        attempts.push({ channel: 'email', status: r.reason, detail: r.error ?? null, sent: r.sent, provider: r.sent ? PROVIDER.email : null, providerId: r.id ?? null })
+        attempts.push({ channel: 'email', status: r.reason, detail: r.error ?? null, sent: r.sent, provider: r.sent ? PROVIDER.email : null, providerId: r.id ?? null, retryable: r.retryable ?? false })
       }
     }
   }

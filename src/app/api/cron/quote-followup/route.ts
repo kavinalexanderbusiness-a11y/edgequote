@@ -11,6 +11,9 @@ import { localTodayISO } from '@/lib/utils'
 import type { Quote } from '@/types'
 
 export const dynamic = 'force-dynamic'
+// Each chase costs up to two sequential provider round-trips, so the platform
+// default (10–15s) would kill the run mid-batch and leave the tally a lie.
+export const maxDuration = 300
 
 // ── Automatic quote follow-up (Vercel Cron → see vercel.json) ────────────────
 // Chases quotes the customer never answered, using the existing estimate_followup
@@ -45,6 +48,13 @@ type FollowUpQuote = Pick<Quote, 'id' | 'user_id' | 'customer_id' | 'quote_numbe
 // genuinely this chaser's own: its follow-up cadence.
 type QuoteChaseCtx = OwnerContext & { policy: FollowUpPolicy }
 
+// Blast-radius guard on the scan, not on who gets chased. Truncating is SAFE here:
+// claim-before-send means a quote this run never reached keeps its follow_up_count
+// and is simply picked up by the next run — nothing is skipped, only deferred. Do
+// not "fix" this by removing the cap; an unbounded scan is what makes a run time
+// out mid-batch.
+const MAX_PER_RUN = 500
+
 export async function GET(req: NextRequest) {
   if (!cronSecretOk(req)) return NextResponse.json({ error: 'forbidden' }, { status: 403 })
   const enabled = commsEnabled()
@@ -59,14 +69,34 @@ export async function GET(req: NextRequest) {
   const today = localTodayISO()
 
   // Only quotes still awaiting an answer can be chased at all.
+  // Oldest first, so a truncated scan still holds the stalest money (the in-memory
+  // compareFollowUp then applies the engine's exact priority). One row over the cap
+  // is how truncation is detected without paying for a count query.
   const sel = 'id, user_id, customer_id, quote_number, total, status, sent_at, valid_until, last_followed_up_at, follow_up_count, customers(name, phone, email, sms_opt_in, email_opt_in, message_prefs)'
-  const { data: rows } = await supabase.from('quotes').select(sel).eq('status', 'sent')
-  const quotes = ((rows as unknown as FollowUpQuote[]) || []).filter(q => q.customer_id && q.customers)
-  if (quotes.length === 0) return NextResponse.json({ ok: true, chased: 0, sent: 0, skipped: 0, failed: 0 })
+  const { data: rows, error } = await supabase.from('quotes').select(sel).eq('status', 'sent')
+    .order('sent_at', { ascending: true })
+    .limit(MAX_PER_RUN + 1)
+  if (error) {
+    // A failed read is NOT a quiet day — say so, or an outage looks like "nothing
+    // to chase" forever.
+    console.error('[cron/quote-followup] quote query failed:', error.message)
+    return NextResponse.json({ ok: false, error: error.message, note: 'Could not read quotes — nothing was chased this run.' }, { status: 500 })
+  }
+  const fetched = (rows as unknown as FollowUpQuote[]) || []
+  const truncated = fetched.length > MAX_PER_RUN
+  const quotes = fetched.slice(0, MAX_PER_RUN).filter(q => q.customer_id && q.customers)
+  if (truncated) console.warn(`[cron/quote-followup] hit MAX_PER_RUN=${MAX_PER_RUN}; the rest are chased on the next run.`)
+  if (quotes.length === 0) return NextResponse.json({ ok: true, chased: 0, sent: 0, skipped: 0, failed: 0, truncated })
 
   // Invoiced → the quote has already turned into money owed; stop chasing it even
   // if its status never moved off 'sent'.
-  const { data: invRows } = await supabase.from('invoices').select('quote_id').in('quote_id', quotes.map(q => q.id))
+  // A failed read here would empty the stop list and chase quotes that already
+  // turned into money owed — so it aborts the run rather than guessing.
+  const { data: invRows, error: invErr } = await supabase.from('invoices').select('quote_id').in('quote_id', quotes.map(q => q.id))
+  if (invErr) {
+    console.error('[cron/quote-followup] invoice lookup failed:', invErr.message)
+    return NextResponse.json({ ok: false, error: invErr.message, note: 'Could not read invoices — nothing was chased this run.' }, { status: 500 })
+  }
   const invoiced = new Set(((invRows as { quote_id: string | null }[]) || []).map(i => i.quote_id))
 
   // Per-owner settings. THE shared settings read (lib/automation/owner) plus this
@@ -106,6 +136,19 @@ export async function GET(req: NextRequest) {
         .select('id')
       return !!data && data.length > 0
     },
+    // Hand the attempt back when the send never happened for a reason that could
+    // resolve itself (Twilio/Resend down, timing out, rate-limiting) — otherwise two
+    // outage days silently retire a live quote at FOLLOW_UP_MAX having sent nothing.
+    // Guarded on seen + 1 — the value the claim wrote — so if a concurrent run has
+    // already re-claimed this quote, this matches nothing and leaves its attempt alone.
+    // last_followed_up_at deliberately STAYS moved: it's the backoff that stops a
+    // broken provider being retried on every run.
+    refund: async q => {
+      const seen = q.follow_up_count ?? 0
+      await supabase.from('quotes')
+        .update({ follow_up_count: seen })
+        .eq('id', q.id).eq('follow_up_count', seen + 1)
+    },
     render: async (q, ctx) => {
       const token = await ensurePortalToken(supabase, q.user_id, q.customer_id!)
       const msg = renderMessage('estimate_followup', ctx.templates, {
@@ -125,5 +168,9 @@ export async function GET(req: NextRequest) {
     },
   })
 
-  return NextResponse.json({ ok: true, ...tally })
+  const summary = { ok: true, ...tally, truncated }
+  // Log only when there was something to do, so quiet runs stay quiet in the logs.
+  if (tally.chased > 0) console.log('[cron/quote-followup] run:', JSON.stringify(summary))
+  if (tally.failed > 0) console.error(`[cron/quote-followup] ${tally.failed} follow-up(s) sent nothing and had their attempt REFUNDED (provider down/timeout/429/5xx, or a throw) — they are chased again next run. See notification_log rows with status 'error'.`)
+  return NextResponse.json(summary)
 }

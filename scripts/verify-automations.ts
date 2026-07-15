@@ -8,6 +8,8 @@ import { resolveAutomations } from '@/lib/comms/automations'
 import { displayQuoteStatus, isQuoteExpired, isExpiringSoon, daysUntilExpiry, defaultValidUntil } from '@/lib/quoteStatus'
 import { prefAllows, msgCategory } from '@/lib/comms/templates'
 import { dispatchToCustomer, sendResultsFromAttempts, type DispatchAttempt } from '@/lib/comms/dispatch'
+import { sendSms, sendEmail } from '@/lib/comms/send'
+import { runChaseCron, type ChaseItem, type ChaseTally } from '@/lib/automation/chase'
 import { SKIP_REASON } from '@/lib/comms/skipReasons'
 import { decide } from '@/lib/automation/decide'
 import { AUTOMATION_RULES } from '@/lib/automation/rules'
@@ -265,7 +267,9 @@ async function run() {
   // the absent keys: a skip has never carried `error`/`id`, and JSON.stringify
   // would leak `"error":null` to every caller if it did.
   const asAttempt = (o: Partial<DispatchAttempt>): DispatchAttempt =>
-    ({ channel: 'sms', status: 'skipped', detail: null, sent: false, provider: null, providerId: null, ...o })
+    // `retryable: false` mirrors dispatch's own skip default — a skip is a decision,
+    // not a failure, so there is nothing to retry.
+    ({ channel: 'sms', status: 'skipped', detail: null, sent: false, provider: null, providerId: null, retryable: false, ...o })
 
   check('results-map', 'opted-out sms → no-optin', sendResultsFromAttempts([asAttempt({ detail: SKIP_REASON.NO_OPT_IN })]), { sms: { sent: false, reason: 'no-optin' } })
   check('results-map', 'missing phone → no-phone', sendResultsFromAttempts([asAttempt({ detail: SKIP_REASON.NO_PHONE })]), { sms: { sent: false, reason: 'no-phone' } })
@@ -319,6 +323,26 @@ async function run() {
   check('decide', 'per-run blast radius reached → frequency_cap', D({ actionsThisRun: 25 }), { fire: false, reason: 'frequency_cap' })
   check('decide', 'quiet hours outrank the caps', D({ hour: 3, recentActionsForSubject: 99 }), { fire: false, reason: 'quiet_hours' })
 
+  // An UNCOUNTED history must fail closed. The engine cannot count a subject's
+  // recent actions yet, and it used to say `0` — a number that reads as "checked,
+  // and they've been left alone", which no query had established. `0 >= 1` is false,
+  // so the per-customer cap could never trip: a promoted rule would re-notify the
+  // same customer every night the sweep re-emitted their signal, with the safeguard
+  // fully written and silently defeated by its caller. 'unknown' makes the lie
+  // unrepresentable — the type no longer has a way to spell "I didn't look".
+  check('decide', "recentActionsForSubject 'unknown' → frequency_cap (fails CLOSED)",
+    D({ recentActionsForSubject: 'unknown' }), { fire: false, reason: 'frequency_cap' })
+  check('decide', "'unknown' suppresses even with everything else clear",
+    D({ recentActionsForSubject: 'unknown', hour: 12, actionsThisRun: 0, alreadyDeduped: false }), { fire: false, reason: 'frequency_cap' })
+  // …but it is a CAP, not an override: the more absolute reasons still outrank it,
+  // so the run log keeps reporting the most useful one.
+  check('decide', "'unknown' does not mask mode_suggest", D({ rule: { ...RULE, mode: 'suggest' }, recentActionsForSubject: 'unknown' }), { fire: false, reason: 'mode_suggest' })
+  check('decide', "'unknown' does not mask quiet_hours", D({ hour: 3, recentActionsForSubject: 'unknown' }), { fire: false, reason: 'quiet_hours' })
+  check('decide', "'unknown' does not mask deduped", D({ alreadyDeduped: true, recentActionsForSubject: 'unknown' }), { fire: false, reason: 'deduped' })
+  // The only way to fire remains a REAL count. This is the line the engine must
+  // cross deliberately, by writing the query — not by picking a hopeful default.
+  check('decide', 'a real count of 0 is the only thing that fires', D({ recentActionsForSubject: 0 }), { fire: true })
+
   H('20. AUTOMATION ENGINE — the registry is an inventory, and nothing is promoted')
   // This is a GUARD RAIL, not a description. Promoting a rule to 'auto' is an owner
   // decision that must be deliberate; if a promotion ever lands by accident, this
@@ -331,6 +355,246 @@ async function run() {
   // Every rule in the registry fires on a signal the sweep can actually emit —
   // otherwise it is a rule that can never run, quietly.
   check('registry', 'every rule watches a signal the sweep emits', AUTOMATION_RULES.every(r => EMITTED_SIGNALS.includes(r.signal)), true)
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  H('21. RETRYABLE CLASSIFICATION — would this exact message plausibly send later?')
+  // The attempt budget is spent on this answer, so it is pinned here per status.
+  // These drive the REAL sendSms/sendEmail with fetch stubbed at the network
+  // boundary — the classification under test is the production one.
+  const realFetch = globalThis.fetch
+  const ENV = { ...process.env }
+  Object.assign(process.env, {
+    TWILIO_ACCOUNT_SID: 'AC_test', TWILIO_AUTH_TOKEN: 'tok', TWILIO_FROM: '+15550000',
+    RESEND_API_KEY: 're_test', RESEND_FROM: 'noreply@test.co',
+  })
+  // Stub the network, run one real send, restore. `body` lets a case carry the
+  // provider's own error JSON so the real parse path runs too.
+  const httpSms = async (status: number, body = '{}') => {
+    globalThis.fetch = (async () => new Response(body, { status })) as never
+    try { const r = await sendSms('+15550100', 'x'); return [r.sent, r.reason, r.retryable] }
+    finally { globalThis.fetch = realFetch }
+  }
+  const httpEmail = async (status: number, body = '{}') => {
+    globalThis.fetch = (async () => new Response(body, { status })) as never
+    try { const r = await sendEmail('a@b.c', 's', 'h', 't'); return [r.sent, r.reason, r.retryable] }
+    finally { globalThis.fetch = realFetch }
+  }
+
+  // Retryable: the provider is down, hung, or telling us to slow down. None of
+  // these is a verdict on the message.
+  check('classify', 'sms 429 rate-limited → retryable', await httpSms(429), [false, 'error', true])
+  check('classify', 'sms 500 → retryable', await httpSms(500), [false, 'error', true])
+  check('classify', 'sms 502 → retryable', await httpSms(502), [false, 'error', true])
+  check('classify', 'sms 503 → retryable', await httpSms(503), [false, 'error', true])
+  check('classify', 'email 429 → retryable', await httpEmail(429), [false, 'error', true])
+  check('classify', 'email 500 → retryable', await httpEmail(500), [false, 'error', true])
+
+  // NOT retryable: the provider is rejecting THIS message. Retrying re-sends
+  // identical bytes to an identical rejection — a typo'd number must not chase
+  // forever on the owner's dime.
+  check('classify', 'sms 400 invalid number → NOT retryable', await httpSms(400, '{"code":21211,"message":"Invalid \'To\' Number"}'), [false, 'error', false])
+  check('classify', 'sms 401 bad credentials → NOT retryable', await httpSms(401), [false, 'error', false])
+  check('classify', 'sms 403 → NOT retryable', await httpSms(403), [false, 'error', false])
+  check('classify', 'sms 404 → NOT retryable', await httpSms(404), [false, 'error', false])
+  check('classify', 'email 422 bad address → NOT retryable', await httpEmail(422), [false, 'error', false])
+  // 499 is the top of the 4xx band — the boundary httpRetryable must not round up.
+  check('classify', 'sms 499 → NOT retryable (4xx boundary)', await httpSms(499), [false, 'error', false])
+
+  // Thrown out of fetch: abort/timeout, DNS, dropped socket. A timeout is the
+  // sharpest case — the provider may even have sent it; we simply never heard.
+  const thrower = async (e: unknown) => {
+    globalThis.fetch = (async () => { throw e }) as never
+    try { const r = await sendSms('+15550100', 'x'); return [r.sent, r.reason, r.retryable] }
+    finally { globalThis.fetch = realFetch }
+  }
+  const abortErr = Object.assign(new Error('aborted'), { name: 'AbortError' })
+  check('classify', 'network throw → retryable', await thrower(new TypeError('fetch failed')), [false, 'error', true])
+  check('classify', 'timeout/abort → retryable (we never learned if it sent)', await thrower(abortErr), [false, 'error', true])
+
+  // A success is never reclassified, and the existing reason/id contract holds.
+  globalThis.fetch = (async () => new Response('{"sid":"SM1"}', { status: 200 })) as never
+  const okSms = await sendSms('+15550100', 'x')
+  globalThis.fetch = realFetch
+  check('classify', 'sent → untouched (no retryable claim on a success)', [okSms.sent, okSms.reason, okSms.id, okSms.retryable], [true, 'sent', 'SM1', undefined])
+
+  // No number on file cannot fix itself on a retry — and this must not reach fetch.
+  check('classify', 'no recipient → error, NOT retryable', await (async () => { const r = await sendSms('', 'x'); return [r.sent, r.reason, r.retryable] })(), [false, 'error', false])
+
+  // Credentials absent is not a failure at all — it's the off switch.
+  const noEnv = { ...process.env }
+  delete process.env.TWILIO_ACCOUNT_SID
+  check('classify', 'disabled (no credentials) → not an error, not retryable', await (async () => { const r = await sendSms('+15550100', 'x'); return [r.sent, r.reason, r.retryable] })(), [false, 'disabled', undefined])
+  Object.assign(process.env, noEnv)
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  H('22. PROVIDER OUTAGE — a failed send must not burn a chase attempt (the money leak)')
+  // runChaseCron claims (spends) an attempt BEFORE dispatch, and sendSms/sendEmail
+  // report an outage by RETURNING { sent:false }, not by throwing. Nothing ever
+  // decremented the counter, so with FOLLOW_UP_MAX=2 two Twilio-down runs retired a
+  // live quote FOREVER having sent zero messages. These drive the real
+  // runChaseCron → dispatchToCustomer → sendSms/sendEmail path.
+  {
+    // The DB row the CAS statements act on. `item` below is the row as READ at the
+    // start of a run — a SNAPSHOT. In production the claim's UPDATE lands in
+    // Postgres and never touches the in-memory object, which is exactly why
+    // refund's `seen = item.follow_up_count` is still the PRE-claim value. Modelling
+    // that split is the point; collapsing it would test a fiction.
+    const db = { follow_up_count: 0, last_followed_up_at: null as string | null }
+
+    type OutageItem = ChaseItem & Pick<Quote, 'status' | 'total' | 'sent_at' | 'last_followed_up_at' | 'follow_up_count'>
+    const mkItem = (over: Partial<{ sms_opt_in: boolean; email_opt_in: boolean }> = {}): OutageItem => ({
+      id: 'q1', user_id: 'u1', customer_id: 'c1',
+      status: 'sent', total: 100, sent_at: isoNDaysAgo(10),
+      follow_up_count: db.follow_up_count,
+      last_followed_up_at: db.last_followed_up_at,
+      customers: { phone: '+15550100', email: 'a@b.c', sms_opt_in: true, email_opt_in: true, ...over },
+    })
+
+    // Minimal Supabase stand-in: notification_log inserts are fire-and-forget, and
+    // the conversation lookup answers "none" so nothing is threaded — correct, since
+    // every send below is meant to fail.
+    const table = () => {
+      const b: Record<string, unknown> = {}
+      for (const m of ['select', 'eq', 'in', 'order', 'limit', 'update', 'upsert']) b[m] = () => b
+      b.insert = async () => ({ error: null })
+      b.maybeSingle = async () => ({ data: null, error: null })
+      b.single = async () => ({ data: null, error: null })
+      return b
+    }
+    const sbFake = { from: () => table() } as never
+
+    // claim/refund TRANSCRIBE the route's SQL (src/app/api/cron/quote-followup):
+    //   claim  → set follow_up_count = seen + 1 ... where follow_up_count = seen
+    //   refund → set follow_up_count = seen     ... where follow_up_count = seen + 1
+    // The route's SQL is the source of truth; this mirrors it because there is no DB
+    // here. `render` throwing models ensurePortalToken dying.
+    const oneRun = async (item: OutageItem, opts: { throwOnRender?: boolean } = {}): Promise<ChaseTally> =>
+      runChaseCron<OutageItem, { policy: typeof P }>(sbFake, {
+        items: [item], template: 'estimate_followup', errorLabel: 'follow-up failed',
+        loadContext: async () => ({ policy: P }),
+        enabled: () => true,
+        due: q => dueForAutoFollowUp(q as unknown as Quote, P),
+        claim: async q => {
+          const seen = q.follow_up_count ?? 0
+          if (db.follow_up_count !== seen) return false
+          db.follow_up_count = seen + 1
+          db.last_followed_up_at = new Date().toISOString()
+          return true
+        },
+        refund: async q => {
+          const seen = q.follow_up_count ?? 0
+          if (db.follow_up_count === seen + 1) db.follow_up_count = seen
+        },
+        render: async () => {
+          if (opts.throwOnRender) throw new Error('ensurePortalToken failed')
+          return { smsText: 's', emailSubject: 'x', emailHtml: 'h', emailText: 't' }
+        },
+      })
+    const withFetch = async (stub: unknown, fn: () => Promise<ChaseTally>): Promise<ChaseTally> => {
+      globalThis.fetch = stub as never
+      try { return await fn() } finally { globalThis.fetch = realFetch }
+    }
+    const reset = () => { db.follow_up_count = 0; db.last_followed_up_at = null }
+    const down = async () => new Response('upstream boom', { status: 500 })
+    const rejects = async () => new Response('{"code":21211,"message":"Invalid \'To\' Number"}', { status: 400 })
+
+    // ── A retryable failure hands the attempt back ──
+    reset()
+    const t500 = await withFetch(down, () => oneRun(mkItem()))
+    check('outage', 'provider down: nothing sent', t500.sent, 0)
+    check('outage', 'provider down: reported FAILED, not skipped (an outage is not a skip)', [t500.chased, t500.failed, t500.skipped], [1, 1, 0])
+    check('outage', 'provider down: attempt REFUNDED', db.follow_up_count, 0)
+    // The anchor is deliberately NOT refunded: it is the backoff that stops a broken
+    // provider being hammered on every run. Only the budget comes back.
+    check('outage', 'provider down: anchor NOT refunded (backoff survives)', db.last_followed_up_at !== null, true)
+    check('outage', '➜ immediately after, backoff holds it (not due again this run)', dueForAutoFollowUp(mkItem() as unknown as Quote, P), false)
+
+    // ── THE LEAK: three outage days must not retire the quote (max is 2) ──
+    reset()
+    for (let day = 1; day <= 3; day++) {
+      const t = await withFetch(down, () => oneRun(mkItem()))
+      check('outage', `outage day ${day}: failed, zero sent`, [t.sent, t.failed], [0, 1])
+      db.last_followed_up_at = isoNDaysAgo(3) // a few days pass; the backoff elapses
+    }
+    check('outage', 'after 3 outages the budget is INTACT', db.follow_up_count, 0)
+    check('outage', '➜ NOT exhausted (before the fix: retired at 2)', followUpsExhausted(mkItem() as unknown as Quote, P), false)
+    check('outage', '➜ the quote is STILL DUE — the money is not lost', dueForAutoFollowUp(mkItem() as unknown as Quote, P), true)
+    // …and once the provider recovers, it actually sends.
+    const tOk = await withFetch(async () => new Response('{"sid":"SM1"}', { status: 200 }), () => oneRun(mkItem()))
+    check('outage', '➜ provider recovers → it sends, on its FIRST attempt', [tOk.sent, tOk.failed, db.follow_up_count], [1, 0, 1])
+
+    // ── A hard 4xx keeps the attempt spent ──
+    reset()
+    const t400 = await withFetch(rejects, () => oneRun(mkItem()))
+    check('outage', 'hard 4xx: nothing sent', t400.sent, 0)
+    check('outage', 'hard 4xx: attempt correctly SPENT (no refund)', db.follow_up_count, 1)
+    check('outage', 'hard 4xx: reported as skipped, not failed', [t400.skipped, t400.failed], [1, 0])
+    reset()
+    for (let i = 0; i < 2; i++) { await withFetch(rejects, () => oneRun(mkItem())); db.last_followed_up_at = isoNDaysAgo(3) }
+    check('outage', 'two hard 4xx → EXHAUSTED (a typo must not chase forever)', followUpsExhausted(mkItem() as unknown as Quote, P), true)
+    check('outage', '➜ and the chaser stops', dueForAutoFollowUp(mkItem() as unknown as Quote, P), false)
+
+    // ── A genuine skip is not a failure: the consent gate working is not an outage ──
+    reset()
+    const tSkip = await withFetch(down, () => oneRun(mkItem({ sms_opt_in: false, email_opt_in: false })))
+    check('outage', 'opted out: no refund (the attempt is correctly spent)', db.follow_up_count, 1)
+    check('outage', 'opted out: reported skipped, not failed', [tSkip.skipped, tSkip.failed], [1, 0])
+    check('outage', 'opted out: never reached the provider', tSkip.sent, 0)
+
+    // ── A throw refunds too: a render that dies has definitely sent nothing ──
+    reset()
+    const tThrow = await withFetch(down, () => oneRun(mkItem(), { throwOnRender: true }))
+    check('outage', 'render throws: counted failed', [tThrow.failed, tThrow.sent], [1, 0])
+    check('outage', 'render throws: attempt REFUNDED (zero sends must not cost one)', db.follow_up_count, 0)
+    // The anchor still moved, deliberately — so it is NOT due again this instant.
+    // That is the backoff, not a loss: once it elapses the quote is due again with
+    // its budget intact, which is the whole distinction this fix rests on.
+    check('outage', '➜ backoff holds it right now', dueForAutoFollowUp(mkItem() as unknown as Quote, P), false)
+    db.last_followed_up_at = isoNDaysAgo(3)
+    check('outage', '➜ backoff elapses → due again, budget intact', [dueForAutoFollowUp(mkItem() as unknown as Quote, P), db.follow_up_count], [true, 0])
+
+    // ── The refund CAS cannot clobber a concurrent run ──
+    // Another run has since re-claimed the row (count moved past what our claim
+    // wrote). Our refund must match nothing rather than hand back an attempt someone
+    // else is spending.
+    reset()
+    const stale = mkItem()          // snapshot at follow_up_count = 0
+    db.follow_up_count = 7          // a concurrent writer moved it
+    const tRace = await withFetch(down, () => oneRun(stale))
+    check('outage', 'refund is a CAS: a lost race leaves the other run alone', db.follow_up_count, 7)
+    check('outage', '➜ and the claim itself never landed', tRace.chased, 0)
+  }
+
+  // Leave the process exactly as we found it — later sections and any other caller
+  // must not inherit fake credentials or a stubbed network.
+  globalThis.fetch = realFetch
+  for (const k of Object.keys(process.env)) if (!(k in ENV)) delete process.env[k]
+  Object.assign(process.env, ENV)
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  H('23. LEGACY MAP — `retryable` is internal and must not leak to the nine callers')
+  // sendResultsFromAttempts is a published contract. The new field lives on the
+  // attempt for the chase loop only; if it ever appears in this map it changes the
+  // response bytes for every caller of /api/comms/send.
+  check('results-map', 'retryable does not leak (provider error)',
+    sendResultsFromAttempts([asAttempt({ status: 'error', detail: 'Twilio 500', retryable: true })]),
+    { sms: { sent: false, reason: 'error', error: 'Twilio 500' } })
+  check('results-map', 'retryable does not leak (sent)',
+    sendResultsFromAttempts([asAttempt({ status: 'sent', sent: true, provider: 'twilio', providerId: 'SM1', retryable: false })]),
+    { sms: { sent: true, reason: 'sent', id: 'SM1' } })
+  check('results-map', 'retryable does not leak (skip)',
+    sendResultsFromAttempts([asAttempt({ detail: SKIP_REASON.NO_OPT_IN, retryable: false })]),
+    { sms: { sent: false, reason: 'no-optin' } })
+  // Belt and braces: no legacy value carries the key at all, whatever the attempt said.
+  check('results-map', 'no `retryable` key on ANY legacy value',
+    Object.values(sendResultsFromAttempts([
+      asAttempt({ status: 'error', detail: 'Twilio 500', retryable: true }),
+      asAttempt({ channel: 'email', detail: SKIP_REASON.NO_EMAIL }),
+    ])).some(v => 'retryable' in v), false)
+  // The exact case from section 18, re-asserted with retryable set: byte-identical.
+  check('results-map', 'section-18 output is UNCHANGED by the new field',
+    sendResultsFromAttempts([asAttempt({ channel: 'email', status: 'error', detail: 'Resend 422: bad address', retryable: false })]),
+    { email: { sent: false, reason: 'error', error: 'Resend 422: bad address' } })
 
   console.log(`\n${'═'.repeat(60)}\n  PASS ${pass}   FAIL ${fail}`)
   if (fails.length) { console.log('\n  FAILURES:'); fails.forEach(f => console.log('   • ' + f)) }
