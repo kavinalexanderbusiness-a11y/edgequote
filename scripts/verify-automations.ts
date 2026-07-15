@@ -25,9 +25,13 @@ function dateNDaysAgo(n: number): string {
   const d = new Date(); d.setDate(d.getDate() - n)
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
+// Exactly n×24h before now — NOT n days ago at noon. The rule under test counts
+// ELAPSED 24h periods from the wall clock (quoteIsQuiet → Date.now()), so a noon
+// anchor made "sent 3d ago → due at delay 3" true only after midday: the harness
+// passed every afternoon and failed every morning. Anchoring to the current time
+// tests the real rule at any hour.
 function isoNDaysAgo(n: number): string {
-  const d = new Date(); d.setDate(d.getDate() - n); d.setHours(12, 0, 0, 0)
-  return d.toISOString()
+  return new Date(Date.now() - n * 86_400_000).toISOString()
 }
 const TODAY = dateNDaysAgo(0)
 

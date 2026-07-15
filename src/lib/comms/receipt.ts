@@ -6,10 +6,9 @@
 // shows up everywhere a normal message does. Server-only.
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { renderMessage } from '@/lib/comms/templates'
-import { sendSms, sendEmail, commsEnabled } from '@/lib/comms/send'
-import { logSend } from '@/lib/comms/log'
-import { getOrCreateConversation } from '@/lib/comms/conversation'
-import { SKIP_REASON } from '@/lib/comms/skipReasons'
+import { commsEnabled } from '@/lib/comms/send'
+import { dispatchToCustomer } from '@/lib/comms/dispatch'
+import { logDispatch } from '@/lib/comms/log'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 
 function formatAmount(n: number): string {
@@ -29,6 +28,8 @@ export async function sendPaymentReceipt(
       .select('id, name, phone, email, sms_opt_in').eq('id', opts.customerId).eq('user_id', opts.userId).maybeSingle()
     if (!cust) return
     const c = cust as { id: string; name: string; phone: string | null; email: string | null; sms_opt_in: boolean }
+    // email_opt_in is deliberately NOT read: a receipt is transactional (see the
+    // `transactional` flag below). message_prefs likewise.
 
     const { data: bizRow } = await sb.from('business_settings')
       .select('company_name, review_url, message_templates').eq('user_id', opts.userId).maybeSingle()
@@ -43,51 +44,34 @@ export async function sendPaymentReceipt(
       reviewLink: biz?.review_url || undefined,
     })
 
-    // Keep each channel's provider id — a receipt that bounces must be able to say
-    // so, rather than reading "Sent" forever.
-    const sent: string[] = []
-    const ids: Record<string, { provider: string; id: string | null }> = {}
-    if (c.email) {
-      const r = await sendEmail(c.email, rendered.subject, rendered.html, rendered.text)
-      if (r.sent) { sent.push('email'); ids.email = { provider: 'resend', id: r.id ?? null } }
-    }
-    if (c.sms_opt_in && c.phone) {
-      const r = await sendSms(c.phone, rendered.sms)
-      if (r.sent) { sent.push('sms'); ids.sms = { provider: 'twilio', id: r.id ?? null } }
-    }
+    // THE one dispatch pipeline. Email first (the receipt's primary channel — the
+    // threaded bubble records whichever sends first), and `transactional` so email
+    // reaches the customer regardless of marketing preferences. SMS still honours
+    // sms_opt_in inside dispatch, exactly as before.
+    //
+    // Only LIVE channels are attempted, so a deployment with comms half-configured
+    // logs nothing for the dead one — the long-standing behaviour here.
+    const live = commsEnabled()
+    const channels = [...(live.email ? ['email'] : []), ...(live.sms ? ['sms'] : [])]
+    if (!channels.length) return
 
-    // Thread the receipt into the conversation + audit log, mirroring the send route.
-    let messageId: string | null = null
-    if (sent.length) {
-      const convoId = await getOrCreateConversation(sb, opts.userId, opts.customerId)
-      if (convoId) {
-        const primary = ids[sent[0]]
-        const msgBase = { user_id: opts.userId, conversation_id: convoId, customer_id: opts.customerId, direction: 'outbound', channel: sent[0], body: rendered.sms, status: 'sent', meta: { template: 'receipt' } }
-        let { data: m } = await sb.from('messages')
-          .insert({ ...msgBase, provider: primary?.provider ?? null, provider_message_id: primary?.id ?? null })
-          .select('id').single()
-        // Pre-migration fallback: never lose the bubble over a missing column.
-        if (!m) ({ data: m } = await sb.from('messages').insert(msgBase).select('id').single())
-        messageId = (m as { id: string } | null)?.id ?? null
-      }
-    }
-    for (const ch of ['email', 'sms']) {
-      const wasSent = sent.includes(ch)
-      // Log the attempt only for live channels (skip noise when comms are disabled).
-      const live = ch === 'email' ? commsEnabled().email : commsEnabled().sms
-      if (!live) continue
-      // Truthful canonical skip reason (receipts: email is transactional → only the
-      // address can be missing; SMS still respects opt-in).
-      const detail = wasSent ? null
-        : ch === 'email' ? SKIP_REASON.NO_EMAIL
-        : !c.sms_opt_in ? SKIP_REASON.NO_OPT_IN : SKIP_REASON.NO_PHONE
-      await logSend(sb, {
-        userId: opts.userId, customerId: opts.customerId, channel: ch, template: 'receipt',
-        status: wasSent ? 'sent' : 'skipped', detail,
-        messageId: wasSent ? messageId : null,
-        provider: ids[ch]?.provider ?? null, providerId: ids[ch]?.id ?? null,
-      })
-    }
+    const res = await dispatchToCustomer(sb, {
+      userId: opts.userId,
+      customer: {
+        id: c.id, phone: c.phone, email: c.email,
+        sms_opt_in: c.sms_opt_in,
+        email_opt_in: true,   // ignored under `transactional`; set true so intent is explicit
+        message_prefs: null,
+      },
+      channels,
+      smsText: rendered.sms,
+      emailSubject: rendered.subject,
+      emailHtml: rendered.html,
+      emailText: rendered.text,
+      template: 'receipt',
+      transactional: true,
+    })
+    await logDispatch(sb, res, { userId: opts.userId, customerId: opts.customerId, template: 'receipt' })
   } catch (e) {
     console.error('[receipt] send failed:', e)
   }

@@ -42,16 +42,36 @@ filter's *index*. The parameterised form is the separately-named `quoteIsQuiet`.
 | `cron/quote-followup` | automation | ✅ |
 | `cron/invoice-reminders` | automation | ✅ |
 | **`cron/notifications`** (reminders + review requests) | automation | ✅ **this pass** |
-| `lib/comms/receipt.ts` | automation (webhook) | ❌ — deliberate, see below |
+| **`lib/comms/receipt.ts`** | automation (webhook) | ✅ — via `transactional`, see below |
 | `api/comms/send/route.ts` | manual | ❌ — see below |
 
 `cron/notifications` was converted with `thread: false`, preserving the fact that
 reminders/review requests have never written a conversation bubble. Verified by
 `scripts/verify-automations.ts` **96/96**.
 
-### `receipt.ts` — a different rule, not a duplicate (OWNER DECISION)
-It cannot go on the shared pipeline without changing behaviour, because its consent
-model is **deliberately different**:
+### `receipt.ts` — now on the pipeline, its rule made explicit
+Dispatch gained exactly what receipt's semantics required, so the rule is now *stated*
+instead of living in a separate code path:
+
+- **`transactional?: boolean`** — bypasses the category check and `email_opt_in`,
+  because a receipt for money someone just paid is not a message they can be
+  unsubscribed from. **SMS still requires `sms_opt_in`** either way: carrier consent
+  isn't ours to waive. Default false — nothing is transactional by accident.
+- **`channels` are attempted in the caller's order** (was hardcoded sms→email). The
+  threaded bubble records the first channel that sent, so order is meaningful. Every
+  pre-existing caller passes `['sms','email']` or a single channel, so this is a no-op
+  for all of them; receipt passes `['email','sms']`, preserving its email-first bubble.
+- Only LIVE channels are attempted (`commsEnabled()`), preserving receipt's
+  long-standing "don't log the dead channel" behaviour without a special case in the
+  logger.
+
+**The owner decision is unchanged and still open:** *should a receipt ignore
+`email_opt_in`?* Today it does — that looks right, and it is now explicit at the call
+site rather than implied by a separate sender. Flipping it is a one-line change to
+`transactional`.
+
+**The pre-extraction reasoning, for the record** — it could not go on the pipeline until
+dispatch could express:
 
 1. **Email is transactional** — it does NOT check `email_opt_in`. `dispatchToCustomer`
    does. Converting as-is would **stop sending receipts to customers who opted out of
@@ -64,12 +84,20 @@ model is **deliberately different**:
 4. **Skips are logged only for live channels** (`commsEnabled()`); dispatch/logDispatch
    would log `disabled` rows too.
 
-**To do this safely dispatch needs two additions:** a `transactional?: boolean` that
-bypasses `email_opt_in` + `prefAllows`, and iteration in the caller's `channels` order
-rather than hardcoded sms→email. Both touch every existing sender. Also in the frozen
-invoice/payment domain. **Question for the owner: should a receipt ignore `email_opt_in`?**
-(Today it does. That looks correct — but it should be a stated decision, not an
-accident of a separate code path.)
+Both additions are now in dispatch (above), so the extraction is done with behaviour
+preserved.
+
+### ⚠️ The verification harness was flaky — fixed
+`scripts/verify-automations.ts` anchored its fixtures to **noon** (`isoNDaysAgo` did
+`setHours(12,0,0,0)`) while the rule under test counts **elapsed 24h periods** from the
+wall clock. So "sent 3d ago → due at delay 3" only became true after midday: **the
+harness passed every afternoon and failed every morning** (4 boundary cases). Proven
+pre-existing by stashing all local edits and re-running against untouched `5f93739` —
+same 4 failures. Fixture is now `Date.now() - n×86_400_000`, which tests the real rule
+at any hour. 96/96, deterministic.
+
+This is the same wall-clock-vs-calendar-day seam the owner ruled on (keep wall-clock).
+The harness had quietly encoded the *calendar* expectation.
 
 ### `api/comms/send/route.ts` — the 4th copy (manual)
 Not an automation, so out of this pass's stated scope, but it is the last

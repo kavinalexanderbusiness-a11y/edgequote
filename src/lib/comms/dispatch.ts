@@ -26,6 +26,8 @@ export interface DispatchCustomer {
 export interface DispatchInput {
   userId: string
   customer: DispatchCustomer
+  /** Attempted IN THIS ORDER. The threaded bubble records the first channel that
+   *  actually sent, so order is meaningful, not cosmetic. */
   channels: string[]
   smsText: string
   emailSubject: string
@@ -34,6 +36,12 @@ export interface DispatchInput {
   template: string          // for messages.meta + notification_log.template
   meta?: Record<string, unknown>
   thread?: boolean          // record an outbound bubble (default true)
+  /** A record the customer is entitled to regardless of marketing preferences —
+   *  today only the payment receipt. Bypasses the category check and email_opt_in,
+   *  because a receipt for money someone just paid is not a message they can be
+   *  unsubscribed from. SMS still requires sms_opt_in either way: carrier consent
+   *  is not ours to waive. Default false — nothing is transactional by accident. */
+  transactional?: boolean
 }
 
 // `provider`/`providerId` are the provider's own handle on the message (Twilio
@@ -61,25 +69,27 @@ export async function dispatchToCustomer(sb: SupabaseClient, inp: DispatchInput)
   const skip = (channel: string, detail: string): DispatchAttempt =>
     ({ channel, status: 'skipped', detail, sent: false, provider: null, providerId: null })
 
-  if (!prefAllows(c.message_prefs, inp.template)) {
+  if (!inp.transactional && !prefAllows(c.message_prefs, inp.template)) {
     for (const ch of inp.channels) attempts.push(skip(ch, SKIP_REASON.UNSUBSCRIBED))
     return { attempts, messageId: null, sentChannels: [] }
   }
 
-  if (inp.channels.includes('sms')) {
-    if (!c.sms_opt_in) attempts.push(skip('sms', SKIP_REASON.NO_OPT_IN))
-    else if (!c.phone) attempts.push(skip('sms', SKIP_REASON.NO_PHONE))
-    else {
-      const r = await sendSms(c.phone, inp.smsText)
-      attempts.push({ channel: 'sms', status: r.reason, detail: r.error ?? null, sent: r.sent, provider: r.sent ? PROVIDER.sms : null, providerId: r.id ?? null })
-    }
-  }
-  if (inp.channels.includes('email')) {
-    if (!c.email_opt_in) attempts.push(skip('email', SKIP_REASON.NO_OPT_IN))
-    else if (!c.email) attempts.push(skip('email', SKIP_REASON.NO_EMAIL))
-    else {
-      const r = await sendEmail(c.email, inp.emailSubject, inp.emailHtml, inp.emailText)
-      attempts.push({ channel: 'email', status: r.reason, detail: r.error ?? null, sent: r.sent, provider: r.sent ? PROVIDER.email : null, providerId: r.id ?? null })
+  // Caller order — the bubble below records the first channel that sent.
+  for (const ch of inp.channels) {
+    if (ch === 'sms') {
+      if (!c.sms_opt_in) attempts.push(skip('sms', SKIP_REASON.NO_OPT_IN))
+      else if (!c.phone) attempts.push(skip('sms', SKIP_REASON.NO_PHONE))
+      else {
+        const r = await sendSms(c.phone, inp.smsText)
+        attempts.push({ channel: 'sms', status: r.reason, detail: r.error ?? null, sent: r.sent, provider: r.sent ? PROVIDER.sms : null, providerId: r.id ?? null })
+      }
+    } else if (ch === 'email') {
+      if (!inp.transactional && !c.email_opt_in) attempts.push(skip('email', SKIP_REASON.NO_OPT_IN))
+      else if (!c.email) attempts.push(skip('email', SKIP_REASON.NO_EMAIL))
+      else {
+        const r = await sendEmail(c.email, inp.emailSubject, inp.emailHtml, inp.emailText)
+        attempts.push({ channel: 'email', status: r.reason, detail: r.error ?? null, sent: r.sent, provider: r.sent ? PROVIDER.email : null, providerId: r.id ?? null })
+      }
     }
   }
 
