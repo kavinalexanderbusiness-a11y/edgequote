@@ -5,12 +5,14 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { Customer, PaymentMethod } from '@/types'
+import { usePaymentsStatus } from '@/hooks/usePaymentsStatus'
+import { cardExpLabel, cardExpiryState } from '@/lib/payments/card'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Toggle } from '@/components/ui/Toggle'
 import { Select } from '@/components/ui/Select'
 import { Banner } from '@/components/ui/Banner'
-import { CreditCard, ShieldCheck, Trash2, Zap, AlertCircle } from 'lucide-react'
+import { CreditCard, ShieldCheck, Trash2, Zap, AlertCircle, AlertTriangle } from 'lucide-react'
 
 type Mode = 'inherit' | 'auto' | 'manual_review'
 
@@ -25,7 +27,7 @@ export function PaymentMethodCard({ customer, onCustomerChange }: {
 }) {
   const supabase = useMemo(() => createClient(), [])
   const [card, setCard] = useState<PaymentMethod | null>(null)
-  const [paymentsEnabled, setPaymentsEnabled] = useState(false)
+  const { enabled: paymentsEnabled, webhook: webhookReady } = usePaymentsStatus()
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [autopay, setAutopay] = useState(!!customer.autopay_enabled)
@@ -41,7 +43,6 @@ export function PaymentMethodCard({ customer, onCustomerChange }: {
   }
 
   useEffect(() => {
-    fetch('/api/payments/status').then(r => r.json()).then(d => setPaymentsEnabled(!!d.enabled)).catch(() => {})
     loadCard()
     // Just back from Stripe? The webhook writes the card a beat later — poll briefly.
     if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('cardsaved') === '1') {
@@ -99,17 +100,29 @@ export function PaymentMethodCard({ customer, onCustomerChange }: {
     onCustomerChange?.({ autopay_charge_mode: value })
   }
 
-  const expLabel = card?.exp_month && card?.exp_year ? `${String(card.exp_month).padStart(2, '0')}/${String(card.exp_year).slice(-2)}` : null
+  const expLabel = cardExpLabel(card)
+  const expState = cardExpiryState(card)
   const brandLabel = card?.brand ? card.brand.charAt(0).toUpperCase() + card.brand.slice(1) : 'Card'
+
+  // AutoPay is only truthfully "on" when it can actually charge. The badge used to
+  // key off the toggle alone, so it stayed green while the engine skipped every
+  // invoice for a reason the owner was never shown.
+  const autopayBlocked = !!card && autopay && (!webhookReady || expState === 'expired')
+  const autopayLive = !!card && autopay && !autopayBlocked
 
   return (
     <Card>
       <CardHeader className="flex items-center gap-2">
         <CreditCard className="w-4 h-4 text-accent-text" />
         <h2 className="text-sm font-semibold text-ink">Payment Method &amp; AutoPay</h2>
-        {autopay && card && (
+        {autopayLive && (
           <span className="ml-auto text-[10px] uppercase tracking-wide text-emerald-400 border border-emerald-500/30 bg-emerald-500/10 rounded px-1.5 py-0.5 font-semibold flex items-center gap-1">
             <Zap className="w-3 h-3" /> AutoPay on
+          </span>
+        )}
+        {autopayBlocked && (
+          <span className="ml-auto text-[10px] uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5 font-semibold flex items-center gap-1">
+            <AlertTriangle className="w-3 h-3" /> AutoPay can&rsquo;t charge
           </span>
         )}
       </CardHeader>
@@ -117,6 +130,29 @@ export function PaymentMethodCard({ customer, onCustomerChange }: {
         {!paymentsEnabled && (
           <Banner tone="warn" icon={AlertCircle} className="text-xs">
             Connect Stripe (STRIPE_SECRET_KEY) to enable saved cards &amp; AutoPay.
+          </Banner>
+        )}
+
+        {/* Stripe half-configured. attemptAutoPayCharge hard-refuses without the webhook
+            ('webhook-unconfigured') because the webhook is the only writer of paid-state —
+            charging with no way to record it would take money and leave the invoice open.
+            That refusal was correct and completely invisible: every recurring visit
+            silently skipped, forever, while this card showed a green AutoPay badge. */}
+        {paymentsEnabled && !webhookReady && (
+          <Banner tone="warn" icon={AlertTriangle} className="text-xs">
+            AutoPay is turned on but <strong>can&rsquo;t charge yet</strong> — the Stripe webhook isn&rsquo;t
+            configured (STRIPE_WEBHOOK_SECRET), so a charge couldn&rsquo;t be recorded against the invoice.
+            Recurring visits are being invoiced as normal; they just won&rsquo;t be paid automatically until it&rsquo;s set up.
+          </Banner>
+        )}
+
+        {/* The expiry was already on screen — as grey text that never made a claim.
+            An expired card declines every charge, so it's the owner's problem now, not
+            a footnote. */}
+        {card && expState === 'expired' && (
+          <Banner tone="warn" icon={AlertTriangle} className="text-xs">
+            This card expired{expLabel ? ` in ${expLabel}` : ''} — AutoPay charges will decline.
+            Ask {customer.name.split(' ')[0]} for a new card, or send a payment link instead.
           </Banner>
         )}
 
@@ -129,9 +165,19 @@ export function PaymentMethodCard({ customer, onCustomerChange }: {
               </div>
               <div className="min-w-0">
                 <p className="text-sm font-medium text-ink">{brandLabel} •••• {card.last4 || '????'}</p>
-                <p className="text-[11px] text-ink-faint flex items-center gap-1">
-                  <ShieldCheck className="w-3 h-3 text-emerald-400" /> Stored securely by Stripe{expLabel ? ` · exp ${expLabel}` : ''}
-                </p>
+                {expState === 'expired' ? (
+                  <p className="text-[11px] text-amber-400 flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3 shrink-0" /> Expired {expLabel}
+                  </p>
+                ) : expState === 'expiring' ? (
+                  <p className="text-[11px] text-amber-400 flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3 shrink-0" /> Expires {expLabel} — ask for a new card soon
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-ink-faint flex items-center gap-1">
+                    <ShieldCheck className="w-3 h-3 text-emerald-400" /> Stored securely by Stripe{expLabel ? ` · exp ${expLabel}` : ''}
+                  </p>
+                )}
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">

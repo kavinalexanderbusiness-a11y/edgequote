@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
+import { usePaymentsStatus } from '@/hooks/usePaymentsStatus'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { Invoice, InvoiceStatus, InvoiceDisplayStatus, INVOICE_STATUS_LABELS, INVOICE_STATUS_COLORS, BusinessSettings, Payment, paymentMethodLabel } from '@/types'
 import { InvoicePaymentControls } from '@/components/payments/InvoicePaymentControls'
@@ -71,7 +72,7 @@ export default function InvoicesPage() {
   })
   // The ONE shared Send Message dialog, opened for a specific invoice's customer.
   const [msgInvoice, setMsgInvoice] = useState<Invoice | null>(null)
-  const [paymentsEnabled, setPaymentsEnabled] = useState(false)
+  const { enabled: paymentsEnabled, webhook: webhookReady } = usePaymentsStatus()
   const [payingId, setPayingId] = useState<string | null>(null)
   const [chargingId, setChargingId] = useState<string | null>(null)
   const [cardCustomers, setCardCustomers] = useState<Set<string>>(new Set())
@@ -171,7 +172,6 @@ export default function InvoicesPage() {
   // customer just completed checkout; the webhook marks the invoice paid a beat
   // later, so we refetch after a short delay.
   useEffect(() => {
-    fetch('/api/payments/status').then(r => r.json()).then(d => setPaymentsEnabled(!!d.enabled)).catch(() => {})
     // ?paid=1 only means the customer reached Stripe's return URL — the WEBHOOK is
     // what records the money. Claiming "Payment received" here would be a guess, and
     // if the webhook isn't configured it would be a lie the invoice never corrects.
@@ -328,6 +328,20 @@ export default function InvoicesPage() {
         <Banner tone="danger" icon={AlertTriangle}
           action={<button type="button" onClick={() => { setLoading(true); fetchInvoices() }} className="shrink-0 underline font-semibold">Retry</button>}>
           {loadError}
+        </Banner>
+      )}
+
+      {/* Stripe key set, webhook secret missing — the worst possible half-state, and
+          until now a completely silent one. Checkout links keep working, so customers
+          pay in full; but the webhook is the single writer of paid-state, so nothing
+          ever records it and the invoice sits here as outstanding forever. The owner
+          chases a customer who already paid. Warn on the page where those links get
+          sent, since Stripe is env-configured and has no settings screen to warn on. */}
+      {paymentsEnabled && !webhookReady && (
+        <Banner tone="warn" icon={AlertTriangle}>
+          Card payments will be <strong>taken but not recorded</strong> — the Stripe webhook isn&rsquo;t configured
+          (STRIPE_WEBHOOK_SECRET), so paid invoices won&rsquo;t mark themselves paid and AutoPay won&rsquo;t charge.
+          Add the endpoint in your Stripe dashboard, or record these payments by hand for now.
         </Banner>
       )}
 
