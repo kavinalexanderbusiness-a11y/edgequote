@@ -834,6 +834,10 @@ export interface BusinessSettings {
   // Where customers send e-transfers — shown in the portal's Ways-to-pay panel.
   etransfer_email?: string | null
   gst_percent: number | null                 // GST shown/charged only when > 0 (Alberta = 5 when registered)
+  // The CRA requires the supplier's GST/HST registration number on any invoice of
+  // $30+ for the CUSTOMER to claim an input tax credit — missing = ITC denied on
+  // audit. Also mandatory on a credit note (ETA s.232(3)). null = not registered.
+  gst_number?: string | null
   // ── Recurring AutoPay ── business-wide default charge mode (a customer may
   // override). 'auto' = charge a saved card the moment a recurring visit completes;
   // 'manual_review' = always draft the invoice and wait for the owner to charge.
@@ -925,6 +929,7 @@ export interface BusinessSettingsFormValues {
   etransfer_discount_percent: number
   etransfer_email: string
   gst_percent: number
+  gst_number: string
   autopay_charge_mode: 'auto' | 'manual_review'
   autopay_variance_pct: number
 }

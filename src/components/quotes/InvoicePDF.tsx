@@ -4,7 +4,7 @@ import {
   Document, Page, Text, View, Image, StyleSheet, pdf,
 } from '@react-pdf/renderer'
 import type { Invoice, BusinessSettings } from '@/types'
-import { invoiceTotals } from '@/lib/invoiceTotals'
+import { invoiceTotals, gstRegistrationNumber } from '@/lib/invoiceTotals'
 
 const COLORS = {
   green: '#00C896',
@@ -58,6 +58,12 @@ const styles = StyleSheet.create({
 
   footer: { position: 'absolute', bottom: 28, left: 44, right: 44, borderTopWidth: 1, borderTopColor: COLORS.line, paddingTop: 10, flexDirection: 'row', justifyContent: 'space-between' },
   footerText: { fontSize: 8, color: COLORS.faint },
+  // Its own line BELOW the footer row. Appending it as a third child of that row
+  // would push "Thank you for your business" from the right edge to the centre —
+  // and since the render returns '' (not nothing) the empty slot would shift it
+  // on single-page invoices too. Positioning is all this style adds; the type is
+  // styles.footerText.
+  pageNumber: { position: 'absolute', bottom: 14, left: 44, right: 44, textAlign: 'right' },
 })
 
 function money(n: number) {
@@ -81,10 +87,13 @@ export function InvoiceDocument({ invoice, settings }: InvoicePDFProps) {
     settings?.email_secondary || settings?.email_primary,
     settings?.website,
   ].filter(Boolean) as string[]
+  // Printed only for a registrant. Without it the customer cannot claim an input
+  // tax credit on this invoice (CRA requires it at $30+).
+  const gstNumber = gstRegistrationNumber(settings)
 
   return (
     <Document>
-      <Page size="A4" style={styles.page}>
+      <Page size="LETTER" style={styles.page}>
         <View style={styles.headerRow}>
           <View>
             {settings?.logo_url ? (
@@ -106,6 +115,7 @@ export function InvoiceDocument({ invoice, settings }: InvoicePDFProps) {
               <Text style={styles.companyLine}>{settings?.email_secondary || settings?.email_primary}</Text>
             ) : null}
             {settings?.website ? <Text style={styles.companyLine}>{settings.website}</Text> : null}
+            {gstNumber ? <Text style={styles.companyLine}>GST/HST #: {gstNumber}</Text> : null}
           </View>
         </View>
 
@@ -152,14 +162,14 @@ export function InvoiceDocument({ invoice, settings }: InvoicePDFProps) {
           const descStyle = showUnits ? styles.cellDescU : styles.cellDesc
           return (
             <View style={styles.table}>
-              <View style={styles.tableHead}>
+              <View style={styles.tableHead} fixed>
                 <Text style={[styles.th, descStyle]}>Description</Text>
                 {showUnits && <Text style={[styles.th, styles.cellQty]}>Qty</Text>}
                 {showUnits && <Text style={[styles.th, styles.cellUnit]}>Unit price</Text>}
                 <Text style={[styles.th, styles.cellAmt]}>Amount</Text>
               </View>
               {rows.map((li, i) => (
-                <View style={styles.tableRow} key={i}>
+                <View style={styles.tableRow} key={i} wrap={false}>
                   <View style={descStyle}>
                     <Text style={styles.td}>{li.description}</Text>
                   </View>
@@ -192,13 +202,13 @@ export function InvoiceDocument({ invoice, settings }: InvoicePDFProps) {
             </View>
           ) : null
           if (!t.hasGst && !t.hasDiscount && !paidRows) return (
-            <View style={styles.grandRow}>
+            <View style={styles.grandRow} wrap={false}>
               <Text style={styles.grandLabel}>Amount Due</Text>
               <Text style={styles.grandValue}>{money(t.total)}</Text>
             </View>
           )
           if (!t.hasGst && !t.hasDiscount) return (
-            <View>
+            <View wrap={false}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 12, marginLeft: 'auto', width: '50%' }}>
                 <Text style={styles.bodyText}>Invoice Total</Text>
                 <Text style={styles.bodyText}>{money(t.total)}</Text>
@@ -207,7 +217,7 @@ export function InvoiceDocument({ invoice, settings }: InvoicePDFProps) {
             </View>
           )
           return (
-            <View>
+            <View wrap={false}>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 12, marginLeft: 'auto', width: '50%' }}>
                 <Text style={styles.bodyText}>Subtotal</Text>
                 <Text style={styles.bodyText}>{money(t.subtotal)}</Text>
@@ -224,10 +234,27 @@ export function InvoiceDocument({ invoice, settings }: InvoicePDFProps) {
                   <Text style={styles.bodyText}>{money(t.gstAmount)}</Text>
                 </View>
               ) : null}
-              <View style={styles.grandRow}>
-                <Text style={styles.grandLabel}>Total Due</Text>
-                <Text style={styles.grandValue}>{money(t.total)}</Text>
-              </View>
+              {/* `paidRows` was computed above and then never rendered on THIS branch —
+                  the branch taken whenever GST or a discount applies, i.e. the default
+                  path for every GST registrant. A part-paid invoice printed "Total Due"
+                  at the FULL amount with no "Paid to date" and no "Balance Due": exactly
+                  the double payment the comment above warns about. When money has been
+                  received the pre-payment figure stops being the headline (it is not what
+                  is due) and steps down to a plain line — the same vocabulary the
+                  no-GST branch already uses — leaving "Balance Due" as the one grand
+                  row, so there is never a second competing bold number to pay. */}
+              {paidRows ? (
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginLeft: 'auto', width: '50%', marginTop: 2 }}>
+                  <Text style={styles.bodyText}>Invoice Total</Text>
+                  <Text style={styles.bodyText}>{money(t.total)}</Text>
+                </View>
+              ) : (
+                <View style={styles.grandRow}>
+                  <Text style={styles.grandLabel}>Total Due</Text>
+                  <Text style={styles.grandValue}>{money(t.total)}</Text>
+                </View>
+              )}
+              {paidRows}
             </View>
           )
         })()}
@@ -250,6 +277,14 @@ export function InvoiceDocument({ invoice, settings }: InvoicePDFProps) {
           <Text style={styles.footerText}>{company}{contactLines.length ? '  ·  ' + contactLines.join('  ·  ') : ''}</Text>
           <Text style={styles.footerText}>Thank you for your business</Text>
         </View>
+
+        {/* Only once the invoice actually spans pages — "Page 1 of 1" on a
+            single-page customer document is noise. */}
+        <Text
+          style={[styles.footerText, styles.pageNumber]}
+          fixed
+          render={({ pageNumber, totalPages }) => (totalPages > 1 ? `Page ${pageNumber} of ${totalPages}` : '')}
+        />
       </Page>
     </Document>
   )

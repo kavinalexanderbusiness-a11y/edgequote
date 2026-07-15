@@ -113,6 +113,7 @@ export default function SettingsPage() {
         etransfer_discount_percent: settings.etransfer_discount_percent ?? 0,
         etransfer_email: settings.etransfer_email || '',
         gst_percent: settings.gst_percent ?? 0,
+        gst_number: settings.gst_number || '',
         autopay_charge_mode: settings.autopay_charge_mode ?? 'auto',
         autopay_variance_pct: settings.autopay_variance_pct ?? 40,
       })
@@ -184,6 +185,9 @@ export default function SettingsPage() {
         etransfer_discount_percent: Number(values.etransfer_discount_percent) >= 0 ? Number(values.etransfer_discount_percent) : 0,
         etransfer_email: values.etransfer_email?.trim() || null,
         gst_percent: Number(values.gst_percent) >= 0 ? Number(values.gst_percent) : 0,
+        // Blank → null, never '': null is the stored "not registered" state, and the
+        // PDFs gate their GST/HST # line on a non-empty number.
+        gst_number: values.gst_number?.trim() || null,
         autopay_charge_mode: values.autopay_charge_mode === 'manual_review' ? 'manual_review' : 'auto',
         autopay_variance_pct: Number(values.autopay_variance_pct) >= 0 ? Number(values.autopay_variance_pct) : 40,
         preferred_work_days: workDays,
@@ -429,6 +433,9 @@ export default function SettingsPage() {
               <Input label="GST % (if registered)" type="number" step="0.5" min="0" max="15"
                 hint="Alberta GST is 5%. Leave 0 if you're not GST-registered — no GST line will be shown."
                 {...register('gst_percent')} />
+              <Input label="GST/HST number" placeholder="123456789RT0001"
+                hint="Prints on your invoices and receipts so customers can claim their input tax credits — the CRA requires it on anything $30 or more. Leave blank if you're not registered."
+                {...register('gst_number')} />
               <Input label="E-transfer email" type="email" placeholder="pay@yourbusiness.com"
                 hint="The email registered with your bank for Interac e-transfers (often your business email). Shown to customers in the portal's Ways to Pay."
                 {...register('etransfer_email')} />

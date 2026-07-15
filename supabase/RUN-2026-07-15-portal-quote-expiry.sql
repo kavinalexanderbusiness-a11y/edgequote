@@ -37,6 +37,14 @@
 -- (quotes.valid_until already exists — nullable date), no data is backfilled, no
 -- status is rewritten, and nothing else in the payload moves.
 --
+-- 2026-07-15 (second change, same file — this is the canonical definition, so it
+-- changes HERE rather than in a seventh file): `gst_number` added to the business
+-- projection. APPLIED to production via MCP and verified live — pg_get_functiondef
+-- GREW 4070 → 4300 chars and still contains valid_until, quote_services,
+-- is_initial_visit, review_declined_at, etransfer_email and end_count, i.e. no
+-- earlier lineage was dropped. Column already exists (business_settings.gst_number,
+-- see RUN-2026-07-15-gst-registration-number.sql); no backfill, nothing else moves.
+--
 -- SAFETY
 -- Additive only. A null valid_until means "never expires", which is every quote
 -- sent before expiry stamping began — so this cannot retroactively expire
@@ -72,7 +80,13 @@ begin
     -- review_declined_at: the customer's own "No thanks", so it survives the session.
     'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code, sms_opt_in, email_opt_in, reviewed_at, review_declined_at, autopay_enabled from public.customers where id = v_customer) c),
     -- service_seasons: buildServicePlans needs the owner's REAL season window.
-    'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, email_secondary, website, logo_url, logo_scale, base_address, terms_text, review_url, coalesce(gst_percent,0) as gst_percent, etransfer_email, service_seasons from public.business_settings where user_id = v_user) b),
+    -- gst_number (added 2026-07-15): the portal re-renders the SAME invoice/receipt
+    -- PDFs from this payload, so without it the customer's own copy — the one they
+    -- hand their accountant — carries no GST/HST registration number and cannot
+    -- support an input tax credit. Fixing only the owner-sent copy would have left
+    -- the hole on the path that actually gets filed. Null when not registered; the
+    -- PDFs print it only when gst_percent > 0 AND it is set.
+    'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, email_secondary, website, logo_url, logo_scale, base_address, terms_text, review_url, coalesce(gst_percent,0) as gst_percent, gst_number, etransfer_email, service_seasons from public.business_settings where user_id = v_user) b),
     'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood, notes from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),
     'quotes', coalesce((select json_agg(q order by q.created_at desc) from (
       select qt.id, qt.quote_number, qt.service_type, qt.address, qt.total, qt.initial_price, qt.subtotal,

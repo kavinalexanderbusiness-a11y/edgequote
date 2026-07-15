@@ -268,6 +268,11 @@ create table if not exists public.business_settings (
   fee_recovery_percent       numeric not null default 3,
   etransfer_discount_percent numeric not null default 0,
   gst_percent                numeric not null default 0,
+  -- GST/HST registration number (e.g. 123456789RT0001). CRA requires it on a $30+
+  -- invoice for the customer to claim an ITC. Null = not registered; the PDFs print
+  -- it only when gst_percent > 0 AND this is set, so a non-registrant never holds
+  -- itself out as one. See RUN-2026-07-15-gst-registration-number.sql.
+  gst_number                 text,
   smart_labor_enabled        boolean not null default true,
   notif_prefs                jsonb not null default '{}'::jsonb,
   sms_pricing                jsonb,
