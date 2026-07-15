@@ -251,7 +251,7 @@ export function recommendQuotePrice(
   // your minimums (req #4). Floor = the market-tier minimum for this cadence, and
   // the revenue/hour floor against crew cost when we know the visit time.
   const guidanceMin = pricingGuidance(enginePrice, cfg).minimum // enginePrice × marketMult
-  const onSite = input.visitMinutes && input.visitMinutes > 0 ? input.visitMinutes : (sqft > 0 ? estimateVisitMinutes(sqft) : 0)
+  const onSite = input.visitMinutes && input.visitMinutes > 0 ? input.visitMinutes : (estimateVisitMinutes(sqft) ?? 0)
   const drive = input.driveMin && input.driveMin > 0 ? input.driveMin : 0
   const hours = (onSite + drive) / 60
   const revFloorPrice = input.crewCost > 0 && hours > 0 ? roundUpToNice(input.crewCost * 1.5 * hours) : 0
