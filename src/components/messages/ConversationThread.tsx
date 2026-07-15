@@ -34,6 +34,9 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
   const [note, setNote] = useState(false)
   const [sending, setSending] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  // A "saved but not delivered" soft-warning is styled amber (not the red of a true
+  // failure) — the message DID save to the timeline.
+  const [errIsWarn, setErrIsWarn] = useState(false)
   const endRef = useRef<HTMLDivElement>(null)
   // Guards a fast conversation switch: a slow load for an earlier customer must never
   // overwrite the thread you've since opened (the component is reused across both).
@@ -131,7 +134,7 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
     // the same id → the server dispatches the SMS at most once (no duplicate on replay).
     const clientMessageId = newClientMessageId()
     setItems(prev => [...prev, { id: pendId, at: new Date().toISOString(), kind: isNote ? 'note' : 'out', channel: 'sms', body: t, status: 'sending' }])
-    setText(''); setSending(true); setErr(null)
+    setText(''); setSending(true); setErr(null); setErrIsWarn(false)
     let deliveryWarn: string | null = null
     try {
       const outcome = await queueOrRun(
@@ -141,7 +144,7 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
           const d = await res.json().catch(() => ({}))
           if (!res.ok) throw new Error(d.error || 'send failed')
           // Saved server-side but SMS not delivered → surface a soft warning (don't roll back).
-          if (d.ok === false && !d.internal) deliveryWarn = d.error || 'Message saved, but the text couldn’t be delivered.'
+          if (d.ok === false && !d.internal) deliveryWarn = d.error || 'Saved to the timeline, but the text couldn’t be delivered.'
         },
         // A lost response after the server may have sent must NOT re-queue (→ no double SMS);
         // true offline still queues. See queueOrRun.
@@ -150,11 +153,11 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
       if (outcome === 'queued') {
         setItems(prev => prev.map(i => i.id === pendId ? { ...i, status: 'queued' } : i))
       } else {
-        if (deliveryWarn) setErr(deliveryWarn)
+        if (deliveryWarn) { setErr(deliveryWarn); setErrIsWarn(true) }
         scheduleLoad() // replaces the optimistic bubble with the saved message; coalesces with the realtime echo
       }
     } catch {
-      setErr('Message could not be sent. Please try again.')
+      setErr('Message could not be sent. Please try again.'); setErrIsWarn(false)
       setItems(prev => prev.filter(i => i.id !== pendId))
       setText(t)
     } finally { setSending(false) }
@@ -179,7 +182,7 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
       </div>
 
       <div className="border-t border-border pt-2 mt-1">
-        {err && <p className="text-xs text-red-400 mb-1">{err}</p>}
+        {err && <p className={cn('text-xs mb-1', errIsWarn ? 'text-amber-400' : 'text-red-400')}>{err}</p>}
         <div className="flex items-end gap-2">
           <textarea value={text} onChange={e => setText(e.target.value)} rows={2}
             aria-label={note ? 'Internal note' : 'Reply message'}
@@ -188,7 +191,7 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
               else if (e.key === 'Escape') e.currentTarget.blur()
             }}
             placeholder={note ? 'Internal note (not sent to the customer)…' : 'Reply by SMS…'}
-            className={cn('flex-1 rounded-lg border px-3 py-2 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 resize-none',
+            className={cn('flex-1 rounded-lg border px-3 py-2 text-base sm:text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 resize-none',
               note ? 'bg-amber-500/5 border-amber-500/30' : 'bg-bg-tertiary border-border-strong')} />
           <div className="flex flex-col gap-1.5 shrink-0">
             <button type="button" onClick={() => setNote(n => !n)} title="Toggle internal note"
@@ -198,7 +201,7 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
             </button>
             <Button size="sm" onClick={send} loading={sending} disabled={!text.trim()}
               aria-label={note ? 'Save note' : 'Send message'} title={note ? 'Save note' : 'Send message'}>
-              {note ? 'Save note' : <Send className="w-4 h-4" />}
+              {note ? 'Save note' : <><Send className="w-4 h-4" /> Send</>}
             </Button>
           </div>
         </div>

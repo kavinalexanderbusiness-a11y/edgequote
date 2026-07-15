@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { MsgType, MSG_LABELS, renderMessage, toDisplayBody, fromDisplayBody } from '@/lib/comms/templates'
+import { MsgType, MSG_LABELS, renderMessage, toDisplayBody, fromDisplayBody, PORTAL_LINK_DISPLAY } from '@/lib/comms/templates'
 import { summarizeSendOutcome, type SendOutcome } from '@/lib/comms/sendOutcome'
 import { SmsCost } from '@/components/comms/SmsCost'
 import { Modal } from '@/components/ui/Modal'
@@ -62,7 +62,7 @@ export function SendMessageDialog({
   const bulk = all.length > 1
 
   const [custom, setCustom] = useState<Partial<Record<MsgType, string>> | null>(null)
-  const [company, setCompany] = useState('Edge Property Services')
+  const [company, setCompany] = useState('Your service provider')
   const [reviewUrl, setReviewUrl] = useState('')
   const [bizPhone, setBizPhone] = useState('')
 
@@ -75,6 +75,8 @@ export function SendMessageDialog({
   const [busy, setBusy] = useState(false)
   const [progress, setProgress] = useState(0)
   const [outcome, setOutcome] = useState<SendOutcome | null>(null)
+  // Bulk sends cost money and reach many people — require a deliberate second click.
+  const [armed, setArmed] = useState(false)
 
   const chosen = useMemo(() => all.filter(r => selected.has(r.customerId)), [all, selected])
   const toggle = (id: string) => setSelected(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
@@ -106,6 +108,15 @@ export function SendMessageDialog({
   }, [open, supabase])
 
   const sampleName = chosen[0]?.name || all[0]?.name || 'there'
+
+  // The email subject line the customer will see (email channel only shows it).
+  const emailSubject = useMemo(
+    () => renderMessage(active, custom, { firstName: sampleName, businessName: company }).subject,
+    [active, custom, sampleName, company],
+  )
+
+  // Any change to the message, channels, or recipients disarms a pending bulk confirm.
+  useEffect(() => { setArmed(false) }, [text, ch.sms, ch.email, selected])
 
   function compose(type: MsgType, opts?: { eta?: string }): string {
     // Only the server knows each customer's portal token — the composer shows a
@@ -178,7 +189,7 @@ export function SendMessageDialog({
 
   return (
     <Modal open={open} onClose={() => !busy && onClose()} icon={MessageSquare} size="lg"
-      onSubmit={() => { if (!busy && !outcome?.ok && chosen.length) send() }}
+      onSubmit={() => { if (busy || outcome?.ok || !chosen.length || !text.trim()) return; if (bulk && !armed) setArmed(true); else send() }}
       title={title ?? (bulk ? `Message ${all.length} customers` : `Message ${(all[0]?.name || 'customer').split(' ')[0]}`)}>
       <div className="space-y-4">
         {/* Recipients — only when there's a real choice to make */}
@@ -217,7 +228,7 @@ export function SendMessageDialog({
           <label className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-ink-faint">
             ETA (min)
             <input type="number" min="1" step="5" value={eta}
-              onChange={e => { setEta(e.target.value); setText(compose(active, { eta: e.target.value })); setEdited(false) }}
+              onChange={e => { setEta(e.target.value); if (!edited) setText(compose(active, { eta: e.target.value })) }}
               className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1 text-sm text-ink outline-none focus:border-accent" />
           </label>
         )}
@@ -228,9 +239,12 @@ export function SendMessageDialog({
           <textarea value={text} onChange={e => { setText(e.target.value); setEdited(true); setOutcome(null) }} rows={6} aria-label="Message"
             placeholder="Write your message…"
             className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink outline-none focus:border-accent resize-none" />
-          {ch.sms
-            ? <SmsCost text={text} recipients={chosen.length || 1} className="mt-1" />
-            : <p className="text-[10px] text-ink-faint mt-1">{text.length} characters</p>}
+          {ch.sms && <SmsCost text={text} recipients={chosen.length || 1} className="mt-1" />}
+          {ch.email && custom !== null && (
+            <p className="text-[11px] text-ink-muted mt-1 flex items-center gap-1.5">
+              <Mail className="w-3 h-3 text-ink-faint shrink-0" /> Email subject: <span className="text-ink font-medium truncate">{emailSubject}</span>
+            </p>
+          )}
           {bulk && (
             <p className="text-[10px] text-ink-faint mt-1">
               {edited
@@ -238,37 +252,43 @@ export function SendMessageDialog({
                 : 'Each customer receives their own personalized version.'}
             </p>
           )}
-          {text.includes('{{') && (
+          {text.includes(PORTAL_LINK_DISPLAY) && (
             <p className="text-[10px] text-ink-faint mt-1">
-              {'{{portal_link}}'} becomes {bulk ? 'each customer’s' : 'the customer’s'} secure link when sent.
+              “{PORTAL_LINK_DISPLAY}” becomes {bulk ? 'each customer’s' : 'this customer’s'} private, secure link when sent.
             </p>
           )}
         </div>
 
         {/* Channels + send. After a successful send the primary action becomes
             Done (closes) — no accidental double-send, no dead end. */}
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <FilterPill active={ch.sms} onClick={() => setCh(c => ({ ...c, sms: !c.sms }))}>
-            <MessageSquare className="w-3 h-3" /> SMS
-          </FilterPill>
-          <FilterPill active={ch.email} onClick={() => setCh(c => ({ ...c, email: !c.email }))}>
-            <Mail className="w-3 h-3" /> Email
-          </FilterPill>
-          <p className="text-[11px] text-ink-faint">Customers without consent or contact info are skipped automatically.</p>
-          {outcome?.ok ? (
-            <Button onClick={() => onClose(1)} className="ml-auto"><Check className="w-4 h-4" /> Done</Button>
-          ) : (
-            <Button onClick={send} loading={busy} disabled={!chosen.length} className="ml-auto">
-              <Send className="w-4 h-4" /> {busy && bulk ? `Sending ${progress}/${chosen.length}…` : bulk ? `Send to ${chosen.length}` : 'Send'}
-            </Button>
-          )}
+        <div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[10px] uppercase tracking-wide text-ink-faint">Send via</span>
+            <FilterPill active={ch.sms} onClick={() => setCh(c => ({ ...c, sms: !c.sms }))}>
+              <MessageSquare className="w-3 h-3" /> SMS
+            </FilterPill>
+            <FilterPill active={ch.email} onClick={() => setCh(c => ({ ...c, email: !c.email }))}>
+              <Mail className="w-3 h-3" /> Email
+            </FilterPill>
+            {outcome?.ok ? (
+              <Button onClick={() => onClose(1)} className="ml-auto"><Check className="w-4 h-4" /> Done</Button>
+            ) : (
+              <Button onClick={bulk && !armed ? () => setArmed(true) : send} loading={busy}
+                disabled={!chosen.length || !text.trim() || (!ch.sms && !ch.email)} className="ml-auto">
+                <Send className="w-4 h-4" /> {busy && bulk ? `Sending ${progress}/${chosen.length}…` : bulk ? (armed ? `Confirm — send to ${chosen.length}` : `Send to ${chosen.length}`) : 'Send'}
+              </Button>
+            )}
+          </div>
+          {bulk && armed && !busy && !outcome?.ok
+            ? <p className="text-[11px] text-amber-400 mt-1.5">You’re about to message {chosen.length} customer{chosen.length !== 1 ? 's' : ''} — click “Confirm” to send.</p>
+            : <p className="text-[11px] text-ink-faint mt-1.5">{bulk ? 'Customers without consent or contact info are skipped automatically.' : 'We only send on channels this customer has opted into.'}</p>}
         </div>
 
         {outcome && (
           <div className={cn('flex items-start gap-1.5 text-xs rounded-lg px-3 py-2 border',
             outcome.ok ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : 'text-amber-400 border-amber-500/30 bg-amber-500/10')}>
             {outcome.ok ? <Check className="w-3.5 h-3.5 shrink-0 mt-px" /> : <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />}
-            <span>{outcome.text}{outcome.ok ? ' It’s logged in the customer’s conversation.' : ''}</span>
+            <span>{outcome.text}</span>
           </div>
         )}
       </div>

@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { formatDistanceToNow } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -20,13 +19,13 @@ import { Menu, type MenuItem } from '@/components/ui/Menu'
 import { FilterPill } from '@/components/ui/FilterPill'
 import { BulkActionBar } from '@/components/ui/BulkActions'
 import { Skeleton } from '@/components/ui/Skeleton'
-import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
+import { EmptyState } from '@/components/ui/EmptyState'
 import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import {
   Loader2, Inbox, User, ArrowLeft, MessageSquare, FileText, X, Plus,
   Archive, ArchiveRestore, Pin, PinOff, BellOff, Bell, MailOpen, Trash2, MoreVertical, Reply,
-  MapPin, Wrench, Receipt, Globe, Sparkles,
+  MapPin, Wrench, Receipt, Globe, Sparkles, Mail,
 } from 'lucide-react'
 
 // Apple-Messages-style inbox that stays a CRM. Archive is a FLAG — nothing is
@@ -58,7 +57,18 @@ const SELECT_COLS = 'id, customer_id, last_message_at, last_preview, last_direct
 const PAGE = 40
 const ROW_H = 76
 
-const timeAgo = (iso: string) => { try { return formatDistanceToNow(new Date(iso), { addSuffix: true }) } catch { return '' } }
+// Compact relative time for the busy list rows — "now", "5m", "2h", "3d", then a
+// short date after a week (the thread bubbles keep the full absolute timestamp).
+const timeAgo = (iso: string) => {
+  try {
+    const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000))
+    if (s < 45) return 'now'
+    const m = Math.round(s / 60); if (m < 60) return `${m}m`
+    const h = Math.round(m / 60); if (h < 24) return `${h}h`
+    const d = Math.round(h / 24); if (d < 7) return `${d}d`
+    return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  } catch { return '' }
+}
 const nameOf = (c: Convo) => c.customers?.name || c.customer_name || 'Unknown'
 const phoneOf = (c: Convo) => c.customers?.phone ?? c.customer_phone ?? null
 
@@ -374,7 +384,7 @@ export default function MessagesPage() {
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
-      <PageHeader title="Messages" description="Two-way texts and portal conversations — archiving a chat keeps its full history on the customer's profile."
+      <PageHeader title="Messages" description="Texts, portal requests, and website leads — one inbox."
         action={
           <Button variant="secondary" onClick={openCompose}>
             <Plus className="w-4 h-4" /> New message
@@ -385,9 +395,10 @@ export default function MessagesPage() {
           Send-Message dialog (same engine; the sent message threads into this list).
           The picker uses the shared Modal so both compose steps share one chrome
           (backdrop, Escape, scroll-lock, mobile bottom-sheet). */}
-      <Modal open={composeOpen} onClose={() => setComposeOpen(false)} title="Who do you want to message?" icon={MessageSquare} size="md">
-        <div className="min-h-[16rem]">
-          <CustomerPicker customers={composeCustomers} value={''} allowManual={false}
+      <Modal open={composeOpen} onClose={() => setComposeOpen(false)} title="New message" icon={MessageSquare} size="md">
+        <div className="min-h-[16rem] space-y-3">
+          <p className="text-xs text-ink-muted">Search a name, phone, or address — picking a customer opens the composer.</p>
+          <CustomerPicker customers={composeCustomers} value={''} allowManual={false} autoFocus
             onChange={id => {
               const c = composeCustomers.find(x => x.id === id)
               if (c) { setComposeOpen(false); setComposeTo({ id: c.id, name: c.name }) }
@@ -402,7 +413,7 @@ export default function MessagesPage() {
       {/* Spotlight search */}
       <div className="relative">
         <SearchInput ref={searchRef} fieldSize="sm" value={query} onChange={e => setQuery(e.target.value)} aria-label="Search conversations"
-          placeholder="Search name, phone, address, property, service, message, quote #, invoice #…"
+          placeholder="Search people, messages, quotes…"
           className="[&>input]:pr-9" />
         {query
           ? <button onClick={() => setQuery('')} aria-label="Clear search" className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-faint hover:text-ink"><X className="w-4 h-4" /></button>
@@ -500,7 +511,7 @@ export default function MessagesPage() {
                   <div className="min-w-0">
                     <p className="text-sm font-bold text-ink truncate flex items-center gap-1.5">
                       {sel.pinned_at && <Pin className="w-3 h-3 text-accent shrink-0" />}{nameOf(sel)}
-                      {sel.lead_status === 'new' && <span className="text-[10px] font-bold uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded-full px-2 py-0.5 flex items-center gap-0.5"><Globe className="w-2.5 h-2.5" /> Website Lead</span>}
+                      {sel.lead_status === 'new' && <span className="text-[10px] font-bold uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded-full px-2 py-0.5 flex items-center gap-0.5"><Globe className="w-2.5 h-2.5" /> Website lead</span>}
                       {sel.archived_at && <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint border border-border rounded-full px-2 py-0.5">Archived</span>}
                       {sel.muted && <BellOff className="w-3 h-3 text-ink-faint shrink-0" />}
                     </p>
@@ -532,8 +543,10 @@ export default function MessagesPage() {
               </div>
             </>
           ) : (
-            <div className="flex-1 flex items-center justify-center py-16">
-              <InlineEmpty icon={MessageSquare}>Select a conversation</InlineEmpty>
+            <div className="flex-1 flex items-center justify-center py-16 px-4">
+              <EmptyState icon={MessageSquare} title="Your inbox, unified"
+                description="Pick a conversation on the left to read its full history, reply by text, or leave an internal note."
+                action={{ label: 'New message', onClick: openCompose }} />
             </div>
           )}
         </div>
@@ -596,7 +609,9 @@ function ConversationRow({ c, selected, actions, query, selectMode, checked, onT
 
   const isSearch = !!query
   const match = c.match_type ? MATCH_META[c.match_type] : null
-  const preview = isSearch && c.match_type === 'message' && c.message_snippet ? c.message_snippet : (c.last_preview || '…')
+  const preview = isSearch && c.match_type === 'message' && c.message_snippet
+    ? c.message_snippet
+    : (c.last_preview || (c.lead_status === 'new' ? 'New website lead' : c.last_channel === 'portal' ? 'Portal request' : 'No messages yet'))
   const needsReply = !c.archived_at && c.last_direction === 'inbound'
   // Same items in the same order as before, rendered by the shared ui/Menu (portals
   // to body so the row's overflow-hidden can never clip it; keyboard nav for free).
@@ -628,7 +643,8 @@ function ConversationRow({ c, selected, actions, query, selectMode, checked, onT
         onContextMenu={selectMode ? undefined : (e) => { e.preventDefault(); openMenu.current() }}
         onTouchStart={selectMode ? undefined : onTouchStart} onTouchMove={selectMode ? undefined : onTouchMove} onTouchEnd={selectMode ? undefined : onTouchEnd}
         style={{ transform: `translateX(${dx}px)`, transition: dx === 0 ? 'transform 0.15s' : 'none', height: ROW_H }}
-        className={cn('relative bg-bg-secondary w-full text-left px-4 flex items-center gap-3 cursor-pointer hover:bg-surface/40 transition-colors outline-none focus-visible:bg-surface/60 focus-visible:ring-1 focus-visible:ring-accent focus-visible:ring-inset', selected && 'bg-accent/5', checked && 'bg-accent/10')}
+        className={cn('relative bg-bg-secondary w-full text-left px-4 flex items-center gap-3 cursor-pointer hover:bg-surface/40 transition-colors outline-none focus-visible:bg-surface/60 focus-visible:ring-1 focus-visible:ring-accent focus-visible:ring-inset',
+          selected && 'bg-accent/10 before:absolute before:left-0 before:inset-y-0 before:w-[3px] before:bg-accent before:content-[""]', checked && 'bg-accent/10')}
       >
         {selectMode && <input type="checkbox" readOnly checked={checked} className="accent-accent w-4 h-4 shrink-0 pointer-events-none" />}
         <div className="w-9 h-9 rounded-full bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0 text-xs font-bold text-accent">
@@ -638,7 +654,7 @@ function ConversationRow({ c, selected, actions, query, selectMode, checked, onT
           <div className="flex items-center gap-1.5">
             {c.pinned_at && <Pin className="w-3 h-3 text-accent shrink-0" />}
             <p className={cn('text-sm truncate flex-1', c.unread > 0 ? 'font-bold text-ink' : 'font-semibold text-ink')}><Highlight text={nameOf(c)} q={query} /></p>
-            {c.lead_status === 'new' && <span className="shrink-0 text-[9px] font-bold uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded-full px-2 leading-4">Lead</span>}
+            {c.lead_status === 'new' && <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded-full px-1.5 leading-4">Lead</span>}
             {c.muted && <BellOff className="w-3 h-3 text-ink-faint shrink-0" />}
             {c.archived_at && <Archive className="w-3 h-3 text-ink-faint shrink-0" />}
             {c.unread > 0 && <span className="shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-accent text-black text-[10px] font-bold tabular-nums flex items-center justify-center">{c.unread > 9 ? '9+' : c.unread}</span>}
@@ -646,11 +662,16 @@ function ConversationRow({ c, selected, actions, query, selectMode, checked, onT
           <p className={cn('text-xs truncate mt-0.5', c.unread > 0 ? 'text-ink font-medium' : 'text-ink-muted')}>
             {!isSearch && (c.last_direction === 'internal' ? 'Note: ' : c.last_direction && c.last_direction !== 'inbound' ? 'You: ' : '')}<Highlight text={preview} q={query} />
           </p>
-          <div className="flex items-center gap-2 mt-0.5">
+          <div className="flex items-center gap-1.5 mt-0.5">
+            {(() => {
+              const Ch = c.last_channel === 'portal' ? Globe : c.last_channel === 'email' ? Mail : MessageSquare
+              const lbl = c.last_channel === 'portal' ? 'Portal' : c.last_channel === 'email' ? 'Email' : 'SMS'
+              return <span title={lbl} className="shrink-0 flex"><Ch className="w-3 h-3 text-ink-faint" aria-label={lbl} /></span>
+            })()}
             <p className="text-[10px] text-ink-faint">{timeAgo(c.last_message_at)}</p>
             {isSearch && match
-              ? <span className="text-[10px] font-semibold text-accent flex items-center gap-0.5"><match.icon className="w-3 h-3" /> {match.label}</span>
-              : needsReply && <span className="text-[10px] font-semibold text-amber-400 flex items-center gap-0.5"><Reply className="w-3 h-3" /> Needs reply</span>}
+              ? <span className="text-[10px] font-semibold text-accent flex items-center gap-0.5 ml-1"><match.icon className="w-3 h-3" /> {match.label}</span>
+              : needsReply && <span className="text-[10px] font-semibold text-amber-400 flex items-center gap-0.5 ml-1"><Reply className="w-3 h-3" /> Needs reply</span>}
           </div>
         </div>
 

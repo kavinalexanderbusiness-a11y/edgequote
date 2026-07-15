@@ -21,10 +21,11 @@ interface CustomerPickerProps {
   placeholder?: string
   error?: string
   hint?: string
+  autoFocus?: boolean           // land the cursor in search on mount (compose flows)
 }
 
 export function CustomerPicker({
-  label, customers, value, onChange, allowManual = true, placeholder = 'Search customers…', error, hint,
+  label, customers, value, onChange, allowManual = true, placeholder = 'Search customers…', error, hint, autoFocus,
 }: CustomerPickerProps) {
   const selected = value && value !== MANUAL ? customers.find(c => c.id === value) ?? null : null
   const [query, setQuery] = useState('')
@@ -91,6 +92,7 @@ export function CustomerPicker({
         <input
           id={inputId}
           autoComplete="off"
+          autoFocus={autoFocus}
           role="combobox"
           aria-expanded={open}
           value={query}
@@ -115,7 +117,7 @@ export function CustomerPicker({
         {open && (
           <div className="absolute z-50 mt-1 w-full bg-bg-secondary border border-border-strong rounded-xl shadow-xl overflow-hidden origin-top animate-pop max-h-72 overflow-y-auto">
             {rows.length === 0 ? (
-              <p className="px-3.5 py-2.5 text-sm text-ink-faint">No customers match “{query.trim()}”.</p>
+              <p className="px-3.5 py-2.5 text-sm text-ink-faint">{query.trim() ? `No customers match “${query.trim()}”.` : 'No customers yet — add one to start a conversation.'}</p>
             ) : rows.map((r, i) => (
               r.type === 'customer' ? (
                 <button key={r.c.id} type="button" onMouseEnter={() => setHi(i)} onClick={() => choose(i)}
