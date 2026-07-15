@@ -800,6 +800,27 @@ export function DayOpsPanel({
                         {job.status === 'scheduled' && etaByJob[job.id] && (
                           <span className="font-semibold text-accent-text shrink-0">ETA {etaByJob[job.id]}</span>
                         )}
+                        {/* The route orders stops by GEOGRAPHY — it never reads a job's
+                            committed start_time — so a visit you promised for 10:00 can be
+                            routed last and land hours later. Both numbers were already on
+                            this card, side by side, with nothing saying they disagreed.
+                            Flag it only once the route misses the window we'd actually TEXT
+                            the customer (windowByJob = start → +2h), so this fires when a
+                            promise breaks, not when a minute slips. Presentation only: the
+                            route is not re-ordered and no engine is consulted. */}
+                        {(() => {
+                          if (job.status !== 'scheduled' || !job.start_time) return null
+                          const arrive = arrivalMinByJob[job.id]
+                          if (arrive == null) return null
+                          const promised = timeToMinutes(job.start_time)
+                          if (arrive <= promised + 120) return null
+                          return (
+                            <span className="shrink-0 text-[10px] font-semibold text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5 flex items-center gap-1"
+                              title={`You'd tell this customer ${windowByJob[job.id]}, but the route has you arriving ${minutesToTime12(arrive)}. Reorder the stop, or move it.`}>
+                              <AlertTriangle className="w-3 h-3" /> misses {windowByJob[job.id]}
+                            </span>
+                          )
+                        })()}
                         {job.status === 'in_progress' && job.started_at && (
                           <span className="font-semibold text-sky-300 shrink-0">▶ {tsTo12(job.started_at)} · {elapsedMin(job.started_at)}m</span>
                         )}
