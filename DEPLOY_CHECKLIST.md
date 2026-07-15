@@ -41,14 +41,23 @@ travel_fee_tiers, properties, job_recurrences, jobs, invoices`) + RLS policies +
 indexes, then every dated migration **through 2026-06-25 only**, including the
 `invoices(job_id)` unique index.
 
-**Keep this current.** Supabase's own migration history for this project is empty
-(`list_migrations` → `[]`), so these files are the only record that a rebuild can be
-driven from. When you add a `RUN-*.sql`, it becomes part of this path automatically by
-date — but if you create an object directly in the dashboard and never write a file,
-it exists *only* in production and disaster recovery loses it. That has already
-happened once: `social_connections` and `publish_jobs` (Marketing Studio publishing)
-lived in production with no migration anywhere until they were transcribed back into
-`RUN-2026-07-15-record-marketing-publishing-tables.sql`.
+**Keep this current.** Supabase's migration history only records what was applied via
+MCP `apply_migration` — everything built by pasting into the dashboard (i.e. most of
+this schema's history) left no row. So these files are the only record a rebuild can
+be driven from. When you add a `RUN-*.sql` it joins this path automatically by date;
+but create an object in the dashboard and never write a file, and it exists *only* in
+production — disaster recovery silently loses it.
+
+That has already happened three times, all found and transcribed back on 2026-07-15:
+
+| Object | Was only in prod | Now recorded in |
+|---|---|---|
+| `social_connections`, `publish_jobs` | Marketing Studio publishing | `RUN-2026-07-15-record-marketing-publishing-tables.sql` |
+| `branding` storage bucket | business logo (settings upload + every branded email) | `RUN-2026-07-15-record-branding-bucket.sql` |
+
+**Verified 2026-07-15 — production vs. source control:**
+all 54 tables, 43 functions, 36 triggers and 4 storage buckets are now creatable from
+this repo, with one known exception below.
 
 `automation_signals` is still in this state — it exists in production, but its
 migration lives only on the unmerged `guardian-2` branch (`aca9a6b`), so a rebuild
