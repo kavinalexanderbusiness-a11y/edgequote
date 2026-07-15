@@ -45,7 +45,7 @@ type LiveStatus = 'scheduled' | 'on_my_way' | 'in_progress' | 'completed'
 interface Derived {
   upcoming: PortalJob[]; completed: PortalJob[]; nextService: PortalJob | null
   lastCompleted: PortalJob | null; outstanding: number
-  plans: { id: string; label: string; service: string }[]
+  plans: { id: string; label: string; service: string; nextDate: string | null; endDate: string | null }[]
 }
 
 const REQUEST_PRESETS = ['Mulch', 'Spring Cleanup', 'Fall Cleanup', 'Weed Control', 'Landscaping']
@@ -269,7 +269,19 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     const plans = activeRecIds.map(id => {
       const r = recById.get(id)
       const sample = jobs.find(j => j.recurrence_id === id)
-      return { id, label: r ? recurrenceLabel(r.interval_unit as 'day' | 'week' | 'month' | null, r.interval_count, r.freq) : 'Recurring', service: sample?.service_type || sample?.title || 'Service' }
+      // `upcoming` is already date-sorted, so the first match IS this plan's next visit.
+      // "Every 2 weeks" without a date is a cadence, not an answer — the question someone
+      // actually has about their plan is "when are you next coming?".
+      const next = upcoming.find(j => j.recurrence_id === id) || null
+      return {
+        id,
+        label: r ? recurrenceLabel(r.interval_unit as 'day' | 'week' | 'month' | null, r.interval_count, r.freq) : 'Recurring',
+        service: sample?.service_type || sample?.title || 'Service',
+        nextDate: next?.scheduled_date || null,
+        // A plan with an end date is a season, and knowing when it stops is part of not
+        // feeling locked in. Only shown when the owner actually set one.
+        endDate: r?.end_date || null,
+      }
     })
     return { upcoming, completed, nextService, lastCompleted, outstanding, plans }
   }, [data])
@@ -306,7 +318,9 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   const hasProperty = !!(data.property && (data.property.address || data.property.lawn_sqft || data.property.fence_length || data.property.neighborhood))
   const TABS: { key: Tab; label: string; icon: typeof Home; n?: number }[] = ([
     { key: 'home', label: 'Home', icon: Home },
-    { key: 'documents', label: 'Documents', icon: FolderOpen, n: data.quotes.length + data.invoices.length },
+    // Count what the tab actually SHOWS — DocumentsTab hides draft invoices (the owner's
+    // unfinished work), so counting them here would promise a document that isn't there.
+    { key: 'documents', label: 'Documents', icon: FolderOpen, n: data.quotes.length + data.invoices.filter(i => i.status !== 'draft').length },
     { key: 'payments', label: 'Payments', icon: Wallet, n: data.payments.length },
     { key: 'service', label: 'Service', icon: History, n: derived.completed.length },
     { key: 'photos', label: 'Photos', icon: ImageIcon, n: data.photos.length },
@@ -404,7 +418,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
           {tab === 'property' && <PropertyTab property={data.property} />}
           {tab === 'payments' && <PaymentsTab customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} business={biz} payments={data.payments} invoices={data.invoices} outstanding={derived.outstanding}
             token={token} paymentsEnabled={paymentsEnabled} card={data.payment_method ?? null} autopayEnabled={!!data.customer.autopay_enabled} onChanged={load} />}
-          {tab === 'documents' && <DocumentsTab quotes={data.quotes} invoices={data.invoices} customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} business={biz} onInvoiceOpen={markInvoiceViewed}
+          {tab === 'documents' && <DocumentsTab quotes={data.quotes} invoices={data.invoices} customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} lawnSqft={Number(data.property?.lawn_sqft) || null} business={biz} onInvoiceOpen={markInvoiceViewed}
             paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} accept={accept} accepting={accepting} initialCat={docsCat} />}
           {tab === 'request' && (
             <RequestTab presets={REQUEST_PRESETS} reqMsg={reqMsg} setReqMsg={setReqMsg} request={request} reqBusy={reqBusy} reqSent={reqSent} biz={biz} />
@@ -569,10 +583,21 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
           <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint mb-2">Active plan{derived.plans.length !== 1 ? 's' : ''}</p>
           <div className="space-y-1.5">
             {derived.plans.map(p => (
-              <div key={p.id} className="flex items-center gap-2 text-sm">
-                <Repeat className="w-3.5 h-3.5 text-accent-text shrink-0" />
-                <span className="text-ink font-medium">{p.service}</span>
-                <span className="text-ink-muted">· {p.label}</span>
+              <div key={p.id} className="flex items-start gap-2 text-sm">
+                <Repeat className="w-3.5 h-3.5 text-accent-text shrink-0 mt-1" />
+                <div className="min-w-0">
+                  <p>
+                    <span className="text-ink font-medium">{p.service}</span>
+                    <span className="text-ink-muted"> · {p.label}</span>
+                  </p>
+                  {(p.nextDate || p.endDate) && (
+                    <p className="text-xs text-ink-muted mt-0.5">
+                      {p.nextDate ? <>Next visit <span className="text-ink font-medium">{formatDate(p.nextDate)}</span></> : null}
+                      {p.nextDate && p.endDate ? ' · ' : null}
+                      {p.endDate ? <>Runs until {formatDate(p.endDate)}</> : null}
+                    </p>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -635,6 +660,27 @@ function ServiceTab({ completed, photosByJob, invoiceByJob, photoUrl, gstPct }: 
               <p className="text-sm font-semibold text-ink tracking-tight flex items-center gap-1.5"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> {j.service_type || j.title}</p>
               <span className="text-xs text-ink-muted">{formatDate(j.scheduled_date)}</span>
             </div>
+            {/* started_at/completed_at were already in the payload and never rendered — so
+                "we were there" was an assertion with no substance behind it. Showing the
+                real window is the difference between a claim and a record. Only shown when
+                both stamps exist and the span is sane (a forgotten 'start' would otherwise
+                report an 11-hour visit). */}
+            {(() => {
+              const st = j.started_at ? new Date(j.started_at).getTime() : null
+              const en = j.completed_at ? new Date(j.completed_at).getTime() : null
+              if (!st || !en || en <= st) return null
+              const mins = Math.round((en - st) / 60000)
+              if (mins < 1 || mins > 600) return null
+              const span = mins < 60 ? `${mins} min` : `${Number((mins / 60).toFixed(1))} hr`
+              return (
+                <p className="text-xs text-ink-muted mt-1 flex items-center gap-1.5">
+                  <Clock className="w-3 h-3 text-ink-faint shrink-0" />
+                  On site {new Date(j.started_at!).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                  {' – '}{new Date(j.completed_at!).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+                  <span className="text-ink-faint">· {span}</span>
+                </p>
+              )
+            })()}
             {photos.length > 0 && (
               <div className="grid grid-cols-4 gap-1.5 mt-3">
                 {photos.slice(0, 4).map(p => (
@@ -719,15 +765,20 @@ type DocKind = 'quote' | 'invoice'
 // different kinds of number in identical type: invoice amounts include GST, quote totals
 // don't. The PDF says "Plus GST — added on your invoice"; the row a customer actually
 // approves from said nothing, so the first bill looked like a bait-and-switch.
-interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; amount: number; amountNote?: string; balance: number; filename: string; getBlob: () => Promise<Blob>; lines?: { label: string; amount: number }[] }
+// `explain` answers "why does this cost this?" in the customer's own terms. It carries
+// only facts about THEIR property and THEIR job — never the owner's rate, margin, floor
+// or win-rate. (`rate` isn't in the portal projection, and deriving it from
+// subtotal ÷ man_hours would expose the owner's hourly pricing to the person paying it.)
+interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; amount: number; amountNote?: string; balance: number; filename: string; getBlob: () => Promise<Blob>; lines?: { label: string; amount: number }[]; explain?: string[] }
 const KIND_META: Record<DocKind, { label: string; icon: typeof FileText; tone: string }> = {
   quote: { label: 'Quote', icon: FileText, tone: 'text-accent-text border-accent/25 bg-accent/10' },
   invoice: { label: 'Invoice', icon: Receipt, tone: 'text-sky-400 border-sky-500/25 bg-sky-500/10' },
 }
 
 
-function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, business, onInvoiceOpen, paymentsEnabled, pay, payingId, accept, accepting, initialCat }: {
-  quotes: PortalQuote[]; invoices: PortalInvoice[]; customerName: string; fallbackAddress: string | null; business: PortalData['business']
+function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, lawnSqft, business, onInvoiceOpen, paymentsEnabled, pay, payingId, accept, accepting, initialCat }: {
+  quotes: PortalQuote[]; invoices: PortalInvoice[]; customerName: string; fallbackAddress: string | null
+  lawnSqft: number | null; business: PortalData['business']
   onInvoiceOpen?: (invoiceId: string) => void
   paymentsEnabled: boolean; pay: (invoiceId: string) => void; payingId: string | null
   accept: (quoteId: string) => void; accepting: string | null
@@ -768,14 +819,37 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, busines
       ].filter((l): l is { label: string; amount: number } => l !== null)
       const allLines = [...svcLines, ...planLines]
       const lines = allLines.length > 0 ? allLines : undefined
+      // "Why does it cost this?" — answered from what we measured about THIS property and
+      // THIS job. The line-item breakdown above only renders for multi-service quotes,
+      // which in practice is almost none of them, so for a typical quote the customer was
+      // handed a single number and no reasoning at all. Every fact here is about them:
+      // their lawn, their visit, their crew. Nothing here exposes the owner's rate.
+      const manHours = Number(qq.hours) > 0 && Number(qq.crew_size) > 0 ? Number(qq.hours) * Number(qq.crew_size) : 0
+      const fmtHrs = (h: number) => h < 1 ? `${Math.round(h * 60)} minutes` : h === 1 ? '1 hour' : `${Number(h.toFixed(1))} hours`
+      const explainBits = [
+        lawnSqft && lawnSqft > 0 ? `Priced for your ${lawnSqft.toLocaleString()} sq ft lawn — measured, not guessed.` : null,
+        manHours > 0
+          ? `About ${fmtHrs(manHours)} of work${Number(qq.crew_size) > 1 ? `, with a crew of ${Number(qq.crew_size)}` : ''}.`
+          : null,
+        Number(qq.travel_fee) > 0 ? `Includes a ${formatCurrency(Number(qq.travel_fee))} travel charge to reach your property.` : null,
+        planLines.length > 0 ? 'Your first visit is priced above; ongoing visits are charged at the plan rate shown.' : null,
+        'Nothing is charged when you approve — you’ll get an invoice once the work is done.',
+      ].filter((s): s is string => !!s)
       return {
         id: 'q' + qq.id, rawId: qq.id, kind: 'quote' as const, number: qq.quote_number, title: qq.service_type || 'Quote',
         date: qq.issued_date || qq.created_at, status: qq.status, amount: Number(qq.total) || 0,
         amountNote: gstPct > 0 ? `+ GST (${gstPct}%) — added on your invoice` : undefined, balance: 0,
         filename: `${qq.quote_number}.pdf`, getBlob: () => renderPortalQuoteBlob(qq, customerName, business), lines,
+        explain: explainBits.length > 1 ? explainBits : undefined,
       }
     })
-    const inv: DocItem[] = invoices.map(ii => {
+    // A DRAFT invoice is the owner's unfinished work — a number they're still deciding on.
+    // get_portal_data filters draft QUOTES (`status <> 'draft'`) but its invoices
+    // projection has no status filter, and two other places compensate client-side (the
+    // outstanding balance, and the pay gate) — this list was simply missed, so a customer
+    // could sit looking at a bill that hadn't been issued and couldn't be paid. Quotes set
+    // the precedent: drafts are private until sent.
+    const inv: DocItem[] = invoices.filter(ii => ii.status !== 'draft').map(ii => {
       // Same balance math as the dashboard: discounted+GST total − payments recorded.
       const total = invoiceTotals(ii.amount, { gst_percent: gstPct }, { type: ii.discount_type, value: ii.discount_value }).total
       const balance = Math.max(0, Math.round((total - (Number(ii.amount_paid) || 0)) * 100) / 100)
@@ -877,6 +951,20 @@ function DocRow({ d, paymentsEnabled, pay, payingId, accept, accepting }: {
               <span className="text-ink shrink-0 tabular-nums">{formatCurrency(l.amount)}</span>
             </div>
           ))}
+        </div>
+      )}
+      {/* What's behind the number. Shown on the quote the customer is deciding on — a
+          price with no reasoning is the thing people call to argue about. */}
+      {d.explain && d.explain.length > 0 && canAccept && (
+        <div className="mt-3 pt-3 border-t border-border/60">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint mb-1.5">What&rsquo;s behind this price</p>
+          <ul className="space-y-1">
+            {d.explain.map((line, i) => (
+              <li key={i} className="text-xs text-ink-muted flex items-start gap-1.5">
+                <Check className="w-3 h-3 text-emerald-400 shrink-0 mt-0.5" /> {line}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
       {(canAccept || canPay) && (

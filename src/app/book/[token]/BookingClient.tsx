@@ -241,8 +241,17 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
       p_neighborhood: neighborhoodOf(parsed.postal, parsed.city, null),
       p_auto: autoResult?.sqft ?? null, p_accepted: sqft, p_building: autoResult?.buildingSqft ?? null, p_confidence: autoResult?.confidence ?? null,
     }).then(() => {}, () => {})
-    // Best-effort owner alert (no-op if email isn't configured).
-    fetch('/api/booking/notify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, name: name.trim(), address: parsed.formatted, service: 'Lawn Mowing', cadence: plan.label, quoteNumber: res.quote_number }) }).catch(() => {})
+    // Best-effort owner alert AND the customer's confirmation (no-op if comms aren't
+    // configured). The customer's contact details go with it so they get something in
+    // writing — closing the tab must not leave them with nothing to prove they booked.
+    fetch('/api/booking/notify', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token, name: name.trim(), address: parsed.formatted, service: 'Lawn Mowing',
+        cadence: plan.label, quoteNumber: res.quote_number,
+        email: email.trim(), phone: phone.trim(), smsConsent: anyOn && !!phone.trim(),
+      }),
+    }).catch(() => {})
     setStep('done')
   }
 
@@ -504,11 +513,16 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
               {sqft > 0 && <SummaryRow label="Lawn size" value={`~${sqft.toLocaleString()} sq ft`} />}
               {quoteNumber && <SummaryRow label="Confirmation #" value={quoteNumber} />}
             </div>
-            {/* Nothing is emailed to the customer at this stage (the only send in the
-                booking path goes to the OWNER's inbox — api/booking/notify), so "keep this
-                for your records" quietly put the burden on them without saying why. Tell
-                them what it's actually for; the request is safe either way. */}
-            {quoteNumber && <p className="text-[11px] text-ink-faint text-center -mt-2">That&rsquo;s your reference if you call or email us — your request is saved either way.</p>}
+            {/* A confirmation now really goes out (api/booking/notify sends the customer
+                the booking_received template, not just the owner alert), so this can
+                finally promise it. Email is the durable copy; SMS only with consent. */}
+            {quoteNumber && (
+              <p className="text-[11px] text-ink-faint text-center -mt-2">
+                {email.trim()
+                  ? <>We&rsquo;ve emailed this confirmation to <span className="text-ink-muted font-medium">{email.trim()}</span> so you have it in writing.</>
+                  : <>That&rsquo;s your reference if you call or text us — your request is saved either way.</>}
+              </p>
+            )}
 
             {/* What happens next — the #1 anxiety point, answered with a concrete SLA. */}
             <div className="rounded-card border border-accent/25 bg-accent/[0.06] px-4 py-3.5">

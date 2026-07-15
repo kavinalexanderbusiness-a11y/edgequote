@@ -14,6 +14,9 @@ export type MsgType =
   | 'estimate_reminder' | 'payment_reminder' | 'estimate_followup'
   // Payment receipt — auto-sent after a successful (AutoPay) payment.
   | 'receipt'
+  // Booking confirmation — auto-sent to the CUSTOMER the moment they book online.
+  // Transactional (it confirms a request they just made), not marketing.
+  | 'booking_received'
   // CRM growth campaigns (lib/crm/campaigns — driven by /api/cron/campaigns).
   | 'birthday' | 'anniversary' | 'win_back' | 'marketing'
   // Standard business announcement — introduction / new phone number.
@@ -40,6 +43,7 @@ export const MSG_LABELS: Record<MsgType, string> = {
   payment_reminder: 'Payment reminder',
   estimate_followup: 'Estimate follow-up',
   receipt: 'Payment receipt',
+  booking_received: 'Booking confirmation',
   birthday: 'Birthday greeting',
   anniversary: 'Anniversary greeting',
   win_back: 'Win-back / re-engagement',
@@ -62,6 +66,7 @@ export const MSG_VARIABLES: { key: string; hint: string }[] = [
   { key: 'quote_link', hint: 'link to the quote (portal)' },
   { key: 'invoice_link', hint: 'link to the invoice (portal)' },
   { key: 'amount', hint: 'invoice amount' },
+  { key: 'confirmation_number', hint: 'their booking reference (booking confirmation)' },
   { key: 'direct_phone', hint: 'your business phone (Settings → Business Information)' },
 ]
 
@@ -237,6 +242,24 @@ Whenever you're ready, you can view and accept your quote here:
 
 Thank you for considering {{business_name}}.`,
 
+  // Sent to the CUSTOMER the instant they book online. Until this existed the booking
+  // funnel's only send went to the OWNER's inbox, so a homeowner who closed the tab was
+  // left with nothing — no reference, no name, no number — after handing over their
+  // address and photos. That is the shape of being ghosted, and it was thirty seconds
+  // after the happiest moment in the funnel. Deliberately does NOT promise a price: the
+  // booking captures an estimate, and the owner confirms the real number.
+  booking_received: `Hi {{first_name}},
+
+Thanks for booking with **{{business_name}}** — this is just so you have it in writing.
+
+We've got your request for **{{address}}**, and your confirmation number is **{{confirmation_number}}**.
+
+A real person here will review it and get in touch to confirm your price and pick a day that suits you — usually within one business day. Nothing is charged until you say yes.
+
+Need us sooner, or want to change something? Call or text {{direct_phone}} and quote your confirmation number.
+
+— {{business_name}}`,
+
   // NOTE: this template is sent by sendPaymentReceipt(), which knows the amount but NOT
   // the remaining balance — so it must not assert one. It used to say "paid in full"
   // unconditionally; if that's ever wrong it's the worst kind of wrong, because the
@@ -299,6 +322,7 @@ const SUBJECTS: Record<MsgType, string> = {
   early_arrival: 'We can come earlier today', confirm: 'Confirming your service',
   estimate_reminder: 'Your upcoming estimate', payment_reminder: 'Invoice reminder', estimate_followup: 'Following up on your quote',
   receipt: 'Payment received — thank you',
+  booking_received: 'We’ve got your request',
   birthday: 'Happy birthday!', anniversary: 'Thank you', win_back: 'We’d love to see you again', marketing: 'A quick hello',
   introduction: 'Our new number — please save it',
   custom: '', // falsy → renderMessage falls back to "A message from {business}"
@@ -318,6 +342,8 @@ export interface MsgVars {
   oldDateLabel?: string
   address?: string
   directPhone?: string
+  // The booking/quote reference a customer can quote back at us on the phone.
+  confirmationNumber?: string
   // Email-shell branding — straight from Business Settings (logo_url / website).
   logoUrl?: string
   website?: string
@@ -339,6 +365,7 @@ function interpolate(tpl: string, v: MsgVars): string {
     time_window: v.timeWindow || 'your scheduled window',
     address: v.address || 'your property',
     amount: v.amount ? ` for ${v.amount}` : '',
+    confirmation_number: v.confirmationNumber || '',
     // Graceful when no business phone is set: "call or text us at this number".
     direct_phone: (v.directPhone || '').trim() || 'this number',
   }
@@ -441,6 +468,9 @@ export function msgCategory(t: MsgType): MsgCategory | null {
     case 'marketing': case 'introduction': case 'win_back': return 'marketing'
     case 'birthday': case 'anniversary': return 'seasonal'
     case 'custom': return null // owner-composed one-offs are always deliverable
+    // Transactional: it confirms a request the customer just made of us, so it isn't a
+    // marketing category they can be opted out of. Channel opt-in still gates the SMS.
+    case 'booking_received': return null
     default: return 'reminders' // every service-timing message (reminder, on_my_way, eta, …)
   }
 }
