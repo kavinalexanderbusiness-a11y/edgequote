@@ -5,7 +5,10 @@ import { format } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { ConfirmHost } from '@/components/ui/ConfirmHost'
-import { recurrenceLabel } from '@/lib/recurrence'
+import { buildServicePlans, type ServicePlan } from '@/lib/recurrence'
+import { jobVisitValue } from '@/lib/invoicing'
+import { settingsToSeasons } from '@/lib/seasons'
+import type { Job, JobRecurrence } from '@/types'
 import { invoiceTotals } from '@/lib/invoiceTotals'
 import { serviceLineTotals } from '@/lib/quoteServices'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
@@ -26,14 +29,16 @@ import {
 interface PortalQuoteService { service_type: string; quantity: number; unit: string | null; unit_price: number; est_minutes: number | null; discount_type: 'amount' | 'percent' | null; discount_value: number | null; notes: string | null; sort_order: number }
 interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null }
 interface PortalInvoice { id: string; invoice_number: string; service_type: string | null; amount: number; status: string; issued_date: string | null; due_date: string | null; notes: string | null; address: string | null; line_items: { description: string; amount: number; kind: string }[] | null; job_id: string | null; created_at: string; discount_type?: 'amount' | 'percent' | null; discount_value?: number | null; amount_paid?: number | null }
-interface PortalJob { id: string; recurrence_id: string | null; service_type: string | null; title: string; scheduled_date: string; status: string; on_my_way_at: string | null; started_at: string | null; completed_at: string | null; notes: string | null }
-interface PortalRec { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null; end_date: string | null }
+// property_id/quote_id/price/is_initial_visit exist so buildServicePlans + jobVisitValue
+// (the SAME engines the owner's customer page runs) can be fed real data here.
+interface PortalJob { id: string; recurrence_id: string | null; property_id: string | null; quote_id: string | null; price: number | null; is_initial_visit: boolean | null; service_type: string | null; title: string; scheduled_date: string; status: string; on_my_way_at: string | null; started_at: string | null; completed_at: string | null; notes: string | null }
+interface PortalRec { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null; start_date: string | null; end_date: string | null; end_count: number | null }
 interface PortalPhoto { id: string; job_id: string | null; storage_path: string; kind: string; caption: string | null; taken_at: string }
 interface PortalPayment { id: string; amount: number; status: string; paid_at: string | null; provider: string; invoice_id: string | null; created_at: string; kind?: string }
 interface PortalCard { brand: string | null; last4: string | null; exp_month: number | null; exp_year: number | null }
 interface PortalData {
   customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null; city: string | null; sms_opt_in?: boolean | null; email_opt_in?: boolean | null; reviewed_at?: string | null; autopay_enabled?: boolean | null }
-  business: { company_name: string | null; owner_name: string | null; phone: string | null; email_primary: string | null; email_secondary: string | null; website: string | null; logo_url: string | null; logo_scale: number | null; base_address: string | null; terms_text: string | null; review_url?: string | null; etransfer_email?: string | null; gst_percent?: number | null } | null
+  business: { company_name: string | null; owner_name: string | null; phone: string | null; email_primary: string | null; email_secondary: string | null; website: string | null; logo_url: string | null; logo_scale: number | null; base_address: string | null; terms_text: string | null; review_url?: string | null; etransfer_email?: string | null; gst_percent?: number | null; service_seasons?: unknown } | null
   property: { address: string | null; city: string | null; province: string | null; lawn_sqft: number | null; fence_length: number | null; neighborhood: string | null; notes: string | null } | null
   quotes: PortalQuote[]; invoices: PortalInvoice[]; jobs: PortalJob[]; recurrences: PortalRec[]; photos: PortalPhoto[]; payments: PortalPayment[]
   payment_method?: PortalCard | null
@@ -45,7 +50,7 @@ type LiveStatus = 'scheduled' | 'on_my_way' | 'in_progress' | 'completed'
 interface Derived {
   upcoming: PortalJob[]; completed: PortalJob[]; nextService: PortalJob | null
   lastCompleted: PortalJob | null; outstanding: number
-  plans: { id: string; label: string; service: string }[]
+  plans: ServicePlan[]
 }
 
 const REQUEST_PRESETS = ['Mulch', 'Spring Cleanup', 'Fall Cleanup', 'Weed Control', 'Landscaping']
@@ -263,14 +268,28 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
       const total = invoiceTotals(i.amount, { gst_percent: gstPct }, { type: i.discount_type, value: i.discount_value }).total
       return s + Math.max(0, Math.round((total - (Number(i.amount_paid) || 0)) * 100) / 100)
     }, 0)
-    // Active plans: recurrences that still have an upcoming visit.
-    const recById = new Map(data.recurrences.map(r => [r.id, r]))
-    const activeRecIds = [...new Set(upcoming.map(j => j.recurrence_id).filter(Boolean) as string[])]
-    const plans = activeRecIds.map(id => {
-      const r = recById.get(id)
-      const sample = jobs.find(j => j.recurrence_id === id)
-      return { id, label: r ? recurrenceLabel(r.interval_unit as 'day' | 'week' | 'month' | null, r.interval_count, r.freq) : 'Recurring', service: sample?.service_type || sample?.title || 'Service' }
-    })
+    // Service plans come from THE shared engine (lib/recurrence.buildServicePlans) —
+    // the exact function the owner's customer page runs, so the two can never
+    // disagree about a plan. It reads the RECURRENCE as the source of truth rather
+    // than inferring from upcoming jobs, which is what used to make a plan vanish
+    // from the portal the moment its scheduled horizon ran out. A series with no
+    // future visits now reports paused:true instead of disappearing.
+    const seasons = settingsToSeasons(data.business?.service_seasons)
+    const quoteById = new Map(data.quotes.map(q => [q.id, q]))
+    // THE per-visit valuation (lib/invoicing.jobVisitValue), identical to the
+    // owner's planValueOf — so "$65/visit" here is the same number they see.
+    const planValueOf = (j: Job) => {
+      const q = j.quote_id ? quoteById.get(j.quote_id) : null
+      const freq = data.recurrences.find(r => r.id === j.recurrence_id)?.freq ?? null
+      return jobVisitValue(j.price, q as unknown as Record<string, unknown>, freq, j.is_initial_visit)
+    }
+    const plans = buildServicePlans(
+      data.recurrences as unknown as JobRecurrence[],
+      jobs as unknown as Job[],
+      seasons,
+      todayISO,
+      planValueOf,
+    )
     return { upcoming, completed, nextService, lastCompleted, outstanding, plans }
   }, [data])
 
@@ -563,18 +582,15 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
       </div>
       )}
 
-      {/* Active plan */}
+      {/* Your service plan — straight from the shared engine, so every fact here
+          (cadence, day, window, next visit, price) is the same one the owner sees. */}
       {derived.plans.length > 0 && (
         <div className="rounded-card border border-border bg-bg-secondary p-4">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint mb-2">Active plan{derived.plans.length !== 1 ? 's' : ''}</p>
-          <div className="space-y-1.5">
-            {derived.plans.map(p => (
-              <div key={p.id} className="flex items-center gap-2 text-sm">
-                <Repeat className="w-3.5 h-3.5 text-accent-text shrink-0" />
-                <span className="text-ink font-medium">{p.service}</span>
-                <span className="text-ink-muted">· {p.label}</span>
-              </div>
-            ))}
+          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint mb-2.5">
+            Your service plan{derived.plans.length !== 1 ? 's' : ''}
+          </p>
+          <div className="space-y-2.5">
+            {derived.plans.map(p => <PlanRow key={p.recurrenceId} p={p} />)}
           </div>
           {/* An ongoing arrangement with no visible way out is what makes people feel
               trapped — and this is the exact card someone looks at when they're wondering
@@ -612,6 +628,59 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
     </div>
   )
 }
+// One recurring plan, as the shared engine reports it. Everything shown is a fact
+// the engine derived — nothing is inferred here.
+//
+// `paused` means the series has history but no future visit booked. That is the
+// honest word for it: we don't know it's cancelled (it may just be between
+// seasons, or the schedule may not be built out yet), so we say what's true —
+// no visits are booked — and put the way to ask right next to it. The old card
+// simply hid such a plan, which is how a customer on a live plan could open the
+// portal and be told nothing about it at all.
+function PlanRow({ p }: { p: ServicePlan }) {
+  const perVisit = p.recurringPrice ?? p.initialPrice
+  return (
+    <div className="rounded-xl border border-border bg-bg-tertiary/40 px-3.5 py-3">
+      <div className="flex items-start gap-2.5">
+        <span className={cn('w-7 h-7 rounded-lg border flex items-center justify-center shrink-0 mt-0.5',
+          p.paused ? 'border-border bg-bg-tertiary text-ink-faint' : 'border-accent/25 bg-accent/10 text-accent-text')}>
+          <Repeat className="w-3.5 h-3.5" aria-hidden="true" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-ink flex flex-wrap items-center gap-x-2 gap-y-1">
+            {p.serviceName}
+            <span className="text-xs font-medium text-ink-muted">· {p.cadenceLabel}</span>
+            {p.paused && (
+              <span className="text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border border-border text-ink-faint">
+                No visits booked
+              </span>
+            )}
+          </p>
+          {/* Only render a fact the engine actually resolved — a missing weekday or
+              window means it wasn't consistent/configured, not that it's unknown-blank. */}
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-ink-muted">
+            {p.weekday && <span>Usually {p.weekday}</span>}
+            {p.windowLabel && <span className="before:content-['·'] before:mr-2 first:before:hidden">{p.windowLabel}</span>}
+            {perVisit != null && perVisit > 0 && (
+              <span className="before:content-['·'] before:mr-2 first:before:hidden tabular-nums">{formatCurrency(perVisit)}/visit</span>
+            )}
+          </div>
+          <p className="text-xs mt-1.5">
+            {p.nextVisitDate ? (
+              <span className="text-ink">
+                Next visit <span className="font-semibold">{formatDate(p.nextVisitDate)}</span>
+                {p.remaining > 1 && <span className="text-ink-muted"> · {p.remaining} booked</span>}
+              </span>
+            ) : (
+              <span className="text-ink-muted">No upcoming visits booked yet.</span>
+            )}
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function StatCard({ label, value, tone, icon: Icon }: { label: string; value: string; tone?: string; icon: typeof Receipt }) {
   return (
     <div className="rounded-card border border-border bg-bg-secondary p-3.5">
