@@ -17,11 +17,6 @@
 // agrees with the surface it came from (inbox badge, follow-up radar, quotes).
 // Counting is deliberately de-duplicated by customer where the sources overlap.
 
-// Generic SupabaseClient (like lib/crm/radar) so the SERVER dashboard can call it.
-import type { SupabaseClient } from '@supabase/supabase-js'
-
-type Supa = SupabaseClient
-
 export type LeadSource = 'website' | 'reply' | 'booking'
 
 export interface LeadNeedingResponse {
@@ -42,43 +37,35 @@ export interface LeadResponseReport {
   oldestHours: number | null
 }
 
-const EMPTY: LeadResponseReport = {
-  items: [], total: 0, bySource: { website: 0, reply: 0, booking: 0 }, oldestHours: null,
+export type LeadConvRow = {
+  id: string; customer_id: string | null; lead_status: string | null
+  last_direction: string | null; last_message_at: string | null; created_at: string
+  customers: { name: string | null } | { name: string | null }[] | null
+}
+export type LeadQuoteRow = {
+  id: string; customer_id: string | null; customer_name: string | null
+  created_at: string; status?: string; lead_meta?: unknown
 }
 
-export async function loadLeadsNeedingResponse(sb: Supa): Promise<LeadResponseReport> {
-  const { data: { session } } = await sb.auth.getSession()
-  const user = session?.user
-  if (!user) return EMPTY
+/** Rows a caller has already loaded — pass them and this fetches nothing. */
+export interface LeadResponsePreloaded {
+  conversations: LeadConvRow[]
+  /** ALL quotes; the booking filter (draft + lead_meta) is applied here. */
+  quotes: LeadQuoteRow[]
+}
 
-  const [convRes, bookRes] = await Promise.all([
-    // Doors 1 + 2 in one read — both live on `conversations`, both scoped to the
-    // inbox's own "not archived" rule so this can never exceed the inbox badge.
-    sb.from('conversations')
-      .select('id, customer_id, lead_status, last_direction, last_message_at, created_at, customers(name)')
-      .eq('user_id', user.id)
-      .is('archived_at', null),
-    // Door 3 — a booking arrives as a draft quote with lead_meta and nothing else.
-    sb.from('quotes')
-      .select('id, customer_id, customer_name, created_at, lead_meta')
-      .eq('user_id', user.id)
-      .eq('status', 'draft')
-      .not('lead_meta', 'is', null),
-  ])
-
-  type ConvRow = {
-    id: string; customer_id: string | null; lead_status: string | null
-    last_direction: string | null; last_message_at: string | null; created_at: string
-    customers: { name: string | null } | { name: string | null }[] | null
-  }
-  type QuoteRow = { id: string; customer_id: string | null; customer_name: string | null; created_at: string }
-
+/**
+ * Pure core. The dashboard already holds both tables, so it passes them in
+ * rather than making this re-read them — and its copies are PAGED, so the union
+ * can't be computed from a silently truncated read.
+ */
+export function computeLeadsNeedingResponse(pre: LeadResponsePreloaded): LeadResponseReport {
   const items: LeadNeedingResponse[] = []
   // A customer who both submitted the form and is awaiting a reply is ONE person
   // to call, not two — count them once, under the stronger signal (website lead).
   const seen = new Set<string>()
 
-  for (const c of ((convRes.data as unknown as ConvRow[]) || [])) {
+  for (const c of pre.conversations) {
     const nameRow = Array.isArray(c.customers) ? c.customers[0] : c.customers
     const name = nameRow?.name || 'New lead'
     const at = c.last_message_at || c.created_at
@@ -92,7 +79,9 @@ export async function loadLeadsNeedingResponse(sb: Supa): Promise<LeadResponseRe
     }
   }
 
-  for (const q of ((bookRes.data as unknown as QuoteRow[]) || [])) {
+  // Door 3 — a booking arrives as a draft quote carrying lead_meta, nothing else.
+  for (const q of pre.quotes) {
+    if (q.status !== 'draft' || q.lead_meta == null) continue
     const dedupe = q.customer_id || q.id
     if (seen.has(dedupe)) continue // already counted via their conversation
     items.push({

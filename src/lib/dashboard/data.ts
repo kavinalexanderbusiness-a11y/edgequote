@@ -14,7 +14,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Invoice, Quote } from '@/types'
 import { invoiceBalance, displayInvoiceStatus, collectedBetween, dayBoundsIso } from '@/lib/payments/ledger'
-import { loadLeadsNeedingResponse } from '@/lib/leadResponse'
+import { computeLeadsNeedingResponse, type LeadConvRow, type LeadQuoteRow } from '@/lib/leadResponse'
 import { loadWeatherImpact, type WeatherImpactReport } from '@/lib/weatherImpact'
 import { settingsToSeasons } from '@/lib/seasons'
 import { localTodayISO } from '@/lib/utils'
@@ -25,6 +25,9 @@ import type { RJob, RRecurrence } from '@/lib/reactivation'
 import type { MoneyBandValues } from '@/components/dashboard/MoneyBand'
 
 type InvoiceRow = Pick<Invoice, 'amount' | 'status' | 'amount_paid' | 'discount_type' | 'discount_value' | 'due_date'>
+// One conversations read serves two consumers: the lead union (all non-archived)
+// and the messages priority row (the unread subset).
+type ConvRow = LeadConvRow & { unread: number }
 
 // The union every downstream consumer actually reads — money/KPIs (status, total,
 // amount fields), priorities (status/total), needsFollowUp (sent_at,
@@ -49,6 +52,12 @@ type SettingsRow = {
   preferred_work_days: number[] | null
   work_start_time: string | null
   daily_capacity_hours: number | null
+  // Read for the weather engine, which is handed this row instead of re-reading
+  // it. Declared here so the type can't silently drift from the select and leave
+  // rain risk quietly computed against the default Calgary location.
+  base_lat: number | null
+  base_lng: number | null
+  base_address: string | null
 }
 
 export async function loadDashboard(sb: SupabaseClient, userId: string): Promise<DashboardData> {
@@ -62,9 +71,10 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
   const dayB = dayBoundsIso(today)
   const weekB = dayBoundsIso(weekStartISO)
 
+  // ── Phase 1: read every table ONCE, all in parallel ──
   const [
     invRes, jobRes, planJobRes, quoteRes, recRes, convRes, custRes, setRes,
-    todayCash, weekCash, leads, weather,
+    todayCash, weekCash,
   ] = await Promise.all([
     // The three full-history reads are PAGED. An unbounded select silently stops
     // at 1000 rows, which would understate Owed/Collected and — via
@@ -75,8 +85,12 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     pageAll<RJob>(() => sb.from('jobs').select('id, quote_id, customer_id, status, scheduled_date, recurrence_id, price, service_type').eq('user_id', userId)),
     // The day plan needs joins + times, but only for the days it shows, so it is a
     // separate NARROW read rather than widening the full-history query above.
+    // Widened with the columns the weather engine needs (crew_size, property_id,
+    // is_initial_visit, lawn_sqft) so this ONE read serves the day plan AND the
+    // rain-risk model. Weather's own window (today→+8d, non-cancelled/completed)
+    // is a strict subset of this one, and it ignores dates outside its forecast.
     sb.from('jobs')
-      .select('id, scheduled_date, start_time, service_type, duration_minutes, price, quote_id, recurrence_id, customers(name, phone), properties(address)')
+      .select('id, scheduled_date, start_time, status, service_type, duration_minutes, price, quote_id, recurrence_id, crew_size, property_id, customer_id, is_initial_visit, customers(name, phone), properties(address, lawn_sqft)')
       .eq('user_id', userId)
       .gte('scheduled_date', today)
       .lte('scheduled_date', isoPlusDays(today, 21))
@@ -87,16 +101,17 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     // consumed by money/KPIs, priorities, needsFollowUp, reactivation and dayPlan.
     pageAll<Quote>(() => sb.from('quotes').select(QUOTE_COLUMNS).eq('user_id', userId)),
     sb.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', userId),
-    sb.from('conversations').select('unread, customer_id').eq('user_id', userId).is('archived_at', null).gt('unread', 0),
+    // ALL non-archived conversations (not just unread): the lead union needs the
+    // full set, and the messages row filters unread>0 from it in memory. One read
+    // instead of two overlapping ones.
+    sb.from('conversations')
+      .select('id, customer_id, unread, lead_status, last_direction, last_message_at, created_at, customers(name)')
+      .eq('user_id', userId).is('archived_at', null),
     sb.from('customers').select('id').eq('user_id', userId).is('archived_at', null),
-    sb.from('business_settings').select('gst_percent, service_seasons, preferred_work_days, work_start_time, daily_capacity_hours').eq('user_id', userId).maybeSingle(),
+    // Widened with base_* so the weather engine doesn't re-read this same row.
+    sb.from('business_settings').select('gst_percent, service_seasons, preferred_work_days, work_start_time, daily_capacity_hours, base_lat, base_lng, base_address').eq('user_id', userId).maybeSingle(),
     collectedBetween(sb, { userId, startIso: dayB.start, endIso: dayB.end }),
     collectedBetween(sb, { userId, startIso: weekB.start, endIso: dayB.end }),
-    loadLeadsNeedingResponse(sb),
-    // Weather is the one slow dependency (an external forecast). A failure must
-    // degrade to `null` rather than take the morning down — but null means
-    // "we couldn't check", NOT "no rain risk", and the strip says so.
-    loadWeatherImpact(sb).catch(() => null),
   ])
 
   // Never render a number we didn't actually read. Supabase RESOLVES on failure
@@ -122,8 +137,28 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
   const invoices = invRes.rows
   const quotes = quoteRes.rows
   const jobs = jobRes.rows
+  const recurrences = (recRes.data as RRecurrence[]) || []
   const recById: Record<string, RRecurrence> = {}
-  for (const r of (recRes.data as RRecurrence[]) || []) recById[r.id] = r
+  for (const r of recurrences) recById[r.id] = r
+  const conversations = (convRes.data as unknown as ConvRow[]) || []
+
+  // ── Phase 2: derive, feeding the engines rows we already hold ──
+  // Both of these used to re-read tables Phase 1 just read. Leads is now pure,
+  // and weather takes the same PAGED quotes — so a truncated read can no longer
+  // misprice its revenue-at-risk figure.
+  const leads = computeLeadsNeedingResponse({
+    conversations,
+    quotes: quotes as unknown as LeadQuoteRow[],
+  })
+  // Weather is the one slow dependency (an external forecast). A failure must
+  // degrade to `null` rather than take the morning down — but null means
+  // "we couldn't check", NOT "no rain risk", and the strip says exactly that.
+  const weather = await loadWeatherImpact(sb, {
+    settings: settings ?? null,
+    jobs: (planJobRes.data as unknown[]) || [],
+    quotes: quotes as unknown as { id: string }[],
+    recurrences,
+  }).catch(() => null)
 
   // ── Money (THE ledger engine) ──
   const issued = invoices.filter(i => i.status !== 'draft' && i.status !== 'cancelled')
@@ -137,9 +172,9 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
   const priorities = computePriorities({
     quotes, invoices, jobs, recById,
     customers: (custRes.data as { id: string }[]) || [],
-    // customer_id must survive the cast — the messages row uses it to exclude
-    // people the leads row already counted.
-    conversations: (convRes.data as { unread: number; customer_id: string | null }[]) || [],
+    // Only the unread ones are a "reply to messages" job. customer_id must
+    // survive — the messages row uses it to exclude people leads already counted.
+    conversations: conversations.filter(c => Number(c.unread || 0) > 0),
     leads,
     seasons: settingsToSeasons(settings?.service_seasons),
     feeSettings: settings,
