@@ -3,9 +3,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
+import { listEquipmentDocs } from '@/lib/equipmentDocs'
 import {
   Equipment, EquipmentService, EquipmentStatus, STATUS_LABELS, STATUS_TONE,
-  categoryMeta, serviceStatus, serviceKindLabel, costOfOwnership, fleetSummary, warrantyStatus, bookValue,
+  categoryMeta, serviceStatus, serviceKindLabel, costOfOwnership, fleetSummary, warrantyStatus, bookValue, type EquipmentDoc,
 } from '@/lib/equipment'
 import { toneSoft, toneText } from '@/lib/tone'
 import { formatCurrency, formatDate, localTodayISO, cn } from '@/lib/utils'
@@ -21,6 +22,7 @@ import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { Banner } from '@/components/ui/Banner'
 import { EquipmentDialog } from '@/components/equipment/EquipmentDialog'
+import { EquipmentDocs } from '@/components/equipment/EquipmentDocs'
 import { ServiceLogDialog } from '@/components/equipment/ServiceLogDialog'
 import { Wrench, Plus, AlertTriangle, CircleDollarSign, Gauge, Pencil, Trash2, History, Clock, ShieldCheck } from 'lucide-react'
 
@@ -34,6 +36,7 @@ export default function EquipmentPage() {
   const supabase = useMemo(() => createClient(), [])
   const [equipment, setEquipment] = useState<Equipment[]>([])
   const [services, setServices] = useState<EquipmentService[]>([])
+  const [docs, setDocs] = useState<EquipmentDoc[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [uid, setUid] = useState<string | null>(null)
@@ -62,6 +65,8 @@ export default function EquipmentPage() {
       setLoadError(null)
       setEquipment((eRes.data as Equipment[]) || [])
       setServices((sRes.data as EquipmentService[]) || [])
+      // Paperwork is optional — a tree without the docs migration still works.
+      setDocs(await listEquipmentDocs(supabase, user.id).catch(() => []))
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : 'Could not load your equipment.')
     } finally {
@@ -177,8 +182,10 @@ export default function EquipmentPage() {
             <div className="space-y-3">
               {visible.map(eq => (
                 <EquipmentRow
-                  key={eq.id} eq={eq}
+                  key={eq.id} eq={eq} uid={uid}
                   services={summary.servicesByEquipment.get(eq.id) ?? []}
+                  docs={docs.filter(d => d.equipment_id === eq.id)}
+                  onDocsChanged={load}
                   today={today}
                   open={openId === eq.id}
                   onToggle={() => setOpenId(openId === eq.id ? null : eq.id)}
@@ -218,8 +225,10 @@ export default function EquipmentPage() {
   )
 }
 
-function EquipmentRow({ eq, services, today, open, onToggle, onEdit, onLog, onRemove, onStatus }: {
-  eq: Equipment; services: EquipmentService[]; today: string; open: boolean
+function EquipmentRow({ eq, uid, services, docs, onDocsChanged, today, open, onToggle, onEdit, onLog, onRemove, onStatus }: {
+  eq: Equipment; uid: string | null; services: EquipmentService[]
+  docs: EquipmentDoc[]; onDocsChanged: () => void
+  today: string; open: boolean
   onToggle: () => void; onEdit: () => void; onLog: () => void; onRemove: () => void
   onStatus: (s: EquipmentStatus) => void
 }) {
@@ -315,6 +324,9 @@ function EquipmentRow({ eq, services, today, open, onToggle, onEdit, onLog, onRe
                 </div>
               )}
             </div>
+
+            {/* The paperwork behind the record — receipt, warranty certificate, manual. */}
+            {uid && <EquipmentDocs userId={uid} equipmentId={eq.id} docs={docs} onChanged={onDocsChanged} />}
 
             <div className="flex items-center gap-1.5 flex-wrap pt-1">
               <Button size="sm" variant="secondary" onClick={onEdit}><Pencil className="w-3.5 h-3.5" /> Edit</Button>

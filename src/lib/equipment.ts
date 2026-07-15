@@ -53,6 +53,43 @@ export interface EquipmentService {
   notes: string | null
 }
 
+export type DocKind = 'receipt' | 'warranty' | 'manual' | 'insurance' | 'photo' | 'other'
+
+export interface EquipmentDoc {
+  id: string
+  created_at: string
+  user_id: string
+  equipment_id: string
+  path: string
+  name: string
+  kind: DocKind
+  mime: string | null
+  size_bytes: number | null
+}
+
+export const DOC_KINDS: { value: DocKind; label: string }[] = [
+  { value: 'receipt', label: 'Purchase receipt' },
+  { value: 'warranty', label: 'Warranty certificate' },
+  { value: 'manual', label: 'Manual' },
+  { value: 'insurance', label: 'Insurance' },
+  { value: 'photo', label: 'Photo' },
+  { value: 'other', label: 'Other' },
+]
+export function docKindLabel(k: DocKind): string {
+  return DOC_KINDS.find(d => d.value === k)?.label ?? 'Other'
+}
+
+/** Human file size — files are shown to the owner, not to a machine. */
+export function fileSize(bytes: number | null | undefined): string {
+  const b = Number(bytes) || 0
+  if (b <= 0) return ''
+  if (b < 1024) return `${b} B`
+  if (b < 1024 * 1024) return `${Math.round(b / 1024)} KB`
+  return `${Math.round((b / (1024 * 1024)) * 10) / 10} MB`
+}
+
+export const EQUIPMENT_DOCS_BUCKET = 'equipment-docs'
+
 export const EQUIPMENT_CATEGORIES: { value: EquipmentCategory; label: string; icon: LucideIcon }[] = [
   { value: 'mower', label: 'Mower', icon: Sprout },
   { value: 'trimmer', label: 'Trimmer', icon: Scissors },
