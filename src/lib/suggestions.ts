@@ -15,7 +15,7 @@ import { OptJob, OptOptions, OptimizeScope, OptimizeMode, analyzeSchedule, optim
 import { dayProfitability } from '@/lib/profitability'
 import {
   CHURN_RATIO_HIGH, FOLLOW_UP_DAYS, cadenceDays, churnRisk, isSeasonallyDormant, isVip,
-  lifetimeValue, needsFollowUp, ranOut,
+  lifetimeValue, needsFollowUp, ranOut, startOfDayMs,
 } from '@/lib/signals'
 import { generateOccurrences, dayDelta } from '@/lib/recurrence'
 import { ServiceSeasons, serviceCategory, seasonForService, seasonEndDateFor, isWithinSeason } from '@/lib/seasons'
@@ -1032,9 +1032,9 @@ function retention(ctx: SuggestionContext): Suggestion[] {
       action: { kind: 'navigate', label: 'Win them back', href: '/dashboard/reactivation' },
     })
   }
-  // Sent quotes gone quiet ≥ the follow-up window, measured against ctx.today so a
-  // feed built in the morning is still correct at night / across midnight.
-  const toChase = ctx.quotes.filter(q => needsFollowUp(q, ctx.today))
+  // Sent quotes gone quiet ≥ the follow-up window, measured against the start of
+  // ctx.today so a feed built in the morning is still correct at night.
+  const toChase = ctx.quotes.filter(q => needsFollowUp(q, startOfDayMs(ctx.today)))
   if (toChase.length) {
     const atRisk = toChase.reduce((s, q) => s + Number(q.total || 0), 0)
     out.push({

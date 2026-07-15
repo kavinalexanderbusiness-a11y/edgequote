@@ -83,9 +83,13 @@ const round5 = (n: number) => Math.round(n / 5) * 5
 const clamp = (n: number, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, n))
 const SEASON_VISITS_BIWEEKLY = SEASON_VISITS.biweekly
 
-// Lifetime value prices a first visit at the initial rate, so jobs carry
-// `is_initial_visit` here — the route/density engines don't need it.
-type RIJob = ProfitJob & { is_initial_visit?: boolean | null }
+// NOTE: jobs here deliberately do NOT carry `is_initial_visit`, so lifetimeValue
+// prices a first visit at the recurring rate — this engine's long-standing
+// behaviour. customerHealth DOES carry it and prices the initial rate, so the two
+// disagree on LTV for any customer whose first visit was priced differently.
+// Aligning them is a pending product decision (it moves LTV, the VIP gate and
+// every ltv-derived figure), so nothing here supplies the field yet.
+type RIJob = ProfitJob
 
 interface RIInput {
   jobs: RIJob[]
@@ -487,7 +491,7 @@ export async function loadRevenueIntel(supabase: SupabaseClient): Promise<Revenu
   if (!user) return null
   const uid = user.id
   const [jRes, qRes, rRes, pRes, cRes, iRes, liRes, sRes, fRes] = await Promise.all([
-    supabase.from('jobs').select('id, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, is_initial_visit, customer_id, property_id, properties(lat, lng, city, postal_code, neighborhood)').eq('user_id', uid),
+    supabase.from('jobs').select('id, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, property_id, properties(lat, lng, city, postal_code, neighborhood)').eq('user_id', uid),
     supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', uid),
     supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', uid),
     supabase.from('properties').select('id, customer_id, lat, lng, postal_code, city, neighborhood').eq('user_id', uid),
@@ -512,7 +516,7 @@ export async function loadRevenueIntel(supabase: SupabaseClient): Promise<Revenu
   const jobs: RIJob[] = rawJobs.map(j => ({
     id: j.id, scheduled_date: j.scheduled_date, status: j.status, service_type: j.service_type,
     quote_id: j.quote_id, recurrence_id: j.recurrence_id, duration_minutes: j.duration_minutes,
-    actual_minutes: j.actual_minutes, price: j.price, is_initial_visit: j.is_initial_visit,
+    actual_minutes: j.actual_minutes, price: j.price,
     customer_id: j.customer_id,
     lat: j.properties?.lat ?? null, lng: j.properties?.lng ?? null,
     city: j.properties?.city ?? null, postal_code: j.properties?.postal_code ?? null, neighborhood: j.properties?.neighborhood ?? null,

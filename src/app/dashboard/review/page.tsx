@@ -94,7 +94,8 @@ export default function WeeklyReviewPage() {
             seasonallyDormant: isSeasonallyDormant(recJob?.service_type ?? null, seasons, today),
             today,
           })
-          if (signal.isRanOut && signal.isUrgent) ranOut++
+          // The whole re-book backlog, not just the urgent window — as before.
+          if (signal.isRanOut) ranOut++
         }
         setRanOutCount(ranOut)
 

@@ -169,7 +169,9 @@ export function TodaysPriorities() {
           seasonallyDormant: isSeasonallyDormant(recJob?.service_type ?? null, seasons, today),
           today,
         })
-        if (!signal.isRanOut || !signal.isUrgent) continue
+        // Every ran-out series counts here (not just the urgent window) — this row
+        // has always tracked the whole re-book backlog.
+        if (!signal.isRanOut) continue
         ranOutCusts.add(custId)
         ranOutValue += Math.round(jobVisitValue(recJob.price, null, freq))
       }

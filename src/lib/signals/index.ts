@@ -12,7 +12,7 @@
 export { VIP_LTV, FOLLOW_UP_DAYS, CHURN_RATIO_WARN, CHURN_RATIO_HIGH, RANOUT_URGENT_MIN_DAYS, RANOUT_URGENT_CADENCES, LAPSE_BUCKET_DAYS } from './constants'
 export { cadenceDays, type CadenceRecLike } from './cadence'
 export { lifetimeValue, visitValue, isVip, type ValuedJob, type ValueRec } from './value'
-export { needsFollowUp, compareFollowUp, followUpAnchor, daysSinceOn, localToday, type FollowUpQuote } from './followup'
+export { needsFollowUp, compareFollowUp, followUpAnchor, daysElapsed, localToday, startOfDayMs, type FollowUpQuote } from './followup'
 export {
   ranOut, isLapsed, churnRisk, isSeasonallyDormant, daysBetween,
   type RanOutInput, type RanOutSignal, type ChurnRisk, type ChurnLevel,

@@ -1,9 +1,8 @@
 import type { Quote } from '@/types'
 import {
   compareFollowUp as compareFollowUpOn,
-  daysSinceOn,
+  daysElapsed,
   followUpAnchor as followUpAnchorOn,
-  localToday,
   needsFollowUp as needsFollowUpOn,
 } from '@/lib/signals'
 
@@ -19,10 +18,10 @@ export function followUpAnchor(q: Quote): string | null {
   return followUpAnchorOn(q)
 }
 
-// Calendar days since — the SAME counter needsFollowUp uses, so a quote can never
-// read "2 days" while sitting in the 3-day follow-up queue beside it.
+// Wall-clock days elapsed — the quote screens' clock, and the same counter
+// needsFollowUp uses here, so the displayed age and the queue never disagree.
 export function daysSince(dateStr: string | null): number | null {
-  return daysSinceOn(dateStr, localToday())
+  return daysElapsed(dateStr)
 }
 
 // A sent quote that's gone quiet long enough to chase again.
