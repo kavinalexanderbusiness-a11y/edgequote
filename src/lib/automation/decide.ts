@@ -15,8 +15,26 @@ export type Decision =
 
 export interface DecisionInput {
   rule: AutomationRule
-  /** Local hour (0-23) the evaluation is happening at. */
-  hour: number
+  /** The hour (0-23) in the OWNER'S timezone that the evaluation is happening at.
+   *
+   *  `'unknown'` is a first-class value for the same reason it is on
+   *  `recentActionsForSubject`, and it is here because we made that exact mistake
+   *  again: the engine passed `new Date().getHours()`, which on Vercel is UTC. With
+   *  a fixed cron time that is the CONSTANT 11 for every owner on every run — and
+   *  11 is inside every rule's send window, so this gate could never suppress. Not
+   *  wrong by an offset; wrong by always opening. A Vancouver owner's "9am-7pm"
+   *  window would have fired at 4:30am.
+   *
+   *  It is NOT fixable here, and that is the point of the value: `business_settings`
+   *  has no timezone column, so the owner's local hour is not merely unused — it is
+   *  not knowable yet. A caller that cannot say what time it is for the OWNER must
+   *  say so rather than pass the server's plausible-looking hour.
+   *
+   *  Unknown fails CLOSED (see decide). So a rule promoted to `auto` before the
+   *  timezone work lands stays quiet and says `quiet_hours`, instead of sending at
+   *  dawn. The run log can never surface this on its own — `quiet_hours` was an
+   *  unreachable verdict — so no amount of observation would have caught it. */
+  hour: number | 'unknown'
   /** How many times this rule has already acted on this subject inside the
    *  rule's own frequency window.
    *
@@ -53,7 +71,12 @@ export function decide(inp: DecisionInput): Decision {
   // 2. Already handled. Checked before the caps so a duplicate never burns quota.
   if (inp.alreadyDeduped) return { fire: false, reason: 'deduped' }
 
-  // 3. Don't wake anyone up. A correct message at 3am is a wrong message.
+  // 3. Don't wake anyone up. A correct message at 3am is a wrong message. An
+  //    unknown hour is treated as outside the window for the same reason an uncounted
+  //    history is treated as a cap hit — and it must be CHECKED, not left to the
+  //    comparisons below: `'unknown' < 9` and `'unknown' >= 19` are both false, so
+  //    without this line the string sails through the one gate it was added to close.
+  if (inp.hour === 'unknown') return { fire: false, reason: 'quiet_hours' }
   const [from, to] = rule.constraints.sendWindowHours
   if (inp.hour < from || inp.hour >= to) return { fire: false, reason: 'quiet_hours' }
 

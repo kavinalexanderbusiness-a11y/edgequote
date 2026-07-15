@@ -112,6 +112,11 @@ const MODE_META: Record<RuleMode, { label: string; tone: Tone; hint: string }> =
 }
 
 interface StatRow { rule_key: string; decision: string; suppressed_reason: Reason | null }
+/** The cron heartbeat (automation_sweeps). ONLY the columns `authenticated` is granted:
+ *  `owners`/`detected`/`written`/`ms` are global cross-tenant aggregates and are
+ *  service-role-only by column grant — selecting one here would 403 the whole query,
+ *  not just drop a field. */
+interface SweepRow { job: string; ran_on: string; ran_at: string; ok: boolean; error: string | null }
 interface LogRow {
   id: string
   status: string
@@ -172,6 +177,10 @@ export default function AutomationPage() {
   const [names, setNames] = useState<Record<string, string>>({})
   const [diag, setDiag] = useState<CommsTest | null>(null)
   const [diagError, setDiagError] = useState<string | null>(null)
+  // Cron liveness comes from the jobs' own heartbeat, never inferred from this owner's
+  // rows — see Liveness.
+  const [signalSweep, setSignalSweep] = useState<SweepRow | null>(null)
+  const [engineSweep, setEngineSweep] = useState<SweepRow | null>(null)
   // The caps the AUTOMATIC chasers actually enforce. Resolved from the owner's
   // business_settings.automations through the chasers' OWN resolvers — not the bare
   // FOLLOW_UP_MAX/REMINDER_MAX constants, because an owner who tuned their cadence
@@ -195,7 +204,7 @@ export default function AutomationPage() {
     const since30 = isoDaysAgo(STATS_DAYS - 1)
     const sinceLog = new Date(Date.now() - LOG_DAYS * 86_400_000).toISOString()
 
-    const [sRes, rRes, tsRes, trRes, stRes, lRes, qRes, iRes, owner, diagRes] = await Promise.all([
+    const [sRes, rRes, tsRes, trRes, stRes, lRes, qRes, iRes, owner, diagRes, ssRes, esRes] = await Promise.all([
       // Newest first. `created_at` is the tiebreak: detected_on is a DATE, so dozens
       // of rows share one value and without it paging/ordering isn't deterministic.
       supabase.from('automation_signals')
@@ -227,6 +236,15 @@ export default function AutomationPage() {
       // Reuse the existing diagnostic endpoint rather than re-implementing the env /
       // credential checks. It validates Twilio + Resend WITHOUT sending.
       fetch('/api/comms/test').then(r => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))).catch((e: Error) => e),
+      // The newest heartbeat per job. One query each rather than one ordered read
+      // sliced by job: a job that stopped a month before the other would otherwise sit
+      // outside any fixed row cap and read as "never ran" — the exact false claim this
+      // table was added to retire. NOT filtered by user_id: the sweep is global, so a
+      // per-owner liveness query was never a fact about the cron.
+      supabase.from('automation_sweeps').select('job, ran_on, ran_at, ok, error')
+        .eq('job', 'signals').order('ran_on', { ascending: false }).limit(1).maybeSingle(),
+      supabase.from('automation_sweeps').select('job, ran_on, ran_at, ok, error')
+        .eq('job', 'engine').order('ran_on', { ascending: false }).limit(1).maybeSingle(),
     ])
 
     const sRows = (sRes.data as SignalRow[] | null) || []
@@ -241,6 +259,8 @@ export default function AutomationPage() {
     setInvoiceRetries((iRes.data as InvoiceRetryRow[] | null) || [])
     setFollowUpPolicy(resolveFollowUpPolicy(owner.automationsRaw))
     setReminderPolicy(resolveReminderPolicy(owner.automationsRaw))
+    setSignalSweep((ssRes.data as SweepRow | null) ?? null)
+    setEngineSweep((esRes.data as SweepRow | null) ?? null)
 
     if (diagRes instanceof Error) setDiagError(diagRes.message)
     else setDiag(diagRes as CommsTest)
@@ -295,11 +315,13 @@ export default function AutomationPage() {
     return { signalsToday, evalsToday, firedToday, sent48, failed48, days }
   }, [trendSignals, trendRuns, logs, today])
 
-  // Cron liveness — the newest row in each table. Read from the UNBOUNDED-BY-DATE
-  // list queries (not the 14-day trend), so a sweep that last ran 40 days ago is
-  // reported as 40 days ago rather than "never".
-  const lastSignalOn = signals[0]?.detected_on ?? null
-  const lastRunOn = runs[0]?.evaluated_on ?? null
+  // Cron liveness is the HEARTBEAT's to answer, and only its. This used to be
+  // `signals[0]?.detected_on` — the newest row THIS owner had — which conflated two
+  // unrelated facts: a cron that never ran, and a cron that ran and correctly found
+  // nothing. Zero rows is the plausible happy path here (two rules, narrow conditions),
+  // so the page confidently reported "never run" on a healthy night, and would have
+  // gone on doing so while the sweep was provably alive for everyone else.
+  const neverRan = !loading && signalSweep === null && engineSweep === null
 
   // ── Per-rule stats (30d), straight off automation_runs ──────────────────────
   const statsByRule = useMemo(() => {
@@ -340,9 +362,11 @@ export default function AutomationPage() {
   // ── Failures (7d) ──────────────────────────────────────────────────────────
   const failures = useMemo(() => logs.filter(l => statusMeta(l.status).tone === 'fail'), [logs])
 
-  // The sweep has never run for this owner — the honest explanation behind every
-  // empty section, and the state this page is actually in today.
-  const neverSwept = !loading && signals.length === 0 && runs.length === 0
+  // Nothing of this owner's to show. Says NOTHING about whether the crons ran — that
+  // is `neverRan` above, and keeping the two apart is the point: "it has never run" and
+  // "it ran and found nothing" produce the identical empty screen and must not produce
+  // the identical sentence.
+  const nothingDetected = !loading && signals.length === 0 && runs.length === 0
 
   if (loading) {
     return (
@@ -375,9 +399,9 @@ export default function AutomationPage() {
         <div className="space-y-6 animate-rise">
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
             <StatTile label="Signals today" value={overview.signalsToday} icon={Radar}
-              sub={lastSignalOn ? `sweep last ran ${lastSignalOn}` : 'sweep has never run'} />
+              sub={`sweep ${sweepSub(signalSweep, today)}`} />
             <StatTile label="Evaluations today" value={overview.evalsToday} icon={Activity}
-              sub={lastRunOn ? `engine last ran ${lastRunOn}` : 'engine has never run'} />
+              sub={`engine ${sweepSub(engineSweep, today)}`} />
             {/* 0 is the CORRECT answer while every rule is `suggest`, so the tile says
                 so rather than presenting a zero that reads as breakage. */}
             <StatTile label="Fired today" value={overview.firedToday} icon={CheckCircle2}
@@ -394,9 +418,11 @@ export default function AutomationPage() {
                 sub="Signals detected and rule evaluations per day — straight from the engine's two tables." className="mb-0" />
             </CardHeader>
             <CardBody>
-              {neverSwept ? (
+              {nothingDetected ? (
                 <InlineEmpty icon={Radar}>
-                  Nothing to chart yet — the signal sweep hasn’t run, so there are no days to compare.
+                  {neverRan
+                    ? 'Nothing to chart — the signal sweep has never run, so there are no days to compare.'
+                    : 'Nothing to chart — the sweep has been running and has found nothing to flag for your customers in this window.'}
                 </InlineEmpty>
               ) : (
                 <div className="space-y-5">
@@ -417,8 +443,11 @@ export default function AutomationPage() {
       {tab === 'rules' && (
         <div className="space-y-3 animate-rise">
           {AUTOMATION_RULES.map((rule, i) => (
+            // The heartbeat, not `runs.length > 0` — this owner having no verdicts is
+            // not evidence the engine never ran, and that was the wrong half of the
+            // sentence to get from the right table.
             <RuleCard key={rule.key} rule={rule} stats={statsByRule[rule.key]} index={i}
-              engineHasRun={runs.length > 0} />
+              engineHasRun={engineSweep !== null} />
           ))}
           {ruleStats.length >= STATS_ROWS && (
             <p className="text-[11px] text-amber-400">
@@ -445,14 +474,24 @@ export default function AutomationPage() {
             </div>
           </CardHeader>
           {signals.length === 0 ? (
-            <EmptyState icon={Radar} title="The signal sweep hasn’t run yet"
-              description={
+            // Two different facts, two different sentences. An owner with nothing wrong
+            // and an owner whose sweep never ran both see zero rows here, and telling
+            // the second story to the first owner is how day one teaches them to ignore
+            // the one warning that matters.
+            <EmptyState icon={Radar} title={neverRan ? 'The signal sweep hasn’t run yet' : 'Nothing to flag'}
+              description={neverRan ? (
                 <>
-                  <code className="text-ink">automation_signals</code> is empty. The nightly sweep (<code className="text-ink">/api/cron/signals</code>)
-                  writes one row per condition, per customer, per day — it hasn’t written any yet, so there is nothing to show.
-                  This is an empty table, not a failure.
+                  <code className="text-ink">automation_signals</code> is empty and no sweep has recorded a heartbeat. The nightly
+                  sweep (<code className="text-ink">/api/cron/signals</code>) writes one row per condition, per customer, per day —
+                  it hasn’t run yet, so there is nothing to show.
                 </>
-              } />
+              ) : (
+                <>
+                  The sweep has been running{signalSweep ? ` — last on ${signalSweep.ran_on}` : ''} and has found nothing to flag.
+                  Signals appear when a customer’s recurring work runs out or their visits drift past their usual cadence.
+                  An empty table means neither is true right now.
+                </>
+              )} />
           ) : filteredSignals.length === 0 ? (
             <InlineEmpty icon={Radar}>No signals match this filter in the last {LIST_ROWS} rows.</InlineEmpty>
           ) : (
@@ -518,14 +557,20 @@ export default function AutomationPage() {
             )}
           </CardHeader>
           {runs.length === 0 ? (
-            <EmptyState icon={Activity} title="The engine hasn’t run yet"
-              description={
+            <EmptyState icon={Activity} title={neverRan ? 'The engine hasn’t run yet' : 'Nothing to evaluate'}
+              description={neverRan ? (
                 <>
-                  <code className="text-ink">automation_runs</code> is empty. The engine (<code className="text-ink">/api/cron/engine</code>) reads
-                  each day’s signals and records a verdict per rule. With no signals swept, there is nothing to evaluate — so an empty
-                  run log is exactly right.
+                  <code className="text-ink">automation_runs</code> is empty and no run has recorded a heartbeat. The engine
+                  (<code className="text-ink">/api/cron/engine</code>) reads each day’s signals and records a verdict per rule —
+                  it hasn’t run yet.
                 </>
-              } />
+              ) : (
+                <>
+                  The engine has been running{engineSweep ? ` — last on ${engineSweep.ran_on}` : ''} and has had no signals of yours
+                  to evaluate. It records a verdict per rule per signal, and nothing has been detected for your customers — so an
+                  empty run log is exactly right.
+                </>
+              )} />
           ) : filteredRuns.length === 0 ? (
             <InlineEmpty icon={Activity}>No evaluations match these filters in the last {LIST_ROWS} rows.</InlineEmpty>
           ) : (
@@ -684,15 +729,21 @@ export default function AutomationPage() {
           <Card>
             <CardHeader>
               <SectionHeading icon={Clock} title="Scheduled jobs"
-                sub="The newest row each job has written. This is the only honest proof they ran." className="mb-0" />
+                sub="Each job’s own heartbeat, written at every exit — success, partial or failure. This is the only honest proof they ran." className="mb-0" />
             </CardHeader>
             <CardBody className="space-y-3">
-              <Liveness name="Signal sweep" path="/api/cron/signals" schedule="daily 11:00" lastOn={lastSignalOn} today={today} />
-              <Liveness name="Automation engine" path="/api/cron/engine" schedule="daily 11:30" lastOn={lastRunOn} today={today} />
-              {neverSwept && (
+              <Liveness name="Signal sweep" path="/api/cron/signals" schedule="daily 11:00" sweep={signalSweep} today={today} />
+              <Liveness name="Automation engine" path="/api/cron/engine" schedule="daily 11:30" sweep={engineSweep} today={today} />
+              {neverRan && (
                 <Banner tone="warn" icon={AlertTriangle}>
-                  Neither job has ever written a row. Both tables exist, so this isn’t a missing migration —
-                  the crons simply haven’t run here yet. Until they do, every section on this page is empty for the same reason.
+                  Neither job has recorded a heartbeat, so neither has ever run here. Every section on this page is
+                  empty for that reason rather than because there was nothing to find.
+                </Banner>
+              )}
+              {!neverRan && nothingDetected && (
+                <Banner tone="info" icon={Info}>
+                  The jobs are running. They just haven’t found anything to flag for your customers yet — which is the
+                  healthy answer, not an empty screen waiting to fill.
                 </Banner>
               )}
             </CardBody>
@@ -785,6 +836,15 @@ export default function AutomationPage() {
  *  than a hand-listed `status === 'error'`, so the two can never drift apart. */
 function isRetryable(status: string): boolean {
   return !(SENT_STATES as readonly string[]).includes((status || '').toLowerCase())
+}
+
+/** The heartbeat in a few words, for a tile's sub-line. Four states, because the
+ *  heartbeat can now distinguish them: no row at all, a run that failed, a run today,
+ *  and a run on a day we can name. */
+function sweepSub(sweep: SweepRow | null, today: string): string {
+  if (!sweep) return 'has never run'
+  if (!sweep.ok) return `last run failed (${sweep.ran_on})`
+  return sweep.ran_on === today ? 'ran today' : `last ran ${sweep.ran_on}`
 }
 
 function TrendBars({ label, days, pick, tone }: {
@@ -918,25 +978,38 @@ function Chip({ children }: { children: React.ReactNode }) {
   )
 }
 
-function Liveness({ name, path, schedule, lastOn, today }: {
-  name: string; path: string; schedule: string; lastOn: string | null; today: string
+function Liveness({ name, path, schedule, sweep, today }: {
+  name: string; path: string; schedule: string; sweep: SweepRow | null; today: string
 }) {
-  const ranToday = lastOn === today
-  // Only three honest answers: it ran today, it ran on a day we can name, or it has
-  // never written a row. Anything warmer than the evidence would be a claim.
-  const tone: Tone = lastOn === null ? 'warn' : ranToday ? 'success' : 'warn'
+  const ranToday = sweep?.ran_on === today
+  const failed = sweep !== null && !sweep.ok
+  // FOUR honest answers, where the evidence used to support none of them: the job
+  // records a heartbeat at every exit, so its absence means it truly never ran, and
+  // `ok=false` is a run that happened and broke — a state the old inference could not
+  // see at all (a crashed sweep writes no signals, so it looked exactly like a quiet
+  // healthy one). "Anything warmer than the evidence would be a claim" — the evidence
+  // is now the job's own word for it.
+  const tone: Tone = sweep === null ? 'warn' : failed ? 'danger' : ranToday ? 'success' : 'warn'
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 rounded-card border border-border p-3">
       <div className="min-w-0">
         <p className="text-sm font-medium text-ink">{name}</p>
         <p className="text-xs text-ink-faint"><code>{path}</code> · {schedule}</p>
       </div>
-      <div className="text-right">
+      <div className="text-right min-w-0">
         <Badge tone={tone}>
-          {lastOn === null ? 'Never run' : ranToday ? 'Ran today' : `Last wrote ${lastOn}`}
+          {sweep === null ? 'Never run' : failed ? `Ran and failed ${sweep.ran_on}` : ranToday ? 'Ran today' : `Last ran ${sweep.ran_on}`}
         </Badge>
-        {lastOn !== null && !ranToday && (
-          <p className="text-[11px] text-ink-faint mt-1">The sweep hasn’t run today.</p>
+        {failed && sweep.error && (
+          <p className="text-[11px] text-red-400 mt-1 max-w-xs truncate" title={sweep.error}>{sweep.error}</p>
+        )}
+        {sweep !== null && !failed && !ranToday && (
+          <p className="text-[11px] text-ink-faint mt-1">It hasn’t run today.</p>
+        )}
+        {sweep !== null && (
+          <p className="text-[11px] text-ink-faint mt-1 tabular-nums">
+            last heartbeat {format(new Date(sweep.ran_at), 'MMM d, HH:mm')}
+          </p>
         )}
       </div>
     </div>

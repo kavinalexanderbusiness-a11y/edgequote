@@ -1,6 +1,8 @@
 /* eslint-disable no-console */
 // End-to-end verification of the two automatic chasers' DECISION logic.
 // Imports the real production functions — nothing is reimplemented here.
+import { readFileSync, statSync } from 'node:fs'
+import { resolve, dirname, join, relative } from 'node:path'
 import { dueForAutoFollowUp, needsFollowUp, quoteIsQuiet, resolveFollowUpPolicy, followUpsExhausted, FOLLOW_UP_DAYS, FOLLOW_UP_MAX } from '@/lib/followup'
 import { dueForAutoReminder, resolveReminderPolicy, remindersExhausted, reminderAnchor, REMINDER_DELAY_DAYS, REMINDER_MAX } from '@/lib/payments/dunning'
 import { displayInvoiceStatus, invoiceBalance } from '@/lib/payments/ledger'
@@ -341,6 +343,22 @@ async function run() {
   // Every rule in the registry fires on a signal the sweep can actually emit —
   // otherwise it is a rule that can never run, quietly.
   check('registry', 'every rule watches a signal the sweep emits', AUTOMATION_RULES.every(r => EMITTED_SIGNALS.includes(r.signal)), true)
+
+  // …and the check above reads the registry ONCE, at startup. `const` protects only
+  // the binding, so `AUTOMATION_RULES[0].mode = 'auto'` used to typecheck — a
+  // one-character grant of authority to message real customers, invisible to the
+  // compiler AND to the guard rail above, which had already run. The registry is now
+  // deeply frozen and deeply readonly, so promotion is what it should always have
+  // been: editing `mode:` in rules.ts, in a diff someone reads.
+  check('registry', 'the registry is frozen', Object.isFrozen(AUTOMATION_RULES), true)
+  check('registry', '➜ deeply — every rule, its constraints, and its caps',
+    AUTOMATION_RULES.every(r => Object.isFrozen(r) && Object.isFrozen(r.constraints)
+      && Object.isFrozen(r.constraints.maxPerCustomerPer) && Object.isFrozen(r.constraints.sendWindowHours)), true)
+  // The behavioural proof, and the one that matters: a rejected write throws in strict
+  // mode and no-ops in sloppy mode, so assert what holds in BOTH — the value does not
+  // move. A test for the throw would pass or fail on how the runner transpiled.
+  check('registry', '➜ a runtime promotion to auto does not take',
+    (() => { try { (AUTOMATION_RULES[0] as unknown as { mode: string }).mode = 'auto' } catch { /* strict mode */ } return AUTOMATION_RULES[0].mode })(), 'suggest')
 
   // ═══════════════════════════════════════════════════════════════════════════
   H('21. RETRYABLE CLASSIFICATION — would this exact message plausibly send later?')
@@ -730,6 +748,175 @@ async function run() {
       // partly audited, and logDispatch must say so rather than return void.
       const { r, cries } = await run1([null, { code: '23505', message: 'dupe' }], sb => logDispatch(sb, res2, ctx))
       check('audit-log', 'logDispatch: one attempt lost → ok:false, and reported', [r, cries], [{ ok: false }, 1])
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  H('26. THE ENGINE IMPORTS NO SENDER — the property, not the promise')
+  // engine/route.ts opens with "IT CANNOT SEND. There is no dispatch import in this
+  // file and no send path behind it." That is the engine's whole safety story before
+  // the run log has been watched, and it was held up by nothing but a comment and the
+  // reviewer's eyes. One `import` in any module behind it makes the comment false
+  // while it goes on reading true — and lib/automation/chase.ts, which imports
+  // dispatchToCustomer and logSend, is a sibling in the same directory. So walk the
+  // real graph and assert the property instead of restating it.
+  {
+    const SRC = resolve(process.cwd(), 'src')
+    const ENTRY = resolve(SRC, 'app/api/cron/engine/route.ts')
+    const isFile = (p: string) => { try { return statSync(p).isFile() } catch { return false } }
+
+    // Comments are stripped before anything is read for meaning: this very file's
+    // prose names dispatchToCustomer, and route.ts's header says the word "dispatch"
+    // in the sentence promising it never dispatches. A check that can't tell code from
+    // commentary would fail on the comment that documents the property it's proving.
+    const stripComments = (s: string) =>
+      s.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/gm, '$1')
+
+    // `import type { X } from '...'` is ERASED at build — it is not a runtime edge and
+    // must not count as one. This is not a technicality: types.ts legitimately does
+    // `import type { MsgType } from '@/lib/comms/templates'`, so counting type edges
+    // would report a sender in the closure today, on correct code, and the only way to
+    // get green again would be to break the types. Strip the type-only forms first.
+    const runtimeSource = (src: string) =>
+      stripComments(src)
+        .replace(/^\s*import\s+type\s[\s\S]*?from\s*['"][^'"]+['"]\s*;?/gm, '')
+        .replace(/^\s*export\s+type\s[\s\S]*?from\s*['"][^'"]+['"]\s*;?/gm, '')
+
+    // Resolve the way the bundler does: '@/' → src/, relative → sibling, bare → a
+    // package, not ours to follow.
+    const resolveSpec = (spec: string, fromFile: string): string | null => {
+      let base: string
+      if (spec.startsWith('@/')) base = resolve(SRC, spec.slice(2))
+      else if (spec.startsWith('.')) base = resolve(dirname(fromFile), spec)
+      else return null
+      for (const c of [base + '.ts', base + '.tsx', join(base, 'index.ts'), join(base, 'index.tsx'), base]) {
+        if (isFile(c)) return c
+      }
+      return null
+    }
+
+    // The regexes are built PER CALL, deliberately. A module-level /g RegExp carries
+    // `lastIndex` between .exec() calls, so the second file walked would resume
+    // matching from wherever the first left off and silently skip the edges before it.
+    // That failure is invisible: it under-reports, so the check goes green while
+    // missing the import it exists to find. Exactly the shape of bug this section is
+    // here to prevent, so it must not contain one.
+    const edgesOf = (src: string): string[] => {
+      const out: string[] = []
+      for (const re of [
+        /(?:^|[\s;])import\s+[^'"();]*?from\s*['"]([^'"]+)['"]/g,  // import x from '…'
+        /(?:^|[\s;])import\s*['"]([^'"]+)['"]/g,                   // side-effect import
+        /(?:^|[\s;])export\s+[^'"();]*?from\s*['"]([^'"]+)['"]/g,  // re-export — a barrel
+        /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,                  // dynamic import()
+        /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+      ]) { let m: RegExpExecArray | null; while ((m = re.exec(src))) out.push(m[1]) }
+      return out
+    }
+
+    const walkFrom = (entry: string) => {
+      const seen = new Map<string, string>()
+      const visit = (file: string) => {
+        if (seen.has(file)) return
+        const src = runtimeSource(readFileSync(file, 'utf8'))
+        seen.set(file, src)
+        for (const spec of edgesOf(src)) { const t = resolveSpec(spec, file); if (t) visit(t) }
+      }
+      visit(entry)
+      return seen
+    }
+
+    // A walk rooted at a path that doesn't exist finds nothing, and "nothing" is what
+    // every assertion below wants to hear. Fail loudly rather than vacuously.
+    check('no-sender', 'the entry point resolves (the walk is not vacuous)', isFile(ENTRY), true)
+
+    const closure = walkFrom(ENTRY)
+    const rel = (p: string) => relative(SRC, p).replace(/\\/g, '/')
+    const members = [...closure.keys()].map(rel).sort()
+
+    // The closure, pinned exactly. This is the check that gives the rest their teeth:
+    // a NEW module appearing here is a decision someone should look at, and a SHRINKING
+    // list means the walk stopped seeing files rather than the graph getting smaller —
+    // which is precisely how the assertions below would start passing for the wrong
+    // reason. (types.ts is absent on purpose: nothing imports it except `import type`.)
+    check('no-sender', 'the engine runtime closure is exactly these 5 modules', members, [
+      'app/api/cron/engine/route.ts',
+      'lib/automation/decide.ts',
+      'lib/automation/rules.ts',
+      'lib/cron/guard.ts',
+      'lib/utils.ts',
+    ])
+
+    // No module in the closure IS a send path…
+    const SEND_MODULES = ['lib/comms/send', 'lib/comms/dispatch', 'lib/comms/log', 'lib/automation/chase']
+    check('no-sender', 'no send module is anywhere in the closure',
+      members.filter(m => SEND_MODULES.some(s => m.startsWith(s))), [])
+
+    // …and no module in it so much as names a sender. Catches the import this walk
+    // can't follow — a re-export alias, a helper added later — one layer cheaper.
+    for (const id of ['dispatchToCustomer', 'sendSms', 'sendEmail', 'logSend', 'logDispatch']) {
+      check('no-sender', `no closure module mentions ${id}`,
+        [...closure].filter(([, src]) => new RegExp(`\\b${id}\\b`).test(src)).map(([f]) => rel(f)), [])
+    }
+
+    // A barrel would hand the engine chase.ts's senders without one line of the engine
+    // changing: `@/lib/automation` would import the directory, the directory would
+    // import chase.ts, and chase.ts imports dispatchToCustomer. Nothing needs one —
+    // every consumer imports its file directly — so the cheapest guard is that it does
+    // not exist.
+    check('no-sender', 'NO barrel at lib/automation/index.ts (it would import chase.ts senders)',
+      isFile(resolve(SRC, 'lib/automation/index.ts')), false)
+
+    // THE NEGATIVE CONTROL. Every assertion above has the form "the bad thing is not in
+    // this set", which is also what a walker that resolves nothing reports. So walk
+    // chase.ts — known to reach the senders, one directory away from the engine — and
+    // require the walk to FIND them. If this goes red the walker is broken and the
+    // green above means nothing.
+    const chaseMembers = [...walkFrom(resolve(SRC, 'lib/automation/chase.ts')).keys()].map(rel)
+    check('no-sender', '➜ control: the same walk DOES reach the send path from chase.ts',
+      ['lib/comms/dispatch.ts', 'lib/comms/log.ts', 'lib/comms/send.ts'].filter(m => !chaseMembers.includes(m)), [])
+    check('no-sender', '➜ control: and chase.ts really does name a sender',
+      /\bdispatchToCustomer\b/.test(runtimeSource(readFileSync(resolve(SRC, 'lib/automation/chase.ts'), 'utf8'))), true)
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    H("27. QUIET HOURS — an hour nobody knows is not an hour inside the window")
+    // decide() takes `hour: number | 'unknown'` because the engine was passing
+    // new Date().getHours() — UTC on Vercel — as if it were the owner's local hour.
+    // With a fixed cron time that is the CONSTANT 11 for every owner on every run, and
+    // 11 sits inside every rule's send window: the gate was not wrong by an offset, it
+    // was incapable of ever suppressing. `quiet_hours` was an unreachable verdict, so
+    // no amount of watching the run log could have surfaced it.
+    check('decide', "hour 'unknown' → quiet_hours (fails CLOSED)",
+      D({ hour: 'unknown' }), { fire: false, reason: 'quiet_hours' })
+    // Everything else permissive — an auto rule, a real count of 0, nothing deduped,
+    // room in the run. The unknown hour is the only thing standing between this rule
+    // and a customer, and it must be enough on its own.
+    check('decide', "'unknown' hour suppresses with everything else clear",
+      D({ hour: 'unknown', recentActionsForSubject: 0, actionsThisRun: 0, alreadyDeduped: false }),
+      { fire: false, reason: 'quiet_hours' })
+    // It is a GATE, not an override: the more absolute reasons still outrank it, so the
+    // run log keeps reporting the most useful one (same ordering as 'unknown' counts).
+    check('decide', "'unknown' hour does not mask mode_off", D({ rule: { ...RULE, mode: 'off' }, hour: 'unknown' }), { fire: false, reason: 'mode_off' })
+    check('decide', "'unknown' hour does not mask mode_suggest", D({ rule: { ...RULE, mode: 'suggest' }, hour: 'unknown' }), { fire: false, reason: 'mode_suggest' })
+    check('decide', "'unknown' hour does not mask deduped", D({ hour: 'unknown', alreadyDeduped: true }), { fire: false, reason: 'deduped' })
+    // …and it outranks the caps, which are checked after it.
+    check('decide', "'unknown' hour outranks an unknown count", D({ hour: 'unknown', recentActionsForSubject: 'unknown' }), { fire: false, reason: 'quiet_hours' })
+    // The numeric contract is untouched by the new value — a real hour still decides.
+    check('decide', 'a real in-window hour is still the only thing that fires', D({ hour: 12 }), { fire: true })
+    check('decide', '➜ and a real out-of-window hour still suppresses', D({ hour: 3 }), { fire: false, reason: 'quiet_hours' })
+
+    // THE GAP THAT LET THIS BUG LIVE THROUGH REVIEW: every hour case in this harness —
+    // old and new — hand-feeds decide() an hour and proves decide() handles it. Nothing
+    // asserted what the CALLER passes, and the caller was the bug. decide() had no way
+    // to distrust a well-formed 11. A gate is only as good as its input, so pin the
+    // input: the engine must not synthesize an hour it cannot know. It can't — there is
+    // no timezone column on business_settings — so `'unknown'` is the only honest thing
+    // it can say, and saying it is what makes the gate above reachable at all.
+    {
+      const routeSrc = stripComments(readFileSync(ENTRY, 'utf8'))
+      check('quiet-hours', 'the engine does not invent an hour (no getHours/getUTCHours)',
+        /\bget(?:UTC)?Hours\s*\(/.test(routeSrc), false)
+      check('quiet-hours', "➜ it passes hour: 'unknown' — the only hour it can honestly claim",
+        /hour:\s*'unknown'/.test(routeSrc), true)
     }
   }
 
