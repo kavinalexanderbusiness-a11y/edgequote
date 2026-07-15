@@ -45,9 +45,17 @@ export async function POST(req: NextRequest) {
   // Find the recorded payment (+ its invoice number) for a Stripe PaymentIntent —
   // used by the refund + dispute branches to locate the affected invoice/owner.
   async function paymentForIntent(piId: string) {
+    // .gt('amount', 0) targets the ORIGINAL money-in row. Refund rows carry the same
+    // stripe_payment_intent (that's how the refund branch links them back), so once a
+    // charge has been refunded at least once this lookup had two candidates and no
+    // ORDER BY — Postgres could hand back the refund row. Today the fields we read
+    // (invoice_id/user_id/customer_id) happen to match on both, so it silently got
+    // away with it; on a payment with no invoice, entity_id would flip between the
+    // two rows and the notify-once dedupe would stop deduping. Ask for the row we
+    // actually mean.
     const { data } = await sb.from('payments')
       .select('id, invoice_id, user_id, customer_id, invoices(invoice_number)')
-      .eq('stripe_payment_intent', piId).limit(1).maybeSingle()
+      .eq('stripe_payment_intent', piId).gt('amount', 0).limit(1).maybeSingle()
     const p = data as { id: string; invoice_id: string | null; user_id: string; customer_id: string | null; invoices?: { invoice_number: string } | { invoice_number: string }[] | null } | null
     if (!p) return null
     const inv = Array.isArray(p.invoices) ? p.invoices[0] : p.invoices
