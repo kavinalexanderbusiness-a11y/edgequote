@@ -66,6 +66,10 @@ export function TodaysPriorities() {
       const jobs = (jRes.data as JobLite[]) || []
       const recById: Record<string, { freq: string | null; interval_unit: string | null; interval_count: number | null }> = {}
       for (const r of (rRes.data as { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null }[]) || []) recById[r.id] = r
+      // Quotes are already loaded above; index them so a recurring visit can read
+      // its cadence price instead of being valued at $0.
+      const quotesById: Record<string, Record<string, unknown>> = {}
+      for (const q of quotes) quotesById[q.id] = q as unknown as Record<string, unknown>
       const conversations = (cRes.data as { unread: number }[]) || []
       const feeSettings = sRes.data as { gst_percent: number | null } | null
 
@@ -141,15 +145,24 @@ export function TodaysPriorities() {
       )
       const ranOutCusts = new Set<string>()
       let ranOutValue = 0
-      for (const j of jobs) {
+      // Most-recent visit first. The rule below keeps the FIRST hit per customer,
+      // and `jobs` arrives in arbitrary DB order — so without this a customer with
+      // two series could be priced off a dead one. (Reactivation sorts for the
+      // same reason.)
+      const ranOutCandidates = [...jobs].sort((a, b) => (a.scheduled_date < b.scheduled_date ? 1 : a.scheduled_date > b.scheduled_date ? -1 : 0))
+      for (const j of ranOutCandidates) {
         if (!j.recurrence_id || !j.customer_id) continue
         if (futureByCust.has(j.customer_id)) continue
         if (j.scheduled_date > today) continue // a future-dated visit means it isn't dry
-        if (ranOutCusts.has(j.customer_id)) continue // first (most recent enough) hit per customer
+        if (ranOutCusts.has(j.customer_id)) continue // most recent past visit per customer
         ranOutCusts.add(j.customer_id)
         const rec = j.recurrence_id ? recById[j.recurrence_id] : null
         const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
-        ranOutValue += Math.round(jobVisitValue(j.price, null, freq))
+        // The quote carries the cadence price. Passing null here made every
+        // quote-linked recurring visit (price IS NULL — the normal case) worth
+        // $0, so this tile silently understated or hid its own value.
+        const q = j.quote_id ? quotesById[j.quote_id] : null
+        ranOutValue += Math.round(jobVisitValue(j.price, q, freq))
       }
       if (ranOutCusts.size > 0) {
         next.push({

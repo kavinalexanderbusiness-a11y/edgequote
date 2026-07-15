@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { stripeEnabled, webhookConfigured, chargeSavedCardOffSession } from '@/lib/stripe/config'
-import { invoiceTotals } from '@/lib/invoiceTotals'
+import { invoiceBalance } from '@/lib/payments/ledger'
 
 // ── THE single AutoPay charge path ───────────────────────────────────────────
 // Called from THREE entry points, all sharing this one function so there is exactly
@@ -35,7 +35,8 @@ export interface AutoPayChargeResult {
 }
 
 interface InvoiceRow {
-  id: string; amount: number; status: string; job_id: string | null; customer_id: string | null
+  id: string; amount: number; amount_paid: number | null; status: string; job_id: string | null; customer_id: string | null
+  discount_type: 'amount' | 'percent' | null; discount_value: number | null
   invoice_number: string; service_type: string | null; notes: string | null
 }
 
@@ -53,8 +54,10 @@ export async function attemptAutoPayCharge(
   if (!webhookConfigured()) return { result: 'skipped', reason: 'webhook-unconfigured' }
 
   // Invoice — scoped to the owner. Must be unpaid + have a payable amount.
+  // amount_paid/discount are selected because the charge is the BALANCE, not the
+  // total — a partly-paid invoice must never be charged twice for the paid part.
   const { data: invRow } = await sb.from('invoices')
-    .select('id, amount, status, job_id, customer_id, invoice_number, service_type, notes')
+    .select('id, amount, amount_paid, discount_type, discount_value, status, job_id, customer_id, invoice_number, service_type, notes')
     .eq('id', invoiceId).eq('user_id', userId).maybeSingle()
   const invoice = invRow as InvoiceRow | null
   if (!invoice) return { result: 'skipped', reason: 'no-invoice' }
@@ -108,10 +111,25 @@ export async function attemptAutoPayCharge(
   const { data: dup } = await sb.from('payments').select('id').eq('stripe_session_id', `autopay:${invoiceId}`).limit(1)
   if (dup && dup.length) return { result: 'skipped', reason: 'already-charged' }
 
-  // GST-inclusive total — the exact amount the manual Pay flow would charge.
+  // The GST-inclusive BALANCE — the exact amount the manual Pay flow charges, via
+  // the same ledger definition it uses (invoiceBalance).
+  //
+  // This used to charge invoiceTotals(...).total and never selected amount_paid,
+  // while the gate above only excludes 'paid' — so a PARTIAL invoice (customer
+  // already sent $30 of $65) was chargeable for the full $65. The one-charge-per-
+  // invoice dedupe hid it for the cron path, but `manual: true` retries re-enter
+  // here. Charging the balance is what every other charge path already does.
   const { data: bizGst } = await sb.from('business_settings').select('gst_percent').eq('user_id', userId).maybeSingle()
-  const total = invoiceTotals(invoice.amount, { gst_percent: (bizGst as { gst_percent: number | null } | null)?.gst_percent }).total
-  const cents = Math.round(total * 100)
+  const { balance } = invoiceBalance(
+    {
+      amount: invoice.amount,
+      amount_paid: invoice.amount_paid ?? 0, // DB null → nothing collected yet
+      discount_type: invoice.discount_type,
+      discount_value: invoice.discount_value,
+    },
+    { gst_percent: (bizGst as { gst_percent: number | null } | null)?.gst_percent },
+  )
+  const cents = Math.round(balance * 100)
   if (!(cents > 0)) return { result: 'skipped', reason: 'no-amount' }
 
   const charge = await chargeSavedCardOffSession({

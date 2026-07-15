@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { estimateVisitMinutes } from '@/lib/pricing'
 import { crewCostPerHour } from '@/lib/economics'
-import { jobVisitValue } from '@/lib/invoicing'
+import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
 import { clamp } from '@/lib/utils'
 
 // ── Smart Labor Calculator V2 — the self-learning labor engine ───────────────────
@@ -464,23 +464,39 @@ export async function loadLaborInsights(supabase: SupabaseClient): Promise<{ ins
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
   const uid = user.id
-  const [oRes, jRes, qRes, pRes, sRes] = await Promise.all([
+  const [oRes, jRes, qRes, pRes, sRes, rRes] = await Promise.all([
     supabase.from('labor_observations').select('job_id, property_id, service_date, sqft, service_type, crew_size, frequency, is_initial_visit, overgrowth, estimated_minutes, actual_minutes').eq('user_id', uid),
     supabase.from('jobs').select('id, price, quote_id, recurrence_id, is_initial_visit').eq('user_id', uid),
     supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', uid),
     supabase.from('properties').select('id, address').eq('user_id', uid),
     supabase.from('business_settings').select('crew_cost_per_hour').eq('user_id', uid).maybeSingle(),
+    // The recurrence carries the CADENCE. Without it every recurring visit fell
+    // through to the quote's first-visit price (see the valuation note below).
+    supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', uid),
   ])
   const obs = (oRes.data as LaborObservation[]) || []
   const model = learnLaborModel(obs)
 
-  // Per-job value (reuse the invoicing valuation — same numbers as BI).
+  // Per-job value — the ONE invoicing valuation, with the cadence resolved the
+  // same way lib/profitability's jobValue resolves it.
+  //
+  // This used to pass `null` for freq, so quoteVisitAmount treated EVERY visit as
+  // a first visit: a $65 biweekly mow was valued at the quote's $150 initial
+  // price, inflating ServiceProfit revPerHour/profit against every other engine.
+  // Only the anchor visit should read the initial price, and `is_initial_visit`
+  // already says which one that is.
   const quotesById: Record<string, Record<string, unknown>> = {}
   for (const q of (qRes.data as { id: string }[]) || []) quotesById[q.id] = q as unknown as Record<string, unknown>
+  const recById: Record<string, { freq: string | null; interval_unit: string | null; interval_count: number | null }> = {}
+  for (const r of (rRes.data as { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null }[]) || []) {
+    recById[r.id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count }
+  }
   const valueByJob: Record<string, number> = {}
-  for (const j of (jRes.data as { id: string; price: number | null; quote_id: string | null; is_initial_visit: boolean | null }[]) || []) {
+  for (const j of (jRes.data as { id: string; price: number | null; quote_id: string | null; recurrence_id: string | null; is_initial_visit: boolean | null }[]) || []) {
     const q = j.quote_id ? quotesById[j.quote_id] : null
-    valueByJob[j.id] = jobVisitValue(j.price, q, null, j.is_initial_visit ?? false)
+    const rec = j.recurrence_id ? recById[j.recurrence_id] : null
+    const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
+    valueByJob[j.id] = jobVisitValue(j.price, q, freq, j.is_initial_visit ?? false)
   }
   const nameByProperty: Record<string, string> = {}
   for (const p of (pRes.data as { id: string; address: string }[]) || []) nameByProperty[p.id] = p.address
