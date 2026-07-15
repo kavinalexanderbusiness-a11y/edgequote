@@ -17,6 +17,7 @@ import { Card, CardBody } from '@/components/ui/Card'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { formatCurrency, formatDate, applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
+import { nextInvoiceNumber } from '@/lib/invoicing'
 import { toast } from '@/lib/toast'
 import { addDays, format as formatDfn, parseISO } from 'date-fns'
 import { needsFollowUp, daysSince, logFollowUpPatch, markWonPatch } from '@/lib/followup'
@@ -317,13 +318,8 @@ export default function QuoteDetailPage() {
         return
       }
 
-      // INV-#### from the highest existing number — count-based numbering
-      // reissues a number after any delete (duplicate customer-facing docs).
-      const { data: nums } = await supabase
-        .from('invoices')
-        .select('invoice_number')
-        .eq('user_id', user!.id)
-      const invoiceNumber = `INV-${String(maxNumericSuffix(((nums as { invoice_number: string }[]) || []).map(n => n.invoice_number)) + 1).padStart(4, '0')}`
+      // ONE numbering engine — shared with the auto-draft and manual creation.
+      const invoiceNumber = await nextInvoiceNumber(supabase, user!.id)
 
       // Local dates — UTC stamping dates evening invoices tomorrow.
       const issued = localTodayISO()

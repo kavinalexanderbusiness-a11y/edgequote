@@ -23,7 +23,8 @@ import { invoiceTotals, applyDiscount, type DiscountType } from '@/lib/invoiceTo
 import { toast as notify } from '@/lib/toast'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
-import { FileText, User, Check, FileDown, Trash2, CreditCard, Zap, AlertTriangle, Pencil, Percent, DollarSign, X, MessageSquare, MoreHorizontal, ChevronDown } from 'lucide-react'
+import { FileText, User, Check, FileDown, Trash2, CreditCard, Zap, AlertTriangle, Pencil, Percent, DollarSign, X, MessageSquare, MoreHorizontal, ChevronDown, Plus } from 'lucide-react'
+import { NewInvoiceDialog } from '@/components/payments/NewInvoiceDialog'
 
 const FILTERS: { value: '' | InvoiceDisplayStatus; label: string }[] = [
   { value: '', label: 'All' },
@@ -69,6 +70,10 @@ export default function InvoicesPage() {
   const [cardCustomers, setCardCustomers] = useState<Set<string>>(new Set())
   const [uid, setUid] = useState<string | null>(null)
   const [editId, setEditId] = useState<string | null>(null)   // invoice whose inline draft editor is open
+  // ?new=1 deep-links straight into manual creation — the command palette's
+  // "New Invoice" used to just open this list and leave the owner to hunt.
+  const [showNew, setShowNew] = useState(() =>
+    typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('new') === '1')
   const [creditByCustomer, setCreditByCustomer] = useState<Record<string, number>>({})   // available credit per customer
   const [paymentsByInvoice, setPaymentsByInvoice] = useState<Record<string, Payment[]>>({}) // ledger rows per invoice (receipts + revert)
 
@@ -297,6 +302,19 @@ export default function InvoicesPage() {
       <PageHeader
         title="Invoices"
         description={`${invoices.length} invoice${invoices.length !== 1 ? 's' : ''}`}
+        action={
+          <Button onClick={() => setShowNew(true)}>
+            <Plus className="w-4 h-4" /> New invoice
+          </Button>
+        }
+      />
+
+      {/* Manual creation → mints an empty draft, then hands off to the SAME inline
+          draft editor a job-generated invoice uses. */}
+      <NewInvoiceDialog
+        open={showNew}
+        onClose={() => setShowNew(false)}
+        onCreated={async id => { setShowNew(false); await fetchInvoices(); setEditId(id) }}
       />
 
       {loadError && (
@@ -621,13 +639,22 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
   const [dValue, setDValue] = useState(inv.discount_value != null ? String(inv.discount_value) : '')
   // Editable line items — a draft's breakdown belongs to the owner, not just the
   // job add-on flow. Amounts are gross; the discount applies to the sum below.
-  const [items, setItems] = useState<{ description: string; amount: string; kind: string }[]>(
-    (inv.line_items || []).map(li => ({ description: li.description, amount: String(Number(li.amount) || 0), kind: (li as { kind?: string }).kind || 'service' })),
+  // qty x unit price IS the amount. Engine-priced lines arrive without a
+  // breakdown, so they open as 1 x their amount — identical figure, now editable
+  // either way. `amount` stays the derived line total every total/PDF reads.
+  const [items, setItems] = useState<{ description: string; qty: string; unit: string; kind: string }[]>(
+    (inv.line_items || []).map(li => ({
+      description: li.description,
+      qty: String(li.qty ?? 1),
+      unit: String(li.unit_price ?? (Number(li.amount) || 0)),
+      kind: (li as { kind?: string }).kind || 'service',
+    })),
   )
+  const lineAmount = (li: { qty: string; unit: string }) => Math.round((Number(li.qty) || 0) * (Number(li.unit) || 0))
   const [saving, setSaving] = useState(false)
 
   const editItems = items.length > 0
-  const itemsSum = items.reduce((s, li) => s + (Number(li.amount) || 0), 0)
+  const itemsSum = items.reduce((s, li) => s + lineAmount(li), 0)
   const grossNum = Math.round(editItems ? itemsSum : (Number(base) || 0))
   const discount = dType && Number(dValue) > 0 ? { type: dType, value: Number(dValue) } : null
   const { net } = applyDiscount(grossNum, discount)
@@ -650,7 +677,16 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
     if (editItems) {
       patch.line_items = items
         .filter(li => li.description.trim())
-        .map(li => ({ description: li.description.trim(), amount: Math.round(Number(li.amount) || 0), kind: li.kind }))
+        .map(li => ({
+          description: li.description.trim(),
+          amount: lineAmount(li),          // the figure every total + the PDF reads
+          kind: li.kind,
+          // Only persist the breakdown when it says something the amount doesn't.
+          // At qty 1 the unit price IS the amount, so writing it would add no
+          // information — and would grow Qty/Unit columns on the PDF of every
+          // engine-priced invoice the owner happens to open and save.
+          ...(Number(li.qty) !== 1 ? { qty: Number(li.qty) || 0, unit_price: Number(li.unit) || 0 } : {}),
+        }))
     }
     const { error } = await supabase.from('invoices').update(patch).eq('id', inv.id)
     setSaving(false)
@@ -684,17 +720,29 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
         <div>
           <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Line items</label>
           <div className="mt-1.5 space-y-1.5">
+            <div className="hidden sm:flex items-center gap-2 px-0.5">
+              <span className="flex-1 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">Description</span>
+              <span className="w-16 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">Qty</span>
+              <span className="w-28 text-[10px] font-semibold uppercase tracking-wide text-ink-faint">Unit price</span>
+              <span className="w-20 text-right text-[10px] font-semibold uppercase tracking-wide text-ink-faint">Amount</span>
+              <span className="w-3.5" aria-hidden />
+            </div>
             {items.map((li, i) => (
               <div key={i} className="flex items-center gap-2">
                 <input value={li.description} placeholder="Description" aria-label="Line item description"
                   onChange={e => setItems(prev => prev.map((x, j) => j === i ? { ...x, description: e.target.value } : x))}
-                  className="flex-1 bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20" />
+                  className="flex-1 min-w-0 bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20" />
+                <input type="number" min="0" step="1" value={li.qty} aria-label="Line item quantity"
+                  onChange={e => setItems(prev => prev.map((x, j) => j === i ? { ...x, qty: e.target.value } : x))}
+                  className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2 text-sm text-ink tabular-nums outline-none focus:border-accent focus:ring-2 focus:ring-accent/20" />
                 <div className="relative w-28">
                   <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-faint text-sm" aria-hidden="true">$</span>
-                  <input type="number" min="0" step="1" value={li.amount} aria-label="Line item amount"
-                    onChange={e => setItems(prev => prev.map((x, j) => j === i ? { ...x, amount: e.target.value } : x))}
-                    className="w-full bg-bg-tertiary border border-border-strong rounded-lg pl-6 pr-2 py-2 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20" />
+                  <input type="number" min="0" step="1" value={li.unit} aria-label="Line item unit price"
+                    onChange={e => setItems(prev => prev.map((x, j) => j === i ? { ...x, unit: e.target.value } : x))}
+                    className="w-full bg-bg-tertiary border border-border-strong rounded-lg pl-6 pr-2 py-2 text-sm text-ink tabular-nums outline-none focus:border-accent focus:ring-2 focus:ring-accent/20" />
                 </div>
+                {/* Derived, never typed — qty x unit is the single source for the line. */}
+                <span className="w-20 text-right text-sm font-medium text-ink tabular-nums" aria-label="Line total">{formatCurrency(lineAmount(li))}</span>
                 <button type="button" onClick={() => setItems(prev => prev.filter((_, j) => j !== i))} disabled={items.length <= 1}
                   className="rounded-md text-ink-faint hover:text-red-400 disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" aria-label="Remove line" title="Remove line">
                   <Trash2 className="w-3.5 h-3.5" />
@@ -705,8 +753,8 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
         </div>
       )}
       <button type="button" onClick={() => setItems(prev => prev.length
-          ? [...prev, { description: '', amount: '0', kind: 'addon' }]
-          : [{ description: service.trim() || inv.service_type || 'Service', amount: base || '0', kind: 'service' }, { description: '', amount: '0', kind: 'addon' }])}
+          ? [...prev, { description: '', qty: '1', unit: '0', kind: 'addon' }]
+          : [{ description: service.trim() || inv.service_type || 'Service', qty: '1', unit: base || '0', kind: 'service' }, { description: '', qty: '1', unit: '0', kind: 'addon' }])}
         className="text-xs font-semibold text-accent-text hover:underline rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
         + Add line item
       </button>

@@ -82,7 +82,7 @@ export function CommandPalette() {
         { id: 'a-quote', label: 'New Quote', sub: 'Start a fresh quote', icon: FilePlus2, run: () => go('/dashboard/quotes/new') },
         { id: 'a-customer', label: 'New Customer', sub: 'Add a customer', icon: UserPlus, run: () => go('/dashboard/customers?new=1') },
         { id: 'a-job', label: 'Schedule a Job', sub: 'Open the calendar', icon: CalendarPlus, run: () => go('/dashboard/schedule') },
-        { id: 'a-invoice', label: 'New Invoice', sub: 'Open invoices', icon: ReceiptText, run: () => go('/dashboard/invoices') },
+        { id: 'a-invoice', label: 'New Invoice', sub: 'Bill a customer directly', icon: ReceiptText, run: () => go('/dashboard/invoices?new=1') },
         { id: 'a-message', label: 'New Message', sub: 'Open the inbox', icon: Send, run: () => go('/dashboard/messages') },
         { id: 'a-studio', label: 'Marketing Studio', sub: 'AI posts from finished jobs', icon: Sparkles, run: () => go('/dashboard/grow/studio') },
       ],
