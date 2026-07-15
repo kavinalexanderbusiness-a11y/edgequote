@@ -9,6 +9,10 @@
       "schedule": "0 15 * * *"
     },
     {
+      "path": "/api/cron/quote-followup",
+      "schedule": "0 17 * * *"
+    },
+    {
       "path": "/api/cron/autopay",
       "schedule": "0 2 * * *"
     },

@@ -121,7 +121,10 @@ export default function SchedulePage() {
   const [workStartTime, setWorkStartTime] = useState('08:00')
   const [capacityHours, setCapacityHours] = useState(8)
   const [defaultCrew, setDefaultCrew] = useState(1)
-  const [automations, setAutomations] = useState<Automations>({ reminder: true, job_complete: true, review: true, marketing_draft: true })
+  // Defaults come from the resolver, not a hand-copied literal — otherwise every
+  // new automation has to be remembered here too (and this is loaded from
+  // settings a moment later anyway).
+  const [automations, setAutomations] = useState<Automations>(() => resolveAutomations(null))
   const [showOptimize, setShowOptimize] = useState(false)
   const [showRainCenter, setShowRainCenter] = useState(false)
   // Pre-scoped launch from an auto-suggestion (vs. the manual Optimize button).
