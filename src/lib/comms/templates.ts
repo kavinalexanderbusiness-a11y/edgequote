@@ -375,6 +375,10 @@ export interface MsgVars {
   // Email-shell branding — straight from Business Settings (logo_url / website).
   logoUrl?: string
   website?: string
+  // CASL: a commercial message must identify the sender with a physical mailing
+  // address and carry a working unsubscribe. Both are rendered by the email shell
+  // for marketing/seasonal templates only — see renderBody.
+  mailingAddress?: string
 }
 
 export interface RenderedMessage { sms: string; subject: string; html: string; text: string }
@@ -405,7 +409,7 @@ function interpolate(tpl: string, v: MsgVars): string {
 // copy) into the per-channel shapes. Interpolation, **bold** handling and the
 // email wrapper are identical to renderMessage, so manual and automated sends
 // look the same in the customer's thread/inbox.
-export function renderBody(rawBody: string, vars: MsgVars, subject: string): RenderedMessage {
+export function renderBody(rawBody: string, vars: MsgVars, subject: string, template?: MsgType): RenderedMessage {
   const raw = interpolate(rawBody, vars)
   // SMS/plain: strip the **bold** markers. Email: render them as <strong>.
   const sms = raw.replace(/\*\*(.+?)\*\*/g, '$1')
@@ -429,8 +433,25 @@ export function renderBody(rawBody: string, vars: MsgVars, subject: string): Ren
     (vars.directPhone || '').trim(),
     site ? `<a href="${siteHref}" style="color:#5B6672;text-decoration:underline">${site.replace(/^https?:\/\//, '')}</a>` : '',
   ].filter(Boolean).join(' &nbsp;·&nbsp; ')
+  // ── CASL: commercial messages carry identification + an unsubscribe ─────────
+  // A message is commercial if msgCategory() says so — the SAME function the
+  // consent gate (prefAllows → reach.ts) uses to decide whether it may be sent at
+  // all. Driving both off one definition means a template can never be gated as
+  // marketing while shipping without an unsubscribe, or vice versa.
+  // The portal's Message preferences card IS the unsubscribe mechanism; the
+  // senders mint the token (cron/campaigns does this for every CEM), so the link
+  // stays valid well past the 60 days CASL s.6(2)(c) requires.
+  const cat = template ? msgCategory(template) : null
+  const isCem = cat === 'marketing' || cat === 'seasonal'
+  const portal = (vars.portalLink || '').trim()
+  const mailing = (vars.mailingAddress || '').trim()
+  const casl = !isCem ? '' : `
+    <p style="margin:10px 0 0;padding:0 6px;font-size:11px;line-height:1.5;color:#8A94A0">
+      You're receiving this because you're a customer of ${business}.${mailing ? ` ${mailing}` : ''}
+      ${portal ? `<br><a href="${portal}" style="color:#5B6672;text-decoration:underline">Unsubscribe or choose which messages you get</a>` : ''}
+    </p>`
   const footer = `${contactBits ? `<p style="margin:12px 0 0;padding:0 6px;font-size:12px;line-height:1.5;color:#8A94A0">${business} &nbsp;·&nbsp; ${contactBits}</p>` : ''}
-    <p style="margin:${contactBits ? '4px' : '12px'} 0 0;padding:0 6px;font-size:12px;line-height:1.5;color:#8A94A0">Reply directly to this email if you have any questions.</p>`
+    <p style="margin:${contactBits ? '4px' : '12px'} 0 0;padding:0 6px;font-size:12px;line-height:1.5;color:#8A94A0">Reply directly to this email if you have any questions.</p>${casl}`
   const html = `<div style="background:#F4F6F5;padding:24px 12px;font-family:system-ui,'Segoe UI',Arial,sans-serif">
   <div style="max-width:560px;margin:0 auto">
     <div style="padding:0 6px">${header}</div>
@@ -455,7 +476,15 @@ export function renderMessage(
   const subject = subjectOverride?.trim()
     || SUBJECTS[type]
     || `A message from ${vars.businessName || 'your service provider'}`
-  return renderBody(tpl, vars, subject)
+  return renderBody(tpl, vars, subject, type)
+}
+
+// Does this template legally require an unsubscribe + sender identification?
+// Exported so a SENDER can guarantee it supplies the portal link a CEM's footer
+// needs, rather than discovering at render time that it can't be built.
+export function isCommercialMessage(type: MsgType): boolean {
+  const cat = msgCategory(type)
+  return cat === 'marketing' || cat === 'seasonal'
 }
 
 // A payment-receipt body with the REAL numbers (invoice #, receipt #, method,

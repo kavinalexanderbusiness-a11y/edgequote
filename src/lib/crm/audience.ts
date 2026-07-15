@@ -103,8 +103,20 @@ async function narrowToRecurring<T extends { id: string }>(sb: SupabaseClient, r
 }
 
 async function loadPool(sb: SupabaseClient, spec: AudienceSpec): Promise<{ rows: AudienceCustomer[]; capped: boolean }> {
-  const base = sb.from('customers').select(AUDIENCE_SELECT).limit(MAX_AUDIENCE + 1) as unknown as Filterable
-  const { data } = await (applyCustomerFilters(base, spec) as unknown as PromiseLike<{ data: unknown }>)
+  // A stable order makes the MAX_AUDIENCE bound deterministic: without it Postgres
+  // may return any 2000 rows, so the preview and the cron could slice different
+  // sets and "the first 2,000" would not be a true statement.
+  const base = sb.from('customers').select(AUDIENCE_SELECT)
+    .order('created_at', { ascending: true }).order('id', { ascending: true })
+    .limit(MAX_AUDIENCE + 1) as unknown as Filterable
+  const { data, error } = await (applyCustomerFilters(base, spec) as unknown as PromiseLike<{ data: unknown; error: { message: string } | null }>)
+  // supabase-js does NOT throw on a failed query — it resolves { data: null, error }.
+  // Swallowing that turned any failure (renamed column, RLS change, network blip)
+  // into an EMPTY audience: every campaign silently stopped sending, last_run_at
+  // kept advancing, and the preview said "Reaches nobody yet" — byte-identical to
+  // a genuinely empty audience. Throwing makes both callers tell the truth; the
+  // preview already renders its catch, and the cron surfaces it in `notes`.
+  if (error) throw new Error(`audience query failed: ${error.message}`)
   let rows = ((data as AudienceCustomer[]) || [])
   const capped = rows.length > MAX_AUDIENCE
   if (capped) rows = rows.slice(0, MAX_AUDIENCE)

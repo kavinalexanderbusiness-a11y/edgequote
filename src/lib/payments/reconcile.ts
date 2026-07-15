@@ -54,12 +54,20 @@ export async function reconcileStripe(
   const stripe = await listSucceededPaymentIntents({ sinceIso: p.sinceIso, maxPages: p.maxPages })
   if (!stripe.ok) return { ...base, error: 'Could not read payments from Stripe — check the API key and try again.' }
 
-  // Our side of the join, in one read: every PaymentIntent this owner has recorded.
+  // Our side of the join: every PaymentIntent this owner has EVER recorded.
+  //
+  // Deliberately NOT filtered by paid_at. The question is "is this charge recorded
+  // anywhere, ever?" — time has nothing to do with it, and a window here only
+  // manufactures false positives: paid_at is the date the OWNER typed for a manual
+  // row (dateToIso), so a back-dated payment falls outside the window while its
+  // PaymentIntent sits inside it. The report would then call a recorded payment
+  // unrecorded, the owner would record it a second time, and this "read-only, safe"
+  // tool would have caused the exact double-count it exists to prevent. One indexed
+  // column for one owner is cheap; being wrong about money is not.
   const { data, error } = await sb.from('payments')
     .select('stripe_payment_intent')
     .eq('user_id', p.userId)
     .not('stripe_payment_intent', 'is', null)
-    .gte('paid_at', p.sinceIso)
   if (error) return { ...base, error: 'Could not read your payment ledger — try again.' }
   const recorded = new Set(((data as { stripe_payment_intent: string | null }[]) || []).map(r => r.stripe_payment_intent))
 

@@ -1,6 +1,31 @@
 -- ============================================================
 -- EdgeQuote AI — Supabase Schema
--- Run this entire file in: Supabase Dashboard → SQL Editor
+--
+-- ⚠️ THIS FILE IS A SNAPSHOT, NOT THE CURRENT SCHEMA. Last complete: 2026-06-25.
+--
+-- It is NOT sufficient on its own. Running only this file builds a database that is
+-- roughly three weeks behind production and silently missing, among others: the
+-- payment ledger, quote_services, granular consent, invoice lifecycle, message
+-- idempotency, quote expiry, delivery tracking, equipment/parts, and campaign studio.
+-- Nothing errors — you just get a schema that the app then fails against at runtime.
+--
+-- TO BUILD A DATABASE (fresh / disaster recovery), run BOTH, in this order:
+--   1. this file
+--   2. EVERY supabase/RUN-*.sql dated after 2026-06-25, in filename (date) order
+-- See DEPLOY_CHECKLIST.md, which lists them.
+--
+-- ⚠️ READING THIS FILE ALSO MISLEADS. Objects here are redefined repeatedly as the
+-- schema evolved — get_portal_data alone appears ELEVEN times. Only the LAST
+-- definition of any object is what this file finally creates, and even that is
+-- superseded by the later RUN-*.sql files. To learn what production actually has,
+-- query production (pg_get_functiondef / information_schema), never this file.
+-- Two wrong conclusions were reached this way on 2026-07-15 by trusting it.
+--
+-- Objects that exist in production but are NOT in this file at all:
+--   • quotes.valid_until          → RUN-2026-07-14-quote-expiry.sql
+--   • social_connections          → RUN-2026-07-15-record-marketing-publishing-tables.sql
+--   • publish_jobs                → RUN-2026-07-15-record-marketing-publishing-tables.sql
+--   • automation_signals          → only on the unmerged `guardian-2` branch (aca9a6b)
 -- ============================================================
 
 -- Enable UUID extension (usually already enabled)

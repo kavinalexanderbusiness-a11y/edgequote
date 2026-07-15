@@ -7,7 +7,7 @@ import { usePaymentsStatus } from '@/hooks/usePaymentsStatus'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { Invoice, InvoiceStatus, InvoiceDisplayStatus, INVOICE_STATUS_LABELS, INVOICE_STATUS_COLORS, BusinessSettings, Payment, paymentMethodLabel } from '@/types'
 import { InvoicePaymentControls } from '@/components/payments/InvoicePaymentControls'
-import { invoiceBalance, displayInvoiceStatus, cancelInvoice, reactivateInvoice } from '@/lib/payments/ledger'
+import { invoiceBalance, displayInvoiceStatus, cancelInvoice, reactivateInvoice, assertCurrent } from '@/lib/payments/ledger'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { SkeletonRows } from '@/components/ui/Skeleton'
@@ -39,6 +39,15 @@ const FILTERS: { value: '' | InvoiceDisplayStatus; label: string }[] = [
   { value: 'overpaid', label: 'Overpaid' },
   { value: 'cancelled', label: 'Cancelled' },
 ]
+
+// Money already settled → the figures are history. Notes stay editable; amount,
+// line items and discount don't. Derived from the LEDGER's balance rather than a
+// status string, so it can't disagree with what the list, PDF and charge routes
+// think this invoice is worth. `amount_paid > 0` keeps a $0 draft (balance 0,
+// nothing received) out of the locked branch.
+function financiallyLocked(inv: Invoice, settings: BusinessSettings | null): boolean {
+  return (Number(inv.amount_paid) || 0) > 0 && invoiceBalance(inv, settings).balance <= 0.01
+}
 
 function todayISO(): string {
   const d = new Date()
@@ -601,8 +610,22 @@ export default function InvoicesPage() {
                     {/* Overflow — secondary row actions (PDF + draft edit/delete) in ONE shared menu. */}
                     <Menu align="end" width={200} ariaLabel="More actions" items={[
                       { key: 'pdf', label: 'Download PDF', icon: FileDown, onSelect: () => openInvoicePdf(inv) },
+                      // Editing used to stop at 'draft'. Approving or sending an
+                      // invoice is not a reason to freeze a typo: an owner who
+                      // spots a wrong price after approving had to cancel and
+                      // rebuild the invoice — a new number for the same job.
+                      // Cancelled stays terminal; paid/overpaid open in a
+                      // financially-locked mode (notes yes, money no). The editor
+                      // itself enforces which fields are live.
+                      ...(inv.status !== 'cancelled' ? [
+                        {
+                          key: 'edit',
+                          label: financiallyLocked(inv, settings) ? 'Edit notes' : inv.status === 'draft' ? 'Edit draft' : 'Edit invoice',
+                          icon: Pencil,
+                          onSelect: () => setEditId(editId === inv.id ? null : inv.id),
+                        },
+                      ] : []),
                       ...(inv.status === 'draft' ? [
-                        { key: 'edit', label: 'Edit draft', icon: Pencil, onSelect: () => setEditId(editId === inv.id ? null : inv.id) },
                         { key: 'delete', label: 'Delete draft', icon: Trash2, danger: true, onSelect: () => deleteInvoice(inv) },
                       ] : []),
                     ]}>
@@ -620,7 +643,25 @@ export default function InvoicesPage() {
                     inv={inv}
                     settings={settings}
                     onCancel={() => setEditId(null)}
-                    onSaved={patch => { setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, ...patch } as Invoice : i)); setEditId(null) }}
+                    onSaved={async patch => {
+                      const updated = { ...inv, ...patch } as Invoice
+                      setInvoices(prev => prev.map(i => i.id === inv.id ? updated : i))
+                      setEditId(null)
+                      // The customer is holding the OLD version. Editing silently
+                      // would leave two different truths for one invoice number —
+                      // so ask, and hand off to the SAME send dialog the Send
+                      // button uses. Declining is fine: the edit is saved either
+                      // way, and the row still offers Send.
+                      if (inv.status === 'sent') {
+                        const ok = await confirmDialog({
+                          title: `Resend ${inv.invoice_number}?`,
+                          message: `${inv.customer_name || 'The customer'} already has the previous version. Send them the updated invoice so their copy matches your books?`,
+                          confirmLabel: 'Resend it',
+                          cancelLabel: 'Not now',
+                        })
+                        if (ok) setMsgInvoice(updated)
+                      }
+                    }}
                   />
                 )}
                 {/* Record payments, resolve overpayments, apply credit. Drafts are
@@ -674,13 +715,16 @@ export default function InvoicesPage() {
 function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
   inv: Invoice
   settings: BusinessSettings | null
-  onSaved: (patch: Partial<Invoice>) => void
+  onSaved: (patch: Partial<Invoice>) => void | Promise<void>
   onCancel: () => void
 }) {
   const supabase = useMemo(() => createClient(), [])
   const liSum = (inv.line_items || []).reduce((s, li) => s + Number(li.amount || 0), 0)
   const itemized = (inv.line_items?.length ?? 0) > 1
   const initial = invoiceTotals(inv.amount, settings, { type: inv.discount_type, value: inv.discount_value })
+  // Settled money is history: the figures lock, the words don't.
+  const locked = financiallyLocked(inv, settings)
+  const paidSoFar = Math.round((Number(inv.amount_paid) || 0) * 100) / 100
 
   const [name, setName] = useState(inv.customer_name || '')
   const [service, setService] = useState(inv.service_type || '')
@@ -719,24 +763,44 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
     // it, and the PDF's breakdown no longer added up to its own total. Blank rows
     // worth $0 are still dropped silently: they contribute nothing either way, so
     // filtering them changes no number.
-    if (editItems && items.some(li => lineAmount(li) !== 0 && !li.description.trim())) {
+    if (!locked && editItems && items.some(li => lineAmount(li) !== 0 && !li.description.trim())) {
       notify.error('Every priced line needs a description — otherwise it won’t appear on the invoice.')
       return
     }
+    // You cannot bill LESS than you've already taken. Dropping the total under
+    // amount_paid would leave the ledger holding money the invoice no longer
+    // claims — the recompute trigger would flip it to 'overpaid' and the owner
+    // would owe a refund they never agreed to. Compared on the SAME GST-inclusive
+    // total the list, PDF and charge routes read.
+    if (!locked && paidSoFar > 0 && t.total < paidSoFar) {
+      notify.error(`${formatCurrency(paidSoFar)} is already paid on ${inv.invoice_number} — the total can’t go below that. Refund the difference first if the price really dropped.`)
+      return
+    }
     setSaving(true)
+    // A payment landing while the editor was open makes every figure above stale.
+    // Same guard the credit/refund writers use — one staleness rule, not two.
+    const stale = await assertCurrent(supabase, inv)
+    if (stale) { setSaving(false); notify.error(stale); return }
     const hasD = !!dType && Number(dValue) > 0
+    // invoice_number and status are deliberately ABSENT: an edit is the same
+    // document, so it keeps its number, and approving/sending is not undone by
+    // fixing a typo. (A 'sent' invoice stays sent — the page offers a resend.)
     const patch: Record<string, unknown> = {
       customer_name: name.trim() || inv.customer_name,
       service_type: service.trim() || null,
       due_date: due || null,
       notes: notes.trim() || null,
-      amount: Math.round(net),
-      discount_type: hasD ? dType : null,
-      discount_value: hasD ? Number(dValue) : null,
+    }
+    // The money half — omitted entirely once the invoice is settled, so a locked
+    // invoice cannot have its figures rewritten even if state went stale.
+    if (!locked) {
+      patch.amount = Math.round(net)
+      patch.discount_type = hasD ? dType : null
+      patch.discount_value = hasD ? Number(dValue) : null
     }
     // Persist the breakdown the owner sees: edited rows when itemized, or the
     // single line kept in step with the base so the PDF total never diverges.
-    if (editItems) {
+    if (!locked && editItems) {
       patch.line_items = items
         .filter(li => li.description.trim())
         .map(li => ({
@@ -761,9 +825,25 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
     // type="button" — the untyped-button-submits-the-form trap).
     <form onSubmit={e => { e.preventDefault(); if (!saving) save() }} className="mt-3 pt-3 border-t border-border space-y-3">
       <div className="flex items-center justify-between">
-        <p className="text-xs font-semibold text-ink uppercase tracking-wide flex items-center gap-1.5"><Pencil className="w-3.5 h-3.5 text-accent-text" /> Edit draft</p>
+        <p className="text-xs font-semibold text-ink uppercase tracking-wide flex items-center gap-1.5">
+          <Pencil className="w-3.5 h-3.5 text-accent-text" /> {locked ? 'Edit notes' : inv.status === 'draft' ? 'Edit draft' : `Edit ${inv.invoice_number}`}
+        </p>
         <button type="button" onClick={onCancel} className="h-7 w-7 rounded-lg flex items-center justify-center text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" aria-label="Close editor"><X className="w-4 h-4" /></button>
       </div>
+
+      {/* Say WHY the money is read-only, next to the money — not as a surprise on save. */}
+      {locked && (
+        <Banner tone="info" icon={Check}>
+          {formatCurrency(paidSoFar)} received — this invoice is settled, so the amount, line items and discount are locked. Notes and details are still editable.
+        </Banner>
+      )}
+      {/* An already-sent invoice is in the customer's hands: saying so up front is
+          the difference between an edit and a surprise. */}
+      {!locked && inv.status === 'sent' && (
+        <Banner tone="warn" icon={MessageSquare}>
+          {inv.invoice_number} is already with the customer. Saving changes it here — you&rsquo;ll be asked whether to resend it.
+        </Banner>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Input label="Customer name" value={name} onChange={e => setName(e.target.value)} />
@@ -771,7 +851,7 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Input label="Due date" type="date" value={due} onChange={e => setDue(e.target.value)} />
-        {!editItems && (
+        {!locked && !editItems && (
           <Input label="Amount (before discount)" type="number" min="0" step="1" value={base} onChange={e => setBase(e.target.value)} />
         )}
       </div>

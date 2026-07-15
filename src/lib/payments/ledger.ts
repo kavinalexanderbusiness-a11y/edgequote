@@ -147,7 +147,11 @@ export async function availableCredit(sb: Supa, customerId: string): Promise<num
 // This narrows the race, it doesn't erase it: two callers reading the same value
 // concurrently still both pass. Closing that properly needs the DB to own the
 // invariant (see the note on availableCredit below).
-async function assertCurrent(sb: Supa, invoice: Invoice): Promise<string | null> {
+// Exported so the invoice EDITOR can reuse the same staleness guard the credit /
+// refund writers use — an edit computed against a balance that has since moved is
+// the same hazard as a credit computed against one, and it must not get a second
+// implementation that drifts from this one.
+export async function assertCurrent(sb: Supa, invoice: Invoice): Promise<string | null> {
   const { data, error } = await sb.from('invoices').select('amount_paid, status').eq('id', invoice.id).maybeSingle()
   // A failed read must NOT be treated as "unchanged" — that's the exact assumption
   // this guard exists to remove.

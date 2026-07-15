@@ -69,7 +69,8 @@ begin
     from public.customer_portal_tokens where token = p_token and not revoked;
   if v_customer is null then return null; end if;
   select json_build_object(
-    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code, sms_opt_in, email_opt_in, reviewed_at, autopay_enabled from public.customers where id = v_customer) c),
+    -- review_declined_at: the customer's own "No thanks", so it survives the session.
+    'customer', (select to_json(c) from (select id, name, email, phone, address, city, province, postal_code, sms_opt_in, email_opt_in, reviewed_at, review_declined_at, autopay_enabled from public.customers where id = v_customer) c),
     -- service_seasons: buildServicePlans needs the owner's REAL season window.
     'business', (select to_json(b) from (select company_name, owner_name, phone, email_primary, email_secondary, website, logo_url, logo_scale, base_address, terms_text, review_url, coalesce(gst_percent,0) as gst_percent, etransfer_email, service_seasons from public.business_settings where user_id = v_user) b),
     'property', (select to_json(p) from (select address, city, province, postal_code, lawn_sqft, fence_length, neighborhood, notes from public.properties where customer_id = v_customer order by is_primary desc nulls last, created_at asc limit 1) p),

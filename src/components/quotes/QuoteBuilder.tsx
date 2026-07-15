@@ -17,6 +17,7 @@ import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { StickyActionBar } from '@/components/ui/StickyActionBar'
 import { Banner } from '@/components/ui/Banner'
 import { Collapsible } from '@/components/ui/Collapsible'
+import { Modal } from '@/components/ui/Modal'
 import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
 import { sumServiceLines, serviceLineTotals, emptyServiceLine, SERVICE_UNITS } from '@/lib/quoteServices'
 import { formatCurrency, formatDate, suggestTravelFee, cn } from '@/lib/utils'
@@ -31,7 +32,7 @@ import type { MeasurementSnapshot, SavedRecommendation } from '@/types'
 import { BestDaySuggestions } from '@/components/schedule/BestDaySuggestions'
 import { SmartLaborField } from '@/components/labor/SmartLaborField'
 import { PriceIntelligence } from '@/components/pricing/PriceIntelligence'
-import { Clock, DollarSign, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, SlidersHorizontal, CheckCircle2, Users, Layers, Plus, Trash2 } from 'lucide-react'
+import { Clock, DollarSign, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, SlidersHorizontal, CheckCircle2, Users, Layers, Plus, Trash2, ChevronUp } from 'lucide-react'
 
 interface QuoteBuilderProps {
   customers: Customer[]
@@ -103,6 +104,8 @@ export function QuoteBuilder({
   const [calcLoading, setCalcLoading] = useState(false)
   const [calcMsg, setCalcMsg] = useState<{ text: string; error?: boolean } | null>(null)
   const [showMeasure, setShowMeasure] = useState(false)
+  // Mobile-only: the desktop preview card is lg-only, so the phone needs a way in.
+  const [showPreview, setShowPreview] = useState(false)
   const [includeTravel, setIncludeTravel] = useState(true)
   const [initialManual, setInitialManual] = useState<boolean>((defaultValues?.initial_price ?? 0) > 0)
   const [showBestDays, setShowBestDays] = useState(false)
@@ -391,6 +394,50 @@ export function QuoteBuilder({
     { value: 'declined', label: 'Declined' },
   ]
   const showManualName = !customerId || customerId === '__manual'
+
+  // ── The price breakdown, defined ONCE ────────────────────────────────────────
+  // Rendered by the desktop preview card AND the mobile sheet below. It used to
+  // live only inside `hidden lg:block`, so a contractor quoting from a phone in
+  // someone's driveway saw a single number — no hours, no travel, no discount,
+  // and no Weekly/Bi-Weekly/Monthly prices, which for a mowing business ARE the
+  // product. "What's it per cut if I go weekly?" was unanswerable without a
+  // laptop. Same JSX both places: one breakdown, no second copy to drift.
+  const previewBreakdown = (
+    <>
+      <div className="flex items-center justify-between text-sm">
+        <span className="flex items-center gap-2 text-ink-muted"><Clock className="w-3.5 h-3.5" /> Hours</span>
+        <span className="text-ink font-medium tabular-nums">{Number(hours).toFixed(1)} hrs · {crewSize} crew</span>
+      </div>
+      <div className="border-t border-border pt-3 space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-ink-muted">First visit{initialManual ? ' (manual)' : ''}</span>
+          <span className="text-ink font-semibold tabular-nums">{formatCurrency(initialPrice)}</span>
+        </div>
+        {extras.net > 0 && (
+          <div className="flex items-center justify-between text-sm">
+            <span className="flex items-center gap-2 text-ink-muted"><Layers className="w-3.5 h-3.5" /> Additional services ({serviceLines.fields.length})</span>
+            <span className="text-ink font-medium tabular-nums">{formatCurrency(extras.net)}</span>
+          </div>
+        )}
+        <div className="flex items-center justify-between text-sm">
+          <span className="flex items-center gap-2 text-ink-muted"><Car className="w-3.5 h-3.5" /> Travel{showTravelSeparately ? ' (shown)' : ''}</span>
+          <span className="text-ink font-medium tabular-nums">{formatCurrency(Number(travelFee))}</span>
+        </div>
+        <div className="flex items-center justify-between pt-2 border-t border-border">
+          <span className="text-sm font-semibold text-ink">First visit total</span>
+          <span className="text-2xl font-bold text-accent-text tabular-nums">{formatCurrency(effectiveTotal)}</span>
+        </div>
+      </div>
+      {(weeklyPrice > 0 || biweeklyPrice > 0 || monthlyPrice > 0) && (
+        <div className="border-t border-border pt-3 space-y-1.5">
+          <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Plan options</p>
+          {weeklyPrice > 0 && <div className="flex justify-between text-sm"><span className="text-ink-muted">Weekly</span><span className="text-ink font-medium tabular-nums">{formatCurrency(weeklyPrice)}/visit</span></div>}
+          {biweeklyPrice > 0 && <div className="flex justify-between text-sm"><span className="text-ink-muted">Bi-Weekly</span><span className="text-ink font-medium tabular-nums">{formatCurrency(biweeklyPrice)}/visit</span></div>}
+          {monthlyPrice > 0 && <div className="flex justify-between text-sm"><span className="text-ink-muted">Monthly</span><span className="text-ink font-medium tabular-nums">{formatCurrency(monthlyPrice)}/visit</span></div>}
+        </div>
+      )}
+    </>
+  )
 
   return (
     <form onSubmit={submit} className="pb-24 lg:pb-0">
@@ -867,38 +914,7 @@ export function QuoteBuilder({
               <h2 className="text-sm font-semibold text-ink">Quote Preview</h2>
             </CardHeader>
             <CardBody className="space-y-3">
-              <div className="flex items-center justify-between text-sm">
-                <span className="flex items-center gap-2 text-ink-muted"><Clock className="w-3.5 h-3.5" /> Hours</span>
-                <span className="text-ink font-medium tabular-nums">{Number(hours).toFixed(1)} hrs · {crewSize} crew</span>
-              </div>
-              <div className="border-t border-border pt-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-ink-muted">First visit{initialManual ? ' (manual)' : ''}</span>
-                  <span className="text-ink font-semibold tabular-nums">{formatCurrency(initialPrice)}</span>
-                </div>
-                {extras.net > 0 && (
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="flex items-center gap-2 text-ink-muted"><Layers className="w-3.5 h-3.5" /> Additional services ({serviceLines.fields.length})</span>
-                    <span className="text-ink font-medium tabular-nums">{formatCurrency(extras.net)}</span>
-                  </div>
-                )}
-                <div className="flex items-center justify-between text-sm">
-                  <span className="flex items-center gap-2 text-ink-muted"><Car className="w-3.5 h-3.5" /> Travel{showTravelSeparately ? ' (shown)' : ''}</span>
-                  <span className="text-ink font-medium tabular-nums">{formatCurrency(Number(travelFee))}</span>
-                </div>
-                <div className="flex items-center justify-between pt-2 border-t border-border">
-                  <span className="text-sm font-semibold text-ink">First visit total</span>
-                  <span className="text-2xl font-bold text-accent-text tabular-nums">{formatCurrency(effectiveTotal)}</span>
-                </div>
-              </div>
-              {(weeklyPrice > 0 || biweeklyPrice > 0 || monthlyPrice > 0) && (
-                <div className="border-t border-border pt-3 space-y-1.5">
-                  <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Plan options</p>
-                  {weeklyPrice > 0 && <div className="flex justify-between text-sm"><span className="text-ink-muted">Weekly</span><span className="text-ink font-medium tabular-nums">{formatCurrency(weeklyPrice)}/visit</span></div>}
-                  {biweeklyPrice > 0 && <div className="flex justify-between text-sm"><span className="text-ink-muted">Bi-Weekly</span><span className="text-ink font-medium tabular-nums">{formatCurrency(biweeklyPrice)}/visit</span></div>}
-                  {monthlyPrice > 0 && <div className="flex justify-between text-sm"><span className="text-ink-muted">Monthly</span><span className="text-ink font-medium tabular-nums">{formatCurrency(monthlyPrice)}/visit</span></div>}
-                </div>
-              )}
+              {previewBreakdown}
               <div className="pt-2 space-y-2">
                 <Button type="submit" className="w-full" size="lg" loading={isSubmitting}>
                   {isEdit ? 'Update quote' : 'Save quote'}
@@ -912,15 +928,27 @@ export function QuoteBuilder({
 
       {/* Mobile sticky save bar — always reachable without scrolling */}
       <StickyActionBar fixed className="lg:hidden flex items-center justify-between gap-3">
-        <div className="leading-tight min-w-0">
-          <p className="text-[10px] uppercase tracking-wide text-ink-faint">First visit total</p>
+        {/* The total is the handle for the breakdown on mobile — the desktop
+            preview card is the only other place it exists, and it's lg-only. */}
+        <button type="button" onClick={() => setShowPreview(true)}
+          className="leading-tight min-w-0 text-left rounded-lg -m-1 p-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          aria-label="Show the price breakdown">
+          <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1">
+            First visit total <ChevronUp className="w-3 h-3" />
+          </p>
           <p className="text-xl font-bold text-accent-text leading-none tabular-nums">{formatCurrency(effectiveTotal)}</p>
-        </div>
+        </button>
         <div className="flex items-center gap-2 shrink-0">
           <Button type="button" variant="ghost" size="sm" onClick={() => router.back()}>Cancel</Button>
           <Button type="submit" size="lg" loading={isSubmitting}>{isEdit ? 'Update quote' : 'Save quote'}</Button>
         </div>
       </StickyActionBar>
+
+      {/* Mobile breakdown — the SAME previewBreakdown the desktop card renders,
+          in the shared Modal (which is a bottom sheet on phones). */}
+      <Modal open={showPreview} onClose={() => setShowPreview(false)} title="Quote breakdown" icon={Calculator} size="sm">
+        <div className="space-y-3">{previewBreakdown}</div>
+      </Modal>
 
       {showMeasure && (
         <QuoteMeasure

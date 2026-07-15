@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
-import { renderMessage, MsgType, type MessagePrefs } from '@/lib/comms/templates'
+import { createClient } from '@supabase/supabase-js'
+import { renderMessage, isCommercialMessage, MsgType, type MessagePrefs } from '@/lib/comms/templates'
 import { commsEnabled } from '@/lib/comms/send'
 import { dispatchToCustomer } from '@/lib/comms/dispatch'
 import { logDispatch } from '@/lib/comms/log'
-import { loadOwnerContext, type OwnerContext } from '@/lib/automation/owner'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import {
   CAMPAIGN_KINDS, campaignPeriodKey, campaignFiresToday, type CampaignKind,
@@ -13,9 +12,12 @@ import { resolveAudience, MAX_AUDIENCE, type AudienceCustomer } from '@/lib/crm/
 import type { CampaignAudience, CampaignSchedule } from '@/types'
 
 export const dynamic = 'force-dynamic'
-// A campaign's audience is capped at MAX_AUDIENCE (2000) and each recipient costs
-// up to two sequential provider round-trips — the platform default (10–15s) could
-// not finish one campaign, let alone the day's.
+// Each customer costs up to ~2 provider calls (10s timeout each) plus ~6 DB
+// round-trips, and the audience runs to MAX_AUDIENCE. On the platform default
+// (10-15s) the invocation was killed after roughly a dozen recipients — and
+// because a broadcast only fires on ONE day per period, the rest were never
+// picked up: a 300-customer send silently reached ~4% of its audience, monthly,
+// forever. Nothing surfaced it; the kill lands before the response is built.
 export const maxDuration = 300
 
 // Daily CRM campaign sends (Vercel Cron → see vercel.json). Resolves each enabled
@@ -30,6 +32,11 @@ export const maxDuration = 300
 // Date matching uses the SERVER (UTC) day; the cron is scheduled mid-morning
 // North-American time so the UTC day lines up with the local day.
 
+// A claim older than this with no send recorded is treated as abandoned by a
+// dead run. Comfortably longer than the worst real send (2 provider calls at a
+// 10s timeout each) so a slow-but-live run is never reaped out from under itself.
+const STALE_CLAIM_MS = 15 * 60 * 1000
+
 interface CampaignRow {
   id: string; user_id: string; name: string; kind: CampaignKind; enabled: boolean
   channels: string[]; template_key: string | null; custom_body: string | null
@@ -38,60 +45,70 @@ interface CampaignRow {
   schedule: CampaignSchedule | null
 }
 
-// Recipients are already bounded per campaign (MAX_AUDIENCE, in lib/crm/audience),
-// so what's left unbounded is the NUMBER of campaigns a run will work through.
-// This sweep runs across ALL owners, so the cap is platform-wide — set well above
-// any realistic day (and below PostgREST's silent 1000-row response cap, which
-// would truncate without saying so).
-//
-// Truncating is safe in the sense that the per-period dedupe (crm_campaign_log)
-// means an unreached campaign is picked up by the next run without double-sending.
-// But unlike the chasers, a campaign's PERIOD can pass — so the warning below is a
-// real signal to raise the cap, not routine noise.
-const MAX_CAMPAIGNS_PER_RUN = 200
-
 export async function GET(req: NextRequest) {
-  if (!cronSecretOk(req)) return NextResponse.json({ error: 'forbidden' }, { status: 403 })
+  const secret = req.headers.get('authorization')?.replace('Bearer ', '') || new URL(req.url).searchParams.get('secret') || ''
+  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
+    return NextResponse.json({ error: 'forbidden' }, { status: 403 })
+  }
   const enabled = commsEnabled()
   if (!enabled.sms && !enabled.email) {
     return NextResponse.json({ ok: true, disabled: true, note: 'Comms disabled — set Twilio/Resend env vars to enable campaign sends.' })
   }
-  const client = serviceClient()
-  if (!client) {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL, svc = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!url || !svc) {
     return NextResponse.json({ ok: true, skipped: true, note: 'Set SUPABASE_SERVICE_ROLE_KEY to enable campaign sends.' })
   }
-  const supabase = client
+  const supabase = createClient(url, svc)
   const today = new Date()
 
-  // Oldest-run first, so a truncated run rotates through the book instead of
-  // starving the same campaigns every day. One row over the cap is how truncation
-  // is detected without paying for a count query.
-  const { data: campaignRows, error: campErr } = await supabase.from('crm_campaigns').select('*').eq('enabled', true)
-    .order('last_run_at', { ascending: true, nullsFirst: true })
-    .limit(MAX_CAMPAIGNS_PER_RUN + 1)
-  if (campErr) {
-    // A failed read is NOT "no campaigns today" — say so, or an outage is invisible.
-    console.error('[cron/campaigns] campaign query failed:', campErr.message)
-    return NextResponse.json({ ok: false, error: campErr.message, note: 'Could not read crm_campaigns — nothing was sent this run.' }, { status: 500 })
-  }
-  const fetched = (campaignRows as CampaignRow[]) || []
-  const truncated = fetched.length > MAX_CAMPAIGNS_PER_RUN
-  const campaigns = fetched.slice(0, MAX_CAMPAIGNS_PER_RUN)
-  if (truncated) console.warn(`[cron/campaigns] hit MAX_CAMPAIGNS_PER_RUN=${MAX_CAMPAIGNS_PER_RUN}; the rest run next time (oldest last_run_at first).`)
+  const { data: campaignRows } = await supabase.from('crm_campaigns').select('*').eq('enabled', true)
+  const campaigns = (campaignRows as CampaignRow[]) || []
 
-  // Per-owner settings (company name, review link, custom templates, email-shell
-  // branding) — THE shared read, lib/automation/owner. Cached because this loop
-  // asks per campaign: one settings query per owner per run, not one per campaign.
-  const bizCache: Record<string, OwnerContext> = {}
-  async function bizInfo(userId: string): Promise<OwnerContext> {
-    return (bizCache[userId] ??= await loadOwnerContext(supabase, userId))
+  // Per-owner business info cache (company name, review link, custom templates,
+  // email-shell branding).
+  const bizCache: Record<string, { name: string; templates: Partial<Record<MsgType, string>> | null; reviewUrl: string | null; logoUrl: string | null; website: string | null; phone: string | null; mailingAddress: string | null }> = {}
+  async function bizInfo(userId: string) {
+    if (bizCache[userId]) return bizCache[userId]
+    const { data } = await supabase.from('business_settings').select('company_name, phone, website, logo_url, review_url, message_templates, base_address').eq('user_id', userId).maybeSingle()
+    const d = data as { company_name: string | null; phone: string | null; website: string | null; logo_url: string | null; review_url: string | null; message_templates: Partial<Record<MsgType, string>> | null; base_address: string | null } | null
+    return (bizCache[userId] = { name: d?.company_name || 'Edge Property Services', templates: d?.message_templates ?? null, reviewUrl: d?.review_url ?? null, logoUrl: d?.logo_url ?? null, website: d?.website ?? null, phone: d?.phone ?? null, mailingAddress: d?.base_address ?? null })
   }
 
-  // `processed` counts CLAIMS (its long-standing meaning); `sent` counts recipients
-  // reached. `skipped`/`failed` are the other two outcomes a claim can have — without
-  // them a provider outage and an opted-out book look identical from the response.
-  let processed = 0, sent = 0, skipped = 0, failed = 0
+  let processed = 0, sent = 0, claimFailures = 0, reaped = 0
   const notes: string[] = []
+
+  // ── Reap stale claims ───────────────────────────────────────────────────────
+  // A claim is written 'sending' BEFORE dispatch and finalized after. If a run
+  // dies in between (timeout, instance recycled) the row sits at 'sending'
+  // forever — and because the dedupe below is status-blind, that customer is
+  // skipped for the WHOLE period: a year for a birthday.
+  //
+  // A stale row is genuinely ambiguous: the send may have gone out and only the
+  // finalize failed. Deleting it blindly would double-message. So resolve it
+  // against what dispatch actually recorded — it stamps meta.campaign_id on the
+  // messages row it threads. Evidence of a send → finalize it. No evidence →
+  // release the claim so this run re-sends.
+  async function reapStale(camp: CampaignRow, periodKey: string) {
+    const cutoff = new Date(Date.now() - STALE_CLAIM_MS).toISOString()
+    const { data: stale } = await supabase.from('crm_campaign_log')
+      .select('id, customer_id')
+      .eq('campaign_id', camp.id).eq('period_key', periodKey)
+      .eq('status', 'sending').lt('created_at', cutoff)
+    for (const row of ((stale as { id: string; customer_id: string }[]) || [])) {
+      const { data: msg } = await supabase.from('messages')
+        .select('id').eq('customer_id', row.customer_id)
+        .eq('meta->>campaign_id', camp.id).limit(1)
+      if ((msg as unknown[] | null)?.length) {
+        // It did send — the finalize is what was lost.
+        await supabase.from('crm_campaign_log')
+          .update({ status: 'sent', detail: 'recovered: send confirmed, finalize lost' }).eq('id', row.id)
+      } else {
+        // No trace of a send — release the slot so this run can retry it.
+        await supabase.from('crm_campaign_log').delete().eq('id', row.id)
+      }
+      reaped++
+    }
+  }
 
   for (const camp of campaigns) {
     const schedule = camp.schedule || {}
@@ -105,14 +122,27 @@ export async function GET(req: NextRequest) {
     // THE shared audience resolver (lib/crm/audience) — the Campaign Manager's
     // preview calls the same code, so what the owner is shown before enabling
     // and who actually receives this can't drift apart.
-    const { customers: cands, capped } = await resolveAudience(supabase, {
-      userId: camp.user_id, kind: camp.kind, schedule, audience: camp.audience || {}, today,
-    })
+    let cands: AudienceCustomer[], capped: boolean
+    try {
+      const r = await resolveAudience(supabase, {
+        userId: camp.user_id, kind: camp.kind, schedule, audience: camp.audience || {}, today,
+      })
+      cands = r.customers; capped = r.capped
+    } catch (e) {
+      // resolveAudience now throws rather than resolving to an empty audience.
+      // Say so and move to the next campaign — one broken query must not look
+      // like "nobody matched", and must not stop the other campaigns.
+      notes.push(`Campaign "${camp.name}": could not resolve its audience — ${(e as Error).message}`)
+      continue
+    }
     if (capped) notes.push(`Campaign "${camp.name}" matched >${MAX_AUDIENCE} customers — only the first ${MAX_AUDIENCE} were processed this run.`)
     if (!cands.length) { await supabase.from('crm_campaigns').update({ last_run_at: new Date().toISOString() }).eq('id', camp.id); continue }
 
     // Per-period dedupe: pull already-logged customers for this campaign+period.
+    // Reap first, so a claim stranded by a crashed run is resolved (or released)
+    // BEFORE it gets counted as "already handled" for another whole period.
     const periodKey = campaignPeriodKey(camp.kind, today, leadDays)
+    await reapStale(camp, periodKey)
     const { data: doneRows } = await supabase.from('crm_campaign_log').select('customer_id').eq('campaign_id', camp.id).eq('period_key', periodKey)
     const done = new Set(((doneRows as { customer_id: string }[]) || []).map(r => r.customer_id))
 
@@ -125,7 +155,11 @@ export async function GET(req: NextRequest) {
       ? { [templateKey]: camp.custom_body } as Partial<Record<MsgType, string>>
       : biz.templates
     const bodyForLinkCheck = (camp.custom_body && camp.custom_body.trim()) || ''
-    const needsPortal = bodyForLinkCheck.includes('{{portal_link}}')
+    // A commercial message ALWAYS needs the portal link — it's the unsubscribe
+    // mechanism its footer is legally required to carry (see renderBody). Minting
+    // it only when the body happens to mention {{portal_link}} meant every
+    // marketing email shipped with an unsubscribe link it couldn't build.
+    const needsPortal = bodyForLinkCheck.includes('{{portal_link}}') || isCommercialMessage(templateKey)
 
     for (const c of cands) {
       if (done.has(c.id)) continue
@@ -136,11 +170,23 @@ export async function GET(req: NextRequest) {
       const { error: claimErr } = await supabase.from('crm_campaign_log').insert({
         user_id: camp.user_id, campaign_id: camp.id, customer_id: c.id, period_key: periodKey, status: 'sending',
       })
-      if (claimErr) continue   // another run owns this customer/period → skip (no send)
+      if (claimErr) {
+        // 23505 = unique violation = another run legitimately owns this customer
+        // for this period. That is the ONLY error reserve-then-send absorbs.
+        // Anything else (auth, network, constraint) was being swallowed as if it
+        // were a dedupe hit, so a run that claimed nothing because it COULDN'T
+        // looked identical to a run with nothing to do.
+        if (claimErr.code !== '23505') {
+          claimFailures++
+          notes.push(`Campaign "${camp.name}": could not claim a send for a customer — ${claimErr.message}`)
+        }
+        continue
+      }
       processed++
-      // One bad recipient must not abort the campaign — and a throw after the claim
-      // would otherwise strand its log row at 'sending' forever (the insert dedupe
-      // blocks a retry either way, so the row must be told what happened).
+      // One customer must never take the whole run down with it. Before this, the
+      // route had no try/catch at all: a single throw stranded the in-flight claim
+      // at 'sending' (permanently skipping that customer for the period) AND
+      // killed every campaign later in the loop for that day.
       try {
         const portalLink = needsPortal ? (await ensurePortalToken(supabase, camp.user_id, c.id).then(t => t ? portalUrl(t) : undefined)) : undefined
         // The owner's subject wins when they wrote one; renderMessage falls back to
@@ -149,6 +195,7 @@ export async function GET(req: NextRequest) {
         const rendered = renderMessage(templateKey, customOverride, {
           firstName: c.name, businessName: biz.name, reviewLink: biz.reviewUrl || undefined, portalLink,
           directPhone: biz.phone || undefined, logoUrl: biz.logoUrl || undefined, website: biz.website || undefined,
+          mailingAddress: biz.mailingAddress || undefined,
         }, camp.subject)
         const res = await dispatchToCustomer(supabase, {
           userId: camp.user_id,
@@ -166,26 +213,24 @@ export async function GET(req: NextRequest) {
           channel: res.sentChannels[0] ?? null, status: overall, detail: firstDetail, message_id: res.messageId,
         }).eq('campaign_id', camp.id).eq('customer_id', c.id).eq('period_key', periodKey)
         if (res.sentChannels.length) sent++
-        else if (overall === 'skipped') skipped++
-        else {
-          // A real send failure, not an opt-out — worth a line in the log.
-          failed++
-          console.error(`[cron/campaigns] "${camp.name}" (${camp.id}) failed for customer ${c.id}: ${firstDetail || 'no detail'}`)
-        }
       } catch (e) {
-        failed++
-        console.error(`[cron/campaigns] "${camp.name}" (${camp.id}) threw for customer ${c.id}:`, e)
+        // Finalize the claim we already own so it can't sit at 'sending' forever.
+        // The reaper above only rescues rows a crash left behind; this closes the
+        // ones we can still see.
         await supabase.from('crm_campaign_log').update({
-          status: 'failed', detail: e instanceof Error ? e.message.slice(0, 200) : 'send threw',
+          status: 'failed', detail: `run error: ${(e as Error).message}`.slice(0, 300),
         }).eq('campaign_id', camp.id).eq('customer_id', c.id).eq('period_key', periodKey)
+        notes.push(`Campaign "${camp.name}": a send failed — ${(e as Error).message}`)
       }
     }
 
     await supabase.from('crm_campaigns').update({ last_run_at: new Date().toISOString() }).eq('id', camp.id)
   }
 
-  const summary = { ok: true, campaigns: campaigns.length, processed, sent, skipped, failed, truncated, ...(notes.length ? { notes } : {}) }
-  // Log only when there was something to do, so quiet runs stay quiet in the logs.
-  if (processed > 0) console.log('[cron/campaigns] run:', JSON.stringify(summary))
-  return NextResponse.json(summary)
+  return NextResponse.json({
+    ok: true, campaigns: campaigns.length, processed, sent,
+    ...(reaped ? { reaped } : {}),
+    ...(claimFailures ? { claimFailures } : {}),
+    ...(notes.length ? { notes } : {}),
+  })
 }
