@@ -531,17 +531,22 @@ export default function SettingsPage() {
         <Card className={cn(tab !== 'pricing' && 'hidden')}>
           <CardHeader>
             <div>
-              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><DollarSign className="w-4 h-4 text-accent-text" /> Lawn Pricing</h2>
-              <p className="text-xs text-ink-faint mt-0.5">Drives suggested measurement prices. Recommended = base price × multiplier.</p>
+              {/* The maths here is base + (area ÷ 1,000 × rate), which is not lawn-
+                  specific — any service you price off a measured area uses it. The
+                  labels used to name mowing, so a pressure-washing or snow business
+                  was asked to configure a "Mowing rate". The stored columns keep
+                  their original names; only the words change. */}
+              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><DollarSign className="w-4 h-4 text-accent-text" /> Measured service pricing</h2>
+              <p className="text-xs text-ink-faint mt-0.5">Drives suggested prices for any service you quote from a measured area. Recommended = base price × multiplier.</p>
             </div>
           </CardHeader>
           <CardBody className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input label="Base / minimum charge ($)" type="number" step="1" min="0"
-                hint="The show-up minimum for any lawn."
+                hint="The show-up minimum for any visit, before area is added."
                 {...register('pricing_base_charge')} />
-              <Input label="Mowing rate ($ / 1,000 sq ft)" type="number" step="1" min="0"
-                hint="Added on top of the base, per 1,000 sq ft."
+              <Input label="Rate per 1,000 sq ft ($)" type="number" step="1" min="0"
+                hint="Added on top of the base, per 1,000 sq ft of measured area."
                 {...register('pricing_mow_rate')} />
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -555,8 +560,12 @@ export default function SettingsPage() {
             <Input label="Travel rate ($ / km)" type="number" step="0.25" min="0"
               hint="Driving distance from base × this rate (route-density discounts apply automatically)."
               {...register('pricing_travel_rate')} />
+            {/* Keep the concrete anchor — it's genuinely useful to the lawn
+                businesses these defaults were tuned for — but say it's a starting
+                point rather than what this card IS, so a different trade knows to
+                replace it instead of wondering why it's talking about mowing. */}
             <p className="text-xs text-ink-faint">
-              Defaults are tuned for Calgary mow+trim+edge: ~$40 small, ~$50–60 medium, ~$70–80 large lawns.
+              The defaults are a Calgary lawn-mowing starting point (~$40 small, ~$50–60 medium, ~$70–80 large). Set them to your own service&rsquo;s numbers.
             </p>
           </CardBody>
         </Card>
