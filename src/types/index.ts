@@ -629,6 +629,11 @@ export interface CustomerFormValues {
   referred_by_customer_id: string
   birthday: string
   anniversary: string
+  // Contact consent captured at creation (persisted via the shared consent
+  // engine so the audit trail is written). Optional — absent on the edit form,
+  // where the profile's Communication card is the canonical consent manager.
+  sms_opt_in?: boolean
+  email_opt_in?: boolean
 }
 
 // ── CRM automation ──────────────────────────────────────────────────────────

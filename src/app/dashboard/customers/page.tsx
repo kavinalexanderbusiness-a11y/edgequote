@@ -9,6 +9,7 @@ import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { Customer, CustomerFormValues } from '@/types'
 import { CustomerList } from '@/components/customers/CustomerList'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
+import { applyConsent } from '@/lib/consent'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { CustomerForm } from '@/components/customers/CustomerForm'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -70,8 +71,14 @@ export default function CustomersPage() {
   useRealtimeRefresh('customers', uid ? `user_id=eq.${uid}` : null, fetchCustomers)
 
   function normalize(values: CustomerFormValues) {
+    // Consent is applied AFTER insert through the shared consent engine (which
+    // writes the audit row) — keep it OUT of the raw insert so nothing bypasses
+    // that trail. The customer is born with consent off (DB default).
+    const rest = { ...values }
+    delete rest.sms_opt_in
+    delete rest.email_opt_in
     return {
-      ...values,
+      ...rest,
       acquisition_source: values.acquisition_source || null,
       referred_by_customer_id: values.referred_by_customer_id || null,
       birthday: values.birthday || null,
@@ -93,11 +100,12 @@ export default function CustomersPage() {
       toast.error('Could not create the customer: ' + (error?.message ?? 'please try again.'))
       return
     }
+    const c = newCustomer as Customer
 
     // Auto-create a primary property from the customer's address
     if (values.address) {
       await supabase.from('properties').insert({
-        customer_id: newCustomer.id,
+        customer_id: c.id,
         user_id: user!.id,
         address: values.address,
         city: values.city || null,
@@ -107,11 +115,30 @@ export default function CustomersPage() {
       })
     }
 
+    // Persist the consent captured on the form through the shared engine (writes
+    // the audit trail) — only for a channel that actually has a contact method.
+    const wantSms = !!values.sms_opt_in && !!c.phone
+    const wantEmail = !!values.email_opt_in && !!c.email
+    if (wantSms || wantEmail) {
+      const targets = [{ id: c.id, sms_opt_in: false, email_opt_in: false }]
+      const by = user!.email || user!.id
+      if (wantSms) await applyConsent(supabase, { targets, channel: 'sms', value: true, userId: user!.id, changedBy: by, source: 'single' })
+      if (wantEmail) await applyConsent(supabase, { targets, channel: 'email', value: true, userId: user!.id, changedBy: by, source: 'single' })
+    }
+
     await fetchCustomers()
     setShowForm(false)
-    // New customer with a phone/email → offer the introduction message right away.
-    const c = newCustomer as Customer
-    if (c.phone || c.email) setIntroFor(c)
+
+    // Guide, never silently create: only offer the introduction when we can
+    // actually reach them; otherwise say exactly how to enable messaging.
+    const first = c.name.split(' ')[0] || 'Customer'
+    if (wantSms || wantEmail) {
+      setIntroFor({ ...c, sms_opt_in: wantSms, email_opt_in: wantEmail })
+    } else if (c.phone || c.email) {
+      toast(`${first} added. To message ${first}, turn on texts or email on their profile — you'll confirm consent there.`, { duration: 7000 })
+    } else {
+      toast.success(`${first} added.`)
+    }
   }
 
   async function handleEdit(values: CustomerFormValues) {
@@ -269,13 +296,15 @@ export default function CustomersPage() {
         </div>
       )}
 
-      {/* Just added a customer with contact info → one-tap introduction (same shared dialog) */}
+      {/* Just added a reachable customer → one-tap introduction. The composer shows
+          the exact message that will be sent (editable); channel(s) reflect the
+          consent just captured. */}
       {introFor && (
         <SendMessageDialog
           open
           recipients={[{ customerId: introFor.id, name: introFor.name, phone: introFor.phone }]}
           defaultTemplate="introduction"
-          title={`Welcome ${introFor.name.split(' ')[0]} — send an introduction?`}
+          title={`Introduce your business to ${introFor.name.split(' ')[0]}`}
           onClose={() => setIntroFor(null)}
         />
       )}
