@@ -6,6 +6,7 @@
 
 import { Coord } from '@/lib/geo'
 import { routeKmEstimate, routeStats, type SpeedModel } from '@/lib/route'
+import { visitEconomics } from '@/lib/economics'
 import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
 import type { Grade } from './grade'
 
@@ -189,11 +190,23 @@ export interface MonthTrend {
   driveKm: number
   revPerHour: number
   revPerKm: number
+  profit: number | null    // revenue − on-site labour cost; null when crewCost wasn't supplied
+  marginPct: number | null // profit as % of revenue; null without crewCost or revenue
 }
 
 // Roll day-routes up into monthly trends so improvement over time is visible.
-export function monthlyTrends(routes: RouteProfit[]): MonthTrend[] {
-  const map: Record<string, MonthTrend> = {}
+// Pass `crewCost` (lib/economics crewCostPerHour) to get profit/margin per month;
+// without it those stay null and every other field is unchanged.
+//
+// Costing note: RouteProfit.laborMinutes is ON-SITE crew time only — the sum of
+// each non-cancelled stop's actual_minutes ?? duration_minutes ?? DEFAULT_LABOR_MIN.
+// Travel is NOT inside it; dayProfitability tracks it separately as driveMinutes.
+// So profit here charges the crew rate against on-site labour only and leaves
+// drive time uncosted — the same basis as the BI report's grossProfitYTD, which
+// keeps the two figures comparable. (revPerHour below is unaffected: it keeps
+// using drive + labour hours, as it always has.)
+export function monthlyTrends(routes: RouteProfit[], crewCost?: number): MonthTrend[] {
+  const map: Record<string, Omit<MonthTrend, 'profit' | 'marginPct'>> = {}
   for (const r of routes) {
     const month = r.date.slice(0, 7)
     const m = (map[month] ||= { month, revenue: 0, driveMinutes: 0, laborMinutes: 0, driveKm: 0, revPerHour: 0, revPerKm: 0 })
@@ -204,11 +217,18 @@ export function monthlyTrends(routes: RouteProfit[]): MonthTrend[] {
   }
   return Object.values(map).map(m => {
     const hours = (m.driveMinutes + m.laborMinutes) / 60
+    // Profit comes from THE profit engine (lib/economics), never a local
+    // revenue−hours×rate spelling — that's the whole point of that module.
+    // Drive time is passed as 0 because it is NOT inside laborMinutes here (it's
+    // tracked separately), and costing it would diverge from BI's grossProfitYTD.
+    const econ = crewCost != null ? visitEconomics(m.revenue, m.laborMinutes, 0, crewCost) : null
     return {
       ...m,
       driveKm: Math.round(m.driveKm * 10) / 10,
       revPerHour: hours > 0 ? Math.round(m.revenue / hours) : 0,
       revPerKm: m.driveKm > 0 ? Math.round((m.revenue / m.driveKm) * 10) / 10 : 0,
+      profit: econ ? econ.profit : null,
+      marginPct: econ && m.revenue > 0 ? Math.round(econ.margin * 100) : null,
     }
   }).sort((a, b) => a.month.localeCompare(b.month))
 }
