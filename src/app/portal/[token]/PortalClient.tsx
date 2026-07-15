@@ -39,7 +39,10 @@ interface PortalPhoto { id: string; job_id: string | null; storage_path: string;
 interface PortalPayment { id: string; amount: number; status: string; paid_at: string | null; provider: string; invoice_id: string | null; created_at: string; kind?: string }
 interface PortalCard { brand: string | null; last4: string | null; exp_month: number | null; exp_year: number | null }
 interface PortalData {
-  customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null; city: string | null; sms_opt_in?: boolean | null; email_opt_in?: boolean | null; reviewed_at?: string | null; autopay_enabled?: boolean | null }
+  // review_declined_at: the customer's own "No thanks". Read here so a decline saved on
+  // a previous visit keeps the review card down — without it, "no" would only last as
+  // long as the tab.
+  customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null; city: string | null; sms_opt_in?: boolean | null; email_opt_in?: boolean | null; reviewed_at?: string | null; review_declined_at?: string | null; autopay_enabled?: boolean | null }
   business: { company_name: string | null; owner_name: string | null; phone: string | null; email_primary: string | null; email_secondary: string | null; website: string | null; logo_url: string | null; logo_scale: number | null; base_address: string | null; terms_text: string | null; review_url?: string | null; etransfer_email?: string | null; gst_percent?: number | null } | null
   property: { address: string | null; city: string | null; province: string | null; lawn_sqft: number | null; fence_length: number | null; neighborhood: string | null; notes: string | null } | null
   quotes: PortalQuote[]; invoices: PortalInvoice[]; jobs: PortalJob[]; recurrences: PortalRec[]; photos: PortalPhoto[]; payments: PortalPayment[]
@@ -113,6 +116,9 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     return pd ? { sms: !!pd.customer?.sms_opt_in, email: !!pd.customer?.email_opt_in } : null
   })
   const [markedReviewed, setMarkedReviewed] = useState(false)
+  // Seeded from the customer record, so a decline saved on an earlier visit keeps the
+  // card down — the whole point of persisting it.
+  const [reviewDeclined, setReviewDeclined] = useState(() => !!normalizePortal(initialData)?.customer?.review_declined_at)
 
   async function load() {
     const { data: d } = await supabase.rpc('get_portal_data', { p_token: token })
@@ -143,6 +149,20 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     setMarkedReviewed(true)
     const { data: ok, error } = await supabase.rpc('portal_mark_reviewed', { p_token: token })
     if (error || !ok) setMarkedReviewed(false)
+  }
+  // "No thanks" — the customer declining to be asked. This used to be React state that
+  // died with the tab: the card returned on their next visit and api/cron/notifications
+  // kept sending review requests, because it suppresses on customers.review_declined_at
+  // and nothing here could write it. Saying no has to mean no, or the button is theatre.
+  // Same token-scoped shape as markReviewed; no new rule — the cron already honours this
+  // column, and the owner's ReviewLifecycle already writes it.
+  async function declineReview() {
+    if (reviewDeclined) return                 // double-click guard
+    setReviewDeclined(true)
+    const { data: ok, error } = await supabase.rpc('portal_decline_review', { p_token: token })
+    // Rolling back means the card reappears — right, because the decline wasn't saved.
+    // Silently keeping it hidden would repeat the exact bug this fixes.
+    if (error || !ok) { setReviewDeclined(false); setActionError('We couldn’t save that — please try again.') }
   }
   // Server already provided initialData → no client fetch on first paint. Only fetch here
   // as a fallback (e.g. a direct client navigation where the server skipped it).
@@ -424,8 +444,8 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
             paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId}
             onOpenInvoices={() => { setDocsCat('invoice'); setTab('documents') }}
             onReviewQuotes={() => { setDocsCat('quote'); setTab('documents') }} />}
-          {tab === 'home' && biz?.review_url && derived.lastCompleted && !data.customer.reviewed_at && (
-            <ReviewCard reviewUrl={biz.review_url} businessName={biz.company_name} reviewed={markedReviewed} onReviewed={markReviewed} />
+          {tab === 'home' && biz?.review_url && derived.lastCompleted && !data.customer.reviewed_at && !reviewDeclined && (
+            <ReviewCard reviewUrl={biz.review_url} businessName={biz.company_name} reviewed={markedReviewed} onReviewed={markReviewed} onDecline={declineReview} />
           )}
           {tab === 'home' && consent && <ConsentCard token={token} consent={consent} onSave={saveConsent} />}
           {tab === 'timeline' && <TimelineTab data={data} photosByJob={photosByJob} />}
@@ -1535,14 +1555,15 @@ function RequestTab({ presets, reqMsg, setReqMsg, request, reqBusy, reqSent, biz
 }
 
 // ── Review ask (only after a completed visit, hidden once they've reviewed) ──
-function ReviewCard({ reviewUrl, businessName, reviewed, onReviewed }: { reviewUrl: string; businessName: string | null; reviewed: boolean; onReviewed: () => void }) {
+function ReviewCard({ reviewUrl, businessName, reviewed, onReviewed, onDecline }: { reviewUrl: string; businessName: string | null; reviewed: boolean; onReviewed: () => void; onDecline: () => void }) {
   const href = reviewUrl.startsWith('http') ? reviewUrl : `https://${reviewUrl}`
   // Both buttons used to mean "yes", so the only way to decline was to lie ("I've left my
-  // review") or to ignore a card that never went away. A guest deserves a door. This one
-  // is session-local — persisting a decline needs a write we don't have here — but it at
-  // least means "no" is expressible rather than a dead end.
-  const [dismissed, setDismissed] = useState(false)
-  if (dismissed) return null
+  // review") or to ignore a card that never went away. "No thanks" was then added as a
+  // door — but a session-local one: it died with the tab while the review-request cron
+  // (which suppresses on review_declined_at) kept messaging them. It now writes that
+  // column through portal_decline_review, so declining is honoured everywhere the owner's
+  // own decline already is. The parent owns the hidden state, since the answer outlives
+  // this component.
   if (reviewed) {
     return (
       <div className="rounded-card border border-emerald-500/30 bg-emerald-500/[0.06] p-4 mt-3">
@@ -1565,7 +1586,7 @@ function ReviewCard({ reviewUrl, businessName, reviewed, onReviewed }: { reviewU
         <Button variant="secondary" className="flex-1 min-w-[140px]" onClick={onReviewed}>
           <Check className="w-4 h-4" /> Already did — thanks!
         </Button>
-        <Button variant="ghost" className="flex-1 min-w-[100px]" onClick={() => setDismissed(true)}>
+        <Button variant="ghost" className="flex-1 min-w-[100px]" onClick={onDecline}>
           No thanks
         </Button>
       </div>
