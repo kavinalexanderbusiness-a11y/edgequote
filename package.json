@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "verify:automations": "tsx scripts/verify-automations.ts",
+    "verify:business-shape": "tsx scripts/verify-business-shape.ts",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",

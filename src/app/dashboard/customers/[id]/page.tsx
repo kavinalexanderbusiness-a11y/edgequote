@@ -19,6 +19,7 @@ import { needsFollowUp, daysSince } from '@/lib/followup'
 import { recurrenceLabel, recurringCustomerLabel, buildServicePlans, ServicePlan } from '@/lib/recurrence'
 import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
 import { settingsToSeasons, DEFAULT_SEASONS, ServiceSeasons } from '@/lib/seasons'
+import { loadBusinessShape, showLawnFieldFor, SHAPE_LOADING, type BusinessShape } from '@/lib/businessShape'
 import { resolvePrefs, prefSummary, hasAnyPref, monthShort } from '@/lib/preferences'
 import { SchedulePrefsFields, PrefsDraft, EMPTY_DRAFT, toDraft, draftToRow } from '@/components/customers/SchedulePrefsFields'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
@@ -115,6 +116,9 @@ export default function CustomerDetailPage() {
   const [lead, setLead] = useState<WebsiteLead | null>(null)
   const [extraTimeline, setExtraTimeline] = useState<TimelineEvent[]>([])
   const [seasons, setSeasons] = useState<ServiceSeasons>(DEFAULT_SEASONS)
+  // What this business does, derived from its own catalogue and jobs — never asked.
+  // Starts SHOWING everything, so a lawn field can't blink out mid-load.
+  const [shape, setShape] = useState<BusinessShape>(SHAPE_LOADING)
   const [gstPercent, setGstPercent] = useState(0)
   const [pausing, setPausing] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -223,7 +227,7 @@ export default function CustomerDetailPage() {
       // realtime refresh.
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
-      const [cRes, pRes, qRes, jRes, iRes, refRes, recRes, mRes, payRes, srRes, setRes, lRes] = await Promise.all([
+      const [cRes, pRes, qRes, jRes, iRes, refRes, recRes, mRes, payRes, srRes, setRes, lRes, shapeRes] = await Promise.all([
         supabase.from('customers').select('*').eq('id', id).eq('user_id', user!.id).single(),
         supabase.from('properties').select('*').eq('customer_id', id).order('is_primary', { ascending: false }),
         supabase.from('quotes').select('*').eq('customer_id', id).order('created_at', { ascending: false }),
@@ -240,6 +244,11 @@ export default function CustomerDetailPage() {
         supabase.from('business_settings').select('service_seasons, gst_percent').eq('user_id', user!.id).maybeSingle(),
         // Newest website lead — the full intake detail (service/address/budget/schedule/contact/source).
         supabase.from('website_leads').select('*').eq('customer_id', id).order('created_at', { ascending: false }).limit(1).maybeSingle(),
+        // Does this business do lawn work? Derived from the owner's own catalogue
+        // and job history (see lib/businessShape) — rides along in the batch that
+        // was already going out. Never blocks the page: on failure the shape falls
+        // back to showing everything, which is how the page behaved before it existed.
+        loadBusinessShape(supabase, user!.id).catch(() => SHAPE_LOADING),
       ])
       // A transient/network error must NOT render as "Customer not found." Only a
       // genuine no-rows result (.single() → PGRST116) means the customer is truly gone.
@@ -260,6 +269,7 @@ export default function CustomerDetailPage() {
 
       if (recRes.data) setRecurrences(recRes.data as JobRecurrence[])
       setLead((lRes.data as WebsiteLead | null) ?? null)
+      setShape(shapeRes)
       setSeasons(settingsToSeasons((setRes.data as { service_seasons: unknown } | null)?.service_seasons))
       setGstPercent(Number((setRes.data as { gst_percent?: number | null } | null)?.gst_percent) || 0)
 
@@ -939,8 +949,18 @@ export default function CustomerDetailPage() {
               <InlineEmpty className="py-6">No properties on file.</InlineEmpty>
             ) : properties.map(p => {
               const jobCount = jobs.filter(j => j.property_id === p.id).length
+              // Lawn is the one measurement here that doesn't apply to every trade, so
+              // it renders when the business does lawn work OR when THIS property
+              // already holds a lawn size — never hide data someone entered. The rest
+              // (fence, mulch, rock, driveway, lot) are generic property facts, and are
+              // untouched.
+              //
+              // The `!= null` behind the gate is deliberately left as it was: a lawn
+              // business with lawn_sqft = 0 still gets today's "Lawn 0 ft²" chip. It's
+              // arguably noise, but it is EXISTING noise, and this change is not
+              // allowed to alter what a lawn business sees.
               const measures = [
-                p.lawn_sqft != null && `Lawn ${Number(p.lawn_sqft).toLocaleString()} ft²`,
+                showLawnFieldFor(shape, p.lawn_sqft) && p.lawn_sqft != null && `Lawn ${Number(p.lawn_sqft).toLocaleString()} ft²`,
                 p.fence_length != null && `Fence ${Number(p.fence_length).toLocaleString()} ft`,
                 p.mulch_area != null && `Mulch ${Number(p.mulch_area).toLocaleString()} ft²`,
                 p.rock_area != null && `Rock ${Number(p.rock_area).toLocaleString()} ft²`,
@@ -962,8 +982,14 @@ export default function CustomerDetailPage() {
                   <p className="text-[11px] text-ink-faint mt-2">
                     {p.lat != null && p.lng != null ? `${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}` : 'No coordinates yet'}
                   </p>
-                  {/* Property actions — one tap each (2-up on phones for bigger targets) */}
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 mt-3">
+                  {/* Property actions — one tap each (2-up on phones for bigger targets).
+                      Measure traces a LAWN boundary and writes lawn_sqft, so it's the one
+                      action here that a plumber has no use for. It stays for anyone who
+                      does lawn work, and for any property already measured (re-measure
+                      must never become unreachable). The grid drops to 3 columns rather
+                      than leaving a hole where it was. */}
+                  {(() => { const showMeasure = showLawnFieldFor(shape, p.lawn_sqft); return (
+                  <div className={`grid grid-cols-2 gap-1.5 mt-3 ${showMeasure ? 'sm:grid-cols-4' : 'sm:grid-cols-3'}`}>
                     <a href={mapsUrl} target="_blank" rel="noopener noreferrer" title="Open in Google Maps" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
                       <ExternalLink className="w-3.5 h-3.5" /> Maps
                     </a>
@@ -973,10 +999,13 @@ export default function CustomerDetailPage() {
                     <Link href={`/dashboard/schedule?customer=${customer.id}&property=${p.id}`} title="Schedule job" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
                       <CalendarPlus className="w-3.5 h-3.5" /> Job
                     </Link>
-                    <Link href={`/dashboard/properties/measure?id=${p.id}`} title="Re-measure property" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
-                      <Ruler className="w-3.5 h-3.5" /> Measure
-                    </Link>
+                    {showMeasure && (
+                      <Link href={`/dashboard/properties/measure?id=${p.id}`} title="Re-measure property" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
+                        <Ruler className="w-3.5 h-3.5" /> Measure
+                      </Link>
+                    )}
                   </div>
+                  ) })()}
 
                   {/* Scheduling override for this property (falls back to the customer default) */}
                   <div className="mt-3 pt-3 border-t border-border">

@@ -81,6 +81,19 @@ jobs:
       - name: Verify automations
         run: npm run verify:automations
 
+      # The business-shape derivation decides whether a lawn field renders at all.
+      # Its failure mode is silent and asymmetric: too much evidence only shows a
+      # plumber a field he ignores, but too little HIDES the measure tool from a lawn
+      # company — the core market — and nothing on screen would say why. There is no
+      # industry setting to check against, because the whole point is that nobody is
+      # asked; the four backwards-compatibility cases in that script are the only
+      # place the intended behaviour is written down executably.
+      #
+      # Kept separate from `verify:automations` so its PASS count stays the
+      # automation engine's own signal — see the header of verify-business-shape.ts.
+      - name: Verify business shape
+        run: npm run verify:business-shape
+
       # This step is why the first 17 CI runs were red, and it's worth writing down.
       # ESLint had never been configured in this repo — no .eslintrc anywhere — so
       # `next lint` dropped into an INTERACTIVE setup prompt, which cannot be
