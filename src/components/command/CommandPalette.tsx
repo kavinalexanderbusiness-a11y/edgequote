@@ -12,6 +12,7 @@ import {
   Home, Image as ImageIcon, CreditCard, Eye, Phone, CalendarPlus, Sparkles, LifeBuoy,
 } from 'lucide-react'
 import { searchHelp, helpHref } from '@/lib/help/content'
+import { receiptNumberFor } from '@/lib/payments/ledger'
 
 type Icon = typeof Users
 interface Item { id: string; label: string; sub?: string; icon: Icon; run: () => void }
@@ -199,7 +200,11 @@ export function CommandPalette() {
       if (payRows.length) sections.push({ title: 'Payments', items: payRows.map(p => ({
         id: `pay-${p.id}`, label: `${p.amount != null ? formatCurrency(Number(p.amount)) : 'Payment'}${p.status ? ` · ${p.status}` : ''}`,
         sub: [p.method, p.notes].filter(Boolean).join(' · ') || undefined,
-        icon: CreditCard, run: () => go(p.customer_id ? `/dashboard/customers/${p.customer_id}` : '/dashboard/invoices'),
+        // Land on the payment itself. This used to dump you on the customer page or,
+        // worse, the unfiltered invoice list — the palette could FIND a payment but had
+        // nowhere to send you, so finding it didn't help. The receipt number is derived
+        // from the row id, so it identifies exactly this one.
+        icon: CreditCard, run: () => go(`/dashboard/payments?q=${encodeURIComponent(receiptNumberFor(p.id))}`),
       })) })
 
       const phRows = (photo.data as { id: string; caption: string | null; kind: string | null; customer_id: string | null }[]) || []

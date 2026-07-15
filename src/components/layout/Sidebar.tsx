@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { LayoutDashboard, Users, FileText, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Receipt, Menu, X, Sprout, MessageSquare, Search, Wrench, LifeBuoy } from 'lucide-react'
+import { LayoutDashboard, Users, FileText, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Receipt, Menu, X, Sprout, MessageSquare, Search, Wrench, LifeBuoy, Wallet } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useFocusTrap } from '@/hooks/useFocusTrap'
@@ -19,6 +19,7 @@ const navMain = [
   { label: 'Properties', href: '/dashboard/properties', icon: Home },
   { label: 'Quotes',     href: '/dashboard/quotes',     icon: FileText },
   { label: 'Invoices',   href: '/dashboard/invoices',   icon: Receipt },
+  { label: 'Payments',   href: '/dashboard/payments',   icon: Wallet },
   { label: 'Messages',   href: '/dashboard/messages',   icon: MessageSquare },
   { label: 'Equipment',  href: '/dashboard/equipment',  icon: Wrench },
   { label: 'Grow',       href: '/dashboard/grow',       icon: Sprout },
