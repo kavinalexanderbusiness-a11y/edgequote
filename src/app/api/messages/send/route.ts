@@ -1,15 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { sendSms } from '@/lib/comms/send'
-import { logSend } from '@/lib/comms/log'
+import { dispatchToCustomer } from '@/lib/comms/dispatch'
+import { logDispatch } from '@/lib/comms/log'
+import { describeSkip } from '@/lib/comms/skipReasons'
 import { getOrCreateConversation } from '@/lib/comms/conversation'
 import { claimSend, finalizeSend } from '@/lib/comms/idempotency'
 
 export const dynamic = 'force-dynamic'
 
-// Owner reply in a conversation: send an SMS via the ONE comms sender (logged to
-// notification_log), or post an internal note (not sent). Both append to the
-// customer's thread.
+// Owner reply in a conversation: send an SMS through the ONE dispatch pipeline
+// (consent-gated, threaded, logged), or post an internal note (not sent).
+//
+// This route used to select ONLY `phone` and call sendSms directly — no consent
+// check of any kind. It was the single authenticated sender with no gate: a
+// customer who opted out via the portal, or whom the owner had un-ticked in the
+// customer editor, still got texted the moment the owner typed a reply. Only a
+// carrier-level STOP caught it, and that safety net doesn't exist for the two
+// in-app ways consent is revoked. The UI meanwhile warns the owner that the SMS
+// flag is load-bearing.
+//
+// The template is 'reply', which msgCategory doesn't know, so prefAllows fails
+// open — deliberately: an owner's one-off reply isn't a marketing category a
+// customer opts out of. What reachCheck DOES enforce here is the channel opt-in
+// and a phone on file, which is exactly the gate that was missing.
 export async function POST(req: NextRequest) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -43,25 +56,39 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, internal: true })
   }
 
-  const { data: cust } = await supabase.from('customers').select('phone').eq('id', customerId).eq('user_id', user.id).maybeSingle()
-  const phone = (cust as { phone: string | null } | null)?.phone
-  if (!phone) return NextResponse.json({ ok: false, error: 'This customer has no phone number on file.' }, { status: 400 })
+  const { data: cust } = await supabase.from('customers')
+    .select('id, phone, email, sms_opt_in, email_opt_in, message_prefs')
+    .eq('id', customerId).eq('user_id', user.id).maybeSingle()
+  if (!cust) return NextResponse.json({ ok: false, error: 'Customer not found.' }, { status: 404 })
 
-  const r = await sendSms(phone, text)
-  // Persist Twilio's SID so /api/sms/status can carry these rows from 'sent'
-  // (accepted) to 'delivered'/'failed'. Both writes degrade to the pre-migration
-  // shape rather than losing the record.
-  const providerCols = r.sent && r.id ? { provider: 'twilio', provider_message_id: r.id } : {}
-  const msgBase = { user_id: user.id, conversation_id: convoId, customer_id: customerId, direction: 'outbound', channel: 'sms', body: text, status: r.reason }
-  const { error: msgErr } = await supabase.from('messages').insert({ ...msgBase, ...providerCols })
-  if (msgErr) await supabase.from('messages').insert(msgBase)
-  await logSend(supabase, {
-    userId: user.id, customerId, channel: 'sms', template: 'reply',
-    status: r.reason, detail: r.error ?? null,
-    provider: r.sent ? 'twilio' : null, providerId: r.id ?? null,
+  // THE send path — the same one every campaign and cron uses. It gates on
+  // consent (lib/comms/reach), sends, threads the outbound bubble, and hands back
+  // per-channel attempts for the audit log.
+  const res = await dispatchToCustomer(supabase, {
+    userId: user.id,
+    customer: cust as Parameters<typeof dispatchToCustomer>[1]['customer'],
+    channels: ['sms'],
+    smsText: text, emailSubject: '', emailHtml: '', emailText: text,
+    template: 'reply',
   })
-  await finalizeSend(supabase, user.id, clientMessageId, r.reason)
+  await logDispatch(supabase, res, { userId: user.id, customerId, template: 'reply' })
+  const attempt = res.attempts[0]
+  await finalizeSend(supabase, user.id, clientMessageId, attempt?.status ?? 'error')
 
-  const error = r.reason === 'disabled' ? 'SMS isn’t set up yet (add your Twilio keys).' : r.reason === 'error' ? 'The message could not be sent.' : undefined
-  return NextResponse.json({ ok: r.sent, reason: r.reason, error })
+  if (res.sentChannels.length) return NextResponse.json({ ok: true, reason: 'sent' })
+
+  // dispatch only threads a bubble when something actually went out. The owner
+  // typed this — it must not vanish from the thread — so record it with the real
+  // reason instead, which is also what makes a failed reply visibly retryable.
+  await supabase.from('messages').insert({
+    user_id: user.id, conversation_id: convoId, customer_id: customerId,
+    direction: 'outbound', channel: 'sms', body: text, status: attempt?.status ?? 'error',
+  })
+  const reason = attempt?.status ?? 'error'
+  const error = attempt?.status === 'skipped'
+    // Say which consent rule stopped it, in the same words the timeline uses.
+    ? `Not sent — ${describeSkip(attempt.detail).label}.`
+    : reason === 'disabled' ? 'SMS isn’t set up yet (add your Twilio keys).'
+    : 'The message could not be sent.'
+  return NextResponse.json({ ok: false, reason, error })
 }

@@ -14,6 +14,7 @@ import type { CampaignKind, CampaignAudience, CampaignSchedule } from '@/types'
 import type { MessagePrefs, MsgType } from '@/lib/comms/templates'
 import { blockedReason } from '@/lib/comms/reach'
 import { describeSkip } from '@/lib/comms/skipReasons'
+import { applyCanAskForReview } from './reviews'
 import { dateFieldFiresToday } from './campaigns'
 
 // Everything dispatch needs, plus the fields the trigger rules match on.
@@ -79,8 +80,12 @@ export function applyCustomerFilters<Q extends Filterable>(q: Q, spec: AudienceS
 
   // Owner-chosen audience switches.
   if (spec.audience?.not_reviewed) {
-    // Never chase a review from someone who already left one or said no.
-    out = out.is('reviewed_at', null).is('review_declined_at', null)
+    // THE review rule (lib/crm/reviews) — the same one the day-after cron applies
+    // via canAskForReview(). It excludes anyone already asked, by EITHER sender,
+    // so a customer can't be chased by the campaign a day after the automation
+    // asked them: the two ledgers can't see each other, but review_requested_at is
+    // written by both.
+    out = applyCanAskForReview(out)
   }
   if (spec.audience?.happy_only) {
     // Only ask for a referral from someone who already rated us well.

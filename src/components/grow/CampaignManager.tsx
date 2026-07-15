@@ -20,6 +20,7 @@ import {
 } from '@/lib/crm/campaigns'
 import { loadCampaignStats, summarizeStats, EMPTY_STATS, type CampaignStats } from '@/lib/crm/campaignStats'
 import { previewAudience } from '@/lib/crm/audience'
+import { applyCanAskForReview } from '@/lib/crm/reviews'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { CampaignHistory } from './CampaignHistory'
 import { CampaignPreview } from './CampaignPreview'
@@ -83,7 +84,9 @@ export function CampaignManager() {
       supabase.from('customers').select('id', head).eq('user_id', user.id).is('archived_at', null),
       supabase.from('customers').select('id', head).eq('user_id', user.id).is('archived_at', null).not('birthday', 'is', null),
       supabase.from('customers').select('id', head).eq('user_id', user.id).is('archived_at', null).not('anniversary', 'is', null),
-      supabase.from('customers').select('id', head).eq('user_id', user.id).is('archived_at', null).is('reviewed_at', null).is('review_declined_at', null),
+      // THE review rule, shared with the cron and the campaign audience — a
+      // hand-rolled copy here would drift from what the sender actually does.
+      applyCanAskForReview(supabase.from('customers').select('id', head).eq('user_id', user.id).is('archived_at', null)),
       supabase.from('customers').select('id', head).eq('user_id', user.id).is('archived_at', null).not('reviewed_at', 'is', null).gte('review_rating', 4),
       supabase.from('business_settings').select('company_name, review_url').eq('user_id', user.id).maybeSingle(),
     ])
@@ -265,7 +268,7 @@ export function CampaignManager() {
     if (c.kind === 'birthday') return `${counts.birthday} of ${counts.total} customers have a birthday set`
     if (c.kind === 'anniversary') return `${counts.anniversary} of ${counts.total} customers have an anniversary set`
     if (c.kind === 'win_back') return 'Quiet customers, when they pass the window'
-    if (c.kind === 'review' && d.audience.not_reviewed) return `${counts.notReviewed} of ${counts.total} customers haven’t reviewed yet`
+    if (c.kind === 'review' && d.audience.not_reviewed) return `${counts.notReviewed} of ${counts.total} customers haven’t been asked yet`
     if (c.kind === 'referral' && d.audience.happy_only) return `${counts.happy} of ${counts.total} customers reviewed you 4★ or better`
     return `Up to ${counts.total} customers${d.audience.recurring_only ? ' (recurring only)' : ''}`
   }

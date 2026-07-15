@@ -34,6 +34,10 @@ export interface DispatchInput {
   template: string          // for messages.meta + notification_log.template
   meta?: Record<string, unknown>
   thread?: boolean          // record an outbound bubble (default true)
+  // A receipt/confirmation for something the customer just did — email skips the
+  // email_opt_in check (CASL s.6(6)(b)). SMS opt-in and the category preference
+  // still apply. See lib/comms/reach.
+  transactional?: boolean
 }
 
 // `provider`/`providerId` are the provider's own handle on the message (Twilio
@@ -62,7 +66,7 @@ export async function dispatchToCustomer(sb: SupabaseClient, inp: DispatchInput)
   // Granular consent + channel opt-in + contact-on-file, resolved by the ONE
   // shared predicate (lib/comms/reach) so the campaign audience preview can
   // predict this exact outcome without re-deriving the rules.
-  const gate = reachCheck(c, inp.channels, inp.template)
+  const gate = reachCheck(c, inp.channels, inp.template, { transactional: inp.transactional })
   const blocked = new Map(gate.map(g => [g.channel, g.blocked]))
 
   // The customer declined this CATEGORY of message — nothing goes out at all.

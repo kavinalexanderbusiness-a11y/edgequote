@@ -1,9 +1,10 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { MsgType, MSG_LABELS, renderMessage, toDisplayBody, fromDisplayBody, PORTAL_LINK_DISPLAY } from '@/lib/comms/templates'
 import { summarizeSendOutcome, type SendOutcome } from '@/lib/comms/sendOutcome'
+import { newClientMessageId } from '@/lib/comms/idempotency'
 import { SmsCost } from '@/components/comms/SmsCost'
 import { Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
@@ -140,8 +141,27 @@ export function SendMessageDialog({
     [active, custom, sampleName, company],
   )
 
-  // Any change to the message, channels, or recipients disarms a pending bulk confirm.
-  useEffect(() => { setArmed(false) }, [text, ch.sms, ch.email, selected])
+  // ── Idempotency keys, one per recipient, stable for THIS send run ────────────
+  // Bulk was the one path that never sent a clientMessageId, so nothing claimed a
+  // send before dispatching: a refresh (or a re-send to fix the few that failed)
+  // re-delivered to everyone who had already received it. The guard already
+  // existed in lib/comms/idempotency and was simply never wired to the path where
+  // a duplicate costs the most — 200 people, twice.
+  //
+  // The keys are minted per recipient and reused across a retry of the SAME run,
+  // so /api/comms/send claims each one exactly once and a repeat is a no-op rather
+  // than a second text. They're regenerated whenever the run itself changes —
+  // different words, channels, or recipients means a genuinely different send —
+  // which is the same signal that disarms the confirm below. So "deselect the ones
+  // that worked and send again" correctly retries only the failures.
+  const sendIds = useRef<Record<string, string>>({})
+  function idFor(customerId: string): string {
+    return (sendIds.current[customerId] ||= newClientMessageId())
+  }
+
+  // Any change to the message, channels, or recipients disarms a pending bulk
+  // confirm — and starts a new send run, so the keys are reissued with it.
+  useEffect(() => { setArmed(false); sendIds.current = {} }, [text, ch.sms, ch.email, selected, active, eta])
 
   function compose(type: MsgType, opts?: { eta?: string }): string {
     // Only the server knows each customer's portal token — the composer shows a
@@ -191,6 +211,7 @@ export function SendMessageDialog({
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             customerId: chosen[i].customerId, template: active, jobId: jobId ?? undefined, channels,
+            clientMessageId: idFor(chosen[i].customerId),
             ...(sendBodyOverride ? { bodyOverride: fromDisplayBody(text) } : {}),
             vars: { eta, dateLabel: vars?.dateLabel, timeWindow: vars?.timeWindow, address: vars?.address, amount: vars?.amount },
           }),

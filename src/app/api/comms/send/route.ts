@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { renderMessage, renderBody, MsgType, MSG_LABELS, prefAllows, type MessagePrefs } from '@/lib/comms/templates'
+import { renderMessage, renderBody, MsgType, MSG_LABELS, type MessagePrefs } from '@/lib/comms/templates'
 import { sendSms, sendEmail, commsEnabled } from '@/lib/comms/send'
+import { reachCheck } from '@/lib/comms/reach'
 import { getOrCreateConversation } from '@/lib/comms/conversation'
 import { SKIP_REASON } from '@/lib/comms/skipReasons'
 import { SENT_STATES } from '@/lib/comms/delivery'
@@ -110,25 +111,37 @@ export async function POST(req: NextRequest) {
   // 'sent' (provider accepted) into 'delivered'/'bounced'.
   const attempts: { channel: string; status: string; detail?: string; sent: boolean; provider?: string | null; providerId?: string | null }[] = []
 
-  // Granular consent — the customer declined this CATEGORY (e.g. marketing) even
-  // though a channel is opted in. Same rule the dispatch engine + crons apply.
-  if (!prefAllows((cust as { message_prefs?: MessagePrefs | null }).message_prefs, template)) {
-    for (const ch of channels) { results[ch] = { sent: false, reason: 'no-optin' }; attempts.push({ channel: ch, status: 'skipped', detail: SKIP_REASON.UNSUBSCRIBED, sent: false }) }
-  } else {
-  if (channels.includes('sms')) {
-    if (!c.sms_opt_in) { results.sms = { sent: false, reason: 'no-optin' }; attempts.push({ channel: 'sms', status: 'skipped', detail: SKIP_REASON.NO_OPT_IN, sent: false }) }
-    else if (!c.phone) { results.sms = { sent: false, reason: 'no-phone' }; attempts.push({ channel: 'sms', status: 'skipped', detail: SKIP_REASON.NO_PHONE, sent: false }) }
-    else { const r = await sendSms(c.phone, outText); results.sms = r; attempts.push({ channel: 'sms', status: r.reason, detail: r.error, sent: r.sent, provider: r.sent ? 'twilio' : null, providerId: r.id ?? null }) }
+  // Consent is decided by THE one predicate (lib/comms/reach) — the same call
+  // dispatchToCustomer makes, so a manual send and an automated one can never
+  // reach different verdicts about the same customer. This used to be a
+  // hand-rolled copy of those rules: it agreed exactly, but nothing kept it
+  // agreeing, and reach.ts exists precisely so the next consent rule lands in one
+  // place. The route still owns its SEND, because it does things dispatch
+  // deliberately doesn't — mint the portal token, honour a bodyOverride, and
+  // answer previewOnly without any I/O.
+  const gate = reachCheck(c, channels, template)
+  const blocked = new Map(gate.map(g => [g.channel, g.blocked]))
+  // 'no-optin' vs 'no-phone'/'no-email' is this route's public JSON contract
+  // (summarizeSendOutcome + every caller reads it); map the canonical reason onto
+  // it rather than changing the shape.
+  const reasonFor = (b: string) => b === SKIP_REASON.NO_PHONE ? 'no-phone' : b === SKIP_REASON.NO_EMAIL ? 'no-email' : 'no-optin'
+  for (const g of gate) {
+    if (!g.blocked) continue
+    results[g.channel] = { sent: false, reason: reasonFor(g.blocked) }
+    attempts.push({ channel: g.channel, status: 'skipped', detail: g.blocked, sent: false })
   }
-  if (channels.includes('email')) {
-    if (!c.email_opt_in) { results.email = { sent: false, reason: 'no-optin' }; attempts.push({ channel: 'email', status: 'skipped', detail: SKIP_REASON.NO_OPT_IN, sent: false }) }
-    else if (!c.email) { results.email = { sent: false, reason: 'no-email' }; attempts.push({ channel: 'email', status: 'skipped', detail: SKIP_REASON.NO_EMAIL, sent: false }) }
-    else { const r = await sendEmail(c.email, rendered.subject, outHtml, outText); results.email = r; attempts.push({ channel: 'email', status: r.reason, detail: r.error, sent: r.sent, provider: r.sent ? 'resend' : null, providerId: r.id ?? null }) }
+
+  if (channels.includes('sms') && !blocked.get('sms')) {
+    const r = await sendSms(c.phone!, outText); results.sms = r
+    attempts.push({ channel: 'sms', status: r.reason, detail: r.error, sent: r.sent, provider: r.sent ? 'twilio' : null, providerId: r.id ?? null })
+  }
+  if (channels.includes('email') && !blocked.get('email')) {
+    const r = await sendEmail(c.email!, rendered.subject, outHtml, outText); results.email = r
+    attempts.push({ channel: 'email', status: r.reason, detail: r.error, sent: r.sent, provider: r.sent ? 'resend' : null, providerId: r.id ?? null })
   }
   if (channels.includes('push')) {
     // Future channel — wired through, always disabled for now (no provider).
     results.push = { sent: false, reason: 'disabled' }; attempts.push({ channel: 'push', status: 'disabled', detail: 'push not configured', sent: false })
-  }
   }
 
   // Record anything actually delivered into the customer's message thread, so it

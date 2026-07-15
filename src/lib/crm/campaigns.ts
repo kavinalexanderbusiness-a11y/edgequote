@@ -91,7 +91,9 @@ export const CAMPAIGN_KINDS: Record<CampaignKind, CampaignKindMeta> = {
 
 export const AUDIENCE_LABELS: Record<keyof CampaignAudience, string> = {
   recurring_only: 'Only recurring customers',
-  not_reviewed: 'Only customers who haven’t reviewed yet',
+  // Says "asked", not "reviewed": the filter excludes anyone already asked by
+  // EITHER review sender, which is what stops a customer being chased twice.
+  not_reviewed: 'Only customers we haven’t asked yet',
   happy_only: 'Only happy customers (reviewed 4★ or better)',
 }
 

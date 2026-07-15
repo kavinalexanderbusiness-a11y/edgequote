@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { addDays, format } from 'date-fns'
-import { renderMessage, MsgType, prefAllows, type MessagePrefs } from '@/lib/comms/templates'
-import { sendSms, sendEmail, commsEnabled, type SendResult } from '@/lib/comms/send'
-import { SKIP_REASON } from '@/lib/comms/skipReasons'
+import { renderMessage, MsgType, type MessagePrefs } from '@/lib/comms/templates'
+import { commsEnabled } from '@/lib/comms/send'
 import { SENT_STATES } from '@/lib/comms/delivery'
-import { logSend } from '@/lib/comms/log'
+import { dispatchToCustomer } from '@/lib/comms/dispatch'
+import { logDispatch } from '@/lib/comms/log'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { resolveAutomations, Automations } from '@/lib/comms/automations'
 import { canAskForReview } from '@/lib/crm/reviews'
@@ -87,32 +87,28 @@ export async function GET(req: NextRequest) {
         if (!(info.reviewUrl || '').trim()) continue
         askedThisRun.add(j.customer_id)
       }
-      if (!prefAllows(c.message_prefs, template)) continue  // customer declined this category of message
       const token = await ensurePortalToken(supabase, j.user_id, j.customer_id)
       const msg = renderMessage(template, info.templates, { firstName: c.name, businessName: info.name, dateLabel, portalLink: token ? portalUrl(token) : undefined, reviewLink: info.reviewUrl || undefined, directPhone: info.phone || undefined, logoUrl: info.logoUrl || undefined, website: info.website || undefined })
-      // Log EVERY outcome, including the skips. These two branches used to be bare
-      // `if (opted_in && contact)` with no else: an opted-out customer produced no
-      // send AND no notification_log row, so the timeline showed nothing at all and
-      // the owner had no way to know a reminder/review request never went out. The
-      // canonical reasons + branch order mirror lib/comms/dispatch.ts so automatic
-      // sends read identically to manual ones. alreadySent() blocks only on a real
-      // prior send (SENT_STATES), so a skipped row never suppresses a later one.
-      const logRow = (channel: 'sms' | 'email', status: string, detail: string | null, r?: SendResult) =>
-        logSend(supabase, {
-          userId: j.user_id, customerId: j.customer_id, jobId: j.id, channel, template, status, detail,
-          // The provider's id — without it these rows could never be corrected past
-          // 'sent', so a bounced reminder would read as delivered forever.
-          provider: r?.sent ? (channel === 'sms' ? 'twilio' : 'resend') : null,
-          providerId: r?.id ?? null,
-        })
 
-      if (!c.sms_opt_in) await logRow('sms', 'skipped', SKIP_REASON.NO_OPT_IN)
-      else if (!c.phone) await logRow('sms', 'skipped', SKIP_REASON.NO_PHONE)
-      else { const r = await sendSms(c.phone, msg.sms); await logRow('sms', r.reason, r.error ?? null, r); if (r.sent) sent++ }
-
-      if (!c.email_opt_in) await logRow('email', 'skipped', SKIP_REASON.NO_OPT_IN)
-      else if (!c.email) await logRow('email', 'skipped', SKIP_REASON.NO_EMAIL)
-      else { const r = await sendEmail(c.email, msg.subject, msg.html, msg.text); await logRow('email', r.reason, r.error ?? null, r); if (r.sent) sent++ }
+      // THE send path — the same one campaigns use. This block used to hand-roll
+      // its own consent ladder + per-channel logging, which made it the copy that
+      // reach.ts exists to prevent, and it never wrote a `messages` row. That
+      // second part mattered more than it looks: trg_crm_touch_last_contacted
+      // fires on messages INSERT, so a customer we reminded and review-asked every
+      // week still looked untouched — and the win_back campaign
+      // ("it's been a little while") would mail someone whose lawn we mowed
+      // yesterday. Dispatch threads the bubble, so last_contacted_at is now true.
+      // logDispatch records EVERY outcome including the skips, so a message that
+      // never went out is still visible in the timeline with its reason.
+      const res = await dispatchToCustomer(supabase, {
+        userId: j.user_id,
+        customer: { id: j.customer_id, phone: c.phone, email: c.email, sms_opt_in: c.sms_opt_in, email_opt_in: c.email_opt_in, message_prefs: c.message_prefs },
+        channels: ['sms', 'email'],
+        smsText: msg.sms, emailSubject: msg.subject, emailHtml: msg.html, emailText: msg.text,
+        template, meta: { job_id: j.id },
+      })
+      await logDispatch(supabase, res, { userId: j.user_id, customerId: j.customer_id, jobId: j.id, template })
+      sent += res.sentChannels.length
     }
   }
 
