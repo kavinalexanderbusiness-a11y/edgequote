@@ -96,7 +96,12 @@ export function NewInvoiceDialog({ open, onClose, onCreated }: {
         address: property?.address ?? customer.address ?? null,
         service_type: service.trim() || null,
         amount: 0,             // the draft editor sets the real figure from the lines
-        line_items: [],
+        // Seed ONE empty line. The draft editor shows its itemised UI only when a
+        // draft already has lines (line_items.length > 0) — an empty array opened
+        // the editor on the single "Amount" box instead, hiding the qty/unit-price
+        // rows that are the whole reason to bill manually behind an "+ Add line
+        // item" link. A manual invoice starts as a line item, because it is one.
+        line_items: [{ description: service.trim() || '', amount: 0, kind: 'service' }],
         status: 'draft',
         issued_date: today,
         due_date: due || null,

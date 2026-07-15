@@ -22,7 +22,7 @@ export interface TimelineStop {
 //
 // It answers, at a glance, what the metric strip could only state: where the day
 // actually goes, how much of it is driving, and whether it runs past capacity.
-export function RouteTimeline({ startMin, finishMin, capacityEndMin, stops, nowMin, className }: {
+export function RouteTimeline({ startMin, finishMin, capacityEndMin, stops, nowMin, onSelectStop, className }: {
   startMin: number
   finishMin: number
   capacityEndMin: number
@@ -30,6 +30,10 @@ export function RouteTimeline({ startMin, finishMin, capacityEndMin, stops, nowM
   /** Minutes-since-midnight right now — passed only for TODAY. Draws the "now"
    *  line, which is what turns a plan into a live read on whether you're behind. */
   nowMin?: number
+  /** Jump to a stop's card. Without this the timeline is a picture you can only
+   *  interrogate by hovering — and `title` tooltips never fire on touch, so on a
+   *  phone the stop names and arrival times were simply unreadable. */
+  onSelectStop?: (jobId: string) => void
   className?: string
 }) {
   if (!stops.length) return null
@@ -96,22 +100,35 @@ export function RouteTimeline({ startMin, finishMin, capacityEndMin, stops, nowM
           }
           const done = s.stop.status === 'completed'
           const running = s.stop.status === 'in_progress'
-          return (
-            <div
+          const label = `Stop ${s.idx + 1}: ${s.stop.name} — arrives ${minutesToTime12(s.stop.arrivalMin)}, ${s.stop.durMin} min${done ? ', done' : running ? ', in progress' : ''}`
+          const cls = cn(
+            'absolute inset-y-1 rounded-md border flex items-center justify-center overflow-hidden',
+            done
+              ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+              : running
+                ? 'bg-sky-400/25 border-sky-400/50 text-sky-200'
+                : 'bg-accent/20 border-accent/45 text-accent',
+            onSelectStop && 'cursor-pointer hover:brightness-125 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:z-20',
+          )
+          const style = { left: `${left}%`, width: `${width}%` }
+          const num = <span className="text-[9px] font-bold tabular-nums leading-none px-0.5 truncate">{s.idx + 1}</span>
+          // A real button when it can act: the block is then reachable by keyboard
+          // and readable by a screen reader, and a tap jumps to the stop's card —
+          // which is where the detail lives on a phone, tooltips being hover-only.
+          return onSelectStop ? (
+            <button
               key={s.stop.jobId}
-              className={cn(
-                'absolute inset-y-1 rounded-md border flex items-center justify-center overflow-hidden',
-                done
-                  ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
-                  : running
-                    ? 'bg-sky-400/25 border-sky-400/50 text-sky-200'
-                    : 'bg-accent/20 border-accent/45 text-accent',
-              )}
-              style={{ left: `${left}%`, width: `${width}%` }}
-              title={`${s.idx + 1}. ${s.stop.name} · ${minutesToTime12(s.stop.arrivalMin)}–${minutesToTime12(s.stop.arrivalMin + s.stop.durMin)} (${s.stop.durMin} min)`}
+              type="button"
+              onClick={() => onSelectStop(s.stop.jobId)}
+              className={cls}
+              style={style}
+              title={label}
+              aria-label={label}
             >
-              <span className="text-[9px] font-bold tabular-nums leading-none px-0.5 truncate">{s.idx + 1}</span>
-            </div>
+              {num}
+            </button>
+          ) : (
+            <div key={s.stop.jobId} className={cls} style={style} title={label} aria-label={label}>{num}</div>
           )
         })}
 
