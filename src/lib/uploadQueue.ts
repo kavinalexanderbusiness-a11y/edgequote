@@ -1,9 +1,10 @@
 import { createClient } from '@/lib/supabase/client'
-import { uploadPhoto } from '@/lib/photos'
+import { uploadPhoto, downscale } from '@/lib/photos'
 import type { PhotoKind } from '@/types'
 import { ensurePair, type JobRow } from '@/lib/beforeafter/autopair'
 import { visualHash } from '@/lib/dedup'
 import { toast } from '@/lib/toast'
+import { putPending, allPending, dropPending, bumpPendingAttempts } from '@/lib/offline/photoStore'
 
 // ── Background upload queue — ONE engine for "uploads that keep going" ────────────
 // A module-level external store (subscribe/emit, mirrors lib/toast) consumed by a
@@ -11,9 +12,13 @@ import { toast } from '@/lib/toast'
 // while you navigate anywhere in EdgeQuote, with progress shown in ONE place.
 //   • Optimistic: items appear instantly (local object-URL previews).
 //   • Parallel with a concurrency cap; retries failures with backoff.
-//   • Pauses on offline, RESUMES on reconnect (within the session — File handles
-//     can't survive a full page reload, browser security).
-//   • Never uploads the same photo twice (session signature dedup).
+//   • Pauses on offline, RESUMES on reconnect — and now SURVIVES a restart: every
+//     pending photo's bytes are persisted to IndexedDB (lib/offline/photoStore) and
+//     rehydrated on load. (The old note here said File handles "can't survive a full
+//     page reload, browser security". They can: IndexedDB stores Blob/File via
+//     structured clone. That misreading was the entire data-loss window — a phone
+//     backgrounding the tab mid-route silently binned the job's photos.)
+//   • Never uploads the same photo twice (signature dedup, restored on rehydrate).
 //   • Reuses lib/photos.uploadPhoto (job_photos + the job-photos bucket) and
 //     autopair.ensurePair (marketing_assets). AI Vision/portal/Studio read those
 //     same rows — no new storage, no parallel photo system.
@@ -102,15 +107,20 @@ async function run(id: string) {
   if (!cur) return
   if (row) {
     patch(id, { status: 'done', rowId: row.id, error: undefined })
+    void dropPending(id)                                             // it's on the server now
   } else {
     const attempts = cur.attempts + 1
     if (!online()) {
       patch(id, { status: 'paused', attempts })                       // wait for reconnect
     } else if (attempts < MAX_ATTEMPTS) {
       patch(id, { status: 'queued', attempts, error: 'retrying…' })   // auto-retry with backoff
+      void bumpPendingAttempts(id, attempts)
       window.setTimeout(pump, backoff(attempts))
     } else {
+      // Out of attempts: keep the bytes. The tray still offers Retry, and a photo
+      // is the one thing here that cannot be recreated later — the lawn is mown.
       patch(id, { status: 'error', attempts, error: 'Upload failed' })
+      void bumpPendingAttempts(id, attempts)
     }
   }
   maybeFinishGroup(it.groupId)
@@ -159,7 +169,7 @@ export function enqueueUploads(group: EnqueueGroup): string {
   for (const e of group.items) {
     const f = e.file
     const sig = `${f.name}|${f.size}|${f.lastModified}`
-    if (seenSigs.has(sig)) continue           // never upload the same photo twice (session)
+    if (seenSigs.has(sig)) continue           // never upload the same photo twice
     seenSigs.add(sig)
     added.push({
       id: `${groupId}-${added.length}-${Math.random().toString(36).slice(2, 7)}`,
@@ -168,8 +178,67 @@ export function enqueueUploads(group: EnqueueGroup): string {
       status: 'queued', attempts: 0, takenAt: e.takenAt ?? null, contentHash: e.contentHash ?? null,
     })
   }
-  if (added.length) { items = [...items, ...added]; emit(); pump() }
+  if (added.length) {
+    items = [...items, ...added]; emit(); pump()
+    // Persist in the background: stays synchronous for callers, and the upload is
+    // already racing anyway — whichever finishes first, the other is a no-op (a
+    // completed upload drops its record; a persisted record for a completed upload
+    // is dropped on success).
+    void persist(added)
+  }
   return groupId
+}
+
+// Shrink then store. Downscaling first is what makes persistence affordable, and
+// the upload re-runs downscale on the smaller blob as a pass-through (see
+// photos.downscale) — so this costs one encode total, not two.
+async function persist(list: QueueItem[]): Promise<void> {
+  for (const it of list) {
+    try {
+      const blob = await downscale(it.file)
+      await putPending({
+        id: it.id, sig: it.sig, blob, name: it.file.name, kind: it.kind, ctx: it.ctx,
+        groupId: it.groupId, label: it.label, pairJob: it.pairJob,
+        takenAt: it.takenAt ?? null, contentHash: it.contentHash ?? null, attempts: it.attempts,
+        createdAt: Date.now(),
+      })
+    } catch { /* best-effort — the in-memory upload still runs this session */ }
+  }
+}
+
+// ── Restart recovery ─────────────────────────────────────────────────────────────
+// On load, anything still on disk goes back in the queue and uploads. Runs once,
+// lazily, from the mounted tray (see UploadQueueWidget) so it never fires during SSR.
+// Rehydrated items start 'queued'; pump() parks them as 'paused' if we're offline and
+// the existing `online` listener releases them on reconnect — the same path a photo
+// taken this session follows, so there's one resume rule, not two.
+let rehydrated = false
+export async function rehydrateUploads(): Promise<number> {
+  if (rehydrated || typeof window === 'undefined') return 0
+  rehydrated = true
+  const recs = await allPending()
+  if (!recs.length) return 0
+  const restored: QueueItem[] = []
+  for (const r of recs) {
+    if (seenSigs.has(r.sig)) continue          // already back in the queue this session
+    seenSigs.add(r.sig)
+    // Rebuild a File from the stored bytes so the rest of the pipeline (uploadPhoto,
+    // visualHash) sees exactly what it would have seen before the restart.
+    const file = new File([r.blob], r.name, { type: r.blob.type || 'image/jpeg' })
+    restored.push({
+      id: r.id, sig: r.sig, file, previewUrl: URL.createObjectURL(r.blob), kind: r.kind,
+      ctx: r.ctx, groupId: r.groupId, label: r.label, pairJob: r.pairJob,
+      // Attempts reset: the last run died with the app, not on the merits. A photo
+      // that has genuinely been rejected MAX_ATTEMPTS times is already off the disk.
+      status: 'queued', attempts: 0, error: undefined,
+      takenAt: r.takenAt, contentHash: r.contentHash,
+    })
+  }
+  if (restored.length) {
+    items = [...items, ...restored]; emit(); pump()
+    toast(`Resuming ${restored.length} photo${restored.length !== 1 ? 's' : ''} from your last session`, { tone: 'info' })
+  }
+  return restored.length
 }
 
 export function retryUpload(id: string) {
@@ -185,12 +254,15 @@ export function retryAllFailed() {
   pump()
 }
 
+// Dismiss is the ONLY way a not-yet-uploaded photo leaves the queue — an explicit
+// "I don't want this one". That's what makes it safe to drop the bytes too.
 export function dismissUpload(id: string) {
   const it = items.find(i => i.id === id)
   if (!it) return
   try { URL.revokeObjectURL(it.previewUrl) } catch { /* ignore */ }
   seenSigs.delete(it.sig)                     // allow a deliberate re-drop later
   items = items.filter(i => i.id !== id)
+  void dropPending(id)
   emit()
 }
 
@@ -199,6 +271,9 @@ export function clearDone(groupId?: string) {
   if (!drop.length) return
   for (const d of drop) { try { URL.revokeObjectURL(d.previewUrl) } catch { /* ignore */ } }
   items = items.filter(i => !drop.includes(i))
+  // Belt and braces: a 'done' item already dropped its record on success. This only
+  // matters if the tray outlived a write that failed silently.
+  for (const d of drop) void dropPending(d.id)
   emit()
 }
 

@@ -84,7 +84,11 @@ export async function listPhotosForProperties(
 // Downscale a phone photo before upload so the gallery loads fast and storage
 // stays small. Falls back to the original file on any failure (unsupported
 // format, no canvas, etc.) — never blocks an upload over a resize hiccup.
-async function downscale(file: File, maxDim = 1600, quality = 0.82): Promise<Blob> {
+// Exported so the upload queue can shrink a photo BEFORE persisting it to disk
+// (~300KB instead of ~4MB per pending shot). Safe to run twice: once an image is
+// within maxDim this returns the input untouched, so the upload's own call on an
+// already-downscaled blob is a pass-through, not a second lossy re-encode.
+export async function downscale(file: File, maxDim = 1600, quality = 0.82): Promise<Blob> {
   if (!file.type.startsWith('image/') || typeof document === 'undefined') return file
   try {
     // `imageOrientation: 'from-image'` bakes the EXIF rotation into the bitmap BEFORE
