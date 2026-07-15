@@ -695,6 +695,16 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
   const t = invoiceTotals(net, settings, discount)
 
   async function save() {
+    // A priced line with no description is the one case where dropping it silently
+    // diverges the books: the filter below removes the LINE, but `amount` is summed
+    // from every row — so the money stayed on the invoice with nothing to explain
+    // it, and the PDF's breakdown no longer added up to its own total. Blank rows
+    // worth $0 are still dropped silently: they contribute nothing either way, so
+    // filtering them changes no number.
+    if (editItems && items.some(li => lineAmount(li) !== 0 && !li.description.trim())) {
+      notify.error('Every priced line needs a description — otherwise it won’t appear on the invoice.')
+      return
+    }
     setSaving(true)
     const hasD = !!dType && Number(dValue) > 0
     const patch: Record<string, unknown> = {
