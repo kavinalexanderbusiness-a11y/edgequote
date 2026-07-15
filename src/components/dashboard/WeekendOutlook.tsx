@@ -67,9 +67,24 @@ export function WeekendOutlook({ plan }: { plan: DayPlan }) {
                       </span>
                       <span className="flex items-center gap-1 shrink-0">
                         <span className={cn('tabular-nums', j.value > 0 ? 'text-ink-muted' : 'text-amber-400')}>{j.value > 0 ? formatCurrency(j.value) : '$?'}</span>
-                        {/* 40px hit areas — these get tapped with gloves on */}
-                        {j.phone && <a href={`tel:${j.phone}`} className="text-accent-text hover:opacity-80 w-10 h-10 -my-2.5 flex items-center justify-center" title="Call"><Phone className="w-4 h-4" /></a>}
-                        {j.address && <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(j.address)}`} target="_blank" rel="noopener noreferrer" className="text-ink-muted hover:text-ink w-10 h-10 -my-2.5 flex items-center justify-center" title="Map"><MapPin className="w-4 h-4" /></a>}
+                        {/* 40px hit areas — these get tapped with gloves on.
+                            aria-label names the CUSTOMER, not the verb: `title`
+                            alone is a last-resort accessible name, and a column
+                            of icon links otherwise reads as "Call, Call, Call"
+                            with no way to tell whose. */}
+                        {j.phone && (
+                          <a href={`tel:${j.phone}`} aria-label={`Call ${j.customer_name}`} title={`Call ${j.customer_name}`}
+                            className="text-accent-text hover:opacity-80 w-10 h-10 -my-2.5 flex items-center justify-center rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                            <Phone className="w-4 h-4" aria-hidden />
+                          </a>
+                        )}
+                        {j.address && (
+                          <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(j.address)}`} target="_blank" rel="noopener noreferrer"
+                            aria-label={`Directions to ${j.customer_name}`} title={`Directions to ${j.customer_name}`}
+                            className="text-ink-muted hover:text-ink w-10 h-10 -my-2.5 flex items-center justify-center rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                            <MapPin className="w-4 h-4" aria-hidden />
+                          </a>
+                        )}
                       </span>
                     </div>
                   ))}

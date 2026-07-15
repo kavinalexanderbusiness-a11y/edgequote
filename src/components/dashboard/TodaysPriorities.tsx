@@ -53,9 +53,11 @@ export function TodaysPriorities({ items }: { items: Priority[] }) {
                   href={p.href}
                   className="group flex items-center gap-3 px-4 sm:px-5 py-3.5 hover:bg-surface/40 active:bg-surface/60 transition-colors"
                 >
-                  <span className={cn('shrink-0 w-5 h-5 rounded text-[10px] font-bold flex items-center justify-center tabular-nums',
+                  {/* Both decorative: this is an <ol>, so assistive tech already
+                      conveys the rank, and the icon just restates the label. */}
+                  <span aria-hidden className={cn('shrink-0 w-5 h-5 rounded text-[10px] font-bold flex items-center justify-center tabular-nums',
                     i === 0 ? 'bg-accent/15 text-accent-text' : 'bg-bg-tertiary text-ink-faint')}>{i + 1}</span>
-                  <span className={cn('shrink-0 w-9 h-9 rounded-lg border flex items-center justify-center', meta.tone)}>
+                  <span aria-hidden className={cn('shrink-0 w-9 h-9 rounded-lg border flex items-center justify-center', meta.tone)}>
                     <Icon className="w-4 h-4" />
                   </span>
                   <span className="min-w-0 flex-1">

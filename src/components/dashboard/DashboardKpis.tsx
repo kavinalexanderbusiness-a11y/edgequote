@@ -12,14 +12,16 @@ import { Card } from '@/components/ui/Card'
 export interface DashboardKpiValues {
   collected: number
   jobsThisMonth: number
-  conversionRate: number
+  conversionRate: number | null
 }
 
 export function DashboardKpis({ collected, jobsThisMonth, conversionRate }: DashboardKpiValues) {
   const tiles = [
     { label: 'Collected', value: formatCurrency(collected), sub: 'All time', icon: Wallet, color: 'text-emerald-400', bg: 'bg-emerald-500/10', href: '/dashboard/invoices' },
     { label: 'Jobs This Month', value: String(jobsThisMonth), sub: 'Completed', icon: CalendarCheck, color: 'text-accent-text', bg: 'bg-accent-dim', href: '/dashboard/schedule' },
-    { label: 'Conversion', value: `${conversionRate}%`, sub: 'Quotes accepted', icon: Percent, color: 'text-teal-400', bg: 'bg-teal-500/10', href: '/dashboard/quotes' },
+    // —, not 0%: with no decided quotes there is no rate, and "0%" on a brand
+    // new business's first morning is a false claim, not a metric.
+    { label: 'Conversion', value: conversionRate == null ? '—' : `${conversionRate}%`, sub: conversionRate == null ? 'No quotes yet' : 'Quotes accepted', icon: Percent, color: 'text-teal-400', bg: 'bg-teal-500/10', href: '/dashboard/quotes' },
   ]
   return (
     <div className="grid grid-cols-3 gap-3">

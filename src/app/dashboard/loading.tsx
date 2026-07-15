@@ -14,7 +14,11 @@ import { Skeleton } from '@/components/ui/Skeleton'
 // jumps when it arrives.
 export default function DashboardLoading() {
   return (
-    <PageContainer width="wide">
+    // aria-busy + aria-hidden children: this is a picture of the page, not the
+    // page. Without it a screen reader announces a pile of meaningless empty
+    // boxes; with it the region simply reports that it's loading.
+    <PageContainer width="wide" aria-busy="true" aria-label="Loading your dashboard">
+      <div aria-hidden className="contents">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between mb-6">
         <div className="flex-1 min-w-0">
           <Skeleton className="h-7 w-44" />
@@ -23,16 +27,17 @@ export default function DashboardLoading() {
         <Skeleton className="h-10 w-32 shrink-0 rounded-xl" />
       </div>
 
-      {/* Money band */}
-      <div className="grid grid-cols-3 gap-3">
+      {/* Money band — mirrors MoneyBand's real geometry (3-across at every width,
+          p-3 on phones) so nothing shifts when the numbers land. */}
+      <div className="grid grid-cols-3 gap-2 sm:gap-3">
         {[0, 1, 2].map(i => (
-          <Card key={i} className="p-4">
-            <div className="flex items-center justify-between mb-2">
-              <Skeleton className="h-2.5 w-20" />
-              <Skeleton className="h-7 w-7 rounded-lg" />
+          <Card key={i} className="p-3 sm:p-4">
+            <div className="flex items-center justify-between gap-1 mb-1.5 sm:mb-2">
+              <Skeleton className="h-2.5 w-12 sm:w-20" />
+              <Skeleton className="h-7 w-7 rounded-lg hidden sm:block" />
             </div>
-            <Skeleton className="h-7 w-24" />
-            <Skeleton className="h-3 w-16 mt-2" />
+            <Skeleton className="h-6 sm:h-7 w-16 sm:w-24" />
+            <Skeleton className="h-2.5 w-12 sm:w-16 mt-1.5" />
           </Card>
         ))}
       </div>
@@ -55,6 +60,7 @@ export default function DashboardLoading() {
             </div>
           ))}
         </div>
+      </div>
       </div>
     </PageContainer>
   )

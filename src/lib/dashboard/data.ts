@@ -40,7 +40,9 @@ export interface DashboardData {
   money: MoneyBandValues
   priorities: Priority[]
   dayPlan: DayPlan
-  kpis: { collected: number; jobsThisMonth: number; conversionRate: number }
+  // conversionRate is null with NO decided quotes — "0%" would be a claim we
+  // haven't earned the data to make.
+  kpis: { collected: number; jobsThisMonth: number; conversionRate: number | null }
   weather: WeatherImpactReport | null
   greeting: string
   dateLine: string
@@ -213,7 +215,7 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     kpis: {
       collected: invoices.reduce((s, i) => s + (Number(i.amount_paid) || 0), 0),
       jobsThisMonth: allJobsForKpi.filter(j => j.status === 'completed' && j.scheduled_date >= monthStart).length,
-      conversionRate: decided > 0 ? Math.round((accepted / decided) * 100) : 0,
+      conversionRate: decided > 0 ? Math.round((accepted / decided) * 100) : null,
     },
     weather,
     greeting: hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening',
