@@ -40,7 +40,6 @@ const styles = StyleSheet.create({
   tableRow: { flexDirection: 'row', paddingVertical: 8, paddingHorizontal: 12, borderTopWidth: 1, borderTopColor: COLORS.line },
   th: { fontSize: 8, color: COLORS.muted, textTransform: 'uppercase', letterSpacing: 0.5, fontFamily: 'Helvetica-Bold' },
   td: { fontSize: 10, color: COLORS.ink },
-  tdSub: { fontSize: 8, color: COLORS.muted, marginTop: 1 },
   cellDesc: { width: '70%' },
   cellAmt: { width: '30%', textAlign: 'right' },
 
@@ -145,23 +144,14 @@ export function InvoiceDocument({ invoice, settings }: InvoicePDFProps) {
           {(invoice.line_items && invoice.line_items.length > 0
             ? invoice.line_items
             : [{ description: invoice.service_type || 'Services rendered', amount: invoiceTotals(invoice.amount, settings, { type: invoice.discount_type, value: invoice.discount_value }).subtotal, kind: 'service' as const }]
-          ).map((li, i) => {
-            // Manual lines carry qty + unit price; show the maths under the
-            // description so the customer can check it. Auto lines have neither
-            // and render exactly as before.
-            const q = Number((li as { qty?: number | null }).qty)
-            const up = Number((li as { unit_price?: number | null }).unit_price)
-            const showMath = Number.isFinite(q) && q > 0 && Number.isFinite(up) && up > 0
-            return (
-              <View style={styles.tableRow} key={i}>
-                <View style={styles.cellDesc}>
-                  <Text style={styles.td}>{li.description}</Text>
-                  {showMath && <Text style={styles.tdSub}>{`${q} × ${money(up)}`}</Text>}
-                </View>
-                <Text style={[styles.td, styles.cellAmt]}>{money(Number(li.amount))}</Text>
+          ).map((li, i) => (
+            <View style={styles.tableRow} key={i}>
+              <View style={styles.cellDesc}>
+                <Text style={styles.td}>{li.description}</Text>
               </View>
-            )
-          })}
+              <Text style={[styles.td, styles.cellAmt]}>{money(Number(li.amount))}</Text>
+            </View>
+          ))}
         </View>
 
         {(() => {

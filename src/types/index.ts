@@ -391,15 +391,8 @@ export const ADDON_TEMPLATES: AddonTemplate[] = [
 export type InvoiceLineKind = 'service' | 'addon' | 'travel'
 export interface InvoiceLineItem {
   description: string
-  // The LINE TOTAL (qty × unit_price for manual lines). Always the source of
-  // truth every engine reads — PDF, portal, totals, ledger — so legacy lines
-  // written before qty/unit_price existed keep working untouched.
   amount: number
   kind: InvoiceLineKind
-  // Optional manual-invoice detail (line_items is jsonb → no migration). Present
-  // on hand-built invoices; absent on auto-generated ones, which render as before.
-  qty?: number | null
-  unit_price?: number | null
 }
 
 // Stored statuses. partial/overpaid are derived by the recompute_invoice_paid DB
