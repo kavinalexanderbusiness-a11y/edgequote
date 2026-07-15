@@ -6,6 +6,7 @@ import { commsEnabled } from '@/lib/comms/send'
 import { dispatchToCustomer } from '@/lib/comms/dispatch'
 import { SENT_STATES } from '@/lib/comms/delivery'
 import { logDispatch } from '@/lib/comms/log'
+import { claimSend, finalizeSend } from '@/lib/comms/idempotency'
 import { loadOwnerContext, type OwnerContext } from '@/lib/automation/owner'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 
@@ -32,6 +33,10 @@ interface CronJob { id: string; user_id: string; customer_id: string | null; sch
 // platform timeout and sends FEWER, at an arbitrary cut-off, silently. 500 jobs on
 // one date is far beyond a single crew's day; if this ever warns, raise the cap.
 const MAX_PER_RUN = 500
+
+// The channels this cron has always attempted. Hoisted so the RESERVATION and the
+// dispatch can never disagree about what was claimed.
+const CHANNELS = ['sms', 'email']
 
 export async function GET(req: NextRequest) {
   if (!cronSecretOk(req)) return NextResponse.json({ error: 'forbidden' }, { status: 403 })
@@ -92,6 +97,29 @@ export async function GET(req: NextRequest) {
         const token = await ensurePortalToken(supabase, j.user_id, j.customer_id)
         const msg = renderMessage(template, info.templates, { firstName: c.name, businessName: info.name, dateLabel, portalLink: token ? portalUrl(token) : undefined, reviewLink: info.reviewUrl || undefined, directPhone: info.phone || undefined, logoUrl: info.logoUrl || undefined, website: info.website || undefined })
 
+        // ── RESERVE, THEN SEND ────────────────────────────────────────────────
+        // alreadySent() above is only a cheap PRE-FILTER, never a guard: the row it
+        // reads isn't written until AFTER the provider has accepted the message. So
+        // two overlapping runs (Vercel Cron is at-least-once) both see zero rows and
+        // both dispatch — the customer gets two "your visit is tomorrow" texts. The
+        // window is the full provider latency, up to 10s. This was the only sender in
+        // the repo without an atomic reservation; the chasers CAS, campaigns claim a
+        // crm_campaign_log row, and this now uses THE shared primitive.
+        //
+        // claimSend's composite PK (user_id, client_message_id) is the serialization
+        // point: exactly one caller wins the insert and may send. Keyed per
+        // (job, template) so a retry of this same logical reminder — not merely this
+        // same invocation — is recognised and never sends twice.
+        //
+        // Claimed as LATE as possible, after the render: a render that throws (e.g.
+        // ensurePortalToken failing) then hasn't spent the reservation, preserving the
+        // "a job that threw is retried on the next run" property the catch documents.
+        const claimKey = `${j.id}:${template}`
+        const { claimed } = await claimSend(supabase, j.user_id, claimKey, CHANNELS.join('+'))
+        // Losing the claim is an ordinary outcome, not an error: another run owns this
+        // send. Pass the job over exactly as alreadySent() would have.
+        if (!claimed) { skipped++; continue }
+
         // THE one dispatch pipeline — same opt-in checks, same branch order, same
         // canonical skip reasons and provider capture every other sender gets.
         // `thread: false` preserves this cron's behaviour: reminders and review
@@ -101,12 +129,20 @@ export async function GET(req: NextRequest) {
         const res = await dispatchToCustomer(supabase, {
           userId: j.user_id,
           customer: { id: j.customer_id, phone: c.phone, email: c.email, sms_opt_in: c.sms_opt_in, email_opt_in: c.email_opt_in, message_prefs: c.message_prefs },
-          channels: ['sms', 'email'],
+          channels: CHANNELS,
           smsText: msg.sms, emailSubject: msg.subject, emailHtml: msg.html, emailText: msg.text,
           template,
           thread: false,
         })
         await logDispatch(supabase, res, { userId: j.user_id, customerId: j.customer_id, jobId: j.id, template })
+        // Informational only — the CLAIM is what enforces at-most-once, so a failed
+        // finalize is harmless. Mirrors the reserve-then-finalize shape
+        // /api/cron/campaigns uses, and keeps the reservation row from reading
+        // 'sending' forever. Deliberately NOT done on the throw path below: a throw
+        // after dispatch means we genuinely don't know whether the provider took it,
+        // and 'sending' is the honest record of that.
+        await finalizeSend(supabase, j.user_id, claimKey,
+          res.sentChannels.length ? 'sent' : (res.attempts.some(a => a.status === 'error') ? 'failed' : 'skipped'))
         if (res.sentChannels.length) sent += res.sentChannels.length
         else skipped++
         // Only a real send FAILURE is noise worth making: no phone, opted out or

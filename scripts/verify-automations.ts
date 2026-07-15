@@ -7,10 +7,13 @@ import { displayInvoiceStatus, invoiceBalance } from '@/lib/payments/ledger'
 import { resolveAutomations } from '@/lib/comms/automations'
 import { displayQuoteStatus, isQuoteExpired, isExpiringSoon, daysUntilExpiry, defaultValidUntil } from '@/lib/quoteStatus'
 import { prefAllows, msgCategory } from '@/lib/comms/templates'
-import { dispatchToCustomer, sendResultsFromAttempts, type DispatchAttempt } from '@/lib/comms/dispatch'
+import { dispatchToCustomer, sendResultsFromAttempts, type DispatchAttempt, type DispatchResult } from '@/lib/comms/dispatch'
+import { logSend, logDispatch } from '@/lib/comms/log'
 import { sendSms, sendEmail } from '@/lib/comms/send'
 import { runChaseCron, type ChaseItem, type ChaseTally } from '@/lib/automation/chase'
 import { SKIP_REASON } from '@/lib/comms/skipReasons'
+import { cadenceDays, churnRisk, type CadenceRecLike } from '@/lib/signals'
+import { effectiveFreq } from '@/lib/invoicing'
 import { decide } from '@/lib/automation/decide'
 import { AUTOMATION_RULES } from '@/lib/automation/rules'
 import type { AutomationRule } from '@/lib/automation/types'
@@ -629,6 +632,148 @@ async function run() {
   check('results-map', 'section-18 output is UNCHANGED by the new field',
     sendResultsFromAttempts([asAttempt({ channel: 'email', status: 'error', detail: 'Resend 422: bad address', retryable: false })]),
     { email: { sent: false, reason: 'error', error: 'Resend 422: bad address' } })
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  H('24. CADENCE — a pricing bucket is not a cadence')
+  // /api/cron/signals composed cadenceDays(effectiveFreq(...), rec). effectiveFreq is
+  // lossy BY DESIGN — it answers "which standard PRICE applies", not "how many days".
+  // cadenceDays then matched the bucket on its first branch and never reached the
+  // precise `rec` branch. These cases pin the difference so the composition cannot be
+  // reintroduced in the sweep without going red.
+  {
+    // ── The `rec` branch is exact when the freq is raw ──
+    const biMonthly: CadenceRecLike = { interval_unit: 'month', interval_count: 2 }
+    const every3wk: CadenceRecLike = { interval_unit: 'week', interval_count: 3 }
+    check('cadence', 'bi-monthly (every 2 months) → 60 days', cadenceDays(null, biMonthly), 60)
+    check('cadence', 'every 3 weeks → 21 days', cadenceDays(null, every3wk), 21)
+    check('cadence', 'every 10 days → 10 days', cadenceDays(null, { interval_unit: 'day', interval_count: 10 }), 10)
+
+    // ── ...and the effectiveFreq composition destroys it. This is WHY the sweep
+    //    must not use it. If these ever equal the true cadence above, effectiveFreq
+    //    changed meaning and the sweep's comment needs revisiting.
+    check('cadence', '➜ effectiveFreq buckets 2-monthly to "monthly"', effectiveFreq(null, 'month', 2), 'monthly')
+    check('cadence', '➜ composed, 60d collapses to 30 (the bug)',
+      cadenceDays(effectiveFreq(null, 'month', 2), biMonthly), 30)
+    check('cadence', '➜ effectiveFreq buckets every-3-weeks to "biweekly"', effectiveFreq(null, 'week', 3), 'biweekly')
+    check('cadence', '➜ composed, 21d collapses to 14 (the bug)',
+      cadenceDays(effectiveFreq(null, 'week', 3), every3wk), 14)
+
+    // ── Legacy standard cadences are UNAFFECTED by passing the raw freq: they hit
+    //    the same first branches either way. This is what makes the sweep's fix safe.
+    check('cadence', 'legacy freq="weekly" still 7', cadenceDays('weekly', { interval_unit: 'week', interval_count: 1 }), 7)
+    check('cadence', 'legacy freq="biweekly" still 14', cadenceDays('biweekly', { interval_unit: 'week', interval_count: 2 }), 14)
+    check('cadence', 'legacy freq="monthly" still 30', cadenceDays('monthly', { interval_unit: 'month', interval_count: 1 }), 30)
+    check('cadence', 'no recurrence at all → the historical 14 fallback', cadenceDays(null, null), 14)
+
+    // ── The sweep's EXACT expression, pinned ──
+    const sweepCadence = (rec: { freq: string | null; interval_unit: string | null; interval_count: number | null } | null) =>
+      cadenceDays(rec?.freq ?? null, rec)
+    check('cadence', 'the sweep reads a bi-monthly series as 60d',
+      sweepCadence({ freq: null, interval_unit: 'month', interval_count: 2 }), 60)
+    check('cadence', 'the sweep still reads a legacy weekly series as 7d',
+      sweepCadence({ freq: 'weekly', interval_unit: null, interval_count: null }), 7)
+
+    // ── What the wrong cadence actually DID to the signal ──
+    // Thresholds: ratio >= 1.25 → watch, >= 1.6 → high.
+    const at = (days: number, cadence: number) =>
+      churnRisk({ hasActiveRecurring: true, daysSinceLastService: days, cadenceDays: cadence, seasonallyDormant: false })
+    // A bi-monthly customer 45 days out is EARLY (0.75 of their cadence).
+    check('cadence', 'bi-monthly at 45d, TRUE cadence 60 → not at risk', at(45, 60).level, 'none')
+    check('cadence', '➜ with the bucketed cadence 30 → false churn_risk (the bug)', at(45, 30).level, 'watch')
+    check('cadence', '➜ and the ratio is double the truth', [at(45, 60).ratio, at(45, 30).ratio], [0.75, 1.5])
+    // Every-3-weeks at 25 days is barely late (1.19); bucketed it reads as HIGH.
+    check('cadence', 'every-3-weeks at 25d, TRUE cadence 21 → not at risk', at(25, 21).level, 'none')
+    check('cadence', '➜ with the bucketed cadence 14 → false "high" (the bug)', at(25, 14).level, 'high')
+
+    // ── ran-out's urgent window is sized by the same cadence, so it inherited it.
+    //    max(RANOUT_URGENT_MIN_DAYS=21, cadence * 3).
+    const urgentWindow = (cadence: number) => Math.max(21, cadence * 3)
+    check('cadence', 'ran-out urgent window follows the TRUE bi-monthly cadence', urgentWindow(60), 180)
+    check('cadence', '➜ the bucketed cadence shrank it to 90 (the bug)', urgentWindow(30), 90)
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  H('25. AUDIT LOG — the fallback is for a missing COLUMN, not for any error')
+  // The base-row fallback omits provider + provider_message_id, which is exactly what
+  // lib/comms/delivery matches webhooks on — so a fallback row can never advance past
+  // 'sent' and a bounced email reads "Sent" forever. That trade is only worth making
+  // when the column genuinely isn't there. Firing on ANY error made a transient blip a
+  // permanent downgrade, and turned a client-side timeout on a server-side SUCCESS into
+  // a second, untrackable row for one send.
+  // Only the notification_log table is faked here; the real logSend/logDispatch run.
+  {
+    type PgErr = null | { code?: string; message?: string }
+    const realErr = console.error
+    // Answers each insert with the next queued error, and records what was written.
+    // console.error is captured so "did it complain?" is itself assertable.
+    async function run1<T>(errors: PgErr[], fn: (sb: never) => Promise<T>) {
+      const inserts: Record<string, unknown>[] = []
+      let i = 0
+      const sb = { from: () => ({ insert: async (row: Record<string, unknown>) => { inserts.push(row); return { error: errors[i++] ?? null } } }) } as never
+      let cries = 0
+      console.error = () => { cries++ }
+      try { return { r: await fn(sb), inserts, cries } } finally { console.error = realErr }
+    }
+    const ROW = { userId: 'u', customerId: 'c', channel: 'email', template: 'reminder', status: 'sent', provider: 'resend', providerId: 're_123' }
+    const send = (errors: PgErr[]) => run1(errors, sb => logSend(sb, ROW))
+
+    // ── Happy path is untouched: one row, provider id intact ──
+    {
+      const { r, inserts, cries } = await send([null])
+      check('audit-log', 'clean insert → ok, one row, provider id intact',
+        [r, inserts.length, inserts[0].provider_message_id, cries], [{ ok: true }, 1, 're_123', 0])
+    }
+
+    // ── The ONE case the fallback exists for ──
+    for (const code of ['42703', 'PGRST204']) {
+      const { r, inserts, cries } = await send([{ code, message: 'column does not exist' }])
+      check('audit-log', `${code} (missing column) → fallback still saves the row`,
+        [r, inserts.length], [{ ok: true }, 2])
+      check('audit-log', `➜ ${code} fallback row is the untrackable base row (the known trade)`,
+        ['provider' in inserts[1], 'provider_message_id' in inserts[1], cries], [false, false, 0])
+    }
+
+    // ── Every OTHER error must NOT fall back ──
+    // A second insert here is the double-row bug: if the first insert succeeded
+    // server-side and only the response was lost, the fallback wrote a SECOND row.
+    for (const [code, label] of [['23505', 'constraint violation'], ['08006', 'transient connection blip'], ['42501', 'permission denied']]) {
+      const { r, inserts, cries } = await send([{ code, message: label }])
+      check('audit-log', `${code} (${label}) → NO untrackable fallback row`,
+        [r, inserts.length], [{ ok: false }, 1])
+      check('audit-log', `➜ ${code} is reported, never swallowed`, cries, 1)
+    }
+    // An error with no code at all is still not a missing column.
+    {
+      const { r, inserts } = await send([{ message: 'fetch failed' }])
+      check('audit-log', 'code-less error → no fallback, reported as failed', [r, inserts.length], [{ ok: false }, 1])
+    }
+
+    // ── A failed audit write is no longer invisible (fix 3) ──
+    // The base-only path (no provider/messageId) never had a fallback and never had a
+    // return value: a message could send with NO audit row and the tally still read OK.
+    {
+      const { r, inserts, cries } = await run1([{ code: '08006', message: 'blip' }], sb =>
+        logSend(sb, { userId: 'u', customerId: 'c', channel: 'sms', template: 'reminder', status: 'error', detail: 'boom' }))
+      check('audit-log', 'base-only row: a lost audit write reports ok:false and says so',
+        [r, inserts.length, cries], [{ ok: false }, 1, 1])
+    }
+
+    // ── logDispatch surfaces whether EVERY attempt was logged ──
+    const att = (channel: string): DispatchAttempt =>
+      ({ channel, status: 'sent', sent: true, detail: null, provider: 'x', providerId: 'p1', retryable: false }) as DispatchAttempt
+    const res2: DispatchResult = { attempts: [att('sms'), att('email')], messageId: 'm1', sentChannels: ['sms', 'email'] }
+    const ctx = { userId: 'u', customerId: 'c', template: 'reminder' }
+    {
+      const { r, inserts } = await run1([null, null], sb => logDispatch(sb, res2, ctx))
+      check('audit-log', 'logDispatch: both attempts logged → ok', [r, inserts.length], [{ ok: true }, 2])
+    }
+    {
+      // Second attempt's row is lost to a non-fallback error → the dispatch is only
+      // partly audited, and logDispatch must say so rather than return void.
+      const { r, cries } = await run1([null, { code: '23505', message: 'dupe' }], sb => logDispatch(sb, res2, ctx))
+      check('audit-log', 'logDispatch: one attempt lost → ok:false, and reported', [r, cries], [{ ok: false }, 1])
+    }
+  }
 
   console.log(`\n${'═'.repeat(60)}\n  PASS ${pass}   FAIL ${fail}`)
   if (fails.length) { console.log('\n  FAILURES:'); fails.forEach(f => console.log('   • ' + f)) }

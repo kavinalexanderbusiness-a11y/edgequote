@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
 import { settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
-import { effectiveFreq } from '@/lib/invoicing'
 import { cadenceDays, churnRisk, daysBetween, isSeasonallyDormant, ranOut } from '@/lib/signals'
 import { localTodayISO } from '@/lib/utils'
 
@@ -142,7 +141,25 @@ export async function GET(req: NextRequest) {
       const lastServiceDate = completed.length ? completed[completed.length - 1] : (pastReal.length ? pastReal[pastReal.length - 1] : null)
 
       const rec = recJob.recurrence_id ? recById[recJob.recurrence_id] : null
-      const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
+      // A PRICING BUCKET IS NOT A CADENCE. This used to read
+      //   cadenceDays(effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count), rec)
+      // but effectiveFreq is lossy BY DESIGN (see lib/invoicing): it resolves a custom
+      // interval to the NEAREST STANDARD PRICE bucket — unit='month' → 'monthly'
+      // whatever the count, unit='week' count=3 → 'biweekly'. Right for money, wrong
+      // for time. cadenceDays then matches 'monthly' on its FIRST branch and returns
+      // 30, never reaching the `rec` branch that reads interval_count.
+      // A bi-monthly customer (true cadence 60d) therefore got 30: at 45 days the true
+      // ratio is 0.75 ('none') but the computed one is 1.5 → a FALSE churn_risk.
+      // Every-3-weeks (21d) got 14 → false 'high'. Cadence also sizes ran-out's urgent
+      // window, so BOTH signals inherited the error.
+      // The raw freq keeps legacy weekly/biweekly/monthly rows on their exact branches
+      // and lets every custom interval (freq is null for those) fall through to the
+      // precise `rec` branch.
+      //
+      // NOTE: customerHealth / revenueIntelligence / businessIntelligence still compose
+      // it the lossy way, so for custom cadences the SCREENS still disagree with this
+      // sweep. Changing them shifts numbers on live dashboards — a separate owner call.
+      const freq = rec?.freq ?? null
       const cadence = cadenceDays(freq, rec)
       const dormant = isSeasonallyDormant(recJob.service_type ?? null, seasons, today)
 
