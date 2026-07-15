@@ -38,6 +38,11 @@ interface PortalRec { id: string; freq: string | null; interval_unit: string | n
 interface PortalPhoto { id: string; job_id: string | null; storage_path: string; kind: string; caption: string | null; taken_at: string }
 interface PortalPayment { id: string; amount: number; status: string; paid_at: string | null; provider: string; invoice_id: string | null; created_at: string; kind?: string }
 interface PortalCard { brand: string | null; last4: string | null; exp_month: number | null; exp_year: number | null }
+// The owner's OWN catalogue (service_templates), surfaced by get_portal_data. This
+// is what makes ONE portal fit any field-service business: a pool company's
+// customers are offered pool visits, a window cleaner's are offered window
+// cleaning. Optional so a portal served by an older RPC still renders.
+interface PortalService { name: string; category: string | null; default_rate: number | null; pricing_display_type: string | null; default_description: string | null }
 interface PortalData {
   // review_declined_at: the customer's own "No thanks". Read here so a decline saved on
   // a previous visit keeps the review card down — without it, "no" would only last as
@@ -47,6 +52,9 @@ interface PortalData {
   property: { address: string | null; city: string | null; province: string | null; lawn_sqft: number | null; fence_length: number | null; neighborhood: string | null; notes: string | null } | null
   quotes: PortalQuote[]; invoices: PortalInvoice[]; jobs: PortalJob[]; recurrences: PortalRec[]; photos: PortalPhoto[]; payments: PortalPayment[]
   payment_method?: PortalCard | null
+  // Optional: a portal whose RPC predates the services key still works — the
+  // Request tab falls back to its free-text ask.
+  services?: PortalService[] | null
 }
 
 type Tab = 'home' | 'timeline' | 'service' | 'photos' | 'property' | 'documents' | 'payments' | 'request'
@@ -58,7 +66,15 @@ interface Derived {
   plans: { id: string; label: string; service: string; nextDate: string | null; endDate: string | null }[]
 }
 
-const REQUEST_PRESETS = ['Mulch', 'Spring Cleanup', 'Fall Cleanup', 'Weed Control', 'Landscaping']
+// What a customer can request comes from the owner's OWN catalogue
+// (service_templates, via get_portal_data) — never a hardcoded list. The portal
+// used to offer Mulch / Spring Cleanup / Fall Cleanup / Weed Control /
+// Landscaping to everyone, so a pool company's customers were offered lawn work
+// their company doesn't sell and couldn't request the work it does.
+//
+// Capped so the tab stays a decision, not a catalogue dump; the free-text
+// "Something else?" ask below covers the rest and always works.
+const MAX_REQUEST_PRESETS = 8
 
 function liveStatusOf(j: PortalJob): LiveStatus {
   if (j.completed_at || j.status === 'completed') return 'completed'
@@ -339,6 +355,14 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
   }
 
   const biz = data.business
+  // The services this business actually offers, in the owner's own order. Empty
+  // when the catalogue is empty OR when an older get_portal_data served this
+  // page — both degrade to the free-text ask rather than to someone else's
+  // service list.
+  const requestPresets = (data.services ?? [])
+    .map(s => s.name?.trim())
+    .filter((n): n is string => !!n)
+    .slice(0, MAX_REQUEST_PRESETS)
   const first = (data.customer?.name || '').trim().split(' ')[0] || 'there'
   const photosByJob = groupPhotos(data.photos)
   const invoiceByJob = new Map((data.invoices || []).filter(i => i.job_id).map(i => [i.job_id as string, i]))
@@ -457,7 +481,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
           {tab === 'documents' && <DocumentsTab quotes={data.quotes} invoices={data.invoices} customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} lawnSqft={Number(data.property?.lawn_sqft) || null} business={biz} onInvoiceOpen={markInvoiceViewed}
             paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} accept={accept} accepting={accepting} initialCat={docsCat} />}
           {tab === 'request' && (
-            <RequestTab presets={REQUEST_PRESETS} reqMsg={reqMsg} setReqMsg={setReqMsg} request={request} reqBusy={reqBusy} reqSent={reqSent} biz={biz} />
+            <RequestTab presets={requestPresets} reqMsg={reqMsg} setReqMsg={setReqMsg} request={request} reqBusy={reqBusy} reqSent={reqSent} biz={biz} />
           )}
         </div>
 
@@ -684,7 +708,10 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
           {data.property.address && <p className="text-sm text-ink flex items-center gap-1.5"><MapPin className="w-3.5 h-3.5 text-ink-faint" /> {data.property.address}{data.property.city ? `, ${data.property.city}` : ''}</p>}
           <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1.5 text-xs text-ink-muted">
             {data.property.neighborhood && <span>{data.property.neighborhood}</span>}
-            {data.property.lawn_sqft ? <span className="flex items-center gap-1"><Ruler className="w-3 h-3" /> {Number(data.property.lawn_sqft).toLocaleString()} sq ft lawn</span> : null}
+            {/* lawn_sqft holds a MEASURED AREA — the column name is historical and
+                stays (it's returned by get_portal_data and read in 74 places), but
+                the label must not tell a pool company we measured their lawn. */}
+            {data.property.lawn_sqft ? <span className="flex items-center gap-1"><Ruler className="w-3 h-3" /> {Number(data.property.lawn_sqft).toLocaleString()} sq ft measured</span> : null}
             {data.property.fence_length ? <span>{data.property.fence_length} ft fence</span> : null}
           </div>
         </div>
@@ -920,7 +947,9 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, lawnSqf
       const manHours = Number(qq.hours) > 0 && Number(qq.crew_size) > 0 ? Number(qq.hours) * Number(qq.crew_size) : 0
       const fmtHrs = (h: number) => h < 1 ? `${Math.round(h * 60)} minutes` : h === 1 ? '1 hour' : `${Number(h.toFixed(1))} hours`
       const explainBits = [
-        lawnSqft && lawnSqft > 0 ? `Priced for your ${lawnSqft.toLocaleString()} sq ft lawn — measured, not guessed.` : null,
+        // The measured area, not "your lawn" — the same number explains a
+        // driveway to a pressure washer's customer or a deck to a stainer's.
+        lawnSqft && lawnSqft > 0 ? `Priced for your measured ${lawnSqft.toLocaleString()} sq ft — measured, not guessed.` : null,
         manHours > 0
           ? `About ${fmtHrs(manHours)} of work${Number(qq.crew_size) > 1 ? `, with a crew of ${Number(qq.crew_size)}` : ''}.`
           : null,
@@ -1217,7 +1246,7 @@ function PropertyTab({ property }: { property: PortalData['property'] }) {
           <p className="text-sm text-ink flex items-start gap-1.5"><MapPin className="w-4 h-4 text-ink-faint shrink-0 mt-0.5" /> <span>{property.address}{property.city ? `, ${property.city}` : ''}{property.province ? `, ${property.province}` : ''}</span></p>
         )}
         <div className="grid grid-cols-2 gap-3 mt-3">
-          {property.lawn_sqft ? <StatCard label="Lawn size" value={`${Number(property.lawn_sqft).toLocaleString()} sq ft`} icon={Ruler} /> : null}
+          {property.lawn_sqft ? <StatCard label="Measured area" value={`${Number(property.lawn_sqft).toLocaleString()} sq ft`} icon={Ruler} /> : null}
           {property.fence_length ? <StatCard label="Fence length" value={`${Number(property.fence_length).toLocaleString()} ft`} icon={Ruler} /> : null}
           {property.neighborhood ? <StatCard label="Neighborhood" value={property.neighborhood} icon={MapPin} /> : null}
         </div>
@@ -1519,6 +1548,10 @@ function RequestTab({ presets, reqMsg, setReqMsg, request, reqBusy, reqSent, biz
 }) {
   return (
     <div className="space-y-3">
+      {/* Only render the picker when this business actually has a catalogue.
+          An empty grid under "Tap a service" would read as broken; the free-text
+          ask below is always available and does the same job. */}
+      {presets.length > 0 && (
       <div className="rounded-card border border-border bg-bg-secondary p-4">
         <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><Sparkles className="w-4 h-4 text-accent-text" /> Request a service</p>
         <p className="text-xs text-ink-muted mt-0.5 mb-3">Tap a service to request a quote — {biz?.company_name || 'we'}’ll be in touch.</p>
@@ -1537,9 +1570,10 @@ function RequestTab({ presets, reqMsg, setReqMsg, request, reqBusy, reqSent, biz
           })}
         </div>
       </div>
+      )}
 
       <div className="rounded-card border border-border bg-bg-secondary p-4">
-        <p className="text-sm font-semibold text-ink mb-1">Something else?</p>
+        <p className="text-sm font-semibold text-ink mb-1">{presets.length > 0 ? 'Something else?' : 'Request a service'}</p>
         {reqSent === 'custom' ? (
           <p className="text-sm text-emerald-400 flex items-center gap-1.5 py-2"><CheckCircle2 className="w-4 h-4" /> Request sent — we’ll be in touch soon.</p>
         ) : (
