@@ -881,8 +881,15 @@ export interface BusinessSettings {
   daily_capacity_hours: number | null
   // Uploaded-logo display scale in percent (100 = default size).
   logo_scale: number | null
-  // Dashboard layout: section order + hidden sections.
+  // DEAD — the old home-dashboard shell's layout. That shell was removed in
+  // 019c24c and nothing reads this; the stored ids name deleted components.
+  // Left in place (dropping a column is a separate, explicit decision).
+  // The analytics workspace uses `analytics_layout` below, NOT this.
   dashboard_cards: { order: string[]; hidden: string[] } | null
+  // Analytics workspace layout: widget order + hidden set for
+  // /dashboard/intelligence. Unknown ids are ignored and missing ids fall back to
+  // the default order — see lib/analytics/layout.normalizeLayout.
+  analytics_layout: { order: string[]; hidden: string[] } | null
   // Service seasons (lawn/snow) as recurring month/day anchors. Drives the
   // "Season End" recurrence default and seasonal reactivation suppression.
   // null = use Calgary defaults (lib/seasons DEFAULT_SEASONS).

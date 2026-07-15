@@ -10,6 +10,8 @@ import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { StatTile } from '@/components/ui/StatTile'
 import { Collapsible } from '@/components/ui/Collapsible'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
+import { AnalyticsWorkspace, WidgetChrome, useWidget } from '@/components/analytics/Workspace'
+import type { WidgetId } from '@/lib/analytics/layout'
 import { formatCurrency, cn } from '@/lib/utils'
 import type { Tone } from '@/lib/tone'
 import { TrendingUp, TrendingDown, DollarSign, Gauge, Users, Target, Activity, LineChart, Home, AlertTriangle, CalendarDays, Ban, Briefcase } from 'lucide-react'
@@ -52,10 +54,15 @@ export default function IntelligencePage() {
     <div className="max-w-6xl mx-auto space-y-6">
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Business Intelligence" description={`How your business is performing — and where to focus. As of ${bi.generatedFor}.`} />
 
+      {/* Every section below is a workspace widget: arrangeable and hideable, but
+          still rendered from the same BIReport, so customising the page can never
+          change what a number means — only whether and where you see it. */}
+      <AnalyticsWorkspace>
+
       {/* ── EXECUTIVE ── The highest-altitude read on the page, so it leads: who the
           revenue depends on, whether it's compounding, and how fast it turns into
           cash. Every figure here is YTD. */}
-      <Section title="Executive" icon={Briefcase}>
+      <Section id="executive" title="Executive" icon={Briefcase}>
         {/* `payingCustomers === 0` is the one check that keeps a wall of "0%" off
             the page — with no YTD revenue there are no shares to take a share of. */}
         {bi.executive.concentration.payingCustomers === 0 ? (
@@ -99,7 +106,7 @@ export default function IntelligencePage() {
       </Section>
 
       {/* ── FINANCIAL ── */}
-      <Section title="Financial" icon={DollarSign}>
+      <Section id="financial" title="Financial" icon={DollarSign}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Stat label="Revenue this month" value={formatCurrency(bi.financial.revenueThisMonth)} delta={bi.financial.monthOverMonthPct} deltaLabel="vs last month" />
           <Stat label="Revenue last month" value={formatCurrency(bi.financial.revenueLastMonth)} />
@@ -125,7 +132,7 @@ export default function IntelligencePage() {
       {/* ── THIS YEAR VS LAST ── Both sides are SEASON-TO-DATE (the engine cuts last
           year at the same month-day), so the delta is like-for-like and safe as a
           headline. Never label it "vs last year (full)". */}
-      <Section title="This year vs last" icon={TrendingUp}>
+      <Section id="yearly" title="This year vs last" icon={TrendingUp}>
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
           <Stat label="Revenue this year" value={formatCurrency(bi.yearly.thisYear.revenue)}
             delta={bi.yearly.revenueDeltaPct} deltaLabel="vs last year to date"
@@ -146,7 +153,7 @@ export default function IntelligencePage() {
       </Section>
 
       {/* ── PROFITABILITY ── */}
-      <Section title="Profitability" icon={Gauge}>
+      <Section id="profitability" title="Profitability" icon={Gauge}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Stat label="Revenue / labor hour" value={`$${bi.profitability.revenuePerLaborHour}`} />
           <Stat label="Gross profit YTD" value={formatCurrency(bi.profitability.grossProfitYTD)} sub={`${bi.profitability.grossMarginPct}% margin`} />
@@ -161,7 +168,7 @@ export default function IntelligencePage() {
       </Section>
 
       {/* ── CUSTOMERS ── */}
-      <Section title="Customers" icon={Users}>
+      <Section id="customers" title="Customers" icon={Users}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Stat label="Active customers" value={String(bi.customers.active)} sub={`${bi.customers.total} total`} />
           <Stat label="Retention rate" value={bi.customers.retentionRatePct != null ? `${bi.customers.retentionRatePct}%` : '—'} sub={bi.customers.churnRatePct != null ? `${bi.customers.churnRatePct}% churn` : 'recurring only'} />
@@ -172,7 +179,7 @@ export default function IntelligencePage() {
       </Section>
 
       {/* ── SALES ── */}
-      <Section title="Sales" icon={Target}>
+      <Section id="sales" title="Sales" icon={Target}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Stat label="Quote win rate" value={bi.sales.quoteAcceptancePct != null ? `${bi.sales.quoteAcceptancePct}%` : '—'} sub={`${bi.sales.won} won · ${bi.sales.lost} lost`} />
           <Stat label="Avg quote value" value={formatCurrency(bi.sales.avgQuoteValue)} />
@@ -186,7 +193,7 @@ export default function IntelligencePage() {
       </Section>
 
       {/* ── OPERATIONS ── */}
-      <Section title="Operations" icon={Activity}>
+      <Section id="operations" title="Operations" icon={Activity}>
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
           {/* "Estimate accuracy" lives ONCE — in the Labour section below (the two
               engines' numbers could disagree, so only the learned one is shown). */}
@@ -205,7 +212,7 @@ export default function IntelligencePage() {
       </Section>
 
       {/* ── BUSIEST DAYS ── */}
-      <Section title="Busiest days" icon={CalendarDays}>
+      <Section id="weekday" title="Busiest days" icon={CalendarDays}>
         {/* `busiest` is null exactly when no weekday has a completed job — the one
             check that keeps a table of zeroes off the page. */}
         {bi.weekday.busiest ? (
@@ -227,7 +234,7 @@ export default function IntelligencePage() {
 
       {/* ── CANCELLATIONS ── A risk metric: the one section where a tint carries
           alarm rather than confidence. */}
-      <Section title="Cancellations" icon={Ban}>
+      <Section id="cancellations" title="Cancellations" icon={Ban}>
         {bi.cancellations.cancelledYTD === 0 ? (
           <div className="rounded-card border border-border bg-bg-secondary">
             <EmptyState icon={Ban} tone="positive" className="py-10" title="Nothing cancelled this year"
@@ -252,6 +259,9 @@ export default function IntelligencePage() {
       {/* ── LABOUR ACCURACY & CREW EFFICIENCY ── (merged from the former Labor
           Intelligence page). Collapsed by default — it's a deep-dive, not a daily
           decision; the one-line summary keeps the headline number visible. */}
+      {/* Not a <Section>, but it IS a block on this page — so it joins the
+          workspace too rather than being the one thing that won't move. */}
+      <LaborWidget>
       <Collapsible title="Labour accuracy & crew efficiency" icon={Gauge}
         summary={labor && labor.trainingJobs >= 1
           ? `${labor.overallAccuracyPct != null ? `${labor.overallAccuracyPct}% estimate accuracy` : ''} · ${labor.trainingJobs} timed job${labor.trainingJobs !== 1 ? 's' : ''}`
@@ -323,15 +333,17 @@ export default function IntelligencePage() {
           </div>
         )}
       </Collapsible>
+      </LaborWidget>
 
       {/* ── FORECASTING ── ("Projected this month" lives once, in Financial above) */}
-      <Section title="Forecasting" icon={LineChart}>
+      <Section id="forecasting" title="Forecasting" icon={LineChart}>
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
           <Stat label="Recurring run-rate" value={formatCurrency(bi.forecasting.projectedRecurringAnnual)} sub="/yr locked in" accent />
           <Stat label="Rest of season" value={formatCurrency(bi.forecasting.projectedSeasonRemaining)} sub="recurring booked" />
           <Stat label="Growth trend" value={bi.forecasting.growthForecastPct != null ? `${bi.forecasting.growthForecastPct > 0 ? '+' : ''}${bi.forecasting.growthForecastPct}%` : '—'} delta={bi.forecasting.growthForecastPct} deltaLabel="3-mo revenue" />
         </div>
       </Section>
+      </AnalyticsWorkspace>
     </div>
   )
 }
@@ -342,15 +354,32 @@ function monthLabel(key: string) { return new Date(`${key}-01T00:00:00`).toLocal
 /** 1-12 → 'Jun'. */
 function monthShort(m: number) { return new Date(2000, m - 1, 1).toLocaleString('en-US', { month: 'short' }) }
 
-function Section({ title, icon: Icon, children }: { title: string; icon: typeof DollarSign; children: React.ReactNode }) {
+// The Labour block is a <Collapsible>, not a <Section>, so it gets a thin wrapper
+// to join the workspace rather than being the one block that refuses to move.
+function LaborWidget({ children }: { children: React.ReactNode }) {
+  const { style, className, dragProps } = useWidget('labor')
   return (
-    <div className="space-y-3 animate-rise">
+    <div style={style} className={cn('animate-rise', className)} {...dragProps}>
+      <div className="flex items-center justify-end -mb-1"><WidgetChrome id="labor" /></div>
+      {children}
+    </div>
+  )
+}
+
+// Sections are the workspace's widgets. `id` is all a section needs to become
+// arrangeable — order, hiding and drag all come from the workspace context, so
+// the markup below stays exactly where it is and doesn't know it can move.
+function Section({ id, title, icon: Icon, children }: { id: WidgetId; title: string; icon: typeof DollarSign; children: React.ReactNode }) {
+  const { style, className, dragProps } = useWidget(id)
+  return (
+    <div style={style} className={cn('space-y-3 animate-rise', className)} {...dragProps}>
       <div className="flex items-center gap-2.5">
         <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
           <Icon className="w-3.5 h-3.5 text-accent-text" />
         </span>
         <p className="text-sm font-semibold tracking-tight text-ink">{title}</p>
         <span className="flex-1 h-px bg-border" aria-hidden />
+        <WidgetChrome id={id} />
       </div>
       {children}
     </div>

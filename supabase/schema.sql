@@ -521,12 +521,24 @@ alter table public.business_settings
 -- Work day start ('HH:mm') drives per-stop arrival ETAs + estimated finish.
 -- Daily capacity (hours) powers the overloaded / room-for-more day signals.
 -- logo_scale = uploaded-logo display size in percent (sidebar, login, PDFs).
--- dashboard_cards = home layout: { "order": [...], "hidden": [...] }.
+-- dashboard_cards = DEAD. Was the old home-dashboard shell's layout
+--   { "order": [...], "hidden": [...] }; that shell was removed in 019c24c and
+--   nothing reads this column now (its stored ids name deleted components).
+--   Left in place deliberately — dropping it is a separate, explicit decision.
+--   The analytics workspace uses `analytics_layout` (below), NOT this.
 alter table public.business_settings
   add column if not exists work_start_time      text    default '08:00',
   add column if not exists daily_capacity_hours numeric default 8,
   add column if not exists logo_scale           numeric default 100,
   add column if not exists dashboard_cards      jsonb;
+
+-- analytics_layout = /dashboard/intelligence workspace layout:
+--   { "order": [widgetId], "hidden": [widgetId] }
+-- Unknown ids are ignored and missing ids fall back to the default order, so a
+-- saved layout can never hide a widget added in a later release.
+-- See supabase/RUN-2026-07-15-analytics-layout.sql (applied 2026-07-15).
+alter table public.business_settings
+  add column if not exists analytics_layout jsonb;
 
 -- Real community name ("Queensland"), reverse-geocoded once from the property's
 -- coordinates. All neighborhood analytics prefer this over the postal FSA prefix
