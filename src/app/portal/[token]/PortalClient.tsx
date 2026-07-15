@@ -8,7 +8,7 @@ import { ConfirmHost } from '@/components/ui/ConfirmHost'
 import { recurrenceLabel } from '@/lib/recurrence'
 import { invoiceTotals } from '@/lib/invoiceTotals'
 import { serviceLineTotals } from '@/lib/quoteServices'
-import { formatCurrency, formatDate, cn, localTodayISO } from '@/lib/utils'
+import { formatCurrency, formatDate, cn, localTodayISO, parseLocalDate } from '@/lib/utils'
 import { displayQuoteStatus } from '@/lib/quoteStatus'
 import type { QuoteStatus } from '@/types'
 import { Button } from '@/components/ui/Button'
@@ -259,7 +259,10 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     const todayISO = format(new Date(), 'yyyy-MM-dd')
     const jobs = data.jobs || []
     const upcoming = jobs.filter(j => j.scheduled_date >= todayISO && j.status !== 'completed').sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date))
-    const completed = jobs.filter(j => j.status === 'completed').sort((a, b) => b.scheduled_date.localeCompare(a.scheduled_date))
+    // Sorted by when the work HAPPENED, not when it was planned — otherwise a
+    // rain-delayed visit sits below one it actually followed, and lastCompleted (which
+    // also gates the review card) can name the wrong visit entirely.
+    const completed = jobs.filter(j => j.status === 'completed').sort((a, b) => visitDay(b).localeCompare(visitDay(a)))
     const nextService = upcoming[0] || null
     const lastCompleted = completed[0] || null
     // Outstanding = unpaid BALANCE (total − payments recorded) across issued invoices,
@@ -269,11 +272,17 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
       const total = invoiceTotals(i.amount, { gst_percent: gstPct }, { type: i.discount_type, value: i.discount_value }).total
       return s + Math.max(0, Math.round((total - (Number(i.amount_paid) || 0)) * 100) / 100)
     }, 0)
-    // Active plans: recurrences that still have an upcoming visit.
-    const recById = new Map(data.recurrences.map(r => [r.id, r]))
-    const activeRecIds = [...new Set(upcoming.map(j => j.recurrence_id).filter(Boolean) as string[])]
-    const plans = activeRecIds.map(id => {
-      const r = recById.get(id)
+    // Active plans come from the RECURRENCE — the customer's actual commitment — not from
+    // whether a visit happens to be on the calendar. Deriving them from `upcoming` meant a
+    // plan disappeared from Home the moment its next job hadn't been generated yet: a
+    // weekly customer whose season runs to October, whose last visit was three weeks ago,
+    // opens the portal and sees no plan at all. It takes the "pause, reschedule or cancel"
+    // card with it — so the plan is least visible exactly when they're wondering about it.
+    // A plan is live until its end date says otherwise.
+    const plans = (data.recurrences || [])
+      .filter(r => !r.end_date || r.end_date >= todayISO)
+      .map(r => {
+      const id = r.id
       const sample = jobs.find(j => j.recurrence_id === id)
       // `upcoming` is already date-sorted, so the first match IS this plan's next visit.
       // "Every 2 weeks" without a date is a cadence, not an answer — the question someone
@@ -281,12 +290,12 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
       const next = upcoming.find(j => j.recurrence_id === id) || null
       return {
         id,
-        label: r ? recurrenceLabel(r.interval_unit as 'day' | 'week' | 'month' | null, r.interval_count, r.freq) : 'Recurring',
+        label: recurrenceLabel(r.interval_unit as 'day' | 'week' | 'month' | null, r.interval_count, r.freq),
         service: sample?.service_type || sample?.title || 'Service',
         nextDate: next?.scheduled_date || null,
         // A plan with an end date is a season, and knowing when it stops is part of not
         // feeling locked in. Only shown when the owner actually set one.
-        endDate: r?.end_date || null,
+        endDate: r.end_date || null,
       }
     })
     return { upcoming, completed, nextService, lastCompleted, outstanding, plans }
@@ -419,7 +428,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
           )}
           {tab === 'home' && consent && <ConsentCard token={token} consent={consent} onSave={saveConsent} />}
           {tab === 'timeline' && <TimelineTab data={data} photosByJob={photosByJob} />}
-          {tab === 'service' && <ServiceTab completed={derived.completed} photosByJob={photosByJob} invoiceByJob={invoiceByJob} photoUrl={photoUrl} gstPct={Number(data.business?.gst_percent) || 0} />}
+          {tab === 'service' && <ServiceTab completed={derived.completed} photosByJob={photosByJob} invoiceByJob={invoiceByJob} photoUrl={photoUrl} gstPct={Number(data.business?.gst_percent) || 0} onOpenPhotos={() => setTab('photos')} />}
           {tab === 'photos' && <GalleryTab photosByJob={photosByJob} jobs={data.jobs} photoUrl={photoUrl} />}
           {tab === 'property' && <PropertyTab property={data.property} />}
           {tab === 'payments' && <PaymentsTab customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} business={biz} payments={data.payments} invoices={data.invoices} outstanding={derived.outstanding}
@@ -446,6 +455,25 @@ const STATUS_META: Record<LiveStatus, { label: string; icon: typeof Play; tone: 
   in_progress: { label: 'In Progress', icon: Play, tone: 'text-amber-400 border-amber-500/30 bg-amber-500/10' },
   completed: { label: 'Completed', icon: CheckCircle2, tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' },
 }
+// THE day a visit actually happened. A rained-out visit is scheduled for Tuesday and
+// completed on Thursday — and the customer remembers Thursday, because that's when
+// someone was in their garden. Reading scheduled_date instead put the wrong visit at
+// the top of "Last completed" and printed a date they know is wrong, while the Timeline
+// (which already reads completed_at) printed the right one. One visit, one date.
+function visitDay(j: { scheduled_date: string; completed_at: string | null }): string {
+  return j.completed_at ? j.completed_at.slice(0, 10) : j.scheduled_date
+}
+
+// "Thursday, July 17" is a fact nobody converts in their head; "Tomorrow" is the
+// answer they actually wanted. The absolute date stays — this sits beside it and
+// answers "how soon?". Beyond two weeks the countdown stops being useful and the
+// date carries it alone, so this returns null rather than "In 43 days".
+function daysAwayLabel(dateISO: string, todayISO: string): string | null {
+  const days = Math.round((parseLocalDate(dateISO).getTime() - parseLocalDate(todayISO).getTime()) / 86_400_000)
+  if (days < 0 || days > 14) return null
+  return days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : `In ${days} days`
+}
+
 function StatusPill({ s }: { s: LiveStatus }) {
   const m = STATUS_META[s]
   return <span className={cn('inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', m.tone)}><m.icon className="w-3 h-3" /> {m.label}</span>
@@ -529,7 +557,10 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
               <p className="text-lg font-bold text-ink tracking-tight">{next.service_type || next.title}</p>
               <StatusPill s={liveStatusOf(next)} />
             </div>
-            <p className="text-sm text-ink-muted mt-0.5">{formatDate(next.scheduled_date)}</p>
+            <p className="text-sm text-ink-muted mt-0.5">
+              {formatDate(next.scheduled_date)}
+              {(() => { const a = daysAwayLabel(next.scheduled_date, localTodayISO()); return a ? <span className="text-ink font-medium"> · {a}</span> : null })()}
+            </p>
             <StatusStepper s={liveStatusOf(next)} />
             {liveStatusOf(next) === 'on_my_way' && <p className="text-xs text-sky-400 mt-2 flex items-center gap-1"><Navigation className="w-3.5 h-3.5" /> Your provider is on the way!</p>}
           </>
@@ -583,7 +614,7 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
         ) : (
           <StatCard label="Amount due" value={formatCurrency(0)} tone="text-emerald-400" icon={Receipt} />
         )}
-        <StatCard label="Last completed" value={derived.lastCompleted ? formatDate(derived.lastCompleted.scheduled_date) : '—'} icon={CheckCircle2} />
+        <StatCard label="Last completed" value={derived.lastCompleted ? formatDate(visitDay(derived.lastCompleted)) : '—'} icon={CheckCircle2} />
       </div>
       )}
 
@@ -600,13 +631,15 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
                     <span className="text-ink font-medium">{p.service}</span>
                     <span className="text-ink-muted"> · {p.label}</span>
                   </p>
-                  {(p.nextDate || p.endDate) && (
-                    <p className="text-xs text-ink-muted mt-0.5">
-                      {p.nextDate ? <>Next visit <span className="text-ink font-medium">{formatDate(p.nextDate)}</span></> : null}
-                      {p.nextDate && p.endDate ? ' · ' : null}
-                      {p.endDate ? <>Runs until {formatDate(p.endDate)}</> : null}
-                    </p>
-                  )}
+                  {/* A live plan with nothing on the calendar yet is normal — the owner
+                      books ahead in batches. Saying so is the whole point: silence here is
+                      what made the plan look cancelled. */}
+                  <p className="text-xs text-ink-muted mt-0.5">
+                    {p.nextDate
+                      ? <>Next visit <span className="text-ink font-medium">{formatDate(p.nextDate)}</span>{(() => { const a = daysAwayLabel(p.nextDate, localTodayISO()); return a ? ` (${a.toLowerCase()})` : null })()}</>
+                      : <>Next visit not booked yet — it&rsquo;ll appear here as soon as it is.</>}
+                    {p.endDate ? <> · Runs until {formatDate(p.endDate)}</> : null}
+                  </p>
                 </div>
               </div>
             ))}
@@ -657,7 +690,7 @@ function StatCard({ label, value, tone, icon: Icon }: { label: string; value: st
 }
 
 // ── Service timeline (grouped by visit) ──
-function ServiceTab({ completed, photosByJob, invoiceByJob, photoUrl, gstPct }: { completed: PortalJob[]; photosByJob: Map<string, PortalPhoto[]>; invoiceByJob: Map<string, PortalInvoice>; photoUrl: (p: string) => string; gstPct: number }) {
+function ServiceTab({ completed, photosByJob, invoiceByJob, photoUrl, gstPct, onOpenPhotos }: { completed: PortalJob[]; photosByJob: Map<string, PortalPhoto[]>; invoiceByJob: Map<string, PortalInvoice>; photoUrl: (p: string) => string; gstPct: number; onOpenPhotos: () => void }) {
   if (completed.length === 0) return <Empty icon={History} text="No completed visits yet — your service history will appear here after your first visit." />
   return (
     <div className="space-y-3">
@@ -668,7 +701,7 @@ function ServiceTab({ completed, photosByJob, invoiceByJob, photoUrl, gstPct }: 
           <div key={j.id} className="rounded-card border border-border bg-bg-secondary p-4">
             <div className="flex items-center justify-between gap-2">
               <p className="text-sm font-semibold text-ink tracking-tight flex items-center gap-1.5"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> {j.service_type || j.title}</p>
-              <span className="text-xs text-ink-muted">{formatDate(j.scheduled_date)}</span>
+              <span className="text-xs text-ink-muted">{formatDate(visitDay(j))}</span>
             </div>
             {/* started_at/completed_at were already in the payload and never rendered — so
                 "we were there" was an assertion with no substance behind it. Showing the
@@ -691,14 +724,35 @@ function ServiceTab({ completed, photosByJob, invoiceByJob, photoUrl, gstPct }: 
                 </p>
               )
             })()}
+            {/* A preview, not the whole set — the Photos tab is the full gallery (grouped
+                by visit, before/after columns). This grid silently rendered the first 4 and
+                dropped the rest: a visit with 10 photos showed 4 and gave no hint the other
+                6 existed. The crew took them for the customer; hiding them makes the work
+                look smaller than it was. The last tile carries the overflow and hands off
+                to the real gallery rather than growing a second viewer here. */}
             {photos.length > 0 && (
               <div className="grid grid-cols-4 gap-1.5 mt-3">
-                {photos.slice(0, 4).map(p => (
-                  <a key={p.id} href={photoUrl(p.storage_path)} target="_blank" rel="noopener noreferrer" className="aspect-square rounded-lg overflow-hidden border border-border bg-bg-tertiary">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={photoUrl(p.storage_path)} alt="" loading="lazy" className="w-full h-full object-cover" />
-                  </a>
-                ))}
+                {photos.slice(0, 4).map((p, i) => {
+                  const hidden = photos.length - 4
+                  const isOverflow = i === 3 && hidden > 0
+                  if (isOverflow) return (
+                    <button key={p.id} type="button" onClick={onOpenPhotos}
+                      aria-label={`View all ${photos.length} photos from this visit`}
+                      className="relative aspect-square rounded-lg overflow-hidden border border-border bg-bg-tertiary group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={photoUrl(p.storage_path)} alt="" loading="lazy" className="w-full h-full object-cover" />
+                      <span className="absolute inset-0 bg-black/60 group-hover:bg-black/50 transition-colors flex items-center justify-center text-sm font-semibold text-white tabular-nums">
+                        +{hidden}
+                      </span>
+                    </button>
+                  )
+                  return (
+                    <a key={p.id} href={photoUrl(p.storage_path)} target="_blank" rel="noopener noreferrer" className="aspect-square rounded-lg overflow-hidden border border-border bg-bg-tertiary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={photoUrl(p.storage_path)} alt="" loading="lazy" className="w-full h-full object-cover" />
+                    </a>
+                  )
+                })}
               </div>
             )}
             {j.notes && <p className="text-xs text-ink-muted mt-2.5 whitespace-pre-wrap border-l-2 border-border pl-2">{j.notes}</p>}
@@ -732,7 +786,9 @@ function GalleryTab({ photosByJob, jobs, photoUrl }: { photosByJob: Map<string, 
         return (
           <div key={jobId} className="rounded-card border border-border bg-bg-secondary p-4">
             <p className="text-sm font-semibold text-ink tracking-tight">{j?.service_type || j?.title || 'Visit'}</p>
-            <p className="text-xs text-ink-faint mb-2.5">{j ? formatDate(j.scheduled_date) : ''}</p>
+            {/* Dated by when the visit HAPPENED, like every other surface — photos taken
+                on Thursday must not be filed under the Tuesday it was booked for. */}
+            <p className="text-xs text-ink-faint mb-2.5">{j ? formatDate(visitDay(j)) : ''}</p>
             {hasBA ? (
               <div className="grid grid-cols-2 gap-2">
                 <GalleryCol label="Before" photos={before} photoUrl={photoUrl} />
@@ -784,7 +840,7 @@ type DocKind = 'quote' | 'invoice'
 // Accept button disappear on its own: `canAccept` already tests for 'sent', so there is
 // no second expiry check anywhere in the render path to forget or contradict.
 // `expiredOn` is the date it lapsed, shown so the customer knows this isn't a glitch.
-interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; expiredOn?: string; amount: number; amountNote?: string; balance: number; filename: string; getBlob: () => Promise<Blob>; lines?: { label: string; amount: number }[]; explain?: string[] }
+interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; expiredOn?: string; dueDate?: string | null; amount: number; amountNote?: string; balance: number; filename: string; getBlob: () => Promise<Blob>; lines?: { label: string; amount: number }[]; explain?: string[] }
 const KIND_META: Record<DocKind, { label: string; icon: typeof FileText; tone: string }> = {
   quote: { label: 'Quote', icon: FileText, tone: 'text-accent-text border-accent/25 bg-accent/10' },
   invoice: { label: 'Invoice', icon: Receipt, tone: 'text-sky-400 border-sky-500/25 bg-sky-500/10' },
@@ -880,9 +936,19 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, lawnSqf
       // Same balance math as the dashboard: discounted+GST total − payments recorded.
       const total = invoiceTotals(ii.amount, { gst_percent: gstPct }, { type: ii.discount_type, value: ii.discount_value }).total
       const balance = Math.max(0, Math.round((total - (Number(ii.amount_paid) || 0)) * 100) / 100)
+      // 'overdue' is a DISPLAY overlay derived from due_date — never stored — exactly the
+      // shape the ledger uses for invoices and quoteStatus uses for expiry. Until now
+      // due_date sat in the payload and was rendered NOWHERE: an invoice three weeks late
+      // looked identical to one issued this morning, both wearing the same amber "Due".
+      // So the portal knew the customer was late and didn't tell them — they'd find out
+      // from a chasing text instead, which is the worst possible order to learn it in.
+      const overdue = balance > 0 && !!ii.due_date && ii.due_date < today && ii.status !== 'cancelled'
       return {
         id: 'i' + ii.id, rawId: ii.id, kind: 'invoice' as const, number: ii.invoice_number, title: ii.service_type || 'Invoice',
-        date: ii.issued_date || ii.created_at, status: ii.status, amount: total, balance,
+        date: ii.issued_date || ii.created_at, status: overdue ? 'overdue' : ii.status, dueDate: ii.due_date, amount: total, balance,
+        // A partial payment is the customer's own money already on this bill — not showing
+        // it made the row look like they'd paid nothing.
+        amountNote: Number(ii.amount_paid) > 0 && balance > 0 ? `${formatCurrency(Number(ii.amount_paid))} already paid` : undefined,
         filename: `${ii.invoice_number}.pdf`, getBlob: () => { onInvoiceOpen?.(ii.id); return renderPortalInvoiceBlob(ii, customerName, fallbackAddress, business) },
       }
     })
@@ -965,6 +1031,13 @@ function DocRow({ d, paymentsEnabled, pay, payingId, accept, accepting }: {
           <div className="min-w-0">
             <p className="text-sm font-semibold text-ink truncate tracking-tight">{d.title}</p>
             <p className="text-xs text-ink-muted">{m.label} · {d.number} · {formatDate(d.date)}</p>
+            {/* When it's due — the row showed only the ISSUE date, so "am I late?" was
+                unanswerable from the one screen built to answer it. */}
+            {d.kind === 'invoice' && d.dueDate && d.balance > 0 && (
+              <p className={cn('text-xs mt-0.5', d.status === 'overdue' ? 'text-red-400 font-medium' : 'text-ink-muted')}>
+                {d.status === 'overdue' ? `Was due ${formatDate(d.dueDate)}` : `Due ${formatDate(d.dueDate)}`}
+              </p>
+            )}
           </div>
         </div>
         <div className="text-right shrink-0">
@@ -1033,17 +1106,60 @@ interface TLEvent { id: string; at: string; icon: typeof Home; tone: string; tit
 function TimelineTab({ data, photosByJob }: { data: PortalData; photosByJob: Map<string, PortalPhoto[]> }) {
   const events = useMemo<TLEvent[]>(() => {
     const ev: TLEvent[] = []
-    for (const q of data.quotes) ev.push({
-      id: 'q' + q.id, at: q.issued_date || q.created_at, icon: FileText,
-      tone: q.status === 'accepted' ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : 'text-amber-400 border-amber-500/30 bg-amber-500/10',
-      title: `Quote ${q.quote_number} ${q.status === 'accepted' ? 'accepted' : q.status === 'declined' ? 'declined' : 'sent'}`, sub: q.service_type || null,
-    })
+    // This event is stamped at the date the quote was SENT, so that's what its title has
+    // to say. "Quote Q-123 accepted" dated the day it went out is a small lie the eye
+    // doesn't catch — the customer approved it days later. The outcome belongs in the
+    // subtitle, where it reads as current state rather than as something that happened
+    // at this point on the line. Tone follows the same rule: amber means "this still
+    // wants you", so a declined or lapsed quote must not wear it.
+    const todayISO = localTodayISO()
+    for (const q of data.quotes) {
+      const st = displayQuoteStatus({ status: q.status as QuoteStatus, valid_until: q.valid_until }, todayISO)
+      const outcome = st === 'accepted' ? 'Approved'
+        : st === 'declined' ? 'Declined'
+        : st === 'expired' ? 'Expired'
+        : st === 'sent' ? 'Awaiting your approval'
+        : null
+      ev.push({
+        id: 'q' + q.id, at: q.issued_date || q.created_at, icon: FileText,
+        tone: st === 'accepted' ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'
+          : st === 'sent' ? 'text-amber-400 border-amber-500/30 bg-amber-500/10'
+          : 'text-ink-muted border-border bg-bg-tertiary',
+        title: `Quote ${q.quote_number} sent`,
+        sub: [q.service_type || null, outcome].filter(Boolean).join(' · ') || null,
+      })
+    }
     for (const j of data.jobs) {
       if (j.completed_at || j.status === 'completed') ev.push({ id: 'jc' + j.id, at: j.completed_at || j.scheduled_date, icon: CheckCircle2, tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10', title: `${j.service_type || j.title} completed`, sub: null })
       else ev.push({ id: 'js' + j.id, at: j.scheduled_date, icon: CalendarClock, tone: 'text-sky-400 border-sky-500/30 bg-sky-500/10', title: `${j.service_type || j.title} scheduled`, sub: null })
     }
-    for (const i of data.invoices) ev.push({ id: 'i' + i.id, at: i.issued_date || i.created_at, icon: Receipt, tone: 'text-ink-muted border-border bg-bg-tertiary', title: `Invoice ${i.invoice_number}`, sub: formatCurrency(invoiceTotals(i.amount, { gst_percent: Number(data.business?.gst_percent) || 0 }, { type: i.discount_type, value: i.discount_value }).total) })
-    for (const p of data.payments) ev.push({ id: 'p' + p.id, at: p.paid_at || p.created_at, icon: CreditCard, tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10', title: 'Payment received', sub: formatCurrency(Number(p.amount)) })
+    // Draft invoices are the owner's unfinished work and are filtered out of the customer's
+    // Documents list — they must not leak onto the timeline either.
+    for (const i of data.invoices.filter(i => i.status !== 'draft')) {
+      const total = invoiceTotals(i.amount, { gst_percent: Number(data.business?.gst_percent) || 0 }, { type: i.discount_type, value: i.discount_value }).total
+      const settled = i.status === 'paid' || i.status === 'overpaid'
+      ev.push({
+        id: 'i' + i.id, at: i.issued_date || i.created_at, icon: Receipt,
+        tone: 'text-ink-muted border-border bg-bg-tertiary',
+        title: `Invoice ${i.invoice_number} issued`,
+        // The amount alone left the customer to cross-reference whether they'd paid it.
+        sub: `${formatCurrency(total)}${settled ? ' · Paid' : i.status === 'cancelled' ? ' · Cancelled' : ' · Due'}`,
+      })
+    }
+    // The PaymentsTab keeps credits out of the receipt list and renders negatives as
+    // "Refund" — the timeline did neither, so a $200 refund read as a green "Payment
+    // received · -$200.00" and an account credit read as money we'd taken. No refunds
+    // exist yet; this is the day-one behaviour when one does.
+    for (const p of data.payments) {
+      if (p.kind === 'credit') continue
+      const refund = Number(p.amount) < 0
+      ev.push({
+        id: 'p' + p.id, at: p.paid_at || p.created_at, icon: CreditCard,
+        tone: refund ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
+        title: refund ? 'Refund issued' : `Payment received · ${paymentMethodLabel(p.provider)}`,
+        sub: formatCurrency(Math.abs(Number(p.amount))),
+      })
+    }
     for (const [jid, ps] of photosByJob) { if (jid !== 'none' && ps.length) ev.push({ id: 'ph' + jid, at: ps[0]?.taken_at || '', icon: ImageIcon, tone: 'text-violet-400 border-violet-500/30 bg-violet-500/10', title: `${ps.length} photo${ps.length === 1 ? '' : 's'} added`, sub: null }) }
     return ev.filter(e => e.at).sort((a, b) => b.at.localeCompare(a.at))
   }, [data, photosByJob])
@@ -1112,18 +1228,31 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
   // Receipt download — re-rendered from the ledger row on demand, so every receipt
   // stays PERMANENTLY available (nothing stored, nothing to lose).
   const [receiptBusy, setReceiptBusy] = useState<string | null>(null)
+  const [receiptErr, setReceiptErr] = useState<string | null>(null)
   async function downloadReceipt(p: PortalPayment, inv: PortalInvoice) {
-    setReceiptBusy(p.id)
+    setReceiptBusy(p.id); setReceiptErr(null)
     try {
       downloadBlob(await renderPortalReceiptBlob(p, inv, customerName, fallbackAddress, business), `${receiptNumberFor(p.id)}.pdf`)
-    } catch { /* transient render failure — button stays available to retry */ }
+    } catch {
+      // "The button stays available to retry" was the old rationale — but from the outside
+      // this was: tap, spinner, spinner stops, nothing. No file, no message, no reason to
+      // think a second tap would differ. This is the one action someone takes to PROVE
+      // they paid; it must never end in silence. DocActions already handles the identical
+      // failure this way.
+      setReceiptErr(p.id)
+    }
     setReceiptBusy(null)
   }
   const invById = new Map(invoices.map(i => [i.id, i]))
   // Receipts (money movements) vs the customer-credit ledger — kept apart so totals
   // and history stay honest.
   const receipts = payments.filter(p => p.kind !== 'credit')
-  const totalPaid = receipts.reduce((s, p) => s + Number(p.amount || 0), 0)
+  // Refunds are negative rows in the ledger. Netting them into "Total paid" makes the
+  // headline contradict the list directly beneath it — pay $500, get refunded $500, and
+  // the tile reads "Total paid $0.00" above a row showing the $500 you paid. Show what
+  // was paid, and name the refund separately.
+  const totalPaid = receipts.filter(p => Number(p.amount) > 0).reduce((s, p) => s + Number(p.amount), 0)
+  const refunded = Math.abs(receipts.filter(p => Number(p.amount) < 0).reduce((s, p) => s + Number(p.amount), 0))
   const availableCredit = Math.round(payments.filter(p => p.kind === 'credit').reduce((s, p) => s + Number(p.amount || 0), 0) * 100) / 100
 
   // ── Ways to pay ── copy-to-clipboard for the e-transfer details. The recipient
@@ -1210,13 +1339,24 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
         <div className="rounded-card border border-emerald-500/20 bg-emerald-500/[0.06] p-3.5">
           <p className="text-[10px] uppercase tracking-[0.14em] text-emerald-400 font-semibold flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Total paid</p>
           <p className="text-lg font-bold text-ink mt-1 tabular-nums">{formatCurrency(totalPaid)}</p>
+          {refunded > 0 && <p className="text-[11px] text-ink-faint mt-0.5 tabular-nums">{formatCurrency(refunded)} refunded</p>}
         </div>
         <div className="rounded-card border border-border bg-bg-secondary p-3.5">
-          <p className="text-[10px] uppercase tracking-[0.14em] text-ink-faint font-semibold flex items-center gap-1"><Receipt className="w-3 h-3" /> Outstanding</p>
+          {/* Same figure as the Home tile, so it must carry the same name — one number
+              with two labels ("Outstanding" here, "Amount due" there) reads as two
+              different numbers. "Outstanding" is also collections vocabulary. */}
+          <p className="text-[10px] uppercase tracking-[0.14em] text-ink-faint font-semibold flex items-center gap-1"><Receipt className="w-3 h-3" /> Amount due</p>
           <p className={cn('text-lg font-bold mt-1 tabular-nums', outstanding > 0 ? 'text-amber-400' : 'text-emerald-400')}>{formatCurrency(outstanding)}</p>
         </div>
       </div>
 
+      {/* The receipts below were an unheaded list hanging off the totals — name it, so
+          it reads as a record you can rely on rather than a loose pile of rows. */}
+      {receipts.length > 0 && (
+        <p className="text-[10px] uppercase tracking-[0.14em] text-ink-faint font-semibold pt-1">
+          Payment history{receipts.length > 1 ? ` · ${receipts.length} payments` : ''}
+        </p>
+      )}
       {receipts.length === 0 ? (
         <Empty icon={Receipt} text="No payments yet — once you pay an invoice, your receipts will live here." />
       ) : receipts.map(p => {
@@ -1237,10 +1377,13 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
             {/* Receipt download — a quiet utility action (the paid status is the
                 story), full-width on mobile, right-aligned on desktop. */}
             {inv && (
-              <Button size="sm" variant="secondary" className="w-full sm:w-auto shrink-0"
-                onClick={() => downloadReceipt(p, inv)} loading={receiptBusy === p.id}>
-                <Download className="w-4 h-4" /> Download {Number(p.amount) < 0 ? 'refund ' : ''}receipt
-              </Button>
+              <div className="w-full sm:w-auto shrink-0">
+                <Button size="sm" variant="secondary" className="w-full sm:w-auto"
+                  onClick={() => downloadReceipt(p, inv)} loading={receiptBusy === p.id}>
+                  <Download className="w-4 h-4" /> Download {Number(p.amount) < 0 ? 'refund ' : ''}receipt
+                </Button>
+                {receiptErr === p.id && <p className="text-xs text-red-400 mt-1 sm:text-right">Couldn&rsquo;t build the receipt — please try again.</p>}
+              </div>
             )}
           </div>
         )
@@ -1547,6 +1690,10 @@ function InvoiceStatusPill({ status }: { status: string }) {
     // owner-side workflow states that mean nothing to the payer.
     sent:     { label: 'Due',            tone: 'text-amber-400 border-amber-500/30 bg-amber-500/10' },
     unpaid:   { label: 'Due',            tone: 'text-amber-400 border-amber-500/30 bg-amber-500/10' },
+    // Derived from due_date, never stored — same overlay pattern as quote expiry. Red
+    // because it's genuinely time-sensitive, but the copy stays neutral: being late
+    // happens, and the row right here is how they fix it.
+    overdue:  { label: 'Past due',       tone: 'text-red-400 border-red-500/30 bg-red-500/10' },
     cancelled:{ label: 'Cancelled',      tone: 'text-ink-muted border-border bg-bg-tertiary' },
     // Same rule as sent/unpaid above: "Draft" is an owner-side workflow word. To the payer
     // it reads as a bill they can't pay and can't act on — a mistake, or a threat.
