@@ -1,3 +1,4 @@
+import { DEFAULT_JOB_MIN } from '@/lib/route'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { estimateVisitMinutes } from '@/lib/pricing'
 import { crewCostPerHour } from '@/lib/economics'
@@ -306,7 +307,12 @@ export function estimateLabor(input: EstimateInput, model: LaborModel | null): L
     if (firstCutF > 1) reasons.push('First cut of the season — heavier than a maintenance visit')
     if (isMowing(key) && season !== 'summer') reasons.push(`${season[0].toUpperCase() + season.slice(1)} adjustment applied`)
   } else {
-    comboSolo = estimateVisitMinutes(sqft) * firstCutF * og
+    // Already the explicit low-confidence branch: usedSizeModel forces enoughData=false
+    // and caps confidence, and the reason below says so in words. estimateVisitMinutes
+    // returns null with no measurement to size from, so fall back to the SHARED
+    // job-length default (lib/route, what duration.ts uses) rather than the lawn 45 —
+    // this path is exactly "we don't know", and it now says so with a neutral number.
+    comboSolo = (estimateVisitMinutes(sqft) ?? DEFAULT_JOB_MIN) * firstCutF * og
     usedSizeModel = true
     reasons.push(`Not enough ${svcLabel} history yet — rough size estimate. Time a few ${svcLabel} jobs to unlock a smart default.`)
   }

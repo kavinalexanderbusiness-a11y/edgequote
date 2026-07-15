@@ -49,9 +49,17 @@ export function evaluatePrice(input: {
   const recommended = recommendedForCadence(sqft, cadence, cfg)
   const reasons: string[] = []
 
-  const onSite = sqft > 0 ? estimateVisitMinutes(sqft) : 0
+  // No measurement → no on-site estimate → NO $/hr. This used to substitute 0
+  // minutes on site, so `hours` collapsed to drive time alone and the job reported a
+  // wildly flattering rate: a $150 stop with a 15-minute drive read $600/hr. Worse
+  // than wrong, it was flattering AND it muted check (3) below — an inflated rate
+  // never trips the crew-cost floor, so the one guardrail that would have caught it
+  // was silently switched off by the very number it was meant to judge.
+  // The floor stays fully active wherever on-site time IS known (sqft > 0), which is
+  // every existing lawn caller — their behaviour is unchanged.
+  const onSite = estimateVisitMinutes(sqft)
   const driveMin = input.driveMin ?? 0
-  const hours = (onSite + driveMin) / 60
+  const hours = onSite != null ? (onSite + driveMin) / 60 : 0
   const revPerHour = hours > 0 && price > 0 ? Math.round(price / hours) : null
 
   let warn = false

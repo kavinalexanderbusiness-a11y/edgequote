@@ -215,7 +215,7 @@ export default function NewQuotePage() {
         if (changed) {
           const cfg = pricingConfigFromSettings(settings)
           const pkg = pricingPackage(measuredSqft, cfg, { overgrowth: Number(values.overgrowth_multiplier) || 1, nearbyCount: 0 })
-          const rec = buildSavedRecommendation(pkg, estimateVisitMinutes(measuredSqft))
+          const rec = buildSavedRecommendation(pkg, estimateVisitMinutes(measuredSqft) ?? 0)
           if (measurement?.cadence && measurement.cadence !== 'one_time') rec.cadence = measurement.cadence
           const hist = Array.isArray((prop as { measurement_history: unknown } | null)?.measurement_history)
             ? (prop as { measurement_history: unknown[] }).measurement_history : []

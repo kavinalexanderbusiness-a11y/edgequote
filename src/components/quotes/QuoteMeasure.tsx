@@ -396,7 +396,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
   const graded = totalSqft > 0 && prospect
     ? gradedProspectPricing(totalSqft, cfg, { overgrowth, nearbyCount: nearby, neighborhoodName: hoodName }, prospect, {
         distanceKm: null, travelFee: Number(travelFee) || 0, neighborhoodName: hoodName,
-        estimatedMinutes: estimateVisitMinutes(totalSqft, prospect.observedMinPer1000),
+        estimatedMinutes: estimateVisitMinutes(totalSqft, prospect.observedMinPer1000) ?? undefined,
         timedJobs: prospect.timedJobs, crewCostPerHour: crewCost,
       })
     : null

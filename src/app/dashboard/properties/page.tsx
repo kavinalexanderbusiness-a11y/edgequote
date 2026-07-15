@@ -215,7 +215,7 @@ export default function PropertiesPage() {
       const cfg = pricingConfigFromSettings(settings)
       const nearby = p.lat != null && p.lng != null ? nearbyJobCount({ lat: p.lat, lng: p.lng }, locatedJobs).count : 0
       const pkg = pricingPackage(sqft, cfg, { overgrowth: 1, nearbyCount: nearby, neighborhoodName: p.neighborhood })
-      const rec = buildSavedRecommendation(pkg, estimateVisitMinutes(sqft), { hood: p.neighborhood })
+      const rec = buildSavedRecommendation(pkg, estimateVisitMinutes(sqft) ?? 0, { hood: p.neighborhood })
       const hist = Array.isArray(p.measurement_history) ? p.measurement_history : []
       const snapshot = { date: new Date().toISOString(), total_sqft: sqft, recommendation: rec }
       const nextHistory = [...hist, snapshot]

@@ -177,8 +177,16 @@ export type CadenceKey = 'one_time' | 'weekly' | 'biweekly' | 'monthly'
 // When the owner's OWN check-in/check-out data exists (observed minutes per
 // 1,000 ft² from completed timed jobs), it replaces the generic model — every
 // completed job makes future estimates more accurate.
-export function estimateVisitMinutes(sqft: number, observedMinPer1000?: number | null): number {
-  if (sqft <= 0) return 45
+// Returns NULL when there is no measurement to estimate from.
+//
+// It used to return a bare `45` for sqft <= 0 — a manufactured duration with no
+// basis and no flag, indistinguishable from a real estimate. Callers then divided
+// money by it: priceGuardrails reported a $/hr built on an invented visit length,
+// and it read as fact. A number we cannot know must be absent, not guessed; every
+// caller already has to handle "no measurement", so make them say so out loud.
+// Behaviour for a real measurement (sqft > 0) is byte-for-byte unchanged.
+export function estimateVisitMinutes(sqft: number, observedMinPer1000?: number | null): number | null {
+  if (sqft <= 0) return null
   if (observedMinPer1000 && observedMinPer1000 > 0) {
     return Math.round(Math.min(90, Math.max(15, (sqft / 1000) * observedMinPer1000)))
   }

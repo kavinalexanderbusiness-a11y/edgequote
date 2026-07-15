@@ -79,6 +79,8 @@ export interface RouteProfit {
   completionPct: number
   avgLegKm: number
   hasDriveData: boolean
+  /** False when any job's duration was assumed (DEFAULT_LABOR_MIN) rather than known. */
+  hasLaborData: boolean
   grade: Grade
 }
 
@@ -96,6 +98,13 @@ export function dayProfitability(date: string, dayJobs: ProfitJob[], ctx: Profit
 
   const revenue = Math.round(active.reduce((s, j) => s + jobValue(j, ctx), 0))
   const laborMinutes = active.reduce((s, j) => s + (j.actual_minutes ?? j.duration_minutes ?? DEFAULT_LABOR_MIN), 0)
+  // Did every job bring its OWN duration, or did we assume one? DEFAULT_LABOR_MIN is
+  // 45 — a lawn-calibrated figure. A visit that actually took four hours costed at 45
+  // minutes inflates $/hr enough to grade the route A, confidently, off a constant.
+  // Same treatment as hasDriveData below: the number stays (it's the best we have),
+  // but it can no longer earn a top grade while resting on an assumption.
+  const assumedLabor = active.some(j => j.actual_minutes == null && j.duration_minutes == null)
+  const hasLaborData = active.length > 0 && !assumedLabor
   const driveKm = ctx.base ? routeKmEstimate(ctx.base, located) : 0
   const stats = routeStats(located, driveKm, ctx.speed)
   const hasDriveData = driveKm > 0
@@ -113,17 +122,20 @@ export function dayProfitability(date: string, dayJobs: ProfitJob[], ctx: Profit
     date, future, revenue, driveMinutes, driveKm, laborMinutes, totalHours,
     revPerHour, revPerKm, revPerStop, stops, locatedStops: located.length,
     jobsTotal: active.length, jobsDue, jobsCompleted: completed.length, completionPct,
-    avgLegKm: stats.avgLegKm, hasDriveData,
-    grade: gradeRoute(revPerHour, revPerKm, stats.avgLegKm, hasDriveData),
+    avgLegKm: stats.avgLegKm, hasDriveData, hasLaborData,
+    grade: gradeRoute(revPerHour, revPerKm, stats.avgLegKm, hasDriveData, hasLaborData),
   }
 }
 
 // Letter grade from revenue/hour (primary), adjusted for driving efficiency.
 // Without drive data, $/hr excludes travel (inflated) and density is unknown, so
 // the route can't earn A/B — capped at C until a base + geocoded stops exist.
-export function gradeRoute(revPerHour: number, revPerKm: number, avgLegKm: number, hasDriveData = true): Grade {
+// Without labour data the same logic applies for the same reason: $/hr rests on an
+// assumed visit length, so it can't earn A/B either. One rule, two inputs — rather
+// than a second confidence system alongside the one that already works.
+export function gradeRoute(revPerHour: number, revPerKm: number, avgLegKm: number, hasDriveData = true, hasLaborData = true): Grade {
   let g = revPerHour >= 120 ? 4 : revPerHour >= 90 ? 3 : revPerHour >= 60 ? 2 : revPerHour >= 40 ? 1 : 0
-  if (!hasDriveData) return (['F', 'D', 'C', 'C', 'C'] as Grade[])[g]
+  if (!hasDriveData || !hasLaborData) return (['F', 'D', 'C', 'C', 'C'] as Grade[])[g]
   if (revPerKm < 5 || avgLegKm > 8) g = Math.max(0, g - 1)                       // inefficient driving
   if (revPerKm >= 25 && avgLegKm > 0 && avgLegKm <= 1.5) g = Math.min(4, g + 1)  // excellent density
   return (['F', 'D', 'C', 'B', 'A'] as Grade[])[g]
