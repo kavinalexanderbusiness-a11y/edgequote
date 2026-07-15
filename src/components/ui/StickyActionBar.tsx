@@ -18,7 +18,10 @@ export function StickyActionBar({ children, fixed, className }: StickyActionBarP
     <div
       className={cn(
         'bottom-0 z-30 bg-bg-secondary/95 backdrop-blur border-t border-border px-4 py-2.5',
-        fixed ? 'fixed left-0 right-0' : 'sticky',
+        // A fixed bar is positioned against the VIEWPORT, so it ignores the
+        // safe-area padding on <body> and lands under the home indicator. Pay the
+        // inset here; sticky bars flow inside body and already clear it.
+        fixed ? 'fixed left-0 right-0 pb-[calc(10px+env(safe-area-inset-bottom))]' : 'sticky',
         className
       )}
     >

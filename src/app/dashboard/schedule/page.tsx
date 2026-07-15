@@ -13,15 +13,21 @@ import { ScopeDialog } from '@/components/schedule/ScopeDialog'
 import { generateOccurrences, jobsInScope, shiftDate, dayDelta, recurrenceLabel } from '@/lib/recurrence'
 import type { JobRecurrence } from '@/types'
 import { createDraftInvoiceForCompletedJob, quoteVisitAmount, jobVisitValue, effectiveFreq, syncDraftInvoiceAmounts } from '@/lib/invoicing'
+import { queueOrRun } from '@/lib/offline/outbox'
+import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
+
+// The offline field window (today ± a week), persisted across app kills.
+const FIELD_JOBS_KEY = 'schedule-field-jobs'
 import { resolveAutomations, Automations } from '@/lib/comms/automations'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
+import { StickyActionBar } from '@/components/ui/StickyActionBar'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Skeleton, SkeletonRows } from '@/components/ui/Skeleton'
-import { cn, minutesBetween } from '@/lib/utils'
+import { cn, minutesBetween, localTodayISO } from '@/lib/utils'
 import { toast } from '@/lib/toast'
 import { format, addMonths, addWeeks, addDays, subMonths, subWeeks, subDays, parseISO, getDay } from 'date-fns'
-import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repeat, Lightbulb, Info, Phone, MessageSquare, Navigation, User as UserIcon, FileText, Receipt } from 'lucide-react'
+import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repeat, Lightbulb, Info, Phone, MessageSquare, Navigation, User as UserIcon, FileText, Receipt, CheckCircle2, Play } from 'lucide-react'
 import { OptimizeSchedule } from '@/components/schedule/OptimizeSchedule'
 import { RainDelayCenter } from '@/components/schedule/RainDelayCenter'
 import { WeatherStrip } from '@/components/weather/WeatherStrip'
@@ -92,6 +98,9 @@ export default function SchedulePage() {
   // finished / am I behind" lives there, not in a passive month grid.
   const [view, setView] = useState<CalendarView>('day')
   const [cursor, setCursor] = useState(new Date())
+  // In-flight guard for the field bar's primary (it shares startJob/completeJob
+  // with the cards, which keep their own `acting` guard inside the panel).
+  const [fieldActing, setFieldActing] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Job | null>(null)
   const [formDate, setFormDate] = useState<string>('')
@@ -475,7 +484,12 @@ export default function SchedulePage() {
   }, [supabase])
 
   const fetchJobs = useCallback(async () => {
-    const { data: { user } } = await supabase.auth.getUser()
+    // Local session read, not getUser(): getUser() is a network round-trip, so with
+    // no signal the whole loader used to throw here and the day never painted at
+    // all — before any cached rows could be shown.
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
+    if (!user) { setLoading(false); return }
     const [jRes, cRes, rRes, qRes, sRes, iRes, hRes, dRes] = await Promise.all([
       fetchAllJobs(user!.id),
       supabase.from('customers').select('*').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — can't schedule an archived customer without restoring
@@ -497,6 +511,13 @@ export default function SchedulePage() {
     } else {
       const loadedJobs = jRes.rows
       setJobs(loadedJobs)
+      // Field cache — today ± a week, the window a contractor actually works out
+      // of. Persisted (localStorage) because the phone kills the app between
+      // stops, so a tab-scoped cache would be empty on the driveway cold-start
+      // that needs it most. Bounded by date so a 200-job/week book stays well
+      // inside quota instead of serializing the whole year.
+      const from = shiftDate(localTodayISO(), -1), to = shiftDate(localTodayISO(), 7)
+      writeCache(FIELD_JOBS_KEY, loadedJobs.filter(j => j.scheduled_date >= from && j.scheduled_date <= to), { persist: true })
       setAddonsByJobId(await listLineItemsByJob(supabase, user!.id, loadedJobs.map(j => j.id)))
     }
     setInvoicedJobIds(new Set(((iRes.data as { job_id: string }[]) || []).map(r => r.job_id)))
@@ -533,7 +554,14 @@ export default function SchedulePage() {
     setLoading(false)
   }, [supabase, fetchAllJobs])
 
-  useEffect(() => { fetchJobs() }, [fetchJobs])
+  // Paint the cached field window first so the day is on screen instantly — and,
+  // with no signal, at all. fetchJobs revalidates right behind it, so this is
+  // never stale-stuck; it only ever front-runs the network.
+  useEffect(() => {
+    const cached = readCache<Job[]>(FIELD_JOBS_KEY, CACHE_TTL.field, { persist: true })
+    if (cached?.length) { setJobs(cached); setLoading(false) }
+    fetchJobs()
+  }, [fetchJobs])
 
   // ── Day Status: live sync + optimistic set/clear (source of truth = day_statuses) ──
   const reloadDayStatuses = useCallback(async () => {
@@ -1176,14 +1204,35 @@ export default function SchedulePage() {
   }
 
   // ▶ Check in: stamps arrival/start, status becomes In Progress.
+  // Queued when there's no signal — checking in is the single most common field
+  // tap and it happens in exactly the places with the worst coverage. The row
+  // flips locally either way, so the contractor is never blocked by a bar of LTE.
   async function startJob(job: Job) {
     const prev = { status: job.status, started_at: job.started_at }
     const now = new Date().toISOString()
-    const { error } = await supabase.from('jobs').update({ status: 'in_progress', started_at: now }).eq('id', job.id)
-    if (error) { setBanner('Could not start the job: ' + error.message); return }
-    await fetchJobs()
-    offerUndo('Job started', async () => {
-      await supabase.from('jobs').update(prev).eq('id', job.id)
+    const patch = { status: 'in_progress' as const, started_at: now }
+    let outcome: 'ran' | 'queued'
+    try {
+      outcome = await queueOrRun(
+        { kind: 'job.update', payload: { id: job.id, patch }, label: `Start ${job.title || 'job'}` },
+        async () => {
+          const { error } = await supabase.from('jobs').update(patch).eq('id', job.id)
+          if (error) throw new Error(error.message)
+        },
+      )
+    } catch (e) {
+      setBanner('Could not start the job: ' + (e instanceof Error ? e.message : 'please try again.'))
+      return
+    }
+    // Paint the new state immediately; a refetch would stall (or wipe it) offline.
+    setJobs(prev2 => prev2.map(j => (j.id === job.id ? { ...j, ...patch } : j)))
+    if (outcome === 'ran') await fetchJobs()
+    offerUndo(outcome === 'queued' ? 'Job started — will sync' : 'Job started', async () => {
+      setJobs(prev2 => prev2.map(j => (j.id === job.id ? { ...j, ...prev } : j)))
+      await queueOrRun(
+        { kind: 'job.update', payload: { id: job.id, patch: prev }, label: `Undo start ${job.title || 'job'}` },
+        async () => { await supabase.from('jobs').update(prev).eq('id', job.id) },
+      )
     })
   }
 
@@ -1194,25 +1243,51 @@ export default function SchedulePage() {
     const prev = { status: job.status, completed_at: job.completed_at, actual_minutes: job.actual_minutes }
     const now = new Date().toISOString()
     const actual = job.started_at ? minutesBetween(job.started_at, now) : job.actual_minutes
-    const { error } = await supabase.from('jobs').update({ status: 'completed', completed_at: now, actual_minutes: actual }).eq('id', job.id)
-    if (error) { setBanner('Could not complete the job: ' + error.message); return }
+    const patch = { status: 'completed' as const, completed_at: now, actual_minutes: actual }
+    const completed = { ...job, ...patch }
+    const notify = !!(automations.job_complete && job.customer_id)
     let invoiceCreated = false
-    const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed', actual_minutes: actual })
-    if (res.created) { invoiceCreated = true; setBanner(`Draft invoice ${res.invoiceNumber} created. Review in Invoices.`) }
-    else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
-    // A failed draft used to say NOTHING, which is indistinguishable from the success
-    // banner you scrolled past — the visit leaves the un-invoiced queue and the money
-    // is never billed, with no trace pointing at it. ('exists' stays quiet: an invoice
-    // does exist, so nothing is misclaimed.)
-    else if (res.reason === 'error') setBanner('Job completed, but the draft invoice could not be created — invoice it manually from the job.')
-    // Automated job-complete message (opt-in + dedupe are enforced by the route).
-    if (automations.job_complete && job.customer_id) {
-      fetch('/api/comms/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ customerId: job.customer_id, template: 'job_complete', jobId: job.id, dedupe: true }) }).catch(() => {})
+
+    // Completing is patch + draft invoice + courtesy text. Offline, all three
+    // queue together as ONE op (kind 'job.complete') so reconnecting can never
+    // leave a finished job un-billed. Online this runs exactly as it always did.
+    let outcome: 'ran' | 'queued'
+    try {
+      outcome = await queueOrRun(
+        { kind: 'job.complete', payload: { id: job.id, patch, job: completed, notify }, label: `Complete ${job.title || 'job'}` },
+        async () => {
+          const { error } = await supabase.from('jobs').update(patch).eq('id', job.id)
+          if (error) throw new Error(error.message)
+          const res = await createDraftInvoiceForCompletedJob(supabase, completed)
+          if (res.created) { invoiceCreated = true; setBanner(`Draft invoice ${res.invoiceNumber} created. Review in Invoices.`) }
+          else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
+          // A failed draft used to say NOTHING, which is indistinguishable from the success
+          // banner you scrolled past — the visit leaves the un-invoiced queue and the money
+          // is never billed, with no trace pointing at it. ('exists' stays quiet: an invoice
+          // does exist, so nothing is misclaimed.)
+          else if (res.reason === 'error') setBanner('Job completed, but the draft invoice could not be created — invoice it manually from the job.')
+          // Automated job-complete message (opt-in + dedupe are enforced by the route).
+          if (notify) {
+            fetch('/api/comms/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ customerId: job.customer_id, template: 'job_complete', jobId: job.id, dedupe: true }) }).catch(() => {})
+          }
+        },
+      )
+    } catch (e) {
+      setBanner('Could not complete the job: ' + (e instanceof Error ? e.message : 'please try again.'))
+      return
     }
-    await fetchJobs()
-    offerUndo('Job completed', async () => {
-      await supabase.from('jobs').update(prev).eq('id', job.id)
-      if (invoiceCreated) await supabase.from('invoices').delete().eq('job_id', job.id).eq('status', 'draft')
+    setJobs(prev2 => prev2.map(j => (j.id === job.id ? { ...j, ...patch } : j)))
+    if (outcome === 'queued') setBanner('Completed offline — it’ll sync and draft the invoice when you’re back in signal.')
+    if (outcome === 'ran') await fetchJobs()
+    offerUndo(outcome === 'queued' ? 'Job completed — will sync' : 'Job completed', async () => {
+      setJobs(prev2 => prev2.map(j => (j.id === job.id ? { ...j, ...prev } : j)))
+      await queueOrRun(
+        { kind: 'job.update', payload: { id: job.id, patch: prev }, label: `Undo complete ${job.title || 'job'}` },
+        async () => {
+          await supabase.from('jobs').update(prev).eq('id', job.id)
+          if (invoiceCreated) await supabase.from('invoices').delete().eq('job_id', job.id).eq('status', 'draft')
+        },
+      )
     })
   }
 
@@ -1593,8 +1668,26 @@ export default function SchedulePage() {
     : pendingAction?.type === 'move' ? 'Move'
     : pendingAction?.type === 'price' ? 'Update price for' : 'Save changes to'
 
+  // THE next stop for the field bar: whatever you're on now, else the first one
+  // still to do — in the same route order the cards are listed in, so the bar and
+  // the board can never disagree about what's next. Undefined once the day's done,
+  // which is what hides the bar.
+  const fieldNext = useMemo(() => {
+    const dayISO = format(cursor, 'yyyy-MM-dd')
+    const open = jobs
+      .filter(j => j.scheduled_date === dayISO && (j.status === 'in_progress' || j.status === 'scheduled'))
+      .sort((a, b) => {
+        const oa = a.route_order ?? 999, ob = b.route_order ?? 999
+        if (oa !== ob) return oa - ob
+        return (a.start_time || '').localeCompare(b.start_time || '')
+      })
+    return open.find(j => j.status === 'in_progress') ?? open[0]
+  }, [jobs, cursor])
+
   return (
-    <div className="max-w-6xl mx-auto space-y-6">
+    // Reserve the field bar's height on phones so the last job card can still be
+    // scrolled clear of it — a fixed bar is out of flow and would sit on top of it.
+    <div className={cn('max-w-6xl mx-auto space-y-6', view === 'day' && fieldNext && 'pb-24 lg:pb-0')}>
       <PageHeader
         title="Schedule"
         description={`${jobs.length} job${jobs.length !== 1 ? 's' : ''} on the calendar`}
@@ -1985,6 +2078,44 @@ export default function SchedulePage() {
           <Button size="sm" variant="secondary" onClick={() => clearDayStatusFor(Array.from(selectedDays))}>Clear status</Button>
           <Button size="sm" variant="ghost" onClick={() => setSelectedDays(new Set())}>Cancel</Button>
         </div>
+      )}
+
+      {/* ── Field bar ────────────────────────────────────────────────────────────
+          The day's ONE next action, pinned in thumb reach. Every primary action on
+          this page lives in the job card or the header — i.e. the top half of a
+          scrolling page — so a contractor holding a trimmer had to two-hand the
+          phone and hunt for the card they were standing in front of. This restates
+          the SAME stage-primary the card shows (On my way → Start → Complete) and
+          calls the SAME engines; it adds reach, not a second way to do things.
+          Phone-only, day-view-only, and it hides itself once the day is done. */}
+      {view === 'day' && fieldNext && (
+        <StickyActionBar fixed className="lg:hidden">
+          <div className="flex items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint">
+                {fieldNext.status === 'in_progress' ? 'In progress' : 'Next stop'}
+              </p>
+              <p className="text-sm font-semibold text-ink truncate">{fieldNext.customers?.name || fieldNext.title}</p>
+            </div>
+            <Button
+              size="lg"
+              className="shrink-0 tap-target"
+              loading={fieldActing}
+              onClick={async () => {
+                if (fieldActing) return
+                setFieldActing(true)
+                try {
+                  if (fieldNext.status === 'in_progress') await completeJob(fieldNext)
+                  else await startJob(fieldNext)
+                } finally { setFieldActing(false) }
+              }}
+            >
+              {fieldNext.status === 'in_progress'
+                ? <><CheckCircle2 className="w-4 h-4" /> Complete</>
+                : <><Play className="w-4 h-4" /> Start</>}
+            </Button>
+          </div>
+        </StickyActionBar>
       )}
     </div>
   )

@@ -62,6 +62,13 @@ export default function InvoicesPage() {
     const job = p.get('job') || undefined
     return invoice || job ? { invoice, job } : null
   })
+  // `?pay=1` — the field "Get paid" tap on a completed job card. Lands on that one
+  // invoice with the record-payment form already open, so collecting in the driveway
+  // is one tap from the schedule instead of a hunt through the invoice list.
+  const [payIntent] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    return new URLSearchParams(window.location.search).get('pay') === '1'
+  })
   // The ONE shared Send Message dialog, opened for a specific invoice's customer.
   const [msgInvoice, setMsgInvoice] = useState<Invoice | null>(null)
   const [paymentsEnabled, setPaymentsEnabled] = useState(false)
@@ -601,8 +608,12 @@ export default function InvoicesPage() {
                     onSaved={patch => { setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, ...patch } as Invoice : i)); setEditId(null) }}
                   />
                 )}
-                {/* Record payments, resolve overpayments, apply credit — issued invoices only */}
-                {inv.status !== 'draft' && uid && (
+                {/* Record payments, resolve overpayments, apply credit. Drafts are
+                    included: completing a job auto-drafts the invoice, so gating this
+                    on "issued" meant a contractor holding cash in the driveway had to
+                    Send the invoice to their own customer before the app would let
+                    them write the payment down. Recording a payment issues it (below). */}
+                {uid && (
                   <InvoicePaymentControls
                     invoice={inv}
                     settings={settings}
@@ -610,6 +621,8 @@ export default function InvoicesPage() {
                     credit={inv.customer_id ? (creditByCustomer[inv.customer_id] || 0) : 0}
                     payments={paymentsByInvoice[inv.id] || []}
                     onChanged={fetchInvoices}
+                    onIssueDraft={() => markSent(inv)}
+                    defaultOpen={payIntent && focused?.length === 1 && focused[0].id === inv.id}
                   />
                 )}
               </CardBody>
