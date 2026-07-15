@@ -104,7 +104,12 @@ export function propertyContextBlock(ctx: PropertyIntelligence | null | undefine
   const bits: string[] = []
   if (ctx.summary) bits.push(ctx.summary.trim())
   if (ctx.detections?.length) bits.push(`Features present: ${ctx.detections.slice(0, 8).join(', ')}.`)
-  if (ctx.mowing_difficulty) bits.push(`Mowing difficulty: ${ctx.mowing_difficulty}.`)
+  // `mowing_difficulty` is the column Vision writes; the VALUE is a plain
+  // easy/moderate/hard rating of working this site. Rendering the column's name into
+  // a prompt told every reader the trade was lawn care — so a plumber's quote could
+  // come back discussing mowing. The rating is still useful to any trade (it's about
+  // access and obstacles), so it's kept and described for what it measures.
+  if (ctx.mowing_difficulty) bits.push(`Site difficulty for working here: ${ctx.mowing_difficulty}.`)
   if (!bits.length) return ''
   return `Known property facts (from a prior AI analysis — reuse these, don't re-derive): ${bits.join(' ')}`
 }
