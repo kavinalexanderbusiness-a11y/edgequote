@@ -20,6 +20,7 @@ import {
 } from '@/lib/crm/campaigns'
 import { loadCampaignStats, summarizeStats, EMPTY_STATS, type CampaignStats } from '@/lib/crm/campaignStats'
 import { previewAudience } from '@/lib/crm/audience'
+import { applyCanAskForReview } from '@/lib/crm/reviews'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { CampaignHistory } from './CampaignHistory'
 import { CampaignPreview } from './CampaignPreview'
@@ -78,12 +79,14 @@ export function CampaignManager() {
     if (!user) { setLoading(false); return }
     const head = { count: 'exact' as const, head: true }
     const [campRes, presetRes, totalRes, bdayRes, annivRes, notRevRes, happyRes, bizRes] = await Promise.all([
-      supabase.from('crm_campaigns').select('*').eq('user_id', user.id).order('created_at', { ascending: true }),
+      supabase.from('crm_campaigns').select('*').eq('user_id', user.id).is('archived_at', null).order('created_at', { ascending: true }),
       supabase.from('crm_campaign_presets').select('*').eq('user_id', user.id).order('name'),
       supabase.from('customers').select('id', head).eq('user_id', user.id).is('archived_at', null),
       supabase.from('customers').select('id', head).eq('user_id', user.id).is('archived_at', null).not('birthday', 'is', null),
       supabase.from('customers').select('id', head).eq('user_id', user.id).is('archived_at', null).not('anniversary', 'is', null),
-      supabase.from('customers').select('id', head).eq('user_id', user.id).is('archived_at', null).is('reviewed_at', null).is('review_declined_at', null),
+      // THE review rule, shared with the cron and the campaign audience — a
+      // hand-rolled copy here would drift from what the sender actually does.
+      applyCanAskForReview(supabase.from('customers').select('id', head).eq('user_id', user.id).is('archived_at', null)),
       supabase.from('customers').select('id', head).eq('user_id', user.id).is('archived_at', null).not('reviewed_at', 'is', null).gte('review_rating', 4),
       supabase.from('business_settings').select('company_name, review_url').eq('user_id', user.id).maybeSingle(),
     ])
@@ -220,12 +223,22 @@ export function CampaignManager() {
     await load()
     startEdit(data as CrmCampaign)
   }
+  // Archive, never DELETE. crm_campaign_log.campaign_id cascades, so a hard delete
+  // destroyed the campaign's whole send history — which is simultaneously the CASL
+  // audit trail AND the per-period dedupe ledger. The Undo then re-inserted the row
+  // enabled, with an empty ledger, so the next run happily messaged every customer a
+  // second time. Archiving keeps the log, so Undo is just a flag flip.
   async function del(c: CrmCampaign) {
-    const { data: row } = await supabase.from('crm_campaigns').select('*').eq('id', c.id).maybeSingle()
-    await supabase.from('crm_campaigns').delete().eq('id', c.id)
+    const wasEnabled = c.enabled
+    const { error } = await supabase.from('crm_campaigns')
+      .update({ archived_at: new Date().toISOString(), enabled: false }).eq('id', c.id)
+    if (error) { toast.error('Could not delete: ' + error.message); return }
     if (editingId === c.id) { setEditingId(null); setDraft(null) }
     load()
-    if (row) toast.undo(`Deleted "${c.name}"`, async () => { await supabase.from('crm_campaigns').insert(row); load() })
+    toast.undo(`Deleted "${c.name}"`, async () => {
+      await supabase.from('crm_campaigns').update({ archived_at: null, enabled: wasEnabled }).eq('id', c.id)
+      load()
+    })
   }
   async function delPreset(p: CrmCampaignPreset) {
     await supabase.from('crm_campaign_presets').delete().eq('id', p.id)
@@ -255,7 +268,7 @@ export function CampaignManager() {
     if (c.kind === 'birthday') return `${counts.birthday} of ${counts.total} customers have a birthday set`
     if (c.kind === 'anniversary') return `${counts.anniversary} of ${counts.total} customers have an anniversary set`
     if (c.kind === 'win_back') return 'Quiet customers, when they pass the window'
-    if (c.kind === 'review' && d.audience.not_reviewed) return `${counts.notReviewed} of ${counts.total} customers haven’t reviewed yet`
+    if (c.kind === 'review' && d.audience.not_reviewed) return `${counts.notReviewed} of ${counts.total} customers haven’t been asked yet`
     if (c.kind === 'referral' && d.audience.happy_only) return `${counts.happy} of ${counts.total} customers reviewed you 4★ or better`
     return `Up to ${counts.total} customers${d.audience.recurring_only ? ' (recurring only)' : ''}`
   }

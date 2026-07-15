@@ -79,7 +79,9 @@ export const CAMPAIGN_KINDS: Record<CampaignKind, CampaignKindMeta> = {
   review: {
     label: 'Review ask',
     blurb: 'Chases customers who haven’t left a review yet. The day-after review automation covers new jobs; this one sweeps up the rest.',
-    defaultTemplate: 'review_request',
+    // review_chase, NOT review_request: a bulk sweep with no visit attached is a
+    // commercial message, so it must ride the marketing opt-out. See msgCategory.
+    defaultTemplate: 'review_chase',
     defaultChannels: ['sms', 'email'],
     defaultSchedule: { day_of_month: 1, every_months: 3 },
     timing: 'monthly',
@@ -89,7 +91,9 @@ export const CAMPAIGN_KINDS: Record<CampaignKind, CampaignKindMeta> = {
 
 export const AUDIENCE_LABELS: Record<keyof CampaignAudience, string> = {
   recurring_only: 'Only recurring customers',
-  not_reviewed: 'Only customers who haven’t reviewed yet',
+  // Says "asked", not "reviewed": the filter excludes anyone already asked by
+  // EITHER review sender, which is what stops a customer being chased twice.
+  not_reviewed: 'Only customers we haven’t asked yet',
   happy_only: 'Only happy customers (reviewed 4★ or better)',
 }
 
@@ -256,15 +260,36 @@ export function dateFieldFiresToday(dateStr: string | null | undefined, today: D
   return md.month === target.getUTCMonth() + 1 && md.day === target.getUTCDate()
 }
 
-// Does a broadcast fire today, given { day_of_month, every_months }? The cadence
-// is anchored on absolute calendar months so it stays stable across years.
-export function broadcastFiresToday(schedule: CampaignSchedule, today: Date): boolean {
+// The month a repeating cadence counts from: the campaign's own start date if it
+// has one, else the month it was created. Returns null when neither is known, in
+// which case broadcastFiresToday falls back to its historic epoch anchor.
+export function anchorMonthIndex(c: { schedule?: CampaignSchedule | null; created_at?: string | null }): number | null {
+  const src = c.schedule?.starts_on || c.created_at
+  if (!src) return null
+  const p = String(src).slice(0, 10).split('-')
+  const y = Number(p[0]), m = Number(p[1])
+  if (!y || !m) return null
+  return y * 12 + (m - 1)
+}
+
+// Does a broadcast fire today, given { day_of_month, every_months }?
+//
+// The cadence counts from `anchorIdx` — the campaign's start (or creation) month.
+// It used to count from an ABSOLUTE month epoch, which silently pinned every
+// multi-month cadence to January: every_months=12 could only ever fire in
+// January, =6 only Jan/Jul, =3 only Jan/Apr/Jul/Oct. An owner who set up a yearly
+// campaign in July got it the following January — 184 days late — while the UI
+// said "once a year" and never named the month.
+export function broadcastFiresToday(schedule: CampaignSchedule, today: Date, anchorIdx?: number | null): boolean {
   const dom = schedule.day_of_month || 1
   const every = Math.max(1, schedule.every_months || 1)
   const y = today.getUTCFullYear(), m = today.getUTCMonth() + 1
   const effectiveDay = Math.min(dom, daysInMonth(y, m))
   if (today.getUTCDate() !== effectiveDay) return false
-  return (y * 12 + (m - 1)) % every === 0
+  const idx = y * 12 + (m - 1)
+  if (anchorIdx == null) return idx % every === 0   // unknown anchor → historic behaviour
+  if (idx < anchorIdx) return false                 // never fire before the campaign existed
+  return (idx - anchorIdx) % every === 0
 }
 
 // Does a seasonal campaign fire today? One fixed calendar date per year; the day
@@ -290,11 +315,16 @@ export function campaignWindowOpen(schedule: CampaignSchedule, today: Date): boo
 // THE one "does this campaign fire today" rule, for every kind. Date-of-birth
 // style kinds still filter per-customer afterwards (dateFieldFiresToday); this
 // is the campaign-level gate the cron checks before it queries an audience.
-export function campaignFiresToday(c: Pick<CrmCampaign, 'kind' | 'schedule'>, today: Date): boolean {
+// `created_at` is optional so existing callers keep compiling, but pass it when
+// you have it: it's what anchors a repeating cadence to the month the owner set
+// the campaign up in, rather than to January.
+export type FireSpec = Pick<CrmCampaign, 'kind' | 'schedule'> & { created_at?: string | null }
+
+export function campaignFiresToday(c: FireSpec, today: Date): boolean {
   const s = c.schedule || {}
   if (!campaignWindowOpen(s, today)) return false
   switch (c.kind) {
-    case 'broadcast': case 'referral': case 'review': return broadcastFiresToday(s, today)
+    case 'broadcast': case 'referral': case 'review': return broadcastFiresToday(s, today, anchorMonthIndex(c))
     case 'seasonal': return seasonalFiresToday(s, today)
     // Birthday/anniversary/win-back evaluate candidates every day.
     case 'birthday': case 'anniversary': case 'win_back': return true
@@ -322,7 +352,7 @@ export function isDailyEvaluated(kind: CampaignKind): boolean {
 // The next day this campaign fires, found by asking the ONE fire rule — no second
 // scheduling maths to drift from campaignFiresToday(). 400 days covers an annual
 // cadence plus a closed window; null means it never fires again (window expired).
-export function nextFireDate(c: Pick<CrmCampaign, 'kind' | 'schedule'>, from: Date): Date | null {
+export function nextFireDate(c: FireSpec, from: Date): Date | null {
   for (let i = 0; i <= 400; i++) {
     const d = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate() + i))
     if (campaignFiresToday(c, d)) return d
@@ -337,7 +367,7 @@ function fmtDate(d: Date): string {
 // Plain-English "when does this next actually go out" — the fact behind the rule.
 // Honest about the three cases that aren't a date: a campaign that evaluates
 // daily, one waiting for its window to open, and one whose window has closed.
-export function describeNextRun(c: Pick<CrmCampaign, 'kind' | 'schedule'>, today: Date): string {
+export function describeNextRun(c: FireSpec, today: Date): string {
   const s = c.schedule || {}
   const next = nextFireDate(c, today)
   if (!next) return 'Its date window has passed — this won’t send again'

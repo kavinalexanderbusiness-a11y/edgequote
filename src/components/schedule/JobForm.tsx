@@ -21,6 +21,8 @@ import type { Cadence } from '@/lib/labor'
 import { resolvePrefs, type PrefSource } from '@/lib/preferences'
 import { findJobMatch, type JobLiteForMatch } from '@/lib/dedup'
 import { Collapsible } from '@/components/ui/Collapsible'
+import { AssistButton } from '@/components/ai/AssistButton'
+import { useAiAssist } from '@/hooks/useAiAssist'
 import { Repeat, Sparkles, Snowflake, Sun, AlertTriangle, CalendarRange, Clock } from 'lucide-react'
 
 // Flexible recurrence: any interval (count + unit), three end modes.
@@ -175,6 +177,8 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   const customerId = watch('customer_id')
   const status = watch('status')
   const selectedPropertyId = watch('property_id')
+  // AI notes cleanup — tidies the owner's jottings; every fact stays theirs.
+  const aiNotes = useAiAssist()
   const serviceType = watch('service_type')
   const scheduledDate = watch('scheduled_date')
   const startTime = watch('start_time')
@@ -506,6 +510,25 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
 
       <Textarea label="Notes" placeholder="Access instructions, gate codes, special requests..."
         {...register('notes')} />
+      {aiNotes.enabled === true && String(watch('notes') || '').trim() !== '' && (
+        <div className="flex items-center gap-2 -mt-2">
+          <AssistButton
+            label={aiNotes.running ? 'Cleaning up…' : 'Clean up notes'}
+            busy={aiNotes.running}
+            title="Rewrites rough jottings into clear notes — keeps every gate code, instruction and detail exactly as written"
+            onClick={async () => {
+              const prior = String(watch('notes') || '')
+              aiNotes.clearError()
+              setValue('notes', '')
+              const full = await aiNotes.run(
+                { task: 'job_notes', draft: prior },
+                { onDelta: d => setValue('notes', String(watch('notes') || '') + d) },
+              )
+              if (full === null) setValue('notes', prior)
+            }} />
+          {aiNotes.error && <p className="text-xs text-amber-400" role="alert">{aiNotes.error}</p>}
+        </div>
+      )}
 
       {/* Time & crew — expanded while creating (the smart duration suggestion
           matters then), a one-line summary when editing. */}

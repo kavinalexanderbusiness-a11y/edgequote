@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { LayoutDashboard, Users, FileText, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Receipt, Menu, X, Sprout, MessageSquare, Search, Wrench, Bot } from 'lucide-react'
+import { LayoutDashboard, Users, FileText, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Receipt, Menu, X, Sprout, MessageSquare, Search, Wrench, Bot, LifeBuoy } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useFocusTrap } from '@/hooks/useFocusTrap'
@@ -38,6 +38,7 @@ const sectionOf: Record<string, string> = {
   '/dashboard/reactivation': '/dashboard/grow',
   '/dashboard/review': '/dashboard/grow',
   '/dashboard/data-quality': '/dashboard/grow',
+  '/dashboard/reports': '/dashboard/grow',
   '/dashboard/routes': '/dashboard/grow',
   '/dashboard/measurements': '/dashboard/grow',
   '/dashboard/weather': '/dashboard/schedule',
@@ -148,6 +149,14 @@ export function Sidebar() {
           })}
         </nav>
         <div className="px-3 py-4 border-t border-border flex flex-col gap-0.5">
+          {/* Help sits with Settings, not in the work nav above — it's a place you go
+              when something is confusing, not part of the daily loop. */}
+          <Link href="/dashboard/help" onClick={onNavigate}
+            aria-current={pathname === '/dashboard/help' ? 'page' : undefined}
+            className={linkClass(pathname === '/dashboard/help')}>
+            <LifeBuoy className="w-4 h-4" aria-hidden="true" />
+            Help
+          </Link>
           <Link href="/dashboard/settings" onClick={onNavigate}
             aria-current={pathname === '/dashboard/settings' ? 'page' : undefined}
             className={linkClass(pathname === '/dashboard/settings')}>

@@ -2,7 +2,6 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { sendSms, sendEmail } from './send'
 import { getOrCreateConversation } from './conversation'
 import { reachCheck } from './reach'
-import { SKIP_REASON } from './skipReasons'
 import { type MessagePrefs } from './templates'
 
 // ── Shared customer dispatch ─────────────────────────────────────────────────
@@ -27,8 +26,6 @@ export interface DispatchCustomer {
 export interface DispatchInput {
   userId: string
   customer: DispatchCustomer
-  /** Attempted IN THIS ORDER. The threaded bubble records the first channel that
-   *  actually sent, so order is meaningful, not cosmetic. */
   channels: string[]
   smsText: string
   emailSubject: string
@@ -37,11 +34,9 @@ export interface DispatchInput {
   template: string          // for messages.meta + notification_log.template
   meta?: Record<string, unknown>
   thread?: boolean          // record an outbound bubble (default true)
-  /** A record the customer is entitled to regardless of marketing preferences —
-   *  today only the payment receipt. Bypasses the category check and email_opt_in,
-   *  because a receipt for money someone just paid is not a message they can be
-   *  unsubscribed from. SMS still requires sms_opt_in either way: carrier consent
-   *  is not ours to waive. Default false — nothing is transactional by accident. */
+  // A receipt/confirmation for something the customer just did — email skips the
+  // email_opt_in check (CASL s.6(6)(b)). SMS opt-in and the category preference
+  // still apply. See lib/comms/reach.
   transactional?: boolean
 }
 
@@ -55,6 +50,13 @@ export interface DispatchInput {
 // finite attempt budget, so they need to tell "the provider is down" apart from
 // "the provider says no". Always false for a skip — a skip isn't a failure, it's
 // the consent gate working, and there is nothing to retry.
+//
+// It is PURELY carried, never consulted here: nothing in this file, and nothing on
+// the interactive send paths, branches on it. lib/comms/send already computes the
+// verdict (429/5xx and timeouts are retryable; a 4xx rejection is not) — dispatch
+// merely stops discarding it on the way to lib/automation/chase, which spends the
+// budget. Adding the field changes no send decision, no consent check and no
+// message; it only makes an answer that already existed reachable.
 export interface DispatchAttempt {
   channel: string
   status: string
@@ -68,49 +70,6 @@ export interface DispatchResult { attempts: DispatchAttempt[]; messageId: string
 
 const PROVIDER: Record<string, string> = { sms: 'twilio', email: 'resend' }
 
-// ── Legacy per-channel result vocabulary ─────────────────────────────────────
-// /api/comms/send has always answered with a per-channel map of raw SendResults
-// ({ sent, reason, error?, id? } — see lib/comms/send) using its OWN hyphenated
-// skip reasons. Nine callers read that map. Dispatch speaks the newer attempt
-// vocabulary (status:'skipped' + SKIP_REASON.*), so this translates back and the
-// route can share the one consent gate without breaking its published contract.
-//
-// Absent fields are OMITTED, not nulled: the legacy values came straight off
-// SendResult, where a skip carried only { sent, reason } and a success carried no
-// `error` key at all. Emitting `error: null` would change the response bytes and
-// `'error' in result` for every caller.
-//
-// This builds its output field by field for exactly that reason — never by
-// spreading an attempt. `retryable` is internal to the automated senders and must
-// NOT appear here; a spread would have published it to all nine callers the day it
-// was added.
-const LEGACY_REASON: Record<string, string> = {
-  [SKIP_REASON.NO_OPT_IN]: 'no-optin',
-  [SKIP_REASON.UNSUBSCRIBED]: 'no-optin',   // a declined CATEGORY reads as no-optin to callers
-  [SKIP_REASON.NO_PHONE]: 'no-phone',
-  [SKIP_REASON.NO_EMAIL]: 'no-email',
-}
-
-export interface LegacySendResult { sent: boolean; reason: string; error?: string | null; id?: string | null }
-
-export function sendResultsFromAttempts(attempts: DispatchAttempt[]): Record<string, LegacySendResult> {
-  const out: Record<string, LegacySendResult> = {}
-  for (const a of attempts) {
-    if (a.status === 'skipped') {
-      // A skip never carried the provider fields — reason is the whole story.
-      out[a.channel] = { sent: false, reason: LEGACY_REASON[a.detail ?? ''] ?? a.status }
-      continue
-    }
-    // Reconstruct the provider's SendResult: `reason` IS the status ('sent' /
-    // 'disabled' / 'error'), and error/id are only ever set one at a time.
-    const r: LegacySendResult = { sent: a.sent, reason: a.status }
-    if (a.detail != null) r.error = a.detail
-    if (a.providerId != null) r.id = a.providerId
-    out[a.channel] = r
-  }
-  return out
-}
-
 export async function dispatchToCustomer(sb: SupabaseClient, inp: DispatchInput): Promise<DispatchResult> {
   const c = inp.customer
   const attempts: DispatchAttempt[] = []
@@ -120,35 +79,33 @@ export async function dispatchToCustomer(sb: SupabaseClient, inp: DispatchInput)
 
   // Granular consent + channel opt-in + contact-on-file, resolved by the ONE
   // shared predicate (lib/comms/reach) so the campaign audience preview can
-  // predict this exact outcome without re-deriving the rules. `transactional`
-  // rides through it too — otherwise the predicate and the send path would
-  // disagree about receipts, which is the exact drift reach.ts exists to prevent.
+  // predict this exact outcome without re-deriving the rules.
   const gate = reachCheck(c, inp.channels, inp.template, { transactional: inp.transactional })
   const blocked = new Map(gate.map(g => [g.channel, g.blocked]))
 
   // The customer declined this CATEGORY of message — nothing goes out at all.
   // Reported per requested channel, in the caller's order.
-  if (gate.length && gate.every(g => g.blocked === SKIP_REASON.UNSUBSCRIBED)) {
+  if (gate.length && gate.every(g => g.blocked === 'unsubscribed')) {
     for (const g of gate) attempts.push(skip(g.channel, g.blocked!))
     return { attempts, messageId: null, sentChannels: [] }
   }
 
-  // Caller order — the bubble below records the first channel that SENT, so this
-  // is meaningful, not cosmetic (the receipt asks for email first).
-  for (const ch of inp.channels) {
-    const b = blocked.get(ch)
-    if (ch === 'sms') {
-      if (b) attempts.push(skip('sms', b))
-      else {
-        const r = await sendSms(c.phone!, inp.smsText)
-        attempts.push({ channel: 'sms', status: r.reason, detail: r.error ?? null, sent: r.sent, provider: r.sent ? PROVIDER.sms : null, providerId: r.id ?? null, retryable: r.retryable ?? false })
-      }
-    } else if (ch === 'email') {
-      if (b) attempts.push(skip('email', b))
-      else {
-        const r = await sendEmail(c.email!, inp.emailSubject, inp.emailHtml, inp.emailText)
-        attempts.push({ channel: 'email', status: r.reason, detail: r.error ?? null, sent: r.sent, provider: r.sent ? PROVIDER.email : null, providerId: r.id ?? null, retryable: r.retryable ?? false })
-      }
+  if (inp.channels.includes('sms')) {
+    const b = blocked.get('sms')
+    if (b) attempts.push(skip('sms', b))
+    else {
+      const r = await sendSms(c.phone!, inp.smsText)
+      // `?? false` — SendResult.retryable is optional, and absent means "hasn't
+      // thought about it", which must not license a retry.
+      attempts.push({ channel: 'sms', status: r.reason, detail: r.error ?? null, sent: r.sent, provider: r.sent ? PROVIDER.sms : null, providerId: r.id ?? null, retryable: r.retryable ?? false })
+    }
+  }
+  if (inp.channels.includes('email')) {
+    const b = blocked.get('email')
+    if (b) attempts.push(skip('email', b))
+    else {
+      const r = await sendEmail(c.email!, inp.emailSubject, inp.emailHtml, inp.emailText)
+      attempts.push({ channel: 'email', status: r.reason, detail: r.error ?? null, sent: r.sent, provider: r.sent ? PROVIDER.email : null, providerId: r.id ?? null, retryable: r.retryable ?? false })
     }
   }
 

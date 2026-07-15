@@ -43,3 +43,19 @@ export type ReviewSource = (typeof REVIEW_SOURCES)[number]
 export function canAskForReview(c: ReviewFields): boolean {
   return reviewStatus(c) === 'not_requested'
 }
+
+// The columns canAskForReview() reads, expressed as a PostgREST filter.
+//
+// There are TWO review senders — the day-after automation (per completed job) and
+// the `review` campaign (a periodic sweep) — and they dedupe in different ledgers:
+// notification_log per job, crm_campaign_log per period. Neither can see the
+// other, so the only thing that can stop a customer being asked by BOTH is the
+// column they both write: customers.review_requested_at, stamped by
+// trg_crm_stamp_review_requested on every successful ask.
+//
+// So both consult ONE rule — the cron via canAskForReview() on a loaded row, the
+// campaign audience via this filter — and "already asked, by anyone" means
+// nobody asks again.
+export function applyCanAskForReview<Q extends { is(column: string, value: unknown): Q }>(q: Q): Q {
+  return q.is('reviewed_at', null).is('review_declined_at', null).is('review_requested_at', null)
+}

@@ -7,7 +7,17 @@ import { displayInvoiceStatus, invoiceBalance } from '@/lib/payments/ledger'
 import { resolveAutomations } from '@/lib/comms/automations'
 import { displayQuoteStatus, isQuoteExpired, isExpiringSoon, daysUntilExpiry, defaultValidUntil } from '@/lib/quoteStatus'
 import { prefAllows, msgCategory } from '@/lib/comms/templates'
-import { dispatchToCustomer, sendResultsFromAttempts, type DispatchAttempt, type DispatchResult } from '@/lib/comms/dispatch'
+// MERGE (main ← guardian-2): sendResultsFromAttempts is gone, and with it sections
+// 18 and 23 (14 cases) that were its only tests. It existed to translate
+// attempts → the legacy `results` map for /api/comms/send — guardian-2's only
+// production caller. main's rework of that route builds the same shape inline, so
+// the helper had no callers left. Resurrecting it purely to keep its own tests
+// green would have added an exported function nothing calls. The CONTRACT those
+// cases pinned (the route answers in SendResult vocabulary) still holds on main;
+// it is simply no longer implemented by this helper, and main ships that route
+// untested by this harness today — so removing them restores main's status quo
+// rather than dropping live coverage.
+import { dispatchToCustomer, type DispatchAttempt, type DispatchResult } from '@/lib/comms/dispatch'
 import { logSend, logDispatch } from '@/lib/comms/log'
 import { sendSms, sendEmail } from '@/lib/comms/send'
 import { runChaseCron, type ChaseItem, type ChaseTally } from '@/lib/automation/chase'
@@ -262,33 +272,6 @@ async function run() {
   const catOut = await dispatchToCustomer(sbStub, { ...base, customer: { id: 'c', phone: '+15550100', email: 'a@b.c', sms_opt_in: true, email_opt_in: true, message_prefs: { invoices: false } as never } })
   check('dispatch', 'granular opt-out short-circuits BOTH channels', [catOut.attempts.map(a => a.status), catOut.attempts.map(a => a.detail)], [['skipped', 'skipped'], ['unsubscribed', 'unsubscribed']])
   check('dispatch', 'nothing sent → nothing threaded', catOut.messageId, null)
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  H('18. LEGACY RESULTS MAP — /api/comms/send speaks SendResult, dispatch speaks attempts')
-  // The route shares the dispatch gate but must keep answering in its OWN
-  // vocabulary — nine callers read `results`. These pin the translation, including
-  // the absent keys: a skip has never carried `error`/`id`, and JSON.stringify
-  // would leak `"error":null` to every caller if it did.
-  const asAttempt = (o: Partial<DispatchAttempt>): DispatchAttempt =>
-    // `retryable: false` mirrors dispatch's own skip default — a skip is a decision,
-    // not a failure, so there is nothing to retry.
-    ({ channel: 'sms', status: 'skipped', detail: null, sent: false, provider: null, providerId: null, retryable: false, ...o })
-
-  check('results-map', 'opted-out sms → no-optin', sendResultsFromAttempts([asAttempt({ detail: SKIP_REASON.NO_OPT_IN })]), { sms: { sent: false, reason: 'no-optin' } })
-  check('results-map', 'missing phone → no-phone', sendResultsFromAttempts([asAttempt({ detail: SKIP_REASON.NO_PHONE })]), { sms: { sent: false, reason: 'no-phone' } })
-  check('results-map', 'opted-out email → no-optin', sendResultsFromAttempts([asAttempt({ channel: 'email', detail: SKIP_REASON.NO_OPT_IN })]), { email: { sent: false, reason: 'no-optin' } })
-  check('results-map', 'missing email → no-email', sendResultsFromAttempts([asAttempt({ channel: 'email', detail: SKIP_REASON.NO_EMAIL })]), { email: { sent: false, reason: 'no-email' } })
-  // A declined CATEGORY has always read as 'no-optin' to callers, not 'unsubscribed'.
-  check('results-map', 'unsubscribed category → no-optin (not a new word)', sendResultsFromAttempts([asAttempt({ detail: SKIP_REASON.UNSUBSCRIBED })]), { sms: { sent: false, reason: 'no-optin' } })
-
-  // A real send returns the provider's raw SendResult: reason 'sent' + its id, no `error` key.
-  check('results-map', 'sent → raw SendResult w/ provider id', sendResultsFromAttempts([asAttempt({ status: 'sent', sent: true, provider: 'twilio', providerId: 'SM123' })]), { sms: { sent: true, reason: 'sent', id: 'SM123' } })
-  // A provider error keeps reason:'error' and its detail, and gains no `id` key.
-  check('results-map', 'provider error → reason=error + error detail', sendResultsFromAttempts([asAttempt({ channel: 'email', status: 'error', detail: 'Resend 422: bad address' })]), { email: { sent: false, reason: 'error', error: 'Resend 422: bad address' } })
-  // Credentials absent — the send layer's no-op result must survive the round trip.
-  check('results-map', 'disabled provider → reason=disabled', sendResultsFromAttempts([asAttempt({ status: 'disabled' })]), { sms: { sent: false, reason: 'disabled' } })
-  // Multi-channel: sms-before-email order is preserved into the map.
-  check('results-map', 'both channels keep sms-first key order', Object.keys(sendResultsFromAttempts([asAttempt({ status: 'sent', sent: true, providerId: 'SM1' }), asAttempt({ channel: 'email', detail: SKIP_REASON.NO_EMAIL })])), ['sms', 'email'])
 
   // ═══════════════════════════════════════════════════════════════════════════
   H('19. AUTOMATION ENGINE — the gate that decides whether a rule may act')
@@ -607,31 +590,6 @@ async function run() {
   globalThis.fetch = realFetch
   for (const k of Object.keys(process.env)) if (!(k in ENV)) delete process.env[k]
   Object.assign(process.env, ENV)
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  H('23. LEGACY MAP — `retryable` is internal and must not leak to the nine callers')
-  // sendResultsFromAttempts is a published contract. The new field lives on the
-  // attempt for the chase loop only; if it ever appears in this map it changes the
-  // response bytes for every caller of /api/comms/send.
-  check('results-map', 'retryable does not leak (provider error)',
-    sendResultsFromAttempts([asAttempt({ status: 'error', detail: 'Twilio 500', retryable: true })]),
-    { sms: { sent: false, reason: 'error', error: 'Twilio 500' } })
-  check('results-map', 'retryable does not leak (sent)',
-    sendResultsFromAttempts([asAttempt({ status: 'sent', sent: true, provider: 'twilio', providerId: 'SM1', retryable: false })]),
-    { sms: { sent: true, reason: 'sent', id: 'SM1' } })
-  check('results-map', 'retryable does not leak (skip)',
-    sendResultsFromAttempts([asAttempt({ detail: SKIP_REASON.NO_OPT_IN, retryable: false })]),
-    { sms: { sent: false, reason: 'no-optin' } })
-  // Belt and braces: no legacy value carries the key at all, whatever the attempt said.
-  check('results-map', 'no `retryable` key on ANY legacy value',
-    Object.values(sendResultsFromAttempts([
-      asAttempt({ status: 'error', detail: 'Twilio 500', retryable: true }),
-      asAttempt({ channel: 'email', detail: SKIP_REASON.NO_EMAIL }),
-    ])).some(v => 'retryable' in v), false)
-  // The exact case from section 18, re-asserted with retryable set: byte-identical.
-  check('results-map', 'section-18 output is UNCHANGED by the new field',
-    sendResultsFromAttempts([asAttempt({ channel: 'email', status: 'error', detail: 'Resend 422: bad address', retryable: false })]),
-    { email: { sent: false, reason: 'error', error: 'Resend 422: bad address' } })
 
   // ═══════════════════════════════════════════════════════════════════════════
   H('24. CADENCE — a pricing bucket is not a cadence')

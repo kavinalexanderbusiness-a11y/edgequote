@@ -25,26 +25,33 @@ export interface ChannelReach {
   blocked: SkipReason | null
 }
 
+export interface ReachOptions {
+  /**
+   * This message is a receipt/confirmation for something the customer just did
+   * with us. CASL s.6(6)(b) exempts that from *consent*, so EMAIL does not
+   * require `email_opt_in` — the customer paid; they get the receipt.
+   *
+   * Deliberately narrow, and stated here rather than by omission in a copy:
+   *  • SMS still requires sms_opt_in. No exemption covers texting someone who
+   *    said don't text me.
+   *  • The category preference still applies to BOTH channels. Someone who
+   *    turned off "Invoices & receipts" asked for exactly this and gets it.
+   */
+  transactional?: boolean
+}
+
 // Per-channel gate, in the same order the caller asked for the channels.
 // Mirrors dispatchToCustomer exactly:
 //   category preference → channel opt-in → contact on file.
 // A channel this pipeline doesn't send (e.g. push) is reported unblocked here;
 // dispatch simply never attempts it, so it can't produce a false "will send".
-export interface ReachOptions {
-  /** A record the customer is entitled to regardless of marketing preferences —
-   *  today only the payment receipt. Bypasses the CATEGORY check and email_opt_in,
-   *  because a receipt for money someone just paid is not a message they can be
-   *  unsubscribed from. SMS still requires sms_opt_in either way: carrier consent
-   *  is not ours to waive, and a contact must still exist to send to. Default
-   *  false — nothing is transactional by accident. */
-  transactional?: boolean
-}
-
-export function reachCheck(c: ReachCustomer, channels: string[], template: string, opts?: ReachOptions): ChannelReach[] {
-  const transactional = opts?.transactional === true
+export function reachCheck(
+  c: ReachCustomer, channels: string[], template: string, opts?: ReachOptions,
+): ChannelReach[] {
   // The customer declined this whole CATEGORY of message (e.g. opted into
-  // invoices but out of marketing) — nothing goes out on any channel.
-  if (!transactional && !prefAllows(c.message_prefs, template)) {
+  // invoices but out of marketing) — nothing goes out on any channel. Applies to
+  // transactional sends too: "don't send me receipts" is a real answer.
+  if (!prefAllows(c.message_prefs, template)) {
     return channels.map(channel => ({ channel, blocked: SKIP_REASON.UNSUBSCRIBED }))
   }
   return channels.map(channel => {
@@ -54,7 +61,7 @@ export function reachCheck(c: ReachCustomer, channels: string[], template: strin
       return { channel, blocked: null }
     }
     if (channel === 'email') {
-      if (!transactional && !c.email_opt_in) return { channel, blocked: SKIP_REASON.NO_OPT_IN }
+      if (!c.email_opt_in && !opts?.transactional) return { channel, blocked: SKIP_REASON.NO_OPT_IN }
       if (!c.email) return { channel, blocked: SKIP_REASON.NO_EMAIL }
       return { channel, blocked: null }
     }
@@ -67,8 +74,8 @@ export function reachCheck(c: ReachCustomer, channels: string[], template: strin
  * A campaign counts as reaching someone if ANY channel gets through — the same
  * rule dispatch applies when it decides whether anything was sent.
  */
-export function isReachable(c: ReachCustomer, channels: string[], template: string): boolean {
-  return reachCheck(c, channels, template).some(r => !r.blocked)
+export function isReachable(c: ReachCustomer, channels: string[], template: string, opts?: ReachOptions): boolean {
+  return reachCheck(c, channels, template, opts).some(r => !r.blocked)
 }
 
 /**
@@ -77,8 +84,8 @@ export function isReachable(c: ReachCustomer, channels: string[], template: stri
  * same reason that reason is reported; a mixture reports the first, which is the
  * one the owner can act on first.
  */
-export function blockedReason(c: ReachCustomer, channels: string[], template: string): SkipReason | null {
-  const gate = reachCheck(c, channels, template)
+export function blockedReason(c: ReachCustomer, channels: string[], template: string, opts?: ReachOptions): SkipReason | null {
+  const gate = reachCheck(c, channels, template, opts)
   if (!gate.length || gate.some(r => !r.blocked)) return null
   return gate[0].blocked
 }

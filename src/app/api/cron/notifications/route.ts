@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
 import { addDays, format } from 'date-fns'
+// MERGE (main ← guardian-2): both. guardian-2's loadOwnerContext replaces main's
+// inline bizCache (hence no MsgType/resolveAutomations here — the shared read owns
+// that shape now); main's canAskForReview is THE review lifecycle rule and stays.
 import { renderMessage, prefAllows, type MessagePrefs } from '@/lib/comms/templates'
 import { commsEnabled } from '@/lib/comms/send'
 import { dispatchToCustomer } from '@/lib/comms/dispatch'
@@ -9,6 +12,7 @@ import { logDispatch } from '@/lib/comms/log'
 import { claimSend, finalizeSend } from '@/lib/comms/idempotency'
 import { loadOwnerContext, type OwnerContext } from '@/lib/automation/owner'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
+import { canAskForReview } from '@/lib/crm/reviews'
 
 export const dynamic = 'force-dynamic'
 // Each job costs up to two sequential provider round-trips, so the platform
@@ -22,7 +26,7 @@ export const maxDuration = 300
 //   • needs SUPABASE_SERVICE_ROLE_KEY to read across customers,
 //   • de-dupes via notification_log and honours per-customer opt-in.
 
-interface CronCustomer { name: string; phone: string | null; email: string | null; sms_opt_in: boolean; email_opt_in: boolean; message_prefs?: MessagePrefs | null; reviewed_at: string | null; review_declined_at: string | null }
+interface CronCustomer { name: string; phone: string | null; email: string | null; sms_opt_in: boolean; email_opt_in: boolean; message_prefs?: MessagePrefs | null; reviewed_at: string | null; review_declined_at: string | null; review_requested_at: string | null }
 interface CronJob { id: string; user_id: string; customer_id: string | null; scheduled_date: string; customers: CronCustomer | null }
 
 // Blast-radius guard, applied to each batch's scan. Unlike the chasers, truncation
@@ -67,7 +71,9 @@ export async function GET(req: NextRequest) {
     const { data } = await supabase.from('notification_log').select('id').eq('user_id', userId).eq('job_id', jobId).eq('template', template).in('status', SENT_STATES as unknown as string[]).limit(1)
     return !!(data && data.length)
   }
-  const sel = 'id, user_id, customer_id, scheduled_date, customers(name, phone, email, sms_opt_in, email_opt_in, message_prefs, reviewed_at, review_declined_at)'
+  // MERGE: main's projection (review_requested_at — canAskForReview reads it) with
+  // guardian-2's accounting.
+  const sel = 'id, user_id, customer_id, scheduled_date, customers(name, phone, email, sms_opt_in, email_opt_in, message_prefs, reviewed_at, review_declined_at, review_requested_at)'
   // What the run actually did. `sent` counts CHANNELS (its long-standing meaning);
   // `errors` counts channel attempts that failed, plus any job that threw;
   // `skipped` counts jobs passed over without a send. Counting only successes is
@@ -75,6 +81,13 @@ export async function GET(req: NextRequest) {
   let sent = 0, skipped = 0, errors = 0
 
   async function runBatch(rows: CronJob[], template: 'reminder' | 'review_request', dateLabel?: string) {
+    // A review ask is per PERSON, not per job. alreadySent() dedupes on job_id, and
+    // every visit is a new job row — so a weekly-mow customer was asked again every
+    // single week, all season, until they reviewed or the owner marked them declined.
+    // This set stops the same customer being asked twice in one run (two properties,
+    // or a mow + a hedge trim finished the same day); canAskForReview below stops it
+    // across runs.
+    const askedThisRun = new Set<string>()
     for (const j of rows) {
       const c = j.customers
       if (!c || !j.customer_id) { skipped++; continue }
@@ -82,7 +95,25 @@ export async function GET(req: NextRequest) {
       const info = await bizInfo(j.user_id)
       if (template === 'reminder' && !info.automations.reminder) { skipped++; continue }       // automation off for this owner
       if (template === 'review_request' && !info.automations.review) { skipped++; continue }
-      if (template === 'review_request' && (c.reviewed_at || c.review_declined_at)) { skipped++; continue }  // already reviewed or opted out — don't ask again
+      if (template === 'review_request') {
+        // MERGE: main's review lifecycle REPLACES guardian-2's inline
+        // `reviewed_at || review_declined_at` test — it is the same rule plus the
+        // half guardian-2 was missing.
+        //
+        // THE review lifecycle rule (lib/crm/reviews) — reviewed, declined, OR
+        // already asked. review_requested_at is stamped by
+        // trg_crm_stamp_review_requested on every successful ask, and
+        // canAskForReview() was written to read it; nothing called it, so the one
+        // column that tracks "we've asked" was ignored by the only thing that asks.
+        if (!canAskForReview(c)) { skipped++; continue }
+        // Per CUSTOMER, not per job: two visits completed yesterday is one ask.
+        if (askedThisRun.has(j.customer_id)) { skipped++; continue }
+        // An ask with nowhere to go is worse than no ask — it burns the request and
+        // stamps them Requested, so they'd never be asked again once the link exists.
+        // ReviewLifecycle already refuses to send without a link; the cron didn't.
+        if (!(info.reviewUrl || '').trim()) { skipped++; continue }
+        askedThisRun.add(j.customer_id)
+      }
       // Category consent. dispatchToCustomer checks this too (and would return a
       // logged 'unsubscribed' skip); this pre-check keeps THIS cron's long-standing
       // behaviour of passing over the customer silently. It is the one outcome here
@@ -122,17 +153,25 @@ export async function GET(req: NextRequest) {
 
         // THE one dispatch pipeline — same opt-in checks, same branch order, same
         // canonical skip reasons and provider capture every other sender gets.
-        // `thread: false` preserves this cron's behaviour: reminders and review
-        // requests have never written a conversation bubble (unlike campaigns).
         // alreadySent() blocks only on a real prior send (SENT_STATES), so a skipped
         // row never suppresses a later one.
+        //
+        // MERGE — the one place the two branches genuinely CONTRADICTED each other:
+        // guardian-2 passed `thread: false` to preserve this cron's history (reminders
+        // have never written a conversation bubble). main dropped it deliberately, and
+        // main is right: trg_crm_touch_last_contacted fires on a messages INSERT, so
+        // with no bubble a customer we reminded and review-asked every week still
+        // looked untouched — and the win_back campaign ("it's been a little while")
+        // would mail someone whose lawn we mowed yesterday. Threading is the fix; the
+        // bubble is not noise, it's the evidence the rest of CRM reads. Preserving the
+        // old silence would have re-broken what main just fixed.
         const res = await dispatchToCustomer(supabase, {
           userId: j.user_id,
           customer: { id: j.customer_id, phone: c.phone, email: c.email, sms_opt_in: c.sms_opt_in, email_opt_in: c.email_opt_in, message_prefs: c.message_prefs },
           channels: CHANNELS,
           smsText: msg.sms, emailSubject: msg.subject, emailHtml: msg.html, emailText: msg.text,
           template,
-          thread: false,
+          meta: { job_id: j.id },
         })
         await logDispatch(supabase, res, { userId: j.user_id, customerId: j.customer_id, jobId: j.id, template })
         // Informational only — the CLAIM is what enforces at-most-once, so a failed

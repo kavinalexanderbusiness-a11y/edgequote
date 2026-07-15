@@ -429,7 +429,13 @@ export interface Invoice {
   status: InvoiceStatus
   issued_date: string | null
   due_date: string | null
+  // The CUSTOMER's note — InvoicePDF renders this in a Notes box. Never put
+  // system text or internal reasoning here.
   notes: string | null
+  // The OWNER's note — never rendered on a PDF or in the portal. Home for
+  // auto-draft provenance and the AutoPay hold flag (see AUTOPAY_HOLD_FLAG), so
+  // editing the customer-facing note can't break hold detection.
+  internal_notes: string | null
   // Snapshot breakdown for the customer (base service + add-ons + travel). Null
   // on legacy invoices → render the single (service_type, amount) row.
   line_items: InvoiceLineItem[] | null
@@ -724,6 +730,10 @@ export interface CrmCampaign {
   audience: CampaignAudience
   schedule: CampaignSchedule
   last_run_at: string | null
+  // Soft delete. A hard DELETE cascades crm_campaign_log, which is BOTH the audit
+  // trail (who we messaged, when) and the per-period dedupe ledger — so an undo
+  // would restore a live campaign with an empty ledger and message everyone again.
+  archived_at: string | null
 }
 
 // A saved campaign configuration the owner can spin up again. Same shape as a

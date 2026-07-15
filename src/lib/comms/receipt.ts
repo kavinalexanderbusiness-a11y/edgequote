@@ -6,7 +6,6 @@
 // shows up everywhere a normal message does. Server-only.
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { renderMessage } from '@/lib/comms/templates'
-import { commsEnabled } from '@/lib/comms/send'
 import { dispatchToCustomer } from '@/lib/comms/dispatch'
 import { logDispatch } from '@/lib/comms/log'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
@@ -16,8 +15,18 @@ function formatAmount(n: number): string {
 }
 
 // Best-effort: never throws. A receipt that can't send must NOT fail the webhook
-// (the payment is already recorded). Respects consent — SMS needs sms_opt_in; email
-// is treated as transactional (a receipt for money the customer just paid).
+// (the payment is already recorded).
+//
+// Consent is decided by the ONE gate (lib/comms/reach), not here. This used to
+// hand-roll its own ladder and had DRIFTED: it never loaded message_prefs, so a
+// customer who turned off "Invoices & receipts" in the portal still got texted a
+// receipt every month — while the very same category of message from
+// cron/invoice-reminders (which goes through dispatch) was correctly skipped. Two
+// senders, same customer, same category, opposite answers.
+//
+// `transactional: true` keeps the one deliberate exemption — email doesn't need
+// email_opt_in, because this is a receipt for money the customer just paid (CASL
+// s.6(6)(b)) — but states it in the gate instead of achieving it by omission.
 export async function sendPaymentReceipt(
   sb: SupabaseClient,
   opts: { userId: string; customerId: string | null; amount: number; origin: string },
@@ -25,11 +34,10 @@ export async function sendPaymentReceipt(
   try {
     if (!opts.customerId) return
     const { data: cust } = await sb.from('customers')
-      .select('id, name, phone, email, sms_opt_in').eq('id', opts.customerId).eq('user_id', opts.userId).maybeSingle()
+      .select('id, name, phone, email, sms_opt_in, email_opt_in, message_prefs')
+      .eq('id', opts.customerId).eq('user_id', opts.userId).maybeSingle()
     if (!cust) return
-    const c = cust as { id: string; name: string; phone: string | null; email: string | null; sms_opt_in: boolean }
-    // email_opt_in is deliberately NOT read: a receipt is transactional (see the
-    // `transactional` flag below). message_prefs likewise.
+    const c = cust as { id: string; name: string; phone: string | null; email: string | null; sms_opt_in: boolean; email_opt_in: boolean; message_prefs: Record<string, boolean> | null }
 
     const { data: bizRow } = await sb.from('business_settings')
       .select('company_name, review_url, message_templates').eq('user_id', opts.userId).maybeSingle()
@@ -44,32 +52,17 @@ export async function sendPaymentReceipt(
       reviewLink: biz?.review_url || undefined,
     })
 
-    // THE one dispatch pipeline. Email first (the receipt's primary channel — the
-    // threaded bubble records whichever sends first), and `transactional` so email
-    // reaches the customer regardless of marketing preferences. SMS still honours
-    // sms_opt_in inside dispatch, exactly as before.
-    //
-    // Only LIVE channels are attempted, so a deployment with comms half-configured
-    // logs nothing for the dead one — the long-standing behaviour here.
-    const live = commsEnabled()
-    const channels = [...(live.email ? ['email'] : []), ...(live.sms ? ['sms'] : [])]
-    if (!channels.length) return
-
+    // The ONE send path: gate → send → thread the bubble → per-channel attempts.
+    // It keeps each channel's provider id, so a receipt that bounces can say so
+    // rather than reading "Sent" forever, and logDispatch is the one writer.
     const res = await dispatchToCustomer(sb, {
       userId: opts.userId,
-      customer: {
-        id: c.id, phone: c.phone, email: c.email,
-        sms_opt_in: c.sms_opt_in,
-        email_opt_in: true,   // ignored under `transactional`; set true so intent is explicit
-        message_prefs: null,
-      },
-      channels,
-      smsText: rendered.sms,
-      emailSubject: rendered.subject,
-      emailHtml: rendered.html,
-      emailText: rendered.text,
+      customer: c,
+      channels: ['email', 'sms'],
+      smsText: rendered.sms, emailSubject: rendered.subject, emailHtml: rendered.html, emailText: rendered.text,
       template: 'receipt',
       transactional: true,
+      meta: { source: 'autopay_receipt' },
     })
     await logDispatch(sb, res, { userId: opts.userId, customerId: opts.customerId, template: 'receipt' })
   } catch (e) {

@@ -18,6 +18,8 @@ import { StickyActionBar } from '@/components/ui/StickyActionBar'
 import { Banner } from '@/components/ui/Banner'
 import { Collapsible } from '@/components/ui/Collapsible'
 import { Modal } from '@/components/ui/Modal'
+import { AssistButton } from '@/components/ai/AssistButton'
+import { useAiAssist } from '@/hooks/useAiAssist'
 import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
 import { sumServiceLines, serviceLineTotals, emptyServiceLine, SERVICE_UNITS } from '@/lib/quoteServices'
 import { formatCurrency, formatDate, suggestTravelFee, cn } from '@/lib/utils'
@@ -136,6 +138,8 @@ export function QuoteBuilder({
   const manualPhone = watch('customer_phone')
   const manualEmail = watch('customer_email')
   const notes = watch('notes')
+  // AI scope writer for the Notes field — words only; pricing never comes from it.
+  const aiScope = useAiAssist()
   const measuredSqft = Number(watch('measured_sqft')) || 0
 
   // Smart Price Guardrails — per-cadence, never-block warnings (measured lawn +
@@ -885,6 +889,27 @@ export function QuoteBuilder({
           <Collapsible title="Notes" icon={FileText} summary={notes ? String(notes).slice(0, 40) : 'None'}>
             <Textarea label="Notes" placeholder="Job-specific details, access instructions, gate codes…"
               {...register('notes')} />
+            {aiScope.enabled === true && (
+              <div className="flex items-center gap-2 mt-2">
+                <AssistButton
+                  label={aiScope.running ? 'Writing…' : notes && String(notes).trim() ? 'Polish into scope notes' : 'Write scope notes'}
+                  busy={aiScope.running}
+                  title="Turns the services on this quote (and your rough notes) into customer-ready scope-of-work text — never touches pricing"
+                  onClick={async () => {
+                    const prior = String(notes || '')
+                    aiScope.clearError()
+                    setValue('notes', '')
+                    const full = await aiScope.run({
+                      task: 'quote_scope',
+                      serviceType: watch('service_type') || undefined,
+                      services: (watchedServices || []).map(s => ({ name: s?.service_type, notes: s?.notes })),
+                      draft: prior,
+                    }, { onDelta: d => setValue('notes', String(watch('notes') || '') + d) })
+                    if (full === null) setValue('notes', prior)
+                  }} />
+                {aiScope.error && <p className="text-xs text-amber-400" role="alert">{aiScope.error}</p>}
+              </div>
+            )}
           </Collapsible>
 
           <Collapsible title="Scheduling & status" icon={SlidersHorizontal}>

@@ -9,8 +9,9 @@ import {
   Search, CornerDownLeft, ArrowUp, ArrowDown, Loader2,
   Users, FileText, Receipt, CalendarDays, MessageSquare, Navigation, Sprout,
   Settings, LayoutDashboard, UserPlus, FilePlus2, ReceiptText, Send,
-  Home, Image as ImageIcon, CreditCard, Eye, Phone, CalendarPlus, Sparkles,
+  Home, Image as ImageIcon, CreditCard, Eye, Phone, CalendarPlus, Sparkles, LifeBuoy,
 } from 'lucide-react'
+import { searchHelp, helpHref } from '@/lib/help/content'
 
 type Icon = typeof Users
 interface Item { id: string; label: string; sub?: string; icon: Icon; run: () => void }
@@ -28,6 +29,7 @@ const NAV: { label: string; href: string; icon: Icon }[] = [
   { label: 'Routes', href: '/dashboard/routes', icon: Navigation },
   { label: 'Grow', href: '/dashboard/grow', icon: Sprout },
   { label: 'Measurement Accuracy', href: '/dashboard/measurements', icon: Eye },
+  { label: 'Help', href: '/dashboard/help', icon: LifeBuoy },
   { label: 'Settings', href: '/dashboard/settings', icon: Settings },
 ]
 
@@ -224,6 +226,20 @@ export function CommandPalette() {
           icon: MessageSquare, run: () => go('/dashboard/messages'),
         }
       }) })
+
+      // ── Help ──
+      // Last, and capped at 3: someone typing a customer's name wants the customer,
+      // not an article that happens to mention "quote". But someone typing "why
+      // didn't it send" has no record to find — only an answer — and this is the
+      // one search box they'll try. Pure client-side (lib/help/content), so it costs
+      // nothing and can't fail.
+      const help = searchHelp(safe).slice(0, 3)
+      if (help.length) sections.push({
+        title: 'Help', items: help.map(a => ({
+          id: `h-${a.id}`, label: a.title, sub: a.summary, icon: LifeBuoy,
+          run: () => go(helpHref(a.id)),
+        })),
+      })
 
       setResults(sections); setSel(0); setLoading(false)
     }, 180)

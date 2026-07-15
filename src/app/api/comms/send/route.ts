@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { renderMessage, renderBody, MsgType, MSG_LABELS, type MessagePrefs } from '@/lib/comms/templates'
-import { commsEnabled } from '@/lib/comms/send'
-import { dispatchToCustomer, sendResultsFromAttempts } from '@/lib/comms/dispatch'
-import { loadOwnerContext } from '@/lib/automation/owner'
+import { sendSms, sendEmail, commsEnabled } from '@/lib/comms/send'
+import { reachCheck } from '@/lib/comms/reach'
+import { getOrCreateConversation } from '@/lib/comms/conversation'
+import { SKIP_REASON } from '@/lib/comms/skipReasons'
 import { SENT_STATES } from '@/lib/comms/delivery'
-import { logSend, logDispatch } from '@/lib/comms/log'
+import { logSend } from '@/lib/comms/log'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { claimSend, finalizeSend } from '@/lib/comms/idempotency'
 
@@ -58,10 +59,9 @@ export async function POST(req: NextRequest) {
     if (!claimed) return NextResponse.json({ enabled: commsEnabled(), results: {}, deduped: true })
   }
 
-  // THE per-owner settings read (lib/automation/owner) — the same one every
-  // scheduled sender uses, so a manual message and an automatic one can never sign
-  // off as different businesses. Session-scoped client here; RLS narrows it further.
-  const biz = await loadOwnerContext(supabase, user.id)
+  const { data: bizRow } = await supabase.from('business_settings')
+    .select('company_name, phone, website, logo_url, review_url, message_templates').eq('user_id', user.id).maybeSingle()
+  const biz = bizRow as { company_name: string | null; phone: string | null; website: string | null; logo_url: string | null; review_url: string | null; message_templates: Partial<Record<MsgType, string>> | null } | null
 
   // "On my way" also stamps the job so the customer portal can show a live status.
   if (template === 'on_my_way' && jobId) {
@@ -74,20 +74,20 @@ export async function POST(req: NextRequest) {
   const origin = req.nextUrl?.origin || process.env.NEXT_PUBLIC_APP_URL || ''
   const msgVars = {
     firstName: c.name,
-    businessName: biz.name,
+    businessName: biz?.company_name || 'Edge Property Services',
     eta: vars.eta,
-    reviewLink: biz.reviewUrl || undefined,
+    reviewLink: biz?.review_url || undefined,
     portalLink: token ? portalUrl(token, origin) : undefined,
     dateLabel: vars.dateLabel,
     amount: vars.amount,
     timeWindow: vars.timeWindow,
     oldDateLabel: vars.oldDateLabel,
     address: vars.address,
-    directPhone: biz.phone || undefined,
-    logoUrl: biz.logoUrl || undefined,
-    website: biz.website || undefined,
+    directPhone: biz?.phone || undefined,
+    logoUrl: biz?.logo_url || undefined,
+    website: biz?.website || undefined,
   }
-  const rendered = renderMessage(template, biz.templates, msgVars)
+  const rendered = renderMessage(template, biz?.message_templates, msgVars)
   // The text we actually send: the owner's edit (or a caller-supplied body such
   // as the payment receipt) when present, else the rendered template. An
   // override may still carry {{portal_link}}/{{first_name}}-style tokens — only
@@ -103,52 +103,76 @@ export async function POST(req: NextRequest) {
   if (body.previewOnly) return NextResponse.json({ enabled: commsEnabled(), preview: outText })
 
   const enabled = commsEnabled()
+  const results: Record<string, unknown> = {}
+  // Collect every channel attempt; log + thread once at the end so a sent message
+  // can be linked to its log rows.
+  // `provider`/`providerId` are the provider's handle on the message (Twilio
+  // MessageSid / Resend id) — persisted so the delivery webhooks can later turn
+  // 'sent' (provider accepted) into 'delivered'/'bounced'.
+  const attempts: { channel: string; status: string; detail?: string; sent: boolean; provider?: string | null; providerId?: string | null }[] = []
 
-  // ONE consent gate. dispatchToCustomer owns the category check, per-channel
-  // opt-in, the sends, and the threaded bubble — the same path the crons take.
-  // This route used to hand-roll all four; it was the last copy.
-  //
-  // Channel ORDER is load-bearing: the bubble records the FIRST channel that
-  // actually sent, and this route has always attempted sms before email no matter
-  // what order the caller listed. Dispatch now honours caller order (and at least
-  // one caller builds the array dynamically), so normalise here to keep sms-first
-  // exactly as before. `push` rides along last so the category gate can skip it
-  // like every other requested channel — dispatch ignores it otherwise.
-  const dispatchChannels = ['sms', 'email'].filter(ch => channels.includes(ch))
-  if (channels.includes('push')) dispatchChannels.push('push')
-
-  const res = await dispatchToCustomer(supabase, {
-    userId: user.id,
-    customer: {
-      id: customerId, phone: c.phone, email: c.email,
-      sms_opt_in: c.sms_opt_in, email_opt_in: c.email_opt_in,
-      message_prefs: (cust as { message_prefs?: MessagePrefs | null }).message_prefs,
-    },
-    channels: dispatchChannels,
-    smsText: outText,
-    emailSubject: rendered.subject,
-    emailHtml: outHtml,
-    emailText: outText,
-    template,
-  })
-
-  // Translate the attempt vocabulary back into this route's published per-channel
-  // SendResult map — nine callers read it.
-  const results = sendResultsFromAttempts(res.attempts)
-
-  // Future channel — wired through, always disabled for now (no provider). Only
-  // when the category gate didn't already skip it: an unsubscribed customer's
-  // push request reads 'no-optin', exactly as it did when this block was nested
-  // inside the consent branch.
-  const pushDisabled = channels.includes('push') && !res.attempts.some(a => a.channel === 'push')
-  if (pushDisabled) results.push = { sent: false, reason: 'disabled' }
-
-  await logDispatch(supabase, res, { userId: user.id, customerId, jobId, template })
-  if (pushDisabled) {
-    await logSend(supabase, { userId: user.id, customerId, jobId, channel: 'push', template, status: 'disabled', detail: 'push not configured', messageId: null, provider: null, providerId: null })
+  // Consent is decided by THE one predicate (lib/comms/reach) — the same call
+  // dispatchToCustomer makes, so a manual send and an automated one can never
+  // reach different verdicts about the same customer. This used to be a
+  // hand-rolled copy of those rules: it agreed exactly, but nothing kept it
+  // agreeing, and reach.ts exists precisely so the next consent rule lands in one
+  // place. The route still owns its SEND, because it does things dispatch
+  // deliberately doesn't — mint the portal token, honour a bodyOverride, and
+  // answer previewOnly without any I/O.
+  const gate = reachCheck(c, channels, template)
+  const blocked = new Map(gate.map(g => [g.channel, g.blocked]))
+  // 'no-optin' vs 'no-phone'/'no-email' is this route's public JSON contract
+  // (summarizeSendOutcome + every caller reads it); map the canonical reason onto
+  // it rather than changing the shape.
+  const reasonFor = (b: string) => b === SKIP_REASON.NO_PHONE ? 'no-phone' : b === SKIP_REASON.NO_EMAIL ? 'no-email' : 'no-optin'
+  for (const g of gate) {
+    if (!g.blocked) continue
+    results[g.channel] = { sent: false, reason: reasonFor(g.blocked) }
+    attempts.push({ channel: g.channel, status: 'skipped', detail: g.blocked, sent: false })
   }
-  await finalizeSend(supabase, user.id, clientMessageId, res.sentChannels.length ? 'sent' : 'skipped')
 
-  return NextResponse.json({ enabled, results, preview: outText, threaded: !!res.messageId })
+  if (channels.includes('sms') && !blocked.get('sms')) {
+    const r = await sendSms(c.phone!, outText); results.sms = r
+    attempts.push({ channel: 'sms', status: r.reason, detail: r.error, sent: r.sent, provider: r.sent ? 'twilio' : null, providerId: r.id ?? null })
+  }
+  if (channels.includes('email') && !blocked.get('email')) {
+    const r = await sendEmail(c.email!, rendered.subject, outHtml, outText); results.email = r
+    attempts.push({ channel: 'email', status: r.reason, detail: r.error, sent: r.sent, provider: r.sent ? 'resend' : null, providerId: r.id ?? null })
+  }
+  if (channels.includes('push')) {
+    // Future channel — wired through, always disabled for now (no provider).
+    results.push = { sent: false, reason: 'disabled' }; attempts.push({ channel: 'push', status: 'disabled', detail: 'push not configured', sent: false })
+  }
+
+  // Record anything actually delivered into the customer's message thread, so it
+  // appears in the message center AND the customer timeline as full text (not just
+  // an audit pill). One outbound bubble per send; the per-channel log rows link to
+  // it so the thread shows the message, not a duplicate event.
+  let messageId: string | null = null
+  const sentChannels = attempts.filter(a => a.sent).map(a => a.channel)
+  if (sentChannels.length) {
+    const convoId = await getOrCreateConversation(supabase, user.id, customerId)
+    if (convoId) {
+      // The bubble carries the primary channel's provider id, so a delivery
+      // webhook for that id can advance THIS row from sent → delivered.
+      const primary = attempts.find(a => a.sent && a.channel === sentChannels[0])
+      const { data: m } = await supabase.from('messages')
+        .insert({
+          user_id: user.id, conversation_id: convoId, customer_id: customerId,
+          direction: 'outbound', channel: sentChannels[0], body: outText, status: 'sent',
+          provider: primary?.provider ?? null, provider_message_id: primary?.providerId ?? null,
+          meta: { template },
+        })
+        .select('id').single()
+      messageId = (m as { id: string } | null)?.id ?? null
+    }
+  }
+
+  for (const a of attempts) {
+    await logSend(supabase, { userId: user.id, customerId, jobId, channel: a.channel, template, status: a.status, detail: a.detail, messageId: a.sent ? messageId : null, provider: a.provider ?? null, providerId: a.providerId ?? null })
+  }
+  await finalizeSend(supabase, user.id, clientMessageId, sentChannels.length ? 'sent' : 'skipped')
+
+  return NextResponse.json({ enabled, results, preview: outText, threaded: !!messageId })
 }
 

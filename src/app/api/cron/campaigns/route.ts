@@ -43,6 +43,9 @@ interface CampaignRow {
   subject: string | null
   audience: CampaignAudience | null
   schedule: CampaignSchedule | null
+  // Anchors a repeating cadence to the month the campaign was set up in — see
+  // campaignFiresToday. Without it, every_months>1 silently pins to January.
+  created_at: string
 }
 
 export async function GET(req: NextRequest) {
@@ -61,7 +64,9 @@ export async function GET(req: NextRequest) {
   const supabase = createClient(url, svc)
   const today = new Date()
 
-  const { data: campaignRows } = await supabase.from('crm_campaigns').select('*').eq('enabled', true)
+  // Archived campaigns are soft-deleted: their crm_campaign_log survives (audit +
+  // dedupe), but they must never send again.
+  const { data: campaignRows } = await supabase.from('crm_campaigns').select('*').eq('enabled', true).is('archived_at', null)
   const campaigns = (campaignRows as CampaignRow[]) || []
 
   // Per-owner business info cache (company name, review link, custom templates,
@@ -116,7 +121,7 @@ export async function GET(req: NextRequest) {
     // THE campaign-level gate (kind cadence + the optional starts_on/ends_on
     // window), shared with the UI so "when it sends" can never drift from when
     // it actually sends. Birthday/anniversary/win-back evaluate candidates daily.
-    if (!campaignFiresToday({ kind: camp.kind, schedule }, today)) continue
+    if (!campaignFiresToday({ kind: camp.kind, schedule, created_at: camp.created_at }, today)) continue
 
     // ── Candidate resolution ──
     // THE shared audience resolver (lib/crm/audience) — the Campaign Manager's

@@ -1,0 +1,72 @@
+name: CI
+
+# WHY THIS EXISTS
+# Until now this repo had no CI at all. The only gate on main was a human
+# remembering to run `tsc` and `next build` before pushing — and several sessions
+# push to main every day. One forgotten check ships a main that doesn't compile,
+# and the next person to branch inherits it.
+#
+# This runs the exact two commands that were being run by hand, plus lint, on
+# every push and every PR. Nothing clever; the point is that it is not optional.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # So a red main can be re-checked after a fix without an empty commit.
+  workflow_dispatch:
+
+# A newer push to the same branch makes the older run pointless — cancel it
+# rather than queue behind it. Never cancel main: its runs are the record of
+# whether the deployed commit was green.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  verify:
+    name: typecheck · lint · build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      # PLACEHOLDERS, not secrets. Every page in this app is server-rendered on
+      # demand (`ƒ` in the build output) and the Supabase clients read env inside
+      # functions rather than at module scope — so nothing contacts Supabase during
+      # `next build`. NEXT_PUBLIC_* are inlined at build time, so they must merely
+      # EXIST for the bundle to be well-formed; these values are never deployed and
+      # never reach a network.
+      #
+      # If a future page starts fetching at build time, this job will fail loudly
+      # against these fake values. That is the correct outcome — a build that
+      # silently depends on production credentials is the thing worth catching.
+      NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key-for-build-only
+      NEXT_PUBLIC_APP_URL: https://example.invalid
+      # Next telemetry adds latency and noise to every CI run.
+      NEXT_TELEMETRY_DISABLED: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # `npm ci` not `npm install`: it installs exactly the lockfile and fails if
+      # package.json and package-lock.json disagree. That disagreement is itself a
+      # bug worth failing on — it means someone hand-edited a dependency.
+      - name: Install
+        run: npm ci
+
+      # Typecheck FIRST. It is the fastest of the three and catches the most, so a
+      # broken branch fails in ~30s instead of after a full build.
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build

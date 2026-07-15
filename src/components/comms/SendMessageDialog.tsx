@@ -1,13 +1,17 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { MsgType, MSG_LABELS, renderMessage, toDisplayBody, fromDisplayBody, PORTAL_LINK_DISPLAY } from '@/lib/comms/templates'
 import { summarizeSendOutcome, type SendOutcome } from '@/lib/comms/sendOutcome'
+import { newClientMessageId } from '@/lib/comms/idempotency'
 import { SmsCost } from '@/components/comms/SmsCost'
 import { Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
 import { FilterPill } from '@/components/ui/FilterPill'
+import { AssistButton } from '@/components/ai/AssistButton'
+import { useAiAssist } from '@/hooks/useAiAssist'
+import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import { MessageSquare, Mail, Send, Check, AlertTriangle } from 'lucide-react'
 
@@ -81,6 +85,28 @@ export function SendMessageDialog({
   const chosen = useMemo(() => all.filter(r => selected.has(r.customerId)), [all, selected])
   const toggle = (id: string) => setSelected(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
 
+  // AI writer — drafts/rewrites INTO the editable box; sending still goes
+  // through the same consent-gated route, so the model never sends anything.
+  const ai = useAiAssist()
+  async function aiWrite(mode: 'draft' | 'rewrite') {
+    if (busy || ai.running) return
+    const prior = text
+    ai.clearError()
+    setText('')
+    const full = await ai.run({
+      task: 'draft_message',
+      customerId: !bulk ? (chosen[0]?.customerId ?? all[0]?.customerId) : undefined,
+      template: active,
+      channels: (['sms', 'email'] as const).filter(c => ch[c]),
+      currentText: mode === 'rewrite' ? prior : '',
+      bulk,
+    }, { onDelta: d => setText(prev => prev + d) })
+    if (full === null) { setText(prior); return }   // error — restore, message shows below
+    setEdited(true)
+    setOutcome(null)
+    if (prior.trim()) toast.undo('Replaced your message.', () => { setText(prior); setEdited(true) })
+  }
+
   const offered = useMemo(() => {
     const base = templates ?? DEFAULT_SET
     return defaultTemplate && !base.includes(defaultTemplate) ? [defaultTemplate, ...base] : base
@@ -115,8 +141,27 @@ export function SendMessageDialog({
     [active, custom, sampleName, company],
   )
 
-  // Any change to the message, channels, or recipients disarms a pending bulk confirm.
-  useEffect(() => { setArmed(false) }, [text, ch.sms, ch.email, selected])
+  // ── Idempotency keys, one per recipient, stable for THIS send run ────────────
+  // Bulk was the one path that never sent a clientMessageId, so nothing claimed a
+  // send before dispatching: a refresh (or a re-send to fix the few that failed)
+  // re-delivered to everyone who had already received it. The guard already
+  // existed in lib/comms/idempotency and was simply never wired to the path where
+  // a duplicate costs the most — 200 people, twice.
+  //
+  // The keys are minted per recipient and reused across a retry of the SAME run,
+  // so /api/comms/send claims each one exactly once and a repeat is a no-op rather
+  // than a second text. They're regenerated whenever the run itself changes —
+  // different words, channels, or recipients means a genuinely different send —
+  // which is the same signal that disarms the confirm below. So "deselect the ones
+  // that worked and send again" correctly retries only the failures.
+  const sendIds = useRef<Record<string, string>>({})
+  function idFor(customerId: string): string {
+    return (sendIds.current[customerId] ||= newClientMessageId())
+  }
+
+  // Any change to the message, channels, or recipients disarms a pending bulk
+  // confirm — and starts a new send run, so the keys are reissued with it.
+  useEffect(() => { setArmed(false); sendIds.current = {} }, [text, ch.sms, ch.email, selected, active, eta])
 
   function compose(type: MsgType, opts?: { eta?: string }): string {
     // Only the server knows each customer's portal token — the composer shows a
@@ -166,6 +211,7 @@ export function SendMessageDialog({
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             customerId: chosen[i].customerId, template: active, jobId: jobId ?? undefined, channels,
+            clientMessageId: idFor(chosen[i].customerId),
             ...(sendBodyOverride ? { bodyOverride: fromDisplayBody(text) } : {}),
             vars: { eta, dateLabel: vars?.dateLabel, timeWindow: vars?.timeWindow, address: vars?.address, amount: vars?.amount },
           }),
@@ -239,10 +285,23 @@ export function SendMessageDialog({
 
         {/* Editable message — starts from the owner's template, edit freely. */}
         <div>
-          {bulk && <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-1">Preview · as {sampleName.split(' ')[0]} will see it</p>}
+          <div className="flex items-end justify-between gap-2 mb-1">
+            {bulk
+              ? <p className="text-[10px] uppercase tracking-wide text-ink-faint">Preview · as {sampleName.split(' ')[0]} will see it</p>
+              : <span />}
+            {ai.enabled === true && (
+              <div className="flex items-center gap-1.5 shrink-0">
+                <AssistButton label={ai.running ? 'Writing…' : 'Write with AI'} onClick={() => aiWrite('draft')} busy={ai.running} disabled={busy} />
+                {text.trim() !== '' && !ai.running && (
+                  <AssistButton label="Polish" onClick={() => aiWrite('rewrite')} disabled={busy} title="Rewrite the current draft — keeps every fact, improves the wording" />
+                )}
+              </div>
+            )}
+          </div>
           <textarea value={text} onChange={e => { setText(e.target.value); setEdited(true); setOutcome(null) }} rows={6} aria-label="Message"
             placeholder="Write your message…"
             className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink outline-none focus:border-accent resize-none" />
+          {ai.error && <p className="text-[11px] text-amber-400 mt-1" role="alert">{ai.error}</p>}
           {ch.sms && <SmsCost text={text} recipients={chosen.length || 1} className="mt-1" />}
           {ch.email && custom !== null && (
             <p className="text-[11px] text-ink-muted mt-1 flex items-center gap-1.5">

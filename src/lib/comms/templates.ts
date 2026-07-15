@@ -22,6 +22,9 @@ export type MsgType =
   // Asks a happy customer to refer a neighbour, and a seasonal service offer.
   // Both are CEMs — see msgCategory(), which files them under marketing/seasonal.
   | 'referral_request' | 'seasonal_offer'
+  // The BULK review chase (the `review` campaign kind). Same words as
+  // review_request, different consent meaning — see msgCategory().
+  | 'review_chase'
   // Standard business announcement — introduction / new phone number.
   | 'introduction'
   // Free-form one-off message (the shared Send Message dialog's blank slate).
@@ -53,6 +56,7 @@ export const MSG_LABELS: Record<MsgType, string> = {
   marketing: 'Marketing check-in',
   referral_request: 'Referral request',
   seasonal_offer: 'Seasonal offer',
+  review_chase: 'Review chase (campaign)',
   introduction: 'Introduction / new number',
   custom: 'Custom message',
 }
@@ -196,6 +200,20 @@ Your feedback helps our small business grow and helps other homeowners choose a 
 {{review_link}}
 
 Thank you again—we truly appreciate your support!`,
+
+  // The BULK chase (the `review` campaign). Deliberately NOT tied to a recent
+  // visit — it sweeps up customers who never reviewed — which is exactly why
+  // msgCategory files it as 'marketing' while review_request stays a service
+  // message. Worded for someone whose last visit may be months ago.
+  review_chase: `Hi {{first_name}},
+
+We hope you've been happy with the work we've done on your property.
+
+If you have a moment, a quick review would mean a lot — it's how most people find us, and it genuinely helps a small local business.
+
+{{review_link}}
+
+No worries at all if you'd rather not. Thank you either way!`,
 
   quote: `Hi {{first_name}},
 
@@ -352,6 +370,7 @@ const SUBJECTS: Record<MsgType, string> = {
   booking_received: 'We’ve got your request',
   birthday: 'Happy birthday!', anniversary: 'Thank you', win_back: 'We’d love to see you again', marketing: 'A quick hello',
   referral_request: 'A small favour?', seasonal_offer: 'Booking now for the season',
+  review_chase: 'Would you leave us a review?',
   introduction: 'Our new number — please save it',
   custom: '', // falsy → renderMessage falls back to "A message from {business}"
 }
@@ -537,7 +556,15 @@ export function msgCategory(t: MsgType): MsgCategory | null {
   switch (t) {
     case 'invoice': case 'payment_reminder': case 'receipt': return 'invoices'
     case 'quote': case 'estimate_reminder': case 'estimate_followup': return 'estimates'
-    case 'marketing': case 'introduction': case 'win_back': case 'referral_request': return 'marketing'
+    // review_chase is the BULK campaign sweep — a list-segmented solicitation
+    // asking customers to publicly promote the business, sent with no visit
+    // attached. That is a CEM, so it rides the marketing preference. Its twin
+    // review_request stays 'reminders' below: that one follows a visit the
+    // customer booked, which is what makes it a service message. Same words,
+    // different consent — which is precisely why they're separate MsgTypes.
+    case 'marketing': case 'introduction': case 'win_back': case 'referral_request':
+    case 'review_chase':
+      return 'marketing'
     case 'birthday': case 'anniversary': case 'seasonal_offer': return 'seasonal'
     case 'custom': return null // owner-composed one-offs are always deliverable
     // Transactional: it confirms a request the customer just made of us, so it isn't a

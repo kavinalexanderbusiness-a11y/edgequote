@@ -41,14 +41,23 @@ travel_fee_tiers, properties, job_recurrences, jobs, invoices`) + RLS policies +
 indexes, then every dated migration **through 2026-06-25 only**, including the
 `invoices(job_id)` unique index.
 
-**Keep this current.** Supabase's own migration history for this project is empty
-(`list_migrations` → `[]`), so these files are the only record that a rebuild can be
-driven from. When you add a `RUN-*.sql`, it becomes part of this path automatically by
-date — but if you create an object directly in the dashboard and never write a file,
-it exists *only* in production and disaster recovery loses it. That has already
-happened once: `social_connections` and `publish_jobs` (Marketing Studio publishing)
-lived in production with no migration anywhere until they were transcribed back into
-`RUN-2026-07-15-record-marketing-publishing-tables.sql`.
+**Keep this current.** Supabase's migration history only records what was applied via
+MCP `apply_migration` — everything built by pasting into the dashboard (i.e. most of
+this schema's history) left no row. So these files are the only record a rebuild can
+be driven from. When you add a `RUN-*.sql` it joins this path automatically by date;
+but create an object in the dashboard and never write a file, and it exists *only* in
+production — disaster recovery silently loses it.
+
+That has already happened three times, all found and transcribed back on 2026-07-15:
+
+| Object | Was only in prod | Now recorded in |
+|---|---|---|
+| `social_connections`, `publish_jobs` | Marketing Studio publishing | `RUN-2026-07-15-record-marketing-publishing-tables.sql` |
+| `branding` storage bucket | business logo (settings upload + every branded email) | `RUN-2026-07-15-record-branding-bucket.sql` |
+
+**Verified 2026-07-15 — production vs. source control:**
+all 54 tables, 43 functions, 36 triggers and 4 storage buckets are now creatable from
+this repo, with one known exception below.
 
 `automation_signals` is still in this state — it exists in production, but its
 migration lives only on the unmerged `guardian-2` branch (`aca9a6b`), so a rebuild
@@ -114,7 +123,22 @@ No Stripe **publishable** key is needed (card capture uses hosted Checkout in se
 
 1. **Run the migration** (above).
 2. **Auth → enable "Leaked Password Protection."**
-3. **Storage buckets** (public read): `branding` (logos), `job-photos` (portal/job photos), `booking-uploads` (booking-funnel photos — `booking-uploads` is created by `schema.sql`; create `branding` + `job-photos` in the dashboard if absent).
+3. **Storage buckets — no manual step.** All four are created by the SQL path above and
+   verified against production on 2026-07-15:
+
+   | Bucket | Public | Holds | Created by |
+   |---|---|---|---|
+   | `job-photos` | yes | portal / job photos | `schema.sql` |
+   | `booking-uploads` | yes | booking-funnel photos | `RUN-db-catchup-2026-06-25.sql` |
+   | `branding` | yes | business logo (settings upload + branded email header) | `RUN-2026-07-15-record-branding-bucket.sql` |
+   | `equipment-docs` | no | equipment paperwork | `RUN-2026-07-15-equipment-docs.sql` |
+
+   > This step used to read *"create `branding` + `job-photos` in the dashboard if
+   > absent."* Both are now created by SQL — `job-photos` always was — and creating
+   > them by hand is what produced the drift in the first place: `branding` existed
+   > only in production for months because it was made in the dashboard and never
+   > written down. **Add a bucket in SQL, never in the dashboard**, or disaster
+   > recovery loses it.
 4. **Realtime:** handled by `schema.sql` (core tables + `payment_methods`, `website_leads`, `schedule_items`, `day_statuses`, `notifications` are on the `supabase_realtime` publication). No manual step.
 5. **Web Push (only if using push)** — after generating VAPID keys, set the dispatch row once:
    ```sql
@@ -153,6 +177,19 @@ vercel --prod
 Vercel reads `vercel.json` (crons) and your env vars automatically.
 
 ## Verify (smoke, immediately after deploy)
+- **`GET https://<app>/api/health`** → `200` and `"status":"ok"`. This is the fastest
+  answer to "did the deploy work?" — it reports the commit it's running, proves the
+  database is actually reachable (not just configured), and lists which capabilities
+  (payments, email, SMS, cron, maps) are switched on.
+  - `"status":"degraded"` → still `200`. The app works, but something is half-set —
+    read `checks.config` and `capabilities` to see what. Notably it flags
+    `STRIPE_SECRET_KEY` set **without** `STRIPE_WEBHOOK_SECRET`, which silently stops
+    AutoPay from charging.
+  - `503` → the database is unreachable. That is a real outage; nothing else in this
+    list will pass either.
+  - Point your uptime monitor at this path and alert on the **status code** — `ok` and
+    `degraded` both return `200` on purpose, so a missing Twilio key never pages anyone
+    at 3am. It answers in ~0.5s and gives up on the database after 3s.
 - App loads, you can sign in, every dashboard page renders.
 - `GET https://<app>/api/payments/status` → `{ "enabled": true, "webhook": true }`.
 - Send a test Stripe webhook from the dashboard → 200, no 500s in Vercel logs.

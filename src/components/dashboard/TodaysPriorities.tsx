@@ -71,6 +71,10 @@ export function TodaysPriorities() {
       const jobs = (jRes.data as JobLite[]) || []
       const recById: Record<string, { freq: string | null; interval_unit: string | null; interval_count: number | null }> = {}
       for (const r of (rRes.data as { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null }[]) || []) recById[r.id] = r
+      // Quotes are already loaded above; index them so a recurring visit can read
+      // its cadence price instead of being valued at $0.
+      const quotesById: Record<string, Record<string, unknown>> = {}
+      for (const q of quotes) quotesById[q.id] = q as unknown as Record<string, unknown>
       const conversations = (cRes.data as { unread: number }[]) || []
       const feeSettings = sRes.data as { gst_percent: number | null; service_seasons: unknown } | null
       const seasons: ServiceSeasons = settingsToSeasons(feeSettings?.service_seasons)
@@ -148,6 +152,17 @@ export function TodaysPriorities() {
       for (const j of jobs) if (j.customer_id) (jobsByCust[j.customer_id] ||= []).push(j)
       const ranOutCusts = new Set<string>()
       let ranOutValue = 0
+      // MERGE (main ← guardian-2): both sides fixed a real bug in this loop, and
+      // each was missing the other's. Neither version wins wholesale.
+      //   · guardian-2: stop re-deriving "ran out" inline — consume the ONE canonical
+      //     detector (lib/signals.ranOut). Re-deriving this condition is exactly how
+      //     six screens came to disagree about who had churned. It also honours
+      //     seasonal dormancy, which the inline rule never did.
+      //   · main (1030f52): the QUOTE carries the cadence price. Valuing the visit off
+      //     j.price alone made every quote-linked recurring visit (price IS NULL — the
+      //     normal case) worth $0, so this tile silently understated its own value.
+      // Both sides also independently fixed "DB order can pick a dead series": the
+      // sort below is guardian-2's, kept because the signal needs the newest series.
       for (const [custId, cj] of Object.entries(jobsByCust)) {
         // Most RECENT recurring activity — DB order can pick a dead series over the
         // customer's current cadence.
@@ -171,7 +186,8 @@ export function TodaysPriorities() {
         // has always tracked the whole re-book backlog.
         if (!signal.isRanOut) continue
         ranOutCusts.add(custId)
-        ranOutValue += Math.round(jobVisitValue(recJob.price, null, freq))
+        const q = recJob.quote_id ? quotesById[recJob.quote_id] : null
+        ranOutValue += Math.round(jobVisitValue(recJob.price, q, freq))
       }
       if (ranOutCusts.size > 0) {
         next.push({
