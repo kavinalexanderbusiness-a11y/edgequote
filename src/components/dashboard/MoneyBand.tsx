@@ -60,7 +60,11 @@ export function MoneyBand({ today, todayCount, week, weekLabel, owed, owedCount,
         ? `${formatCurrency(overdue)} overdue · ${overdueCount} invoice${overdueCount !== 1 ? 's' : ''}`
         : owedCount > 0 ? `${owedCount} invoice${owedCount !== 1 ? 's' : ''} · none overdue` : 'All settled',
       icon: AlertCircle,
-      href: overdue > 0 ? '/dashboard/invoices?status=overdue' : '/dashboard/invoices',
+      // Plain /dashboard/invoices: the invoices page only parses ?invoice and
+      // ?job, so ?status=overdue was silently ignored and the tile landed on the
+      // unfiltered All list — a destination that contradicted the number clicked.
+      // Better to promise nothing than to promise a filter that never applies.
+      href: '/dashboard/invoices',
       tone: overdue > 0 ? 'text-amber-400' : 'text-ink',
       chip: overdue > 0 ? 'bg-amber-500/10 border-amber-500/20 text-amber-400' : 'bg-surface border-border text-ink-faint',
       surface: overdue > 0 ? 'border-amber-500/30' : 'border-border',

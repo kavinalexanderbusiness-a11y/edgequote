@@ -20,8 +20,18 @@ import { settingsToSeasons } from '@/lib/seasons'
 import { localTodayISO } from '@/lib/utils'
 import { computePriorities, type Priority } from '@/lib/dashboard/priorities'
 import { computeDayPlan, type DayPlan, type PlanJob } from '@/lib/dashboard/dayPlan'
+import { pageAll } from '@/lib/supabase/pageAll'
 import type { RJob, RRecurrence } from '@/lib/reactivation'
 import type { MoneyBandValues } from '@/components/dashboard/MoneyBand'
+
+type InvoiceRow = Pick<Invoice, 'amount' | 'status' | 'amount_paid' | 'discount_type' | 'discount_value' | 'due_date'>
+
+// The union every downstream consumer actually reads — money/KPIs (status, total,
+// amount fields), priorities (status/total), needsFollowUp (sent_at,
+// last_followed_up_at), reactivation (cadence prices, created_at) and dayPlan's
+// jobVisitValue. `select('*')` shipped all 45 columns for these 14.
+const QUOTE_COLUMNS =
+  'id, customer_id, customer_name, status, total, service_type, created_at, sent_at, last_followed_up_at, initial_price, weekly_price, biweekly_price, monthly_price, lead_meta'
 
 export interface DashboardData {
   money: MoneyBandValues
@@ -56,9 +66,13 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     invRes, jobRes, planJobRes, quoteRes, recRes, convRes, custRes, setRes,
     todayCash, weekCash, leads, weather,
   ] = await Promise.all([
-    sb.from('invoices').select('amount, status, amount_paid, discount_type, discount_value, due_date').eq('user_id', userId),
+    // The three full-history reads are PAGED. An unbounded select silently stops
+    // at 1000 rows, which would understate Owed/Collected and — via
+    // priorities' scheduledQuoteIds — tell the owner to schedule work that is
+    // already booked. At ~200 jobs/wk `jobs` crosses the cap within weeks.
+    pageAll<InvoiceRow>(() => sb.from('invoices').select('id, amount, status, amount_paid, discount_type, discount_value, due_date').eq('user_id', userId)),
     // Every job, lean columns — feeds priorities (missed/unscheduled) + reactivation.
-    sb.from('jobs').select('quote_id, customer_id, status, scheduled_date, recurrence_id, price, service_type').eq('user_id', userId),
+    pageAll<RJob>(() => sb.from('jobs').select('id, quote_id, customer_id, status, scheduled_date, recurrence_id, price, service_type').eq('user_id', userId)),
     // The day plan needs joins + times, but only for the days it shows, so it is a
     // separate NARROW read rather than widening the full-history query above.
     sb.from('jobs')
@@ -68,25 +82,46 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
       .lte('scheduled_date', isoPlusDays(today, 21))
       .in('status', ['scheduled', 'in_progress'])
       .order('start_time', { nullsFirst: true }),
-    sb.from('quotes').select('*').eq('user_id', userId),
+    // Explicit columns, not '*': quotes has 45 of them and every one crossed the
+    // wire and got serialized into the RSC payload. This is the union actually
+    // consumed by money/KPIs, priorities, needsFollowUp, reactivation and dayPlan.
+    pageAll<Quote>(() => sb.from('quotes').select(QUOTE_COLUMNS).eq('user_id', userId)),
     sb.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', userId),
-    sb.from('conversations').select('unread').eq('user_id', userId).is('archived_at', null).gt('unread', 0),
+    sb.from('conversations').select('unread, customer_id').eq('user_id', userId).is('archived_at', null).gt('unread', 0),
     sb.from('customers').select('id').eq('user_id', userId).is('archived_at', null),
     sb.from('business_settings').select('gst_percent, service_seasons, preferred_work_days, work_start_time, daily_capacity_hours').eq('user_id', userId).maybeSingle(),
     collectedBetween(sb, { userId, startIso: dayB.start, endIso: dayB.end }),
     collectedBetween(sb, { userId, startIso: weekB.start, endIso: dayB.end }),
     loadLeadsNeedingResponse(sb),
-    // Weather is the one slow dependency (external forecast). It rides along in the
-    // same Promise.all so it never blocks the rest, and a failure degrades to null
-    // rather than taking the morning down with it.
+    // Weather is the one slow dependency (an external forecast). A failure must
+    // degrade to `null` rather than take the morning down — but null means
+    // "we couldn't check", NOT "no rain risk", and the strip says so.
     loadWeatherImpact(sb).catch(() => null),
   ])
 
+  // Never render a number we didn't actually read. Supabase RESOLVES on failure
+  // (it returns {data: null, error}), so without this a transient outage paints
+  // the most reassuring screen in the app — $0 owed, "All settled", "You're all
+  // caught up" — while the truth is simply unknown. Throwing hands it to
+  // dashboard/error.tsx, which tells the owner the morning didn't load.
+  const failure =
+    invRes.error ? `invoices: ${invRes.error}`
+    : jobRes.error ? `jobs: ${jobRes.error}`
+    : quoteRes.error ? `quotes: ${quoteRes.error}`
+    : planJobRes.error ? `today's jobs: ${planJobRes.error.message}`
+    : recRes.error ? `recurrences: ${recRes.error.message}`
+    : convRes.error ? `conversations: ${convRes.error.message}`
+    : custRes.error ? `customers: ${custRes.error.message}`
+    : setRes.error ? `settings: ${setRes.error.message}`
+    : todayCash.error ? `today's payments: ${todayCash.error}`
+    : weekCash.error ? `this week's payments: ${weekCash.error}`
+    : null
+  if (failure) throw new Error(`Dashboard could not load — ${failure}`)
+
   const settings = (setRes.data as SettingsRow | null)
-  type InvoiceRow = Pick<Invoice, 'amount' | 'status' | 'amount_paid' | 'discount_type' | 'discount_value' | 'due_date'>
-  const invoices = (invRes.data as InvoiceRow[]) || []
-  const quotes = (quoteRes.data as Quote[]) || []
-  const jobs = (jobRes.data as RJob[]) || []
+  const invoices = invRes.rows
+  const quotes = quoteRes.rows
+  const jobs = jobRes.rows
   const recById: Record<string, RRecurrence> = {}
   for (const r of (recRes.data as RRecurrence[]) || []) recById[r.id] = r
 
@@ -102,7 +137,9 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
   const priorities = computePriorities({
     quotes, invoices, jobs, recById,
     customers: (custRes.data as { id: string }[]) || [],
-    conversations: (convRes.data as { unread: number }[]) || [],
+    // customer_id must survive the cast — the messages row uses it to exclude
+    // people the leads row already counted.
+    conversations: (convRes.data as { unread: number; customer_id: string | null }[]) || [],
     leads,
     seasons: settingsToSeasons(settings?.service_seasons),
     feeSettings: settings,

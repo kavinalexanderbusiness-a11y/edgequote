@@ -143,8 +143,15 @@ export function dayBoundsIso(dateISO: string): { start: string; end: string } {
 // THE date-range cash figure (today / this week / any span). It must read the
 // `payments` rows, NOT invoices.amount_paid: that column is a trigger rollup with
 // the time dimension collapsed, so it can answer "how much in total" but never
-// "how much today". Summed over all time this agrees exactly with the dashboard's
-// lifetime Collected — same rows, same trigger source.
+// "how much today".
+//
+// ⚠️ This does NOT tie out to the dashboard's lifetime "Collected" tile, and that
+// is deliberate — do not "fix" one to match the other. Collected sums
+// invoices.amount_paid, which the trigger derives from EVERY payment row,
+// including the +payment leg applyCreditToInvoice writes. This function excludes
+// those by default (see includeCreditApplications): settling an invoice from
+// credit the customer paid earlier is not cash arriving today. The two figures
+// answer different questions and diverge by every dollar of credit ever applied.
 //
 // The sum is SIGNED on purpose: a refund is stored as a negative kind='payment'
 // row (recordRefund), so refunds net themselves out with no special handling.
@@ -158,20 +165,25 @@ export function dayBoundsIso(dateISO: string): { start: string; end: string } {
 // dashboard can call it too — the money lands in the first paint, no spinner.
 export async function collectedBetween(sb: SupabaseClient, p: {
   userId: string; startIso: string; endIso: string; includeCreditApplications?: boolean
-}): Promise<{ total: number; count: number }> {
-  const { data } = await sb.from('payments')
+}): Promise<{ total: number; count: number; error: string | null }> {
+  // `error` is surfaced, not swallowed: a failed read must never be reported as
+  // "$0 received today" — that is indistinguishable from a genuinely quiet
+  // morning, and it is the one number the owner trusts at a glance.
+  const { data, error } = await sb.from('payments')
     .select('amount, provider')
     .eq('user_id', p.userId)
     .eq('kind', 'payment')
     .eq('status', 'paid')
     .gte('paid_at', p.startIso)
     .lt('paid_at', p.endIso)
+  if (error) return { total: 0, count: 0, error: error.message }
   const rows = ((data as { amount: number; provider: string | null }[]) || [])
     .filter(r => p.includeCreditApplications || r.provider !== 'credit')
   return {
     total: round2(rows.reduce((s, r) => s + (Number(r.amount) || 0), 0)),
     // Money-in events only — a refund shouldn't read as "1 payment today".
     count: rows.filter(r => (Number(r.amount) || 0) > 0).length,
+    error: null,
   }
 }
 

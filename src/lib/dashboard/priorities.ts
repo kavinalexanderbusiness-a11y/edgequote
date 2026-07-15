@@ -43,7 +43,7 @@ export interface PrioritiesInput {
   jobs: RJob[]
   recById: Record<string, RRecurrence>
   customers: { id: string }[]
-  conversations: { unread: number }[]
+  conversations: { unread: number; customer_id?: string | null }[]
   leads: LeadResponseReport
   seasons: ServiceSeasons
   feeSettings: FeeSettings | null
@@ -51,6 +51,15 @@ export interface PrioritiesInput {
   /** Cap the list so the queue stays scannable. */
   limit?: number
 }
+
+// Tiers sit 10_000 apart and each carries a dollar/urgency adder on top. The
+// adder MUST stay inside the gap: added raw, a $17k pile of unscheduled work
+// (80_000 + 17_000) would outrank a three-day-old lead (ceiling 97_200), and any
+// $5 unpaid invoice (100_000 floor) would outrank it too — silently inverting
+// the order this file documents. Clamping keeps ordering WITHIN a tier by value
+// while the tier order stays exactly as written.
+const TIER_GAP = 10_000
+const adder = (n: number) => Math.min(Math.max(n, 0), TIER_GAP - 1_000)
 
 export function computePriorities(i: PrioritiesInput): Priority[] {
   const { quotes, invoices, jobs, recById, customers, conversations, leads, seasons, feeSettings, today } = i
@@ -65,7 +74,7 @@ export function computePriorities(i: PrioritiesInput): Priority[] {
     next.push({
       kind: 'unpaid', label: 'Collect unpaid invoices',
       detail: `${owed.length} · ${formatCurrency(owedTotal)}`,
-      href: '/dashboard/invoices', score: 100_000 + owedTotal,
+      href: '/dashboard/invoices', score: 100_000 + adder(owedTotal),
     })
   }
 
@@ -85,7 +94,7 @@ export function computePriorities(i: PrioritiesInput): Priority[] {
         ? `${parts} · oldest ${hrs >= 48 ? `${Math.floor(hrs / 24)}d` : `${hrs}h`}`
         : parts,
       href: leads.items[0]?.href || '/dashboard/messages',
-      score: 90_000 + Math.min(hrs ?? 0, 72) * 100,
+      score: 90_000 + adder(Math.min(hrs ?? 0, 72) * 100),
     })
   }
 
@@ -98,7 +107,7 @@ export function computePriorities(i: PrioritiesInput): Priority[] {
     next.push({
       kind: 'unscheduled', label: 'Schedule accepted jobs',
       detail: `${acceptedUnscheduled.length} · ${formatCurrency(acceptedTotal)}`,
-      href: '/dashboard/schedule', score: 80_000 + acceptedTotal,
+      href: '/dashboard/schedule', score: 80_000 + adder(acceptedTotal),
     })
   }
 
@@ -107,7 +116,7 @@ export function computePriorities(i: PrioritiesInput): Priority[] {
   if (missed.length > 0) {
     next.push({
       kind: 'missed', label: 'Resolve missed jobs', detail: `${missed.length} past due`,
-      href: '/dashboard/schedule', score: 70_000 + missed.length * 200,
+      href: '/dashboard/schedule', score: 70_000 + adder(missed.length * 200),
     })
   }
 
@@ -119,7 +128,7 @@ export function computePriorities(i: PrioritiesInput): Priority[] {
     next.push({
       kind: 'drafts', label: 'Send draft invoices',
       detail: `${drafts.length} · ${formatCurrency(draftTotal)}`,
-      href: '/dashboard/invoices', score: 60_000 + draftTotal,
+      href: '/dashboard/invoices', score: 60_000 + adder(draftTotal),
     })
   }
 
@@ -131,7 +140,7 @@ export function computePriorities(i: PrioritiesInput): Priority[] {
     next.push({
       kind: 'followups', label: 'Follow up on quotes',
       detail: `${followups.length} · ${formatCurrency(followupTotal)}`,
-      href: '/dashboard/quotes', score: 50_000 + followupTotal,
+      href: '/dashboard/quotes', score: 50_000 + adder(followupTotal),
     })
   }
 
@@ -144,7 +153,7 @@ export function computePriorities(i: PrioritiesInput): Priority[] {
     next.push({
       kind: 'reactivation', label: 'Re-book recurring customers',
       detail: ranOutValue > 0 ? `${react.ranOuts.length} · ${formatCurrency(ranOutValue)}/visit` : `${react.ranOuts.length} customer${react.ranOuts.length !== 1 ? 's' : ''}`,
-      href: '/dashboard/reactivation', score: 40_000 + ranOutValue,
+      href: '/dashboard/reactivation', score: 40_000 + adder(ranOutValue),
     })
   }
   // The slower half of the same engine — only when no urgent re-book queue is
@@ -154,18 +163,28 @@ export function computePriorities(i: PrioritiesInput): Priority[] {
     next.push({
       kind: 'lapsed', label: 'Win back lapsed customers',
       detail: `${react.risks.length} · ${formatCurrency(recover)} recoverable`,
-      href: '/dashboard/reactivation', score: 20_000 + recover,
+      href: '/dashboard/reactivation', score: 20_000 + adder(recover),
     })
   }
 
   // 8) Unread messages — time-sensitive but lower raw dollar value, so it sits
   //    below the money rows unless nothing else is up.
-  const unreadTotal = conversations.reduce((s, c) => s + Number(c.unread || 0), 0)
-  if (conversations.length > 0) {
+  //
+  //    An unanswered inbound conversation is ALREADY counted by the leads row
+  //    above (leadResponse classifies last_direction='inbound' as a 'reply'
+  //    lead). Left alone, the same customers appeared in two rows pointing at the
+  //    same inbox — the queue telling the owner to do one thing twice. Anyone the
+  //    leads row already owns is excluded here; the higher tier keeps them.
+  const leadCustomerIds = new Set(
+    leads.items.filter(l => l.source === 'reply' && l.customerId).map(l => l.customerId),
+  )
+  const otherUnread = conversations.filter(c => !(c.customer_id && leadCustomerIds.has(c.customer_id)))
+  const unreadTotal = otherUnread.reduce((s, c) => s + Number(c.unread || 0), 0)
+  if (otherUnread.length > 0) {
     next.push({
       kind: 'messages', label: 'Reply to messages',
-      detail: `${conversations.length} conversation${conversations.length !== 1 ? 's' : ''} · ${unreadTotal} unread`,
-      href: '/dashboard/messages', score: 30_000 + unreadTotal * 100,
+      detail: `${otherUnread.length} conversation${otherUnread.length !== 1 ? 's' : ''} · ${unreadTotal} unread`,
+      href: '/dashboard/messages', score: 30_000 + adder(unreadTotal * 100),
     })
   }
 
