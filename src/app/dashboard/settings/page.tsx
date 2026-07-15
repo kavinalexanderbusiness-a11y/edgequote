@@ -386,16 +386,14 @@ export default function SettingsPage() {
             </div>
           </CardHeader>
           <CardBody className="space-y-4">
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Fee recovery strategy</label>
-              <select {...register('payment_fee_strategy')}
-                className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all">
-                <option value="global_price_increase">Global price increase (recommended)</option>
-                <option value="absorb">Absorb the fee (no change)</option>
-                <option value="etransfer_discount" disabled>E-transfer discount (coming soon)</option>
-              </select>
-              <p className="text-xs text-ink-faint">“Global price increase” adds the % below to every NEW quote so card fees are covered. Existing quotes are never changed.</p>
-            </div>
+            <Select label="Fee recovery strategy"
+              hint="“Global price increase” adds the % below to every NEW quote so card fees are covered. Existing quotes are never changed."
+              options={[
+                { value: 'global_price_increase', label: 'Global price increase (recommended)' },
+                { value: 'absorb', label: 'Absorb the fee (no change)' },
+                { value: 'etransfer_discount', label: 'E-transfer discount (coming soon)', disabled: true },
+              ]}
+              {...register('payment_fee_strategy')} />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input label="Fee recovery %" type="number" step="0.5" min="0" max="10"
                 hint="Baked into new quote prices. ~3% covers Stripe's ~2.9% + 30¢."

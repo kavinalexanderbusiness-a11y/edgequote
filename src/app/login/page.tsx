@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
+import { Banner } from '@/components/ui/Banner'
 import { Zap } from 'lucide-react'
 
 export default function LoginPage() {
@@ -88,11 +89,7 @@ export default function LoginPage() {
               required
               autoComplete="current-password"
             />
-            {error && (
-              <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 text-sm text-red-400">
-                {error}
-              </div>
-            )}
+            {error && <Banner tone="danger">{error}</Banner>}
             <Button type="submit" className="w-full" size="lg" loading={loading}>
               Sign In
             </Button>
