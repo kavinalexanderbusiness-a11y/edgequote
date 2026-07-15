@@ -42,7 +42,7 @@ export function ReconcilePanel() {
               <Scale className="w-4 h-4 text-accent-text" /> Check Stripe against your books
             </p>
             <p className="text-xs text-ink-faint mt-0.5">
-              Finds card payments Stripe took that never got recorded here — the kind a missed webhook leaves behind. Nothing is changed; it only looks.
+              Finds card payments Stripe is still holding that never got recorded here — the kind a missed webhook leaves behind. Refunded money is left out. Nothing is changed; it only looks.
             </p>
           </div>
           <Button size="sm" variant="secondary" onClick={check} loading={busy} className="shrink-0">
@@ -83,6 +83,10 @@ export function ReconcilePanel() {
                       {c.orphaned
                         ? c.description || 'No invoice on this payment — check it in Stripe.'
                         : `For ${c.invoiceNumber}`}
+                      {/* The amount above is what's STILL held, so a partly refunded
+                          charge would otherwise look like a smaller payment for no
+                          visible reason. Say why. */}
+                      {c.refunded > 0 && ` · ${formatCurrency(c.refunded)} of it was refunded`}
                     </p>
                   </div>
                   {/* Two things this link has to respect, both easy to get wrong:
