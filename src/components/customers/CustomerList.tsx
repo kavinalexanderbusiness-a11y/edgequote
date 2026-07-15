@@ -4,7 +4,8 @@ import { useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Customer } from '@/types'
-import { formatDate, getInitials, cn } from '@/lib/utils'
+import { formatDate, cn } from '@/lib/utils'
+import { Avatar } from '@/components/ui/Avatar'
 import { createClient } from '@/lib/supabase/client'
 import { prefetchCustomer, hoverIntent } from '@/lib/prefetch'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
@@ -21,9 +22,15 @@ import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { Menu } from '@/components/ui/Menu'
 import { FilterPill } from '@/components/ui/FilterPill'
-import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
+import { EmptyState } from '@/components/ui/EmptyState'
 import { SearchInput } from '@/components/ui/SearchInput'
 import { Edit2, Phone, Mail, FileText, Link2, MessageSquare, ShieldAlert, Archive, Download, Send, Users, Star, Smartphone, MoreHorizontal } from 'lucide-react'
+
+// Cap the rendered rows so a book of thousands of customers doesn't paint
+// thousands of DOM nodes (janky scroll, slow filter). The full set is still
+// searched/selected/exported — only the DOM is bounded, same idea as the
+// CustomerPicker's 50-row cap. Search narrows to what you're actually after.
+const RENDER_CAP = 100
 
 type ConsentFilter = '' | 'sms_in' | 'sms_out' | 'email_in' | 'email_out' | 'both' | 'neither'
 const CONSENT_FILTERS: { value: ConsentFilter; label: string }[] = [
@@ -74,12 +81,21 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
   // Memoized so typing in a search box or ticking a bulk-select checkbox (which
   // changes unrelated state) doesn't re-run these O(n) passes over every customer.
   const filtered = useMemo(() => {
-    const q = search.toLowerCase()
-    return customers.filter(c =>
-      (c.name.toLowerCase().includes(q) ||
-        c.email?.toLowerCase().includes(q) ||
-        c.city?.toLowerCase().includes(q)) && matchesConsent(c)
-    )
+    const q = search.trim().toLowerCase()
+    // Digits-only pass so a phone search matches regardless of formatting —
+    // "4035550100", "403 555" and "(403) 555-0100" all find the same person.
+    const digits = q.replace(/\D/g, '')
+    return customers.filter(c => {
+      if (!matchesConsent(c)) return false
+      if (!q) return true
+      return (
+        c.name.toLowerCase().includes(q) ||
+        !!c.email?.toLowerCase().includes(q) ||
+        !!c.city?.toLowerCase().includes(q) ||
+        !!c.address?.toLowerCase().includes(q) ||
+        (!!digits && !!c.phone && c.phone.replace(/\D/g, '').includes(digits))
+      )
+    })
   }, [customers, search, consentFilter]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Missing-consent report — over ALL customers, not the filtered view.
@@ -201,7 +217,7 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
       {/* Search — THE shared SearchInput */}
       <SearchInput
         ref={searchRef}
-        placeholder="Search customers…  ( / )"
+        placeholder="Search name, email, phone, address…  ( / )"
         value={search}
         onChange={e => setSearch(e.target.value)}
         onKeyDown={e => { if (e.key === 'Escape') { setSearch(''); e.currentTarget.blur() } }}
@@ -232,18 +248,25 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
               action={onAdd ? { label: 'Add customer', onClick: onAdd } : { label: 'Import customers', onClick: () => router.push('/dashboard/customers/import') }} />
           </Card>
         ) : (
-          <Card><InlineEmpty>No customers match your filters.</InlineEmpty></Card>
+          <Card>
+            <div className="px-6 py-8 text-center space-y-3">
+              <p className="text-sm text-ink-muted">
+                No customers match {search.trim() ? <>“<span className="text-ink">{search.trim()}</span>”</> : 'these filters'}.
+              </p>
+              <Button size="sm" variant="secondary" onClick={() => { setSearch(''); setConsentFilter('') }}>
+                Clear search &amp; filters
+              </Button>
+            </div>
+          </Card>
         )
       ) : (
         <div className="grid gap-3">
-          {filtered.map((c, i) => (
+          {filtered.slice(0, RENDER_CAP).map((c, i) => (
             <Card key={c.id} {...hoverIntent(() => prefetchCustomer(c.id))}
               className={cn('flex items-center gap-3 px-5 py-4 transition-colors card-lift animate-rise', i < 6 && `stagger-${i + 1}`, sel.isSelected(c.id) ? 'border-accent/50' : 'hover:border-border-strong')}>
               <SelectCheckbox checked={sel.isSelected(c.id)} onToggle={shift => sel.toggle(c.id, shift)} />
-              {/* Avatar */}
-              <div className="w-10 h-10 rounded-full bg-accent/10 border border-accent/20 flex items-center justify-center flex-shrink-0">
-                <span className="text-sm font-bold text-accent">{getInitials(c.name)}</span>
-              </div>
+              {/* Avatar — deterministic colour per customer (scannable identity) */}
+              <Avatar name={c.name} seed={c.id} />
               {/* Info */}
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -262,7 +285,7 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
                       <Phone className="w-3 h-3" /> {c.phone}
                     </a>
                   )}
-                  {c.city && <span className="text-xs text-ink-faint">{c.city}, {c.province}</span>}
+                  {c.city && <span className="text-xs text-ink-faint">{c.city}{c.province ? `, ${c.province}` : ''}</span>}
                   {c.acquisition_source && (
                     <span className="text-[10px] uppercase tracking-wide text-ink-muted border border-border rounded px-1.5 py-0.5">{c.acquisition_source}</span>
                   )}
@@ -294,7 +317,11 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
           ))}
         </div>
       )}
-      <p className="text-xs text-ink-faint text-right">{filtered.length} customer{filtered.length !== 1 ? 's' : ''}</p>
+      <p className="text-xs text-ink-faint text-right">
+        {filtered.length > RENDER_CAP
+          ? <>Showing {RENDER_CAP} of {filtered.length.toLocaleString()} — search to find anyone</>
+          : <>{filtered.length.toLocaleString()} customer{filtered.length !== 1 ? 's' : ''}</>}
+      </p>
 
       {/* Consent overview — compliance reference, below the work surface so the
           list (what the owner came for) is never pushed a screen down. */}
@@ -325,7 +352,7 @@ function ReportStat({ label, value, tone }: { label: string; value: number; tone
   return (
     <div className="rounded-card border border-border bg-bg-secondary px-3 py-2">
       <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
-      <p className={cn('text-lg font-bold tabular-nums', tone || 'text-ink')}>{value}</p>
+      <p className={cn('text-lg font-bold tabular-nums', tone || 'text-ink')}>{value.toLocaleString()}</p>
     </div>
   )
 }

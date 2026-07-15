@@ -10,7 +10,7 @@ import { queueOrRun } from '@/lib/offline/outbox'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { custCacheKey, type CustomerPrefetch } from '@/lib/prefetch'
-import { Customer, Property, Quote, Job, Invoice, JobRecurrence } from '@/types'
+import { Customer, Property, Quote, Job, Invoice, JobRecurrence, CustomerFormValues } from '@/types'
 import { WebsiteLead } from '@/lib/leads'
 import { LeadSummary } from '@/components/leads/LeadSummary'
 import { JobPhotos } from '@/components/photos/JobPhotos'
@@ -23,13 +23,16 @@ import { resolvePrefs, prefSummary, hasAnyPref } from '@/lib/preferences'
 import { SchedulePrefsFields, PrefsDraft, EMPTY_DRAFT, toDraft, draftToRow } from '@/components/customers/SchedulePrefsFields'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { DetailHeader } from '@/components/layout/DetailHeader'
+import { Avatar } from '@/components/ui/Avatar'
+import { Modal } from '@/components/ui/Modal'
+import { CustomerForm } from '@/components/customers/CustomerForm'
 import { Banner } from '@/components/ui/Banner'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { InlineEmpty } from '@/components/ui/EmptyState'
 import { Button } from '@/components/ui/Button'
 import { Textarea } from '@/components/ui/Textarea'
 import { SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
-import { formatCurrency, formatDate, getInitials, cn } from '@/lib/utils'
+import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { CustomerComms } from '@/components/customers/CustomerComms'
 import { CommsHealth } from '@/components/customers/CommsHealth'
@@ -46,6 +49,7 @@ import {
 
 const WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
 const OPEN_INVOICE = new Set(['unpaid', 'sent', 'partial'])
+const TIMELINE_CAP = 8   // recent events shown before "Show more"
 
 function localToday(): string {
   const d = new Date()
@@ -122,6 +126,13 @@ export default function CustomerDetailPage() {
   const [portalBusy, setPortalBusy] = useState(false)
   const [portalCopied, setPortalCopied] = useState(false)
   const [showMessage, setShowMessage] = useState(false)
+  // Edit core details in place — the profile could show a customer but not fix a
+  // typo in their email without leaving for the list. Same shared form, in a modal.
+  const [editing, setEditing] = useState(false)
+  const [allCustomers, setAllCustomers] = useState<Customer[]>([])
+  // Timeline can run to hundreds of events on a long-standing customer — show the
+  // recent slice, expand on demand.
+  const [showAllEvents, setShowAllEvents] = useState(false)
 
   async function copyPortalLink() {
     if (!customer) return
@@ -135,6 +146,44 @@ export default function CustomerDetailPage() {
       try { await navigator.clipboard.writeText(url) } catch { toast('Portal link (copy manually): ' + url, { duration: 20000 }) }
       setPortalCopied(true); setTimeout(() => setPortalCopied(false), 2500)
     } finally { setPortalBusy(false) }
+  }
+
+  async function openEdit() {
+    // Lazy-load the name list once so the "Referred by" picker works while editing
+    // (dup detection is off in edit mode, so id+name is all the form needs).
+    if (allCustomers.length === 0) {
+      const { data } = await supabase.from('customers').select('id, name').neq('id', id).order('name')
+      setAllCustomers((data as Customer[]) || [])
+    }
+    setEditing(true)
+  }
+
+  // Mirrors the list's edit: update the customer, and keep the primary property's
+  // address in sync when it changes. reload() re-runs the page's own load().
+  async function handleSaveEdit(values: CustomerFormValues) {
+    // Strip consent from the raw update — it's audited through the shared engine
+    // and owned by the profile's Communication card. Editing a name must never
+    // silently flip SMS/email opt-in. (The form hides these in edit mode anyway.)
+    const rest = { ...values }
+    delete rest.sms_opt_in
+    delete rest.email_opt_in
+    const patch = {
+      ...rest,
+      acquisition_source: values.acquisition_source || null,
+      referred_by_customer_id: values.referred_by_customer_id || null,
+      birthday: values.birthday || null,
+      anniversary: values.anniversary || null,
+    }
+    const { error } = await supabase.from('customers').update(patch).eq('id', id)
+    if (error) { toast.error('Could not save the customer: ' + error.message); return }   // keep the form open to retry
+    if (values.address) {
+      await supabase.from('properties').update({
+        address: values.address, city: values.city || null,
+        province: values.province || 'AB', postal_code: values.postal_code || null,
+      }).eq('customer_id', id).eq('is_primary', true)
+    }
+    setEditing(false)
+    reload()
   }
 
   const [editingNotes, setEditingNotes] = useState(false)
@@ -500,11 +549,16 @@ export default function CustomerDetailPage() {
         title={customer.name}
         description={`Customer since ${formatDate(customer.created_at)}`}
         action={
-          <Button size="sm" variant="secondary" loading={portalBusy}
-            title="Copy a private link the customer can use to view quotes, invoices, history & photos and accept quotes"
-            onClick={copyPortalLink}>
-            {portalCopied ? <><Check className="w-3.5 h-3.5" /> Link copied</> : <><Link2 className="w-3.5 h-3.5" /> Portal link</>}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="secondary" onClick={openEdit} title="Edit name, contact and address">
+              <Edit2 className="w-3.5 h-3.5" /> Edit
+            </Button>
+            <Button size="sm" variant="secondary" loading={portalBusy}
+              title="Copy a private link the customer can use to view quotes, invoices, history & photos and accept quotes"
+              onClick={copyPortalLink}>
+              {portalCopied ? <><Check className="w-3.5 h-3.5" /> Link copied</> : <><Link2 className="w-3.5 h-3.5" /> Portal link</>}
+            </Button>
+          </div>
         }
       />
 
@@ -517,23 +571,24 @@ export default function CustomerDetailPage() {
       <Card>
         <CardBody className="space-y-4">
           <div className="flex items-start gap-4">
-            <div className="w-12 h-12 rounded-full bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-              <span className="text-base font-bold text-accent">{getInitials(customer.name)}</span>
-            </div>
+            <Avatar name={customer.name} seed={customer.id} size="lg" />
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2 flex-wrap">
-                <p className="text-lg font-bold text-ink">{customer.name}</p>
-                {isHighValue && (
-                  <span className="text-[10px] uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5 font-semibold flex items-center gap-1">
-                    <Sparkles className="w-3 h-3" /> High value
-                  </span>
-                )}
-                {recurringStatus && (
-                  <span className="text-[10px] uppercase tracking-wide text-emerald-400 border border-emerald-500/30 bg-emerald-500/10 rounded px-1.5 py-0.5 font-semibold flex items-center gap-1">
-                    <Repeat className="w-3 h-3" /> {recurringStatus}
-                  </span>
-                )}
-              </div>
+              {/* Name lives in the DetailHeader above — here we lead with status +
+                  contact so the same name isn't stacked twice. */}
+              {(isHighValue || recurringStatus) && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  {isHighValue && (
+                    <span className="text-[10px] uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5 font-semibold flex items-center gap-1">
+                      <Sparkles className="w-3 h-3" /> High value
+                    </span>
+                  )}
+                  {recurringStatus && (
+                    <span className="text-[10px] uppercase tracking-wide text-emerald-400 border border-emerald-500/30 bg-emerald-500/10 rounded px-1.5 py-0.5 font-semibold flex items-center gap-1">
+                      <Repeat className="w-3 h-3" /> {recurringStatus}
+                    </span>
+                  )}
+                </div>
+              )}
               <div className="flex items-center gap-x-4 gap-y-1 mt-1 flex-wrap text-sm">
                 {customer.phone && (
                   <span className="flex items-center gap-1.5">
@@ -830,7 +885,7 @@ export default function CustomerDetailPage() {
               <InlineEmpty className="py-6">No history yet.</InlineEmpty>
             ) : (
               <div className="space-y-3">
-                {events.map((e, i) => {
+                {(showAllEvents ? events : events.slice(0, TIMELINE_CAP)).map((e, i) => {
                   const meta = EVENT_META[e.kind]
                   const Icon = meta.icon
                   const row = (
@@ -848,6 +903,12 @@ export default function CustomerDetailPage() {
                     ? <Link key={i} href={e.href} className="block hover:opacity-80 transition-opacity">{row}</Link>
                     : <div key={i}>{row}</div>
                 })}
+                {events.length > TIMELINE_CAP && (
+                  <button onClick={() => setShowAllEvents(s => !s)}
+                    className="text-xs font-medium text-accent hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                    {showAllEvents ? 'Show less' : `Show ${events.length - TIMELINE_CAP} more`}
+                  </button>
+                )}
               </div>
             )}
           </CardBody>
@@ -939,6 +1000,31 @@ export default function CustomerDetailPage() {
 
       {/* Referrals — advocates this customer brought in (with statuses + rewards) */}
       <ReferralPanel customer={customer} referrer={referrer} referredRevenue={referredRevenue} />
+
+      {/* Edit core details — the ONE shared customer form, in a modal (no page leave) */}
+      <Modal open={editing} onClose={() => setEditing(false)} title="Edit customer" icon={Edit2} size="lg">
+        <CustomerForm
+          isEdit
+          customers={allCustomers}
+          autosaveKey={`customer:${customer.id}`}
+          defaultValues={{
+            name: customer.name || '',
+            email: customer.email || '',
+            phone: customer.phone || '',
+            address: customer.address || '',
+            city: customer.city || '',
+            province: customer.province || '',
+            postal_code: customer.postal_code || '',
+            notes: customer.notes || '',
+            acquisition_source: customer.acquisition_source || '',
+            referred_by_customer_id: customer.referred_by_customer_id || '',
+            birthday: customer.birthday || '',
+            anniversary: customer.anniversary || '',
+          }}
+          onSubmit={handleSaveEdit}
+          onCancel={() => setEditing(false)}
+        />
+      </Modal>
     </div>
   )
 }

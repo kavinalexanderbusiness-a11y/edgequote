@@ -12,11 +12,16 @@ import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { applyConsent } from '@/lib/consent'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { CustomerForm } from '@/components/customers/CustomerForm'
+import { Avatar } from '@/components/ui/Avatar'
 import { PageHeader } from '@/components/layout/PageHeader'
 import Link from 'next/link'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Plus, X, Upload, Archive, RotateCcw, Trash2 } from 'lucide-react'
+
+// Bound the archived DOM too — a long-lived company can accumulate hundreds of
+// churned customers; render a page's worth and note the rest.
+const ARCHIVED_RENDER_CAP = 50
 
 export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[]>([])
@@ -201,18 +206,26 @@ export default function CustomersPage() {
     toast.success(`${name} permanently deleted.`)
   }
 
+  // The add/edit form renders inline at the top of the page. Editing from a row
+  // deep in a long list would otherwise open it off-screen — bring it into view.
+  function scrollToTop() {
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+  function openAdd() { setEditing(null); setShowForm(true); scrollToTop() }
+  function openEdit(c: Customer) { setEditing(c); setShowForm(false); scrollToTop() }
+
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       <PageHeader
         title="Customers"
-        description={`${customers.length} customer${customers.length !== 1 ? 's' : ''} in your database`}
+        description={`${customers.length.toLocaleString()} customer${customers.length !== 1 ? 's' : ''} in your database`}
         action={
           <div className="flex items-center gap-2">
             <Link href="/dashboard/customers/import"
               className="inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-surface border border-border-strong text-ink hover:bg-surface-raised active:scale-[0.98] px-4 py-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
               <Upload className="w-4 h-4" /> Import
             </Link>
-            <Button onClick={() => { setShowForm(true); setEditing(null) }}>
+            <Button onClick={openAdd}>
               <Plus className="w-4 h-4" /> Add customer
             </Button>
           </div>
@@ -264,10 +277,10 @@ export default function CustomersPage() {
       ) : (
         <CustomerList
           customers={customers}
-          onEdit={c => { setEditing(c); setShowForm(false) }}
+          onEdit={openEdit}
           onDelete={handleDelete}
           onRefresh={fetchCustomers}
-          onAdd={() => { setShowForm(true); setEditing(null) }}
+          onAdd={openAdd}
         />
       )}
 
@@ -275,15 +288,18 @@ export default function CustomersPage() {
       {!loading && archived.length > 0 && (
         <div className="rounded-card border border-border bg-bg-secondary p-4">
           <button onClick={() => setShowArchived(s => !s)} className="text-sm font-medium text-ink-muted hover:text-ink flex items-center gap-1.5 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-            <Archive className="w-4 h-4" /> {showArchived ? 'Hide' : 'Show'} archived ({archived.length})
+            <Archive className="w-4 h-4" /> {showArchived ? 'Hide' : 'Show'} archived ({archived.length.toLocaleString()})
           </button>
           {showArchived && (
             <div className="mt-3 divide-y divide-border">
-              {archived.map(c => (
+              {archived.slice(0, ARCHIVED_RENDER_CAP).map(c => (
                 <div key={c.id} className="flex items-center justify-between gap-3 py-2">
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-ink truncate">{c.name}</p>
-                    <p className="text-[11px] text-ink-faint">Archived{c.archived_at ? ` ${new Date(c.archived_at).toLocaleDateString()}` : ''} · all history preserved</p>
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Avatar name={c.name} seed={c.id} size="sm" className="opacity-60" />
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-ink truncate">{c.name}</p>
+                      <p className="text-[11px] text-ink-faint">Archived{c.archived_at ? ` ${new Date(c.archived_at).toLocaleDateString()}` : ''} · all history preserved</p>
+                    </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <Button size="sm" variant="secondary" onClick={() => handleRestore(c.id)}><RotateCcw className="w-3.5 h-3.5" /> Restore</Button>
@@ -291,6 +307,9 @@ export default function CustomersPage() {
                   </div>
                 </div>
               ))}
+              {archived.length > ARCHIVED_RENDER_CAP && (
+                <p className="text-[11px] text-ink-faint pt-2">…and {(archived.length - ARCHIVED_RENDER_CAP).toLocaleString()} more archived</p>
+              )}
             </div>
           )}
         </div>
