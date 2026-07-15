@@ -22,6 +22,7 @@ import { AssistButton } from '@/components/ai/AssistButton'
 import { useAiAssist } from '@/hooks/useAiAssist'
 import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
 import { sumServiceLines, serviceLineTotals, emptyServiceLine, SERVICE_UNITS } from '@/lib/quoteServices'
+import { loadServiceUnits, type ServiceUnit } from '@/lib/units'
 import { formatCurrency, formatDate, suggestTravelFee, cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
 import { formatServicePrice, servicePricingKind } from '@/lib/servicePricing'
@@ -386,6 +387,23 @@ export function QuoteBuilder({
     ...customers.map(c => ({ value: c.id, label: c.name })),
     { value: '__manual', label: '+ Enter manually' },
   ], [customers])
+  // The unit vocabulary (service_units): the nine system units plus this owner's
+  // custom ones. It replaces a hardcoded four-value list, which is the whole
+  // reason a plumber can now quote 6 fixtures and a painter 3 rooms — the line
+  // maths was always qty × unit_price and never needed to change. Falls back to
+  // the old constant if the read fails, so the picker can never come up empty.
+  const [units, setUnits] = useState<ServiceUnit[]>([])
+  useEffect(() => {
+    let alive = true
+    loadServiceUnits(createClient()).then(u => { if (alive) setUnits(u) })
+    return () => { alive = false }
+  }, [])
+  const unitOptions = useMemo(() => (
+    units.length
+      ? units.map(u => ({ value: u.code, label: u.label }))
+      : SERVICE_UNITS.map(u => ({ value: u.value, label: u.label }))
+  ), [units])
+
   const activeTemplates = useMemo(() => templates.filter(t => t.is_active), [templates])
   const templateOptions = useMemo(() => [
     { value: '', label: 'Select a service...' },
@@ -857,7 +875,7 @@ export function QuoteBuilder({
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                       <Input label="Qty" type="number" step="0.5" min="0"
                         {...register(`services.${i}.quantity` as const, { min: 0 })} />
-                      <Select label="Unit" options={SERVICE_UNITS.map(u => ({ value: u.value, label: u.label }))}
+                      <Select label="Unit" options={unitOptions}
                         {...register(`services.${i}.unit` as const)} />
                       <Input label="Unit price ($)" type="number" step="1" min="0"
                         {...register(`services.${i}.unit_price` as const, { min: 0 })} />
