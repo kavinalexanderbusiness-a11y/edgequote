@@ -429,7 +429,13 @@ export interface Invoice {
   status: InvoiceStatus
   issued_date: string | null
   due_date: string | null
+  // The CUSTOMER's note — InvoicePDF renders this in a Notes box. Never put
+  // system text or internal reasoning here.
   notes: string | null
+  // The OWNER's note — never rendered on a PDF or in the portal. Home for
+  // auto-draft provenance and the AutoPay hold flag (see AUTOPAY_HOLD_FLAG), so
+  // editing the customer-facing note can't break hold detection.
+  internal_notes: string | null
   // Snapshot breakdown for the customer (base service + add-ons + travel). Null
   // on legacy invoices → render the single (service_type, amount) row.
   line_items: InvoiceLineItem[] | null

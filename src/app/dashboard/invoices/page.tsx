@@ -8,6 +8,7 @@ import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { Invoice, InvoiceStatus, InvoiceDisplayStatus, INVOICE_STATUS_LABELS, INVOICE_STATUS_COLORS, BusinessSettings, Payment, paymentMethodLabel } from '@/types'
 import { InvoicePaymentControls } from '@/components/payments/InvoicePaymentControls'
 import { invoiceBalance, displayInvoiceStatus, cancelInvoice, reactivateInvoice, assertCurrent } from '@/lib/payments/ledger'
+import { isAutoPayHeld } from '@/lib/payments/autopay'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { SkeletonRows } from '@/components/ui/Skeleton'
@@ -547,8 +548,8 @@ export default function InvoicesPage() {
                       )
                     })()}
                     {/* AutoPay held this invoice for review (amount differs from usual). */}
-                    {inv.status === 'draft' && (inv.notes || '').includes('AutoPay held') && (
-                      <span title={inv.notes || undefined} className="text-[10px] px-2 py-1 rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-400 font-semibold flex items-center gap-1">
+                    {inv.status === 'draft' && isAutoPayHeld(inv) && (
+                      <span title={inv.internal_notes || undefined} className="text-[10px] px-2 py-1 rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-400 font-semibold flex items-center gap-1">
                         <AlertTriangle className="w-3 h-3" /> Review
                       </span>
                     )}
@@ -593,11 +594,11 @@ export default function InvoicesPage() {
                             notify.error(`${inv.invoice_number} is $0 — add a line item with a price before sending it.`)
                             return
                           }
-                          const held = inv.status === 'draft' && (inv.notes || '').includes('AutoPay held')
+                          const held = inv.status === 'draft' && isAutoPayHeld(inv)
                           if (held) {
                             const ok = await confirmDialog({
                               title: 'Send an invoice that was held for review?',
-                              message: `${inv.invoice_number} was held because the amount looks unusual for this customer${inv.notes ? ` — ${inv.notes}` : ''}. Send it as-is?`,
+                              message: `${inv.invoice_number} was held because the amount looks unusual for this customer${inv.internal_notes ? ` — ${inv.internal_notes}` : ''}. Send it as-is?`,
                               confirmLabel: 'Send it anyway',
                             })
                             if (!ok) return
@@ -730,6 +731,7 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
   const [service, setService] = useState(inv.service_type || '')
   const [due, setDue] = useState(inv.due_date || '')
   const [notes, setNotes] = useState(inv.notes || '')
+  const [internalNotes, setInternalNotes] = useState(inv.internal_notes || '')
   const [base, setBase] = useState(String(Math.round(itemized ? liSum : initial.subtotal)))
   const [dType, setDType] = useState<'' | DiscountType>(inv.discount_type ?? '')
   const [dValue, setDValue] = useState(inv.discount_value != null ? String(inv.discount_value) : '')
@@ -790,6 +792,8 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
       service_type: service.trim() || null,
       due_date: due || null,
       notes: notes.trim() || null,
+      // Non-financial → stays editable even on a settled invoice.
+      internal_notes: internalNotes.trim() || null,
     }
     // The money half — omitted entirely once the invoice is settled, so a locked
     // invoice cannot have its figures rewritten even if state went stale.
@@ -929,7 +933,12 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
         </div>
       </div>
 
-      <Textarea label="Notes" value={notes} onChange={e => setNotes(e.target.value)} rows={2} placeholder="Optional note shown on the invoice" />
+      {/* Two notes, and the labels have to make the difference obvious — the whole
+          point is that one of these is printed and the other never is. */}
+      <Textarea label="Notes (the customer sees this)" value={notes} onChange={e => setNotes(e.target.value)} rows={2}
+        placeholder="Shown on the invoice PDF — e.g. “Thanks for your business!”" />
+      <Textarea label="Internal note (private — never on the PDF)" value={internalNotes} onChange={e => setInternalNotes(e.target.value)} rows={2}
+        placeholder="Only you see this. The app also records here why a draft exists, and why AutoPay held a charge." />
 
       {/* Live breakdown — exactly what the customer, PDF and Stripe charge will show */}
       <div className="rounded-xl border border-border bg-bg-tertiary px-3.5 py-2.5 space-y-1 text-sm">
