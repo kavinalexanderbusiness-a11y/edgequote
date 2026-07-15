@@ -9,7 +9,7 @@
 
 import { createClient } from '@/lib/supabase/client'
 import { createDraftInvoiceForCompletedJob, syncDraftInvoiceAmounts } from '@/lib/invoicing'
-import { recordPriceChange } from '@/lib/jobPricing'
+import { recordPriceChange, addLineItems } from '@/lib/jobPricing'
 import type { Job } from '@/types'
 import { registerHandler } from './outbox'
 
@@ -94,6 +94,20 @@ export function registerOfflineHandlers(): void {
       }).catch(() => {})   // a failed courtesy text must not re-run the invoice
     }
   })
-  // (Photo uploads are online-only again after the merge — main's photo experience
-  // handles capture/dedup/EXIF directly, so there is no photo.upload replay handler.)
+  // P7 — Visit add-ons. Extra services sold ON SITE ("do the mulch while you're
+  // here") are money, and this used to no-op silently with no signal: the call
+  // opened with a network getUser() and bailed on !user, so the contractor typed a
+  // charge, tapped save, and nothing happened OR warned them.
+  // Replays the add + the draft re-price together — the add-on is only real once the
+  // invoice it belongs on knows about it.
+  registerHandler('job.addons.add', async (payload) => {
+    const p = payload as { opts: Parameters<typeof addLineItems>[1]; syncJobIds: string[] }
+    const supabase = createClient()
+    await addLineItems(supabase, p.opts)
+    await syncDraftInvoiceAmounts(supabase, p.syncJobIds)
+  })
+  // (Photo uploads have their OWN durable queue — lib/offline/photoStore + the
+  // upload queue's scheduler. They're bulk binary with their own retry/pairing
+  // rules, so they'd distort this queue's FIFO and its poison-drop would bin a
+  // job's only photo. See photoStore's header for the full reasoning.)
 }
