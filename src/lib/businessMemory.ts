@@ -15,6 +15,46 @@ import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 // Feeding it is automatic — completing jobs, sending quotes, getting paid and
 // replying to texts is the data entry.
 
+/** Issued → paid, in days, for every invoice that actually got collected.
+ *  THE one definition of "how long did this take to collect" — per-customer habits
+ *  and the business-level collection speed on the BI report both read it, so a
+ *  customer's "pays in ~3 days" can never disagree with the headline figure.
+ *  Guarded to 0..120 days: a backdated issue or a mis-stamped paid_at would
+ *  otherwise drag the median into fiction. */
+export function collectionDays(
+  invoices: { issued_date?: string | null; paid_at?: string | null }[],
+): number[] {
+  const days: number[] = []
+  for (const i of invoices) {
+    if (!i.issued_date || !i.paid_at) continue
+    const d = (Date.parse(i.paid_at) - Date.parse(i.issued_date)) / 86_400_000
+    if (d >= 0 && d <= 120) days.push(d)
+  }
+  return days
+}
+
+export interface CollectionStats {
+  medianDays: number | null
+  count: number        // invoices the median is based on
+  slowestDays: number | null
+}
+
+/** Collection speed over a set of invoices. This module owns "days to pay", so it
+ *  owns the summary too — the BI report asks rather than re-deriving, which is why
+ *  a customer's "pays in ~3 days" can't contradict the business-level headline.
+ *  Median, not mean: one 90-day straggler shouldn't make a healthy book look broken. */
+export function collectionStats(
+  invoices: { issued_date?: string | null; paid_at?: string | null }[],
+): CollectionStats {
+  const days = collectionDays(invoices)
+  if (!days.length) return { medianDays: null, count: 0, slowestDays: null }
+  return {
+    medianDays: Math.round(median(days)! * 10) / 10,
+    count: days.length,
+    slowestDays: Math.round(Math.max(...days)),
+  }
+}
+
 export interface CustomerHabits {
   customerId: string
   // Communication
@@ -97,14 +137,8 @@ export function deriveCustomerHabits(
     const medianResponseMin = gaps.length >= 2 ? Math.round(median(gaps)!) : null
     if (medianResponseMin != null) reasons.push(medianResponseMin <= 60 ? `Fast responder (~${medianResponseMin} min)` : `Typically replies in ~${Math.round(medianResponseMin / 60)} h`)
 
-    // Payment speed = issued → paid days.
-    const payDays: number[] = []
-    for (const i of d.invs) {
-      if (!i.issued_date || !i.paid_at) continue
-      const days = (Date.parse(i.paid_at) - Date.parse(i.issued_date)) / 86_400_000
-      if (days >= 0 && days <= 120) payDays.push(days)
-    }
-    const medianDaysToPay = payDays.length ? Math.round(median(payDays)! * 10) / 10 : null
+    // Payment speed = issued → paid days, via the shared definition above.
+    const { medianDays: medianDaysToPay, count: payDaysCount } = collectionStats(d.invs)
     if (medianDaysToPay != null) reasons.push(medianDaysToPay <= 2 ? `Pays fast (~${medianDaysToPay} d)` : `Pays in ~${Math.round(medianDaysToPay)} days`)
 
     // Services + cancellations + typical start time (completed jobs; the same
@@ -127,7 +161,7 @@ export function deriveCustomerHabits(
     out[customerId] = {
       customerId,
       preferredChannel, medianResponseMin,
-      medianDaysToPay, paymentsOnRecord: payDays.length,
+      medianDaysToPay, paymentsOnRecord: payDaysCount,
       favoriteServices, completedJobs: done.length, cancelledJobs: cancelled,
       typicalStartTime, lastCompletedAt,
       repeatCustomer: done.length >= 3,

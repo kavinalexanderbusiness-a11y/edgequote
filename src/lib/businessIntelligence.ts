@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { localTodayISO, parseLocalDate } from '@/lib/utils'
 import { weekdayShort } from '@/lib/preferences'
+import { collectionStats } from '@/lib/businessMemory'
 import { crewCostPerHour, visitEconomics } from '@/lib/economics'
 import { effectiveFreq, jobVisitValue } from '@/lib/invoicing'
 import { SEASON_VISITS } from '@/lib/pricing'
@@ -35,6 +36,33 @@ export interface WeekdayStat { weekday: number; label: string; jobs: number; rev
 /** Cancellations. Everywhere else in the codebase `status === 'cancelled'` is
  *  only ever a filter to EXCLUDE — nothing counted it until now. */
 export interface CancellationStats { cancelledYTD: number; completedYTD: number; cancelRatePct: number | null; trend: NamedValue[]; worstMonth: string | null }
+
+/** How much of the year's revenue rides on the biggest customers. For a 1-3 person
+ *  shop this is a solvency fact, not trivia: if one customer is 30% of revenue,
+ *  losing them is a different event from losing an average one. */
+export interface RevenueConcentration {
+  top1Name: string | null
+  top1Pct: number | null   // share of YTD revenue, 0-100
+  top3Pct: number | null
+  payingCustomers: number  // customers with any YTD revenue
+}
+
+/** Is growth compounding on a returning base, or churn-and-replace? A customer is
+ *  NEW if their first completed visit ever falls in this year — so a customer won
+ *  last season who is still here counts as returning, which is the honest read. */
+export interface RevenueMix {
+  newRevenue: number
+  returningRevenue: number
+  newPct: number | null    // 0-100; null when there's no YTD revenue
+}
+
+/** How fast money actually arrives. Median (not mean) so one 90-day straggler
+ *  can't make a healthy book look broken. */
+export interface CollectionSpeed {
+  medianDaysToPay: number | null
+  paidInvoices: number     // invoices the figure is based on
+  slowestDays: number | null
+}
 
 /** Season-to-date on BOTH sides — see the cutoff note in computeBI. */
 export interface YearSummary { year: string; revenue: number; jobs: number; profit: number | null }
@@ -109,6 +137,13 @@ export interface BIReport {
   weekday: { byWeekday: WeekdayStat[]; busiest: WeekdayStat | null; bestPaying: WeekdayStat | null }
   cancellations: CancellationStats
   yearly: YearComparison
+  // Executive read: who the revenue depends on, whether it's compounding, and how
+  // fast it turns into cash. All composed from rows already fetched.
+  executive: {
+    concentration: RevenueConcentration
+    mix: RevenueMix
+    collection: CollectionSpeed
+  }
 }
 
 const round = (n: number) => Math.round(n)
@@ -154,7 +189,9 @@ export interface BIInput {
   quoteOutcomes: QuoteOutcomeRow[]
   properties: { id: string; lat: number | null; lng: number | null; postal_code: string | null; city: string | null; neighborhood: string | null }[]
   recurrences: Record<string, RecInfo>
-  invoices: { status: string; amount: number | null; customer_id: string | null }[]
+  // issued_date/paid_at drive collection speed. This input was fetched and passed
+  // but never read until then — the loader already had the rows.
+  invoices: { status: string; amount: number | null; customer_id: string | null; issued_date?: string | null; paid_at?: string | null }[]
   crewCost: number
   capacityHours: number
   preferredDays: number[]
@@ -163,7 +200,7 @@ export interface BIInput {
 }
 
 export function computeBI(inp: BIInput): BIReport {
-  const { jobs, pctx, customers, quotes, quoteOutcomes, properties, recurrences, crewCost, capacityHours, preferredDays, seasons, today } = inp
+  const { jobs, pctx, customers, quotes, quoteOutcomes, properties, recurrences, invoices, crewCost, capacityHours, preferredDays, seasons, today } = inp
   const yr = today.slice(0, 4)
   const thisMonth = today.slice(0, 7)
   const yearStart = `${yr}-01-01`
@@ -440,6 +477,52 @@ export function computeBI(inp: BIInput): BIReport {
     byMonth: yearlyByMonth,
   }
 
+  // ── EXECUTIVE ──
+  // Concentration: custRev (YTD, keyed by customer) and revYTD are already built
+  // above by the financial pass — this is a share-of-total division, nothing more.
+  const custRevSorted = Object.entries(custRev).sort((a, b) => b[1] - a[1])
+  const shareOf = (n: number) => (revYTD > 0 ? Math.round((n / revYTD) * 100) : null)
+  const concentration: RevenueConcentration = {
+    top1Name: custRevSorted[0] ? (custName[custRevSorted[0][0]] || 'Unknown') : null,
+    top1Pct: custRevSorted[0] ? shareOf(custRevSorted[0][1]) : null,
+    top3Pct: custRevSorted.length ? shareOf(custRevSorted.slice(0, 3).reduce((s, [, v]) => s + v, 0)) : null,
+    payingCustomers: custRevSorted.length,
+  }
+
+  // Mix: a customer counts as NEW only if their FIRST completed visit ever lands
+  // this year. `completed` spans all history, so this reads real first-service
+  // dates rather than customers.created_at — a lead created in 2024 and finally
+  // serviced this spring is genuinely new revenue, and created_at would miss that.
+  const firstVisitByCust: Record<string, string> = {}
+  for (const j of completed) {
+    if (!j.customer_id) continue
+    const prev = firstVisitByCust[j.customer_id]
+    if (!prev || j.scheduled_date < prev) firstVisitByCust[j.customer_id] = j.scheduled_date
+  }
+  let newRevenue = 0, returningRevenue = 0
+  for (const [cid, v] of Object.entries(custRev)) {
+    const first = firstVisitByCust[cid]
+    if (first && first >= yearStart) newRevenue += v
+    else returningRevenue += v
+  }
+  const mix: RevenueMix = {
+    newRevenue: round(newRevenue),
+    returningRevenue: round(returningRevenue),
+    newPct: revYTD > 0 ? Math.round((newRevenue / revYTD) * 100) : null,
+  }
+
+  // Collection speed — via lib/businessMemory's collectionDays, the one definition
+  // of issued→paid (per-customer habits read the same function, so a customer's
+  // "pays in ~3 days" can never contradict this headline). Pooled across invoices
+  // rather than a median-of-per-customer-medians, which would weight a one-invoice
+  // customer the same as a fifty-invoice one.
+  const payStats = collectionStats(invoices)
+  const collection: CollectionSpeed = {
+    medianDaysToPay: payStats.medianDays,
+    paidInvoices: payStats.count,
+    slowestDays: payStats.slowestDays,
+  }
+
   return {
     generatedFor: new Date(today + 'T00:00:00').toLocaleString('en-US', { month: 'short', year: 'numeric' }),
     financial: { revenueThisMonth: round(revThisMonth), revenueLastMonth: round(revLastMonth), revenueYTD: round(revYTD), monthOverMonthPct: revLastMonth > 0 ? Math.round(((revThisMonth - revLastMonth) / revLastMonth) * 100) : null, byService, byNeighborhood, byCustomer, trend },
@@ -451,6 +534,7 @@ export function computeBI(inp: BIInput): BIReport {
     weekday: { byWeekday, busiest, bestPaying },
     cancellations: { cancelledYTD, completedYTD, cancelRatePct, trend: cancelTrend, worstMonth },
     yearly,
+    executive: { concentration, mix, collection },
   }
 }
 
@@ -465,7 +549,9 @@ export async function loadBusinessIntelligence(supabase: SupabaseClient): Promis
     supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', uid),
     supabase.from('properties').select('id, lat, lng, postal_code, city, neighborhood').eq('user_id', uid),
     supabase.from('customers').select('id, name, created_at').eq('user_id', uid),
-    supabase.from('invoices').select('status, amount, customer_id').eq('user_id', uid),
+    // issued_date/paid_at drive collection speed. Existing columns — no migration;
+    // this select was simply narrower than the rows the report needed.
+    supabase.from('invoices').select('status, amount, customer_id, issued_date, paid_at').eq('user_id', uid),
     supabase.from('business_settings').select('crew_cost_per_hour, daily_capacity_hours, preferred_work_days, base_lat, base_lng, service_seasons').eq('user_id', uid).maybeSingle(),
     supabase.from('quote_outcomes').select('quote_id, reason, detail, competitor_price').eq('user_id', uid),
   ])
@@ -496,7 +582,7 @@ export async function loadBusinessIntelligence(supabase: SupabaseClient): Promis
     quoteOutcomes: (oRes.data as QuoteOutcomeRow[]) || [],
     properties: (pRes.data as { id: string; lat: number | null; lng: number | null; postal_code: string | null; city: string | null; neighborhood: string | null }[]) || [],
     recurrences,
-    invoices: (iRes.data as { status: string; amount: number | null; customer_id: string | null }[]) || [],
+    invoices: (iRes.data as { status: string; amount: number | null; customer_id: string | null; issued_date: string | null; paid_at: string | null }[]) || [],
     crewCost: crewCostPerHour(settings?.crew_cost_per_hour as number | null | undefined),
     capacityHours: Number(settings?.daily_capacity_hours) > 0 ? Number(settings!.daily_capacity_hours) : 8,
     preferredDays: (settings?.preferred_work_days as number[] | null)?.length ? (settings!.preferred_work_days as number[]) : [5, 6, 0],
