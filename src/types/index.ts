@@ -669,7 +669,32 @@ export interface Referral {
   rewarded_at: string | null
 }
 
-export type CampaignKind = 'birthday' | 'anniversary' | 'win_back' | 'broadcast'
+export type CampaignKind =
+  | 'birthday' | 'anniversary' | 'win_back' | 'broadcast'
+  | 'seasonal'   // fires on a fixed calendar date (e.g. spring cleanup), once a year
+  | 'referral'   // asks happy customers to refer a neighbour
+  | 'review'     // asks customers who haven't reviewed yet
+
+// What a campaign sends to, beyond the implicit filters the cron always applies
+// (own customers, not archived, plus the kind's own trigger).
+export interface CampaignAudience {
+  recurring_only?: boolean   // has at least one job_recurrence
+  not_reviewed?: boolean     // hasn't reviewed and hasn't declined — for review asks
+  happy_only?: boolean       // left a review rated >= 4 — for referral asks
+}
+
+// Kind-specific timing. `starts_on`/`ends_on` are an optional active window that
+// applies to EVERY kind — outside it the campaign is skipped without sending.
+export interface CampaignSchedule {
+  days?: number           // win_back: quiet for N days
+  lead_days?: number      // birthday/anniversary: fire N days early
+  day_of_month?: number   // broadcast/referral/review: day to fire on
+  every_months?: number   // broadcast/referral/review: cadence
+  month?: number          // seasonal: 1-12
+  day?: number            // seasonal: 1-28
+  starts_on?: string      // 'YYYY-MM-DD' — campaign is dormant before this date
+  ends_on?: string        // 'YYYY-MM-DD' — campaign is dormant after this date
+}
 
 // A customer-centric automated outreach the owner defines; the daily cron
 // (/api/cron/campaigns) resolves the audience and sends through the existing
@@ -685,9 +710,28 @@ export interface CrmCampaign {
   channels: string[]
   template_key: string | null
   custom_body: string | null
-  audience: { recurring_only?: boolean }
-  schedule: { days?: number; lead_days?: number; day_of_month?: number; every_months?: number }
+  subject: string | null      // owner-written email subject; blank → the template's stock subject
+  audience: CampaignAudience
+  schedule: CampaignSchedule
   last_run_at: string | null
+}
+
+// A saved campaign configuration the owner can spin up again. Same shape as a
+// campaign minus the runtime fields (enabled/last_run_at) — deliberately a
+// separate table so a preset can never be mistaken for a live, sending campaign.
+export interface CrmCampaignPreset {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  name: string
+  kind: CampaignKind
+  channels: string[]
+  template_key: string | null
+  custom_body: string | null
+  subject: string | null
+  audience: CampaignAudience
+  schedule: CampaignSchedule
 }
 
 export const ACQUISITION_SOURCES = [

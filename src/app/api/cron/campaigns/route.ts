@@ -6,8 +6,9 @@ import { dispatchToCustomer } from '@/lib/comms/dispatch'
 import { logDispatch } from '@/lib/comms/log'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import {
-  CAMPAIGN_KINDS, campaignPeriodKey, dateFieldFiresToday, broadcastFiresToday, type CampaignKind,
+  CAMPAIGN_KINDS, campaignPeriodKey, dateFieldFiresToday, campaignFiresToday, type CampaignKind,
 } from '@/lib/crm/campaigns'
+import type { CampaignAudience, CampaignSchedule } from '@/types'
 
 export const dynamic = 'force-dynamic'
 
@@ -24,17 +25,28 @@ export const dynamic = 'force-dynamic'
 // North-American time so the UTC day lines up with the local day.
 
 const MAX_AUDIENCE = 2000   // safety bound; logged if exceeded (no silent cap)
+// Postgrest puts `.in()` lists in the URI, so a single 2000-id filter blows the
+// URL length limit and the query fails outright. Chunk any id list through this.
+const IN_CHUNK = 100
 
 interface CampaignRow {
   id: string; user_id: string; name: string; kind: CampaignKind; enabled: boolean
   channels: string[]; template_key: string | null; custom_body: string | null
-  audience: { recurring_only?: boolean } | null
-  schedule: { days?: number; lead_days?: number; day_of_month?: number; every_months?: number } | null
+  subject: string | null
+  audience: CampaignAudience | null
+  schedule: CampaignSchedule | null
 }
 interface Cand {
   id: string; name: string; phone: string | null; email: string | null
   sms_opt_in: boolean; email_opt_in: boolean; message_prefs?: MessagePrefs | null
   birthday: string | null; anniversary: string | null
+}
+
+// Split an id list into URI-safe chunks.
+function chunked<T>(xs: T[], size = IN_CHUNK): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < xs.length; i += size) out.push(xs.slice(i, i + size))
+  return out
 }
 
 export async function GET(req: NextRequest) {
@@ -72,8 +84,10 @@ export async function GET(req: NextRequest) {
   for (const camp of campaigns) {
     const schedule = camp.schedule || {}
     const leadDays = schedule.lead_days || 0
-    // Broadcasts only run on their scheduled day; the others evaluate candidates daily.
-    if (camp.kind === 'broadcast' && !broadcastFiresToday(schedule, today)) continue
+    // THE campaign-level gate (kind cadence + the optional starts_on/ends_on
+    // window), shared with the UI so "when it sends" can never drift from when
+    // it actually sends. Birthday/anniversary/win-back evaluate candidates daily.
+    if (!campaignFiresToday({ kind: camp.kind, schedule }, today)) continue
 
     // ── Candidate query ──
     let q = supabase.from('customers')
@@ -87,6 +101,16 @@ export async function GET(req: NextRequest) {
       // brand-new, never-contacted lead.
       q = q.not('last_contacted_at', 'is', null).lt('last_contacted_at', cutoff)
     }
+    // Audience narrowing that lives on `customers` — done in the query rather
+    // than in JS so it also shrinks what counts against MAX_AUDIENCE.
+    if (camp.audience?.not_reviewed) {
+      // Never chase a review from someone who already left one or said no.
+      q = q.is('reviewed_at', null).is('review_declined_at', null)
+    }
+    if (camp.audience?.happy_only) {
+      // Only ask for a referral from someone who already rated us well.
+      q = q.not('reviewed_at', 'is', null).gte('review_rating', 4)
+    }
     const { data: candRows } = await q
     let cands = (candRows as Cand[]) || []
     if (cands.length > MAX_AUDIENCE) { notes.push(`Campaign "${camp.name}" matched >${MAX_AUDIENCE} customers — only the first ${MAX_AUDIENCE} were processed this run.`); cands = cands.slice(0, MAX_AUDIENCE) }
@@ -95,10 +119,14 @@ export async function GET(req: NextRequest) {
     if (camp.kind === 'birthday') cands = cands.filter(c => dateFieldFiresToday(c.birthday, today, leadDays))
     else if (camp.kind === 'anniversary') cands = cands.filter(c => dateFieldFiresToday(c.anniversary, today, leadDays))
 
-    // Audience filter: recurring customers only.
+    // Audience filter: recurring customers only. Chunked — a single .in() with a
+    // full 2000-customer audience overflows the request URI and fails the query.
     if (camp.audience?.recurring_only && cands.length) {
-      const { data: recs } = await supabase.from('job_recurrences').select('customer_id').in('customer_id', cands.map(c => c.id))
-      const recurringIds = new Set(((recs as { customer_id: string }[]) || []).map(r => r.customer_id))
+      const recurringIds = new Set<string>()
+      for (const ids of chunked(cands.map(c => c.id))) {
+        const { data: recs } = await supabase.from('job_recurrences').select('customer_id').in('customer_id', ids)
+        for (const r of ((recs as { customer_id: string }[]) || [])) recurringIds.add(r.customer_id)
+      }
       cands = cands.filter(c => recurringIds.has(c.id))
     }
     if (!cands.length) { await supabase.from('crm_campaigns').update({ last_run_at: new Date().toISOString() }).eq('id', camp.id); continue }
@@ -131,10 +159,13 @@ export async function GET(req: NextRequest) {
       if (claimErr) continue   // another run owns this customer/period → skip (no send)
       processed++
       const portalLink = needsPortal ? (await ensurePortalToken(supabase, camp.user_id, c.id).then(t => t ? portalUrl(t) : undefined)) : undefined
+      // The owner's subject wins when they wrote one; renderMessage falls back to
+      // the template's stock subject otherwise (so existing campaigns are
+      // untouched, rather than every broadcast emailing "A quick hello").
       const rendered = renderMessage(templateKey, customOverride, {
         firstName: c.name, businessName: biz.name, reviewLink: biz.reviewUrl || undefined, portalLink,
         directPhone: biz.phone || undefined, logoUrl: biz.logoUrl || undefined, website: biz.website || undefined,
-      })
+      }, camp.subject)
       const res = await dispatchToCustomer(supabase, {
         userId: camp.user_id,
         customer: { id: c.id, phone: c.phone, email: c.email, sms_opt_in: c.sms_opt_in, email_opt_in: c.email_opt_in, message_prefs: c.message_prefs },
