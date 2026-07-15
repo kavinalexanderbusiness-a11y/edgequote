@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { Equipment, EquipmentService, ServiceKind, SERVICE_KINDS, serviceKindLabel, serviceStatus } from '@/lib/equipment'
+import { Equipment, EquipmentService, ServiceKind, SERVICE_KINDS, serviceKindLabel, serviceStatus, warrantyStatus } from '@/lib/equipment'
 import { formatCurrency, formatDate, localTodayISO, cn } from '@/lib/utils'
 import { toneSoft, toneText } from '@/lib/tone'
 import { toast } from '@/lib/toast'
@@ -13,7 +13,8 @@ import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
 import { Textarea } from '@/components/ui/Textarea'
 import { InlineEmpty } from '@/components/ui/EmptyState'
-import { Wrench, Trash2, Clock } from 'lucide-react'
+import { Banner } from '@/components/ui/Banner'
+import { Wrench, Trash2, Clock, ShieldCheck } from 'lucide-react'
 
 // Log a service and read the machine's history. Logging is the ONLY way
 // "last serviced" moves — a DB trigger recomputes it from these rows, so the
@@ -41,6 +42,10 @@ export function ServiceLogDialog({ open, userId, equipment, services, onClose, o
   const set = <K extends keyof typeof v>(k: K, val: (typeof v)[K]) => setV(s => ({ ...s, [k]: val }))
   const numOrNull = (s: string) => { const n = Number(s); return s.trim() && Number.isFinite(n) ? n : null }
   const svc = serviceStatus(equipment, today)
+  const wty = warrantyStatus(equipment, today)
+  // The money moment: a repair on a covered machine should be billed to the
+  // warranty, not to you. Shown the instant "Repair" is picked, before the cost.
+  const coveredRepair = (wty.state === 'covered' || wty.state === 'expiring') && (v.kind === 'repair' || v.kind === 'tune_up')
 
   async function logIt() {
     if (!v.service_date) { toast.error('Pick the date the work was done.'); return }
@@ -105,6 +110,14 @@ export function ServiceLogDialog({ open, userId, equipment, services, onClose, o
           <Select label="What was done" value={v.kind} onChange={e => set('kind', e.target.value as ServiceKind)}
             options={SERVICE_KINDS.map(k => ({ value: k.value, label: k.label }))} />
         </div>
+
+        {/* Don't pay for covered work. */}
+        {coveredRepair && (
+          <Banner tone="success" icon={ShieldCheck}>
+            <span className="font-semibold">This machine is still under warranty.</span>{' '}
+            {wty.reason}. Check with {equipment.warranty_provider || 'your dealer'} before you pay for this{v.kind === 'repair' ? ' repair' : ' work'}.
+          </Banner>
+        )}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Input label="Engine hours at service" type="number" min="0" step="0.1" inputMode="decimal"
             value={v.hours} onChange={e => set('hours', e.target.value)}

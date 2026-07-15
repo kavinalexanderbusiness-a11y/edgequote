@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import {
   Equipment, EquipmentService, EquipmentStatus, STATUS_LABELS, STATUS_TONE,
-  categoryMeta, serviceStatus, serviceKindLabel, costOfOwnership, fleetSummary,
+  categoryMeta, serviceStatus, serviceKindLabel, costOfOwnership, fleetSummary, warrantyStatus, bookValue,
 } from '@/lib/equipment'
 import { toneSoft, toneText } from '@/lib/tone'
 import { formatCurrency, formatDate, localTodayISO, cn } from '@/lib/utils'
@@ -22,7 +22,7 @@ import { SkeletonRows } from '@/components/ui/Skeleton'
 import { Banner } from '@/components/ui/Banner'
 import { EquipmentDialog } from '@/components/equipment/EquipmentDialog'
 import { ServiceLogDialog } from '@/components/equipment/ServiceLogDialog'
-import { Wrench, Plus, AlertTriangle, CircleDollarSign, Gauge, Pencil, Trash2, History, Clock } from 'lucide-react'
+import { Wrench, Plus, AlertTriangle, CircleDollarSign, Gauge, Pencil, Trash2, History, Clock, ShieldCheck } from 'lucide-react'
 
 // ── Equipment ────────────────────────────────────────────────────────────────
 // The fleet: what you own, what it's costing, and what needs servicing before it
@@ -147,9 +147,16 @@ export default function EquipmentPage() {
               sub={summary.needingService ? 'Due or due soon' : 'Nothing due'}
               onClick={() => setFilter(summary.needingService ? 'needs_service' : 'all')} />
             <StatTile icon={CircleDollarSign} label="Fleet value" value={formatCurrency(summary.fleetValue)}
-              sub="Purchase price, excl. retired" />
-            <StatTile icon={History} label="Maintenance YTD" value={formatCurrency(summary.maintenanceYtd)}
-              sub="Logged service costs this year" />
+              sub={summary.fleetPurchase > summary.fleetValue
+                ? `Book value · ${formatCurrency(summary.fleetPurchase)} paid`
+                : 'Purchase price, excl. retired'} />
+            {summary.warrantyExpiring > 0 ? (
+              <StatTile icon={ShieldCheck} label="Warranty ending" value={String(summary.warrantyExpiring)}
+                tone="warn" tonedSurface sub="Within 30 days — book covered work" />
+            ) : (
+              <StatTile icon={History} label="Maintenance YTD" value={formatCurrency(summary.maintenanceYtd)}
+                sub="Logged service costs this year" />
+            )}
           </div>
 
           <div className="flex items-center gap-1.5 flex-wrap">
@@ -218,6 +225,8 @@ function EquipmentRow({ eq, services, today, open, onToggle, onEdit, onLog, onRe
 }) {
   const meta = categoryMeta(eq.category)
   const svc = serviceStatus(eq, today)
+  const wty = warrantyStatus(eq, today)
+  const book = bookValue(eq, today)
   const cost = costOfOwnership(eq, services)
   const retired = eq.status === 'retired'
 
@@ -236,6 +245,12 @@ function EquipmentRow({ eq, services, today, open, onToggle, onEdit, onLog, onRe
                 <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 border', toneSoft[STATUS_TONE[eq.status]])}>
                   {STATUS_LABELS[eq.status]}
                 </span>
+                {!retired && wty.state !== 'none' && wty.state !== 'expired' && (
+                  <span title={wty.reason}
+                    className={cn('text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 border inline-flex items-center gap-1', toneSoft[wty.tone])}>
+                    <ShieldCheck className="w-3 h-3" /> {wty.state === 'covered' ? 'Under warranty' : 'Warranty ending'}
+                  </span>
+                )}
               </div>
               <p className="text-xs text-ink-muted mt-0.5 truncate">
                 {[meta.label, [eq.make, eq.model].filter(Boolean).join(' '), eq.hours > 0 ? `${eq.hours} h` : null].filter(Boolean).join(' · ')}
@@ -261,14 +276,23 @@ function EquipmentRow({ eq, services, today, open, onToggle, onEdit, onLog, onRe
         {open && (
           <div className="space-y-3 pt-1">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <Detail label="Purchase" value={eq.purchase_price ? formatCurrency(eq.purchase_price) : '—'}
-                sub={eq.purchase_date ? formatDate(eq.purchase_date) : undefined} />
+              <Detail label="Worth today" value={eq.purchase_price ? formatCurrency(book.value) : '—'}
+                sub={book.depreciating
+                  ? `${formatCurrency(eq.purchase_price || 0)} paid · −${formatCurrency(book.annual || 0)}/yr`
+                  : eq.purchase_date ? `Paid ${formatDate(eq.purchase_date)}` : 'Add a useful life to depreciate'} />
               <Detail label="Maintenance" value={formatCurrency(cost.maintenance)} sub={`${services.length} service${services.length !== 1 ? 's' : ''}`} />
               <Detail label="Total cost" value={formatCurrency(cost.total)} sub="Purchase + service" />
               <Detail label="Cost / hour" value={cost.perHour != null ? formatCurrency(cost.perHour) : '—'}
                 sub={cost.perHour == null ? 'Add engine hours' : `over ${eq.hours} h`} />
             </div>
 
+            {/* Warranty in words — including when it has lapsed, so a repair
+                bill is never questioned twice. */}
+            {wty.state !== 'none' && (
+              <p className={cn('text-[11px] flex items-center gap-1.5', toneText[wty.tone])}>
+                <ShieldCheck className="w-3 h-3 shrink-0" /> {wty.reason}
+              </p>
+            )}
             {eq.serial_number && <p className="text-[11px] text-ink-faint">Serial {eq.serial_number}</p>}
             {eq.notes && <p className="text-xs text-ink-muted whitespace-pre-wrap">{eq.notes}</p>}
 

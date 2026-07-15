@@ -35,6 +35,10 @@ export function EquipmentDialog({ open, userId, equipment, onClose, onSaved }: {
     hours: equipment?.hours != null ? String(equipment.hours) : '0',
     service_interval_hours: equipment?.service_interval_hours != null ? String(equipment.service_interval_hours) : '',
     service_interval_days: equipment?.service_interval_days != null ? String(equipment.service_interval_days) : '',
+    warranty_expires: equipment?.warranty_expires ?? '',
+    warranty_provider: equipment?.warranty_provider ?? '',
+    useful_life_years: equipment?.useful_life_years != null ? String(equipment.useful_life_years) : '',
+    salvage_value: equipment?.salvage_value != null ? String(equipment.salvage_value) : '',
     notes: equipment?.notes ?? '',
   })
   const set = <K extends keyof typeof v>(k: K, val: (typeof v)[K]) => setV(s => ({ ...s, [k]: val }))
@@ -55,6 +59,10 @@ export function EquipmentDialog({ open, userId, equipment, onClose, onSaved }: {
       hours: numOrNull(v.hours) ?? 0,
       service_interval_hours: numOrNull(v.service_interval_hours),
       service_interval_days: numOrNull(v.service_interval_days),
+      warranty_expires: v.warranty_expires || null,
+      warranty_provider: v.warranty_provider.trim() || null,
+      useful_life_years: numOrNull(v.useful_life_years),
+      salvage_value: numOrNull(v.salvage_value),
       notes: v.notes.trim() || null,
     }
     const q = isEdit
@@ -114,8 +122,36 @@ export function EquipmentDialog({ open, userId, equipment, onClose, onSaved }: {
           </div>
         </div>
 
+        <div className="rounded-xl border border-border bg-surface/40 p-4 space-y-3">
+          <div>
+            <p className="text-sm font-semibold text-ink">Warranty</p>
+            <p className="text-xs text-ink-muted mt-0.5">So a covered repair never gets paid for by mistake — we'll flag it before you log the cost.</p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Input label="Cover ends" type="date" value={v.warranty_expires}
+              onChange={e => set('warranty_expires', e.target.value)} hint="Leave blank if there's no warranty." />
+            <Input label="Honoured by" value={v.warranty_provider}
+              onChange={e => set('warranty_provider', e.target.value)} placeholder="Toro dealer — Calgary SE" />
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-border bg-surface/40 p-4 space-y-3">
+          <div>
+            <p className="text-sm font-semibold text-ink">Depreciation</p>
+            <p className="text-xs text-ink-muted mt-0.5">Straight-line book value for your accountant and for resale. Leave the life blank and we just report what you paid.</p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Input label="Useful life (years)" type="number" min="0" step="1" inputMode="numeric"
+              value={v.useful_life_years} onChange={e => set('useful_life_years', e.target.value)}
+              placeholder="7" hint="Typical: 5–7 years for a commercial mower." />
+            <Input label="Value at end of life" type="number" min="0" step="0.01" inputMode="decimal"
+              value={v.salvage_value} onChange={e => set('salvage_value', e.target.value)}
+              placeholder="0.00" hint="What you'd still get for it — book value never drops below this." />
+          </div>
+        </div>
+
         <Textarea label="Notes" value={v.notes} onChange={e => set('notes', e.target.value)}
-          placeholder="Blade size, oil type, dealer, warranty expiry…" />
+          placeholder="Blade size, oil type, dealer, what to watch…" />
       </div>
     </Modal>
   )
