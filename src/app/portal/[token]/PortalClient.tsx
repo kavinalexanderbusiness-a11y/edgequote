@@ -180,12 +180,26 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     // before removing a card, so a stray tap can't accept a job by accident.
     const q = data?.quotes.find(x => x.id === qid)
     const svc = (q?.service_type || '').trim()
+    // Never ask someone to approve an amount without showing it. The dialog named the
+    // service but not the price, so the homeowner's last step before committing money
+    // was the only one that didn't mention money — and nothing told them that approving
+    // isn't paying, which is the thing they're most afraid of when they tap.
+    const amount = Number(q?.total) || 0
+    const plan = q ? ([
+      Number(q.weekly_price) > 0 ? `${formatCurrency(Number(q.weekly_price))} per weekly visit` : null,
+      Number(q.biweekly_price) > 0 ? `${formatCurrency(Number(q.biweekly_price))} per bi-weekly visit` : null,
+      Number(q.monthly_price) > 0 ? `${formatCurrency(Number(q.monthly_price))} per month` : null,
+    ].filter(Boolean)[0] as string | undefined) : undefined
+    const gst = Number(data?.business?.gst_percent) || 0
+    const what = svc ? `${svc} for ${formatCurrency(amount)}` : formatCurrency(amount)
     const confirmed = await confirmDialog({
-      title: 'Approve this quote?',
-      message: svc
-        ? `You're approving ${svc}. We'll follow up to schedule your first visit.`
-        : `We'll follow up to schedule your first visit once you approve.`,
-      confirmLabel: 'Approve quote',
+      title: `Approve ${formatCurrency(amount)}?`,
+      message: [
+        `You're approving ${what}${gst > 0 ? `, plus GST (${gst}%) added on your invoice` : ''}.`,
+        plan ? `Ongoing visits after that are ${plan}.` : null,
+        `Approving doesn't charge you — we'll confirm a date with you first, and you'll only get an invoice after the work is done.`,
+      ].filter(Boolean).join(' '),
+      confirmLabel: `Approve ${formatCurrency(amount)}`,
     })
     if (!confirmed) return
     setAccepting(qid)
@@ -359,7 +373,14 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
           )}
           {justAccepted && (
             <div className="mb-3 rounded-card border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-sm font-medium px-4 py-3 flex items-start justify-between gap-3">
-              <span className="flex items-start gap-2"><CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" /> Quote approved — thank you! We’ll be in touch to schedule your service.</span>
+              {/* "We'll be in touch" is the line that leaves people wondering for a week.
+                  Say who will reach out and — more useful — where the answer will appear,
+                  so they can check instead of wait. */}
+              <span className="flex items-start gap-2"><CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>Quote approved — thank you!{' '}
+                  <span className="font-normal">{biz?.company_name || 'We'}&rsquo;ll contact you to agree a date. Once it&rsquo;s booked, your visit appears on this page — nothing else to do for now.</span>
+                </span>
+              </span>
               <button onClick={() => setJustAccepted(false)} aria-label="Dismiss" className="shrink-0 opacity-70 hover:opacity-100"><X className="w-4 h-4" /></button>
             </div>
           )}
@@ -493,7 +514,13 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
             <p className="text-sm font-semibold text-ink flex items-center gap-1.5">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" /> Your quote has been approved.
             </p>
-            <p className="text-sm text-ink-muted mt-1">We&rsquo;re scheduling your service and will contact you shortly.</p>
+            {/* This is the screen someone stares at for days after saying yes. "Will contact
+                you shortly" gives them nothing to do but wonder — tell them where the answer
+                will land and that reaching out is welcome. */}
+            <p className="text-sm text-ink-muted mt-1">
+              We&rsquo;re arranging your first visit. The date will appear here as soon as it&rsquo;s booked
+              {biz && (biz.phone || biz.email_primary) ? ' — and you can call or email us any time using the buttons below.' : '.'}
+            </p>
           </div>
         ) : (
           <div>
@@ -512,15 +539,25 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
         {derived.outstanding > 0 ? (
           <button type="button" onClick={payOutstanding} disabled={payingId !== null}
             className="text-left rounded-card border border-amber-500/30 bg-amber-500/[0.06] p-3.5 transition-colors hover:border-amber-500/50 active:scale-[0.99] disabled:opacity-60 card-lift focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint flex items-center gap-1"><Receipt className="w-3 h-3" /> Outstanding balance</p>
+            {/* "Outstanding" is collections vocabulary — it lands like an accusation on the
+                one tile someone reads when they're already tense about money. */}
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint flex items-center gap-1"><Receipt className="w-3 h-3" /> Amount due</p>
             <p className="text-lg font-bold mt-1 text-amber-400 tabular-nums">{formatCurrency(derived.outstanding)}</p>
             <span className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-accent-text">
               {payingId ? <Loader2 className="w-3 h-3 animate-spin" /> : <CreditCard className="w-3 h-3" />}
-              {paymentsEnabled ? (owing.length === 1 ? 'Pay now' : 'View & pay') : 'View invoices'}
+              {paymentsEnabled ? (owing.length === 1 ? `Pay ${owing[0].invoice_number}` : 'View & pay') : 'View invoices'}
             </span>
+            {/* This tile jumps straight to Stripe when exactly one invoice is owing, so it
+                needs the same reassurance the Documents row already carries — otherwise
+                tapping a number to "see what it's made of" lands you on a payment page. */}
+            {paymentsEnabled && owing.length === 1 && (
+              <span className="mt-1 flex items-start gap-1 text-[10px] text-ink-faint">
+                <ShieldCheck className="w-2.5 h-2.5 text-emerald-400 shrink-0 mt-0.5" /> Secure checkout by Stripe — you&rsquo;ll confirm on the next screen.
+              </span>
+            )}
           </button>
         ) : (
-          <StatCard label="Outstanding balance" value={formatCurrency(0)} tone="text-emerald-400" icon={Receipt} />
+          <StatCard label="Amount due" value={formatCurrency(0)} tone="text-emerald-400" icon={Receipt} />
         )}
         <StatCard label="Last completed" value={derived.lastCompleted ? formatDate(derived.lastCompleted.scheduled_date) : '—'} icon={CheckCircle2} />
       </div>
@@ -539,6 +576,15 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
               </div>
             ))}
           </div>
+          {/* An ongoing arrangement with no visible way out is what makes people feel
+              trapped — and this is the exact card someone looks at when they're wondering
+              whether signing up was a mistake. The Request tab already exists; point at it
+              rather than leaving them to hunt. */}
+          <p className="text-xs text-ink-muted mt-2.5 pt-2.5 border-t border-border/60">
+            Need to pause, reschedule, or cancel?{' '}
+            <button type="button" onClick={onRequest} className="text-accent-text font-medium hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">Send us a message</button>
+            {biz?.phone ? <> or call <a href={`tel:${biz.phone}`} className="text-accent-text font-medium hover:underline">{biz.phone}</a>.</> : '.'}
+          </p>
         </div>
       )}
 
@@ -669,7 +715,11 @@ function Thumb({ p, photoUrl, wide }: { p: PortalPhoto; photoUrl: (s: string) =>
 type DocKind = 'quote' | 'invoice'
 // rawId/balance power the row's actions — Documents is THE records hub, so paying
 // an invoice or accepting a quote happens right on the row (no separate tabs).
-interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; amount: number; balance: number; filename: string; getBlob: () => Promise<Blob>; lines?: { label: string; amount: number }[] }
+// `amountNote` qualifies the headline figure. It exists because this ONE list renders two
+// different kinds of number in identical type: invoice amounts include GST, quote totals
+// don't. The PDF says "Plus GST — added on your invoice"; the row a customer actually
+// approves from said nothing, so the first bill looked like a bait-and-switch.
+interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; amount: number; amountNote?: string; balance: number; filename: string; getBlob: () => Promise<Blob>; lines?: { label: string; amount: number }[] }
 const KIND_META: Record<DocKind, { label: string; icon: typeof FileText; tone: string }> = {
   quote: { label: 'Quote', icon: FileText, tone: 'text-accent-text border-accent/25 bg-accent/10' },
   invoice: { label: 'Invoice', icon: Receipt, tone: 'text-sky-400 border-sky-500/25 bg-sky-500/10' },
@@ -710,13 +760,18 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, busines
       const planLines = [
         Number(qq.weekly_price) > 0 ? { label: 'Weekly plan (per visit)', amount: Number(qq.weekly_price) } : null,
         Number(qq.biweekly_price) > 0 ? { label: 'Bi-weekly plan (per visit)', amount: Number(qq.biweekly_price) } : null,
-        Number(qq.monthly_price) > 0 ? { label: 'Monthly plan', amount: Number(qq.monthly_price) } : null,
+        // "(per visit)" is NOT optional here. Its two siblings carry it, so dropping it read
+        // as deliberate — "Monthly plan · $260" says $260/month, all in. The PDF calls the
+        // same number "Monthly visit · per visit". At 4 visits/month that's a 4x misread the
+        // customer only discovers on their first bill.
+        Number(qq.monthly_price) > 0 ? { label: 'Monthly plan (per visit)', amount: Number(qq.monthly_price) } : null,
       ].filter((l): l is { label: string; amount: number } => l !== null)
       const allLines = [...svcLines, ...planLines]
       const lines = allLines.length > 0 ? allLines : undefined
       return {
         id: 'q' + qq.id, rawId: qq.id, kind: 'quote' as const, number: qq.quote_number, title: qq.service_type || 'Quote',
-        date: qq.issued_date || qq.created_at, status: qq.status, amount: Number(qq.total) || 0, balance: 0,
+        date: qq.issued_date || qq.created_at, status: qq.status, amount: Number(qq.total) || 0,
+        amountNote: gstPct > 0 ? `+ GST (${gstPct}%) — added on your invoice` : undefined, balance: 0,
         filename: `${qq.quote_number}.pdf`, getBlob: () => renderPortalQuoteBlob(qq, customerName, business), lines,
       }
     })
@@ -810,6 +865,7 @@ function DocRow({ d, paymentsEnabled, pay, payingId, accept, accepting }: {
         </div>
         <div className="text-right shrink-0">
           <p className="text-sm font-bold text-ink tabular-nums">{formatCurrency(d.amount)}</p>
+          {d.amountNote && <p className="text-[11px] text-ink-faint mt-0.5">{d.amountNote}</p>}
           {d.kind === 'quote' ? <QuoteStatusPill status={d.status} /> : <InvoiceStatusPill status={d.status} />}
         </div>
       </div>
@@ -990,7 +1046,14 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
                 </Button>
               )}
             </div>
-            <p className="text-[11px] text-ink-faint mt-2">E-transfers are usually received within a few hours — your balance updates here once we accept it.</p>
+            {/* Sending money to a copy-pasted address is the loneliest moment in this
+                product. The old line described OUR balance updating; it never told the
+                customer they'd hear anything, or what to do if they didn't. Give them the
+                evidence trail and a deadline at which it's right to chase us. */}
+            <p className="text-[11px] text-ink-faint mt-2">
+              E-transfers usually arrive within a few hours. Once we accept it, your payment appears in your history below with a receipt you can download.
+              If you don&rsquo;t see it within one business day, give us a call and we&rsquo;ll track it down.
+            </p>
           </div>
         </div>
         )}
@@ -998,7 +1061,10 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
           <span aria-hidden><Banknote className="w-4 h-4" /></span>
           <div className="min-w-0">
             <p className="text-sm font-semibold text-ink">Cash</p>
-            <p className="text-xs text-ink-muted">Pay in person at your next visit — we&rsquo;ll record it and send your receipt.</p>
+            {/* "send your receipt" promised an automatic send; for cash/e-transfer the
+                receipt is a button the owner may never press. Point at what IS guaranteed:
+                the payment history, which is written the moment the payment is recorded. */}
+            <p className="text-xs text-ink-muted">Pay your crew in person at your next visit. We&rsquo;ll record it, and your payment and receipt will appear in your history below.</p>
           </div>
         </div>
       </div>
@@ -1095,7 +1161,19 @@ function AutoPayCard({ token, card, autopayEnabled, onChanged }: {
   return (
     <div className="rounded-card border border-border bg-bg-secondary p-4">
       <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><CreditCard className="w-4 h-4 text-accent-text" /> Payment method &amp; AutoPay</p>
-      <p className="text-xs text-ink-muted mt-0.5 mb-3">Save a card to pay recurring invoices automatically. Your card is stored securely by Stripe — never by us.</p>
+      {/* Saving a card is the largest ask in this portal, and it used to be answered with
+          one sentence about Stripe — which addresses a fear the customer doesn't have.
+          What they actually want to know is WHEN, HOW MUCH, and HOW TO STOP. All three are
+          true of the engine today (autopay.ts only charges invoices tied to a recurring
+          visit, after completion, for that visit's amount) — the portal just never said so.
+          Note this reassurance must render BEFORE the Add-card button, not only after. */}
+      <p className="text-xs text-ink-muted mt-0.5 mb-3">Your card is stored securely by Stripe — never by us.</p>
+      <ul className="text-xs text-ink-muted mb-3 space-y-1">
+        <li className="flex items-start gap-1.5"><Check className="w-3 h-3 text-emerald-400 shrink-0 mt-0.5" /> We charge only the invoice from each recurring visit — after that visit is done, for that visit&rsquo;s amount.</li>
+        <li className="flex items-start gap-1.5"><Check className="w-3 h-3 text-emerald-400 shrink-0 mt-0.5" /> One-off jobs and extra work are never charged automatically — we&rsquo;ll always ask you first.</li>
+        <li className="flex items-start gap-1.5"><Check className="w-3 h-3 text-emerald-400 shrink-0 mt-0.5" /> Every charge gets a receipt, and shows up in your payment history here.</li>
+        <li className="flex items-start gap-1.5"><Check className="w-3 h-3 text-emerald-400 shrink-0 mt-0.5" /> Turn AutoPay off or remove your card any time — it takes effect right away.</li>
+      </ul>
       {card ? (
         <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-bg-tertiary px-3 py-2.5">
           <span className="text-sm text-ink flex items-center gap-2 min-w-0">
@@ -1170,6 +1248,12 @@ function RequestTab({ presets, reqMsg, setReqMsg, request, reqBusy, reqSent, biz
 // ── Review ask (only after a completed visit, hidden once they've reviewed) ──
 function ReviewCard({ reviewUrl, businessName, reviewed, onReviewed }: { reviewUrl: string; businessName: string | null; reviewed: boolean; onReviewed: () => void }) {
   const href = reviewUrl.startsWith('http') ? reviewUrl : `https://${reviewUrl}`
+  // Both buttons used to mean "yes", so the only way to decline was to lie ("I've left my
+  // review") or to ignore a card that never went away. A guest deserves a door. This one
+  // is session-local — persisting a decline needs a write we don't have here — but it at
+  // least means "no" is expressible rather than a dead end.
+  const [dismissed, setDismissed] = useState(false)
+  if (dismissed) return null
   if (reviewed) {
     return (
       <div className="rounded-card border border-emerald-500/30 bg-emerald-500/[0.06] p-4 mt-3">
@@ -1181,14 +1265,19 @@ function ReviewCard({ reviewUrl, businessName, reviewed, onReviewed }: { reviewU
   return (
     <div className="rounded-card border border-amber-400/30 bg-amber-400/[0.06] p-4 mt-3">
       <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><Star className="w-4 h-4 text-amber-400" /> Enjoying the service?</p>
-      <p className="text-xs text-ink-muted mt-0.5 mb-3">A quick review helps {businessName || 'your service provider'} a lot — thank you!</p>
+      <p className="text-xs text-ink-muted mt-0.5 mb-3">
+        If we did right by you, a quick review means a lot to a small business like {businessName || 'ours'}. Totally optional — it won&rsquo;t affect your service either way.
+      </p>
       <div className="flex flex-wrap gap-2">
         <a href={href} target="_blank" rel="noopener noreferrer"
           className="flex-1 min-w-[140px] inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-accent text-black hover:bg-accent-hover active:scale-[0.98] shadow-sm px-4 py-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
           <Star className="w-4 h-4" /> Leave a review
         </a>
         <Button variant="secondary" className="flex-1 min-w-[140px]" onClick={onReviewed}>
-          <Check className="w-4 h-4" /> I’ve left my review
+          <Check className="w-4 h-4" /> Already did — thanks!
+        </Button>
+        <Button variant="ghost" className="flex-1 min-w-[100px]" onClick={() => setDismissed(true)}>
+          No thanks
         </Button>
       </div>
     </div>
@@ -1324,7 +1413,9 @@ function InvoiceStatusPill({ status }: { status: string }) {
     sent:     { label: 'Due',            tone: 'text-amber-400 border-amber-500/30 bg-amber-500/10' },
     unpaid:   { label: 'Due',            tone: 'text-amber-400 border-amber-500/30 bg-amber-500/10' },
     cancelled:{ label: 'Cancelled',      tone: 'text-ink-muted border-border bg-bg-tertiary' },
-    draft:    { label: 'Draft',          tone: 'text-ink-muted border-border bg-bg-tertiary' },
+    // Same rule as sent/unpaid above: "Draft" is an owner-side workflow word. To the payer
+    // it reads as a bill they can't pay and can't act on — a mistake, or a threat.
+    draft:    { label: 'Not yet issued',  tone: 'text-ink-muted border-border bg-bg-tertiary' },
   }
   const m = map[status] || { label: 'Due', tone: 'text-amber-400 border-amber-500/30 bg-amber-500/10' }
   return <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', m.tone)}>{m.label}</span>

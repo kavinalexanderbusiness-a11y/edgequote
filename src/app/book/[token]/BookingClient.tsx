@@ -222,7 +222,10 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
     })
     setSubmitting(false)
     const res = data as { quote_number?: string; quote_id?: string } | null
-    if (rpcErr || !res?.quote_number) { setError(`Something went wrong — please try again${biz?.phone ? `, or call us at ${biz.phone}` : ' or contact us directly'}.`); return }
+    // "Something went wrong" at this exact moment reads as "did it save? will I be
+    // double-booked if I retry?" — this returns before setStep('done'), so nothing was
+    // submitted, and saying so is what makes retrying feel safe.
+    if (rpcErr || !res?.quote_number) { setError(`That didn’t go through — nothing was submitted, so you won’t be double-booked. Please try once more${biz?.phone ? `, or call us at ${biz.phone} and we’ll take your details over the phone` : ''}.`); return }
     setQuoteNumber(res.quote_number)
     // Sync messaging consent into the customer record (best-effort). Channel
     // opt-in = they gave us that contact method + at least one category on.
@@ -453,7 +456,10 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
                     {label}
                   </label>
                 ))}
-                <p className="text-[10px] text-ink-faint">Reply STOP to any text to opt out. Change these anytime in your customer portal.</p>
+                {/* "your customer portal" — I've never logged into anything. Did I just
+                    create an account? Describe it as the thing they'll receive, not a
+                    place they're assumed to already know. */}
+                <p className="text-[10px] text-ink-faint">Reply STOP to any text to opt out. Once you&rsquo;re booked we&rsquo;ll send you a private link where you can change these anytime.</p>
               </div>
             </div>
             {plan && (
@@ -498,7 +504,11 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
               {sqft > 0 && <SummaryRow label="Lawn size" value={`~${sqft.toLocaleString()} sq ft`} />}
               {quoteNumber && <SummaryRow label="Confirmation #" value={quoteNumber} />}
             </div>
-            {quoteNumber && <p className="text-[11px] text-ink-faint text-center -mt-2">Keep your confirmation number for your records.</p>}
+            {/* Nothing is emailed to the customer at this stage (the only send in the
+                booking path goes to the OWNER's inbox — api/booking/notify), so "keep this
+                for your records" quietly put the burden on them without saying why. Tell
+                them what it's actually for; the request is safe either way. */}
+            {quoteNumber && <p className="text-[11px] text-ink-faint text-center -mt-2">That&rsquo;s your reference if you call or email us — your request is saved either way.</p>}
 
             {/* What happens next — the #1 anxiety point, answered with a concrete SLA. */}
             <div className="rounded-card border border-accent/25 bg-accent/[0.06] px-4 py-3.5">
@@ -547,13 +557,15 @@ function Section({ title, sub, children }: { title: string; sub?: string; childr
   )
 }
 function ConfidenceBadge({ confidence }: { confidence?: string }) {
-  // Customer-facing: never tell a prospect their estimate is "low confidence" at
-  // the conversion moment. High reads as verified; anything else reads as an
-  // editable estimate (which it is — the field right beside it).
+  // Customer-facing: never tell a prospect their estimate is "low confidence" at the
+  // conversion moment — the tiering below keeps that. But "Verified" claimed a human
+  // checked this, and none did: it's a satellite measurement. If the price moves after
+  // the first visit, a customer who was shown "Verified" reads the whole quote as bait.
+  // Naming the source keeps the confidence signal ("Measured" > "Estimated") and is true.
   if (confidence === 'high') {
-    return <span className="text-[10px] font-semibold uppercase tracking-[0.14em] rounded-full px-2 py-0.5 border text-emerald-400 border-emerald-500/30 bg-emerald-500/10">Verified estimate</span>
+    return <span className="text-[10px] font-semibold uppercase tracking-[0.14em] rounded-full px-2 py-0.5 border text-emerald-400 border-emerald-500/30 bg-emerald-500/10">Measured from satellite</span>
   }
-  return <span className="text-[10px] font-semibold uppercase tracking-[0.14em] rounded-full px-2 py-0.5 border text-ink-muted border-border bg-bg-tertiary">Estimated</span>
+  return <span className="text-[10px] font-semibold uppercase tracking-[0.14em] rounded-full px-2 py-0.5 border text-ink-muted border-border bg-bg-tertiary">Estimated from satellite</span>
 }
 function Field({ label, value, onChange, placeholder, type, autoFocus, autoComplete, inputMode }: {
   label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string; autoFocus?: boolean
