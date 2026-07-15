@@ -7,7 +7,8 @@ import { displayInvoiceStatus, invoiceBalance } from '@/lib/payments/ledger'
 import { resolveAutomations } from '@/lib/comms/automations'
 import { displayQuoteStatus, isQuoteExpired, isExpiringSoon, daysUntilExpiry, defaultValidUntil } from '@/lib/quoteStatus'
 import { prefAllows, msgCategory } from '@/lib/comms/templates'
-import { dispatchToCustomer } from '@/lib/comms/dispatch'
+import { dispatchToCustomer, sendResultsFromAttempts, type DispatchAttempt } from '@/lib/comms/dispatch'
+import { SKIP_REASON } from '@/lib/comms/skipReasons'
 import type { Quote } from '@/types'
 import type { FeeSettings } from '@/lib/invoiceTotals'
 
@@ -249,6 +250,31 @@ async function run() {
   const catOut = await dispatchToCustomer(sbStub, { ...base, customer: { id: 'c', phone: '+15550100', email: 'a@b.c', sms_opt_in: true, email_opt_in: true, message_prefs: { invoices: false } as never } })
   check('dispatch', 'granular opt-out short-circuits BOTH channels', [catOut.attempts.map(a => a.status), catOut.attempts.map(a => a.detail)], [['skipped', 'skipped'], ['unsubscribed', 'unsubscribed']])
   check('dispatch', 'nothing sent → nothing threaded', catOut.messageId, null)
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  H('18. LEGACY RESULTS MAP — /api/comms/send speaks SendResult, dispatch speaks attempts')
+  // The route shares the dispatch gate but must keep answering in its OWN
+  // vocabulary — nine callers read `results`. These pin the translation, including
+  // the absent keys: a skip has never carried `error`/`id`, and JSON.stringify
+  // would leak `"error":null` to every caller if it did.
+  const asAttempt = (o: Partial<DispatchAttempt>): DispatchAttempt =>
+    ({ channel: 'sms', status: 'skipped', detail: null, sent: false, provider: null, providerId: null, ...o })
+
+  check('results-map', 'opted-out sms → no-optin', sendResultsFromAttempts([asAttempt({ detail: SKIP_REASON.NO_OPT_IN })]), { sms: { sent: false, reason: 'no-optin' } })
+  check('results-map', 'missing phone → no-phone', sendResultsFromAttempts([asAttempt({ detail: SKIP_REASON.NO_PHONE })]), { sms: { sent: false, reason: 'no-phone' } })
+  check('results-map', 'opted-out email → no-optin', sendResultsFromAttempts([asAttempt({ channel: 'email', detail: SKIP_REASON.NO_OPT_IN })]), { email: { sent: false, reason: 'no-optin' } })
+  check('results-map', 'missing email → no-email', sendResultsFromAttempts([asAttempt({ channel: 'email', detail: SKIP_REASON.NO_EMAIL })]), { email: { sent: false, reason: 'no-email' } })
+  // A declined CATEGORY has always read as 'no-optin' to callers, not 'unsubscribed'.
+  check('results-map', 'unsubscribed category → no-optin (not a new word)', sendResultsFromAttempts([asAttempt({ detail: SKIP_REASON.UNSUBSCRIBED })]), { sms: { sent: false, reason: 'no-optin' } })
+
+  // A real send returns the provider's raw SendResult: reason 'sent' + its id, no `error` key.
+  check('results-map', 'sent → raw SendResult w/ provider id', sendResultsFromAttempts([asAttempt({ status: 'sent', sent: true, provider: 'twilio', providerId: 'SM123' })]), { sms: { sent: true, reason: 'sent', id: 'SM123' } })
+  // A provider error keeps reason:'error' and its detail, and gains no `id` key.
+  check('results-map', 'provider error → reason=error + error detail', sendResultsFromAttempts([asAttempt({ channel: 'email', status: 'error', detail: 'Resend 422: bad address' })]), { email: { sent: false, reason: 'error', error: 'Resend 422: bad address' } })
+  // Credentials absent — the send layer's no-op result must survive the round trip.
+  check('results-map', 'disabled provider → reason=disabled', sendResultsFromAttempts([asAttempt({ status: 'disabled' })]), { sms: { sent: false, reason: 'disabled' } })
+  // Multi-channel: sms-before-email order is preserved into the map.
+  check('results-map', 'both channels keep sms-first key order', Object.keys(sendResultsFromAttempts([asAttempt({ status: 'sent', sent: true, providerId: 'SM1' }), asAttempt({ channel: 'email', detail: SKIP_REASON.NO_EMAIL })])), ['sms', 'email'])
 
   console.log(`\n${'═'.repeat(60)}\n  PASS ${pass}   FAIL ${fail}`)
   if (fails.length) { console.log('\n  FAILURES:'); fails.forEach(f => console.log('   • ' + f)) }

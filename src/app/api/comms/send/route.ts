@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { renderMessage, renderBody, MsgType, MSG_LABELS, prefAllows, type MessagePrefs } from '@/lib/comms/templates'
-import { sendSms, sendEmail, commsEnabled } from '@/lib/comms/send'
-import { getOrCreateConversation } from '@/lib/comms/conversation'
-import { SKIP_REASON } from '@/lib/comms/skipReasons'
+import { renderMessage, renderBody, MsgType, MSG_LABELS, type MessagePrefs } from '@/lib/comms/templates'
+import { commsEnabled } from '@/lib/comms/send'
+import { dispatchToCustomer, sendResultsFromAttempts } from '@/lib/comms/dispatch'
 import { SENT_STATES } from '@/lib/comms/delivery'
-import { logSend } from '@/lib/comms/log'
+import { logSend, logDispatch } from '@/lib/comms/log'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { claimSend, finalizeSend } from '@/lib/comms/idempotency'
 
@@ -102,64 +101,52 @@ export async function POST(req: NextRequest) {
   if (body.previewOnly) return NextResponse.json({ enabled: commsEnabled(), preview: outText })
 
   const enabled = commsEnabled()
-  const results: Record<string, unknown> = {}
-  // Collect every channel attempt; log + thread once at the end so a sent message
-  // can be linked to its log rows.
-  // `provider`/`providerId` are the provider's handle on the message (Twilio
-  // MessageSid / Resend id) — persisted so the delivery webhooks can later turn
-  // 'sent' (provider accepted) into 'delivered'/'bounced'.
-  const attempts: { channel: string; status: string; detail?: string; sent: boolean; provider?: string | null; providerId?: string | null }[] = []
 
-  // Granular consent — the customer declined this CATEGORY (e.g. marketing) even
-  // though a channel is opted in. Same rule the dispatch engine + crons apply.
-  if (!prefAllows((cust as { message_prefs?: MessagePrefs | null }).message_prefs, template)) {
-    for (const ch of channels) { results[ch] = { sent: false, reason: 'no-optin' }; attempts.push({ channel: ch, status: 'skipped', detail: SKIP_REASON.UNSUBSCRIBED, sent: false }) }
-  } else {
-  if (channels.includes('sms')) {
-    if (!c.sms_opt_in) { results.sms = { sent: false, reason: 'no-optin' }; attempts.push({ channel: 'sms', status: 'skipped', detail: SKIP_REASON.NO_OPT_IN, sent: false }) }
-    else if (!c.phone) { results.sms = { sent: false, reason: 'no-phone' }; attempts.push({ channel: 'sms', status: 'skipped', detail: SKIP_REASON.NO_PHONE, sent: false }) }
-    else { const r = await sendSms(c.phone, outText); results.sms = r; attempts.push({ channel: 'sms', status: r.reason, detail: r.error, sent: r.sent, provider: r.sent ? 'twilio' : null, providerId: r.id ?? null }) }
-  }
-  if (channels.includes('email')) {
-    if (!c.email_opt_in) { results.email = { sent: false, reason: 'no-optin' }; attempts.push({ channel: 'email', status: 'skipped', detail: SKIP_REASON.NO_OPT_IN, sent: false }) }
-    else if (!c.email) { results.email = { sent: false, reason: 'no-email' }; attempts.push({ channel: 'email', status: 'skipped', detail: SKIP_REASON.NO_EMAIL, sent: false }) }
-    else { const r = await sendEmail(c.email, rendered.subject, outHtml, outText); results.email = r; attempts.push({ channel: 'email', status: r.reason, detail: r.error, sent: r.sent, provider: r.sent ? 'resend' : null, providerId: r.id ?? null }) }
-  }
-  if (channels.includes('push')) {
-    // Future channel — wired through, always disabled for now (no provider).
-    results.push = { sent: false, reason: 'disabled' }; attempts.push({ channel: 'push', status: 'disabled', detail: 'push not configured', sent: false })
-  }
-  }
+  // ONE consent gate. dispatchToCustomer owns the category check, per-channel
+  // opt-in, the sends, and the threaded bubble — the same path the crons take.
+  // This route used to hand-roll all four; it was the last copy.
+  //
+  // Channel ORDER is load-bearing: the bubble records the FIRST channel that
+  // actually sent, and this route has always attempted sms before email no matter
+  // what order the caller listed. Dispatch now honours caller order (and at least
+  // one caller builds the array dynamically), so normalise here to keep sms-first
+  // exactly as before. `push` rides along last so the category gate can skip it
+  // like every other requested channel — dispatch ignores it otherwise.
+  const dispatchChannels = ['sms', 'email'].filter(ch => channels.includes(ch))
+  if (channels.includes('push')) dispatchChannels.push('push')
 
-  // Record anything actually delivered into the customer's message thread, so it
-  // appears in the message center AND the customer timeline as full text (not just
-  // an audit pill). One outbound bubble per send; the per-channel log rows link to
-  // it so the thread shows the message, not a duplicate event.
-  let messageId: string | null = null
-  const sentChannels = attempts.filter(a => a.sent).map(a => a.channel)
-  if (sentChannels.length) {
-    const convoId = await getOrCreateConversation(supabase, user.id, customerId)
-    if (convoId) {
-      // The bubble carries the primary channel's provider id, so a delivery
-      // webhook for that id can advance THIS row from sent → delivered.
-      const primary = attempts.find(a => a.sent && a.channel === sentChannels[0])
-      const { data: m } = await supabase.from('messages')
-        .insert({
-          user_id: user.id, conversation_id: convoId, customer_id: customerId,
-          direction: 'outbound', channel: sentChannels[0], body: outText, status: 'sent',
-          provider: primary?.provider ?? null, provider_message_id: primary?.providerId ?? null,
-          meta: { template },
-        })
-        .select('id').single()
-      messageId = (m as { id: string } | null)?.id ?? null
-    }
-  }
+  const res = await dispatchToCustomer(supabase, {
+    userId: user.id,
+    customer: {
+      id: customerId, phone: c.phone, email: c.email,
+      sms_opt_in: c.sms_opt_in, email_opt_in: c.email_opt_in,
+      message_prefs: (cust as { message_prefs?: MessagePrefs | null }).message_prefs,
+    },
+    channels: dispatchChannels,
+    smsText: outText,
+    emailSubject: rendered.subject,
+    emailHtml: outHtml,
+    emailText: outText,
+    template,
+  })
 
-  for (const a of attempts) {
-    await logSend(supabase, { userId: user.id, customerId, jobId, channel: a.channel, template, status: a.status, detail: a.detail, messageId: a.sent ? messageId : null, provider: a.provider ?? null, providerId: a.providerId ?? null })
-  }
-  await finalizeSend(supabase, user.id, clientMessageId, sentChannels.length ? 'sent' : 'skipped')
+  // Translate the attempt vocabulary back into this route's published per-channel
+  // SendResult map — nine callers read it.
+  const results = sendResultsFromAttempts(res.attempts)
 
-  return NextResponse.json({ enabled, results, preview: outText, threaded: !!messageId })
+  // Future channel — wired through, always disabled for now (no provider). Only
+  // when the category gate didn't already skip it: an unsubscribed customer's
+  // push request reads 'no-optin', exactly as it did when this block was nested
+  // inside the consent branch.
+  const pushDisabled = channels.includes('push') && !res.attempts.some(a => a.channel === 'push')
+  if (pushDisabled) results.push = { sent: false, reason: 'disabled' }
+
+  await logDispatch(supabase, res, { userId: user.id, customerId, jobId, template })
+  if (pushDisabled) {
+    await logSend(supabase, { userId: user.id, customerId, jobId, channel: 'push', template, status: 'disabled', detail: 'push not configured', messageId: null, provider: null, providerId: null })
+  }
+  await finalizeSend(supabase, user.id, clientMessageId, res.sentChannels.length ? 'sent' : 'skipped')
+
+  return NextResponse.json({ enabled, results, preview: outText, threaded: !!res.messageId })
 }
 

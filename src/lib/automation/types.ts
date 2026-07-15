@@ -87,7 +87,11 @@ export interface RunRecord {
   customerId: string | null
   evaluatedAt: string
   decision: 'fired' | 'suppressed'
-  suppressedReason?: 'mode_off' | 'quiet_hours' | 'frequency_cap' | 'no_consent' | 'deduped' | 'signal_absent'
+  /** `mode_suggest` is NOT a failure — it is the whole product today: the condition
+   *  was real, the rule saw it, and the owner has not granted it authority to act.
+   *  Distinct from `mode_off` (deliberately disabled) so a run log can tell
+   *  "waiting to be trusted" apart from "switched off". */
+  suppressedReason?: 'mode_off' | 'mode_suggest' | 'quiet_hours' | 'frequency_cap' | 'no_consent' | 'deduped' | 'signal_absent'
   queuedActionId?: string
   sentAt?: string
   undoneAt?: string

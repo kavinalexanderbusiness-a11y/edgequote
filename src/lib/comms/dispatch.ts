@@ -60,6 +60,44 @@ export interface DispatchResult { attempts: DispatchAttempt[]; messageId: string
 
 const PROVIDER: Record<string, string> = { sms: 'twilio', email: 'resend' }
 
+// ── Legacy per-channel result vocabulary ─────────────────────────────────────
+// /api/comms/send has always answered with a per-channel map of raw SendResults
+// ({ sent, reason, error?, id? } — see lib/comms/send) using its OWN hyphenated
+// skip reasons. Nine callers read that map. Dispatch speaks the newer attempt
+// vocabulary (status:'skipped' + SKIP_REASON.*), so this translates back and the
+// route can share the one consent gate without breaking its published contract.
+//
+// Absent fields are OMITTED, not nulled: the legacy values came straight off
+// SendResult, where a skip carried only { sent, reason } and a success carried no
+// `error` key at all. Emitting `error: null` would change the response bytes and
+// `'error' in result` for every caller.
+const LEGACY_REASON: Record<string, string> = {
+  [SKIP_REASON.NO_OPT_IN]: 'no-optin',
+  [SKIP_REASON.UNSUBSCRIBED]: 'no-optin',   // a declined CATEGORY reads as no-optin to callers
+  [SKIP_REASON.NO_PHONE]: 'no-phone',
+  [SKIP_REASON.NO_EMAIL]: 'no-email',
+}
+
+export interface LegacySendResult { sent: boolean; reason: string; error?: string | null; id?: string | null }
+
+export function sendResultsFromAttempts(attempts: DispatchAttempt[]): Record<string, LegacySendResult> {
+  const out: Record<string, LegacySendResult> = {}
+  for (const a of attempts) {
+    if (a.status === 'skipped') {
+      // A skip never carried the provider fields — reason is the whole story.
+      out[a.channel] = { sent: false, reason: LEGACY_REASON[a.detail ?? ''] ?? a.status }
+      continue
+    }
+    // Reconstruct the provider's SendResult: `reason` IS the status ('sent' /
+    // 'disabled' / 'error'), and error/id are only ever set one at a time.
+    const r: LegacySendResult = { sent: a.sent, reason: a.status }
+    if (a.detail != null) r.error = a.detail
+    if (a.providerId != null) r.id = a.providerId
+    out[a.channel] = r
+  }
+  return out
+}
+
 export async function dispatchToCustomer(sb: SupabaseClient, inp: DispatchInput): Promise<DispatchResult> {
   const c = inp.customer
   const attempts: DispatchAttempt[] = []

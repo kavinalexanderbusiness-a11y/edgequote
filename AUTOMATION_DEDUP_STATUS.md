@@ -43,7 +43,22 @@ filter's *index*. The parameterised form is the separately-named `quoteIsQuiet`.
 | `cron/invoice-reminders` | automation | ✅ |
 | **`cron/notifications`** (reminders + review requests) | automation | ✅ **this pass** |
 | **`lib/comms/receipt.ts`** | automation (webhook) | ✅ — via `transactional`, see below |
-| `api/comms/send/route.ts` | manual | ❌ — see below |
+| **`api/comms/send/route.ts`** | manual | ✅ — the last one |
+
+**Zero hand-rolled consent gates remain.** Every sender in the product — automated and
+manual — decides opt-in, category consent, contact presence and skip reasons in exactly
+one place: `dispatchToCustomer`.
+
+`comms/send` kept its own API contract (the `results` map's legacy vocabulary:
+`no-optin` / `no-phone` / `no-email`), translated by the pure, harness-pinned
+`sendResultsFromAttempts`. Two traps found during the extraction, both of which would
+have been silent behaviour changes:
+- **`push` was nested inside the `else` of the category gate** — so a category-blocked
+  customer requesting push got `no-optin`, not `disabled`. Lifting the block out
+  "unchanged" would have flipped that.
+- **The raw `SendResult` omits absent keys** (`{sent,reason,id}` on success,
+  `{sent,reason,error}` on failure). Emitting `error:null`/`id:null` would have changed
+  `'error' in r` for all 9 callers. Null fields are omitted; the harness pins it.
 
 `cron/notifications` was converted with `thread: false`, preserving the fact that
 reminders/review requests have never written a conversation bubble. Verified by
@@ -176,7 +191,43 @@ the same loop twice). Still not done, still the right next extraction — and it
 natural first consumer of `automation/policy` + `automation/types`: same policy resolve,
 same claim-then-send, same run log. Left alone here to avoid a collision.
 
-## Automation engine — prepared, NOT wired
+## The engine — built, and deliberately unable to send
+
+The full loop now exists end to end, in **observe mode**:
+
+```
+/api/cron/signals   detectors → automation_signals   (writes rows, sends nothing)
+        ↓
+/api/cron/engine    signals × rules → decide() → automation_runs
+                    ZERO send imports in the file. Not "doesn't send today" —
+                    cannot, structurally.
+```
+
+- `lib/automation/rules.ts` — the registry. Code-defined on purpose: inventing a rule
+  should be a reviewed change, not a row someone types. **Every rule enters at the mode
+  it already runs at.** The two registered rules are `suggest`, which is exactly what
+  the product does today (surface it, act on nothing). Switching the engine on changes
+  nothing — that is the point.
+- `lib/automation/decide.ts` — **pure**. No client, no clock, no send path; it cannot
+  message anyone by construction. Check order is deliberate so the recorded reason is
+  the *useful* one (a rule that's off says "off", not "outside quiet hours").
+- `suppressedReason: 'mode_suggest'` is distinct from `'mode_off'` — "waiting to be
+  trusted" is not "switched off", and a run log that conflates them is useless.
+
+**What this buys before a single message changes:** the run log answers *"what would an
+automation have done last night, and why didn't it?"* for as long as it takes to trust
+it. Promotion to `auto` is then a one-field change against evidence, rather than a leap.
+
+`fired` is reported in the response and is 0 while every rule is `suggest` — so the day
+it stops being 0 is visible to us, not discovered via a customer.
+
+**Deliberately not built yet:** the Delay/Undo stages (`automation_queue`,
+`UndoableAction`). Nothing can fire, so a hold window would be scaffolding guarding
+nothing. They land with the first `auto` promotion, which is when they start mattering.
+Likewise `recentActionsForSubject` is passed as 0 — a query for a number that is always
+0 would be dead code pretending to be a safeguard.
+
+## Contracts — prepared, NOT wired
 
 - `lib/automation/types.ts` — contracts only. Modes (`off | suggest | auto`), the
   hold/undo window, dedupe key, run log with a **suppression reason**. No runtime.
