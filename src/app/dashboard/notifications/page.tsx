@@ -15,13 +15,14 @@ import { SkeletonRows } from '@/components/ui/Skeleton'
 import { Banner } from '@/components/ui/Banner'
 import { SectionHeading } from '@/components/ui/SectionHeading'
 import { cn } from '@/lib/utils'
-import { Bell, Check, FileText, DollarSign, MessageSquare, Globe, Star, CreditCard, AlertTriangle, RotateCcw, ShieldAlert, ChevronDown, Clock, X, Archive } from 'lucide-react'
+import { Bell, Check, FileText, DollarSign, MessageSquare, Globe, Star, CreditCard, AlertTriangle, RotateCcw, ShieldAlert, ShieldCheck, ChevronDown, Clock, X, Archive } from 'lucide-react'
 
 const ICON: Record<string, typeof FileText> = {
   quote_accepted: FileText, invoice_paid: DollarSign,
   new_message: MessageSquare, portal_request: Globe, review_received: Star,
   payment_failed: CreditCard, autopay_review: AlertTriangle, website_lead: Globe,
   payment_refunded: RotateCcw, payment_disputed: ShieldAlert,
+  payment_dispute_lost: ShieldAlert, payment_dispute_won: ShieldCheck,
 }
 const timeAgo = (iso: string) => { try { return formatDistanceToNow(new Date(iso), { addSuffix: true }) } catch { return '' } }
 // A website lead arrives as a portal_request whose body is the "New … lead — …"

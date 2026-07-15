@@ -14,8 +14,12 @@ export type NotifPriority = 'action' | 'update' | 'info'
 const PRIORITY: Record<string, NotifPriority> = {
   payment_failed: 'action',
   payment_disputed: 'action',
+  // Money the owner thinks they have and doesn't — the loudest thing in here.
+  payment_dispute_lost: 'action',
   autopay_review: 'action',
   payment_refunded: 'action',
+  // Nothing to do; it's the reassuring half of a dispute they already worried about.
+  payment_dispute_won: 'update',
   quote_accepted: 'update',
   invoice_paid: 'update',
   review_received: 'update',
@@ -40,6 +44,8 @@ const ACTION_VERB: Record<string, string> = {
   autopay_review: 'Review',
   payment_refunded: 'View',
   payment_disputed: 'Review',
+  payment_dispute_lost: 'Review',
+  payment_dispute_won: 'View',
 }
 export function notificationActionLabel(type: string): string {
   return ACTION_VERB[type] ?? 'View'
@@ -57,6 +63,8 @@ const TYPE_NOUN: Record<string, string> = {
   autopay_review: 'autopay to review',
   payment_refunded: 'refund',
   payment_disputed: 'dispute',
+  payment_dispute_lost: 'dispute lost',
+  payment_dispute_won: 'dispute resolved',
 }
 function groupTitle(type: string, n: number): string {
   const noun = TYPE_NOUN[type] ?? type.replace(/_/g, ' ')
