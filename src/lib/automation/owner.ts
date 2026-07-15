@@ -65,7 +65,11 @@ export async function loadOwnerContext(sb: SupabaseClient, userId: string): Prom
     .eq('user_id', userId).maybeSingle()
   const d = data as (SettingsRow & FeeSettings) | null
   return {
-    name: d?.company_name || 'Edge Property Services',
+    // Never another company's name. This context feeds every AUTOMATED send
+    // (reminders, follow-ups, campaigns), and the comment above is proud that an
+    // owner who never opened Settings still sends — which is exactly the operator
+    // whose customers were getting messages signed "Edge Property Services".
+    name: d?.company_name || 'your service provider',
     templates: d?.message_templates ?? null,
     logoUrl: d?.logo_url ?? null,
     website: d?.website ?? null,

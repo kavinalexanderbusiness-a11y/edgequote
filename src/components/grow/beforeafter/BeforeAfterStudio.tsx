@@ -248,7 +248,10 @@ export function BeforeAfterStudio() {
       if (!alive) return
       setConsentSupported(consentOk)
       setBrand({
-        name: s?.company_name || 'Edge Property Services',
+        // Burned onto the exported image. Unlike the message composers this needs a
+        // VISIBLE fallback rather than an empty one, but it must never be a real
+        // company — this poster goes out under the owner's own brand.
+        name: s?.company_name || 'your service provider',
         phone: s?.phone || null,
         website: s?.website || null,
         logo: null,

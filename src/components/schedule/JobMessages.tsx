@@ -45,7 +45,12 @@ const ACTIONS: { type: MsgType; label: string; icon: typeof Navigation; tone?: s
 export function JobMessages({ jobId, customerId, customerName, visitDate, timeWindow, address }: Props) {
   const supabase = useMemo(() => createClient(), [])
   const [custom, setCustom] = useState<Partial<Record<MsgType, string>> | null>(null)
-  const [company, setCompany] = useState('Edge Property Services')
+  // Empty until settings load: `company` is passed straight to renderMessage as
+  // businessName, and templates.ts already falls back to "your service provider".
+  // Seeding it with a real company's name meant any owner whose settings hadn't
+  // loaded — or who never set company_name — composed a message signed with
+  // someone else's business.
+  const [company, setCompany] = useState('')
   const [reviewUrl, setReviewUrl] = useState('')
   const [reviewed, setReviewed] = useState(false)  // customer already left a review → hide review request
 
