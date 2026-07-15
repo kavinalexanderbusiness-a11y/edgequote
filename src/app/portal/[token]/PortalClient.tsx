@@ -15,10 +15,11 @@ import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
 import { renderPortalQuoteBlob, renderPortalInvoiceBlob, renderPortalReceiptBlob, downloadBlob, viewBlob, printBlob } from '@/lib/portalPdf'
 import { receiptNumberFor } from '@/lib/payments/ledger'
+import { cardExpLabel, cardExpiryState } from '@/lib/payments/card'
 import {
   Home, History, Image as ImageIcon, FileText, Receipt, MessageSquarePlus, Check, Loader2,
   Phone, Globe, Mail, Leaf, CheckCircle2, Navigation, Play, CalendarClock, Repeat, MapPin, Ruler, Sparkles, CreditCard, MessageSquare,
-  Eye, Download, Printer, FolderOpen, Search, ArrowUpDown, Activity, Wallet, Star, Zap, ShieldCheck, Trash2, X, Landmark, Banknote, Copy, Clock,
+  Eye, Download, Printer, FolderOpen, Search, ArrowUpDown, Activity, Wallet, Star, Zap, ShieldCheck, Trash2, X, Landmark, Banknote, Copy, Clock, AlertTriangle,
 } from 'lucide-react'
 
 // ── Premium Customer Portal ─────────────────────────────────────────────────────
@@ -1224,7 +1225,8 @@ function AutoPayCard({ token, card, autopayEnabled, onChanged }: {
     if (!d.ok) { setAutopay(!next); setErr('Could not update AutoPay.'); return }
     onChanged()
   }
-  const exp = card?.exp_month && card?.exp_year ? `${String(card.exp_month).padStart(2, '0')}/${String(card.exp_year).slice(-2)}` : null
+  const exp = cardExpLabel(card)
+  const expState = cardExpiryState(card)
   const brand = card?.brand ? card.brand.charAt(0).toUpperCase() + card.brand.slice(1) : 'Card'
 
   return (
@@ -1266,7 +1268,20 @@ function AutoPayCard({ token, card, autopayEnabled, onChanged }: {
           <span className={cn('absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform', autopay && 'translate-x-5')} />
         </button>
       </div>
-      {card && <p className="text-[11px] text-ink-faint mt-2 flex items-center gap-1"><ShieldCheck className="w-3 h-3 text-emerald-400" /> Secured by Stripe. You can remove your card or turn off AutoPay anytime.</p>}
+      {/* The customer is the only person who can actually fix an expiring card, and this
+          is the only screen where they see it. Silence here means their next visit
+          declines and they find out from a chase message instead. */}
+      {card && (expState === 'expired' || expState === 'expiring') && (
+        <p className="text-xs text-amber-400 mt-2 flex items-start gap-1.5">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <span>
+            {expState === 'expired'
+              ? <>This card expired{exp ? ` in ${exp}` : ''}, so AutoPay can&rsquo;t charge it. Tap <strong>Replace</strong> to add a current one.</>
+              : <>This card expires{exp ? ` in ${exp}` : ' soon'}. Tap <strong>Replace</strong> to keep AutoPay running without a gap.</>}
+          </span>
+        </p>
+      )}
+      {card && expState !== 'expired' && <p className="text-[11px] text-ink-faint mt-2 flex items-center gap-1"><ShieldCheck className="w-3 h-3 text-emerald-400" /> Secured by Stripe. You can remove your card or turn off AutoPay anytime.</p>}
       {err && <p className="text-xs text-red-400 mt-2">{err}</p>}
     </div>
   )

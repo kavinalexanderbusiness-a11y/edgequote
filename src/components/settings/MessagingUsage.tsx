@@ -9,9 +9,10 @@ import { StatTile } from '@/components/ui/StatTile'
 import { SkeletonTiles } from '@/components/ui/Skeleton'
 import { analyzeSms, smsCost, formatSmsCost, resolveSmsPricing, type SmsPricing } from '@/lib/sms/segments'
 import { loadSmsPricing, invalidateSmsPricing } from '@/lib/sms/useSmsPricing'
-import { MessageSquareText, Check } from 'lucide-react'
+import { SENT_STATES } from '@/lib/comms/delivery'
+import { MessageSquareText, Check, AlertTriangle } from 'lucide-react'
 
-interface Row { body: string | null; created_at: string }
+interface Row { body: string | null; created_at: string; status: string | null }
 
 // Messaging usage + the CONFIGURABLE pricing that drives every composer's estimate.
 // Spend is computed from REAL segment counts of this month's outbound SMS bodies
@@ -46,7 +47,7 @@ export function MessagingUsage() {
       if (!user) { if (active) setRows([]); return }
       const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0)
       const { data } = await supabase.from('messages')
-        .select('body, created_at')
+        .select('body, created_at, status')
         .eq('user_id', user.id).eq('direction', 'outbound').eq('channel', 'sms')
         .gte('created_at', monthStart.toISOString())
         .order('created_at', { ascending: false }).limit(5000)
@@ -64,15 +65,30 @@ export function MessagingUsage() {
   const stats = useMemo(() => {
     if (!rows) return null
     const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
-    let sentMonth = 0, sentToday = 0, segMonth = 0, spend = 0
+    let sentMonth = 0, sentToday = 0, segMonth = 0, spend = 0, failed = 0
     for (const r of rows) {
+      // Count (and bill) only what actually reached the carrier. This used to count
+      // EVERY outbound row, so a send that never left the building — 'error' (Twilio
+      // rejected the request) or 'disabled' (no credentials, we never called out) —
+      // was still reported as "SMS sent" and charged in "Est. spend". Both numbers
+      // overclaimed, and the spend one was simply wrong: nobody bills you for a
+      // request that was refused.
+      //
+      // SENT_STATES is THE definition of "the send happened" (lib/comms/delivery) —
+      // the same list the resend-dedupe uses. It includes 'failed'/'bounced' on
+      // purpose: the carrier accepted and attempted those, so they ARE billable.
+      // A null status is a legacy row from before status tracking; counting it
+      // preserves the historical total rather than silently deflating this month.
+      const s = (r.status || '').toLowerCase()
+      if (s && !(SENT_STATES as readonly string[]).includes(s)) continue
       sentMonth++
       const info = analyzeSms(r.body || '')
       segMonth += info.segments
       spend += smsCost(info.segments, info.encoding, 1, pricing)
       if (new Date(r.created_at) >= todayStart) sentToday++
+      if (s === 'failed' || s === 'bounced' || s === 'spam') failed++
     }
-    return { sentMonth, sentToday, segMonth, spend, avg: segMonth > 0 ? spend / segMonth : pricing.gsm7 }
+    return { sentMonth, sentToday, segMonth, spend, failed, avg: segMonth > 0 ? spend / segMonth : pricing.gsm7 }
   }, [rows, pricing])
 
   async function save() {
@@ -125,8 +141,17 @@ export function MessagingUsage() {
               <StatTile label="Avg cost / segment" value={formatSmsCost(stats.avg, pricing.currency)} />
             </div>
             <p className="text-[11px] text-ink-faint italic">
-              {stats.segMonth} SMS segment{stats.segMonth !== 1 ? 's' : ''} sent this month. Estimated messaging cost — actual carrier/provider charges may vary.
+              {stats.segMonth} SMS segment{stats.segMonth !== 1 ? 's' : ''} sent this month. Counts only messages the carrier accepted — attempts that never left (no credentials, or a rejected request) aren&rsquo;t billed and aren&rsquo;t counted. Estimated messaging cost; actual carrier charges may vary.
             </p>
+            {/* Delivery outcome — only shown once the webhooks have actually told us
+                something. Before delivery tracking this was unknowable, and silence is
+                the honest default: no webhook, no claim. */}
+            {stats.failed > 0 && (
+              <p className="text-[11px] text-amber-400 flex items-center gap-1.5">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                {stats.failed} message{stats.failed !== 1 ? 's' : ''} the carrier couldn&rsquo;t deliver this month — open the customer&rsquo;s conversation to see why.
+              </p>
+            )}
           </>
         )}
       </CardBody>
