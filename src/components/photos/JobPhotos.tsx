@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { PhotoKind, PHOTO_KIND_LABELS } from '@/types'
 import { JobPhotoView, listPhotos, uploadPhotos, deletePhoto, updatePhoto, thumbUrl } from '@/lib/photos'
+import { captureMetaFor } from '@/lib/exif'
 import { downloadBlob } from '@/lib/portalPdf'
 import { toast } from '@/lib/toast'
 import { formatDate } from '@/lib/utils'
@@ -56,6 +57,7 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
   // the lightbox silently jump to a different photo — it stays on the same one or closes.
   const [lightboxId, setLightboxId] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const cameraRef = useRef<HTMLInputElement>(null)
   const pendingKind = useRef<PhotoKind>('after')
   const userIdRef = useRef<string | null>(null)
   const objectUrls = useRef<Set<string>>(new Set())
@@ -125,9 +127,14 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
     URL.revokeObjectURL(t.url); objectUrls.current.delete(t.url)
   }
 
-  function pick(kind: PhotoKind) {
+  // Before/After are taken standing on the lawn, so they go straight to the
+  // camera: `capture="environment"` opens the rear shutter instead of the OS
+  // "Take Photo / Photo Library" chooser, cutting a tap and a decision out of the
+  // action a contractor repeats at every stop. "Add photo" keeps the plain picker
+  // for attaching from the library, so neither capability is lost.
+  function pick(kind: PhotoKind, source: 'camera' | 'library' = 'camera') {
     pendingKind.current = kind
-    fileRef.current?.click()
+    ;(source === 'camera' ? cameraRef : fileRef).current?.click()
   }
 
   async function onFiles(e: React.ChangeEvent<HTMLInputElement>) {
@@ -151,6 +158,15 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
 
     await uploadPhotos(supabase, files, { userId: uid, propertyId, jobId, customerId, kind }, {
       concurrency: 3,
+      // Stamp the REAL capture time from EXIF. Without this taken_at defaulted to
+      // now(), so a batch uploaded at the end of a job all landed within a second
+      // of each other and the Studio's "earliest before / latest after" ordering
+      // quietly degraded to upload order. Nothing errored — the pairs were just
+      // subtly wrong. Falls back to the file's lastModified, then to the DB default.
+      perFile: async (f) => {
+        const meta = await captureMetaFor(f)
+        return meta.ms ? { takenAt: new Date(meta.ms).toISOString() } : {}
+      },
       onUploaded: (row, i) => {
         const t = tiles[i]
         setPhotos(prev => [row, ...prev])
@@ -247,6 +263,10 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
   return (
     <div className={className}>
       <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={onFiles} />
+      {/* Separate node: `capture` can't be toggled per click — the attribute has to
+          be on the input at the moment it's activated, so camera and library are
+          two inputs sharing one handler. */}
+      <input ref={cameraRef} type="file" accept="image/*" capture="environment" multiple className="hidden" onChange={onFiles} />
 
       {/* Capture buttons — never disabled during upload, so you can keep adding.
           Hidden in read-only mode (a pure viewer for customer-attached photos). */}
@@ -255,7 +275,7 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
           <CaptureBtn label="Before" icon={Camera} busy={busyOf('before')} onClick={() => pick('before')} tone="amber" />
           <CaptureBtn label="After" icon={Camera} busy={busyOf('after')} onClick={() => pick('after')} tone="emerald" />
           {variant === 'gallery' && (
-            <CaptureBtn label="Add photo" icon={ImagePlus} busy={busyOf('general')} onClick={() => pick('general')} />
+            <CaptureBtn label="Add photo" icon={ImagePlus} busy={busyOf('general')} onClick={() => pick('general', 'library')} />
           )}
         </>}
         <span className="text-[11px] ml-auto inline-flex items-center gap-1.5">
@@ -398,8 +418,9 @@ function CaptureBtn({ label, icon: Icon, busy, disabled, onClick, tone }: {
   label: string; icon: typeof Camera; busy: boolean; disabled?: boolean; onClick: () => void; tone?: 'amber' | 'emerald'
 }) {
   return (
+    // tap-target: 44px on a phone (gloves, sun, one hand), unchanged 32px with a mouse.
     <button type="button" onClick={onClick} disabled={disabled}
-      className={`h-8 px-2.5 rounded-lg border text-xs font-medium flex items-center gap-1.5 active:scale-95 transition-transform disabled:opacity-50 ${
+      className={`tap-target h-8 px-2.5 rounded-lg border text-xs font-medium flex items-center justify-center gap-1.5 active:scale-95 transition-transform disabled:opacity-50 ${
         tone === 'amber' ? 'bg-amber-500/15 border-amber-500/30 text-amber-300 hover:bg-amber-500/25'
           : tone === 'emerald' ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25'
             : 'border-border text-ink-muted hover:text-ink hover:bg-black/10'

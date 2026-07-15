@@ -8,6 +8,8 @@
 // Register once on the client (from the mounted OfflineStatus). Idempotent.
 
 import { createClient } from '@/lib/supabase/client'
+import { createDraftInvoiceForCompletedJob } from '@/lib/invoicing'
+import type { Job } from '@/types'
 import { registerHandler } from './outbox'
 
 let registered = false
@@ -57,6 +59,29 @@ export function registerOfflineHandlers(): void {
     const supabase = createClient()
     const { error } = await supabase.from('jobs').update(p.patch).eq('id', p.id)
     if (error) throw new Error(error.message)
+  })
+
+  // P6 — Completing a job is NOT just a jobs patch: online it also drafts the
+  // invoice and fires the job-complete message. Replaying only the patch would
+  // mean a contractor who finishes a route with no signal reconnects to eight
+  // completed jobs and ZERO invoices — the money silently never gets billed. So
+  // the whole completion replays here, through the SAME engines the online path
+  // calls. Both are safely idempotent: the draft de-dupes on job_id, and the
+  // comms route enforces its own opt-in + dedupe, so a retried op is a no-op.
+  registerHandler('job.complete', async (payload) => {
+    const p = payload as { id: string; patch: Record<string, unknown>; job: Job; notify?: boolean }
+    const supabase = createClient()
+    const { error } = await supabase.from('jobs').update(p.patch).eq('id', p.id)
+    if (error) throw new Error(error.message)
+    // Invoice before message: if the draft throws we keep the op queued and retry,
+    // rather than having told the customer we're done with nothing to bill them.
+    await createDraftInvoiceForCompletedJob(supabase, p.job)
+    if (p.notify && p.job.customer_id) {
+      await fetch('/api/comms/send', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customerId: p.job.customer_id, template: 'job_complete', jobId: p.id, dedupe: true }),
+      }).catch(() => {})   // a failed courtesy text must not re-run the invoice
+    }
   })
   // (Photo uploads are online-only again after the merge — main's photo experience
   // handles capture/dedup/EXIF directly, so there is no photo.upload replay handler.)

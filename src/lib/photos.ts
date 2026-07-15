@@ -181,7 +181,16 @@ export async function uploadPhotos(
   supabase: SupabaseClient,
   files: File[],
   base: Omit<Parameters<typeof uploadPhoto>[1], 'file'>,
-  opts?: { concurrency?: number; onUploaded?: (row: JobPhotoView, index: number) => void; onError?: (file: File, index: number) => void },
+  opts?: {
+    concurrency?: number
+    onUploaded?: (row: JobPhotoView, index: number) => void
+    onError?: (file: File, index: number) => void
+    // Per-file fields resolved INSIDE the pool (e.g. reading EXIF capture time).
+    // `base` is shared by every file, so anything derived from the file itself has
+    // to come from here — and doing it in the worker keeps the read overlapped with
+    // the uploads instead of serialising a pass over every file up front.
+    perFile?: (file: File, index: number) => Promise<Partial<UploadPhotoOpts>>
+  },
 ): Promise<JobPhotoView[]> {
   const concurrency = Math.max(1, Math.min(opts?.concurrency ?? 3, files.length))
   const results: JobPhotoView[] = []
@@ -189,7 +198,9 @@ export async function uploadPhotos(
   async function worker(): Promise<void> {
     while (next < files.length) {
       const i = next++
-      const row = await uploadPhoto(supabase, { ...base, file: files[i] })
+      // A failing per-file resolver must never cost the photo — fall back to base.
+      const extra = opts?.perFile ? await opts.perFile(files[i], i).catch(() => ({})) : {}
+      const row = await uploadPhoto(supabase, { ...base, ...extra, file: files[i] })
       if (row) { results.push(row); opts?.onUploaded?.(row, i) }
       else opts?.onError?.(files[i], i)
     }
