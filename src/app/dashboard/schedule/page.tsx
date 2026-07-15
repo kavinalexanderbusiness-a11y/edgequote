@@ -1292,31 +1292,55 @@ export default function SchedulePage() {
   }
 
   // Inline quick-edit from the day panel — small per-visit changes, no full form.
+  // Queues offline like the rest of the day. The kind is chosen by what the edit
+  // actually DOES, so replay reuses the same engines the online path just ran:
+  // completing the job → 'job.complete' (patch + draft invoice); a plain edit →
+  // 'job.update', carrying a price change through to an existing draft.
   async function quickSaveJob(job: Job, patch: QuickPatch) {
-    const { error } = await supabase.from('jobs').update({
+    const fields = {
       start_time: patch.start_time,
       crew_size: patch.crew_size,
       duration_minutes: patch.duration_minutes,
       status: patch.status,
       notes: patch.notes,
       price: patch.price,
-    }).eq('id', job.id)
-    if (error) { setBanner('Could not save the job: ' + error.message); return }
-    if (patch.status === 'completed' && job.status !== 'completed') {
-      const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed' })
-      if (res.created) setBanner(`Saved — draft invoice ${res.invoiceNumber} created.`)
-      else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
-      // The quick-edit dropdown completes a job through the same transition as the Complete
-      // button, which DOES report this (completeJob below). Without it a failed draft leaves
-      // the visit out of the un-invoiced queue and it is never billed, with no trace.
-      else if (res.reason === 'error') setBanner('Job completed, but the draft invoice could not be created — invoice it manually from the job.')
     }
-    // If the inline edit changed the price, keep its draft invoice in sync.
-    if (Number(patch.price) !== Number(job.price)) {
-      const { failed } = await syncDraftInvoiceAmounts(supabase, [job.id])
-      if (failed > 0) setBanner('Saved, but its draft invoice still shows the old amount — open the invoice to re-price it.')
+    const completing = patch.status === 'completed' && job.status !== 'completed'
+    const repriced = Number(patch.price) !== Number(job.price)
+    const completed = { ...job, ...fields }
+
+    let outcome: 'ran' | 'queued'
+    try {
+      outcome = await queueOrRun(
+        completing
+          ? { kind: 'job.complete', payload: { id: job.id, patch: fields, job: completed, notify: false }, label: `Complete ${job.title || 'job'}` }
+          : { kind: 'job.update', payload: { id: job.id, patch: fields, syncPrice: repriced }, label: `Edit ${job.title || 'job'}` },
+        async () => {
+          const { error } = await supabase.from('jobs').update(fields).eq('id', job.id)
+          if (error) throw new Error(error.message)
+          if (completing) {
+            const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed' })
+            if (res.created) setBanner(`Saved — draft invoice ${res.invoiceNumber} created.`)
+            else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
+            // The quick-edit dropdown completes a job through the same transition as the Complete
+            // button, which DOES report this (completeJob below). Without it a failed draft leaves
+            // the visit out of the un-invoiced queue and it is never billed, with no trace.
+            else if (res.reason === 'error') setBanner('Job completed, but the draft invoice could not be created — invoice it manually from the job.')
+          }
+          // If the inline edit changed the price, keep its draft invoice in sync.
+          if (repriced) {
+            const { failed } = await syncDraftInvoiceAmounts(supabase, [job.id])
+            if (failed > 0) setBanner('Saved, but its draft invoice still shows the old amount — open the invoice to re-price it.')
+          }
+        },
+      )
+    } catch (e) {
+      setBanner('Could not save the job: ' + (e instanceof Error ? e.message : 'please try again.'))
+      return
     }
-    await fetchJobs()
+    setJobs(prev => prev.map(j => (j.id === job.id ? { ...j, ...fields } : j)))
+    if (outcome === 'queued') setBanner('Saved offline — it’ll sync when you’re back in signal.')
+    if (outcome === 'ran') await fetchJobs()
   }
 
   // First-class price edit from the Day panel.
@@ -1329,16 +1353,35 @@ export default function SchedulePage() {
       return
     }
     const oldAmount = valueByJobId[job.id] ?? null
-    const { data: { user } } = await supabase.auth.getUser()
-    const { error } = await supabase.from('jobs').update({ price }).eq('id', job.id)
-    if (error) { setBanner('Could not update price: ' + error.message); return }
-    // Audit trail (old → new, reason on raises) for upsell analytics later.
-    await recordPriceChange(supabase, { userId: user!.id, jobId: job.id, scope: null, oldAmount, newAmount: price, reason, changedByEmail: user?.email })
-    // The job is the source of truth — re-price its draft invoice automatically.
-    const { changed, failed } = await syncDraftInvoiceAmounts(supabase, [job.id], { reason })
-    await fetchJobs()
-    if (failed > 0) setBanner('Price updated, but its draft invoice still shows the old amount — open the invoice to re-price it.')
-    else if (changed > 0) setBanner('Price updated — its draft invoice was re-priced to match.')
+    // Local session read: getUser() is a network call, so pricing a job in a driveway
+    // used to die here — before the price, the audit row or the draft sync happened.
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
+    if (!user) { setBanner('Session expired — sign in again.'); return }
+    const audit = { userId: user.id, jobId: job.id, scope: null, oldAmount, newAmount: price, reason, changedByEmail: user.email }
+
+    let outcome: 'ran' | 'queued'
+    try {
+      outcome = await queueOrRun(
+        { kind: 'job.update', payload: { id: job.id, patch: { price }, syncPrice: true, syncReason: reason, priceAudit: audit }, label: `Price ${job.title || 'job'}` },
+        async () => {
+          const { error } = await supabase.from('jobs').update({ price }).eq('id', job.id)
+          if (error) throw new Error(error.message)
+          // Audit trail (old → new, reason on raises) for upsell analytics later.
+          await recordPriceChange(supabase, audit)
+          // The job is the source of truth — re-price its draft invoice automatically.
+          const { changed, failed } = await syncDraftInvoiceAmounts(supabase, [job.id], { reason })
+          if (failed > 0) setBanner('Price updated, but its draft invoice still shows the old amount — open the invoice to re-price it.')
+          else if (changed > 0) setBanner('Price updated — its draft invoice was re-priced to match.')
+        },
+      )
+    } catch (e) {
+      setBanner('Could not update price: ' + (e instanceof Error ? e.message : 'please try again.'))
+      return
+    }
+    setJobs(prev => prev.map(j => (j.id === job.id ? { ...j, price } : j)))
+    if (outcome === 'queued') setBanner('Price saved offline — it’ll sync when you’re back in signal.')
+    if (outcome === 'ran') await fetchJobs()
   }
 
   // The quote cadence column a recurring job's price maps to (interval-aware).

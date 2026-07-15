@@ -8,7 +8,8 @@
 // Register once on the client (from the mounted OfflineStatus). Idempotent.
 
 import { createClient } from '@/lib/supabase/client'
-import { createDraftInvoiceForCompletedJob } from '@/lib/invoicing'
+import { createDraftInvoiceForCompletedJob, syncDraftInvoiceAmounts } from '@/lib/invoicing'
+import { recordPriceChange } from '@/lib/jobPricing'
 import type { Job } from '@/types'
 import { registerHandler } from './outbox'
 
@@ -55,10 +56,20 @@ export function registerOfflineHandlers(): void {
   // `queueOrRun({ kind:'job.update', payload:{ id, patch } }, run)` — no other import.
   // See docs/OFFLINE_FOR_SESSION_C.md. We register it here so it's always available.
   registerHandler('job.update', async (payload) => {
-    const p = payload as { id: string; patch: Record<string, unknown> }
+    const p = payload as {
+      id: string; patch: Record<string, unknown>; syncPrice?: boolean; syncReason?: string
+      priceAudit?: Parameters<typeof recordPriceChange>[1]
+    }
     const supabase = createClient()
     const { error } = await supabase.from('jobs').update(p.patch).eq('id', p.id)
     if (error) throw new Error(error.message)
+    // The follow-ups the online path performs, replayed with it — a patch that
+    // arrives without them isn't the same mutation, just a piece of one.
+    if (p.priceAudit) await recordPriceChange(supabase, p.priceAudit).catch(() => {})
+    // Re-pricing a visit that ALREADY has a draft invoice has to carry to the draft,
+    // or the customer gets billed yesterday's number. (Only for an existing draft —
+    // a job completed offline drafts fresh, at the new price, via job.complete.)
+    if (p.syncPrice) await syncDraftInvoiceAmounts(supabase, [p.id], { reason: p.syncReason })
   })
 
   // P6 — Completing a job is NOT just a jobs patch: online it also drafts the
