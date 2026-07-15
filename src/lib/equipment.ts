@@ -30,6 +30,13 @@ export interface Equipment {
   last_service_at: string | null
   last_service_hours: number | null
   notes: string | null
+  // Warranty cover (optional) — drives "don't pay for this repair".
+  warranty_expires: string | null
+  warranty_provider: string | null
+  // Straight-line depreciation inputs (optional). No useful life = not
+  // depreciated; book value simply reports the purchase price.
+  useful_life_years: number | null
+  salvage_value: number | null
 }
 
 export type ServiceKind = 'oil' | 'blade' | 'filter' | 'spark_plug' | 'tune_up' | 'tire' | 'repair' | 'other'
@@ -45,6 +52,43 @@ export interface EquipmentService {
   cost: number | null
   notes: string | null
 }
+
+export type DocKind = 'receipt' | 'warranty' | 'manual' | 'insurance' | 'photo' | 'other'
+
+export interface EquipmentDoc {
+  id: string
+  created_at: string
+  user_id: string
+  equipment_id: string
+  path: string
+  name: string
+  kind: DocKind
+  mime: string | null
+  size_bytes: number | null
+}
+
+export const DOC_KINDS: { value: DocKind; label: string }[] = [
+  { value: 'receipt', label: 'Purchase receipt' },
+  { value: 'warranty', label: 'Warranty certificate' },
+  { value: 'manual', label: 'Manual' },
+  { value: 'insurance', label: 'Insurance' },
+  { value: 'photo', label: 'Photo' },
+  { value: 'other', label: 'Other' },
+]
+export function docKindLabel(k: DocKind): string {
+  return DOC_KINDS.find(d => d.value === k)?.label ?? 'Other'
+}
+
+/** Human file size — files are shown to the owner, not to a machine. */
+export function fileSize(bytes: number | null | undefined): string {
+  const b = Number(bytes) || 0
+  if (b <= 0) return ''
+  if (b < 1024) return `${b} B`
+  if (b < 1024 * 1024) return `${Math.round(b / 1024)} KB`
+  return `${Math.round((b / (1024 * 1024)) * 10) / 10} MB`
+}
+
+export const EQUIPMENT_DOCS_BUCKET = 'equipment-docs'
 
 export const EQUIPMENT_CATEGORIES: { value: EquipmentCategory; label: string; icon: LucideIcon }[] = [
   { value: 'mower', label: 'Mower', icon: Sprout },
@@ -148,6 +192,56 @@ export function serviceStatus(eq: Equipment, todayISO: string): ServiceStatus {
   return { state: 'ok', reason: why, hoursRemaining, daysRemaining, tone: 'success' }
 }
 
+export type WarrantyState = 'covered' | 'expiring' | 'expired' | 'none'
+
+export interface WarrantyStatus {
+  state: WarrantyState
+  /** Plain-language — always says what it means for the money. */
+  reason: string
+  daysRemaining: number | null
+  tone: Tone
+}
+
+// Is this machine still covered? "Expiring" at 30 days is the window where an
+// operator can still book covered work before paying for it themselves.
+export function warrantyStatus(eq: Equipment, todayISO: string): WarrantyStatus {
+  if (!eq.warranty_expires) {
+    return { state: 'none', reason: 'No warranty on file', daysRemaining: null, tone: 'neutral' }
+  }
+  const days = daysBetween(todayISO, eq.warranty_expires)
+  const who = eq.warranty_provider ? ` · ${eq.warranty_provider}` : ''
+  if (days < 0) {
+    return { state: 'expired', reason: `Warranty ended ${Math.abs(days)} days ago${who}`, daysRemaining: days, tone: 'neutral' }
+  }
+  if (days <= 30) {
+    return { state: 'expiring', reason: `Warranty ends in ${days} days — book covered work now${who}`, daysRemaining: days, tone: 'warn' }
+  }
+  return { state: 'covered', reason: `Under warranty for ${days} more days${who}`, daysRemaining: days, tone: 'success' }
+}
+
+export interface BookValue {
+  value: number            // what it's worth today
+  depreciated: number      // how much value it has lost
+  annual: number | null    // straight-line depreciation per year
+  depreciating: boolean    // false = no useful life set (value = purchase price)
+}
+
+// Straight-line book value: purchase → salvage over useful_life_years, floored at
+// salvage and never above purchase. No purchase price or no useful life → we
+// report what we know rather than inventing a number.
+export function bookValue(eq: Equipment, todayISO: string): BookValue {
+  const purchase = Number(eq.purchase_price) || 0
+  const life = Number(eq.useful_life_years) || 0
+  const salvage = Math.min(Number(eq.salvage_value) || 0, purchase)
+  if (!purchase || life <= 0 || !eq.purchase_date) {
+    return { value: round2(purchase), depreciated: 0, annual: null, depreciating: false }
+  }
+  const annual = round2((purchase - salvage) / life)
+  const years = Math.max(0, daysBetween(eq.purchase_date, todayISO) / 365.25)
+  const lost = Math.min(round2(annual * years), round2(purchase - salvage))
+  return { value: round2(purchase - lost), depreciated: lost, annual, depreciating: true }
+}
+
 /** What this machine has actually cost: purchase + every logged service. */
 export function costOfOwnership(eq: Equipment, services: EquipmentService[]) {
   const maintenance = round2(services.reduce((s, r) => s + (Number(r.cost) || 0), 0))
@@ -181,7 +275,12 @@ export function fleetSummary(equipment: Equipment[], services: EquipmentService[
     activeCount: equipment.filter(e => e.status === 'active').length,
     repairCount: equipment.filter(e => e.status === 'repair').length,
     needingService: needing.length,
-    fleetValue: round2(live.reduce((s, e) => s + (Number(e.purchase_price) || 0), 0)),
+    /** What the live fleet is worth TODAY (depreciated where a life is set). */
+    fleetValue: round2(live.reduce((s, e) => s + bookValue(e, todayISO).value, 0)),
+    /** What it cost new — the paid figure, for contrast with book value. */
+    fleetPurchase: round2(live.reduce((s, e) => s + (Number(e.purchase_price) || 0), 0)),
+    /** Cover about to lapse — the window to book covered work for free. */
+    warrantyExpiring: live.filter(e => warrantyStatus(e, todayISO).state === 'expiring').length,
     maintenanceYtd: round2(services.filter(s => s.service_date >= yearStart).reduce((s, r) => s + (Number(r.cost) || 0), 0)),
     servicesByEquipment: byEq,
   }

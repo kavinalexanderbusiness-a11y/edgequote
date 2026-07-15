@@ -3,9 +3,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
+import { listEquipmentDocs } from '@/lib/equipmentDocs'
 import {
   Equipment, EquipmentService, EquipmentStatus, STATUS_LABELS, STATUS_TONE,
-  categoryMeta, serviceStatus, serviceKindLabel, costOfOwnership, fleetSummary,
+  categoryMeta, serviceStatus, serviceKindLabel, costOfOwnership, fleetSummary, warrantyStatus, bookValue, type EquipmentDoc,
 } from '@/lib/equipment'
 import { toneSoft, toneText } from '@/lib/tone'
 import { formatCurrency, formatDate, localTodayISO, cn } from '@/lib/utils'
@@ -21,8 +22,9 @@ import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { Banner } from '@/components/ui/Banner'
 import { EquipmentDialog } from '@/components/equipment/EquipmentDialog'
+import { EquipmentDocs } from '@/components/equipment/EquipmentDocs'
 import { ServiceLogDialog } from '@/components/equipment/ServiceLogDialog'
-import { Wrench, Plus, AlertTriangle, CircleDollarSign, Gauge, Pencil, Trash2, History, Clock } from 'lucide-react'
+import { Wrench, Plus, AlertTriangle, CircleDollarSign, Gauge, Pencil, Trash2, History, Clock, ShieldCheck } from 'lucide-react'
 
 // ── Equipment ────────────────────────────────────────────────────────────────
 // The fleet: what you own, what it's costing, and what needs servicing before it
@@ -34,6 +36,7 @@ export default function EquipmentPage() {
   const supabase = useMemo(() => createClient(), [])
   const [equipment, setEquipment] = useState<Equipment[]>([])
   const [services, setServices] = useState<EquipmentService[]>([])
+  const [docs, setDocs] = useState<EquipmentDoc[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [uid, setUid] = useState<string | null>(null)
@@ -62,6 +65,8 @@ export default function EquipmentPage() {
       setLoadError(null)
       setEquipment((eRes.data as Equipment[]) || [])
       setServices((sRes.data as EquipmentService[]) || [])
+      // Paperwork is optional — a tree without the docs migration still works.
+      setDocs(await listEquipmentDocs(supabase, user.id).catch(() => []))
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : 'Could not load your equipment.')
     } finally {
@@ -147,9 +152,16 @@ export default function EquipmentPage() {
               sub={summary.needingService ? 'Due or due soon' : 'Nothing due'}
               onClick={() => setFilter(summary.needingService ? 'needs_service' : 'all')} />
             <StatTile icon={CircleDollarSign} label="Fleet value" value={formatCurrency(summary.fleetValue)}
-              sub="Purchase price, excl. retired" />
-            <StatTile icon={History} label="Maintenance YTD" value={formatCurrency(summary.maintenanceYtd)}
-              sub="Logged service costs this year" />
+              sub={summary.fleetPurchase > summary.fleetValue
+                ? `Book value · ${formatCurrency(summary.fleetPurchase)} paid`
+                : 'Purchase price, excl. retired'} />
+            {summary.warrantyExpiring > 0 ? (
+              <StatTile icon={ShieldCheck} label="Warranty ending" value={String(summary.warrantyExpiring)}
+                tone="warn" tonedSurface sub="Within 30 days — book covered work" />
+            ) : (
+              <StatTile icon={History} label="Maintenance YTD" value={formatCurrency(summary.maintenanceYtd)}
+                sub="Logged service costs this year" />
+            )}
           </div>
 
           <div className="flex items-center gap-1.5 flex-wrap">
@@ -170,8 +182,10 @@ export default function EquipmentPage() {
             <div className="space-y-3">
               {visible.map(eq => (
                 <EquipmentRow
-                  key={eq.id} eq={eq}
+                  key={eq.id} eq={eq} uid={uid}
                   services={summary.servicesByEquipment.get(eq.id) ?? []}
+                  docs={docs.filter(d => d.equipment_id === eq.id)}
+                  onDocsChanged={load}
                   today={today}
                   open={openId === eq.id}
                   onToggle={() => setOpenId(openId === eq.id ? null : eq.id)}
@@ -211,13 +225,17 @@ export default function EquipmentPage() {
   )
 }
 
-function EquipmentRow({ eq, services, today, open, onToggle, onEdit, onLog, onRemove, onStatus }: {
-  eq: Equipment; services: EquipmentService[]; today: string; open: boolean
+function EquipmentRow({ eq, uid, services, docs, onDocsChanged, today, open, onToggle, onEdit, onLog, onRemove, onStatus }: {
+  eq: Equipment; uid: string | null; services: EquipmentService[]
+  docs: EquipmentDoc[]; onDocsChanged: () => void
+  today: string; open: boolean
   onToggle: () => void; onEdit: () => void; onLog: () => void; onRemove: () => void
   onStatus: (s: EquipmentStatus) => void
 }) {
   const meta = categoryMeta(eq.category)
   const svc = serviceStatus(eq, today)
+  const wty = warrantyStatus(eq, today)
+  const book = bookValue(eq, today)
   const cost = costOfOwnership(eq, services)
   const retired = eq.status === 'retired'
 
@@ -236,6 +254,12 @@ function EquipmentRow({ eq, services, today, open, onToggle, onEdit, onLog, onRe
                 <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 border', toneSoft[STATUS_TONE[eq.status]])}>
                   {STATUS_LABELS[eq.status]}
                 </span>
+                {!retired && wty.state !== 'none' && wty.state !== 'expired' && (
+                  <span title={wty.reason}
+                    className={cn('text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 border inline-flex items-center gap-1', toneSoft[wty.tone])}>
+                    <ShieldCheck className="w-3 h-3" /> {wty.state === 'covered' ? 'Under warranty' : 'Warranty ending'}
+                  </span>
+                )}
               </div>
               <p className="text-xs text-ink-muted mt-0.5 truncate">
                 {[meta.label, [eq.make, eq.model].filter(Boolean).join(' '), eq.hours > 0 ? `${eq.hours} h` : null].filter(Boolean).join(' · ')}
@@ -261,14 +285,23 @@ function EquipmentRow({ eq, services, today, open, onToggle, onEdit, onLog, onRe
         {open && (
           <div className="space-y-3 pt-1">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <Detail label="Purchase" value={eq.purchase_price ? formatCurrency(eq.purchase_price) : '—'}
-                sub={eq.purchase_date ? formatDate(eq.purchase_date) : undefined} />
+              <Detail label="Worth today" value={eq.purchase_price ? formatCurrency(book.value) : '—'}
+                sub={book.depreciating
+                  ? `${formatCurrency(eq.purchase_price || 0)} paid · −${formatCurrency(book.annual || 0)}/yr`
+                  : eq.purchase_date ? `Paid ${formatDate(eq.purchase_date)}` : 'Add a useful life to depreciate'} />
               <Detail label="Maintenance" value={formatCurrency(cost.maintenance)} sub={`${services.length} service${services.length !== 1 ? 's' : ''}`} />
               <Detail label="Total cost" value={formatCurrency(cost.total)} sub="Purchase + service" />
               <Detail label="Cost / hour" value={cost.perHour != null ? formatCurrency(cost.perHour) : '—'}
                 sub={cost.perHour == null ? 'Add engine hours' : `over ${eq.hours} h`} />
             </div>
 
+            {/* Warranty in words — including when it has lapsed, so a repair
+                bill is never questioned twice. */}
+            {wty.state !== 'none' && (
+              <p className={cn('text-[11px] flex items-center gap-1.5', toneText[wty.tone])}>
+                <ShieldCheck className="w-3 h-3 shrink-0" /> {wty.reason}
+              </p>
+            )}
             {eq.serial_number && <p className="text-[11px] text-ink-faint">Serial {eq.serial_number}</p>}
             {eq.notes && <p className="text-xs text-ink-muted whitespace-pre-wrap">{eq.notes}</p>}
 
@@ -291,6 +324,9 @@ function EquipmentRow({ eq, services, today, open, onToggle, onEdit, onLog, onRe
                 </div>
               )}
             </div>
+
+            {/* The paperwork behind the record — receipt, warranty certificate, manual. */}
+            {uid && <EquipmentDocs userId={uid} equipmentId={eq.id} docs={docs} onChanged={onDocsChanged} />}
 
             <div className="flex items-center gap-1.5 flex-wrap pt-1">
               <Button size="sm" variant="secondary" onClick={onEdit}><Pencil className="w-3.5 h-3.5" /> Edit</Button>
