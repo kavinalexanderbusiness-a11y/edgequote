@@ -11,9 +11,61 @@ import { createClient } from '@/lib/supabase/client'
 import { createDraftInvoiceForCompletedJob, syncDraftInvoiceAmounts } from '@/lib/invoicing'
 import { recordPriceChange, addLineItems } from '@/lib/jobPricing'
 import type { Job } from '@/types'
-import { registerHandler } from './outbox'
+import { registerHandler, ConflictError, isOwnedThisFlush } from './outbox'
 
 let registered = false
+
+// ── Guarded patch — ONE implementation for every kind that updates a row ─────────
+// Optimistic concurrency. `baseUpdatedAt` is the row version the contractor's edit was
+// based on, captured when they made it. We only write if the server still holds that
+// version; if it doesn't, the row changed while they were offline and blindly writing
+// would silently revert whoever changed it (usually the office). That was the old
+// behaviour: last-write-wins, no trace.
+//
+// Verified against the live DB before relying on it: customers/jobs/quotes/invoices
+// each carry updated_at with a `handle_updated_at` BEFORE UPDATE trigger
+// (`new.updated_at = now()`), so the version genuinely advances on every server edit.
+//
+// The version MUST be the raw string Supabase returned. updated_at is timestamptz
+// precision 6 (e.g. 2026-07-15 05:41:07.299074+00); round-tripping it through
+// `new Date().toISOString()` truncates to milliseconds, which would match NOTHING and
+// turn every single replay into a false conflict.
+//
+// No baseUpdatedAt → unguarded, exactly as before. That keeps ops queued by older
+// builds (and call sites not yet passing a version) working rather than failing them
+// all as conflicts.
+async function guardedPatch(
+  supabase: ReturnType<typeof createClient>,
+  table: 'jobs' | 'customers' | 'quotes',
+  id: string,
+  patch: Record<string, unknown>,
+  baseUpdatedAt?: string | null,
+): Promise<void> {
+  // No version to check against, or the row is one WE already wrote this flush (a
+  // chained offline edit — see isOwnedThisFlush): patch it straight. Guarding against
+  // a version our own previous op just replaced would invent a conflict.
+  const ownKey = `${table.slice(0, -1)}:${id}`   // 'jobs' → 'job:<id>', matching entityKey
+  if (!baseUpdatedAt || isOwnedThisFlush(ownKey)) {
+    const { error } = await supabase.from(table).update(patch).eq('id', id)
+    if (error) throw new Error(error.message)
+    return
+  }
+  const { data, error } = await supabase
+    .from(table).update(patch).eq('id', id).eq('updated_at', baseUpdatedAt).select('id')
+  if (error) throw new Error(error.message)          // network/RLS → retryable
+  if (data && data.length > 0) return                // we held the current version
+
+  // Zero rows means the precondition failed — but that's two different situations, and
+  // telling a contractor "someone edited it" about a record that was DELETED would send
+  // them looking for something that isn't there. A plain read distinguishes them.
+  const { data: still, error: readErr } = await supabase.from(table).select('id').eq('id', id).maybeSingle()
+  if (readErr) throw new Error(readErr.message)      // couldn't tell → retry, don't guess
+  throw new ConflictError(
+    still ? `${table} ${id} changed on the server` : `${table} ${id} no longer exists`,
+    patch,
+    still ? 'changed' : 'gone',
+  )
+}
 
 export function registerOfflineHandlers(): void {
   if (registered) return
@@ -41,10 +93,10 @@ export function registerOfflineHandlers(): void {
       id: string; patch: Record<string, unknown>
       /** Editing a customer's address ALSO moves their primary property (see below). */
       primaryProperty?: Record<string, unknown>
+      baseUpdatedAt?: string | null
     }
     const supabase = createClient()
-    const { error } = await supabase.from('customers').update(p.patch).eq('id', p.id)
-    if (error) throw new Error(error.message)
+    await guardedPatch(supabase, 'customers', p.id, p.patch, p.baseUpdatedAt)
     // The address lives in two places: on the customer AND on their primary property
     // (which is what the schedule, routing and measurements actually read). The edit
     // form writes both, so a replay that only patched the customer would leave the
@@ -59,10 +111,9 @@ export function registerOfflineHandlers(): void {
 
   // P4 — Quote edits/status. A patch on quotes (same shape as customer.update).
   registerHandler('quote.update', async (payload) => {
-    const p = payload as { id: string; patch: Record<string, unknown> }
+    const p = payload as { id: string; patch: Record<string, unknown>; baseUpdatedAt?: string | null }
     const supabase = createClient()
-    const { error } = await supabase.from('quotes').update(p.patch).eq('id', p.id)
-    if (error) throw new Error(error.message)
+    await guardedPatch(supabase, 'quotes', p.id, p.patch, p.baseUpdatedAt)
   })
 
   // P5 — Jobs. The HANDLER lives here (shared), but the call sites live in the
@@ -73,10 +124,10 @@ export function registerOfflineHandlers(): void {
     const p = payload as {
       id: string; patch: Record<string, unknown>; syncPrice?: boolean; syncReason?: string
       priceAudit?: Parameters<typeof recordPriceChange>[1]
+      baseUpdatedAt?: string | null
     }
     const supabase = createClient()
-    const { error } = await supabase.from('jobs').update(p.patch).eq('id', p.id)
-    if (error) throw new Error(error.message)
+    await guardedPatch(supabase, 'jobs', p.id, p.patch, p.baseUpdatedAt)
     // The follow-ups the online path performs, replayed with it — a patch that
     // arrives without them isn't the same mutation, just a piece of one.
     //
@@ -106,10 +157,9 @@ export function registerOfflineHandlers(): void {
   // calls. Both are safely idempotent: the draft de-dupes on job_id, and the
   // comms route enforces its own opt-in + dedupe, so a retried op is a no-op.
   registerHandler('job.complete', async (payload) => {
-    const p = payload as { id: string; patch: Record<string, unknown>; job: Job; notify?: boolean }
+    const p = payload as { id: string; patch: Record<string, unknown>; job: Job; notify?: boolean; baseUpdatedAt?: string | null }
     const supabase = createClient()
-    const { error } = await supabase.from('jobs').update(p.patch).eq('id', p.id)
-    if (error) throw new Error(error.message)
+    await guardedPatch(supabase, 'jobs', p.id, p.patch, p.baseUpdatedAt)
     // Invoice before message: a draft we couldn't create keeps the op queued to retry,
     // rather than having told the customer we're done with nothing to bill them.
     //

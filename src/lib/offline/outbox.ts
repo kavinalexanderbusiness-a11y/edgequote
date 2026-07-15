@@ -9,6 +9,42 @@
 
 import { toast } from '@/lib/toast'
 
+// ── Conflicts ────────────────────────────────────────────────────────────────────
+// Replay was last-write-wins: a queued patch overwrote whatever the server held,
+// so a price the office corrected while the contractor was offline was silently
+// reverted on reconnect. Nobody was told, and the office's number was simply gone.
+//
+// A handler raises this when the row it meant to patch has MOVED ON — i.e. the
+// contractor's edit was based on a version of the row that no longer exists. It is
+// NOT retryable: replaying can only overwrite the newer data again. So the op leaves
+// the queue and the human is told exactly what didn't apply, which is the only
+// correct answer — the machine cannot know whether the driveway or the office is
+// right. `intent` is what they tried to change, so the message can say it.
+// Entities THIS flush has already written successfully.
+//
+// Without this, chained offline edits to one row would all falsely conflict: tap
+// Start then Undo with no signal, and on reconnect Start replays and advances
+// updated_at — so Undo's base version (captured before Start) no longer matches, and
+// we'd report a conflict against a change WE had just made a moment earlier. The
+// contractor would be told the office edited their job when nobody had.
+// A version we ourselves just set is not someone else's edit, so once we hold a row
+// this flush, later ops in that chain patch it unguarded. Correct because ops are
+// strict FIFO per entity and an entity is blocked the moment one of its ops fails —
+// so reaching a later op proves every earlier one landed.
+const ownedThisFlush = new Set<string>()
+export function isOwnedThisFlush(key: string): boolean { return ownedThisFlush.has(key) }
+
+export class ConflictError extends Error {
+  readonly intent: Record<string, unknown>
+  readonly conflictKind: 'changed' | 'gone'
+  constructor(message: string, intent: Record<string, unknown>, conflictKind: 'changed' | 'gone' = 'changed') {
+    super(message)
+    this.name = 'ConflictError'
+    this.intent = intent
+    this.conflictKind = conflictKind
+  }
+}
+
 export interface OutboxOp {
   id: string
   kind: string            // handler key, e.g. 'message.send'
@@ -127,6 +163,24 @@ const MAX_ATTEMPTS = 6
 // and the contractor had already driven away certain it was done. The op is still
 // dropped (a poison op must not retry forever), but the person who made it is told
 // exactly what didn't stick, so they can redo it. Named `label` for that reason.
+// Conflicts are told, never swallowed — and the message carries the VALUES they tried
+// to set, because the op is gone from the queue and this toast is the only remaining
+// record of the work. Without it "never lose data" would be false: their edit would
+// vanish as silently as the overwrite we just prevented.
+function reportConflict(op: OutboxOp, err: ConflictError): void {
+  const what = Object.entries(err.intent)
+    .filter(([, v]) => v !== undefined && v !== null && v !== '')
+    .map(([k, v]) => `${k.replace(/_/g, ' ')} → ${String(v)}`)
+    .join(', ')
+  const why = err.conflictKind === 'gone'
+    ? 'it was deleted while you were offline'
+    : 'it changed on another device while you were offline'
+  toast(
+    `“${op.label}” wasn’t applied — ${why}.${what ? ` Your change (${what}) was not saved.` : ''} Check the record and redo it if it still applies.`,
+    { tone: 'error', duration: 20000 },
+  )
+}
+
 function reportDropped(op: OutboxOp): void {
   // Long duration + error tone: this is the one message here a contractor cannot
   // afford to scroll past — the work is gone and only they can redo it.
@@ -144,6 +198,7 @@ async function doFlush(): Promise<FlushResult> {
   let done = 0, failed = 0
   // Entities whose earlier op failed THIS round. See the ordering note below.
   const blocked = new Set<string>()
+  ownedThisFlush.clear()   // scoped to this flush only — a later flush re-verifies
   try {
     const ops = await list()   // oldest-first
     for (const op of ops) {
@@ -157,10 +212,16 @@ async function doFlush(): Promise<FlushResult> {
       // stuck op can't dam the whole queue.
       const key = entityKey(op)
       if (key && blocked.has(key)) { failed++; continue }
-      try { await h(op.payload); await remove(op.id); done++ }
+      try { await h(op.payload); await remove(op.id); done++; if (key) ownedThisFlush.add(key) }
       catch (err) {
         if (key) blocked.add(key)
         failed++
+        // A conflict can NEVER succeed by retrying — the server row has moved on, and
+        // replaying would just overwrite the newer data we refused to clobber. Take it
+        // out of the queue and hand it to the human, who is the only one who can know
+        // whether the driveway or the office is right. The entity stays blocked for
+        // this round so later ops built on the same stale version don't land either.
+        if (err instanceof ConflictError) { await remove(op.id); reportConflict(op, err); continue }
         // A NETWORK failure is not the op's fault, so it must not cost it an attempt.
         // Flushes fire on online + focus + visibilitychange + every 30s, and every
         // failure used to increment: six flaky reconnects — reachable in about three

@@ -1307,7 +1307,7 @@ export default function SchedulePage() {
     let outcome: 'ran' | 'queued'
     try {
       outcome = await queueOrRun(
-        { kind: 'job.update', payload: { id: job.id, patch }, label: `Start ${job.title || 'job'}` },
+        { kind: 'job.update', payload: { id: job.id, patch, baseUpdatedAt: job.updated_at }, label: `Start ${job.title || 'job'}` },
         async () => {
           const { error } = await supabase.from('jobs').update(patch).eq('id', job.id)
           if (error) throw new Error(error.message)
@@ -1323,7 +1323,7 @@ export default function SchedulePage() {
     offerUndo(outcome === 'queued' ? 'Job started — will sync' : 'Job started', async () => {
       setJobs(prev2 => prev2.map(j => (j.id === job.id ? { ...j, ...prev } : j)))
       await queueOrRun(
-        { kind: 'job.update', payload: { id: job.id, patch: prev }, label: `Undo start ${job.title || 'job'}` },
+        { kind: 'job.update', payload: { id: job.id, patch: prev, baseUpdatedAt: job.updated_at }, label: `Undo start ${job.title || 'job'}` },
         async () => { await supabase.from('jobs').update(prev).eq('id', job.id) },
       )
     })
@@ -1347,7 +1347,7 @@ export default function SchedulePage() {
     let outcome: 'ran' | 'queued'
     try {
       outcome = await queueOrRun(
-        { kind: 'job.complete', payload: { id: job.id, patch, job: completed, notify }, label: `Complete ${job.title || 'job'}` },
+        { kind: 'job.complete', payload: { id: job.id, patch, job: completed, notify, baseUpdatedAt: job.updated_at }, label: `Complete ${job.title || 'job'}` },
         async () => {
           const { error } = await supabase.from('jobs').update(patch).eq('id', job.id)
           if (error) throw new Error(error.message)
@@ -1375,7 +1375,7 @@ export default function SchedulePage() {
     offerUndo(outcome === 'queued' ? 'Job completed — will sync' : 'Job completed', async () => {
       setJobs(prev2 => prev2.map(j => (j.id === job.id ? { ...j, ...prev } : j)))
       await queueOrRun(
-        { kind: 'job.update', payload: { id: job.id, patch: prev }, label: `Undo complete ${job.title || 'job'}` },
+        { kind: 'job.update', payload: { id: job.id, patch: prev, baseUpdatedAt: job.updated_at }, label: `Undo complete ${job.title || 'job'}` },
         async () => {
           await supabase.from('jobs').update(prev).eq('id', job.id)
           if (invoiceCreated) await supabase.from('invoices').delete().eq('job_id', job.id).eq('status', 'draft')
@@ -1406,8 +1406,8 @@ export default function SchedulePage() {
     try {
       outcome = await queueOrRun(
         completing
-          ? { kind: 'job.complete', payload: { id: job.id, patch: fields, job: completed, notify: false }, label: `Complete ${job.title || 'job'}` }
-          : { kind: 'job.update', payload: { id: job.id, patch: fields, syncPrice: repriced }, label: `Edit ${job.title || 'job'}` },
+          ? { kind: 'job.complete', payload: { id: job.id, patch: fields, job: completed, notify: false, baseUpdatedAt: job.updated_at }, label: `Complete ${job.title || 'job'}` }
+          : { kind: 'job.update', payload: { id: job.id, patch: fields, syncPrice: repriced, baseUpdatedAt: job.updated_at }, label: `Edit ${job.title || 'job'}` },
         async () => {
           const { error } = await supabase.from('jobs').update(fields).eq('id', job.id)
           if (error) throw new Error(error.message)
@@ -1456,7 +1456,7 @@ export default function SchedulePage() {
     let outcome: 'ran' | 'queued'
     try {
       outcome = await queueOrRun(
-        { kind: 'job.update', payload: { id: job.id, patch: { price }, syncPrice: true, syncReason: reason, priceAudit: audit }, label: `Price ${job.title || 'job'}` },
+        { kind: 'job.update', payload: { id: job.id, patch: { price }, syncPrice: true, syncReason: reason, priceAudit: audit, baseUpdatedAt: job.updated_at }, label: `Price ${job.title || 'job'}` },
         async () => {
           const { error } = await supabase.from('jobs').update({ price }).eq('id', job.id)
           if (error) throw new Error(error.message)

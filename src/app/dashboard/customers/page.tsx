@@ -174,7 +174,7 @@ export default function CustomersPage() {
     let outcome: 'ran' | 'queued'
     try {
       outcome = await queueOrRun(
-        { kind: 'customer.update', payload: { id, patch, primaryProperty }, label: `Edit · ${editing.name}` },
+        { kind: 'customer.update', payload: { id, patch, primaryProperty, baseUpdatedAt: editing.updated_at }, label: `Edit · ${editing.name}` },
         async () => {
           const { error } = await supabase.from('customers').update(patch).eq('id', id)
           if (error) throw new Error(error.message)
