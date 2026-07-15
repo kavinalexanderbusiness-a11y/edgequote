@@ -1568,6 +1568,13 @@ export default function SchedulePage() {
       userId: user.id, targetJobIds: ids,
       description: input.description, amount: input.amount, serviceKey: input.serviceKey,
       serviceType: job.service_type, recurring: input.scope !== 'this',
+      // Minted ONCE, here, and carried in the payload — so this add has the same
+      // identity however many times it replays. Without it a retry mints a fresh
+      // group_id, looks like a second add-on, and bills the customer twice; with it
+      // addLineItems sees the rows already landed and re-prices instead of re-adding.
+      // This is what lets the handler safely retry a failed draft re-price.
+      // Same generator the engine already writes into this uuid column.
+      groupId: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : null,
     }
     let outcome: 'ran' | 'queued'
     try {
@@ -1575,12 +1582,13 @@ export default function SchedulePage() {
         { kind: 'job.addons.add', payload: { opts, syncJobIds: ids }, label: `Add “${input.description}” to ${job.title || 'job'}` },
         async () => {
           await addLineItems(supabase, opts)
-          await syncDraftInvoiceAmounts(supabase, ids)
+          const { failed } = await syncDraftInvoiceAmounts(supabase, ids)
+          if (failed > 0) setBanner('Service added, but its draft invoice still shows the old total — open the invoice to re-price it.')
         },
-        // Inserting line items is NOT idempotent — a replay would bill the mulch
-        // twice. Queue only when we're definitively offline (so nothing was sent);
-        // a request that failed mid-flight with the network still up is rethrown for
-        // the contractor to retry deliberately, exactly like an SMS send.
+        // Queue only when we're definitively offline (so nothing was sent). A request
+        // that failed mid-flight with the network still up is rethrown for the
+        // contractor to retry deliberately, exactly like an SMS send — the groupId
+        // above makes a replay safe, but it can't tell us whether the server committed.
         { queueOnRunError: false },
       )
     } catch (e) {
@@ -1598,7 +1606,16 @@ export default function SchedulePage() {
       const { data } = await supabase.from('job_line_items').select('*').eq('group_id', item.group_id)
       if (data?.length) snapshot = data as JobLineItem[]
     }
-    await deleteLineItem(supabase, item)
+    // deleteLineItem throws now. Previously it read no error and returned void, so a
+    // failed delete still fired "Removed …" WITH an Undo — and that Undo re-inserted
+    // rows that had never been deleted, duplicating the charge. Bail before the toast:
+    // never claim work is undone when the row is still there.
+    try {
+      await deleteLineItem(supabase, item)
+    } catch (e) {
+      setBanner('Could not remove that service: ' + (e instanceof Error ? e.message : 'please try again.'))
+      return
+    }
     const affectedJobs = [...new Set(snapshot.map(r => r.job_id))]
     await syncDraftInvoiceAmounts(supabase, affectedJobs)
     await fetchJobs()
@@ -1628,9 +1645,17 @@ export default function SchedulePage() {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
     const existing = new Set((addonsByJobId[job.id] || []).map(i => (i.service_key || i.description).toLowerCase()))
-    for (const a of prev) {
-      if (existing.has((a.serviceKey || a.description).toLowerCase())) continue
-      await addLineItems(supabase, { userId: user.id, targetJobIds: [job.id], description: a.description, amount: a.amount, serviceKey: a.serviceKey, serviceType: job.service_type, recurring: false })
+    // addLineItems throws now, so a failed copy says so instead of quietly adding
+    // nothing. Not queued: this is a convenience that reads the previous visit's
+    // extras, and it already returned early above when there's no session.
+    try {
+      for (const a of prev) {
+        if (existing.has((a.serviceKey || a.description).toLowerCase())) continue
+        await addLineItems(supabase, { userId: user.id, targetJobIds: [job.id], description: a.description, amount: a.amount, serviceKey: a.serviceKey, serviceType: job.service_type, recurring: false })
+      }
+    } catch (e) {
+      setBanner('Could not copy the previous visit’s services: ' + (e instanceof Error ? e.message : 'please try again.'))
+      return
     }
     await syncDraftInvoiceAmounts(supabase, [job.id])
     await fetchJobs()
