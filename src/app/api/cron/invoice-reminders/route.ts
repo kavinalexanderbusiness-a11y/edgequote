@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
 import { renderMessage, MsgType, type MessagePrefs } from '@/lib/comms/templates'
 import { commsEnabled } from '@/lib/comms/send'
 import { dispatchToCustomer } from '@/lib/comms/dispatch'
@@ -46,19 +46,16 @@ type ReminderRow = RemindableInvoice & {
 }
 
 export async function GET(req: NextRequest) {
-  const secret = req.headers.get('authorization')?.replace('Bearer ', '') || new URL(req.url).searchParams.get('secret') || ''
-  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
-    return NextResponse.json({ error: 'forbidden' }, { status: 403 })
-  }
+  if (!cronSecretOk(req)) return NextResponse.json({ error: 'forbidden' }, { status: 403 })
   const enabled = commsEnabled()
   if (!enabled.sms && !enabled.email) {
     return NextResponse.json({ ok: true, disabled: true, note: 'Comms disabled — set Twilio/Resend env vars to enable scheduled sends.' })
   }
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL, svc = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!url || !svc) {
+  const client = serviceClient()
+  if (!client) {
     return NextResponse.json({ ok: true, skipped: true, note: 'Set SUPABASE_SERVICE_ROLE_KEY to enable scheduled sends.' })
   }
-  const supabase = createClient(url, svc)
+  const supabase = client
   const today = localTodayISO()
 
   // Only invoices that can still owe money. 'overdue' is then decided by the

@@ -137,15 +137,44 @@ has these queued. Doing them here would conflict:
 
 ---
 
+## ⚠️ Overlap with `guardian/dedup-2026-07-14`
+
+That branch's backlog lists `lib/cron/guard.ts requireCron()` (catalogued, not built).
+**It is built here** — `/api/cron/signals` would otherwise have been the 8th copy of the
+cron preamble, which defeats the point. Whoever merges second should drop their copy.
+
+Its backlog also lists **`runChaseCron`** (the quote chaser and the invoice chaser are
+the same loop twice). Still not done, still the right next extraction — and it is the
+natural first consumer of `automation/policy` + `automation/types`: same policy resolve,
+same claim-then-send, same run log. Left alone here to avoid a collision.
+
 ## Automation engine — prepared, NOT wired
 
 - `lib/automation/types.ts` — contracts only. Modes (`off | suggest | auto`), the
   hold/undo window, dedupe key, run log with a **suppression reason**. No runtime.
-- `lib/automation/policy.ts` — the first real shared piece, in use by both chasers.
-- `lib/signals/*` — pure, clock-injected, DOM-free, primitive inputs. This is what
-  lets a future `/api/cron/signals` evaluate detection server-side.
+- `lib/automation/policy.ts` — `resolveChasePolicy`, in use by both chasers.
+- `lib/cron/guard.ts` — `cronSecretOk` (constant-time) + `serviceClient`. The preamble
+  every scheduled route opens with, once.
+- `lib/signals/*` — pure, clock-injected, DOM-free, primitive inputs.
+- **`/api/cron/signals` + `automation_signals`** — the detection half. Sweeps the
+  server-runnable detectors and records what it found. **It sends nothing, notifies
+  nothing, mutates nothing user-visible.** Idempotent: one row per
+  (user, signal, subject, day).
 
-**The gap that still defines the product:** ~75 detectors exist and only 3 run without
-a browser open. The two new chasers are the 4th and 5th. Closing that is Phase 1.6
-(`/api/cron/signals`) — not started, and not startable until the owner rules on the
-decisions above, since they'd drive real sends.
+### Why a table nothing reads yet
+Deliberate. A rule must **consume a signal**, never re-derive the condition — re-deriving
+is exactly how six screens ended up disagreeing about who had churned. The ledger has to
+exist before the first rule can be honest. Until then the sweep is observability: it
+answers "what would an automation have seen last night?" without anyone being messaged.
+
+**Run this now:** `supabase/RUN-2026-07-14-automation-signals.sql` (the sweep degrades
+gracefully without it — it reports the missing table instead of failing nightly).
+
+**Signals emitted today:** `recurring_ran_out`, `churn_risk` (both customer-subject).
+Deliberately a small, verified start rather than all ~75 at once — each additional
+detector must first be proven server-runnable and duplicate-free, per the signals
+contract.
+
+**The gap that still defines the product:** ~75 detectors exist; before this pass three
+ran without a browser open, and the two new chasers made five. This sweep is the first
+that exists to be *read* rather than to send. The remaining ~70 are still browser-only.
