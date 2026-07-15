@@ -2,10 +2,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { addDays, format } from 'date-fns'
 import { renderMessage, MsgType, prefAllows, type MessagePrefs } from '@/lib/comms/templates'
-import { sendSms, sendEmail, commsEnabled, type SendResult } from '@/lib/comms/send'
-import { SKIP_REASON } from '@/lib/comms/skipReasons'
+import { commsEnabled } from '@/lib/comms/send'
+import { dispatchToCustomer } from '@/lib/comms/dispatch'
 import { SENT_STATES } from '@/lib/comms/delivery'
-import { logSend } from '@/lib/comms/log'
+import { logDispatch } from '@/lib/comms/log'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { resolveAutomations, Automations } from '@/lib/comms/automations'
 
@@ -66,32 +66,30 @@ export async function GET(req: NextRequest) {
       if (template === 'reminder' && !info.automations.reminder) continue       // automation off for this owner
       if (template === 'review_request' && !info.automations.review) continue
       if (template === 'review_request' && (c.reviewed_at || c.review_declined_at)) continue  // already reviewed or opted out — don't ask again
-      if (!prefAllows(c.message_prefs, template)) continue  // customer declined this category of message
+      // Category consent. dispatchToCustomer checks this too (and would return a
+      // logged 'unsubscribed' skip); this pre-check keeps THIS cron's long-standing
+      // behaviour of passing over the customer silently. It is the one outcome here
+      // that isn't logged — see AUTOMATION_DEDUP_STATUS.md, pending an owner call.
+      if (!prefAllows(c.message_prefs, template)) continue
       const token = await ensurePortalToken(supabase, j.user_id, j.customer_id)
       const msg = renderMessage(template, info.templates, { firstName: c.name, businessName: info.name, dateLabel, portalLink: token ? portalUrl(token) : undefined, reviewLink: info.reviewUrl || undefined, directPhone: info.phone || undefined, logoUrl: info.logoUrl || undefined, website: info.website || undefined })
-      // Log EVERY outcome, including the skips. These two branches used to be bare
-      // `if (opted_in && contact)` with no else: an opted-out customer produced no
-      // send AND no notification_log row, so the timeline showed nothing at all and
-      // the owner had no way to know a reminder/review request never went out. The
-      // canonical reasons + branch order mirror lib/comms/dispatch.ts so automatic
-      // sends read identically to manual ones. alreadySent() blocks only on a real
-      // prior send (SENT_STATES), so a skipped row never suppresses a later one.
-      const logRow = (channel: 'sms' | 'email', status: string, detail: string | null, r?: SendResult) =>
-        logSend(supabase, {
-          userId: j.user_id, customerId: j.customer_id, jobId: j.id, channel, template, status, detail,
-          // The provider's id — without it these rows could never be corrected past
-          // 'sent', so a bounced reminder would read as delivered forever.
-          provider: r?.sent ? (channel === 'sms' ? 'twilio' : 'resend') : null,
-          providerId: r?.id ?? null,
-        })
 
-      if (!c.sms_opt_in) await logRow('sms', 'skipped', SKIP_REASON.NO_OPT_IN)
-      else if (!c.phone) await logRow('sms', 'skipped', SKIP_REASON.NO_PHONE)
-      else { const r = await sendSms(c.phone, msg.sms); await logRow('sms', r.reason, r.error ?? null, r); if (r.sent) sent++ }
-
-      if (!c.email_opt_in) await logRow('email', 'skipped', SKIP_REASON.NO_OPT_IN)
-      else if (!c.email) await logRow('email', 'skipped', SKIP_REASON.NO_EMAIL)
-      else { const r = await sendEmail(c.email, msg.subject, msg.html, msg.text); await logRow('email', r.reason, r.error ?? null, r); if (r.sent) sent++ }
+      // THE one dispatch pipeline — same opt-in checks, same branch order, same
+      // canonical skip reasons and provider capture every other sender gets.
+      // `thread: false` preserves this cron's behaviour: reminders and review
+      // requests have never written a conversation bubble (unlike campaigns).
+      // alreadySent() blocks only on a real prior send (SENT_STATES), so a skipped
+      // row never suppresses a later one.
+      const res = await dispatchToCustomer(supabase, {
+        userId: j.user_id,
+        customer: { id: j.customer_id, phone: c.phone, email: c.email, sms_opt_in: c.sms_opt_in, email_opt_in: c.email_opt_in, message_prefs: c.message_prefs },
+        channels: ['sms', 'email'],
+        smsText: msg.sms, emailSubject: msg.subject, emailHtml: msg.html, emailText: msg.text,
+        template,
+        thread: false,
+      })
+      await logDispatch(supabase, res, { userId: j.user_id, customerId: j.customer_id, jobId: j.id, template })
+      sent += res.sentChannels.length
     }
   }
 

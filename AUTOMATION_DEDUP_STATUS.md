@@ -34,6 +34,52 @@ filter's *index*. The parameterised form is the separately-named `quoteIsQuiet`.
 
 ---
 
+## Dispatch pipeline — who is on it
+
+| Sender | Kind | On `dispatchToCustomer`? |
+|---|---|---|
+| `cron/campaigns` | automation | ✅ |
+| `cron/quote-followup` | automation | ✅ |
+| `cron/invoice-reminders` | automation | ✅ |
+| **`cron/notifications`** (reminders + review requests) | automation | ✅ **this pass** |
+| `lib/comms/receipt.ts` | automation (webhook) | ❌ — deliberate, see below |
+| `api/comms/send/route.ts` | manual | ❌ — see below |
+
+`cron/notifications` was converted with `thread: false`, preserving the fact that
+reminders/review requests have never written a conversation bubble. Verified by
+`scripts/verify-automations.ts` **96/96**.
+
+### `receipt.ts` — a different rule, not a duplicate (OWNER DECISION)
+It cannot go on the shared pipeline without changing behaviour, because its consent
+model is **deliberately different**:
+
+1. **Email is transactional** — it does NOT check `email_opt_in`. `dispatchToCustomer`
+   does. Converting as-is would **stop sending receipts to customers who opted out of
+   email** — for money they just paid. Almost certainly wrong.
+2. **No `prefAllows`** — dispatch checks the category. Converting would suppress
+   receipts for anyone opted out of the `invoices` category.
+3. **Channel order** — receipt sends **email first**, dispatch hardcodes **sms first**,
+   and the threaded bubble records the first-sent channel. The bubble's channel would
+   flip.
+4. **Skips are logged only for live channels** (`commsEnabled()`); dispatch/logDispatch
+   would log `disabled` rows too.
+
+**To do this safely dispatch needs two additions:** a `transactional?: boolean` that
+bypasses `email_opt_in` + `prefAllows`, and iteration in the caller's `channels` order
+rather than hardcoded sms→email. Both touch every existing sender. Also in the frozen
+invoice/payment domain. **Question for the owner: should a receipt ignore `email_opt_in`?**
+(Today it does. That looks correct — but it should be a stated decision, not an
+accident of a separate code path.)
+
+### `api/comms/send/route.ts` — the 4th copy (manual)
+Not an automation, so out of this pass's stated scope, but it is the last
+re-implementation of the gate. It differs from dispatch in that it also stamps
+`on_my_way_at` as a side-effect of sending and honours a `bodyOverride`. Converting it
+is a bigger job than the crons and should be its own change with the harness extended
+to cover the manual path first.
+
+---
+
 ## NEEDS AN OWNER DECISION — documented, NOT changed
 
 ### 1. `is_initial_visit` — LTV disagrees by screen
