@@ -4,14 +4,15 @@ import { cn } from '@/lib/utils'
 interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
   label?: string
   error?: string
-  options: { value: string; label: string }[]
+  hint?: string
+  options: { value: string; label: string; disabled?: boolean }[]
   placeholder?: string
   /** 'sm' = the blessed compact field (rounded-lg px-3 py-2 text-sm) — matches Input's. */
   fieldSize?: 'sm' | 'md'
 }
 
 const Select = forwardRef<HTMLSelectElement, SelectProps>(
-  ({ className, label, error, options, placeholder, id, fieldSize = 'md', ...props }, ref) => {
+  ({ className, label, error, hint, options, placeholder, id, fieldSize = 'md', ...props }, ref) => {
     const generatedId = useId()
     const inputId = id ?? generatedId
     return (
@@ -37,12 +38,13 @@ const Select = forwardRef<HTMLSelectElement, SelectProps>(
         >
           {placeholder && <option value="">{placeholder}</option>}
           {options.map((opt) => (
-            <option key={opt.value} value={opt.value} className="bg-bg-secondary">
+            <option key={opt.value} value={opt.value} disabled={opt.disabled} className="bg-bg-secondary">
               {opt.label}
             </option>
           ))}
         </select>
         {error && <p className="text-xs text-red-400 animate-fade">{error}</p>}
+        {hint && !error && <p className="text-xs text-ink-faint animate-fade">{hint}</p>}
       </div>
     )
   }
