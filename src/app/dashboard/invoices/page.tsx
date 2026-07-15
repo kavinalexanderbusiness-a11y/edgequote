@@ -20,6 +20,7 @@ import { Input } from '@/components/ui/Input'
 import { Textarea } from '@/components/ui/Textarea'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { PaymentHistory } from '@/components/payments/PaymentHistory'
+import { ReconcilePanel } from '@/components/payments/ReconcilePanel'
 import { invoiceTotals, applyDiscount, type DiscountType } from '@/lib/invoiceTotals'
 import { toast as notify } from '@/lib/toast'
 import { confirm as confirmDialog } from '@/lib/confirm'
@@ -646,6 +647,9 @@ export default function InvoicesPage() {
       )}
 
       {!loading && !loadError && invoices.length > 0 && <PaymentHistory settings={settings} />}
+      {/* Sits with the ledger it checks. Only offered once Stripe is connected —
+          without it there is no second set of books to compare against. */}
+      {!loading && !loadError && paymentsEnabled && invoices.length > 0 && <ReconcilePanel />}
 
       {/* ONE shared Send Message dialog — sending marks the invoice sent. The amount
           is what's actually OWED (the ledger balance), never the original total: a
