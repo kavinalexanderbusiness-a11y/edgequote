@@ -639,6 +639,7 @@ export function DayOpsPanel({
               stops={timelineStops}
               nowMin={isToday ? new Date().getHours() * 60 + new Date().getMinutes() : undefined}
               onSelectStop={jumpToStop}
+              omitted={active.length - timelineStops.length}
             />
           )}
 

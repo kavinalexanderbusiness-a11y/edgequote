@@ -22,7 +22,7 @@ export interface TimelineStop {
 //
 // It answers, at a glance, what the metric strip could only state: where the day
 // actually goes, how much of it is driving, and whether it runs past capacity.
-export function RouteTimeline({ startMin, finishMin, capacityEndMin, stops, nowMin, onSelectStop, className }: {
+export function RouteTimeline({ startMin, finishMin, capacityEndMin, stops, nowMin, onSelectStop, omitted, className }: {
   startMin: number
   finishMin: number
   capacityEndMin: number
@@ -34,6 +34,10 @@ export function RouteTimeline({ startMin, finishMin, capacityEndMin, stops, nowM
    *  interrogate by hovering — and `title` tooltips never fire on touch, so on a
    *  phone the stop names and arrival times were simply unreadable. */
   onSelectStop?: (jobId: string) => void
+  /** Visits on this day that the route couldn't place (no address to geocode).
+   *  They're absent from the ETA chain, so they're absent here AND from the
+   *  finish time — say so rather than draw a day that quietly leaves work out. */
+  omitted?: number
   className?: string
 }) {
   if (!stops.length) return null
@@ -174,6 +178,16 @@ export function RouteTimeline({ startMin, finishMin, capacityEndMin, stops, nowM
       {over && (
         <p className="text-[11px] text-red-400 mt-1">
           Runs ~{Math.round(overMin / 6) / 10}h past your day — optimize the route, or move a stop.
+        </p>
+      )}
+
+      {/* The route can only place stops it can geocode, so an address-less visit is
+          missing from the ETA chain — and therefore from this bar and the finish
+          time above it. Better to admit the gap than to draw a shorter day than
+          the one you actually have. */}
+      {!!omitted && omitted > 0 && (
+        <p className="text-[11px] text-amber-400 mt-1">
+          {omitted} {omitted === 1 ? 'visit has' : 'visits have'} no address — not shown here, and not counted in the finish time.
         </p>
       )}
     </div>
