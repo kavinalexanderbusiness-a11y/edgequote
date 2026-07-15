@@ -61,13 +61,29 @@ function openDB(): Promise<IDBDatabase> {
   })
 }
 
+// Resolves when the TRANSACTION COMMITS, not when the request succeeds.
+//
+// This module is sold as owning survival, and its durability signal used to fire
+// before durability existed: it resolved on `request.onsuccess`, which only means the
+// request was accepted INSIDE the transaction — the bytes are not on disk until the
+// transaction commits. `await putPending(...)` therefore returned while the write was
+// still in flight, and a phone that died in that gap lost the photo silently while
+// the UI said "Saved". (The outbox's tx() has the same shape; there it's harmless,
+// because a lost intent is re-derivable and a lost photo is not — the lawn is mown.)
+// Reads still resolve from the request: there is nothing to commit.
 function tx<T>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
   return openDB().then(db => new Promise<T>((resolve, reject) => {
     const t = db.transaction(STORE, mode)
+    let result: T
     const r = run(t.objectStore(STORE))
-    r.onsuccess = () => resolve(r.result)
+    r.onsuccess = () => { result = r.result; if (mode === 'readonly') resolve(result) }
     r.onerror = () => reject(r.error)
-    t.oncomplete = () => db.close()
+    t.oncomplete = () => { db.close(); resolve(result) }
+    // A write that aborts (quota, a killed tab mid-commit) must REJECT, not hang.
+    // Previously neither of these was handled, so the promise stayed pending forever
+    // and its db handle leaked — enough of them blocks a future openDB upgrade.
+    t.onabort = () => { db.close(); reject(t.error || new Error('idb transaction aborted')) }
+    t.onerror = () => { db.close(); reject(t.error || new Error('idb transaction failed')) }
   }))
 }
 
