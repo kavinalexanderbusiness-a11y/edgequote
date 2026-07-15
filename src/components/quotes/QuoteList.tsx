@@ -261,7 +261,17 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
               action={{ label: 'New quote', onClick: () => router.push('/dashboard/quotes/new') }} />
           </Card>
         ) : (
-          <Card><InlineEmpty>No quotes match your filters.</InlineEmpty></Card>
+          <Card>
+            <InlineEmpty>
+              No quotes match your filters.
+              <span className="block mt-3">
+                <Button variant="ghost" size="sm"
+                  onClick={() => { setSearch(''); setStatusFilter(''); setFollowUpOnly(false) }}>
+                  Clear filters
+                </Button>
+              </span>
+            </InlineEmpty>
+          </Card>
         )
       ) : (
         <Card className="overflow-hidden">
@@ -273,9 +283,9 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
                   <th className="text-left px-3 sm:px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide hidden sm:table-cell">Quote #</th>
                   <th className="text-left px-3 sm:px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide">Customer</th>
                   <th className="text-left px-3 sm:px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide hidden md:table-cell">Service</th>
-                  <th className="text-left px-3 sm:px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide">Total</th>
+                  <th className="text-right px-3 sm:px-5 pr-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide">Total</th>
                   <th className="text-left px-3 sm:px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide">Status</th>
-                  <th className="text-left px-3 sm:px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide hidden lg:table-cell">Date</th>
+                  <th className="text-left px-3 sm:px-5 py-3 text-xs font-semibold text-ink-muted uppercase tracking-wide hidden md:table-cell">Date</th>
                   <th className="px-3 sm:px-5 py-3" />
                 </tr>
               </thead>
@@ -283,38 +293,47 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
                 {filtered.map(q => (
                   <tr key={q.id} {...hoverIntent(() => router.prefetch(`/dashboard/quotes/${q.id}`))}
                     onClick={() => router.push(`/dashboard/quotes/${q.id}`)}
-                    className="hover:bg-surface-raised transition-colors group cursor-pointer">
+                    tabIndex={0}
+                    role="button"
+                    onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); router.push(`/dashboard/quotes/${q.id}`) } }}
+                    className="hover:bg-surface-raised focus-visible:bg-surface-raised focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent/40 transition-colors group cursor-pointer">
                     <td className="px-3 py-3.5" onClick={e => e.stopPropagation()}>
                       <SelectCheckbox checked={sel.isSelected(q.id)} onToggle={shift => sel.toggle(q.id, shift)} />
                     </td>
                     {/* Hidden on phones — the follow-up state it carried is already
                         shown as "Sent Xd ago · follow up" under the customer name. */}
                     <td className="px-3 sm:px-5 py-3.5 font-mono text-xs text-ink-muted hidden sm:table-cell">
-                      <span className="flex items-center gap-1.5">
-                        {needsFollowUp(q) && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" title="Needs follow-up" />}
-                        {q.quote_number}
-                      </span>
+                      {q.quote_number}
                     </td>
-                    <td className="px-3 sm:px-5 py-3.5 font-medium text-ink">
+                    <td className="px-3 sm:px-5 py-3.5 font-semibold text-ink">
                       {q.customer_name}
                       {needsFollowUp(q) && q.sent_at && (
-                        <span className="block text-[10px] font-semibold text-amber-400 mt-0.5">Sent {daysSince(q.sent_at)}d ago · follow up</span>
+                        <span className="block text-[11px] font-medium text-amber-400 mt-0.5">Sent {daysSince(q.sent_at)}d ago · follow up</span>
                       )}
                     </td>
                     <td className="px-3 sm:px-5 py-3.5 text-ink-muted hidden md:table-cell">{q.service_type}</td>
-                    <td className="px-3 sm:px-5 py-3.5 font-semibold text-ink tabular-nums">{formatCurrency(q.total)}</td>
+                    <td className="px-3 sm:px-5 pr-5 py-3.5 text-right font-medium text-ink tabular-nums">{formatCurrency(q.total)}</td>
                     <td className="px-3 sm:px-5 py-3.5" onClick={e => e.stopPropagation()}><QuoteStatusControl quoteId={q.id} status={q.status} followUpCount={q.follow_up_count} /></td>
-                    <td className="px-3 sm:px-5 py-3.5 text-ink-faint hidden lg:table-cell">{formatDate(q.created_at)}</td>
+                    {/* Age surfaces dead pipeline: amber past 14d, red past 30d for
+                        quotes not already sent (a sent quote is chased via follow-up). */}
+                    <td className="px-3 sm:px-5 py-3.5 hidden md:table-cell tabular-nums" title={formatDate(q.created_at)}>
+                      {(() => {
+                        const age = daysSince(q.created_at) ?? 0
+                        const stale = q.status !== 'sent'
+                        const tone = stale && age > 30 ? 'text-red-400' : stale && age > 14 ? 'text-amber-400' : 'text-ink-muted'
+                        return <span className={tone}>{age}d</span>
+                      })()}
+                    </td>
                     <td className="px-3 sm:px-5 py-3.5" onClick={e => e.stopPropagation()}>
                       <div className="flex items-center gap-1 justify-end">
                         <Button
-                          variant="danger"
+                          variant="ghost"
                           size="sm"
                           onClick={() => handleDelete(q.id)}
                           loading={deleting === q.id}
                           title="Delete quote"
                           aria-label="Delete quote"
-                          className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
+                          className="text-ink-faint hover:text-red-400 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </Button>

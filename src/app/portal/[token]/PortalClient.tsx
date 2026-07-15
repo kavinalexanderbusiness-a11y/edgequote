@@ -167,10 +167,12 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     // before removing a card, so a stray tap can't accept a job by accident.
     const q = data?.quotes.find(x => x.id === qid)
     const svc = (q?.service_type || '').trim()
+    const total = Number(q?.total) || 0
+    const money = total > 0 ? ` for ${formatCurrency(total)}` : ''
     const confirmed = await confirmDialog({
       title: 'Approve this quote?',
       message: svc
-        ? `You're approving ${svc}. We'll follow up to schedule your first visit.`
+        ? `You're approving ${svc}${money}. We'll follow up to schedule your first visit.`
         : `We'll follow up to schedule your first visit once you approve.`,
       confirmLabel: 'Approve quote',
     })
@@ -445,6 +447,9 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
                 <p className="text-xs text-ink-muted">
                   {awaiting.length === 1 ? `${formatCurrency(Number(awaiting[0].total) || 0)} — review and approve when you're ready` : `Review and approve when you're ready`}
                 </p>
+                {awaiting.length === 1 && (
+                  <p className="text-[11px] text-ink-faint mt-0.5">Valid until {formatDate(new Date(new Date(awaiting[0].issued_date || awaiting[0].created_at).getTime() + 30 * 86400000).toISOString().slice(0, 10))}</p>
+                )}
               </div>
             </div>
             <span className="text-xs font-semibold text-amber-400 shrink-0">Review →</span>
@@ -776,6 +781,8 @@ function DocRow({ d, paymentsEnabled, pay, payingId, accept, accepting }: {
   // can be accepted; an invoice with a balance can be paid.
   const canAccept = d.kind === 'quote' && d.status === 'sent'
   const canPay = d.kind === 'invoice' && paymentsEnabled && d.balance > 0 && d.status !== 'draft' && d.status !== 'cancelled'
+  // Quotes hold their price for 30 days from issue — show that window so approval feels timely.
+  const validUntil = new Date(new Date(d.date).getTime() + 30 * 86400000).toISOString().slice(0, 10)
   return (
     <div className="rounded-card border border-border bg-bg-secondary p-4 card-lift">
       <div className="flex items-start justify-between gap-2">
@@ -788,6 +795,7 @@ function DocRow({ d, paymentsEnabled, pay, payingId, accept, accepting }: {
         </div>
         <div className="text-right shrink-0">
           <p className="text-sm font-bold text-ink tabular-nums">{formatCurrency(d.amount)}</p>
+          {canAccept && <p className="text-[11px] text-ink-faint mt-0.5">Valid until {formatDate(validUntil)}</p>}
           {d.kind === 'quote' ? <QuoteStatusPill status={d.status} /> : <InvoiceStatusPill status={d.status} />}
         </div>
       </div>
@@ -804,7 +812,10 @@ function DocRow({ d, paymentsEnabled, pay, payingId, accept, accepting }: {
       {(canAccept || canPay) && (
         <div className="mt-3">
           {canAccept && (
-            <Button className="w-full sm:w-auto" onClick={() => accept(d.rawId)} loading={accepting === d.rawId}><Check className="w-4 h-4" /> Accept this quote</Button>
+            <>
+              <Button className="w-full sm:w-auto" onClick={() => accept(d.rawId)} loading={accepting === d.rawId}><Check className="w-4 h-4" /> Approve — {formatCurrency(d.amount)}</Button>
+              <p className="text-[11px] text-ink-faint mt-1.5">You&rsquo;ll confirm on the next step — we&rsquo;ll then reach out to schedule.</p>
+            </>
           )}
           {canPay && (
             <>
