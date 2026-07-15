@@ -317,11 +317,18 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
                     </div>
                   </div>
                 ) : t.status === 'paused' ? (
-                  // Honest: it's not stuck, there's no signal. It'll go on reconnect —
-                  // and it's on disk, so closing the app won't lose it.
+                  // Honest: it's not stuck, there's no signal. It'll go on reconnect.
+                  // The wording turns on whether the bytes are ACTUALLY on disk —
+                  // this said "Saved" unconditionally, including when storage was full
+                  // and the photo had no backup at all, which is precisely the
+                  // sentence that stops someone re-shooting a lawn they've now mown.
                   <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-black/45 px-1 text-center">
                     <WifiOff className="w-4 h-4 text-white/90" />
-                    <span className="text-[9px] font-medium text-white leading-tight">Saved — uploads when you&apos;re back</span>
+                    <span className="text-[10px] font-medium text-white leading-tight">
+                      {t.durable === false
+                        ? 'Not saved — keep the app open'
+                        : 'Saved — uploads when you’re back'}
+                    </span>
                   </div>
                 ) : (
                   <div className="absolute inset-0 flex items-center justify-center bg-black/25"><Loader2 className="w-5 h-5 text-white animate-spin" /></div>

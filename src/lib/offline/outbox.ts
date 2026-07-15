@@ -178,8 +178,31 @@ export async function queueOrRun(
   }
 }
 
+// The message a browser gives a dead fetch. Deliberately a list of EXACT phrases, not
+// a loose "network" match: anything broader would start queueing genuine validation
+// and permission errors, which can never succeed on retry and would burn MAX_ATTEMPTS
+// before being dropped — trading a visible failure for a silent one.
+//   Chrome  "Failed to fetch"
+//   Firefox "NetworkError when attempting to fetch resource."
+//   Safari  "Load failed" / "The Internet connection appears to be offline."
+//   undici  "fetch failed"
+const NETWORK_MESSAGE = /failed to fetch|networkerror when attempting|load failed|fetch failed|network request failed|internet connection appears to be offline|err_internet_disconnected|err_network_changed|err_name_not_resolved/i
+
+// Would this error have been fixed by having signal?
+//
+// `navigator.onLine === false` only means the OS sees no interface. It is famously
+// TRUE on a captive portal — the hotel/coffee-shop wifi a contractor's phone joins by
+// itself at the edge of a job — where every request dies at a login page. And
+// supabase-js does NOT throw on a dead fetch: it RETURNS { error }, and our call sites
+// then `throw new Error(error.message)`, which is a plain Error, not a TypeError.
+// So the old check missed both halves of the commonest real-world outage: onLine lied,
+// the error wasn't a TypeError, and the write was never queued. The contractor got a
+// "couldn't save" banner on a phone in their pocket, and the work was gone.
 function isNetworkError(e: unknown): boolean {
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return true
   // fetch() throws a TypeError ("Failed to fetch") when the network is unreachable.
-  return e instanceof TypeError
+  if (e instanceof TypeError) return true
+  // …but a rethrown supabase error is a plain Error carrying the same text.
+  const msg = e instanceof Error ? e.message : typeof e === 'string' ? e : ''
+  return msg ? NETWORK_MESSAGE.test(msg) : false
 }
