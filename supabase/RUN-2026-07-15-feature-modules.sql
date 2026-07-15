@@ -12,3 +12,10 @@ alter table business_settings add column if not exists enabled_modules jsonb;
 
 comment on column business_settings.enabled_modules is
   'Feature-module keys visible in navigation (registry: src/lib/modules.ts). NULL = all modules. Core modules (dashboard) are always shown regardless.';
+
+-- ── Neutral company_name default (same platform pass) ───────────────────────
+-- APPLIED to production 2026-07-15 via MCP (verified: default now ''::text).
+-- New signups were literally branded 'Edge Property Services' by the schema.
+-- Existing rows untouched; every send path falls back to the neutral
+-- 'your service provider' when company_name is empty.
+alter table business_settings alter column company_name set default '';
