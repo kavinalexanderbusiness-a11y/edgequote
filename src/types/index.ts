@@ -947,25 +947,14 @@ export const SERVICE_CATEGORIES = [
   'General',
 ] as const
 
-export const OVERGROWTH_LEVELS = [
-  { label: 'Normal Lawn', multiplier: 1.0, description: 'Standard condition — base price' },
-  { label: '6–12 inches', multiplier: 1.5, description: 'Moderate overgrowth' },
-  { label: '1–2 feet', multiplier: 2.0, description: 'Heavy overgrowth' },
-  { label: 'Over 2 feet', multiplier: 0, description: 'Custom quote required' },
-] as const
+// OVERGROWTH_LEVELS and SERVICE_TYPES were deleted here (2026-07-15). Both were
+// dead — zero references anywhere in src/, no type alias, no importer — and both
+// hardcoded a lawn trade: a fixed 10-service menu and a grass-height multiplier.
+// The live equivalents are owner-owned data, not constants: service_templates IS
+// the service catalogue, and overgrowth is quotes.overgrowth_multiplier, set from
+// the measure tool. Keeping dead lawn lists around is how the next reader
+// concludes the platform has a home industry.
 
-export const SERVICE_TYPES = [
-  'Lawn Mowing',
-  'Yard Cleanup',
-  'Snow Removal',
-  'Landscaping',
-  'Pressure Washing',
-  'Window Cleaning',
-  'Junk Removal',
-  'Fencing',
-  'Painting',
-  'Other',
-] as const
 
 export const STATUS_LABELS: Record<QuoteStatus, string> = {
   draft: 'Draft',

@@ -423,7 +423,9 @@ const PLATFORMS = [
 ]
 
 function buildCurl(endpoint: string, token: string): string {
-  const payload = { token, name: 'cURL test', email: 'test@example.com', phone: '5875550000', address: '123 Test St', requestedServices: 'Lawn Mowing' }
+  // Sample data, like every other field here ('cURL test', 'test@example.com',
+  // '123 Test St'). It used to name a trade, which read as a required value.
+  const payload = { token, name: 'cURL test', email: 'test@example.com', phone: '5875550000', address: '123 Test St', requestedServices: 'Test service' }
   return `curl -X POST ${JSON.stringify(endpoint)} \\\n  -H "Content-Type: application/json" \\\n  -d '${JSON.stringify(payload)}'`
 }
 
