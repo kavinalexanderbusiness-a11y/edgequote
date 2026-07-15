@@ -45,7 +45,7 @@ export function WeatherStrip({ report }: { report?: WeatherImpactReport | null }
     if (!report && !tried) return null // still loading its own copy — say nothing yet
     return (
       <Link href="/dashboard/weather"
-        className="flex items-center gap-2 rounded-card border border-border bg-bg-secondary px-4 py-2.5 transition-colors hover:border-accent/30">
+        className="flex items-center gap-2 rounded-card border border-border bg-bg-secondary px-4 py-2.5 transition-colors hover:border-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
         <CloudOff className="w-3.5 h-3.5 text-ink-faint shrink-0" />
         <p className="text-xs text-ink-muted">Couldn&rsquo;t check the forecast — rain risk unknown</p>
         <span className="ml-auto text-[11px] font-medium text-accent-text flex items-center gap-1 shrink-0">Weather <ArrowRight className="w-3 h-3" /></span>
@@ -56,7 +56,7 @@ export function WeatherStrip({ report }: { report?: WeatherImpactReport | null }
 
   return (
     <Link href="/dashboard/weather"
-      className={cn('flex items-center gap-3 rounded-card border px-4 py-2.5 transition-colors',
+      className={cn('flex items-center gap-3 rounded-card border px-4 py-2.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
         atRisk ? 'border-blue-500/30 bg-blue-500/[0.05] hover:border-blue-500/50' : 'border-border bg-bg-secondary hover:border-accent/30')}>
       <div className="flex items-center gap-2 text-sm">
         {r.today && <span title="Today">{r.today.emoji} <span className="text-ink-muted">{r.today.precipProbability}%</span></span>}

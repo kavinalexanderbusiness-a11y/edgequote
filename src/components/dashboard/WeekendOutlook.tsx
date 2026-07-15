@@ -53,7 +53,7 @@ export function WeekendOutlook({ plan }: { plan: DayPlan }) {
                   </span>
                 ) : (
                   // Accent, not amber — open capacity is opportunity, and amber is reserved for risk on this page.
-                  <Link href="/dashboard/schedule" className="text-xs text-accent-text font-medium flex items-center gap-1 hover:underline"><Plus className="w-3 h-3" /> Open — add a job</Link>
+                  <Link href="/dashboard/schedule" className="text-xs text-accent-text font-medium flex items-center gap-1 hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><Plus className="w-3 h-3" /> Open — add a job</Link>
                 )}
               </div>
               {g.jobs.length > 0 && (
@@ -94,7 +94,7 @@ export function WeekendOutlook({ plan }: { plan: DayPlan }) {
           ))}
         </div>
         <div className="px-5 py-2.5 border-t border-border">
-          <Link href="/dashboard/schedule" className="text-xs text-accent-text font-medium hover:underline">Open Schedule →</Link>
+          <Link href="/dashboard/schedule" className="text-xs text-accent-text font-medium hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">Open Schedule →</Link>
         </div>
       </CardBody>
     </Card>

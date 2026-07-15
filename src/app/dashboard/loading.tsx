@@ -42,6 +42,13 @@ export default function DashboardLoading() {
         ))}
       </div>
 
+      {/* Weather strip. Reserved on purpose: the strip almost always renders
+          something (the impact engine falls back to a default location, and a
+          failed forecast still says so), so leaving no room here meant it
+          INSERTED between money and priorities on arrival and shoved the queue
+          down — a shift right where the eye already is. */}
+      <Skeleton className="h-[42px] w-full rounded-card" />
+
       {/* Priorities queue */}
       <div className="rounded-card border border-accent/20 overflow-hidden">
         <div className="px-4 sm:px-5 py-3.5 border-b border-border flex items-center gap-2.5">

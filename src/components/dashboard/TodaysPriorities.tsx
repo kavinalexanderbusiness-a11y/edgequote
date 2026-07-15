@@ -51,7 +51,10 @@ export function TodaysPriorities({ items }: { items: Priority[] }) {
               <li key={p.kind}>
                 <Link
                   href={p.href}
-                  className="group flex items-center gap-3 px-4 sm:px-5 py-3.5 hover:bg-surface/40 active:bg-surface/60 transition-colors"
+                  // -outline-offset pulls the ring INSIDE the row: these rows sit
+                  // flush against the card's rounded border, so an outset ring
+                  // would clip against it on the first and last item.
+                  className="group flex items-center gap-3 px-4 sm:px-5 py-3.5 hover:bg-surface/40 active:bg-surface/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/50"
                 >
                   {/* Both decorative: this is an <ol>, so assistive tech already
                       conveys the rank, and the icon just restates the label. */}
