@@ -95,7 +95,13 @@ export default function ServiceTemplatesPage() {
     return acc
   }, {})
 
-  const categoryOptions = SERVICE_CATEGORIES.map(c => ({ value: c, label: c }))
+  // service_templates.category is free TEXT; SERVICE_CATEGORIES is a starter list,
+  // not the set of legal values. Merge in whatever this business actually uses, so
+  // a category that arrived from anywhere else stays selectable instead of
+  // silently resetting to a lawn one on the next edit.
+  const usedCategories = Array.from(new Set(templates.map(t => (t.category || '').trim()).filter(Boolean)))
+  const allCategories = Array.from(new Set<string>([...SERVICE_CATEGORIES, ...usedCategories]))
+  const categoryOptions = allCategories.map(c => ({ value: c, label: c }))
   const pricingTypeOptions = PRICING_DISPLAY_TYPES.map(t => ({ value: t, label: PRICING_DISPLAY_TYPE_LABELS[t] }))
 
   if (loading) return (
@@ -162,7 +168,11 @@ export default function ServiceTemplatesPage() {
       {Object.keys(grouped).length === 0 ? (
         <Card><InlineEmpty>No services yet. Add your first one.</InlineEmpty></Card>
       ) : (
-        SERVICE_CATEGORIES.filter(c => grouped[c]?.length).map(category => (
+        // Render from the categories that EXIST, not from the constant. Iterating
+        // the constant meant a service filed under anything outside those six was
+        // invisible here while still living in the database — free-text column,
+        // hardcoded reader.
+        allCategories.filter(c => grouped[c]?.length).map(category => (
           <div key={category}>
             <h3 className="text-[10px] font-semibold text-ink-faint uppercase tracking-[0.14em] mb-2 px-1">{category}</h3>
             <Card>

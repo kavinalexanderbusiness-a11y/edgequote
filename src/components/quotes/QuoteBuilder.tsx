@@ -531,7 +531,11 @@ export function QuoteBuilder({
                   the selected service. */}
               <Controller name="service_template_id" control={control}
                 render={({ field }) => (<Select label="Service" options={templateOptions} {...field} />)} />
-              <Input label="Service Name *" placeholder="e.g. Lawn Mowing"
+              {/* The example comes from THEIR catalogue, not ours. A lawn company
+                  with a "Lawn Mowing" template still reads "e.g. Lawn Mowing"; a
+                  pool company reads "e.g. Pool Opening". Falls back to a neutral
+                  hint before any template exists. */}
+              <Input label="Service Name *" placeholder={`e.g. ${activeTemplates[0]?.name || 'Weekly Service'}`}
                 hint="Auto-fills when you pick a service above — edit to rename it on the quote."
                 error={errors.service_type?.message}
                 {...register('service_type', { required: 'Service is required' })} />

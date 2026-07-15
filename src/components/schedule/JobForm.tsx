@@ -173,6 +173,8 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   // instant "Lawn Mowing" quick-add; every other trade gets THEIR default — the
   // platform itself has no home industry. Never overwrites a caller default or
   // anything the owner has already typed.
+  // What this business actually does, learned once and reused by the cadence chips.
+  const [learnedService, setLearnedService] = useState<string | null>(null)
   useEffect(() => {
     if (isEdit || defaultValues?.service_type) return
     let alive = true
@@ -196,7 +198,11 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
           .eq('user_id', uid).order('sort_order').limit(1)
         top = ((t as { name: string | null }[] | null)?.[0]?.name || '').trim() || null
       }
-      if (alive && top && !watch('service_type')) setValue('service_type', top)
+      // Keep it: the cadence chips need the same answer, and recomputing it there
+      // would be a second definition of "this business's default service".
+      if (!alive || !top) return
+      setLearnedService(top)
+      if (!watch('service_type')) setValue('service_type', top)
     })()
     return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -293,12 +299,21 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     }
   }
 
-  function applyLawnPreset(kind: 'weekly' | 'biweekly' | 'monthly') {
+  // A cadence chip picks the CADENCE. It used to also rename the service to
+  // "Lawn Mowing" (or "Monthly Service"), which threw away both the learned
+  // default above and anything the owner had already typed — tapping Weekly on a
+  // snow job renamed it to mowing. Now it fills the service only when there isn't
+  // one, from what this business actually does. A lawn company whose learned
+  // default is "Lawn Mowing" gets exactly the old behaviour; every other trade
+  // gets theirs.
+  function applyCadencePreset(kind: 'weekly' | 'biweekly' | 'monthly') {
     setPreset(kind === 'weekly' ? 'w1' : kind === 'biweekly' ? 'w2' : 'm1')
-    const svc = kind === 'monthly' ? 'Monthly Service' : 'Lawn Mowing'
-    setValue('service_type', svc)
-    if (!watch('title')) {
-      setValue('title', svc + (selProp?.address ? ` — ${selProp.address}` : ''))
+    const svc = (watch('service_type') || '').trim() || learnedService || ''
+    if (svc) {
+      setValue('service_type', svc)
+      if (!watch('title')) {
+        setValue('title', svc + (selProp?.address ? ` — ${selProp.address}` : ''))
+      }
     }
     // Selecting Weekly/Bi-Weekly/Monthly auto-suggests the measured price for
     // that cadence (only when the price hasn't been typed yet).
@@ -652,7 +667,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
                 { kind: 'biweekly', label: 'Bi-Weekly Lawn Care' },
                 { kind: 'monthly', label: 'Monthly Service' },
               ] as const).map(p => (
-                <button key={p.kind} type="button" onClick={() => applyLawnPreset(p.kind)}
+                <button key={p.kind} type="button" onClick={() => applyCadencePreset(p.kind)}
                   className="text-xs font-medium px-3 py-1.5 rounded-lg border border-accent/30 bg-accent/10 text-accent-text hover:bg-accent/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                   {p.label}
                 </button>
