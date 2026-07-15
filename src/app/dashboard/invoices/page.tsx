@@ -12,6 +12,7 @@ import { Card, CardBody } from '@/components/ui/Card'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { Banner } from '@/components/ui/Banner'
+import Link from 'next/link'
 import { Button } from '@/components/ui/Button'
 import { FilterPill } from '@/components/ui/FilterPill'
 import { Menu } from '@/components/ui/Menu'
@@ -23,7 +24,7 @@ import { invoiceTotals, applyDiscount, type DiscountType } from '@/lib/invoiceTo
 import { toast as notify } from '@/lib/toast'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
-import { FileText, User, Check, FileDown, Trash2, CreditCard, Zap, AlertTriangle, Pencil, Percent, DollarSign, X, MessageSquare, MoreHorizontal, ChevronDown } from 'lucide-react'
+import { FileText, User, Check, FileDown, Trash2, CreditCard, Zap, AlertTriangle, Pencil, Percent, DollarSign, X, MessageSquare, MoreHorizontal, ChevronDown, Plus } from 'lucide-react'
 
 const FILTERS: { value: '' | InvoiceDisplayStatus; label: string }[] = [
   { value: '', label: 'All' },
@@ -297,6 +298,11 @@ export default function InvoicesPage() {
       <PageHeader
         title="Invoices"
         description={`${invoices.length} invoice${invoices.length !== 1 ? 's' : ''}`}
+        action={
+          <Link href="/dashboard/invoices/new">
+            <Button><Plus className="w-4 h-4" /> New invoice</Button>
+          </Link>
+        }
       />
 
       {loadError && (
