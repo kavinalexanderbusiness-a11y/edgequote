@@ -95,7 +95,10 @@ export function BeforeAfterUploader({
     if (!propertyId && !fixedJobId) { setJob(null); setJobChoices([]); setNeedsJobAsk(false); return }
     let alive = true
     ;(async () => {
-      const { data: { user } } = await supabase.auth.getUser()
+      // Local read — getUser() is a network call, and these gate the staging UI, so
+      // with no signal they returned early and left Upload disabled with no reason given.
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
       if (!user || !alive) return
       const r = await resolveTargetJob(supabase, user.id, propertyId, fixedJobId, Date.now())
       if (!alive) return
@@ -114,7 +117,10 @@ export function BeforeAfterUploader({
     let alive = true
     setSearching(true)
     const t = setTimeout(async () => {
-      const { data: { user } } = await supabase.auth.getUser()
+      // Local read — getUser() is a network call, and these gate the staging UI, so
+      // with no signal they returned early and left Upload disabled with no reason given.
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
       if (!user || !alive) return
       const { data } = await supabase.from('properties')
         .select('id,address,city,neighborhood,customer_id,customers(name)')
@@ -132,7 +138,15 @@ export function BeforeAfterUploader({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, fixedContext])
 
-  useEffect(() => () => { staged.forEach(s => URL.revokeObjectURL(s.url)) }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // Revoke the previews we actually hold at unmount. This read `staged` with empty
+  // deps, so the cleanup closed over the INITIAL EMPTY array and revoked nothing:
+  // staging a driveway's photos and then closing without uploading pinned every
+  // full-size blob for the life of the tab. On a phone that's the memory pressure
+  // that gets the tab killed — which is the thing losing photos in the first place.
+  // A ref so the cleanup sees the latest list without re-running per keystroke.
+  const stagedRef = useRef<Staged[]>([])
+  stagedRef.current = staged
+  useEffect(() => () => { stagedRef.current.forEach(s => URL.revokeObjectURL(s.url)) }, [])
 
   // Fetch a property's existing photos for dedup (tolerates the content_hash column
   // not being migrated yet — falls back to timestamp-only matching).
@@ -173,7 +187,10 @@ export function BeforeAfterUploader({
         return { ...s, meta: metas[idx], kind: kindByIdx.get(idx) ?? s.kind, groupIdx: groupByIdx.get(idx) ?? 0 }
       }))
 
-      const { data: { user } } = await supabase.auth.getUser()
+      // Local read (see above) — a network round-trip here stalled EXIF grouping,
+      // and offline it abandoned the analyse pass entirely.
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
       if (!user || seq !== analyzeSeq.current) return
 
       // Multi-visit drop → assign each cluster to its property + that day's job.
@@ -256,8 +273,16 @@ export function BeforeAfterUploader({
 
   async function doUpload() {
     setUploading(true)
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) { setUploading(false); toast('Not signed in', { tone: 'error' }); return }
+    // LOCAL session read. This was getUser() — a network call — so with no signal it
+    // resolved { user: null } and returned here with "Not signed in": a flat lie to a
+    // signed-in contractor, and worse, it returned BEFORE enqueueUploads. The staged
+    // photos only ever existed as File refs in React state, so they never reached the
+    // durable queue and died with the tab. A whole driveway's before/afters, gone —
+    // and a photo is the one thing here that cannot be redone, because the lawn is
+    // already mown. JobPhotos has always used getSession() for exactly this reason.
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
+    if (!user) { setUploading(false); toast('Session expired — sign in again.', { tone: 'error' }); return }
 
     if (!fixedContext && ctxLabel && propertyId) {
       try { localStorage.setItem(LAST_CTX_KEY, JSON.stringify({ propertyId, customerId, label: ctxLabel } satisfies LastCtx)) } catch { /* ignore */ }
