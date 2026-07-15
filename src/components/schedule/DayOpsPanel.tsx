@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/Button'
 import { Menu } from '@/components/ui/Menu'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { JobPhotos } from '@/components/photos/JobPhotos'
+import { RouteTimeline, type TimelineStop } from '@/components/schedule/RouteTimeline'
 import { JobAddons } from '@/components/schedule/JobAddons'
 import { JobMessages } from '@/components/schedule/JobMessages'
 import { SendMessageDialog, type MessageRecipient } from '@/components/comms/SendMessageDialog'
@@ -448,6 +449,21 @@ export function DayOpsPanel({
   const dayCapMin = usedMin + load.spareMin
   const loadPct = dayCapMin > 0 ? Math.round((usedMin / dayCapMin) * 100) : null
 
+  // The timeline reads the ETA chain the route engine already produced above —
+  // no second ordering, no second distance lookup. Capacity ends at work start +
+  // the day's labour budget, which is the same number the load pill uses.
+  const timelineStops: TimelineStop[] = etas
+    ? etas.stops
+        .map(s => {
+          const job = active.find(j => j.id === s.jobId)
+          return job
+            ? { jobId: job.id, name: job.customers?.name || job.title, arrivalMin: s.arrivalMin, durMin: durByJob[job.id] ?? DEFAULT_JOB_MIN, status: job.status }
+            : null
+        })
+        .filter((s): s is TimelineStop => s !== null)
+    : []
+  const capacityEndMin = (etas?.startMin ?? timeToMinutes(workStartTime)) + Math.round((capacityHours > 0 ? capacityHours : 8) * 60)
+
   // ── Live day tracking (check-in/check-out data) ──
   const isToday = date === localTodayISO()
   const inProgress = active.find(j => j.status === 'in_progress') ?? null
@@ -596,6 +612,17 @@ export function DayOpsPanel({
               <p className="text-xs text-ink-faint mt-1.5">No locatable stops yet.</p>
             )}
           </div>
+
+          {/* The same route, as time: where the day goes, how much is driving,
+              and whether it runs past capacity. Reads the ETAs computed above. */}
+          {etas && timelineStops.length > 0 && (
+            <RouteTimeline
+              startMin={etas.startMin}
+              finishMin={etas.finishMin}
+              capacityEndMin={capacityEndMin}
+              stops={timelineStops}
+            />
+          )}
 
           {/* Jobs in route order, with one-tap actions */}
           <div className="space-y-2">
