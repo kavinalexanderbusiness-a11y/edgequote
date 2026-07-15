@@ -12,6 +12,7 @@ import { buildRoadDistance } from '@/lib/distance'
 import { jobVisitValue, effectiveFreq, quoteVisitAmount } from '@/lib/invoicing'
 import { addonsTotal } from '@/lib/jobPricing'
 import { formatCurrency, cn, localTodayISO } from '@/lib/utils'
+import { scrollBehavior } from '@/lib/motion'
 import { Button } from '@/components/ui/Button'
 import { Menu } from '@/components/ui/Menu'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -464,6 +465,13 @@ export function DayOpsPanel({
     : []
   const capacityEndMin = (etas?.startMin ?? timeToMinutes(workStartTime)) + Math.round((capacityHours > 0 ? capacityHours : 8) * 60)
 
+  // Tapping a block on the timeline brings its card into view — the timeline is a
+  // map of the day, so it should navigate the day. scrollBehavior() honours the
+  // reduced-motion preference (a JS-requested 'smooth' overrides the stylesheet).
+  function jumpToStop(jobId: string) {
+    document.getElementById(`stop-${jobId}`)?.scrollIntoView({ behavior: scrollBehavior(), block: 'center' })
+  }
+
   // ── Live day tracking (check-in/check-out data) ──
   const isToday = date === localTodayISO()
   const inProgress = active.find(j => j.status === 'in_progress') ?? null
@@ -630,6 +638,7 @@ export function DayOpsPanel({
               capacityEndMin={capacityEndMin}
               stops={timelineStops}
               nowMin={isToday ? new Date().getHours() * 60 + new Date().getMinutes() : undefined}
+              onSelectStop={jumpToStop}
             />
           )}
 
@@ -645,13 +654,14 @@ export function DayOpsPanel({
               const idx = sortedJobs.findIndex(j => j.id === job.id)
               return (
                 <div key={job.id}
+                  id={`stop-${job.id}`}
                   draggable={sortedJobs.length > 1}
                   onDragStart={() => { dragId.current = job.id; setDraggingId(job.id) }}
                   onDragEnd={() => { setDraggingId(null); setDragOverId(null) }}
                   onDragOver={e => { e.preventDefault(); if (dragOverId !== job.id) setDragOverId(job.id) }}
                   onDragLeave={() => { if (dragOverId === job.id) setDragOverId(null) }}
                   onDrop={() => { dropOn(job.id); setDraggingId(null); setDragOverId(null) }}
-                  className={cn('rounded-xl border px-3 py-2.5 transition-colors',
+                  className={cn('rounded-xl border px-3 py-2.5 transition-colors scroll-mt-4',
                     // Done cards RECEDE (neutral + faded); the live stop is sky end-to-end
                     // (badge, timer, live bar and card all agree); scheduled keeps the token.
                     done ? 'border-border bg-bg-tertiary/60 text-ink-muted opacity-60'
