@@ -584,7 +584,12 @@ export default function SchedulePage() {
     // ONE persisted bundle, written only from reads that actually succeeded. Jobs
     // alone weren't enough: the board derives a recurring visit's price from its
     // quote, so a cached day without quotes shows real work at "$0 · Set price".
-    if (fieldJobs && !qRes.error && !rRes.error && !sRes.error) {
+    // dRes is in this gate now. It used to write `dayStatuses: dRes.error ? [] : …`,
+    // which bypassed the very guard the live path applies two dozen lines up: a failed
+    // day-status read persisted an EMPTY list, so offline buildDayStatusMap([]) painted
+    // every blocked and rained-out day as available — confidently bookable. That is
+    // precisely the class of failure this bundle exists to prevent.
+    if (fieldJobs && !qRes.error && !rRes.error && !sRes.error && !dRes.error) {
       const quoteIds = new Set(fieldJobs.map(j => j.quote_id).filter(Boolean))
       const recIds = new Set(fieldJobs.map(j => j.recurrence_id).filter(Boolean))
       writeCache<FieldBundle>(FIELD_BUNDLE_KEY, {
@@ -593,7 +598,7 @@ export default function SchedulePage() {
         // Only what this window references — the whole quote book would blow quota.
         quotes: ((qRes.data as QuoteLite[]) || []).filter(q => quoteIds.has(q.id)),
         recurrences: ((rRes.data as JobRecurrence[]) || []).filter(r => recIds.has(r.id)),
-        dayStatuses: dRes.error ? [] : ((dRes.data as DayStatusRow[]) || []),
+        dayStatuses: (dRes.data as DayStatusRow[]) || [],
         settings: (sRes.data as FieldSettings | null) ?? null,
       }, { persist: true })
     }
