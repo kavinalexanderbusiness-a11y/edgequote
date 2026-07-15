@@ -17,6 +17,7 @@ import { CommunicationsTest } from '@/components/settings/CommunicationsTest'
 import { MessageTemplateEditor } from '@/components/settings/MessageTemplateEditor'
 import { MessagingUsage } from '@/components/settings/MessagingUsage'
 import { AutomationToggles } from '@/components/settings/AutomationToggles'
+import { ModuleManager } from '@/components/settings/ModuleManager'
 import { PushNotificationSettings } from '@/components/settings/PushNotificationSettings'
 import { WebsiteIntegration } from '@/components/settings/WebsiteIntegration'
 import { Tabs, type TabItem } from '@/components/ui/Tabs'
@@ -26,7 +27,7 @@ import { cn } from '@/lib/utils'
 import { ThemePref, getThemePref, applyThemePref } from '@/lib/theme'
 import { ServiceSeasons, ServiceSeason, DEFAULT_SEASONS, settingsToSeasons, seasonLabel } from '@/lib/seasons'
 import { weekdayLong } from '@/lib/preferences'
-import { Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard, Building2, DollarSign, MessageSquare, Bell, Link as LinkIcon, Zap, RotateCcw, Image as ImageIcon, Palette, Clock, MapPin } from 'lucide-react'
+import { Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard, Building2, DollarSign, MessageSquare, Bell, Link as LinkIcon, Zap, RotateCcw, Image as ImageIcon, Palette, Clock, MapPin, LayoutGrid } from 'lucide-react'
 
 const SETTINGS_TABS: TabItem[] = [
   { key: 'business', label: 'Business', icon: Building2 },
@@ -35,6 +36,7 @@ const SETTINGS_TABS: TabItem[] = [
   { key: 'messaging', label: 'Messaging', icon: MessageSquare },
   { key: 'notifications', label: 'Notifications', icon: Bell },
   { key: 'booking', label: 'Booking', icon: LinkIcon },
+  { key: 'modules', label: 'Modules', icon: LayoutGrid },
 ]
 type SettingsTab = (typeof SETTINGS_TABS)[number]['key']
 
@@ -602,6 +604,11 @@ export default function SettingsPage() {
         <MessageTemplateEditor />
         <MessagingUsage />
         <CommunicationsTest />
+      </div>
+
+      {/* MODULES — compose which feature modules this business sees. */}
+      <div className={cn('order-3 space-y-6', tab !== 'modules' && 'hidden')}>
+        <ModuleManager />
       </div>
 
       {/* NOTIFICATIONS */}

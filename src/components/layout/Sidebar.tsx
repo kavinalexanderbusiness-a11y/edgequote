@@ -7,7 +7,7 @@ import { Settings, LogOut, Zap, LayoutTemplate, Menu, X, Search, LifeBuoy } from
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useFocusTrap } from '@/hooks/useFocusTrap'
-import { visibleModules } from '@/lib/modules'
+import { useModules } from '@/hooks/useModules'
 import { NotificationBell } from '@/components/notifications/NotificationBell'
 
 // Everyday work up top; the analytics pages live behind one "Grow" hub
@@ -43,10 +43,9 @@ export function Sidebar() {
   const drawerRef = useFocusTrap<HTMLElement>(open, () => setOpen(false))
   const [brand, setBrand] = useState<{ url: string | null; scale: number; name: string | null }>({ url: null, scale: 100, name: null })
   const [unread, setUnread] = useState(0)
-  // Per-business module composition (null until loaded = show everything, which
-  // is also the meaning of a NULL column — no flicker, no behavior change).
-  const [enabledModules, setEnabledModules] = useState<unknown>(null)
-  const navMain = visibleModules(enabledModules)
+  // Per-business module composition — ONE loader (useModules) shared with the
+  // command palette and the Modules settings surface; live-updates on change.
+  const { visible: navMain } = useModules()
 
   // Uploaded logo + size from Branding settings (cached for the login screen).
   useEffect(() => {
@@ -62,10 +61,9 @@ export function Sidebar() {
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
       if (!user) return
-      const { data } = await supabase.from('business_settings').select('logo_url, logo_scale, company_name, enabled_modules').eq('user_id', user.id).maybeSingle()
-      const s = data as { logo_url: string | null; logo_scale: number | null; company_name: string | null; enabled_modules: unknown } | null
+      const { data } = await supabase.from('business_settings').select('logo_url, logo_scale, company_name').eq('user_id', user.id).maybeSingle()
+      const s = data as { logo_url: string | null; logo_scale: number | null; company_name: string | null } | null
       if (!active) return
-      setEnabledModules(s?.enabled_modules ?? null)
       const next = { url: s?.logo_url ?? null, scale: s?.logo_scale && s.logo_scale >= 50 ? s.logo_scale : 100, name: s?.company_name?.trim() || null }
       setBrand(next)
       try { window.localStorage.setItem('eq-logo', JSON.stringify(next)) } catch { /* ignore */ }

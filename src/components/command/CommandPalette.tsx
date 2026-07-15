@@ -12,6 +12,7 @@ import {
   Home, Image as ImageIcon, CreditCard, Eye, Phone, CalendarPlus, Sparkles, LifeBuoy,
 } from 'lucide-react'
 import { searchHelp, helpHref } from '@/lib/help/content'
+import { useModules } from '@/hooks/useModules'
 import { receiptNumberFor } from '@/lib/payments/ledger'
 
 type Icon = typeof Users
@@ -19,16 +20,11 @@ interface Item { id: string; label: string; sub?: string; icon: Icon; run: () =>
 interface Section { title: string; items: Item[] }
 
 // Jump-to navigation (also filtered by the query).
-const NAV: { label: string; href: string; icon: Icon }[] = [
-  { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-  { label: 'Schedule', href: '/dashboard/schedule', icon: CalendarDays },
-  { label: 'Customers', href: '/dashboard/customers', icon: Users },
-  { label: 'Properties', href: '/dashboard/properties', icon: Home },
-  { label: 'Quotes', href: '/dashboard/quotes', icon: FileText },
-  { label: 'Invoices', href: '/dashboard/invoices', icon: Receipt },
-  { label: 'Messages', href: '/dashboard/messages', icon: MessageSquare },
+// Module destinations come from THE feature-module registry (lib/modules) —
+// same source and same per-business filtering as the sidebar, so the palette
+// never disagrees with navigation. Only non-module destinations live here.
+const EXTRA_NAV: { label: string; href: string; icon: Icon }[] = [
   { label: 'Routes', href: '/dashboard/routes', icon: Navigation },
-  { label: 'Grow', href: '/dashboard/grow', icon: Sprout },
   { label: 'Measurement Accuracy', href: '/dashboard/measurements', icon: Eye },
   { label: 'Help', href: '/dashboard/help', icon: LifeBuoy },
   { label: 'Settings', href: '/dashboard/settings', icon: Settings },
@@ -45,6 +41,11 @@ const VERB_RE = /^(call|phone|text|message|msg|sms|schedule|book)\b\s*(.*)$/i
 export function CommandPalette() {
   const supabase = useMemo(() => createClient(), [])
   const router = useRouter()
+  const { visible: moduleNav } = useModules()
+  const NAV = useMemo(
+    () => [...moduleNav.map(m => ({ label: m.label, href: m.href, icon: m.icon as Icon })), ...EXTRA_NAV],
+    [moduleNav],
+  )
   const [open, setOpen] = useState(false)
   const [mounted, setMounted] = useState(false)
   const [q, setQ] = useState('')
@@ -91,7 +92,7 @@ export function CommandPalette() {
       ],
     },
     { title: 'Go to', items: NAV.map(n => ({ id: `n-${n.href}`, label: n.label, icon: n.icon, run: () => go(n.href) })) },
-  ], [go])
+  ], [go, NAV])
 
   // Debounced universal search + command verbs.
   useEffect(() => {
