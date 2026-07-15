@@ -237,11 +237,16 @@ Whenever you're ready, you can view and accept your quote here:
 
 Thank you for considering {{business_name}}.`,
 
+  // NOTE: this template is sent by sendPaymentReceipt(), which knows the amount but NOT
+  // the remaining balance — so it must not assert one. It used to say "paid in full"
+  // unconditionally; if that's ever wrong it's the worst kind of wrong, because the
+  // customer stops thinking about the bill and turns up overdue on money they were told
+  // they didn't owe. receiptMessageBody() below takes balanceRemaining and CAN say it.
   receipt: `Hi {{first_name}},
 
 Thank you — we've received your payment{{amount}}.
 
-This confirms your invoice has been **paid in full**. You can view your payment history and receipts anytime here:
+Your receipt and up-to-date balance are always here:
 
 {{portal_link}}
 
