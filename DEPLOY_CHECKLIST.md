@@ -123,7 +123,22 @@ No Stripe **publishable** key is needed (card capture uses hosted Checkout in se
 
 1. **Run the migration** (above).
 2. **Auth → enable "Leaked Password Protection."**
-3. **Storage buckets** (public read): `branding` (logos), `job-photos` (portal/job photos), `booking-uploads` (booking-funnel photos — `booking-uploads` is created by `schema.sql`; create `branding` + `job-photos` in the dashboard if absent).
+3. **Storage buckets — no manual step.** All four are created by the SQL path above and
+   verified against production on 2026-07-15:
+
+   | Bucket | Public | Holds | Created by |
+   |---|---|---|---|
+   | `job-photos` | yes | portal / job photos | `schema.sql` |
+   | `booking-uploads` | yes | booking-funnel photos | `RUN-db-catchup-2026-06-25.sql` |
+   | `branding` | yes | business logo (settings upload + branded email header) | `RUN-2026-07-15-record-branding-bucket.sql` |
+   | `equipment-docs` | no | equipment paperwork | `RUN-2026-07-15-equipment-docs.sql` |
+
+   > This step used to read *"create `branding` + `job-photos` in the dashboard if
+   > absent."* Both are now created by SQL — `job-photos` always was — and creating
+   > them by hand is what produced the drift in the first place: `branding` existed
+   > only in production for months because it was made in the dashboard and never
+   > written down. **Add a bucket in SQL, never in the dashboard**, or disaster
+   > recovery loses it.
 4. **Realtime:** handled by `schema.sql` (core tables + `payment_methods`, `website_leads`, `schedule_items`, `day_statuses`, `notifications` are on the `supabase_realtime` publication). No manual step.
 5. **Web Push (only if using push)** — after generating VAPID keys, set the dispatch row once:
    ```sql
