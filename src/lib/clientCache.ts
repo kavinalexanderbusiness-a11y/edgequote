@@ -43,8 +43,18 @@ export const CACHE_TTL = {
   short: 2 * 60_000,   // 2 min — feeds that change as you act
   medium: 5 * 60_000,  // 5 min — analytics dashboards
   long: 30 * 60_000,   // 30 min — slow-moving data (e.g. weather)
-  // 16h — a work day. Only for `persist` field data: out on a route the choice is
-  // never "fresh vs stale", it's "this morning's schedule vs a blank screen". The
-  // live fetch still overwrites it the moment there's signal.
-  field: 16 * 60 * 60_000,
+  // 36h — for `persist` field data. Out on a route the choice is never "fresh vs
+  // stale", it's "this morning's schedule vs a blank screen".
+  //
+  // Why not 16h: the clock starts at the last SUCCESSFUL WRITE, not at the workday.
+  // Last signal 5pm Tuesday, cold start 10am Wednesday = 17h → readCache returned
+  // null → the day board painted nothing, on the exact morning the cache existed
+  // for. And the data wasn't even stale: the bundle spans today ± 7 days, so a
+  // Tuesday-evening write already CONTAINS Wednesday's jobs. Expiring it threw away
+  // good work.
+  // 36h covers "worked late, no signal overnight, start the next morning" — the real
+  // shape of the gap — while still refusing to pass a genuinely abandoned bundle off
+  // as today. The live fetch overwrites it the moment there's signal, and a failed
+  // load says so in the banner rather than silently painting old work as current.
+  field: 36 * 60 * 60_000,
 }
