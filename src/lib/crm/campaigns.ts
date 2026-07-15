@@ -312,6 +312,41 @@ export function campaignPeriodKey(kind: CampaignKind, today: Date, leadDays = 0)
   return `${today.getUTCFullYear()}-${String(today.getUTCMonth() + 1).padStart(2, '0')}`
 }
 
+// Birthday/anniversary/win-back are evaluated EVERY day (they fire per-customer,
+// not per-calendar-date), so "next send" is not a date for them — it's "whenever
+// a customer qualifies". Saying "next sends today" would be a lie.
+export function isDailyEvaluated(kind: CampaignKind): boolean {
+  return kind === 'birthday' || kind === 'anniversary' || kind === 'win_back'
+}
+
+// The next day this campaign fires, found by asking the ONE fire rule — no second
+// scheduling maths to drift from campaignFiresToday(). 400 days covers an annual
+// cadence plus a closed window; null means it never fires again (window expired).
+export function nextFireDate(c: Pick<CrmCampaign, 'kind' | 'schedule'>, from: Date): Date | null {
+  for (let i = 0; i <= 400; i++) {
+    const d = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate() + i))
+    if (campaignFiresToday(c, d)) return d
+  }
+  return null
+}
+
+function fmtDate(d: Date): string {
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
+}
+
+// Plain-English "when does this next actually go out" — the fact behind the rule.
+// Honest about the three cases that aren't a date: a campaign that evaluates
+// daily, one waiting for its window to open, and one whose window has closed.
+export function describeNextRun(c: Pick<CrmCampaign, 'kind' | 'schedule'>, today: Date): string {
+  const s = c.schedule || {}
+  const next = nextFireDate(c, today)
+  if (!next) return 'Its date window has passed — this won’t send again'
+  if (!campaignWindowOpen(s, today)) return `Starts ${fmtDate(next)}`
+  if (isDailyEvaluated(c.kind)) return 'Checks every day'
+  const isToday = next.toISOString().slice(0, 10) === today.toISOString().slice(0, 10)
+  return isToday ? 'Sends today' : `Next sends ${fmtDate(next)}`
+}
+
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 
 function cadenceLabel(every: number): string {
