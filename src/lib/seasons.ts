@@ -9,6 +9,7 @@
 // year. A season can wrap the new year (snow: Nov 1 → Mar 31).
 
 import { addDays, parseISO, format } from 'date-fns'
+import { monthShort } from '@/lib/preferences'
 import type { RecurUnit } from '@/types'
 
 export type SeasonCategory = 'lawn' | 'snow' | 'year_round'
@@ -112,9 +113,8 @@ export function estimateSeasonVisits(startISO: string, endISO: string, unit: Rec
 }
 
 // Human label like "Apr 15 → Oct 31".
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 export function seasonLabel(s: ServiceSeason): string {
-  return `${MONTHS[s.startMonth - 1]} ${s.startDay} → ${MONTHS[s.endMonth - 1]} ${s.endDay}`
+  return `${monthShort(s.startMonth - 1)} ${s.startDay} → ${monthShort(s.endMonth - 1)} ${s.endDay}`
 }
 
 // Read seasons off business_settings, falling back to defaults. Stored as a JSON

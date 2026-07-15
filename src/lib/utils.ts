@@ -29,9 +29,21 @@ export function formatDate(dateStr: string): string {
 }
 
 // Local (not UTC) yyyy-MM-dd — evening work must not stamp tomorrow's date.
-export function localTodayISO(): string {
-  const d = new Date()
+// `toLocalISO` takes any Date; `localTodayISO` is the today shorthand. Both live
+// here: the Date-taking form was missing, so every caller that needed to format
+// some OTHER date re-inlined the template — which is how four differently-named
+// copies of this one function ended up in the tree.
+export function toLocalISO(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+export function localTodayISO(): string {
+  return toLocalISO(new Date())
+}
+
+// Constrain a number to an inclusive [lo, hi] range.
+export function clamp(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v))
 }
 
 // Whole minutes between two ISO timestamps (check-in → check-out), min 1.

@@ -4,7 +4,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
-import { Skeleton } from '@/components/ui/Skeleton'
+import { Input } from '@/components/ui/Input'
+import { StatTile } from '@/components/ui/StatTile'
+import { SkeletonTiles } from '@/components/ui/Skeleton'
 import { analyzeSms, smsCost, formatSmsCost, resolveSmsPricing, type SmsPricing } from '@/lib/sms/segments'
 import { loadSmsPricing, invalidateSmsPricing } from '@/lib/sms/useSmsPricing'
 import { MessageSquareText, Check } from 'lucide-react'
@@ -95,18 +97,14 @@ export function MessagingUsage() {
       <CardBody className="space-y-4">
         {/* Configurable pricing */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <Field label={`Cost / GSM-7 segment (${currency})`}>
-            <input type="number" step="0.001" min="0" value={gsm7} onChange={e => setGsm7(e.target.value)} className={inputCls} />
-          </Field>
-          <Field label={`Cost / Unicode segment`} hint="optional">
-            <input type="number" step="0.001" min="0" value={unicode} placeholder={gsm7} onChange={e => setUnicode(e.target.value)} className={inputCls} />
-          </Field>
-          <Field label="Currency">
-            <input type="text" value={currency} maxLength={3} onChange={e => setCurrency(e.target.value.toUpperCase())} className={inputCls} />
-          </Field>
-          <Field label="Provider" hint="reference">
-            <input type="text" value={provider} onChange={e => setProvider(e.target.value)} className={inputCls} />
-          </Field>
+          <Input label={`Cost / GSM-7 segment (${currency})`} fieldSize="sm"
+            type="number" step="0.001" min="0" value={gsm7} onChange={e => setGsm7(e.target.value)} />
+          <Input label="Cost / Unicode segment" hint="optional" fieldSize="sm"
+            type="number" step="0.001" min="0" value={unicode} placeholder={gsm7} onChange={e => setUnicode(e.target.value)} />
+          <Input label="Currency" fieldSize="sm"
+            type="text" value={currency} maxLength={3} onChange={e => setCurrency(e.target.value.toUpperCase())} />
+          <Input label="Provider" hint="reference" fieldSize="sm"
+            type="text" value={provider} onChange={e => setProvider(e.target.value)} />
         </div>
         <div className="flex items-center gap-3">
           <Button size="sm" onClick={save} loading={saving}>
@@ -117,21 +115,14 @@ export function MessagingUsage() {
 
         {/* Usage stats */}
         {!stats ? (
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5" aria-hidden>
-            {[0, 1, 2, 3].map(i => (
-              <div key={i} className="rounded-xl border border-border bg-bg-secondary px-3 py-2.5">
-                <Skeleton className="h-2.5 w-20" />
-                <Skeleton className="h-5 w-14 mt-1.5" />
-              </div>
-            ))}
-          </div>
+          <SkeletonTiles count={4} className="sm:grid-cols-4 gap-2.5" />
         ) : (
           <>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-              <UsageStat label="SMS sent today" value={String(stats.sentToday)} />
-              <UsageStat label="SMS sent this month" value={String(stats.sentMonth)} />
-              <UsageStat label="Est. spend this month" value={formatSmsCost(stats.spend, pricing.currency)} tone="text-accent-text" />
-              <UsageStat label="Avg cost / segment" value={formatSmsCost(stats.avg, pricing.currency)} />
+              <StatTile label="SMS sent today" value={String(stats.sentToday)} />
+              <StatTile label="SMS sent this month" value={String(stats.sentMonth)} />
+              <StatTile label="Est. spend this month" value={formatSmsCost(stats.spend, pricing.currency)} tone="accent" />
+              <StatTile label="Avg cost / segment" value={formatSmsCost(stats.avg, pricing.currency)} />
             </div>
             <p className="text-[11px] text-ink-faint italic">
               {stats.segMonth} SMS segment{stats.segMonth !== 1 ? 's' : ''} sent this month. Estimated messaging cost — actual carrier/provider charges may vary.
@@ -140,25 +131,5 @@ export function MessagingUsage() {
         )}
       </CardBody>
     </Card>
-  )
-}
-
-const inputCls = 'w-full bg-bg-tertiary border border-border-strong rounded-lg px-2.5 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20'
-
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <label className="flex flex-col gap-1 min-w-0">
-      <span className="text-xs font-semibold text-ink-muted uppercase tracking-wide truncate">{label}{hint && <span className="normal-case font-normal text-ink-faint"> · {hint}</span>}</span>
-      {children}
-    </label>
-  )
-}
-
-function UsageStat({ label, value, tone }: { label: string; value: string; tone?: string }) {
-  return (
-    <div className="rounded-xl border border-border bg-bg-secondary px-3 py-2.5">
-      <p className="text-[10px] font-semibold text-ink-faint uppercase tracking-wide leading-none">{label}</p>
-      <p className={`text-lg font-bold mt-1 tabular-nums ${tone || 'text-ink'}`}>{value}</p>
-    </div>
   )
 }

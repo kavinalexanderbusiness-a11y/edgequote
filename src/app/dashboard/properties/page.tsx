@@ -10,6 +10,7 @@ import { buildServicePlans, ServicePlan } from '@/lib/recurrence'
 import { settingsToSeasons } from '@/lib/seasons'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
+import { Badge } from '@/components/ui/Badge'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -320,23 +321,20 @@ export default function PropertiesPage() {
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="text-sm font-semibold text-ink">{property.address}</p>
                         {property.is_primary && (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border uppercase tracking-wide bg-accent-dim text-accent-text border-accent/20">
-                            Primary
-                          </span>
+                          <Badge tone="accent">Primary</Badge>
                         )}
                         {activePlan && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border uppercase tracking-wide bg-accent/10 text-accent-text border-accent/20">
-                            <Repeat className="w-3 h-3" /> {activePlan.cadenceLabel}
-                          </span>
+                          <Badge tone="accent" icon={Repeat}>{activePlan.cadenceLabel}</Badge>
                         )}
                         {/* One overall health score — measurement, pricing, history, recurring, scheduling, AI Vision */}
-                        <span title="Property health — measurement freshness, pricing confidence, service history, recurring status, scheduling & AI Vision"
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
-                            health.tone === 'good' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
-                            : health.tone === 'warn' ? 'border-amber-500/30 bg-amber-500/10 text-amber-400'
-                            : health.tone === 'new' ? 'border-sky-500/30 bg-sky-500/10 text-sky-400'
-                            : 'border-accent/20 bg-accent/10 text-accent-text'}`}>
-                          <Heart className="w-2.5 h-2.5" /> {health.score} · {health.label}
+                        <span title="Property health — measurement freshness, pricing confidence, service history, recurring status, scheduling & AI Vision" className="inline-flex">
+                          <Badge icon={Heart} tone={
+                            health.tone === 'good' ? 'success'
+                            : health.tone === 'warn' ? 'warn'
+                            : health.tone === 'new' ? 'info'
+                            : 'accent'}>
+                            {health.score} · {health.label}
+                          </Badge>
                         </span>
                       </div>
                       {(property.city || property.province) && (

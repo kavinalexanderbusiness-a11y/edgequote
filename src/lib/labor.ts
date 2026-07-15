@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { estimateVisitMinutes } from '@/lib/pricing'
 import { crewCostPerHour } from '@/lib/economics'
 import { jobVisitValue } from '@/lib/invoicing'
+import { clamp } from '@/lib/utils'
 
 // ── Smart Labor Calculator V2 — the self-learning labor engine ───────────────────
 // Estimates on-site minutes from a property's OWN history first, then the service
@@ -142,7 +143,6 @@ function cv(xs: number[]): number {
   const v = xs.reduce((a, b) => a + (b - mean) ** 2, 0) / xs.length
   return Math.min(1, Math.sqrt(v) / mean)
 }
-const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n))
 
 // ── the learned model ───────────────────────────────────────────────────────────
 export interface LaborModel {

@@ -1,6 +1,7 @@
 'use client'
 
 import { weekdayShort } from '@/lib/preferences'
+import { Input } from '@/components/ui/Input'
 
 // Controlled editor for a set of scheduling preferences (used for both the
 // customer-wide default and a per-property override). Preferred and Avoid days
@@ -59,18 +60,10 @@ export function SchedulePrefsFields({ value, onChange }: { value: PrefsDraft; on
       <DayRow label="Preferred days" tone="accent" selected={value.preferred_days} onToggle={d => toggle('preferred', d)} />
       <DayRow label="Avoid days" tone="amber" selected={value.avoid_days} onToggle={d => toggle('avoid', d)} />
       <div className="grid grid-cols-2 gap-3">
-        <label className="flex flex-col gap-1.5">
-          <span className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Earliest start</span>
-          <input type="time" value={value.pref_time_start}
-            onChange={e => onChange({ ...value, pref_time_start: e.target.value })}
-            className="bg-bg-tertiary border border-border-strong rounded-lg px-2.5 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
-        </label>
-        <label className="flex flex-col gap-1.5">
-          <span className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Latest start</span>
-          <input type="time" value={value.pref_time_end}
-            onChange={e => onChange({ ...value, pref_time_end: e.target.value })}
-            className="bg-bg-tertiary border border-border-strong rounded-lg px-2.5 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
-        </label>
+        <Input label="Earliest start" type="time" fieldSize="sm" value={value.pref_time_start}
+          onChange={e => onChange({ ...value, pref_time_start: e.target.value })} />
+        <Input label="Latest start" type="time" fieldSize="sm" value={value.pref_time_end}
+          onChange={e => onChange({ ...value, pref_time_end: e.target.value })} />
       </div>
       <p className="text-[11px] text-ink-faint">Used as soft warnings when scheduling, and to steer the optimizer and best-day picker. Nothing is hard-blocked.</p>
     </div>

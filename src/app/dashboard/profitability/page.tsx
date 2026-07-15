@@ -6,10 +6,11 @@ import { loadAnalyticsCore } from '@/lib/analyticsData'
 import { loadTravelModel } from '@/lib/travelLearning'
 import { Coord, geocodeAddress } from '@/lib/geo'
 import {
-  ProfitJob, ProfitQuote, ProfitContext, RecInfo, RouteProfit, Grade, GRADE_COLORS,
+  ProfitJob, ProfitQuote, ProfitContext, RecInfo, RouteProfit, Grade,
   dayProfitability, gradeRoute, improvementSuggestions, neighborhoodProfitability, monthlyTrends,
 } from '@/lib/profitability'
 import { ProfitMap, ProfitPoint } from '@/components/profitability/ProfitMap'
+import { GradeBadge } from '@/components/ui/GradeBadge'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
@@ -289,15 +290,6 @@ export default function ProfitabilityPage() {
           <ProfitMap points={mapPoints} />
         </div>
       )}
-    </div>
-  )
-}
-
-function GradeBadge({ grade }: { grade: Grade }) {
-  return (
-    <div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg font-black shrink-0"
-      style={{ backgroundColor: GRADE_COLORS[grade] + '22', color: GRADE_COLORS[grade], border: `1px solid ${GRADE_COLORS[grade]}55` }}>
-      {grade}
     </div>
   )
 }

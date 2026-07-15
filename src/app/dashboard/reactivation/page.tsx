@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { Customer } from '@/types'
 import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
 import { seasonForService, isWithinSeason, settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatCurrency, formatDate, localTodayISO } from '@/lib/utils'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { StatTile } from '@/components/ui/StatTile'
@@ -48,10 +48,6 @@ interface RanOutCustomer {
   isVip: boolean
 }
 
-function localTodayISO() {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
 function daysBetween(aISO: string, bISO: string) {
   return Math.floor((new Date(bISO + 'T00:00:00').getTime() - new Date(aISO + 'T00:00:00').getTime()) / 86400000)
 }

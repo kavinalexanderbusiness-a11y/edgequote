@@ -7,6 +7,7 @@
 import { Coord } from '@/lib/geo'
 import { routeKmEstimate, routeStats, type SpeedModel } from '@/lib/route'
 import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
+import type { Grade } from './grade'
 
 export interface ProfitJob {
   id: string
@@ -34,10 +35,10 @@ export interface ProfitQuote {
   monthly_price: number | null
 }
 
-export type Grade = 'A' | 'B' | 'C' | 'D' | 'F'
-export const GRADE_COLORS: Record<Grade, string> = {
-  A: '#10B981', B: '#34D399', C: '#F59E0B', D: '#F97316', F: '#EF4444',
-}
+// Grade + its colours now live in lib/grade (shared with lib/dataQuality and the
+// GradeBadge primitive). Re-exported here so every existing importer is unchanged.
+export { GRADE_COLORS } from './grade'
+export type { Grade }
 
 export interface RecInfo { freq: string | null; interval_unit: string | null; interval_count: number | null }
 

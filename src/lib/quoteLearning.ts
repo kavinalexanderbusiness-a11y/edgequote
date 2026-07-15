@@ -8,6 +8,7 @@ import { isWon, isLost } from '@/lib/winLoss'
 import { serviceKey, serviceLabel, laborEconomics, type Confidence } from '@/lib/labor'
 import { crewCostPerHour } from '@/lib/economics'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
+import { clamp } from '@/lib/utils'
 
 // ── Quote win-rate learning — the self-learning pricing intelligence layer ───────
 //
@@ -76,7 +77,6 @@ function median(xs: number[]): number {
   const i = Math.floor(s.length / 2)
   return s.length % 2 ? s[i] : (s[i - 1] + s[i]) / 2
 }
-const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n))
 
 // Enough decided quotes for a service before its win-ratio is trusted over the raw
 // engine number. Conservative so thin data never swings price — it just holds at

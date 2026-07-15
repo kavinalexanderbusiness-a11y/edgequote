@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { haversineKm } from '@/lib/geo'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
+import { clamp } from '@/lib/utils'
 
 // ── Drive-time learning ──────────────────────────────────────────────────────
 // EdgeQuote already turns distance → minutes with ONE constant (geo.ts
@@ -31,7 +32,6 @@ export interface TravelModel {
 
 interface Leg { km: number; minutes: number; fromHood: string | null }
 
-const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n))
 function median(xs: number[]): number {
   if (!xs.length) return 0
   const s = [...xs].sort((a, b) => a - b)

@@ -8,13 +8,8 @@ import { loadWeatherImpact } from '@/lib/weatherImpact'
 import { needsFollowUp } from '@/lib/followup'
 import type { Coord } from '@/lib/geo'
 import type { Quote } from '@/types'
-import { cn } from '@/lib/utils'
+import { cn, localTodayISO } from '@/lib/utils'
 import { Sunrise, ChevronRight } from 'lucide-react'
-
-function localToday(): string {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
 
 // Start-of-day digest — one calm card that answers "what matters today" from data
 // EdgeQuote already has (scheduling, payments, CRM, weather). Reuses lib/briefing
@@ -29,7 +24,7 @@ export function MorningBriefing() {
     ;(async () => {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) { if (active) setLoading(false); return }
-      const today = localToday()
+      const today = localTodayISO()
       const [jobsRes, sRes, invRes, quotesRes, weather] = await Promise.all([
         supabase.from('jobs').select('id, status, price, duration_minutes, properties(lat, lng)').eq('user_id', user.id).eq('scheduled_date', today),
         supabase.from('business_settings').select('base_lat, base_lng, work_start_time').eq('user_id', user.id).maybeSingle(),
