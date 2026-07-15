@@ -249,7 +249,11 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
       body: JSON.stringify({
         token, name: name.trim(), address: parsed.formatted, service: 'Lawn Mowing',
         cadence: plan.label, quoteNumber: res.quote_number,
-        email: email.trim(), phone: phone.trim(), smsConsent: anyOn && !!phone.trim(),
+        // The confirmation is sent to the customer submit_booking just created,
+        // resolved server-side from this quote. Contact details and a consent
+        // flag are deliberately NOT sent — the server must never take either
+        // from the request body (this endpoint is public). See the route.
+        quoteId: res.quote_id,
       }),
     }).catch(() => {})
     setStep('done')
