@@ -65,11 +65,23 @@ export function registerOfflineHandlers(): void {
     if (error) throw new Error(error.message)
     // The follow-ups the online path performs, replayed with it — a patch that
     // arrives without them isn't the same mutation, just a piece of one.
+    //
+    // The audit row stays best-effort ON PURPOSE, and it's the only thing here that
+    // does: the price is the contractor's work, the audit trail is analytics about it.
+    // Retrying the op to win an audit row would re-run the patch for a row nobody bills
+    // from. It's swallowed loudly here rather than silently — recordPriceChange also
+    // absorbs its own insert error internally, so this .catch is a second net.
     if (p.priceAudit) await recordPriceChange(supabase, p.priceAudit).catch(() => {})
     // Re-pricing a visit that ALREADY has a draft invoice has to carry to the draft,
     // or the customer gets billed yesterday's number. (Only for an existing draft —
     // a job completed offline drafts fresh, at the new price, via job.complete.)
-    if (p.syncPrice) await syncDraftInvoiceAmounts(supabase, [p.id], { reason: p.syncReason })
+    // Reported, not thrown → must be read, or the op is deleted having billed the old
+    // amount. Retry is safe: the patch above is a fixed set of fields (idempotent) and
+    // the sync recomputes from the job.
+    if (p.syncPrice) {
+      const { failed } = await syncDraftInvoiceAmounts(supabase, [p.id], { reason: p.syncReason })
+      if (failed > 0) throw new Error(`draft re-price failed for job ${p.id}`)
+    }
   })
 
   // P6 — Completing a job is NOT just a jobs patch: online it also drafts the
@@ -84,9 +96,22 @@ export function registerOfflineHandlers(): void {
     const supabase = createClient()
     const { error } = await supabase.from('jobs').update(p.patch).eq('id', p.id)
     if (error) throw new Error(error.message)
-    // Invoice before message: if the draft throws we keep the op queued and retry,
+    // Invoice before message: a draft we couldn't create keeps the op queued to retry,
     // rather than having told the customer we're done with nothing to bill them.
-    await createDraftInvoiceForCompletedJob(supabase, p.job)
+    //
+    // This MUST read the result. createDraftInvoiceForCompletedJob does not throw — it
+    // RETURNS { created:false, reason:'error' } (invoicing.ts:187, :275), and its very
+    // first act is a network getUser(). Replay runs at reconnect, when the network is
+    // by definition marginal, so the draft was the single most likely step to fail —
+    // and failing was indistinguishable from succeeding. The op got deleted either
+    // way. That is exactly the outcome the note above claims to prevent: eight
+    // completed jobs, zero invoices, no trace.
+    // 'exists' and 'no-amount' are terminal successes: the invoice is already there,
+    // or the visit has no price and must never draft a $0 invoice. Only 'error' retries.
+    const draft = await createDraftInvoiceForCompletedJob(supabase, p.job)
+    if (!draft.created && draft.reason === 'error') {
+      throw new Error(`draft invoice failed for job ${p.id}`)
+    }
     if (p.notify && p.job.customer_id) {
       await fetch('/api/comms/send', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -100,11 +125,24 @@ export function registerOfflineHandlers(): void {
   // charge, tapped save, and nothing happened OR warned them.
   // Replays the add + the draft re-price together — the add-on is only real once the
   // invoice it belongs on knows about it.
+  // Safe to retry: p.opts carries a groupId minted once at enqueue, so a replay whose
+  // insert already landed returns those rows instead of billing the mulch twice.
   registerHandler('job.addons.add', async (payload) => {
     const p = payload as { opts: Parameters<typeof addLineItems>[1]; syncJobIds: string[] }
     const supabase = createClient()
-    await addLineItems(supabase, p.opts)
-    await syncDraftInvoiceAmounts(supabase, p.syncJobIds)
+    await addLineItems(supabase, p.opts)   // throws → op stays queued
+    // syncDraftInvoiceAmounts reports { changed, failed } and never throws. An add-on
+    // the draft invoice doesn't know about isn't billed, so a failed sync must retry —
+    // it only ever recomputes an amount from the job, so re-running it is a no-op.
+    const { failed } = await syncDraftInvoiceAmounts(supabase, p.syncJobIds)
+    if (failed > 0) {
+      // Retry ONLY when this add is replay-safe. Ops outlive deploys in IndexedDB, so
+      // one queued by a build before groupId existed has no stable identity — retrying
+      // it would insert a SECOND add-on rather than re-price the first. For those,
+      // accept a stale draft total: it's visible on the invoice and fixable in a tap,
+      // whereas a double charge reaches the customer and costs trust to unwind.
+      if (p.opts.groupId) throw new Error(`draft re-price failed for ${failed} job(s)`)
+    }
   })
   // (Photo uploads have their OWN durable queue — lib/offline/photoStore + the
   // upload queue's scheduler. They're bulk binary with their own retry/pairing
