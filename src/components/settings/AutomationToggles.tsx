@@ -6,10 +6,34 @@ import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Toggle } from '@/components/ui/Toggle'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { resolveAutomations, Automations, AUTOMATION_LABELS } from '@/lib/comms/automations'
-import { resolveFollowUpPolicy, FOLLOW_UP_DAYS, FOLLOW_UP_MAX, type FollowUpPolicy } from '@/lib/followup'
+import { resolveFollowUpPolicy, type FollowUpPolicy } from '@/lib/followup'
+import { resolveReminderPolicy } from '@/lib/payments/dunning'
 import { Zap } from 'lucide-react'
 
-const KEYS: (keyof Automations)[] = ['reminder', 'job_complete', 'review', 'marketing_draft', 'quote_followup']
+const KEYS: (keyof Automations)[] = ['reminder', 'job_complete', 'review', 'marketing_draft', 'quote_followup', 'invoice_reminder']
+
+// The two chasers are tuned the same way — one cadence panel, driven by which
+// jsonb keys each writes, rather than a second copy of the same two inputs.
+interface Cadence {
+  delayKey: string; maxKey: string
+  delayLabel: string; maxLabel: string
+  delayUnit: string; maxUnit: string
+  summary: (p: FollowUpPolicy) => string
+}
+const CADENCE: Partial<Record<keyof Automations, Cadence>> = {
+  quote_followup: {
+    delayKey: 'quote_followup_delay_days', maxKey: 'quote_followup_max',
+    delayLabel: 'Wait before chasing', maxLabel: 'Chase at most',
+    delayUnit: 'days of silence', maxUnit: 'times per quote',
+    summary: p => `A quote goes quiet for ${p.delayDays} day${p.delayDays !== 1 ? 's' : ''} → it gets chased, up to ${p.maxCount} time${p.maxCount !== 1 ? 's' : ''}, then stops. Turning this on also chases quotes already sitting in Sent.`,
+  },
+  invoice_reminder: {
+    delayKey: 'invoice_reminder_delay_days', maxKey: 'invoice_reminder_max',
+    delayLabel: 'Wait after due date', maxLabel: 'Remind at most',
+    delayUnit: 'days overdue', maxUnit: 'times per invoice',
+    summary: p => `An invoice is ${p.delayDays} day${p.delayDays !== 1 ? 's' : ''} past due → a reminder goes out, up to ${p.maxCount} time${p.maxCount !== 1 ? 's' : ''}, then stops. It stops on its own the moment the invoice is paid or cancelled. Turning this on also chases invoices already overdue.`,
+  },
+}
 const HINTS: Record<keyof Automations, string> = {
   reminder: 'Texts/emails the customer the evening before their visit.',
   // Honest scope: only the Complete button attempts this send (the quick-edit status
@@ -19,12 +43,18 @@ const HINTS: Record<keyof Automations, string> = {
   review: 'Asks for a review the day after a completed visit.',
   marketing_draft: 'Prepares a marketing post draft when a job has before & after photos — you review before anything posts.',
   quote_followup: 'Chases quotes the customer hasn’t answered. Stops on its own the moment a quote is accepted, declined or invoiced.',
+  invoice_reminder: 'Chases invoices past their due date. Stops on its own as soon as the invoice is paid or cancelled.',
 }
 
 export function AutomationToggles() {
   const supabase = useMemo(() => createClient(), [])
-  const [auto, setAuto] = useState<Automations>({ reminder: true, job_complete: true, review: true, marketing_draft: true, quote_followup: false })
-  const [policy, setPolicy] = useState<FollowUpPolicy>({ delayDays: FOLLOW_UP_DAYS, maxCount: FOLLOW_UP_MAX })
+  const [auto, setAuto] = useState<Automations>(() => resolveAutomations(null))
+  // One policy per chaser, both resolved from (and written back into) the same
+  // automations jsonb.
+  const [policies, setPolicies] = useState<Record<string, FollowUpPolicy>>({
+    quote_followup: resolveFollowUpPolicy(null),
+    invoice_reminder: resolveReminderPolicy(null),
+  })
   // The whole automations blob is one jsonb column, and the follow-up cadence
   // lives in it alongside the toggles. Keep the raw value so a write merges into
   // it instead of replacing it with just the booleans — otherwise flipping any
@@ -40,7 +70,7 @@ export function AutomationToggles() {
     const value = (data as { automations: unknown } | null)?.automations
     setRaw((value && typeof value === 'object') ? value as Record<string, unknown> : {})
     setAuto(resolveAutomations(value))
-    setPolicy(resolveFollowUpPolicy(value))
+    setPolicies({ quote_followup: resolveFollowUpPolicy(value), invoice_reminder: resolveReminderPolicy(value) })
     setLoading(false)
   }
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -62,12 +92,14 @@ export function AutomationToggles() {
     if (!await persist({ [key]: value })) setAuto(prev)   // revert — never show a toggle the cron won't honor
   }
 
-  async function savePolicy(patch: Partial<FollowUpPolicy>) {
-    const prev = policy
-    const next = { ...policy, ...patch }
-    setPolicy(next)   // optimistic
-    const ok = await persist({ quote_followup_delay_days: next.delayDays, quote_followup_max: next.maxCount })
-    if (!ok) setPolicy(prev)
+  async function savePolicy(key: keyof Automations, patch: Partial<FollowUpPolicy>) {
+    const cfg = CADENCE[key]
+    if (!cfg) return
+    const prev = policies
+    const next = { ...policies[key], ...patch }
+    setPolicies({ ...policies, [key]: next })   // optimistic
+    const ok = await persist({ [cfg.delayKey]: next.delayDays, [cfg.maxKey]: next.maxCount })
+    if (!ok) setPolicies(prev)
   }
 
   return (
@@ -101,35 +133,33 @@ export function AutomationToggles() {
                   <Toggle checked={auto[k]} onChange={v => toggle(k, v)} ariaLabel={AUTOMATION_LABELS[k]} />
                 </div>
                 {/* Cadence sits with the switch that uses it, and only once it's on. */}
-                {k === 'quote_followup' && auto.quote_followup && (
+                {CADENCE[k] && auto[k] && (
                   <div className="mt-1 mb-2 ml-0 sm:ml-4 rounded-xl border border-border bg-bg-secondary p-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <label className="flex flex-col gap-1.5">
-                      <span className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Wait before chasing</span>
+                      <span className="text-xs font-semibold uppercase tracking-wide text-ink-muted">{CADENCE[k]!.delayLabel}</span>
                       <span className="flex items-center gap-2">
                         <input
-                          type="number" min={1} max={60} value={policy.delayDays}
-                          onChange={e => setPolicy({ ...policy, delayDays: Number(e.target.value) })}
-                          onBlur={e => savePolicy({ delayDays: Math.min(60, Math.max(1, Math.floor(Number(e.target.value)) || FOLLOW_UP_DAYS)) })}
+                          type="number" min={1} max={60} value={policies[k].delayDays}
+                          onChange={e => setPolicies({ ...policies, [k]: { ...policies[k], delayDays: Number(e.target.value) } })}
+                          onBlur={e => savePolicy(k, { delayDays: Math.min(60, Math.max(1, Math.floor(Number(e.target.value)) || 3)) })}
                           className="w-20 bg-bg-tertiary border border-border-strong rounded-lg px-2.5 py-1.5 text-sm text-ink tabular-nums outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20"
                         />
-                        <span className="text-xs text-ink-muted">days of silence</span>
+                        <span className="text-xs text-ink-muted">{CADENCE[k]!.delayUnit}</span>
                       </span>
                     </label>
                     <label className="flex flex-col gap-1.5">
-                      <span className="text-xs font-semibold uppercase tracking-wide text-ink-muted">Chase at most</span>
+                      <span className="text-xs font-semibold uppercase tracking-wide text-ink-muted">{CADENCE[k]!.maxLabel}</span>
                       <span className="flex items-center gap-2">
                         <input
-                          type="number" min={0} max={10} value={policy.maxCount}
-                          onChange={e => setPolicy({ ...policy, maxCount: Number(e.target.value) })}
-                          onBlur={e => savePolicy({ maxCount: Math.min(10, Math.max(0, Math.floor(Number(e.target.value)) || 0)) })}
+                          type="number" min={0} max={10} value={policies[k].maxCount}
+                          onChange={e => setPolicies({ ...policies, [k]: { ...policies[k], maxCount: Number(e.target.value) } })}
+                          onBlur={e => savePolicy(k, { maxCount: Math.min(10, Math.max(0, Math.floor(Number(e.target.value)) || 0)) })}
                           className="w-20 bg-bg-tertiary border border-border-strong rounded-lg px-2.5 py-1.5 text-sm text-ink tabular-nums outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20"
                         />
-                        <span className="text-xs text-ink-muted">times per quote</span>
+                        <span className="text-xs text-ink-muted">{CADENCE[k]!.maxUnit}</span>
                       </span>
                     </label>
-                    <p className="sm:col-span-2 text-[11px] text-ink-faint">
-                      A quote goes quiet for {policy.delayDays} day{policy.delayDays !== 1 ? 's' : ''} → it gets chased, up to {policy.maxCount} time{policy.maxCount !== 1 ? 's' : ''}, then stops. Turning this on also chases quotes already sitting in Sent.
-                    </p>
+                    <p className="sm:col-span-2 text-[11px] text-ink-faint">{CADENCE[k]!.summary(policies[k])}</p>
                   </div>
                 )}
               </div>
