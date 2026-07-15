@@ -97,7 +97,16 @@ export default function ServiceTemplatesPage() {
   const categoryOptions = SERVICE_CATEGORIES.map(c => ({ value: c, label: c }))
   const pricingTypeOptions = PRICING_DISPLAY_TYPES.map(t => ({ value: t, label: PRICING_DISPLAY_TYPE_LABELS[t] }))
 
-  if (loading) return <SkeletonRows count={5} />
+  if (loading) return (
+    <div className="max-w-3xl mx-auto space-y-6">
+      <PageHeader
+        crumb={{ label: 'Settings', href: '/dashboard/settings' }}
+        title="Service Templates"
+        description="Add, edit, or remove services. The quote builder pulls from this list."
+      />
+      <Card><div className="p-2"><SkeletonRows count={5} /></div></Card>
+    </div>
+  )
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
