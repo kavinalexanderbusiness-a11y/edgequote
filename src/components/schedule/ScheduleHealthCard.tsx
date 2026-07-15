@@ -31,7 +31,7 @@ export function ScheduleHealthCard({ issues, busyKey, onReview, onDelete, onMerg
           {issues.length === 0
             ? <ShieldCheck className="w-4 h-4 text-emerald-400" />
             : <ShieldAlert className={cn('w-4 h-4', high > 0 ? 'text-red-400' : 'text-amber-400')} />}
-          <h2 className="text-sm font-semibold text-ink">Schedule Health</h2>
+          <h2 className="text-sm font-semibold tracking-tight text-ink">Schedule Health</h2>
           {issues.length > 0 && (
             <span className={cn('ml-auto text-xs font-semibold rounded-full px-2 py-0.5 border',
               high > 0 ? 'text-red-400 bg-red-500/10 border-red-500/20' : 'text-amber-400 bg-amber-500/10 border-amber-500/20')}>

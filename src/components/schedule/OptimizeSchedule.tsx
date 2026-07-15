@@ -214,7 +214,7 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
       <div className="min-h-full flex items-start justify-center p-4 sm:p-6">
         <Card className="w-full max-w-2xl my-2 shadow-2xl" onClick={e => e.stopPropagation()}>
           <div className="px-5 py-4 border-b border-border flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Rocket className="w-4 h-4 text-accent" /> Optimize Schedule</h2>
+            <h2 className="text-sm font-semibold tracking-tight text-ink flex items-center gap-2"><Rocket className="w-4 h-4 text-accent" /> Optimize Schedule</h2>
             <button type="button" onClick={onClose} aria-label="Close" className="w-9 h-9 -mr-2 flex items-center justify-center text-ink-faint hover:text-ink"><X className="w-4 h-4" /></button>
           </div>
           <CardBody className="space-y-4">
