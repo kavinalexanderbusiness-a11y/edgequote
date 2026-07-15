@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { localTodayISO } from '@/lib/utils'
-import { crewCostPerHour } from '@/lib/economics'
+import { localTodayISO, parseLocalDate } from '@/lib/utils'
+import { weekdayShort } from '@/lib/preferences'
+import { crewCostPerHour, visitEconomics } from '@/lib/economics'
 import { effectiveFreq, jobVisitValue } from '@/lib/invoicing'
 import { SEASON_VISITS } from '@/lib/pricing'
 import { settingsToSeasons, seasonForService, isWithinSeason, ServiceSeasons } from '@/lib/seasons'
@@ -22,6 +23,29 @@ import {
 const DEFAULT_LABOR_MIN = 45
 
 export interface NamedValue { name: string; value: number; sub?: number }
+
+// ── The three facts nothing else in the app computes ─────────────────────────
+// Every figure below is COMPOSED from the existing engines (dayProfitability →
+// monthlyTrends → visitEconomics). Nothing here re-derives revenue or profit.
+
+/** One day-of-week rolled up across all history. dayProfitability is keyed by
+ *  calendar DATE, so the weekday dimension was previously thrown away. */
+export interface WeekdayStat { weekday: number; label: string; jobs: number; revenue: number; hours: number; revPerHour: number | null }
+
+/** Cancellations. Everywhere else in the codebase `status === 'cancelled'` is
+ *  only ever a filter to EXCLUDE — nothing counted it until now. */
+export interface CancellationStats { cancelledYTD: number; completedYTD: number; cancelRatePct: number | null; trend: NamedValue[]; worstMonth: string | null }
+
+/** Season-to-date on BOTH sides — see the cutoff note in computeBI. */
+export interface YearSummary { year: string; revenue: number; jobs: number; profit: number | null }
+export interface YearComparison {
+  thisYear: YearSummary
+  lastYear: YearSummary | null          // null for a first-season business
+  revenueDeltaPct: number | null
+  jobsDeltaPct: number | null
+  byMonth: { month: number; thisYear: number; lastYear: number | null }[]
+}
+
 export interface BIReport {
   generatedFor: string // 'Jun 2026'
   financial: {
@@ -81,6 +105,10 @@ export interface BIReport {
     capacityForecastPct: number | null
     growthForecastPct: number | null
   }
+  // Busiest weekdays — all 7 entries, Sun(0)..Sat(6), zero-jobs days included.
+  weekday: { byWeekday: WeekdayStat[]; busiest: WeekdayStat | null; bestPaying: WeekdayStat | null }
+  cancellations: CancellationStats
+  yearly: YearComparison
 }
 
 const round = (n: number) => Math.round(n)
@@ -175,8 +203,35 @@ export function computeBI(inp: BIInput): BIReport {
   const jobsByDate: Record<string, ProfitJob[]> = {}
   for (const j of jobs) (jobsByDate[j.scheduled_date] ||= []).push(j)
   const routes = pastDates.map(d => dayProfitability(d, jobsByDate[d] || [], pctx))
-  const allTrend = monthlyTrends(routes)
+  // crewCost makes every MonthTrend profit/margin-aware (lib/profitability) — the
+  // 12-month trend, the YoY comparison below and the chart all read the same rows.
+  const allTrend = monthlyTrends(routes, crewCost)
   const trend = allTrend.slice(-12)
+
+  // ── WEEKDAY ──
+  // Day-of-week rollup of the SAME day routes: revenue/hours are RouteProfit
+  // fields (already priced via jobValue) — nothing is re-derived from jobs here.
+  // totalHours (labour + drive) is the denominator so revPerHour means exactly
+  // what RouteProfit.revPerHour and MonthTrend.revPerHour mean.
+  const wdAcc = Array.from({ length: 7 }, (_, i) => ({ weekday: i, jobs: 0, revenue: 0, hours: 0 }))
+  for (const r of routes) {
+    const e = wdAcc[parseLocalDate(r.date).getDay()] // date-only string → local midnight
+    e.jobs += r.stops
+    e.revenue += r.revenue
+    e.hours += r.totalHours
+  }
+  const byWeekday: WeekdayStat[] = wdAcc.map(e => ({
+    weekday: e.weekday,
+    label: weekdayShort(e.weekday),
+    jobs: e.jobs,
+    revenue: round(e.revenue),
+    hours: Math.round(e.hours * 10) / 10,
+    revPerHour: e.hours > 0 ? round(e.revenue / e.hours) : null,
+  }))
+  const worked = byWeekday.filter(w => w.jobs > 0)
+  const busiest = worked.length ? worked.reduce((a, b) => (b.jobs > a.jobs ? b : a)) : null
+  const payingDays = worked.filter(w => w.revPerHour != null)
+  const bestPaying = payingDays.length ? payingDays.reduce((a, b) => ((b.revPerHour as number) > (a.revPerHour as number) ? b : a)) : null
 
   // ── PROFITABILITY ──
   let totalLaborMin = 0, grossProfit = 0
@@ -321,6 +376,70 @@ export function computeBI(inp: BIInput): BIReport {
     if (a > 0) growthForecastPct = Math.round(((b - a) / a) * 100)
   }
 
+  // ── CANCELLATIONS ──
+  // Cancelled jobs are excluded from every revenue figure above (dayProfitability
+  // drops them); this is the one place they're counted rather than filtered out.
+  const cancelledJobs = jobs.filter(j => j.status === 'cancelled')
+  const cancelledYTD = cancelledJobs.filter(j => j.scheduled_date >= yearStart).length
+  const completedYTD = ytdCompleted.length
+  const cancelDen = cancelledYTD + completedYTD
+  const cancelRatePct = cancelDen > 0 ? Math.round((cancelledYTD / cancelDen) * 100) : null
+  const cancelByMonth: Record<string, number> = {}
+  for (const j of cancelledJobs) { const mk = monthKey(j.scheduled_date); cancelByMonth[mk] = (cancelByMonth[mk] || 0) + 1 }
+  // Same 12-month window as financial.trend, so the two charts line up month-for-month.
+  const cancelTrend: NamedValue[] = trend.map(t => ({ name: t.month, value: cancelByMonth[t.month] || 0 }))
+  // Worst month is measured over ALL history (not just the charted window) — it
+  // answers "when did we bleed the most jobs", null only when nothing was ever cancelled.
+  const worstMonth = Object.entries(cancelByMonth).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] ?? null
+
+  // ── YEARLY (year over year) ──
+  // allTrend holds EVERY month the business has routes for (not just YTD) and is
+  // already profit-aware, so YoY is a pure bucketing of MonthTrend — no re-summing.
+  const lastYr = String(Number(yr) - 1)
+  // DATE-ALIGNED, deliberately. `routes` only runs to `today`, so comparing this
+  // year against last year's FULL twelve months would read sharply negative all
+  // season by construction — the calendar shrinking, not the business. Last year
+  // is therefore cut at the same month-day, so both sides are "season to date".
+  // (Feb 29 → Feb 28 in a non-leap prior year, via the string cut.)
+  const lastYrCutoff = `${lastYr}${today.slice(4)}`
+  const throughFor = (year: string) => (year === yr ? today : lastYrCutoff)
+  const summarizeYear = (year: string): YearSummary => {
+    const through = throughFor(year)
+    const yrRoutes = routes.filter(r => r.date.slice(0, 4) === year && r.date <= through)
+    // Revenue/profit are taken from THE profit engine over the same aligned slice
+    // — never re-summed by hand. Job counts aren't on MonthTrend, so stops come
+    // off the very routes the trend rows were built from.
+    const revenue = yrRoutes.reduce((s, r) => s + r.revenue, 0)
+    const laborMinutes = yrRoutes.reduce((s, r) => s + r.laborMinutes, 0)
+    return {
+      year,
+      revenue: round(revenue),
+      jobs: yrRoutes.reduce((s, r) => s + r.stops, 0),
+      profit: visitEconomics(revenue, laborMinutes, 0, crewCost).profit,
+    }
+  }
+  const thisYearSum = summarizeYear(yr)
+  const hasLastYear = routes.some(r => r.date.slice(0, 4) === lastYr)
+  const lastYearSum = hasLastYear ? summarizeYear(lastYr) : null // null for a first-season business
+  // null (not 0) means "no data for that month" — an unworked month and a $0 month
+  // are different stories, and only the chart knows how to draw the gap.
+  const revenueForMonth = (year: string, month: number) => allTrend.find(m => m.month === `${year}-${String(month).padStart(2, '0')}`)?.revenue ?? null
+  const yearlyByMonth = Array.from({ length: 12 }, (_, i) => {
+    const month = i + 1
+    return { month, thisYear: revenueForMonth(yr, month) ?? 0, lastYear: revenueForMonth(lastYr, month) }
+  })
+  // Both sides are season-to-date (see lastYrCutoff), so these deltas are a like-
+  // for-like read and safe to show as a headline. `byMonth` stays FULL-year on the
+  // prior side on purpose — a chart wants last year's whole shape to compare against.
+  const deltaPct = (now: number, prev: number | null | undefined) => (prev != null && prev > 0 ? Math.round(((now - prev) / prev) * 100) : null)
+  const yearly: YearComparison = {
+    thisYear: thisYearSum,
+    lastYear: lastYearSum,
+    revenueDeltaPct: deltaPct(thisYearSum.revenue, lastYearSum?.revenue),
+    jobsDeltaPct: deltaPct(thisYearSum.jobs, lastYearSum?.jobs),
+    byMonth: yearlyByMonth,
+  }
+
   return {
     generatedFor: new Date(today + 'T00:00:00').toLocaleString('en-US', { month: 'short', year: 'numeric' }),
     financial: { revenueThisMonth: round(revThisMonth), revenueLastMonth: round(revLastMonth), revenueYTD: round(revYTD), monthOverMonthPct: revLastMonth > 0 ? Math.round(((revThisMonth - revLastMonth) / revLastMonth) * 100) : null, byService, byNeighborhood, byCustomer, trend },
@@ -329,6 +448,9 @@ export function computeBI(inp: BIInput): BIReport {
     sales: { quoteAcceptancePct: wl.decided >= 1 ? Math.round(wl.winRate * 100) : null, won: wl.won, lost: wl.lost, avgQuoteValue, lostValue: round(wl.byHood.reduce((s, h) => s + h.lostValue, 0)), byServiceType, byNeighborhood: byHoodWL, topLossReasons },
     operations: { capacityUtilizationPct, bookedUtilizationPct, laborAccuracyPct, autoMeasureAccuracyPct: null, avgRouteDensity, timedJobs: durModel.totalSamples },
     forecasting: { projectedThisMonth, projectedRecurringAnnual, projectedSeasonRemaining, capacityForecastPct: bookedUtilizationPct, growthForecastPct },
+    weekday: { byWeekday, busiest, bestPaying },
+    cancellations: { cancelledYTD, completedYTD, cancelRatePct, trend: cancelTrend, worstMonth },
+    yearly,
   }
 }
 

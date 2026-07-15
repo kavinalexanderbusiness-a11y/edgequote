@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { loadBusinessIntelligence, BIReport, NamedValue } from '@/lib/businessIntelligence'
+import { loadBusinessIntelligence, BIReport, NamedValue, WeekdayStat, YearComparison } from '@/lib/businessIntelligence'
 import { loadLaborInsights, LaborInsights, ServiceAccuracy, ServiceProfit } from '@/lib/labor'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Skeleton, SkeletonTiles } from '@/components/ui/Skeleton'
@@ -11,7 +11,8 @@ import { StatTile } from '@/components/ui/StatTile'
 import { Collapsible } from '@/components/ui/Collapsible'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { formatCurrency, cn } from '@/lib/utils'
-import { TrendingUp, TrendingDown, DollarSign, Gauge, Users, Target, Activity, LineChart, Home, AlertTriangle } from 'lucide-react'
+import type { Tone } from '@/lib/tone'
+import { TrendingUp, TrendingDown, DollarSign, Gauge, Users, Target, Activity, LineChart, Home, AlertTriangle, CalendarDays, Ban } from 'lucide-react'
 
 export default function IntelligencePage() {
   const supabase = useMemo(() => createClient(), [])
@@ -65,6 +66,29 @@ export default function IntelligencePage() {
           <RankList title="By neighborhood" items={bi.financial.byNeighborhood} fmt={formatCurrency} subFmt={v => `$${v}/hr`} />
           <RankList title="Top customers" items={bi.financial.byCustomer} fmt={formatCurrency} />
         </div>
+      </Section>
+
+      {/* ── THIS YEAR VS LAST ── Both sides are SEASON-TO-DATE (the engine cuts last
+          year at the same month-day), so the delta is like-for-like and safe as a
+          headline. Never label it "vs last year (full)". */}
+      <Section title="This year vs last" icon={TrendingUp}>
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+          <Stat label="Revenue this year" value={formatCurrency(bi.yearly.thisYear.revenue)}
+            delta={bi.yearly.revenueDeltaPct} deltaLabel="vs last year to date"
+            sub={bi.yearly.lastYear ? `${formatCurrency(bi.yearly.lastYear.revenue)} at this point last season` : 'season to date'} />
+          <Stat label="Jobs this year" value={String(bi.yearly.thisYear.jobs)}
+            delta={bi.yearly.jobsDeltaPct} deltaLabel="vs last year to date"
+            sub={bi.yearly.lastYear ? `${bi.yearly.lastYear.jobs} at this point last season` : 'season to date'} />
+          <Stat label="Profit this year" value={bi.yearly.thisYear.profit != null ? formatCurrency(bi.yearly.thisYear.profit) : '—'} sub="season to date" accent />
+        </div>
+        {bi.yearly.lastYear ? (
+          <YearMonthList byMonth={bi.yearly.byMonth} thisYear={bi.yearly.thisYear.year} lastYear={bi.yearly.lastYear.year} />
+        ) : (
+          // First season — a null prior year is "nothing to compare", never −100%.
+          <div className="rounded-card border border-border bg-bg-secondary p-4">
+            <InlineEmpty icon={LineChart} className="py-3">First season — no prior year to compare yet. Next year this shows your growth month by month.</InlineEmpty>
+          </div>
+        )}
       </Section>
 
       {/* ── PROFITABILITY ── */}
@@ -124,6 +148,51 @@ export default function IntelligencePage() {
               </span>
             } />
         </div>
+      </Section>
+
+      {/* ── BUSIEST DAYS ── */}
+      <Section title="Busiest days" icon={CalendarDays}>
+        {/* `busiest` is null exactly when no weekday has a completed job — the one
+            check that keeps a table of zeroes off the page. */}
+        {bi.weekday.busiest ? (
+          <>
+            <div className="grid grid-cols-2 gap-3">
+              <Stat label="Busiest day" value={bi.weekday.busiest.label}
+                sub={`${bi.weekday.busiest.jobs} job${bi.weekday.busiest.jobs === 1 ? '' : 's'} · ${formatCurrency(bi.weekday.busiest.revenue)}`} accent />
+              <Stat label="Best-paying day" value={bi.weekday.bestPaying?.label ?? '—'}
+                sub={bi.weekday.bestPaying?.revPerHour != null ? `$${bi.weekday.bestPaying.revPerHour}/hr` : 'needs completed work'} />
+            </div>
+            <WeekdayBreakdown rows={bi.weekday.byWeekday} busiest={bi.weekday.busiest.weekday} />
+          </>
+        ) : (
+          <div className="rounded-card border border-border bg-bg-secondary p-4">
+            <InlineEmpty className="py-3">No completed work yet — this fills in as jobs complete.</InlineEmpty>
+          </div>
+        )}
+      </Section>
+
+      {/* ── CANCELLATIONS ── A risk metric: the one section where a tint carries
+          alarm rather than confidence. */}
+      <Section title="Cancellations" icon={Ban}>
+        {bi.cancellations.cancelledYTD === 0 ? (
+          <div className="rounded-card border border-border bg-bg-secondary">
+            <EmptyState icon={Ban} tone="positive" className="py-10" title="Nothing cancelled this year"
+              description={bi.cancellations.completedYTD > 0
+                ? `All ${bi.cancellations.completedYTD} job${bi.cancellations.completedYTD === 1 ? '' : 's'} booked this year went ahead.`
+                : 'No cancellations on the books this year.'} />
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+              <Stat label="Cancelled YTD" value={String(bi.cancellations.cancelledYTD)} tone="warn"
+                sub={`of ${bi.cancellations.cancelledYTD + bi.cancellations.completedYTD} booked jobs`} />
+              <Stat label="Cancellation rate" value={bi.cancellations.cancelRatePct != null ? `${bi.cancellations.cancelRatePct}%` : '—'} tone="warn" sub="of booked jobs this year" />
+              <Stat label="Worst month" value={bi.cancellations.worstMonth ? monthLabel(bi.cancellations.worstMonth) : '—'} sub="most jobs lost" />
+            </div>
+            {/* Same 12-month window as the revenue trend above, so the two line up. */}
+            <TrendBars trend={bi.cancellations.trend.map(t => ({ month: t.name, revenue: t.value }))} label="Cancelled jobs / month" integer tone="warn" />
+          </>
+        )}
       </Section>
 
       {/* ── LABOUR ACCURACY & CREW EFFICIENCY ── (merged from the former Labor
@@ -214,6 +283,10 @@ export default function IntelligencePage() {
 }
 
 function cap(s: string) { return s.replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase()) }
+/** 'yyyy-MM' → 'Jun 2026'. Same formatting path as `generatedFor`. */
+function monthLabel(key: string) { return new Date(`${key}-01T00:00:00`).toLocaleString('en-US', { month: 'short', year: 'numeric' }) }
+/** 1-12 → 'Jun'. */
+function monthShort(m: number) { return new Date(2000, m - 1, 1).toLocaleString('en-US', { month: 'short' }) }
 
 function Section({ title, icon: Icon, children }: { title: string; icon: typeof DollarSign; children: React.ReactNode }) {
   return (
@@ -233,14 +306,14 @@ function Section({ title, icon: Icon, children }: { title: string; icon: typeof 
 // Thin adapter over the ONE shared KPI tile — the delta (▲/▼ vs last period)
 // renders as the tile's `sub` node, so the change is highlighted right under
 // the number without a second tile style existing anywhere.
-function Stat({ label, value, sub, delta, deltaLabel, accent }: { label: string; value: string; sub?: React.ReactNode; delta?: number | null; deltaLabel?: string; accent?: boolean }) {
+function Stat({ label, value, sub, delta, deltaLabel, accent, tone }: { label: string; value: string; sub?: React.ReactNode; delta?: number | null; deltaLabel?: string; accent?: boolean; tone?: Tone }) {
   const deltaNode = delta != null ? (
     <span className={cn('font-semibold inline-flex items-center gap-1 tabular-nums', delta >= 0 ? 'text-emerald-400' : 'text-red-400')}>
       {delta >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
       {delta > 0 ? '+' : ''}{delta}% {deltaLabel && <span className="text-ink-faint font-normal">{deltaLabel}</span>}
     </span>
   ) : null
-  return <StatTile label={label} value={<span className="tabular-nums">{value}</span>} accent={accent} sub={deltaNode ?? sub} />
+  return <StatTile label={label} value={<span className="tabular-nums">{value}</span>} accent={accent} tone={tone} sub={deltaNode ?? sub} />
 }
 
 function RankList({ title, items, fmt, subFmt }: { title: string; items: NamedValue[]; fmt: (v: number) => string; subFmt?: (v: number) => string }) {
@@ -272,7 +345,23 @@ function RankList({ title, items, fmt, subFmt }: { title: string; items: NamedVa
   )
 }
 
-function TrendBars({ trend, label = 'Revenue / month', integer = false }: { trend: { month: string; revenue: number }[]; label?: string; integer?: boolean }) {
+// Bar palette. `accent` is the default everywhere; `warn` exists only for RISK
+// series (cancellations) — the design language reserves tint for alarm, never
+// for confidence. Literal class strings so Tailwind keeps them.
+const BAR_TONE = {
+  accent: {
+    current: 'bg-gradient-to-t from-accent/70 to-accent',
+    peak: 'bg-gradient-to-t from-accent/35 to-accent/70 opacity-90',
+    rest: 'bg-gradient-to-t from-accent/20 to-accent/50 opacity-80',
+  },
+  warn: {
+    current: 'bg-gradient-to-t from-amber-500/70 to-amber-400',
+    peak: 'bg-gradient-to-t from-amber-500/35 to-amber-500/70 opacity-90',
+    rest: 'bg-gradient-to-t from-amber-500/20 to-amber-500/50 opacity-80',
+  },
+} as const
+
+function TrendBars({ trend, label = 'Revenue / month', integer = false, tone = 'accent' }: { trend: { month: string; revenue: number }[]; label?: string; integer?: boolean; tone?: keyof typeof BAR_TONE }) {
   if (!trend.length) return null
   const max = Math.max(1, ...trend.map(t => t.revenue))
   const best = trend.reduce((m, t) => Math.max(m, t.revenue), 0)
@@ -293,10 +382,10 @@ function TrendBars({ trend, label = 'Revenue / month', integer = false }: { tren
                 className={cn(
                   'w-full rounded-t-md transition-all duration-200 group-hover/bar:opacity-100',
                   current
-                    ? 'bg-gradient-to-t from-accent/70 to-accent'
+                    ? BAR_TONE[tone].current
                     : t.revenue === best && best > 0
-                      ? 'bg-gradient-to-t from-accent/35 to-accent/70 opacity-90'
-                      : 'bg-gradient-to-t from-accent/20 to-accent/50 opacity-80',
+                      ? BAR_TONE[tone].peak
+                      : BAR_TONE[tone].rest,
                 )}
                 style={{ height: `${Math.max(3, (t.revenue / max) * 100)}%` }}
                 title={`${t.month}: ${fmt(t.revenue)}`}
@@ -306,6 +395,65 @@ function TrendBars({ trend, label = 'Revenue / month', integer = false }: { tren
           )
         })}
       </div>
+    </div>
+  )
+}
+
+// Sun..Sat in calendar order — NOT a ranking, so it deliberately skips RankList's
+// numbered badges (a chronological list with 1..7 medals would read as a league
+// table). Zero-job days stay in place to show the shape of the week, but their
+// money columns render '—': a day you never work isn't a $0/hr day.
+function WeekdayBreakdown({ rows, busiest }: { rows: WeekdayStat[]; busiest: number }) {
+  return (
+    <div className="rounded-card border border-border bg-bg-secondary p-4">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint mb-2.5">Every weekday</p>
+      <ul className="space-y-2">
+        {rows.map(w => {
+          const worked = w.jobs > 0
+          return (
+            <li key={w.weekday} className="flex items-center justify-between gap-2 text-sm">
+              <span className={cn('truncate', !worked ? 'text-ink-faint' : w.weekday === busiest ? 'text-ink font-medium' : 'text-ink')}>{w.label}</span>
+              <span className="shrink-0 flex items-center gap-3 tabular-nums">
+                <span className={cn('text-xs w-14 text-right', worked ? 'text-ink-muted' : 'text-ink-faint')}>{w.jobs} job{w.jobs === 1 ? '' : 's'}</span>
+                <span className={cn('w-20 text-right font-semibold', worked ? 'text-ink' : 'text-ink-faint font-normal')}>{worked ? formatCurrency(w.revenue) : '—'}</span>
+                <span className="w-16 text-right text-[11px] text-ink-faint font-normal">{w.revPerHour != null ? `$${w.revPerHour}/hr` : '—'}</span>
+              </span>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
+}
+
+// This year vs last, month by month. A null `lastYear` is NO DATA (an unworked
+// month and a $0 month are different stories) — it renders as a gap, never a zero.
+// Months with nothing on either side are dropped: they're padding, not signal.
+function YearMonthList({ byMonth, thisYear, lastYear }: { byMonth: YearComparison['byMonth']; thisYear: string; lastYear: string }) {
+  const rows = byMonth.filter(m => m.thisYear > 0 || (m.lastYear ?? 0) > 0)
+  return (
+    <div className="rounded-card border border-border bg-bg-secondary p-4">
+      <div className="flex items-baseline justify-between gap-3 mb-2.5">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">Revenue by month</p>
+        <p className="text-xs text-ink-faint tabular-nums">{thisYear} vs {lastYear}</p>
+      </div>
+      {rows.length === 0 ? (
+        <InlineEmpty className="py-3">No revenue recorded in either year yet.</InlineEmpty>
+      ) : (
+        <ul className="space-y-2">
+          {rows.map(m => (
+            <li key={m.month} className="flex items-center justify-between gap-2 text-sm">
+              <span className="text-ink truncate">{monthShort(m.month)}</span>
+              <span className="shrink-0 tabular-nums">
+                <span className="font-semibold text-ink">{formatCurrency(m.thisYear)}</span>
+                <span className="text-[11px] text-ink-faint font-normal ml-1.5">
+                  {m.lastYear != null ? `vs ${formatCurrency(m.lastYear)}` : 'no data last year'}
+                </span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }
