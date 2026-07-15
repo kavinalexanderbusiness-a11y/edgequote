@@ -1,8 +1,28 @@
 /* EdgeQuote service worker — offline shell + fast static assets + push.
    Conservative by design: never caches API / Supabase / RSC data, so it can't
-   serve stale app state. Bump CACHE to invalidate on a new release. */
-const CACHE = 'eq-v1'
+   serve stale app state. It DOES cache the dashboard's HTML shell (see
+   isFieldShell) — that's chrome, not state: those pages render no server data, so
+   there's nothing stale to serve, and without it a cold start with no signal can't
+   open the app at all. Bump CACHE to invalidate on a new release. */
+const CACHE = 'eq-v2'
 const PRECACHE = ['/offline.html', '/manifest.webmanifest', '/icon.svg', '/icon-maskable.svg']
+
+// The dashboard is the field app. Its pages are shells: /dashboard/layout is the
+// only server component and it renders no business data — every page below it is
+// 'use client' and pulls from Supabase in the BROWSER. So caching this HTML caches
+// chrome, not app state, which is the thing the "no stale data" rule above exists
+// to protect. Data offline is handled where it belongs (lib/clientCache).
+function isFieldShell(url) {
+  return url.pathname === '/dashboard' || url.pathname.startsWith('/dashboard/')
+}
+
+// Key shells by PATHNAME only. A field deep link carries query (?job=…&pay=1 from
+// "Get paid"), and the page reads the REAL url from window.location once it boots —
+// so one cached shell serves every variant instead of the cache filling with a copy
+// per link, and a deep link still opens with no signal.
+function shellKey(url) {
+  return new Request(url.origin + url.pathname)
+}
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -25,11 +45,43 @@ self.addEventListener('fetch', (event) => {
   // Only handle same-origin; never touch Supabase, Google Maps, Open-Meteo, etc.
   if (url.origin !== self.location.origin) return
 
-  // Page navigations: network-first, fall back to the offline page when offline.
+  // Page navigations: network-first (fresh always wins), but remember the last good
+  // dashboard shell. Without this the whole offline story was unreachable: a phone
+  // kills the app between stops, so the next launch in a driveway is a COLD start —
+  // it went straight to offline.html, and the cached day, the queued check-ins and
+  // the pending photos sat there with no app to open them.
   if (req.mode === 'navigate') {
-    event.respondWith(fetch(req).catch(() => caches.match('/offline.html')))
+    event.respondWith((async () => {
+      try {
+        const res = await fetch(req)
+        // `redirected` matters: the dashboard layout bounces to /login when the
+        // session is gone. Caching THAT under /dashboard/schedule would pin a login
+        // page as the field shell forever.
+        if (res && res.ok && !res.redirected && isFieldShell(url)) {
+          const copy = res.clone()
+          caches.open(CACHE).then((c) => c.put(shellKey(url), copy)).catch(() => {})
+        }
+        return res
+      } catch (e) {
+        if (isFieldShell(url)) {
+          // This exact page, else the day board, else the dashboard home — a
+          // contractor with no signal should land on work, not on an apology.
+          const hit = (await caches.match(shellKey(url)))
+            || (await caches.match(new Request(url.origin + '/dashboard/schedule')))
+            || (await caches.match(new Request(url.origin + '/dashboard')))
+          if (hit) return hit
+        }
+        return (await caches.match('/offline.html')) || Response.error()
+      }
+    })())
     return
   }
+
+  // RSC payloads stay on the network, deliberately. They vary by the router-state
+  // header, so any cache key we could invent here would sometimes hand the router a
+  // payload for a different navigation — a subtly broken page is worse than a failed
+  // one. Letting the fetch fail makes Next fall back to a full navigation, which the
+  // handler above serves from the shell cache. Same destination, no guessing.
 
   // Immutable hashed assets + our icons: cache-first (instant repeat launches).
   const cacheFirst = url.pathname.startsWith('/_next/static')

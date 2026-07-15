@@ -16,8 +16,27 @@ import { createDraftInvoiceForCompletedJob, quoteVisitAmount, jobVisitValue, eff
 import { queueOrRun } from '@/lib/offline/outbox'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 
-// The offline field window (today ± a week), persisted across app kills.
-const FIELD_JOBS_KEY = 'schedule-field-jobs'
+// ── The offline field bundle ──────────────────────────────────────────────────
+// Everything the day board needs to be TRUE with no signal, for the window a
+// contractor works out of (today ± a week), persisted across app kills.
+const FIELD_BUNDLE_KEY = 'schedule-field-bundle'
+
+// The settings the board actually reads. Narrow on purpose: caching the whole
+// settings row would drag pricing/branding/API config onto disk for no benefit.
+interface FieldSettings {
+  base_lat: number | null; base_lng: number | null; base_address: string | null
+  preferred_work_days: number[] | null; work_start_time: string | null
+  daily_capacity_hours: number | null; automations: unknown
+}
+
+interface FieldBundle {
+  jobs: Job[]
+  addons: Record<string, JobLineItem[]>
+  quotes: QuoteLite[]          // prices for recurring visits derive from these
+  recurrences: JobRecurrence[] // cadence labels
+  dayStatuses: DayStatusRow[]
+  settings: FieldSettings | null
+}
 import { resolveAutomations, Automations } from '@/lib/comms/automations'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
@@ -501,40 +520,70 @@ export default function SchedulePage() {
       supabase.from('day_statuses').select(DAY_STATUS_SELECT).eq('user_id', user!.id),
     ])
     setUid(user!.id)
-    setDayStatusMap(buildDayStatusMap((dRes.data as DayStatusRow[]) || []))
+    // Every setter below is guarded on its own error. They used to write `|| []`
+    // unconditionally, so ONE offline load flattened the whole board: prices
+    // vanished (they derive from quotes), cadence labels vanished, and the day's
+    // capacity/work-start silently reverted to the 8h Fri–Sun defaults that the ETA
+    // chain and the day-load signal read. The schedule looked authoritative and was
+    // wrong. A read that failed now changes nothing.
+    if (!dRes.error) setDayStatusMap(buildDayStatusMap((dRes.data as DayStatusRow[]) || []))
     // A failed jobs read must NEVER paint an empty schedule: "no work today" is
     // indistinguishable from a clear day, and that's how a stop gets missed. Keep
     // whatever is already on screen, say so plainly, and let the rest of the page
     // finish refreshing (so loading always resolves).
+    let fieldJobs: Job[] | null = null
+    let fieldAddons: Record<string, JobLineItem[]> | null = null
     if (jRes.error) {
       setBanner('Could not load the schedule — check your connection and refresh. Showing the last data loaded.')
     } else {
       const loadedJobs = jRes.rows
       setJobs(loadedJobs)
-      // Field cache — today ± a week, the window a contractor actually works out
-      // of. Persisted (localStorage) because the phone kills the app between
-      // stops, so a tab-scoped cache would be empty on the driveway cold-start
-      // that needs it most. Bounded by date so a 200-job/week book stays well
-      // inside quota instead of serializing the whole year.
+      // Field window — today ± a week, what a contractor actually works out of.
+      // Bounded by date so a 200-job/week book stays well inside quota instead of
+      // serializing the whole year.
       const from = shiftDate(localTodayISO(), -1), to = shiftDate(localTodayISO(), 7)
-      writeCache(FIELD_JOBS_KEY, loadedJobs.filter(j => j.scheduled_date >= from && j.scheduled_date <= to), { persist: true })
-      setAddonsByJobId(await listLineItemsByJob(supabase, user!.id, loadedJobs.map(j => j.id)))
+      fieldJobs = loadedJobs.filter(j => j.scheduled_date >= from && j.scheduled_date <= to)
+      const addons = await listLineItemsByJob(supabase, user!.id, loadedJobs.map(j => j.id))
+      setAddonsByJobId(addons)
+      // Only the field window's add-ons — the map is keyed by every job id in the book.
+      fieldAddons = Object.fromEntries(fieldJobs.map(j => [j.id, addons[j.id]]).filter(([, v]) => v)) as Record<string, JobLineItem[]>
     }
-    setInvoicedJobIds(new Set(((iRes.data as { job_id: string }[]) || []).map(r => r.job_id)))
-    setIgnoredHealthKeys(new Set(((hRes.data as { issue_key: string }[] | null) || []).map(r => r.issue_key)))
-    setCustomers((cRes.data as Customer[]) || [])
-    const labels: Record<string, string> = {}
-    const recMap: Record<string, JobRecurrence> = {}
-    for (const r of (rRes.data as JobRecurrence[]) || []) {
-      labels[r.id] = recurrenceLabel(r.interval_unit, r.interval_count, r.freq)
-      recMap[r.id] = r
+    if (!iRes.error) setInvoicedJobIds(new Set(((iRes.data as { job_id: string }[]) || []).map(r => r.job_id)))
+    if (!hRes.error) setIgnoredHealthKeys(new Set(((hRes.data as { issue_key: string }[] | null) || []).map(r => r.issue_key)))
+    if (!cRes.error) setCustomers((cRes.data as Customer[]) || [])
+    if (!rRes.error) {
+      const labels: Record<string, string> = {}
+      const recMap: Record<string, JobRecurrence> = {}
+      for (const r of (rRes.data as JobRecurrence[]) || []) {
+        labels[r.id] = recurrenceLabel(r.interval_unit, r.interval_count, r.freq)
+        recMap[r.id] = r
+      }
+      setRecurrenceLabels(labels)
+      setRecurrences(recMap)
     }
-    setRecurrenceLabels(labels)
-    setRecurrences(recMap)
 
     const qMap: Record<string, QuoteLite> = {}
-    for (const q of (qRes.data as QuoteLite[]) || []) qMap[q.id] = q
-    setQuotesById(qMap)
+    if (!qRes.error) {
+      for (const q of (qRes.data as QuoteLite[]) || []) qMap[q.id] = q
+      setQuotesById(qMap)
+    }
+
+    // ONE persisted bundle, written only from reads that actually succeeded. Jobs
+    // alone weren't enough: the board derives a recurring visit's price from its
+    // quote, so a cached day without quotes shows real work at "$0 · Set price".
+    if (fieldJobs && !qRes.error && !rRes.error && !sRes.error) {
+      const quoteIds = new Set(fieldJobs.map(j => j.quote_id).filter(Boolean))
+      const recIds = new Set(fieldJobs.map(j => j.recurrence_id).filter(Boolean))
+      writeCache<FieldBundle>(FIELD_BUNDLE_KEY, {
+        jobs: fieldJobs,
+        addons: fieldAddons ?? {},
+        // Only what this window references — the whole quote book would blow quota.
+        quotes: ((qRes.data as QuoteLite[]) || []).filter(q => quoteIds.has(q.id)),
+        recurrences: ((rRes.data as JobRecurrence[]) || []).filter(r => recIds.has(r.id)),
+        dayStatuses: dRes.error ? [] : ((dRes.data as DayStatusRow[]) || []),
+        settings: (sRes.data as FieldSettings | null) ?? null,
+      }, { persist: true })
+    }
 
     // Base coordinate for route optimization (geocode the address once if needed).
     const s = sRes.data as { base_lat: number | null; base_lng: number | null; base_address: string | null; preferred_work_days: number[] | null; work_start_time: string | null; daily_capacity_hours: number | null; automations: unknown } | null
@@ -554,12 +603,38 @@ export default function SchedulePage() {
     setLoading(false)
   }, [supabase, fetchAllJobs])
 
-  // Paint the cached field window first so the day is on screen instantly — and,
-  // with no signal, at all. fetchJobs revalidates right behind it, so this is
-  // never stale-stuck; it only ever front-runs the network.
+  // Paint the cached field bundle first so the day is on screen instantly — and,
+  // with no signal, at all. fetchJobs revalidates right behind it, so this is never
+  // stale-stuck; it only ever front-runs the network. Restores the DERIVED inputs
+  // too (quotes/recurrences/settings), because a day board with jobs but no quotes
+  // is worse than no board: it shows real work priced at $0.
   useEffect(() => {
-    const cached = readCache<Job[]>(FIELD_JOBS_KEY, CACHE_TTL.field, { persist: true })
-    if (cached?.length) { setJobs(cached); setLoading(false) }
+    const b = readCache<FieldBundle>(FIELD_BUNDLE_KEY, CACHE_TTL.field, { persist: true })
+    if (b?.jobs?.length) {
+      setJobs(b.jobs)
+      setAddonsByJobId(b.addons || {})
+      const qMap: Record<string, QuoteLite> = {}
+      for (const q of b.quotes || []) qMap[q.id] = q
+      setQuotesById(qMap)
+      const labels: Record<string, string> = {}
+      const recMap: Record<string, JobRecurrence> = {}
+      for (const r of b.recurrences || []) {
+        labels[r.id] = recurrenceLabel(r.interval_unit, r.interval_count, r.freq)
+        recMap[r.id] = r
+      }
+      setRecurrenceLabels(labels)
+      setRecurrences(recMap)
+      setDayStatusMap(buildDayStatusMap(b.dayStatuses || []))
+      const s = b.settings
+      if (s) {
+        setAutomations(resolveAutomations(s.automations))
+        setPreferredWorkDays(s.preferred_work_days?.length ? s.preferred_work_days : [5, 6, 0])
+        setWorkStartTime(s.work_start_time || '08:00')
+        setCapacityHours(s.daily_capacity_hours && s.daily_capacity_hours > 0 ? s.daily_capacity_hours : 8)
+        if (s.base_lat != null && s.base_lng != null) setBaseCoord({ lat: s.base_lat, lng: s.base_lng })
+      }
+      setLoading(false)
+    }
     fetchJobs()
   }, [fetchJobs])
 
@@ -1466,19 +1541,41 @@ export default function SchedulePage() {
   // Add an extra service to this visit / future / the whole plan, then keep the
   // affected draft invoices in sync (the JOB — base + add-ons — is the truth).
   async function addLineItemToJob(job: Job, input: { description: string; amount: number; serviceKey: string; scope: RecurrenceScope }) {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
+    // Local session read: getUser() is a network call, so selling an add-on in a
+    // driveway used to fall straight through the `!user` guard and do nothing at
+    // all — no row, no error, no clue. Billable work just evaporated.
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
+    if (!user) { setBanner('Session expired — sign in again.'); return }
     const targets = input.scope === 'this'
       ? [job.id]
       : jobsInScope(job, jobs, input.scope).filter(j => j.status !== 'completed' && j.status !== 'cancelled').map(j => j.id)
     const ids = targets.length ? targets : [job.id]
-    await addLineItems(supabase, {
+    const opts = {
       userId: user.id, targetJobIds: ids,
       description: input.description, amount: input.amount, serviceKey: input.serviceKey,
       serviceType: job.service_type, recurring: input.scope !== 'this',
-    })
-    await syncDraftInvoiceAmounts(supabase, ids)
-    await fetchJobs()
+    }
+    let outcome: 'ran' | 'queued'
+    try {
+      outcome = await queueOrRun(
+        { kind: 'job.addons.add', payload: { opts, syncJobIds: ids }, label: `Add “${input.description}” to ${job.title || 'job'}` },
+        async () => {
+          await addLineItems(supabase, opts)
+          await syncDraftInvoiceAmounts(supabase, ids)
+        },
+        // Inserting line items is NOT idempotent — a replay would bill the mulch
+        // twice. Queue only when we're definitively offline (so nothing was sent);
+        // a request that failed mid-flight with the network still up is rethrown for
+        // the contractor to retry deliberately, exactly like an SMS send.
+        { queueOnRunError: false },
+      )
+    } catch (e) {
+      setBanner('Could not add that service: ' + (e instanceof Error ? e.message : 'please try again.'))
+      return
+    }
+    if (outcome === 'queued') setBanner('Service added offline — it’ll sync and bill when you’re back in signal.')
+    if (outcome === 'ran') await fetchJobs()
   }
   async function removeLineItem(item: JobLineItem) {
     // Snapshot BEFORE deleting: a grouped (plan-wide) add-on removes rows across
