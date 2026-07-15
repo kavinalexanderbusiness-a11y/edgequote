@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
 import { renderMessage, MsgType, type MessagePrefs } from '@/lib/comms/templates'
 import { commsEnabled } from '@/lib/comms/send'
-import { dispatchToCustomer } from '@/lib/comms/dispatch'
-import { logDispatch, logSend } from '@/lib/comms/log'
+import { runChaseCron } from '@/lib/automation/chase'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { resolveAutomations, Automations } from '@/lib/comms/automations'
 import { dueForAutoFollowUp, compareFollowUp, resolveFollowUpPolicy, type FollowUpPolicy } from '@/lib/followup'
@@ -42,6 +41,17 @@ interface FollowUpCustomer {
 type FollowUpQuote = Pick<Quote, 'id' | 'user_id' | 'customer_id' | 'quote_number' | 'total' | 'status' | 'sent_at' | 'valid_until' | 'last_followed_up_at' | 'follow_up_count'>
   & { customers: FollowUpCustomer | null }
 
+// This chaser's per-owner settings — the only context the shared loop hands back.
+interface QuoteChaseCtx {
+  name: string
+  templates: Partial<Record<MsgType, string>> | null
+  logoUrl: string | null
+  website: string | null
+  phone: string | null
+  automations: Automations
+  policy: FollowUpPolicy
+}
+
 export async function GET(req: NextRequest) {
   if (!cronSecretOk(req)) return NextResponse.json({ error: 'forbidden' }, { status: 403 })
   const enabled = commsEnabled()
@@ -66,12 +76,12 @@ export async function GET(req: NextRequest) {
   const { data: invRows } = await supabase.from('invoices').select('quote_id').in('quote_id', quotes.map(q => q.id))
   const invoiced = new Set(((invRows as { quote_id: string | null }[]) || []).map(i => i.quote_id))
 
-  const bizCache: Record<string, { name: string; templates: Partial<Record<MsgType, string>> | null; logoUrl: string | null; website: string | null; phone: string | null; automations: Automations; policy: FollowUpPolicy }> = {}
-  async function bizInfo(userId: string) {
-    if (bizCache[userId]) return bizCache[userId]
+  // Per-owner settings. runChaseCron caches this per user_id, so it's resolved once
+  // per owner per run exactly as the local cache did.
+  async function bizInfo(userId: string): Promise<QuoteChaseCtx> {
     const { data } = await supabase.from('business_settings').select('company_name, phone, website, logo_url, message_templates, automations').eq('user_id', userId).maybeSingle()
     const d = data as { company_name: string | null; phone: string | null; website: string | null; logo_url: string | null; message_templates: Partial<Record<MsgType, string>> | null; automations: unknown } | null
-    return (bizCache[userId] = {
+    return {
       name: d?.company_name || 'Edge Property Services',
       templates: d?.message_templates ?? null,
       logoUrl: d?.logo_url ?? null,
@@ -79,76 +89,56 @@ export async function GET(req: NextRequest) {
       phone: d?.phone ?? null,
       automations: resolveAutomations(d?.automations),
       policy: resolveFollowUpPolicy(d?.automations),
-    })
-  }
-
-  let sent = 0, skipped = 0, chased = 0, failed = 0
-  // Oldest first, biggest ties first — the engine's own priority, so a partial run
-  // always chases the stalest money first.
-  for (const q of [...quotes].sort((a, b) => compareFollowUp(a as unknown as Quote, b as unknown as Quote))) {
-    if (invoiced.has(q.id)) continue
-    if (isQuoteExpired(q, today)) continue   // ONE expiry engine — never chase a price we won't honour
-    const info = await bizInfo(q.user_id)
-    if (!info.automations.quote_followup) continue                        // owner hasn't switched it on
-    if (!dueForAutoFollowUp(q as unknown as Quote, info.policy)) continue  // ONE engine decides staleness + cap
-
-    // ── Claim before sending ──────────────────────────────────────────────────
-    // Compare-and-swap on the exact follow_up_count we read, re-checking status in
-    // the same statement. Two overlapping cron runs both see the quote as due, but
-    // only one UPDATE can match — the loser gets zero rows and moves on, so a quote
-    // can never be chased twice. Moving last_followed_up_at also re-anchors
-    // needsFollowUp, which is what spaces the next chase by delayDays.
-    const seen = q.follow_up_count ?? 0
-    const { data: claimed } = await supabase.from('quotes')
-      .update({ last_followed_up_at: new Date().toISOString(), follow_up_count: seen + 1 })
-      .eq('id', q.id).eq('status', 'sent').eq('follow_up_count', seen)
-      .select('id')
-    if (!claimed || claimed.length === 0) continue   // another run got it, or it was answered mid-run
-    chased++
-
-    // One bad quote must never abort the batch — the rest of the owner's book
-    // would go unchased until tomorrow. A throw here is recorded like any other
-    // failure so the attempt it consumed is visible rather than silent.
-    try {
-      const token = await ensurePortalToken(supabase, q.user_id, q.customer_id!)
-      const msg = renderMessage('estimate_followup', info.templates, {
-        firstName: q.customers!.name,
-        businessName: info.name,
-        quoteLink: token ? portalUrl(token) : undefined,
-        logoUrl: info.logoUrl || undefined,
-        website: info.website || undefined,
-        directPhone: info.phone || undefined,
-      })
-
-      // The shared dispatcher enforces granular consent + per-channel opt-in and
-      // threads the message into the customer's conversation — identical to a manual
-      // send. It returns one attempt per channel for us to log.
-      const res = await dispatchToCustomer(supabase, {
-        userId: q.user_id,
-        customer: { id: q.customer_id!, ...q.customers! },
-        channels: ['sms', 'email'],
-        smsText: msg.sms, emailSubject: msg.subject, emailHtml: msg.html, emailText: msg.text,
-        template: 'estimate_followup',
-        meta: { quote_id: q.id, quote_number: q.quote_number, follow_up_number: seen + 1, automated: true },
-      })
-      // THE shared writer: carries each attempt's provider id, so a delivery
-      // webhook can later move these rows past 'sent' (and only links a bubble to
-      // attempts that actually sent).
-      await logDispatch(supabase, res, { userId: q.user_id, customerId: q.customer_id, template: 'estimate_followup' })
-      if (res.sentChannels.length) sent++; else skipped++
-    } catch (e) {
-      failed++
-      // 'error', not 'failed': the dispatcher threw, so we do NOT know the message
-      // reached a provider — that's a send-time failure and must stay retryable.
-      // 'failed' is reserved for a provider telling us delivery failed (see
-      // lib/comms/delivery SENT_STATES), which would suppress future attempts.
-      await logSend(supabase, {
-        userId: q.user_id, customerId: q.customer_id, channel: 'sms',
-        template: 'estimate_followup', status: 'error',
-        detail: e instanceof Error ? e.message.slice(0, 200) : 'follow-up failed',
-      })
     }
   }
 
-  return NextResponse.json({ ok: true, chased, sent, skipped, failed })
+  // THE shared chase loop (lib/automation/chase) owns the parts that are dangerous
+  // to re-type: claim-before-send, 'error' vs 'failed', one bad row never aborting
+  // the batch, and what the tally counts. What stays here is only what's this
+  // chaser's own.
+  const tally = await runChaseCron<FollowUpQuote, QuoteChaseCtx>(supabase, {
+    items: quotes,
+    template: 'estimate_followup',
+    errorLabel: 'follow-up failed',
+    // Oldest first, biggest ties first — the engine's own priority, so a partial run
+    // always chases the stalest money first.
+    sort: (a, b) => compareFollowUp(a as unknown as Quote, b as unknown as Quote),
+    // Invoiced → already money owed. Expired → never chase a price we won't honour
+    // (ONE expiry engine).
+    skip: q => invoiced.has(q.id) || isQuoteExpired(q, today),
+    loadContext: bizInfo,
+    enabled: ctx => ctx.automations.quote_followup,                          // owner hasn't switched it on
+    due: (q, ctx) => dueForAutoFollowUp(q as unknown as Quote, ctx.policy),  // ONE engine decides staleness + cap
+    // Compare-and-swap on the exact follow_up_count we read, re-checking status in
+    // the same statement. Two overlapping runs both see the quote as due, but only
+    // one UPDATE can match. Moving last_followed_up_at also re-anchors
+    // needsFollowUp, which is what spaces the next chase by delayDays.
+    claim: async q => {
+      const seen = q.follow_up_count ?? 0
+      const { data } = await supabase.from('quotes')
+        .update({ last_followed_up_at: new Date().toISOString(), follow_up_count: seen + 1 })
+        .eq('id', q.id).eq('status', 'sent').eq('follow_up_count', seen)
+        .select('id')
+      return !!data && data.length > 0
+    },
+    render: async (q, ctx) => {
+      const token = await ensurePortalToken(supabase, q.user_id, q.customer_id!)
+      const msg = renderMessage('estimate_followup', ctx.templates, {
+        firstName: q.customers!.name,
+        businessName: ctx.name,
+        quoteLink: token ? portalUrl(token) : undefined,
+        logoUrl: ctx.logoUrl || undefined,
+        website: ctx.website || undefined,
+        directPhone: ctx.phone || undefined,
+      })
+      return {
+        smsText: msg.sms, emailSubject: msg.subject, emailHtml: msg.html, emailText: msg.text,
+        // follow_up_count is the value READ before the claim — the row object isn't
+        // mutated by it — so this is the same number the CAS wrote.
+        meta: { quote_id: q.id, quote_number: q.quote_number, follow_up_number: (q.follow_up_count ?? 0) + 1, automated: true },
+      }
+    },
+  })
+
+  return NextResponse.json({ ok: true, ...tally })
 }

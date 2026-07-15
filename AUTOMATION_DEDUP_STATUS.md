@@ -182,14 +182,33 @@ has these queued. Doing them here would conflict:
 
 ## ⚠️ Overlap with `guardian/dedup-2026-07-14`
 
-That branch's backlog lists `lib/cron/guard.ts requireCron()` (catalogued, not built).
-**It is built here** — `/api/cron/signals` would otherwise have been the 8th copy of the
-cron preamble, which defeats the point. Whoever merges second should drop their copy.
+That branch's backlog listed `lib/cron/guard.ts requireCron()` and `runChaseCron`
+(catalogued, not built). **Both are built here.** Verified before starting: `main` has no
+chase extraction and no `lib/automation/`, and that branch has since moved on to other
+work (payments single-writer, CEO dashboard, campaigns) — so neither was claimed and no
+effort was duplicated. Whoever merges second should drop those two backlog entries.
 
-Its backlog also lists **`runChaseCron`** (the quote chaser and the invoice chaser are
-the same loop twice). Still not done, still the right next extraction — and it is the
-natural first consumer of `automation/policy` + `automation/types`: same policy resolve,
-same claim-then-send, same run log. Left alone here to avoid a collision.
+### `runChaseCron` — done
+The two chasers were the same loop twice. What they actually shared wasn't line count —
+it was the parts that are **dangerous to re-type**, and which a third chaser would get
+subtly wrong:
+- **Claim BEFORE sending.** The compare-and-swap must precede dispatch or two overlapping
+  runs both send. Order *is* the safety property.
+- **`'error'`, not `'failed'`.** A throw means we don't know whether a provider received
+  it, so it must stay retryable; `'failed'` is reserved for a provider reporting delivery
+  failure and suppresses future attempts. Backwards = silently stops chasing real money.
+- **One bad row must never abort the batch**, or the rest of the owner's book goes
+  unchased until tomorrow.
+- **What the tally counts**: `chased` = claims consumed, `sent`/`skipped` = what dispatch
+  actually did.
+
+Each chaser keeps only what is genuinely its own: its query, its stop conditions
+(`invoiced` / `isQuoteExpired`), its policy, its CAS statement, and its message. Net
+−25 lines, but the point is that the invariants now live in one reviewed place.
+
+One subtlety worth recording: `render` runs *after* `claim`, and the meta needs the
+pre-claim count. The row object isn't mutated by the CAS, so `(count ?? 0) + 1` in
+`render` is the same number the CAS wrote — no threading of state required.
 
 ## The engine — built, and deliberately unable to send
 

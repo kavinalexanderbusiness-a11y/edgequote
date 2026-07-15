@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
 import { renderMessage, MsgType, type MessagePrefs } from '@/lib/comms/templates'
 import { commsEnabled } from '@/lib/comms/send'
-import { dispatchToCustomer } from '@/lib/comms/dispatch'
-import { logDispatch, logSend } from '@/lib/comms/log'
+import { runChaseCron } from '@/lib/automation/chase'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { resolveAutomations, Automations } from '@/lib/comms/automations'
 import { dueForAutoReminder, resolveReminderPolicy, type ReminderPolicy, type RemindableInvoice } from '@/lib/payments/dunning'
@@ -45,6 +44,18 @@ type ReminderRow = RemindableInvoice & {
   customers: ReminderCustomer | null
 }
 
+// This chaser's per-owner settings — the only context the shared loop hands back.
+interface InvoiceChaseCtx {
+  name: string
+  templates: Partial<Record<MsgType, string>> | null
+  logoUrl: string | null
+  website: string | null
+  phone: string | null
+  automations: Automations
+  policy: ReminderPolicy
+  fees: FeeSettings
+}
+
 export async function GET(req: NextRequest) {
   if (!cronSecretOk(req)) return NextResponse.json({ error: 'forbidden' }, { status: 403 })
   const enabled = commsEnabled()
@@ -70,14 +81,14 @@ export async function GET(req: NextRequest) {
   const invoices = ((rows as unknown as ReminderRow[]) || []).filter(i => i.customer_id && i.customers)
   if (invoices.length === 0) return NextResponse.json({ ok: true, chased: 0, sent: 0, skipped: 0, failed: 0 })
 
-  const bizCache: Record<string, { name: string; templates: Partial<Record<MsgType, string>> | null; logoUrl: string | null; website: string | null; phone: string | null; automations: Automations; policy: ReminderPolicy; fees: FeeSettings }> = {}
-  async function bizInfo(userId: string) {
-    if (bizCache[userId]) return bizCache[userId]
+  // Per-owner settings. runChaseCron caches this per user_id, so it's resolved once
+  // per owner per run exactly as the local cache did.
+  async function bizInfo(userId: string): Promise<InvoiceChaseCtx> {
     const { data } = await supabase.from('business_settings')
       .select('company_name, phone, website, logo_url, message_templates, automations, payment_fee_strategy, fee_recovery_percent, gst_percent')
       .eq('user_id', userId).maybeSingle()
     const d = data as ({ company_name: string | null; phone: string | null; website: string | null; logo_url: string | null; message_templates: Partial<Record<MsgType, string>> | null; automations: unknown } & FeeSettings) | null
-    return (bizCache[userId] = {
+    return {
       name: d?.company_name || 'Edge Property Services',
       templates: d?.message_templates ?? null,
       logoUrl: d?.logo_url ?? null,
@@ -88,79 +99,53 @@ export async function GET(req: NextRequest) {
       // The SAME fee/GST settings every balance is computed with, so the reminder
       // can never disagree with the amount shown on the invoice or the portal.
       fees: { payment_fee_strategy: d?.payment_fee_strategy ?? null, fee_recovery_percent: d?.fee_recovery_percent ?? null, gst_percent: d?.gst_percent ?? null },
-    })
-  }
-
-  let sent = 0, skipped = 0, chased = 0, failed = 0
-  // Longest-overdue first, so a partial run always chases the stalest money first.
-  const ordered = [...invoices].sort((a, b) => (a.due_date || '').localeCompare(b.due_date || ''))
-
-  for (const inv of ordered) {
-    const info = await bizInfo(inv.user_id)
-    if (!info.automations.invoice_reminder) continue                            // owner hasn't switched it on
-    if (!dueForAutoReminder(inv, info.fees, today, info.policy)) continue        // ledger decides overdue; policy decides cadence
-
-    // ── Claim before sending ──────────────────────────────────────────────────
-    // Compare-and-swap on the exact reminder_count we read, re-asserting that the
-    // invoice is still chaseable in the same statement. Two overlapping cron runs
-    // both see it as due, but only one UPDATE can match — the loser gets zero rows
-    // and moves on, so an invoice can never be reminded twice. Moving
-    // last_reminded_at also re-anchors the policy, which is what spaces the next
-    // reminder by delayDays.
-    const seen = inv.reminder_count ?? 0
-    const { data: claimed } = await supabase.from('invoices')
-      .update({ last_reminded_at: new Date().toISOString(), reminder_count: seen + 1 })
-      .eq('id', inv.id).eq('reminder_count', seen).in('status', ['unpaid', 'sent', 'partial'])
-      .select('id')
-    if (!claimed || claimed.length === 0) continue   // another run got it, or it was paid mid-run
-    chased++
-
-    // One bad invoice must never abort the batch — the rest of the owner's book
-    // would go unchased until tomorrow. A throw is recorded like any other failure
-    // so the attempt it consumed is visible rather than silent.
-    try {
-      const token = await ensurePortalToken(supabase, inv.user_id, inv.customer_id!)
-      const { balance } = invoiceBalance(inv, info.fees)
-      const msg = renderMessage('payment_reminder', info.templates, {
-        firstName: inv.customers!.name,
-        businessName: info.name,
-        invoiceLink: token ? portalUrl(token) : undefined,
-        amount: formatCurrency(balance),
-        logoUrl: info.logoUrl || undefined,
-        website: info.website || undefined,
-        directPhone: info.phone || undefined,
-      })
-
-      // The shared dispatcher enforces granular consent (payment_reminder maps to
-      // the 'invoices' category) + per-channel opt-in and threads the message into
-      // the customer's conversation — identical to a manual send. It returns one
-      // attempt per channel for us to log.
-      const res = await dispatchToCustomer(supabase, {
-        userId: inv.user_id,
-        customer: { id: inv.customer_id!, ...inv.customers! },
-        channels: ['sms', 'email'],
-        smsText: msg.sms, emailSubject: msg.subject, emailHtml: msg.html, emailText: msg.text,
-        template: 'payment_reminder',
-        meta: { invoice_id: inv.id, invoice_number: inv.invoice_number, reminder_number: seen + 1, balance, automated: true },
-      })
-      // THE shared writer: carries each attempt's provider id, so a delivery
-      // webhook can later move these rows past 'sent' (and only links a bubble to
-      // attempts that actually sent).
-      await logDispatch(supabase, res, { userId: inv.user_id, customerId: inv.customer_id, template: 'payment_reminder' })
-      if (res.sentChannels.length) sent++; else skipped++
-    } catch (e) {
-      failed++
-      // 'error', not 'failed': the dispatcher threw, so we do NOT know the message
-      // reached a provider — that's a send-time failure and must stay retryable.
-      // 'failed' is reserved for a provider telling us delivery failed (see
-      // lib/comms/delivery SENT_STATES), which would suppress future attempts.
-      await logSend(supabase, {
-        userId: inv.user_id, customerId: inv.customer_id, channel: 'sms',
-        template: 'payment_reminder', status: 'error',
-        detail: e instanceof Error ? e.message.slice(0, 200) : 'reminder failed',
-      })
     }
   }
 
-  return NextResponse.json({ ok: true, chased, sent, skipped, failed })
+  // THE shared chase loop (lib/automation/chase) — same claim-before-send,
+  // 'error'-not-'failed' and batch-isolation rules the quote chaser gets. Only this
+  // chaser's own nouns stay here.
+  const tally = await runChaseCron<ReminderRow, InvoiceChaseCtx>(supabase, {
+    items: invoices,
+    template: 'payment_reminder',
+    errorLabel: 'reminder failed',
+    // Longest-overdue first, so a partial run always chases the stalest money first.
+    sort: (a, b) => (a.due_date || '').localeCompare(b.due_date || ''),
+    loadContext: bizInfo,
+    enabled: ctx => ctx.automations.invoice_reminder,                       // owner hasn't switched it on
+    due: (inv, ctx) => dueForAutoReminder(inv, ctx.fees, today, ctx.policy), // ledger decides overdue; policy decides cadence
+    // Compare-and-swap on the exact reminder_count we read, re-asserting that the
+    // invoice is still chaseable in the same statement. Two overlapping runs both
+    // see it as due, but only one UPDATE can match. Moving last_reminded_at also
+    // re-anchors the policy, which is what spaces the next reminder by delayDays.
+    claim: async inv => {
+      const seen = inv.reminder_count ?? 0
+      const { data } = await supabase.from('invoices')
+        .update({ last_reminded_at: new Date().toISOString(), reminder_count: seen + 1 })
+        .eq('id', inv.id).eq('reminder_count', seen).in('status', ['unpaid', 'sent', 'partial'])
+        .select('id')
+      return !!data && data.length > 0
+    },
+    render: async (inv, ctx) => {
+      const token = await ensurePortalToken(supabase, inv.user_id, inv.customer_id!)
+      const { balance } = invoiceBalance(inv, ctx.fees)
+      const msg = renderMessage('payment_reminder', ctx.templates, {
+        firstName: inv.customers!.name,
+        businessName: ctx.name,
+        invoiceLink: token ? portalUrl(token) : undefined,
+        amount: formatCurrency(balance),
+        logoUrl: ctx.logoUrl || undefined,
+        website: ctx.website || undefined,
+        directPhone: ctx.phone || undefined,
+      })
+      return {
+        smsText: msg.sms, emailSubject: msg.subject, emailHtml: msg.html, emailText: msg.text,
+        // reminder_count is the value READ before the claim — the row object isn't
+        // mutated by it — so this is the same number the CAS wrote.
+        meta: { invoice_id: inv.id, invoice_number: inv.invoice_number, reminder_number: (inv.reminder_count ?? 0) + 1, balance, automated: true },
+      }
+    },
+  })
+
+  return NextResponse.json({ ok: true, ...tally })
 }
