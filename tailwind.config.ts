@@ -48,6 +48,19 @@ const config: Config = {
         card: '14px',
         xl2: '20px',
       },
+      // ── Layering contract ──────────────────────────────────────────────────
+      // Everything that floats above the page stacks here. The numbers are the
+      // ones the app already used — this only NAMES them, so a new overlay reads
+      // the order instead of guessing it (guessing is how a stray `z-[55]` got
+      // added). Local/in-card stacking keeps plain z-10…z-40; anything global
+      // must use one of these.
+      zIndex: {
+        overlay: '50',        // dialogs, drawers, lightboxes + their scrims
+        'overlay-top': '60',  // an overlay that must clear another overlay
+        notice: '90',         // offline / install system notices
+        toast: '100',         // toasts + the notification popover
+        menu: '200',          // menus, popovers, command palette, skip link — always top
+      },
       // 18px step — w-4.5/h-4.5 icons inside 32px chips were silently falling
       // back to lucide's 24px default because this step didn't exist.
       spacing: {

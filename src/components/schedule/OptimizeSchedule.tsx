@@ -214,7 +214,7 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
   const fmtDrive = (min: number) => min >= 60 ? `${Math.floor(min / 60)}h ${min % 60}m` : `${min}m`
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/50" onClick={onClose}>
+    <div className="fixed inset-0 z-overlay overflow-y-auto bg-black/50" onClick={onClose}>
       <div ref={dialogRef} className="min-h-full flex items-start justify-center p-4 sm:p-6">
         <Card role="dialog" aria-modal="true" aria-labelledby="optimize-title" tabIndex={-1} className="w-full max-w-2xl my-2 shadow-2xl focus:outline-none" onClick={e => e.stopPropagation()}>
           <div className="px-5 py-4 border-b border-border flex items-center justify-between">

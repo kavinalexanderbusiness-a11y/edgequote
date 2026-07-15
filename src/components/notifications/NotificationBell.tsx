@@ -196,7 +196,7 @@ export function NotificationBell() {
       role="dialog"
       aria-label="Notifications"
       style={{ position: 'fixed', top: pos.top, left: pos.left, width: pos.width, maxHeight: pos.maxHeight }}
-      className="z-[100] flex flex-col rounded-card border border-border bg-bg-secondary shadow-2xl overflow-hidden origin-top-right animate-pop">
+      className="z-toast flex flex-col rounded-card border border-border bg-bg-secondary shadow-2xl overflow-hidden origin-top-right animate-pop">
       <div className="px-4 py-2.5 border-b border-border flex items-center justify-between shrink-0">
         <p className="text-sm font-bold text-ink">Notifications</p>
         {unread > 0 && (

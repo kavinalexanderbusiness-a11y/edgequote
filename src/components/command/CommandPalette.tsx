@@ -257,7 +257,7 @@ export function CommandPalette() {
 
   let idx = -1   // running index so each row knows its position in `flat`
   const overlay = (
-    <div className="fixed inset-0 z-[200] flex items-start justify-center px-4 pt-[14vh] sm:pt-[12vh] animate-fade"
+    <div className="fixed inset-0 z-menu flex items-start justify-center px-4 pt-[14vh] sm:pt-[12vh] animate-fade"
       onMouseDown={close}>
       <div className="absolute inset-0 bg-black/50 backdrop-blur-[2px]" />
       <div role="dialog" aria-modal="true" aria-label="Command palette" onMouseDown={e => e.stopPropagation()}

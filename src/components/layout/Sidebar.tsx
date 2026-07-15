@@ -208,7 +208,7 @@ export function Sidebar() {
 
       {/* Mobile drawer */}
       {open && (
-        <div className="lg:hidden fixed inset-0 z-50">
+        <div className="lg:hidden fixed inset-0 z-overlay">
           <div className="absolute inset-0 bg-black/60 animate-fade" onClick={() => setOpen(false)} />
           <aside ref={drawerRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Menu" className="absolute left-0 top-0 h-full w-64 max-w-[80%] bg-bg-secondary border-r border-border flex flex-col animate-drawer focus:outline-none">
             <div className="h-14 flex items-center justify-between px-4 border-b border-border">

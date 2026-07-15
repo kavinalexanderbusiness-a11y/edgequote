@@ -29,7 +29,7 @@ export function ScopeDialog({ title, verb, destructive, onChoose, onCancel }: Sc
     return () => { document.body.style.overflow = prev }
   }, [])
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-4" onClick={onCancel}>
+    <div className="fixed inset-0 z-overlay flex items-end sm:items-center justify-center bg-black/50 p-4" onClick={onCancel}>
       <div
         ref={panelRef}
         tabIndex={-1}

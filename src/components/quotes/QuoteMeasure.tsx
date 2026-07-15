@@ -432,7 +432,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center p-0 sm:p-4">
+    <div className="fixed inset-0 z-overlay bg-black/70 flex items-end sm:items-center justify-center p-0 sm:p-4">
       <div role="dialog" aria-modal="true" aria-label="Measure & Price" className="w-full sm:max-w-3xl bg-bg-secondary border border-border sm:rounded-card max-h-[95vh] overflow-auto">
         <div className="flex items-center justify-between px-4 py-3 border-b border-border sticky top-0 bg-bg-secondary z-10">
           <h2 className="text-sm font-semibold text-ink">Measure & Price</h2>

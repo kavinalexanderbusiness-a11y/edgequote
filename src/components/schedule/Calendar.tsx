@@ -315,7 +315,7 @@ export function Calendar({ view, cursor, jobs, onSelectDay, onSelectJob, onMarkD
     <div
       ref={ghostRef}
       className={cn(
-        'fixed top-0 left-0 z-50 pointer-events-none px-2 py-1 rounded-lg bg-accent text-black text-xs font-semibold shadow-lg max-w-[180px] truncate',
+        'fixed top-0 left-0 z-overlay pointer-events-none px-2 py-1 rounded-lg bg-accent text-black text-xs font-semibold shadow-lg max-w-[180px] truncate',
         !dragging && 'hidden'
       )}
     />

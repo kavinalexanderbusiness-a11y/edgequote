@@ -57,7 +57,7 @@ export function DayStatusMenu({ dates, current, pos, onPick, onClear, onClose }:
       ref={ref}
       role="menu"
       style={{ position: 'fixed', top: coords?.top ?? pos.y, left: coords?.left ?? pos.x, width: 248, visibility: coords ? 'visible' : 'hidden' }}
-      className="z-[200] rounded-xl border border-border bg-bg-secondary shadow-2xl overflow-hidden">
+      className="z-menu rounded-xl border border-border bg-bg-secondary shadow-2xl overflow-hidden">
       <div className="flex items-center justify-between px-3 py-2 border-b border-border">
         <div className="min-w-0">
           <p className="text-xs font-bold text-ink truncate">{heading}</p>

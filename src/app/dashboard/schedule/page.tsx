@@ -1632,7 +1632,7 @@ export default function SchedulePage() {
 
       {/* Edit/New job — modal overlay so Open always brings the correct job into view */}
       {(showForm || editing) && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/50" onClick={closeForm}>
+        <div className="fixed inset-0 z-overlay overflow-y-auto bg-black/50" onClick={closeForm}>
           <div className="min-h-full flex items-start justify-center p-4 sm:p-6">
             <Card role="dialog" aria-modal="true" aria-labelledby="job-form-title" className="w-full max-w-2xl my-2 shadow-2xl" onClick={e => e.stopPropagation()}>
           <CardHeader className="flex items-center justify-between">
@@ -1800,7 +1800,7 @@ export default function SchedulePage() {
 
       {/* Soft cadence / preference warning before a hand move */}
       {moveConfirm && (
-        <div ref={moveConfirmRef} className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4" onClick={() => setMoveConfirm(null)}>
+        <div ref={moveConfirmRef} className="fixed inset-0 z-overlay-top flex items-center justify-center bg-black/50 p-4" onClick={() => setMoveConfirm(null)}>
           <Card role="dialog" aria-modal="true" aria-labelledby="move-confirm-title" tabIndex={-1} className="w-full max-w-md shadow-2xl focus:outline-none" onClick={e => e.stopPropagation()}>
             <CardHeader className="flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 text-amber-400" aria-hidden="true" />

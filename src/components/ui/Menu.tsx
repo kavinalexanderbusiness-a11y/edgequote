@@ -155,7 +155,7 @@ export function Menu({ items, align = 'start', width = 288, ariaLabel = 'Menu', 
             maxHeight: 'calc(100vh - 16px)',
             visibility: coords ? 'visible' : 'hidden',
           }}
-          className="z-[200] overflow-y-auto rounded-xl border border-border bg-bg-secondary shadow-2xl p-1.5 origin-top animate-pop">
+          className="z-menu overflow-y-auto rounded-xl border border-border bg-bg-secondary shadow-2xl p-1.5 origin-top animate-pop">
           {items.map((it, i) => {
             const Icon = it.icon
             return (

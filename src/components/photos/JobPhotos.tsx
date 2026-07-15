@@ -317,7 +317,7 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
 
       {/* Lightbox */}
       {current && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" onClick={() => setLightboxId(null)}>
+        <div className="fixed inset-0 z-overlay bg-black/80 flex items-center justify-center p-4" onClick={() => setLightboxId(null)}>
           {/* Prev / next across the current (filtered) set — no open-close per photo. */}
           {filtered.length > 1 && (
             <>

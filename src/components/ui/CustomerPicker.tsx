@@ -115,7 +115,7 @@ export function CustomerPicker({
           <ChevronDown className="w-4 h-4 text-ink-faint absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
         )}
         {open && (
-          <div className="absolute z-50 mt-1 w-full bg-bg-secondary border border-border-strong rounded-xl shadow-xl overflow-hidden origin-top animate-pop max-h-72 overflow-y-auto">
+          <div className="absolute z-overlay mt-1 w-full bg-bg-secondary border border-border-strong rounded-xl shadow-xl overflow-hidden origin-top animate-pop max-h-72 overflow-y-auto">
             {rows.length === 0 ? (
               <p className="px-3.5 py-2.5 text-sm text-ink-faint">{query.trim() ? `No customers match “${query.trim()}”.` : 'No customers yet — add one to start a conversation.'}</p>
             ) : rows.map((r, i) => (

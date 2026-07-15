@@ -79,7 +79,7 @@ export function Modal({ open, onClose, title, icon: Icon, children, footer, size
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-4 animate-fade"
+      className="fixed inset-0 z-overlay flex items-end sm:items-center justify-center bg-black/50 p-4 animate-fade"
       onClick={dismissable ? onClose : undefined}
     >
       <div
