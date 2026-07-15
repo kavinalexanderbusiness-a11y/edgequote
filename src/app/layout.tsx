@@ -19,8 +19,8 @@ const syne = Syne({
 })
 
 export const metadata: Metadata = {
-  title: 'EdgeQuote AI — Edge Property Services',
-  description: 'Quoting, scheduling and field operations for Edge Property Services',
+  title: 'EdgeQuote — Field Service Platform',
+  description: 'Quoting, scheduling, messaging, invoicing and payments for field service businesses.',
   applicationName: 'EdgeQuote',
   manifest: '/manifest.webmanifest',
   appleWebApp: { capable: true, title: 'EdgeQuote', statusBarStyle: 'default' },

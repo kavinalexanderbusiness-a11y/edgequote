@@ -292,7 +292,7 @@ export default function NewQuotePage() {
           customer_email: lead.customerEmail || '',
           address: lead.address || '',
           measured_sqft: lead.sqft || 0,
-          service_type: lead.serviceType || 'Lawn Mowing',
+          service_type: lead.serviceType || templates[0]?.name || '',
           // RAW website prices — handleSubmit applies fee-recovery once at insert.
           initial_price: lead.initialPrice || 0,
           weekly_price: lead.weekly || 0,
@@ -307,8 +307,9 @@ export default function NewQuotePage() {
           address: measurement.address || '',
           // Lawn size measured on the website flows straight into the editable field.
           measured_sqft: measurement.sqft || 0,
-          // Sensible default so a measured lawn is saveable in one tap (editable).
-          service_type: 'Lawn Mowing',
+          // Default to the owner's PRIMARY service (their first template) so a
+          // measured property is saveable in one tap — learned, not assumed.
+          service_type: templates[0]?.name || '',
           initial_price: measurement.jobPrice || 0,
           // Selected cadence from the pricing package — the full structure
           // arrives pre-filled, no manual entry.

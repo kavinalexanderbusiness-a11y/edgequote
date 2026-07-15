@@ -197,7 +197,7 @@ export default function ReactivationPage() {
             jobsCompleted: completed.length,
             lifetimeRevenue,
             lastQuoteAmount,
-            lastServiceType: completed[completed.length - 1].service_type || cq[0]?.service_type || 'Lawn Mowing',
+            lastServiceType: completed[completed.length - 1].service_type || cq[0]?.service_type || 'their usual service',
             potentialRecovery: lastQuoteAmount || Math.round(avgValue),
             bucket: days >= LAPSE_BUCKET_DAYS['12+'] ? '12+' : days >= LAPSE_BUCKET_DAYS['6+'] ? '6+' : '3+',
             isVip,

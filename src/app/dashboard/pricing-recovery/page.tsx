@@ -206,7 +206,7 @@ export default function PricingRecoveryPage() {
     const insert: Record<string, unknown> = {
       user_id: user!.id, quote_number,
       customer_id: sample.customer_id, customer_name: sample.customerName,
-      address: sample.address || '', service_type: sample.service_type || 'Lawn Mowing',
+      address: sample.address || '', service_type: sample.service_type || '',
       property_id: sample.property_id, initial_price: price, status: 'accepted',
       custom_travel_required: false, show_travel_separately: false,
       issued_date: localTodayISO(),

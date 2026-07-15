@@ -64,7 +64,7 @@ export default function LoginPage() {
             </div>
           )}
           <h1 className="text-xl font-bold tracking-tight text-ink">EdgeQuote AI</h1>
-          <p className="text-sm text-ink-muted mt-1">Edge Property Services — Internal Tool</p>
+          <p className="text-sm text-ink-muted mt-1">Your field service workspace</p>
         </div>
 
         {/* Card */}

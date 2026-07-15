@@ -76,7 +76,7 @@ export async function GET(req: NextRequest) {
     if (bizCache[userId]) return bizCache[userId]
     const { data } = await supabase.from('business_settings').select('company_name, phone, website, logo_url, review_url, message_templates, base_address').eq('user_id', userId).maybeSingle()
     const d = data as { company_name: string | null; phone: string | null; website: string | null; logo_url: string | null; review_url: string | null; message_templates: Partial<Record<MsgType, string>> | null; base_address: string | null } | null
-    return (bizCache[userId] = { name: d?.company_name || 'Edge Property Services', templates: d?.message_templates ?? null, reviewUrl: d?.review_url ?? null, logoUrl: d?.logo_url ?? null, website: d?.website ?? null, phone: d?.phone ?? null, mailingAddress: d?.base_address ?? null })
+    return (bizCache[userId] = { name: d?.company_name || 'your service provider', templates: d?.message_templates ?? null, reviewUrl: d?.review_url ?? null, logoUrl: d?.logo_url ?? null, website: d?.website ?? null, phone: d?.phone ?? null, mailingAddress: d?.base_address ?? null })
   }
 
   let processed = 0, sent = 0, claimFailures = 0, reaped = 0

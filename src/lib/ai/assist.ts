@@ -198,7 +198,7 @@ async function customerContext(supabase: SupabaseClient, userId: string, custome
   if (c.last_contacted_at) lines.push(`Last outbound contact: ${String(c.last_contacted_at).slice(0, 10)}.`)
   if (c.reviewed_at) lines.push(`Left a ${c.review_rating ?? '?'}-star review on ${c.review_source || 'Google'} (${String(c.reviewed_at).slice(0, 10)}).`)
   for (const p of props) {
-    lines.push(`Property: ${p.address || 'on file'}${p.neighborhood ? ` (${p.neighborhood})` : ''}${p.lawn_sqft ? `, lawn ≈${p.lawn_sqft} sqft` : ''}${p.notes ? ` — ${trunc(p.notes, 100)}` : ''}.`)
+    lines.push(`Property: ${p.address || 'on file'}${p.neighborhood ? ` (${p.neighborhood})` : ''}${p.lawn_sqft ? `, measured area ≈${p.lawn_sqft} sqft` : ''}${p.notes ? ` — ${trunc(p.notes, 100)}` : ''}.`)
   }
   if (jobs.length) {
     lines.push('Recent visits (newest first):')
@@ -340,7 +340,7 @@ ${GUARDRAILS}`
           : 'A critical review: thank them for the feedback, apologize once without excuses and without arguing any detail, and invite them to continue directly (phone or email) so you can make it right. Never dispute their account publicly, never mention compensation.'
       const system = `You write the business owner's PUBLIC reply to a customer review of ${ctx.company} (posted on ${trunc(p.source, 30) || 'Google'}). 2–4 sentences, under 60 words.
 ${shape}
-This reply is public: use the reviewer's FIRST NAME only, and never reveal their address, prices paid, invoice details, or visit dates — the kind of service ("your lawn", "the spring cleanup") is as specific as it gets.
+This reply is public: use the reviewer's FIRST NAME only, and never reveal their address, prices paid, invoice details, or visit dates — the kind of service ("your yard", "the install", "the cleanup") is as specific as it gets.
 Don't open with "Thank you so much" — vary the opener. Use the business name at most once.
 ${STYLE}
 ${GUARDRAILS}`
@@ -363,7 +363,7 @@ ${GUARDRAILS}`
         p.serviceType ? `Primary service: ${trunc(p.serviceType, 60)}.` : '',
         services.length ? `Line items on the quote, in order: ${services.join('; ')}.` : '',
         p.address ? `Property address: ${trunc(p.address, 80)}.` : '',
-        p.measuredSqft && p.measuredSqft > 0 ? `Measured lawn size: ${Math.round(p.measuredSqft)} sqft (measured, not estimated — you may reference it).` : '',
+        p.measuredSqft && p.measuredSqft > 0 ? `Measured work area: ${Math.round(p.measuredSqft)} sqft (measured, not estimated — you may reference it).` : '',
         propLine,
         trunc(p.draft, 10) ? `The owner's rough notes to build from (keep every fact in them):\n---\n${trunc(p.draft, 1200)}\n---` : 'Write the scope notes from the line items above.',
       ].filter(Boolean).join('\n')

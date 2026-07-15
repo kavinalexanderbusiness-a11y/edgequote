@@ -52,7 +52,7 @@ export function Sidebar() {
   // The mobile drawer is a modal overlay — trap focus, move focus in on open,
   // Escape to close, and restore focus to the hamburger on close.
   const drawerRef = useFocusTrap<HTMLElement>(open, () => setOpen(false))
-  const [brand, setBrand] = useState<{ url: string | null; scale: number }>({ url: null, scale: 100 })
+  const [brand, setBrand] = useState<{ url: string | null; scale: number; name: string | null }>({ url: null, scale: 100, name: null })
   const [unread, setUnread] = useState(0)
 
   // Uploaded logo + size from Branding settings (cached for the login screen).
@@ -61,7 +61,7 @@ export function Sidebar() {
     async function load() {
       try {
         const cached = window.localStorage.getItem('eq-logo')
-        if (cached) { const c = JSON.parse(cached); if (active && c?.url) setBrand({ url: c.url, scale: c.scale || 100 }) }
+        if (cached) { const c = JSON.parse(cached); if (active && (c?.url || c?.name)) setBrand({ url: c.url ?? null, scale: c.scale || 100, name: c.name ?? null }) }
       } catch { /* ignore */ }
       const supabase = createClient()
       // Local session read — the sidebar mounts on every page; no auth round-trip
@@ -69,10 +69,10 @@ export function Sidebar() {
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
       if (!user) return
-      const { data } = await supabase.from('business_settings').select('logo_url, logo_scale').eq('user_id', user.id).maybeSingle()
-      const s = data as { logo_url: string | null; logo_scale: number | null } | null
+      const { data } = await supabase.from('business_settings').select('logo_url, logo_scale, company_name').eq('user_id', user.id).maybeSingle()
+      const s = data as { logo_url: string | null; logo_scale: number | null; company_name: string | null } | null
       if (!active) return
-      const next = { url: s?.logo_url ?? null, scale: s?.logo_scale && s.logo_scale >= 50 ? s.logo_scale : 100 }
+      const next = { url: s?.logo_url ?? null, scale: s?.logo_scale && s.logo_scale >= 50 ? s.logo_scale : 100, name: s?.company_name?.trim() || null }
       setBrand(next)
       try { window.localStorage.setItem('eq-logo', JSON.stringify(next)) } catch { /* ignore */ }
     }
@@ -197,7 +197,9 @@ export function Sidebar() {
       )}
       <div className="min-w-0">
         <p className="text-sm font-bold text-ink leading-none truncate">EdgeQuote</p>
-        <p className="text-[10px] text-ink-faint leading-none mt-0.5 truncate">Edge Property Services</p>
+        {/* The OWNER's business name (Settings → Branding) — the platform never
+            assumes whose business this is. Hidden until a name is set. */}
+        {brand.name && <p className="text-[10px] text-ink-faint leading-none mt-0.5 truncate">{brand.name}</p>}
       </div>
     </div>
   )

@@ -154,7 +154,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
         customer_id: '',
         property_id: '',
         title: '',
-        service_type: 'Lawn Mowing', // most jobs are mows — quick-add ready
+        service_type: '', // prefilled with the owner's most common service (learned, not assumed — see effect below)
         scheduled_date: '',
         start_time: '',
         end_time: '',
@@ -167,6 +167,40 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
         ...defaultValues,
       },
     })
+
+  // Quick-add default service is LEARNED, not assumed: the owner's most frequent
+  // recent service, else their first service template. A lawn company keeps its
+  // instant "Lawn Mowing" quick-add; every other trade gets THEIR default — the
+  // platform itself has no home industry. Never overwrites a caller default or
+  // anything the owner has already typed.
+  useEffect(() => {
+    if (isEdit || defaultValues?.service_type) return
+    let alive = true
+    ;(async () => {
+      const { data: { session } } = await supabase.auth.getSession()
+      const uid = session?.user?.id
+      if (!uid) return
+      const { data } = await supabase.from('jobs').select('service_type')
+        .eq('user_id', uid).not('service_type', 'is', null)
+        .order('created_at', { ascending: false }).limit(30)
+      const counts = new Map<string, number>()
+      let top: string | null = null
+      for (const r of (data as { service_type: string | null }[] | null) || []) {
+        const s = (r.service_type || '').trim()
+        if (!s) continue
+        counts.set(s, (counts.get(s) || 0) + 1)
+        if (!top || counts.get(s)! > (counts.get(top) || 0)) top = s
+      }
+      if (!top) {
+        const { data: t } = await supabase.from('service_templates').select('name')
+          .eq('user_id', uid).order('sort_order').limit(1)
+        top = ((t as { name: string | null }[] | null)?.[0]?.name || '').trim() || null
+      }
+      if (alive && top && !watch('service_type')) setValue('service_type', top)
+    })()
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Quick-add: only Customer / Service / Date show; everything else is collapsed.
   // BUT if a recurrence is pre-filled on a new job (e.g. scheduling a recurring
@@ -411,7 +445,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
           <Select label="Customer" autoFocus options={customerOptions} {...field} />
         )} />
 
-      <Input label="Service Type" placeholder="e.g. Lawn Mowing"
+      <Input label="Service Type" placeholder="Your most common service"
         {...register('service_type')} />
 
       <div>
