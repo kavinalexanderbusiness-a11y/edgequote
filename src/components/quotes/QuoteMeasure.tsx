@@ -448,6 +448,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
               <span className="text-xs font-medium text-ink">Service</span>
               <select
                 value={serviceType ?? ''}
+                aria-label="Service to measure"
                 onChange={e => onServiceChange?.(e.target.value)}
                 className="bg-bg border border-border-strong rounded-lg px-2.5 py-1.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20">
                 <option value="">Select a service…</option>

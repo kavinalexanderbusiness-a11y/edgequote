@@ -296,7 +296,12 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
                       </span>
                     </td>
                     <td className="px-3 sm:px-5 py-3.5 font-medium text-ink">
-                      {q.customer_name}
+                      {/* A real link makes the row keyboard-operable (the row's own
+                          onClick only serves the mouse) and gives it an accessible name. */}
+                      <Link href={`/dashboard/quotes/${q.id}`} onClick={e => e.stopPropagation()}
+                        className="rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 hover:text-accent transition-colors">
+                        {q.customer_name}
+                      </Link>
                       {needsFollowUp(q) && q.sent_at && (
                         <span className="block text-[10px] font-semibold text-amber-400 mt-0.5">Sent {daysSince(q.sent_at)}d ago · follow up</span>
                       )}

@@ -315,6 +315,7 @@ export default function NeighborsPage() {
                     <div className="flex items-center gap-2 mb-2">
                       <input
                         value={convertName} onChange={e => setConvertName(e.target.value)} autoFocus
+                        aria-label="Customer name"
                         placeholder={`Customer name for ${l.address}`}
                         onKeyDown={e => { if (e.key === 'Enter' && convertName.trim()) convertLead(l, converting.thenQuote); if (e.key === 'Escape') setConverting(null) }}
                         className="flex-1 bg-bg-tertiary border border-border-strong rounded-lg px-3 py-1.5 text-sm text-ink outline-none focus:border-accent"

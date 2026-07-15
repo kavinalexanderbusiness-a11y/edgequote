@@ -10,6 +10,7 @@ import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/t
 import type { DayStatusMap } from '@/lib/dayStatus'
 import { resolvePrefs } from '@/lib/preferences'
 import { localTodayISO, formatCurrency, cn } from '@/lib/utils'
+import { useFocusTrap } from '@/hooks/useFocusTrap'
 import { Button } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Rocket, X, Trophy, Scale, DollarSign, Target, ArrowRight, Repeat, Check, Navigation, Clock, Gauge, CalendarDays, Lightbulb, AlertTriangle, ShieldCheck, Loader2 } from 'lucide-react'
@@ -62,6 +63,9 @@ interface Props {
 // review every proposed move, then Apply (undo-able) or Cancel.
 export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, preferredWorkDays, capacityHours, anchorDate, initialScope, initialMode, autoRun, invoicedIds: invoicedIdsProp, roadDist, dayStatusMap, capacityForDate, duplicateNote, onApply, onClose }: Props) {
   const supabase = createClient()
+  // Dialog focus management (this overlay mounts/unmounts rather than toggling an
+  // `open` prop, so the trap is active for its whole lifetime).
+  const dialogRef = useFocusTrap<HTMLDivElement>(true, onClose)
   const [mode, setMode] = useState<OptimizeMode>(initialMode ?? 'recommended')
   // Default blast radius = THIS WEEK (same as every other door into the
   // optimizer) — "all future" is an explicit choice, never the default.
@@ -211,10 +215,10 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-black/50" onClick={onClose}>
-      <div className="min-h-full flex items-start justify-center p-4 sm:p-6">
-        <Card className="w-full max-w-2xl my-2 shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div ref={dialogRef} className="min-h-full flex items-start justify-center p-4 sm:p-6">
+        <Card role="dialog" aria-modal="true" aria-labelledby="optimize-title" tabIndex={-1} className="w-full max-w-2xl my-2 shadow-2xl focus:outline-none" onClick={e => e.stopPropagation()}>
           <div className="px-5 py-4 border-b border-border flex items-center justify-between">
-            <h2 className="text-sm font-semibold tracking-tight text-ink flex items-center gap-2"><Rocket className="w-4 h-4 text-accent" /> Optimize Schedule</h2>
+            <h2 id="optimize-title" className="text-sm font-semibold tracking-tight text-ink flex items-center gap-2"><Rocket className="w-4 h-4 text-accent" aria-hidden="true" /> Optimize Schedule</h2>
             <button type="button" onClick={onClose} aria-label="Close" className="w-9 h-9 -mr-2 flex items-center justify-center text-ink-faint hover:text-ink"><X className="w-4 h-4" /></button>
           </div>
           <CardBody className="space-y-4">

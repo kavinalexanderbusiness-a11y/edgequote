@@ -295,6 +295,7 @@ export default function SettingsPage() {
                 ))}
                 <div className="flex items-center gap-2 flex-1 min-w-[180px]">
                   <input type="range" min={50} max={200} step={5} value={logoScale}
+                    aria-label="Logo size percent" aria-valuetext={`${logoScale}%`}
                     onChange={e => setLogoScale(Number(e.target.value))}
                     onPointerUp={e => persistLogoScale(Number((e.target as HTMLInputElement).value))}
                     className="flex-1 accent-[rgb(var(--c-accent))]" />
@@ -584,6 +585,8 @@ export default function SettingsPage() {
             <Button type="submit" form="settings-form" loading={isSubmitting} className={cn(isDirty && 'pill-glow')}>
               {saved ? <><Check className="w-4 h-4" /> Saved</> : isDirty ? 'Save changes' : 'Save settings'}
             </Button>
+            {/* Success is otherwise visual-only (the button label swaps for 2s). */}
+            <span role="status" aria-live="polite" className="sr-only">{saved ? 'Settings saved.' : ''}</span>
           </div>
         </div>
       )}
@@ -599,12 +602,12 @@ function SeasonEditor({ icon, title, hint, season, onChange }: {
 }) {
   const set = (patch: Partial<ServiceSeason>) => onChange({ ...season, ...patch })
   const dayField = (val: number, key: 'startDay' | 'endDay') => (
-    <input type="number" min={1} max={31} value={val}
+    <input type="number" min={1} max={31} value={val} aria-label={key === 'startDay' ? 'Start day' : 'End day'}
       onChange={e => set({ [key]: Math.min(31, Math.max(1, Number(e.target.value) || 1)) })}
       className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
   )
   const monthField = (val: number, key: 'startMonth' | 'endMonth') => (
-    <select value={val} onChange={e => set({ [key]: Number(e.target.value) })}
+    <select value={val} onChange={e => set({ [key]: Number(e.target.value) })} aria-label={key === 'startMonth' ? 'Start month' : 'End month'}
       className="bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20">
       {MONTH_OPTS.map(o => <option key={o.value} value={o.value} className="bg-bg-secondary">{o.label}</option>)}
     </select>

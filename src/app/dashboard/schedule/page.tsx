@@ -40,6 +40,7 @@ import { buildDayStatusMap, buildCapacityForDate, dayStartTime, isDayBlocked, lo
 import { directionsUrl } from '@/lib/route'
 import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
+import { useFocusTrap } from '@/hooks/useFocusTrap'
 import { DaySettingsBar } from '@/components/schedule/DaySettingsBar'
 import { WeatherRainCard, type RainMoveSummary } from '@/components/schedule/WeatherRainCard'
 import { loadWeatherImpact, type WeatherImpactReport, type DayImpact } from '@/lib/weatherImpact'
@@ -128,6 +129,8 @@ export default function SchedulePage() {
   const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(new Set())
   // Soft warning before a hand move that breaks cadence or a customer preference.
   const [moveConfirm, setMoveConfirm] = useState<{ job: Job; newDate: string; warnings: string[] } | null>(null)
+  // Dialog focus management for the move-confirm overlay (Escape/trap/restore).
+  const moveConfirmRef = useFocusTrap<HTMLDivElement>(!!moveConfirm, () => setMoveConfirm(null))
   // After a job is added, auto-propose optimization — LOCAL first (the new job's
   // week), escalating to month/all-future ONLY for a substantial gain. Carries
   // the new job's date so the proposal is anchored around it.
@@ -1615,9 +1618,9 @@ export default function SchedulePage() {
       {(showForm || editing) && (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-black/50" onClick={closeForm}>
           <div className="min-h-full flex items-start justify-center p-4 sm:p-6">
-            <Card className="w-full max-w-2xl my-2 shadow-2xl" onClick={e => e.stopPropagation()}>
+            <Card role="dialog" aria-modal="true" aria-labelledby="job-form-title" className="w-full max-w-2xl my-2 shadow-2xl" onClick={e => e.stopPropagation()}>
           <CardHeader className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-ink">{editing ? 'Edit Job' : 'New Job'}</h2>
+            <h2 id="job-form-title" className="text-sm font-semibold text-ink">{editing ? 'Edit Job' : 'New Job'}</h2>
             <div className="flex items-center gap-2">
               {editing && (
                 <button onClick={handleDelete} className="text-red-400/70 hover:text-red-400 transition-colors" title="Delete job" aria-label="Delete job">
@@ -1780,11 +1783,11 @@ export default function SchedulePage() {
 
       {/* Soft cadence / preference warning before a hand move */}
       {moveConfirm && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4" onClick={() => setMoveConfirm(null)}>
-          <Card className="w-full max-w-md shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div ref={moveConfirmRef} className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4" onClick={() => setMoveConfirm(null)}>
+          <Card role="dialog" aria-modal="true" aria-labelledby="move-confirm-title" tabIndex={-1} className="w-full max-w-md shadow-2xl focus:outline-none" onClick={e => e.stopPropagation()}>
             <CardHeader className="flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-amber-400" />
-              <h2 className="text-sm font-semibold text-ink">Move to {format(parseISO(moveConfirm.newDate + 'T00:00:00'), 'EEE, MMM d')}?</h2>
+              <AlertTriangle className="w-4 h-4 text-amber-400" aria-hidden="true" />
+              <h2 id="move-confirm-title" className="text-sm font-semibold text-ink">Move to {format(parseISO(moveConfirm.newDate + 'T00:00:00'), 'EEE, MMM d')}?</h2>
             </CardHeader>
             <CardBody className="space-y-3">
               <ul className="space-y-1.5">

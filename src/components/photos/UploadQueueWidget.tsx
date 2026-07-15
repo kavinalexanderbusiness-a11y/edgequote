@@ -31,12 +31,13 @@ export function UploadQueueWidget() {
   const allDone = active === 0 && failed === 0
 
   return (
-    <div className="fixed bottom-4 right-4 z-[60] w-[300px] max-w-[calc(100vw-2rem)] rounded-card border border-border bg-bg-secondary shadow-2xl overflow-hidden">
+    <div role="status" aria-live="polite" className="fixed bottom-4 right-4 z-[60] w-[300px] max-w-[calc(100vw-2rem)] rounded-card border border-border bg-bg-secondary shadow-2xl overflow-hidden">
       <div className="flex items-center gap-2 px-3 py-2 border-b border-border">
-        {active > 0 ? <Loader2 className="w-4 h-4 text-accent animate-spin" /> : failed > 0 ? <AlertTriangle className="w-4 h-4 text-red-400" /> : <Check className="w-4 h-4 text-emerald-400" />}
-        <span className="text-xs font-semibold text-ink flex-1 truncate">
+        {active > 0 ? <Loader2 className="w-4 h-4 text-accent animate-spin" aria-hidden="true" /> : failed > 0 ? <AlertTriangle className="w-4 h-4 text-red-400" aria-hidden="true" /> : <Check className="w-4 h-4 text-emerald-400" aria-hidden="true" />}
+        <span className="text-xs font-semibold text-ink flex-1 truncate"
+          aria-label={`${active > 0 ? `Uploading ${active}` : failed > 0 ? `${failed} failed` : 'Uploads complete'} — ${done} of ${items.length} done`}>
           {active > 0 ? `Uploading ${active}…` : failed > 0 ? `${failed} failed` : 'Uploads complete'}
-          <span className="text-ink-faint font-normal"> · {done}/{items.length}</span>
+          <span className="text-ink-faint font-normal" aria-hidden="true"> · {done}/{items.length}</span>
         </span>
         {failed > 0 && <button onClick={retryAllFailed} className="text-[11px] font-semibold text-accent hover:underline">Retry all</button>}
         <button onClick={() => setCollapsed(c => !c)} aria-expanded={!collapsed} aria-label={collapsed ? 'Expand uploads' : 'Collapse uploads'} className="text-ink-faint hover:text-ink">{collapsed ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}</button>

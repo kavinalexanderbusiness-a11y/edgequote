@@ -1,8 +1,10 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useId, useRef } from 'react'
 import { X, LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
+
+const FOCUSABLE = 'a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])'
 
 // ── Modal ─────────────────────────────────────────────────────────────────────
 // One dialog/overlay primitive to replace the ~11 bespoke `fixed inset-0`
@@ -37,12 +39,29 @@ const SIZES: Record<NonNullable<ModalProps['size']>, string> = {
 
 export function Modal({ open, onClose, title, icon: Icon, children, footer, size = 'md', dismissable = true, className, onSubmit }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null)
+  // The element that had focus when the dialog opened, so we can return focus
+  // there on close (a keyboard user isn't dumped at the top of the page).
+  const restoreRef = useRef<HTMLElement | null>(null)
+  const titleId = useId()
 
   useEffect(() => {
     if (!open) return
+    restoreRef.current = document.activeElement as HTMLElement | null
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape' && dismissable) onClose()
       else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && onSubmit) { e.preventDefault(); onSubmit() }
+      else if (e.key === 'Tab') {
+        // Focus trap: Tab/Shift+Tab wrap within the dialog so focus can never
+        // land on the obscured background page behind the backdrop.
+        const panel = panelRef.current
+        if (!panel) return
+        const items = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(el => el.offsetParent !== null || el === panel)
+        if (items.length === 0) { e.preventDefault(); panel.focus(); return }
+        const first = items[0], last = items[items.length - 1]
+        const activeEl = document.activeElement
+        if (e.shiftKey && (activeEl === first || activeEl === panel)) { e.preventDefault(); last.focus() }
+        else if (!e.shiftKey && activeEl === last) { e.preventDefault(); first.focus() }
+      }
     }
     document.addEventListener('keydown', onKey)
     const prevOverflow = document.body.style.overflow
@@ -51,6 +70,8 @@ export function Modal({ open, onClose, title, icon: Icon, children, footer, size
     return () => {
       document.removeEventListener('keydown', onKey)
       document.body.style.overflow = prevOverflow
+      // Return focus to whatever opened the dialog (no-op if it's since gone).
+      restoreRef.current?.focus?.()
     }
   }, [open, dismissable, onClose, onSubmit])
 
@@ -66,7 +87,8 @@ export function Modal({ open, onClose, title, icon: Icon, children, footer, size
         tabIndex={-1}
         role="dialog"
         aria-modal="true"
-        aria-label={typeof title === 'string' ? title : undefined}
+        aria-labelledby={title ? titleId : undefined}
+        aria-label={!title ? 'Dialog' : undefined}
         onClick={e => e.stopPropagation()}
         className={cn(
           'w-full bg-surface border border-border-strong rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] focus:outline-none animate-panel',
@@ -76,8 +98,8 @@ export function Modal({ open, onClose, title, icon: Icon, children, footer, size
       >
         {(title || dismissable) && (
           <div className="flex items-center gap-2 px-5 py-4 border-b border-border shrink-0">
-            {Icon && <Icon className="w-4 h-4 text-accent shrink-0" />}
-            {title && <h2 className="text-sm font-semibold text-ink min-w-0 truncate">{title}</h2>}
+            {Icon && <Icon className="w-4 h-4 text-accent shrink-0" aria-hidden="true" />}
+            {title && <h2 id={titleId} className="text-sm font-semibold text-ink min-w-0 truncate">{title}</h2>}
             {dismissable && (
               <button
                 type="button"

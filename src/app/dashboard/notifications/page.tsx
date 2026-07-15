@@ -117,7 +117,7 @@ export default function NotificationsPage() {
       <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
         {g.count === 1 && g.href && (
           <button onClick={() => openItem(g.items[0])}
-            className="text-[11px] font-semibold text-accent hover:underline px-1.5 py-1">{actionLabel ?? notificationActionLabel(g.type)}</button>
+            className="text-[11px] font-semibold text-accent hover:underline px-1.5 py-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{actionLabel ?? notificationActionLabel(g.type)}</button>
         )}
         {supportsManage && (
           <button onClick={() => snooze(g.ids)} title="Remind me tomorrow" aria-label="Snooze"
@@ -145,7 +145,7 @@ export default function NotificationsPage() {
 
       {loadError && (
         <Banner tone="danger">
-          {loadError} <button onClick={() => { setLoading(true); if (uid) load(uid) }} className="underline font-medium ml-1">Retry</button>
+          {loadError} <button onClick={() => { setLoading(true); if (uid) load(uid) }} className="underline font-medium ml-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">Retry</button>
         </Banner>
       )}
 
@@ -167,7 +167,7 @@ export default function NotificationsPage() {
                   return (
                     <div key={g.key} className={cn('px-4 py-3 flex items-start gap-3', g.unread && 'bg-amber-500/[0.06]')}>
                       <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border border-amber-500/30 bg-amber-500/10 text-amber-300"><Icon className="w-4 h-4" /></div>
-                      <button onClick={() => openItem(g.items[0])} className="min-w-0 flex-1 text-left">
+                      <button onClick={() => openItem(g.items[0])} className="min-w-0 flex-1 text-left rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                         <p className={cn('text-sm', g.unread ? 'font-semibold text-ink' : 'text-ink-muted')}>{g.title}</p>
                         {g.body && <p className="text-xs text-ink-muted mt-0.5">{g.body}</p>}
                         <p className="text-[10px] text-ink-faint mt-0.5">{timeAgo(g.latestAt)}</p>
@@ -197,7 +197,7 @@ export default function NotificationsPage() {
                     <div key={g.key}>
                       <div className={cn('px-4 py-3.5 flex items-start gap-3', lead ? 'bg-accent/[0.06]' : g.unread && 'bg-accent/[0.04]')}>
                         <div className={cn('w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border', emphasise ? 'border-accent/30 bg-accent/10 text-accent' : 'border-border text-ink-muted')}><Icon className="w-4 h-4" /></div>
-                        <button onClick={onMain} className="min-w-0 flex-1 text-left">
+                        <button onClick={onMain} className="min-w-0 flex-1 text-left rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                           <p className={cn('text-sm flex items-center gap-2', emphasise ? 'font-semibold text-ink' : 'text-ink-muted')}>
                             {title}
                             {lead && <span className="text-[9px] font-bold text-black bg-accent rounded-full px-1.5 py-px leading-none tracking-wider shrink-0">NEW</span>}
@@ -215,13 +215,13 @@ export default function NotificationsPage() {
                             const nLead = isLeadNotif(n)
                             return (
                             <div key={n.id} className="pl-16 pr-3 py-2.5 flex items-start gap-2">
-                              <button onClick={() => openItem(n)} className="min-w-0 flex-1 text-left">
+                              <button onClick={() => openItem(n)} className="min-w-0 flex-1 text-left rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                                 <p className="text-xs text-ink">{nLead ? 'New website lead' : n.title}</p>
                                 {n.body && <p className="text-[11px] text-ink-muted truncate">{n.body}</p>}
                                 <p className="text-[10px] text-ink-faint mt-0.5">{timeAgo(n.created_at)}</p>
                               </button>
                               <div className="flex items-center gap-1 shrink-0">
-                                {n.href && <button onClick={() => openItem(n)} className="text-[11px] font-semibold text-accent hover:underline px-1.5 py-1">{nLead ? 'Build quote' : notificationActionLabel(n.type)}</button>}
+                                {n.href && <button onClick={() => openItem(n)} className="text-[11px] font-semibold text-accent hover:underline px-1.5 py-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{nLead ? 'Build quote' : notificationActionLabel(n.type)}</button>}
                                 {supportsManage && <button onClick={() => snooze([n.id])} title="Remind me tomorrow" aria-label="Snooze" className="h-6 w-6 rounded-lg text-ink-faint hover:text-ink hover:bg-surface flex items-center justify-center"><Clock className="w-3 h-3" /></button>}
                                 <button onClick={() => dismiss([n.id])} title={supportsManage ? 'Dismiss' : 'Mark read'} aria-label="Dismiss" className="h-6 w-6 rounded-lg text-ink-faint hover:text-ink hover:bg-surface flex items-center justify-center"><X className="w-3 h-3" /></button>
                               </div>

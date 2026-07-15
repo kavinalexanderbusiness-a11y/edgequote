@@ -274,7 +274,8 @@ export function SendMessageDialog({
               <Button onClick={() => onClose(1)} className="ml-auto"><Check className="w-4 h-4" /> Done</Button>
             ) : (
               <Button onClick={bulk && !armed ? () => setArmed(true) : send} loading={busy}
-                disabled={!chosen.length || !text.trim() || (!ch.sms && !ch.email)} className="ml-auto">
+                disabled={!chosen.length || !text.trim() || (!ch.sms && !ch.email)}
+                title={!chosen.length ? 'Select at least one recipient to send.' : !text.trim() ? 'Write a message to send.' : (!ch.sms && !ch.email) ? 'Pick at least one channel (SMS or email).' : undefined} className="ml-auto">
                 <Send className="w-4 h-4" /> {busy && bulk ? `Sending ${progress}/${chosen.length}…` : bulk ? (armed ? `Confirm — send to ${chosen.length}` : `Send to ${chosen.length}`) : 'Send'}
               </Button>
             )}
@@ -284,10 +285,14 @@ export function SendMessageDialog({
             : <p className="text-[11px] text-ink-faint mt-1.5">{bulk ? 'Customers without consent or contact info are skipped automatically.' : 'We only send on channels this customer has opted into.'}</p>}
         </div>
 
+        {/* Bulk send progress, announced without stealing focus. */}
+        {busy && bulk && <span className="sr-only" role="status" aria-live="polite">Sending {progress} of {chosen.length}.</span>}
+
         {outcome && (
-          <div className={cn('flex items-start gap-1.5 text-xs rounded-lg px-3 py-2 border',
+          <div role={outcome.ok ? 'status' : 'alert'} aria-live={outcome.ok ? 'polite' : 'assertive'}
+            className={cn('flex items-start gap-1.5 text-xs rounded-lg px-3 py-2 border',
             outcome.ok ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : 'text-amber-400 border-amber-500/30 bg-amber-500/10')}>
-            {outcome.ok ? <Check className="w-3.5 h-3.5 shrink-0 mt-px" /> : <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" />}
+            {outcome.ok ? <Check className="w-3.5 h-3.5 shrink-0 mt-px" aria-hidden="true" /> : <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-px" aria-hidden="true" />}
             <span>{outcome.text}</span>
           </div>
         )}

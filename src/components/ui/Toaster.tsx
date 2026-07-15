@@ -19,9 +19,14 @@ const TONE: Record<ToastItem['tone'], { icon: typeof Info; cls: string }> = {
 
 export function Toaster() {
   const toasts = useSyncExternalStore(subscribeToasts, getToasts, getToasts)
-  if (!toasts.length) return null
+  // The container stays mounted even when empty so it's a PERSISTENT polite live
+  // region — screen readers announce each toast as it's added. Errors/warnings
+  // escalate to role="alert" (assertive) on the row itself.
   return (
-    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[100] flex flex-col gap-2 w-[calc(100%-2rem)] max-w-sm pointer-events-none">
+    <div
+      aria-live="polite"
+      aria-atomic="false"
+      className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[100] flex flex-col gap-2 w-[calc(100%-2rem)] max-w-sm pointer-events-none">
       {toasts.map(t => <ToastRow key={t.id} t={t} />)}
     </div>
   )
@@ -34,9 +39,11 @@ function ToastRow({ t }: { t: ToastItem }) {
     dismissToast(t.id)
     try { await t.undo?.() } catch { /* swallow — best-effort undo */ }
   }, [t])
+  // Errors/warnings interrupt (assertive); everything else is polite.
+  const alert = t.tone === 'error' || t.tone === 'warning'
   return (
-    <div className={`pointer-events-auto flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5 shadow-lg text-sm animate-toast ${meta.cls}`}>
-      <Icon className={`w-4 h-4 shrink-0 ${t.tone === 'loading' ? 'animate-spin' : ''}`} />
+    <div role={alert ? 'alert' : 'status'} className={`pointer-events-auto flex items-center gap-2.5 rounded-xl border px-3.5 py-2.5 shadow-lg text-sm animate-toast ${meta.cls}`}>
+      <Icon aria-hidden="true" className={`w-4 h-4 shrink-0 ${t.tone === 'loading' ? 'animate-spin' : ''}`} />
       <span className="flex-1 min-w-0">{t.message}</span>
       {t.undo && (
         <button type="button" onClick={onUndo} className="shrink-0 inline-flex items-center gap-1 text-xs font-semibold rounded-lg px-2 py-1 border border-current/30 hover:bg-current/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">

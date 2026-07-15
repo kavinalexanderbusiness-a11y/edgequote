@@ -129,8 +129,8 @@ export default function ImportCustomersPage() {
 
       {done != null ? (
         <Card>
-          <CardBody className="text-center py-10 space-y-3">
-            <Check className="w-10 h-10 text-emerald-400 mx-auto" />
+          <CardBody className="text-center py-10 space-y-3" role="status" aria-live="polite">
+            <Check className="w-10 h-10 text-emerald-400 mx-auto" aria-hidden="true" />
             <p className="text-lg font-semibold text-ink">Imported {done} customer{done !== 1 ? 's' : ''}.</p>
             <Button onClick={() => router.push('/dashboard/customers')}>Back to customers</Button>
           </CardBody>
@@ -150,6 +150,7 @@ export default function ImportCustomersPage() {
                 value={csv}
                 onChange={e => preview(e.target.value)}
                 rows={8}
+                aria-label="Paste CSV data"
                 placeholder={'name,email,phone,city,sms_opt_in,email_opt_in\nJane Doe,jane@example.com,403-555-0100,Calgary,false,true'}
                 className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-sm font-mono text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20"
               />
@@ -176,13 +177,15 @@ export default function ImportCustomersPage() {
                 {smsCount > 0 && (
                   <Banner tone="warn" icon={ShieldAlert}>
                     <label className="flex items-start gap-2 cursor-pointer">
-                      <input type="checkbox" checked={smsAck} onChange={e => setSmsAck(e.target.checked)} className="mt-0.5 w-4 h-4 accent-accent" />
+                      <input id="sms-consent-ack" type="checkbox" checked={smsAck} onChange={e => setSmsAck(e.target.checked)} className="mt-0.5 w-4 h-4 accent-accent" />
                       <span className="text-xs text-ink-muted">{SMS_CONSENT_WARNING}</span>
                     </label>
                   </Banner>
                 )}
 
-                <Button onClick={runImport} loading={importing} disabled={smsCount > 0 && !smsAck}>
+                <Button onClick={runImport} loading={importing} disabled={smsCount > 0 && !smsAck}
+                  aria-describedby={smsCount > 0 && !smsAck ? 'sms-consent-ack' : undefined}
+                  title={smsCount > 0 && !smsAck ? 'Acknowledge the SMS consent notice above to import.' : undefined}>
                   Import {rows.length} customer{rows.length !== 1 ? 's' : ''}
                 </Button>
               </CardBody>

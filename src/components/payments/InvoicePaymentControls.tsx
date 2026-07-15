@@ -287,7 +287,7 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
               className="w-full mt-1 bg-bg-tertiary border border-border-strong rounded-lg px-2.5 py-2 text-base sm:text-sm font-normal text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
           </label>
           <div className="flex items-center gap-2">
-            <Button size="sm" type="submit" loading={busy} disabled={!(Number(amount) > 0)}>Record {Number(amount) > 0 ? formatCurrency(Number(amount)) : 'payment'}</Button>
+            <Button size="sm" type="submit" loading={busy} disabled={!(Number(amount) > 0)} title={!(Number(amount) > 0) ? 'Enter an amount greater than $0 to record a payment.' : undefined}>Record {Number(amount) > 0 ? formatCurrency(Number(amount)) : 'payment'}</Button>
             <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
             {balance > 0 && Number(amount) > 0 && Number(amount) < balance && <span className="text-[10px] text-amber-400 ml-auto">Partial — {formatCurrency(balance - Number(amount))} will remain</span>}
           </div>

@@ -193,6 +193,7 @@ export function DayBulkMessage({ date, jobs, onClose }: { date: string; jobs: Jo
             {/* Preview / custom editor */}
             {tpl.custom ? (
               <textarea value={custom} onChange={e => setCustom(e.target.value)} rows={4} placeholder="Write your message…"
+                aria-label="Message text"
                 className="w-full bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20 resize-none" />
             ) : (
               <div className="rounded-lg border border-border bg-bg-tertiary px-3 py-2">

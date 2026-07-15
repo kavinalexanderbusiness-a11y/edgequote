@@ -73,6 +73,7 @@ export function CommsHealth({ customer, onChange }: {
             <input
               autoFocus
               type={adding === 'email' ? 'email' : 'tel'}
+              aria-label={adding === 'email' ? 'New email address' : 'New phone number'}
               value={value}
               onChange={e => setValue(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') save(adding) }}

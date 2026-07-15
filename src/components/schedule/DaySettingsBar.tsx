@@ -119,11 +119,11 @@ export function DaySettingsBar({
             <div className="min-w-0">
               <p className="text-[10px] font-semibold text-ink-faint uppercase tracking-wide mb-1 flex items-center gap-1"><Clock className="w-3 h-3" /> Working hours</p>
               <div className="flex items-center gap-1.5">
-                <input type="time" value={start} disabled={busy || blocked}
+                <input type="time" value={start} disabled={busy || blocked} aria-label="Working hours start"
                   onChange={e => onSetCapacity({ startsAt: e.target.value || null, endsAt: end })}
                   className="bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1 text-xs text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:opacity-50" />
-                <span className="text-ink-faint text-xs">–</span>
-                <input type="time" value={end} disabled={busy || blocked}
+                <span className="text-ink-faint text-xs" aria-hidden="true">–</span>
+                <input type="time" value={end} disabled={busy || blocked} aria-label="Working hours end"
                   onChange={e => onSetCapacity({ startsAt: start, endsAt: e.target.value || null })}
                   className="bg-bg-tertiary border border-border-strong rounded-lg px-2 py-1 text-xs text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20 disabled:opacity-50" />
               </div>

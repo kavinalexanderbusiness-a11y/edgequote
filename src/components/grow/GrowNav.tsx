@@ -30,7 +30,7 @@ export function GrowNav() {
   return (
     // The right-edge fade tells phones the rail keeps going — 9 pills never fit,
     // and no-scrollbar otherwise hides every cue that Campaigns/Ideas/Automations exist.
-    <div className="flex gap-1.5 overflow-x-auto no-scrollbar -mx-1 px-1 pb-1 [mask-image:linear-gradient(to_right,black_calc(100%-28px),transparent)] sm:[mask-image:none]">
+    <nav aria-label="Grow sections" className="flex gap-1.5 overflow-x-auto no-scrollbar -mx-1 px-1 pb-1 [mask-image:linear-gradient(to_right,black_calc(100%-28px),transparent)] sm:[mask-image:none]">
       {ITEMS.map(item => {
         const Icon = item.icon
         const active = item.href && (item.href === '/dashboard/grow'
@@ -50,13 +50,14 @@ export function GrowNav() {
           <Link
             key={item.label}
             href={item.href!}
+            aria-current={active ? 'page' : undefined}
             className={cn(base, active ? 'bg-accent text-black border-accent font-semibold pill-glow' : 'bg-surface text-ink-muted border-border hover:text-ink hover:border-border-strong')}
           >
-            <Icon className="w-3.5 h-3.5" />
+            <Icon className="w-3.5 h-3.5" aria-hidden="true" />
             {item.label}
           </Link>
         )
       })}
-    </div>
+    </nav>
   )
 }

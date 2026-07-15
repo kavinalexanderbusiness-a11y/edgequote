@@ -327,7 +327,7 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
                 className="absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 h-10 w-10 rounded-full bg-black/40 hover:bg-black/60 text-white flex items-center justify-center disabled:opacity-30"><ChevronRight className="w-5 h-5" /></button>
             </>
           )}
-          <div className="bg-bg-secondary border border-border rounded-card max-w-2xl w-full max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+          <div role="dialog" aria-modal="true" aria-label="Photo viewer" className="bg-bg-secondary border border-border rounded-card max-w-2xl w-full max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-4 py-2.5 border-b border-border">
               <span className={`text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 border ${KIND_BADGE[current.kind]}`}>
                 {PHOTO_KIND_LABELS[current.kind]} · {formatDate(current.taken_at)}

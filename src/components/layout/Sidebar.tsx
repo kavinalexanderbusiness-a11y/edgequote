@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react'
 import { LayoutDashboard, Users, FileText, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Receipt, Menu, X, Sprout, MessageSquare, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
+import { useFocusTrap } from '@/hooks/useFocusTrap'
 import { NotificationBell } from '@/components/notifications/NotificationBell'
 
 // Everyday work up top; the analytics pages live behind one "Grow" hub
@@ -44,6 +45,9 @@ export function Sidebar() {
   const pathname = usePathname()
   const router = useRouter()
   const [open, setOpen] = useState(false)
+  // The mobile drawer is a modal overlay — trap focus, move focus in on open,
+  // Escape to close, and restore focus to the hamburger on close.
+  const drawerRef = useFocusTrap<HTMLElement>(open, () => setOpen(false))
   const [brand, setBrand] = useState<{ url: string | null; scale: number }>({ url: null, scale: 100 })
   const [unread, setUnread] = useState(0)
 
@@ -114,7 +118,7 @@ export function Sidebar() {
   function navBody(onNavigate?: () => void) {
     return (
       <>
-        <nav className="flex-1 px-3 py-4 flex flex-col gap-0.5 overflow-y-auto">
+        <nav aria-label="Primary" className="flex-1 px-3 py-4 flex flex-col gap-0.5 overflow-y-auto">
           <button
             onClick={() => { onNavigate?.(); openCommand() }}
             className="flex items-center gap-3 px-3 py-2.5 mb-1 rounded-xl text-sm font-medium text-ink-muted bg-surface/60 border border-border hover:text-ink hover:bg-surface transition-all w-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
@@ -129,11 +133,11 @@ export function Sidebar() {
               : pathname.startsWith(href) || (section != null && sectionOf[section] === href)
             const badge = label === 'Messages' && unread > 0 ? unread : 0
             return (
-              <Link key={href} href={href} onClick={onNavigate} className={linkClass(active)}>
-                <Icon className="w-4 h-4" />
+              <Link key={href} href={href} onClick={onNavigate} aria-current={active ? 'page' : undefined} className={linkClass(active)}>
+                <Icon className="w-4 h-4" aria-hidden="true" />
                 <span className="flex-1">{label}</span>
                 {badge > 0 && (
-                  <span className="shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-accent text-black text-[10px] font-bold flex items-center justify-center">
+                  <span aria-label={`${badge} unread`} className="shrink-0 min-w-[18px] h-[18px] px-1 rounded-full bg-accent text-black text-[10px] font-bold flex items-center justify-center">
                     {badge > 9 ? '9+' : badge}
                   </span>
                 )}
@@ -143,13 +147,15 @@ export function Sidebar() {
         </nav>
         <div className="px-3 py-4 border-t border-border flex flex-col gap-0.5">
           <Link href="/dashboard/settings" onClick={onNavigate}
+            aria-current={pathname === '/dashboard/settings' ? 'page' : undefined}
             className={linkClass(pathname === '/dashboard/settings')}>
-            <Settings className="w-4 h-4" />
+            <Settings className="w-4 h-4" aria-hidden="true" />
             Settings
           </Link>
           <Link href="/dashboard/settings/templates" onClick={onNavigate}
+            aria-current={pathname === '/dashboard/settings/templates' ? 'page' : undefined}
             className={linkClass(pathname === '/dashboard/settings/templates')}>
-            <LayoutTemplate className="w-4 h-4" />
+            <LayoutTemplate className="w-4 h-4" aria-hidden="true" />
             Service Templates
           </Link>
           <button
@@ -204,7 +210,7 @@ export function Sidebar() {
       {open && (
         <div className="lg:hidden fixed inset-0 z-50">
           <div className="absolute inset-0 bg-black/60 animate-fade" onClick={() => setOpen(false)} />
-          <aside className="absolute left-0 top-0 h-full w-64 max-w-[80%] bg-bg-secondary border-r border-border flex flex-col animate-drawer">
+          <aside ref={drawerRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label="Menu" className="absolute left-0 top-0 h-full w-64 max-w-[80%] bg-bg-secondary border-r border-border flex flex-col animate-drawer focus:outline-none">
             <div className="h-14 flex items-center justify-between px-4 border-b border-border">
               {logo}
               <button onClick={() => setOpen(false)} className="text-ink-faint hover:text-ink p-2 -mr-2" aria-label="Close menu">
@@ -217,7 +223,7 @@ export function Sidebar() {
       )}
 
       {/* Desktop sidebar */}
-      <aside className="hidden lg:flex w-60 shrink-0 h-screen sticky top-0 flex-col bg-bg-secondary border-r border-border">
+      <aside aria-label="Sidebar" className="hidden lg:flex w-60 shrink-0 h-screen sticky top-0 flex-col bg-bg-secondary border-r border-border">
         <div className="h-16 flex items-center justify-between gap-2 px-5 border-b border-border">
           {logo}
           <NotificationBell />

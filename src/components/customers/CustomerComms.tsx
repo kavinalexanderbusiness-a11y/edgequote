@@ -71,7 +71,7 @@ export function CustomerComms({ customerId, smsOptIn, emailOptIn }: { customerId
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint mb-1.5">History</p>
           {loading ? (
-            <p className="text-xs text-ink-muted flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…</p>
+            <p role="status" aria-live="polite" className="text-xs text-ink-muted flex items-center gap-2"><Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" /> Loading…</p>
           ) : log.length === 0 ? (
             <InlineEmpty className="py-3">No messages sent yet.</InlineEmpty>
           ) : (
