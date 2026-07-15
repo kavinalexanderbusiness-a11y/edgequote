@@ -473,13 +473,15 @@ export function DayOpsPanel({
   const workedMin = completed.reduce((s, j) => s + (j.actual_minutes || 0), 0)
     + (inProgress?.started_at ? elapsedMin(inProgress.started_at) : 0)
   const live = isToday && (!!inProgress || (!!firstStart && completed.length > 0))
-  // Re-render each minute while a job is running so elapsed/finish stay current.
+  // Re-render each minute on TODAY so elapsed, finish and the timeline's "now"
+  // line stay current — the now line has to keep moving before the first
+  // check-in, which is exactly when you're deciding whether you're already late.
   const [, setTick] = useState(0)
   useEffect(() => {
-    if (!isToday || !inProgress) return
+    if (!isToday) return
     const t = setInterval(() => setTick(x => x + 1), 60000)
     return () => clearInterval(t)
-  }, [isToday, inProgress])
+  }, [isToday])
   // Finish estimate: live (now + what's left) once the day is underway, else the
   // planned route ETAs from work start.
   let estFinish: string
@@ -520,15 +522,21 @@ export function DayOpsPanel({
             </span>
           )}
         </div>
+        {/* On a phone the two SECONDARY actions collapse to their icons (the same
+            pattern the message thread header uses) — three full labels here are
+            ~330px on a 360px screen, which squeezed the date out of its own
+            header. The primary action keeps its label. */}
         <div className="flex items-center gap-2 shrink-0">
           {dayRecipients.length > 0 && (
-            <Button size="sm" variant="secondary" onClick={() => setShowDayMsg(true)} title="Message everyone scheduled today">
-              <MessageSquare className="w-4 h-4" /> Message all
+            <Button size="sm" variant="secondary" onClick={() => setShowDayMsg(true)}
+              title="Message everyone scheduled today" aria-label="Message everyone scheduled today">
+              <MessageSquare className="w-4 h-4" /> <span className="hidden sm:inline">Message all</span>
             </Button>
           )}
           {remaining.length > 0 && (
-            <Button size="sm" variant="secondary" onClick={onRainDelay} title="Bump all remaining jobs to your next work day">
-              <CloudRain className="w-4 h-4" /> Delay remaining
+            <Button size="sm" variant="secondary" onClick={onRainDelay}
+              title="Bump all remaining jobs to your next work day" aria-label="Delay remaining jobs to the next work day">
+              <CloudRain className="w-4 h-4" /> <span className="hidden sm:inline">Delay remaining</span>
             </Button>
           )}
           <Button size="sm" onClick={onAddJob}><Plus className="w-4 h-4" /> Add job</Button>
@@ -621,6 +629,7 @@ export function DayOpsPanel({
               finishMin={etas.finishMin}
               capacityEndMin={capacityEndMin}
               stops={timelineStops}
+              nowMin={isToday ? new Date().getHours() * 60 + new Date().getMinutes() : undefined}
             />
           )}
 

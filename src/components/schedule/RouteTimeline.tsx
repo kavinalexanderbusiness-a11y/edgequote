@@ -22,11 +22,14 @@ export interface TimelineStop {
 //
 // It answers, at a glance, what the metric strip could only state: where the day
 // actually goes, how much of it is driving, and whether it runs past capacity.
-export function RouteTimeline({ startMin, finishMin, capacityEndMin, stops, className }: {
+export function RouteTimeline({ startMin, finishMin, capacityEndMin, stops, nowMin, className }: {
   startMin: number
   finishMin: number
   capacityEndMin: number
   stops: TimelineStop[]
+  /** Minutes-since-midnight right now — passed only for TODAY. Draws the "now"
+   *  line, which is what turns a plan into a live read on whether you're behind. */
+  nowMin?: number
   className?: string
 }) {
   if (!stops.length) return null
@@ -36,6 +39,7 @@ export function RouteTimeline({ startMin, finishMin, capacityEndMin, stops, clas
   const pct = (min: number) => ((min - startMin) / span) * 100
   const over = finishMin > capacityEndMin
   const overMin = Math.round(finishMin - capacityEndMin)
+  const showNow = nowMin != null && nowMin >= startMin && nowMin <= endMin
 
   // Lay the day out: drive → work → drive → work … from the engine's arrivals.
   type Seg =
@@ -120,14 +124,29 @@ export function RouteTimeline({ startMin, finishMin, capacityEndMin, stops, clas
             aria-hidden
           />
         )}
+
+        {/* Now — the line that turns the plan into a live read. Against the
+            completed/live blocks, being left of your current stop means ahead
+            and right of it means behind, with no arithmetic. */}
+        {showNow && (
+          <div
+            className="absolute inset-y-0 w-0.5 bg-ink shadow-[0_0_0_1px_rgba(0,0,0,0.35)] z-10"
+            style={{ left: `${pct(nowMin!)}%` }}
+            title={`Now — ${minutesToTime12(nowMin!)}`}
+          />
+        )}
       </div>
 
-      {/* Hour ruler */}
+      {/* Hour ruler. Labels collide on a phone, so show every second hour there
+          and the full set once there's room. */}
       <div className="relative h-3.5 mt-1" aria-hidden>
-        {ticks.map(m => (
+        {ticks.map((m, i) => (
           <span
             key={m}
-            className="absolute top-0 text-[9px] text-ink-faint tabular-nums -translate-x-1/2 whitespace-nowrap"
+            className={cn(
+              'absolute top-0 text-[9px] text-ink-faint tabular-nums -translate-x-1/2 whitespace-nowrap',
+              i % 2 === 1 && 'hidden sm:inline',
+            )}
             style={{ left: `${pct(m)}%` }}
           >
             {minutesToTime12(m).replace(':00', '')}
