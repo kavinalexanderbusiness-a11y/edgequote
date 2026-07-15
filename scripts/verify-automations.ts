@@ -26,9 +26,13 @@ function dateNDaysAgo(n: number): string {
   const d = new Date(); d.setDate(d.getDate() - n)
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
+// EXACTLY n*24h ago, not "n calendar days ago at noon".
+// followup/dunning measure elapsed days — Math.floor((now - anchor)/DAY) — so an
+// anchor pinned to midday was only n-0.5 days old before noon and n+0.5 after it.
+// Every boundary case ("sent 3d ago, delay 3 → due") therefore passed in the
+// afternoon and failed in the morning. Deterministic at any hour now.
 function isoNDaysAgo(n: number): string {
-  const d = new Date(); d.setDate(d.getDate() - n); d.setHours(12, 0, 0, 0)
-  return d.toISOString()
+  return new Date(Date.now() - n * 86_400_000).toISOString()
 }
 const TODAY = dateNDaysAgo(0)
 
