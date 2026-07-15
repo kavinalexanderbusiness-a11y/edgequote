@@ -82,6 +82,14 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
   const lastMoneyIn = [...payments]
     .filter(p => p.kind !== 'credit' && Number(p.amount) > 0)
     .sort((a, b) => String(b.paid_at || b.created_at).localeCompare(String(a.paid_at || a.created_at)))[0]
+  // A card refund has exactly ONE writer — the charge.refunded webhook — for the same
+  // reason a card PAYMENT does: Stripe is where the money actually moves, so Stripe is
+  // what we listen to. Hand-recording one on top DOUBLE-COUNTS: the webhook dedupes
+  // only against its own rows (stripe_session_id like 'refund:<charge>:%'), so it can't
+  // see a manual row and writes its own anyway — a $50 refund books as −$100. And if
+  // the owner records it here but never refunds in Stripe, the ledger says the customer
+  // was paid back when they weren't. Wrong in both directions, so we don't offer it —
+  // the same call removePayment already makes for reverting an online payment.
   const refundViaCard = !!lastMoneyIn && (lastMoneyIn.provider === 'stripe' || lastMoneyIn.method === 'card')
 
   async function save() {
@@ -249,6 +257,21 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
           never happened. This is the missing door, not a second engine. */}
       {paid > 0 && overpaid <= 0 && (
         refundOpen ? (
+          refundViaCard ? (
+            /* The card path is a dead end by design — see refundViaCard above. Keep the
+               door visible (an owner still needs to ask "how do I refund this?") and
+               answer it truthfully instead of handing them a form that corrupts the
+               ledger whichever way they use it. */
+            <div className="rounded-lg border border-border bg-bg-tertiary/50 p-2.5 space-y-2">
+              <p className="text-xs text-ink font-medium">This one was paid by card — refund it in Stripe.</p>
+              <p className="text-[11px] text-ink-muted">
+                Open the payment in your Stripe dashboard and refund it there. It lands here on its own —
+                the ledger row, the balance and the refund receipt all appear the moment Stripe confirms it.
+                Recording it here too would count the same refund twice.
+              </p>
+              <Button size="sm" variant="ghost" onClick={() => setRefundOpen(false)}>Got it</Button>
+            </div>
+          ) : (
           <div className="rounded-lg border border-border bg-bg-tertiary/50 p-2.5 space-y-2">
             <label className="block text-[11px] font-semibold text-ink-muted">
               Refund amount
@@ -274,11 +297,10 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
             </div>
             {/* Never imply we moved money — we didn't. */}
             <p className="text-[10px] text-ink-faint">
-              {refundViaCard
-                ? 'Card refunds are issued in your Stripe dashboard; this records it so your balances stay correct.'
-                : 'Recording a refund doesn’t move any money — return it the way it came in, then record it here so your balances stay correct.'}
+              Recording a refund doesn’t move any money — return it the way it came in, then record it here so your balances stay correct.
             </p>
           </div>
+          )
         ) : (
           <button type="button" onClick={() => { setRefundOpen(true); setRefundAmount('') }}
             className="text-[11px] font-medium text-ink-faint hover:text-ink rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 inline-flex items-center gap-1">
@@ -295,15 +317,20 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
             <Button size="sm" variant="secondary" loading={busy} onClick={() => run(() => overpaymentToCredit(supabase, { userId: uid, invoice, amount: overpaid }), `${formatCurrency(overpaid)} added to customer credit.`)}>
               <Gift className="w-3.5 h-3.5" /> Apply as credit
             </Button>
-            <Button size="sm" variant="secondary" loading={busy} onClick={() => run(() => recordRefund(supabase, { userId: uid, invoice, amount: overpaid, notes: 'Overpayment refund' }), `Refund of ${formatCurrency(overpaid)} recorded.`)}>
-              <Banknote className="w-3.5 h-3.5" /> Record refund
-            </Button>
+            {/* Same one-writer rule as the refund door above: a card overpayment gets
+                refunded in Stripe, and the webhook books it. Offering the button here
+                would double-count the identical way. */}
+            {!refundViaCard && (
+              <Button size="sm" variant="secondary" loading={busy} onClick={() => run(() => recordRefund(supabase, { userId: uid, invoice, amount: overpaid, notes: 'Overpayment refund' }), `Refund of ${formatCurrency(overpaid)} recorded.`)}>
+                <Banknote className="w-3.5 h-3.5" /> Record refund
+              </Button>
+            )}
             <Button size="sm" variant="ghost" loading={busy} onClick={raiseTotal}>
               <TrendingUp className="w-3.5 h-3.5" /> Raise total
             </Button>
           </div>
           <p className="text-[10px] text-ink-faint">{refundViaCard
-            ? 'Card refunds are issued in your Stripe dashboard; this records it so your balances stay correct.'
+            ? `They paid by card — to return the ${formatCurrency(overpaid)}, refund it in your Stripe dashboard and it will be recorded here automatically. Or keep it as credit against their next invoice.`
             : `Recording a refund doesn’t move any money — return the ${formatCurrency(overpaid)} the way it came in, then record it here so your balances stay correct.`}</p>
         </div>
       )}
