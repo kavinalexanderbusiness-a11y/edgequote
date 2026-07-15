@@ -12,7 +12,7 @@ import { Collapsible } from '@/components/ui/Collapsible'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { formatCurrency, cn } from '@/lib/utils'
 import type { Tone } from '@/lib/tone'
-import { TrendingUp, TrendingDown, DollarSign, Gauge, Users, Target, Activity, LineChart, Home, AlertTriangle, CalendarDays, Ban } from 'lucide-react'
+import { TrendingUp, TrendingDown, DollarSign, Gauge, Users, Target, Activity, LineChart, Home, AlertTriangle, CalendarDays, Ban, Briefcase } from 'lucide-react'
 
 export default function IntelligencePage() {
   const supabase = useMemo(() => createClient(), [])
@@ -52,6 +52,52 @@ export default function IntelligencePage() {
     <div className="max-w-6xl mx-auto space-y-6">
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Business Intelligence" description={`How your business is performing — and where to focus. As of ${bi.generatedFor}.`} />
 
+      {/* ── EXECUTIVE ── The highest-altitude read on the page, so it leads: who the
+          revenue depends on, whether it's compounding, and how fast it turns into
+          cash. Every figure here is YTD. */}
+      <Section title="Executive" icon={Briefcase}>
+        {/* `payingCustomers === 0` is the one check that keeps a wall of "0%" off
+            the page — with no YTD revenue there are no shares to take a share of. */}
+        {bi.executive.concentration.payingCustomers === 0 ? (
+          <div className="rounded-card border border-border bg-bg-secondary p-4">
+            <InlineEmpty icon={Briefcase} className="py-3">No revenue yet this year — concentration, mix and collection speed fill in as work completes and invoices are paid.</InlineEmpty>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+            {/* Tint ONLY at >=30%: for a 1-3 person shop, one customer at a third of
+                the year's revenue is a dependency risk, not a fun fact. Below that
+                it's an unremarkable number and gets no colour. */}
+            <Stat label="Top customer share"
+              value={bi.executive.concentration.top1Pct != null ? `${bi.executive.concentration.top1Pct}%` : '—'}
+              tone={bi.executive.concentration.top1Pct != null && bi.executive.concentration.top1Pct >= 30 ? 'warn' : undefined}
+              sub={
+                <span className="tabular-nums">
+                  {bi.executive.concentration.top1Name ?? 'Top customer'}
+                  {bi.executive.concentration.top3Pct != null && ` · top 3 = ${bi.executive.concentration.top3Pct}%`}
+                </span>
+              } />
+            {/* NEW = first ever completed visit falls this year, so last season's
+                customer still on the books reads as returning. */}
+            <Stat label="Revenue from new customers"
+              value={bi.executive.mix.newPct != null ? `${bi.executive.mix.newPct}%` : '—'}
+              sub={<span className="tabular-nums">{formatCurrency(bi.executive.mix.newRevenue)} new · {formatCurrency(bi.executive.mix.returningRevenue)} returning</span>} />
+            {/* Speed of collection — a median over PAID invoices only. It is NOT
+                receivables aging: nothing unpaid is in this number. The sample size
+                rides along because a median over 2 invoices isn't a trend. */}
+            <Stat label="Median time to get paid"
+              value={bi.executive.collection.medianDaysToPay != null ? `${bi.executive.collection.medianDaysToPay} ${bi.executive.collection.medianDaysToPay === 1 ? 'day' : 'days'}` : '—'}
+              tone={bi.executive.collection.medianDaysToPay != null && bi.executive.collection.medianDaysToPay > 14 ? 'warn' : undefined}
+              sub={
+                <span className="tabular-nums">
+                  {bi.executive.collection.medianDaysToPay != null
+                    ? `across ${bi.executive.collection.paidInvoices} paid invoice${bi.executive.collection.paidInvoices === 1 ? '' : 's'}`
+                    : 'No invoices paid yet'}
+                </span>
+              } />
+          </div>
+        )}
+      </Section>
+
       {/* ── FINANCIAL ── */}
       <Section title="Financial" icon={DollarSign}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -61,6 +107,14 @@ export default function IntelligencePage() {
           <Stat label="Projected this month" value={formatCurrency(bi.forecasting.projectedThisMonth)} accent />
         </div>
         <TrendBars trend={bi.financial.trend} />
+        {/* Average job value, on the SAME 12-month axis as the revenue trend above so
+            the two read together month-for-month: revenue rising on flat job value =
+            more work; revenue rising on rising job value = better-paid work. Those
+            call for opposite responses. Months with no jobs pass through as null and
+            TrendBars draws them as a gap — dropping them would slide this chart's
+            months out of step with the one directly above it. */}
+        <TrendBars label="Average job value"
+          trend={bi.financial.trend.map(t => ({ month: t.month, revenue: t.avgJobValue }))} />
         <div className="grid md:grid-cols-3 gap-3">
           <RankList title="By service" items={bi.financial.byService} fmt={formatCurrency} />
           <RankList title="By neighborhood" items={bi.financial.byNeighborhood} fmt={formatCurrency} subFmt={v => `$${v}/hr`} />
@@ -361,21 +415,39 @@ const BAR_TONE = {
   },
 } as const
 
-function TrendBars({ trend, label = 'Revenue / month', integer = false, tone = 'accent' }: { trend: { month: string; revenue: number }[]; label?: string; integer?: boolean; tone?: keyof typeof BAR_TONE }) {
+// `revenue: null` = NO DATA for that month, which is not the same story as $0 — a
+// month you never worked must read as a gap, not a floored stub labelled zero.
+// Nullable so every chart on this page can keep the SAME 12-month axis: filtering
+// empty months out instead would silently shift one chart's months out of step
+// with the one beside it, and make "latest" name a month that isn't the latest.
+function TrendBars({ trend, label = 'Revenue / month', integer = false, tone = 'accent' }: { trend: { month: string; revenue: number | null }[]; label?: string; integer?: boolean; tone?: keyof typeof BAR_TONE }) {
   if (!trend.length) return null
-  const max = Math.max(1, ...trend.map(t => t.revenue))
-  const best = trend.reduce((m, t) => Math.max(m, t.revenue), 0)
+  const values = trend.map(t => t.revenue).filter((v): v is number => v != null)
+  if (!values.length) return null
+  const max = Math.max(1, ...values)
+  const best = Math.max(0, ...values)
   const fmt = (v: number) => integer ? String(v) : '$' + Math.round(v).toLocaleString()
   const latest = trend[trend.length - 1]
   return (
     <div className="rounded-card border border-border bg-bg-secondary p-4">
       <div className="flex items-baseline justify-between gap-3 mb-3">
         <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">{label}</p>
-        {latest && <p className="text-xs text-ink-muted tabular-nums">{latest.month.slice(5)}: <span className="font-semibold text-ink">{fmt(latest.revenue)}</span></p>}
+        {latest && <p className="text-xs text-ink-muted tabular-nums">{latest.month.slice(5)}: <span className="font-semibold text-ink">{latest.revenue != null ? fmt(latest.revenue) : '—'}</span></p>}
       </div>
       <div className="flex items-end gap-1.5 h-24">
         {trend.map((t, i) => {
           const current = i === trend.length - 1
+          // No data → a hairline on the baseline, never a bar. It holds the month's
+          // slot on the axis (so this chart stays aligned with its neighbours) while
+          // reading as "nothing here", which a 3%-floored stub would not.
+          if (t.revenue == null) {
+            return (
+              <div key={i} className="flex-1 flex flex-col items-center justify-end gap-1.5 min-w-0">
+                <div className="w-full h-px bg-border rounded-full" title={`${t.month}: no jobs`} />
+                <span className="text-[10px] truncate w-full text-center tabular-nums text-ink-faint/60">{t.month.slice(5)}</span>
+              </div>
+            )
+          }
           return (
             <div key={i} className="flex-1 flex flex-col items-center justify-end gap-1.5 min-w-0 group/bar">
               <div

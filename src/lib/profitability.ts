@@ -192,6 +192,10 @@ export interface MonthTrend {
   revPerKm: number
   profit: number | null    // revenue − on-site labour cost; null when crewCost wasn't supplied
   marginPct: number | null // profit as % of revenue; null without crewCost or revenue
+  jobs: number             // stops completed/booked that month
+  // Revenue ÷ jobs. Separates "more work" from "better-paid work" — the two look
+  // identical on a revenue line and call for opposite responses. null when no jobs.
+  avgJobValue: number | null
 }
 
 // Roll day-routes up into monthly trends so improvement over time is visible.
@@ -206,14 +210,15 @@ export interface MonthTrend {
 // keeps the two figures comparable. (revPerHour below is unaffected: it keeps
 // using drive + labour hours, as it always has.)
 export function monthlyTrends(routes: RouteProfit[], crewCost?: number): MonthTrend[] {
-  const map: Record<string, Omit<MonthTrend, 'profit' | 'marginPct'>> = {}
+  const map: Record<string, Omit<MonthTrend, 'profit' | 'marginPct' | 'avgJobValue'>> = {}
   for (const r of routes) {
     const month = r.date.slice(0, 7)
-    const m = (map[month] ||= { month, revenue: 0, driveMinutes: 0, laborMinutes: 0, driveKm: 0, revPerHour: 0, revPerKm: 0 })
+    const m = (map[month] ||= { month, revenue: 0, driveMinutes: 0, laborMinutes: 0, driveKm: 0, revPerHour: 0, revPerKm: 0, jobs: 0 })
     m.revenue += r.revenue
     m.driveMinutes += r.driveMinutes
     m.laborMinutes += r.laborMinutes
     m.driveKm += r.driveKm
+    m.jobs += r.stops
   }
   return Object.values(map).map(m => {
     const hours = (m.driveMinutes + m.laborMinutes) / 60
@@ -229,6 +234,7 @@ export function monthlyTrends(routes: RouteProfit[], crewCost?: number): MonthTr
       revPerKm: m.driveKm > 0 ? Math.round((m.revenue / m.driveKm) * 10) / 10 : 0,
       profit: econ ? econ.profit : null,
       marginPct: econ && m.revenue > 0 ? Math.round(econ.margin * 100) : null,
+      avgJobValue: m.jobs > 0 ? Math.round(m.revenue / m.jobs) : null,
     }
   }).sort((a, b) => a.month.localeCompare(b.month))
 }
