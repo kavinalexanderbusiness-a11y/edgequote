@@ -15,13 +15,14 @@
 // Pure core + loader, mirroring lib/customerHealth.ts. Valuation always defers to
 // the ONE pricing engine (jobVisitValue/effectiveFreq) — no money math lives here.
 
-import type { createClient } from '@/lib/supabase/client'
+// Generic SupabaseClient (like lib/crm/radar) so server callers work too.
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Customer } from '@/types'
 import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
 import { seasonForService, isWithinSeason, settingsToSeasons, type ServiceSeasons } from '@/lib/seasons'
 import { localTodayISO } from '@/lib/utils'
 
-type Supa = ReturnType<typeof createClient>
+type Supa = SupabaseClient
 
 export interface RJob {
   customer_id: string | null; scheduled_date: string; status: string

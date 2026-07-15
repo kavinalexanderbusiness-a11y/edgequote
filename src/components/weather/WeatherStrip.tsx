@@ -8,16 +8,26 @@ import { loadWeatherImpact, WeatherImpactReport } from '@/lib/weatherImpact'
 import { formatCurrency, cn } from '@/lib/utils'
 import { CloudRain, ArrowRight } from 'lucide-react'
 
-// Compact weather + rain-risk strip — a self-contained drop-in (e.g. top of the
-// Schedule page). Loads its own data; renders nothing until there's something
+// Compact weather + rain-risk strip. Renders nothing until there's something
 // worth showing, so it never clutters a clear week.
-export function WeatherStrip() {
+//
+// Pass `report` when the caller has ALREADY loaded the impact engine (the
+// dashboard loads it server-side, so the strip paints with the page instead of
+// popping in). Omit it and the strip loads its own data — the self-contained
+// drop-in the Schedule page uses.
+export function WeatherStrip({ report }: { report?: WeatherImpactReport | null }) {
   const supabase = useMemo(() => createClient(), [])
-  const [r, setR] = useState<WeatherImpactReport | null>(null)
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
+  const [fetched, setFetched] = useState<WeatherImpactReport | null>(null)
+  const provided = report !== undefined
 
-  useEffect(() => { let active = true; loadWeatherImpact(supabase).then(x => { if (active) setR(x) }); return () => { active = false } }, [supabase])
+  useEffect(() => {
+    if (provided) return // the caller already paid for this — don't fetch it twice
+    let active = true
+    loadWeatherImpact(supabase).then(x => { if (active) setFetched(x) })
+    return () => { active = false }
+  }, [supabase, provided])
 
+  const r = provided ? report : fetched
   if (!r || !r.hasBase || r.forecast.length === 0) return null
   const atRisk = r.totals.days > 0
 

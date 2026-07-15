@@ -17,9 +17,10 @@
 // agrees with the surface it came from (inbox badge, follow-up radar, quotes).
 // Counting is deliberately de-duplicated by customer where the sources overlap.
 
-import type { createClient } from '@/lib/supabase/client'
+// Generic SupabaseClient (like lib/crm/radar) so the SERVER dashboard can call it.
+import type { SupabaseClient } from '@supabase/supabase-js'
 
-type Supa = ReturnType<typeof createClient>
+type Supa = SupabaseClient
 
 export type LeadSource = 'website' | 'reply' | 'booking'
 

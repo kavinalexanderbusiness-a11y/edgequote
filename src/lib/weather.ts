@@ -82,14 +82,69 @@ interface OpenMeteoDaily {
   temperature_2m_min?: (number | null)[]
 }
 
+// ── Forecast cache ───────────────────────────────────────────────────────────
+// The forecast is PUBLIC data keyed only by coordinate — no user rows, no RLS —
+// so it is safe to share across callers and requests (nothing tenant-specific can
+// leak through this key). That matters because loadWeatherImpact is called from
+// four places and the dashboard + Schedule both mount WeatherStrip, so a single
+// morning could fire the same Open-Meteo request several times over.
+//
+// Two layers:
+//   • ttl      — a 10-minute result cache. Rain forecasts don't move minute to
+//                minute, and Weather Ops decisions are made on the hour.
+//   • inflight — concurrent callers share ONE request instead of racing (the
+//                Schedule page mounts WeatherStrip AND calls the engine itself).
+// Failures are never cached, so a blip can't stick for 10 minutes.
+const FORECAST_TTL_MS = 10 * 60_000
+const forecastCache = new Map<string, { at: number; data: DayForecast[] }>()
+const forecastInflight = new Map<string, Promise<DayForecast[]>>()
+
+// Coarse key: a few metres of GPS jitter is the same weather.
+const forecastKey = (lat: number, lng: number, days: number) =>
+  `${lat.toFixed(3)},${lng.toFixed(3)},${days}`
+
+/** Drop cached forecasts (tests / an explicit refresh). */
+export function clearForecastCache(): void {
+  forecastCache.clear()
+  forecastInflight.clear()
+}
+
 // Fetch the next `days` of daily forecast for a coordinate. Returns [] on any
 // failure so the UI degrades gracefully (never throws into the page).
 export async function fetchForecast(lat: number, lng: number, days = 7): Promise<DayForecast[]> {
+  const key = forecastKey(lat, lng, days)
+  const hit = forecastCache.get(key)
+  if (hit && Date.now() - hit.at < FORECAST_TTL_MS) return hit.data
+  const pending = forecastInflight.get(key)
+  if (pending) return pending
+
+  const run = fetchForecastUncached(lat, lng, days)
+    .then(data => {
+      // Only cache a real answer — [] means the request failed or the API had
+      // nothing, and caching that would blind Weather Ops for 10 minutes.
+      if (data.length) forecastCache.set(key, { at: Date.now(), data })
+      return data
+    })
+    .finally(() => { forecastInflight.delete(key) })
+
+  forecastInflight.set(key, run)
+  return run
+}
+
+// A third party must never be able to hang EdgeQuote. The dashboard renders this
+// on the server, so an Open-Meteo stall would otherwise hold the whole morning
+// view hostage with no way to bail. Time it out and degrade to "no forecast" —
+// the strip and Weather Ops both already handle an empty forecast.
+const FORECAST_TIMEOUT_MS = 2_500
+
+async function fetchForecastUncached(lat: number, lng: number, days: number): Promise<DayForecast[]> {
+  const ctl = new AbortController()
+  const timer = setTimeout(() => ctl.abort(), FORECAST_TIMEOUT_MS)
   try {
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}`
       + `&daily=precipitation_probability_max,precipitation_sum,windspeed_10m_max,windgusts_10m_max,weathercode,temperature_2m_max,temperature_2m_min`
       + `&timezone=auto&forecast_days=${days}`
-    const res = await fetch(url)
+    const res = await fetch(url, { signal: ctl.signal })
     if (!res.ok) return []
     const json = await res.json() as { daily?: OpenMeteoDaily }
     const d = json.daily
@@ -116,6 +171,9 @@ export async function fetchForecast(lat: number, lng: number, days = 7): Promise
       }
     })
   } catch {
+    // Includes the abort above — a slow forecast is a missing forecast, not an error.
     return []
+  } finally {
+    clearTimeout(timer)
   }
 }
