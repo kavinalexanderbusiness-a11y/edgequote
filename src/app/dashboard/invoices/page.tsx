@@ -160,8 +160,11 @@ export default function InvoicesPage() {
   // later, so we refetch after a short delay.
   useEffect(() => {
     fetch('/api/payments/status').then(r => r.json()).then(d => setPaymentsEnabled(!!d.enabled)).catch(() => {})
+    // ?paid=1 only means the customer reached Stripe's return URL — the WEBHOOK is
+    // what records the money. Claiming "Payment received" here would be a guess, and
+    // if the webhook isn't configured it would be a lie the invoice never corrects.
     if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('paid') === '1') {
-      notify('Payment received — updating the invoice…')
+      notify('Checkout completed — confirming the payment…')
       window.history.replaceState({}, '', '/dashboard/invoices')
       setTimeout(() => fetchInvoices(), 1500)
           }
@@ -461,6 +464,12 @@ export default function InvoicesPage() {
                             >
                               {ds === 'paid' && <Check className="w-3 h-3" />}
                               {INVOICE_STATUS_LABELS[ds]}
+                              {/* "Overdue" collapses "never opened, nothing paid" and "part-paid,
+                                  chase the rest" into one identical red word. Show what's LEFT so
+                                  the owner knows which conversation to have. */}
+                              {ds === 'overdue' && (Number(inv.amount_paid) || 0) > 0.01 && (
+                                <span className="normal-case font-medium opacity-90">· {formatCurrency(invoiceBalance(inv, settings).balance)} left</span>
+                              )}
                               {clickable && <ChevronDown aria-hidden className="w-3 h-3 opacity-60" />}
                             </button>
                           )}
@@ -500,9 +509,24 @@ export default function InvoicesPage() {
                     {inv.status === 'paid' && inv.payment_method && (
                       <span className="text-[10px] text-ink-faint">{paymentMethodLabel(inv.payment_method)}</span>
                     )}
-                    {/* Send — the primary outbound action, in the cluster (not exiled below). */}
+                    {/* Send — the primary outbound action, in the cluster (not exiled below).
+                        A draft AutoPay HELD for review is an amount the system itself
+                        distrusted — never let one tap put it in front of the customer
+                        without naming the anomaly first. */}
                     {inv.customer_id && inv.status !== 'cancelled' && (
-                      <Button variant="secondary" size="sm" onClick={() => setMsgInvoice(inv)} title="Send this invoice to the customer">
+                      <Button variant="secondary" size="sm" title="Send this invoice to the customer"
+                        onClick={async () => {
+                          const held = inv.status === 'draft' && (inv.notes || '').includes('AutoPay held')
+                          if (held) {
+                            const ok = await confirmDialog({
+                              title: 'Send an invoice that was held for review?',
+                              message: `${inv.invoice_number} was held because the amount looks unusual for this customer${inv.notes ? ` — ${inv.notes}` : ''}. Send it as-is?`,
+                              confirmLabel: 'Send it anyway',
+                            })
+                            if (!ok) return
+                          }
+                          setMsgInvoice(inv)
+                        }}>
                         <MessageSquare className="w-3.5 h-3.5" /> Send
                       </Button>
                     )}
@@ -550,11 +574,13 @@ export default function InvoicesPage() {
 
       {!loading && !loadError && invoices.length > 0 && <PaymentHistory settings={settings} />}
 
-      {/* ONE shared Send Message dialog — sending marks the invoice sent. */}
+      {/* ONE shared Send Message dialog — sending marks the invoice sent. The amount
+          is what's actually OWED (the ledger balance), never the original total: a
+          customer who has already part-paid must never be asked for the full amount. */}
       {msgInvoice?.customer_id && (
         <SendMessageDialog open onClose={() => setMsgInvoice(null)}
           customerId={msgInvoice.customer_id} customerName={msgInvoice.customer_name}
-          defaultTemplate="invoice" vars={{ amount: formatCurrency(invoiceTotals(msgInvoice.amount, settings, { type: msgInvoice.discount_type, value: msgInvoice.discount_value }).total) }}
+          defaultTemplate="invoice" vars={{ amount: formatCurrency(invoiceBalance(msgInvoice, settings).balance) }}
           onSent={() => markSent(msgInvoice)} />
       )}
     </div>

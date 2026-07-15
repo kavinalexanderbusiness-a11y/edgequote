@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from '@/lib/toast'
+import { confirm as confirmDialog } from '@/lib/confirm'
 import { formatCurrency } from '@/lib/utils'
 import { Invoice, BusinessSettings, Payment, PAYMENT_METHODS, paymentMethodLabel } from '@/types'
 import { Button } from '@/components/ui/Button'
@@ -70,6 +71,13 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
   }
 
   const applyable = Math.min(credit, balance)
+  // How the overpayment actually arrived. A cash/e-transfer overpayment must never be
+  // sent to Stripe (no charge exists there), and "Record refund" must never imply the
+  // app moved the money — it only records money the owner moved.
+  const lastMoneyIn = [...payments]
+    .filter(p => p.kind !== 'credit' && Number(p.amount) > 0)
+    .sort((a, b) => String(b.paid_at || b.created_at).localeCompare(String(a.paid_at || a.created_at)))[0]
+  const overpaidViaCard = !!lastMoneyIn && (lastMoneyIn.provider === 'stripe' || lastMoneyIn.method === 'card')
 
   async function save() {
     setBusy(true)
@@ -83,19 +91,16 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
   }
 
   // ── Receipt actions — generated from the ledger row, never stored ──────────────
-  // Balance AFTER this payment (component may render before the refetch lands).
-  function balanceAfter(p: Payment): number {
-    const paidNow = Math.max(paid, 0) >= Number(p.amount) ? paid : paid + Number(p.amount)
-    return Math.max(0, Math.round((total - paidNow) * 100) / 100)
-  }
+  // ONE balance source: the refetched invoice (via invoiceBalance above). We never
+  // project a balance — a guess here prints a wrong "remaining" on the customer's
+  // receipt, which is worse than showing nothing.
   async function downloadReceipt(p: Payment) {
     setSendingReceipt('pdf')
     try {
       const [{ renderReceiptBlob }, { downloadBlob }] = await Promise.all([
         import('@/components/payments/ReceiptPDF'), import('@/lib/portalPdf'),
       ])
-      const inv = { ...invoice, amount_paid: total - balanceAfter(p) }
-      downloadBlob(await renderReceiptBlob(p, inv, settings), `${receiptNumberFor(p.id)}.pdf`)
+      downloadBlob(await renderReceiptBlob(p, invoice, settings), `${receiptNumberFor(p.id)}.pdf`)
     } catch { toast.error('Could not generate the receipt PDF.') }
     setSendingReceipt(null)
   }
@@ -103,7 +108,7 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
     if (!invoice.customer_id) { toast.error('No customer on this invoice.'); return }
     setSendingReceipt(channel)
     try {
-      const remaining = balanceAfter(p)
+      const remaining = balance
       const res = await fetch('/api/comms/send', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -149,6 +154,15 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
   async function raiseTotal() {
     const gst = Number(settings?.gst_percent) || 0
     const newNet = Math.round((paid / (1 + gst / 100)) * 100) / 100
+    // Its siblings (credit / refund) add a ledger row; this one REPRICES a document
+    // the customer already has. That deserves the same deliberate confirm a card
+    // charge gets — the PDF, their portal copy and your reports all change.
+    const ok = await confirmDialog({
+      title: 'Raise the invoice total?',
+      message: `Raise ${invoice.invoice_number} from ${formatCurrency(total)} to ${formatCurrency(total + overpaid)} so it matches what was paid? The customer's copy, the PDF and your reports will all show the new total.`,
+      confirmLabel: 'Raise total',
+    })
+    if (!ok) return
     setBusy(true)
     const { error } = await supabase.from('invoices').update({ amount: newNet }).eq('id', invoice.id)
     setBusy(false)
@@ -236,7 +250,9 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
               <TrendingUp className="w-3.5 h-3.5" /> Raise total
             </Button>
           </div>
-          <p className="text-[10px] text-ink-faint">Card refunds are issued in your Stripe dashboard; this records it so your balances stay correct.</p>
+          <p className="text-[10px] text-ink-faint">{overpaidViaCard
+            ? 'Card refunds are issued in your Stripe dashboard; this records it so your balances stay correct.'
+            : `Recording a refund doesn’t move any money — return the ${formatCurrency(overpaid)} the way it came in, then record it here so your balances stay correct.`}</p>
         </div>
       )}
 

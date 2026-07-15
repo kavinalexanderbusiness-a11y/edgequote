@@ -3,6 +3,8 @@
 import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { queueOrRun } from '@/lib/offline/outbox'
+import { toast } from '@/lib/toast'
+import { confirm as confirmDialog } from '@/lib/confirm'
 import { QuoteStatus, STATUS_LABELS, STATUS_COLORS } from '@/types'
 import { ChevronDown } from 'lucide-react'
 
@@ -22,6 +24,17 @@ export function QuoteStatusControl({ quoteId, status, followUpCount, onChanged }
 
   async function handleChange(e: React.ChangeEvent<HTMLSelectElement>) {
     const s = e.target.value as QuoteStatus
+    // "Scheduled" here only relabels the quote — it does NOT create a job, and it
+    // hides the "Accepted — not scheduled yet" reminder. Say so before the owner
+    // silently removes their own safety net.
+    if (s === 'scheduled' && current !== 'scheduled') {
+      const ok = await confirmDialog({
+        title: 'Mark as Scheduled?',
+        message: 'This only changes the label — it won’t add a job to your calendar. To actually book the visit, use Schedule on the quote instead.',
+        confirmLabel: 'Just change the status',
+      })
+      if (!ok) return   // controlled select snaps back to `current` on its own
+    }
     setCurrent(s)
     setSaving(true)
     const updates: Record<string, unknown> = { status: s }
@@ -39,11 +52,15 @@ export function QuoteStatusControl({ quoteId, status, followUpCount, onChanged }
           if (s === 'sent') await supabase.from('quotes').update({ sent_at: new Date().toISOString() }).eq('id', quoteId).is('sent_at', null)
         },
       )
+      // Only tell the page on success (queueOrRun resolves for a queued offline
+      // change too). Firing this from `finally` propagated a status the write had
+      // REJECTED — the pill reverted while the page kept the new status.
+      onChanged?.(s)
     } catch {
       setCurrent(status)   // hard failure → revert the optimistic status
+      toast.error('Could not update the status — check your connection and try again.')
     } finally {
       setSaving(false)
-      onChanged?.(s)
     }
   }
 

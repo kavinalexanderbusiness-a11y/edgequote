@@ -179,7 +179,7 @@ Have a wonderful day!`,
 
 Thank you for choosing {{business_name}}!
 
-If you were happy with today's service, we'd really appreciate a quick review.
+If you were happy with your recent service, we'd really appreciate a quick review.
 
 Your feedback helps our small business grow and helps other homeowners choose a company they can trust.
 
