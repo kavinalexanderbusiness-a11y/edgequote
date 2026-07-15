@@ -47,8 +47,16 @@ export async function POST(req: NextRequest) {
   if (!phone) return NextResponse.json({ ok: false, error: 'This customer has no phone number on file.' }, { status: 400 })
 
   const r = await sendSms(phone, text)
-  await supabase.from('messages').insert({ user_id: user.id, conversation_id: convoId, customer_id: customerId, direction: 'outbound', channel: 'sms', body: text, status: r.reason })
-  await supabase.from('notification_log').insert({ user_id: user.id, customer_id: customerId, channel: 'sms', template: 'reply', status: r.reason, detail: r.error ?? null })
+  // Persist Twilio's SID so /api/sms/status can carry these rows from 'sent'
+  // (accepted) to 'delivered'/'failed'. Written through a helper that degrades to
+  // the pre-migration shape rather than losing the message record.
+  const providerCols = r.sent && r.id ? { provider: 'twilio', provider_message_id: r.id } : {}
+  const msgBase = { user_id: user.id, conversation_id: convoId, customer_id: customerId, direction: 'outbound', channel: 'sms', body: text, status: r.reason }
+  const { error: msgErr } = await supabase.from('messages').insert({ ...msgBase, ...providerCols })
+  if (msgErr) await supabase.from('messages').insert(msgBase)
+  const logBase = { user_id: user.id, customer_id: customerId, channel: 'sms', template: 'reply', status: r.reason, detail: r.error ?? null }
+  const { error: logErr } = await supabase.from('notification_log').insert({ ...logBase, ...providerCols })
+  if (logErr) await supabase.from('notification_log').insert(logBase)
   await finalizeSend(supabase, user.id, clientMessageId, r.reason)
 
   const error = r.reason === 'disabled' ? 'SMS isn’t set up yet (add your Twilio keys).' : r.reason === 'error' ? 'The message could not be sent.' : undefined

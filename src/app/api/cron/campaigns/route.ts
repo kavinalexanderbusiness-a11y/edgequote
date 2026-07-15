@@ -146,6 +146,9 @@ export async function GET(req: NextRequest) {
         await supabase.from('notification_log').insert({
           user_id: camp.user_id, customer_id: c.id, channel: a.channel, template: templateKey,
           status: a.status, detail: a.detail ?? null, message_id: a.sent ? res.messageId : null,
+          // The provider's own id — what the delivery webhooks match on to carry
+          // this row from 'sent' (accepted) to 'delivered'/'bounced'.
+          provider: a.provider, provider_message_id: a.providerId,
         })
       }
       // Finalize the claimed row (UPDATE, not a second insert) with the real outcome.

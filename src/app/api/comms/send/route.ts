@@ -4,6 +4,7 @@ import { renderMessage, renderBody, MsgType, MSG_LABELS, prefAllows, type Messag
 import { sendSms, sendEmail, commsEnabled } from '@/lib/comms/send'
 import { getOrCreateConversation } from '@/lib/comms/conversation'
 import { SKIP_REASON } from '@/lib/comms/skipReasons'
+import { SENT_STATES } from '@/lib/comms/delivery'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { claimSend, finalizeSend } from '@/lib/comms/idempotency'
 
@@ -41,7 +42,9 @@ export async function POST(req: NextRequest) {
   // Automated sends pass dedupe:true so the same template can't fire twice for the
   // same job (e.g. a job completed, undone, completed again).
   if (body.dedupe && jobId) {
-    const { data: prior } = await supabase.from('notification_log').select('id').eq('user_id', user.id).eq('job_id', jobId).eq('template', template).eq('status', 'sent').limit(1)
+    // SENT_STATES, not status='sent': a delivery webhook may have already moved a
+    // prior send to 'delivered', and an equality check would miss it and resend.
+    const { data: prior } = await supabase.from('notification_log').select('id').eq('user_id', user.id).eq('job_id', jobId).eq('template', template).in('status', SENT_STATES as unknown as string[]).limit(1)
     if (prior && prior.length) return NextResponse.json({ enabled: commsEnabled(), results: {}, skipped: 'duplicate' })
   }
 
@@ -101,7 +104,10 @@ export async function POST(req: NextRequest) {
   const results: Record<string, unknown> = {}
   // Collect every channel attempt; log + thread once at the end so a sent message
   // can be linked to its log rows.
-  const attempts: { channel: string; status: string; detail?: string; sent: boolean }[] = []
+  // `provider`/`providerId` are the provider's handle on the message (Twilio
+  // MessageSid / Resend id) — persisted so the delivery webhooks can later turn
+  // 'sent' (provider accepted) into 'delivered'/'bounced'.
+  const attempts: { channel: string; status: string; detail?: string; sent: boolean; provider?: string | null; providerId?: string | null }[] = []
 
   // Granular consent — the customer declined this CATEGORY (e.g. marketing) even
   // though a channel is opted in. Same rule the dispatch engine + crons apply.
@@ -111,12 +117,12 @@ export async function POST(req: NextRequest) {
   if (channels.includes('sms')) {
     if (!c.sms_opt_in) { results.sms = { sent: false, reason: 'no-optin' }; attempts.push({ channel: 'sms', status: 'skipped', detail: SKIP_REASON.NO_OPT_IN, sent: false }) }
     else if (!c.phone) { results.sms = { sent: false, reason: 'no-phone' }; attempts.push({ channel: 'sms', status: 'skipped', detail: SKIP_REASON.NO_PHONE, sent: false }) }
-    else { const r = await sendSms(c.phone, outText); results.sms = r; attempts.push({ channel: 'sms', status: r.reason, detail: r.error, sent: r.sent }) }
+    else { const r = await sendSms(c.phone, outText); results.sms = r; attempts.push({ channel: 'sms', status: r.reason, detail: r.error, sent: r.sent, provider: r.sent ? 'twilio' : null, providerId: r.id ?? null }) }
   }
   if (channels.includes('email')) {
     if (!c.email_opt_in) { results.email = { sent: false, reason: 'no-optin' }; attempts.push({ channel: 'email', status: 'skipped', detail: SKIP_REASON.NO_OPT_IN, sent: false }) }
     else if (!c.email) { results.email = { sent: false, reason: 'no-email' }; attempts.push({ channel: 'email', status: 'skipped', detail: SKIP_REASON.NO_EMAIL, sent: false }) }
-    else { const r = await sendEmail(c.email, rendered.subject, outHtml, outText); results.email = r; attempts.push({ channel: 'email', status: r.reason, detail: r.error, sent: r.sent }) }
+    else { const r = await sendEmail(c.email, rendered.subject, outHtml, outText); results.email = r; attempts.push({ channel: 'email', status: r.reason, detail: r.error, sent: r.sent, provider: r.sent ? 'resend' : null, providerId: r.id ?? null }) }
   }
   if (channels.includes('push')) {
     // Future channel — wired through, always disabled for now (no provider).
@@ -133,35 +139,44 @@ export async function POST(req: NextRequest) {
   if (sentChannels.length) {
     const convoId = await getOrCreateConversation(supabase, user.id, customerId)
     if (convoId) {
+      // The bubble carries the primary channel's provider id, so a delivery
+      // webhook for that id can advance THIS row from sent → delivered.
+      const primary = attempts.find(a => a.sent && a.channel === sentChannels[0])
       const { data: m } = await supabase.from('messages')
-        .insert({ user_id: user.id, conversation_id: convoId, customer_id: customerId, direction: 'outbound', channel: sentChannels[0], body: outText, status: 'sent', meta: { template } })
+        .insert({
+          user_id: user.id, conversation_id: convoId, customer_id: customerId,
+          direction: 'outbound', channel: sentChannels[0], body: outText, status: 'sent',
+          provider: primary?.provider ?? null, provider_message_id: primary?.providerId ?? null,
+          meta: { template },
+        })
         .select('id').single()
       messageId = (m as { id: string } | null)?.id ?? null
     }
   }
 
   for (const a of attempts) {
-    await logSend(supabase, { userId: user.id, customerId, jobId, channel: a.channel, template, status: a.status, detail: a.detail, messageId: a.sent ? messageId : null })
+    await logSend(supabase, { userId: user.id, customerId, jobId, channel: a.channel, template, status: a.status, detail: a.detail, messageId: a.sent ? messageId : null, provider: a.provider ?? null, providerId: a.providerId ?? null })
   }
   await finalizeSend(supabase, user.id, clientMessageId, sentChannels.length ? 'sent' : 'skipped')
 
   return NextResponse.json({ enabled, results, preview: outText, threaded: !!messageId })
 }
 
-// Insert a notification_log row. Links to the thread message when one exists; falls
-// back to an unlinked insert if the message_id column hasn't been migrated yet, so
-// the audit trail is never silently dropped.
+// Insert a notification_log row. Links to the thread message when one exists and
+// carries the provider's message id (what the delivery webhooks match on). Falls
+// back to a bare insert if those columns haven't been migrated yet, so the audit
+// trail is never silently dropped over a missing column.
 async function logSend(
   supabase: Awaited<ReturnType<typeof createClient>>,
-  l: { userId: string; customerId: string; jobId: string | null; channel: string; template: string; status: string; detail?: string; messageId: string | null },
+  l: { userId: string; customerId: string; jobId: string | null; channel: string; template: string; status: string; detail?: string; messageId: string | null; provider?: string | null; providerId?: string | null },
 ): Promise<void> {
   const base = { user_id: l.userId, customer_id: l.customerId, job_id: l.jobId, channel: l.channel, template: l.template, status: l.status, detail: l.detail ?? null }
-  if (l.messageId) {
-    const { error } = await supabase.from('notification_log').insert({ ...base, message_id: l.messageId })
-    if (!error) return
-    // Pre-migration fallback: the message_id column may not exist yet.
-    await supabase.from('notification_log').insert(base)
-    return
-  }
+  const full: Record<string, unknown> = { ...base }
+  if (l.messageId) full.message_id = l.messageId
+  if (l.provider) full.provider = l.provider
+  if (l.providerId) full.provider_message_id = l.providerId
+  if (Object.keys(full).length === Object.keys(base).length) { await supabase.from('notification_log').insert(base); return }
+  const { error } = await supabase.from('notification_log').insert(full)
+  if (!error) return
   await supabase.from('notification_log').insert(base)
 }

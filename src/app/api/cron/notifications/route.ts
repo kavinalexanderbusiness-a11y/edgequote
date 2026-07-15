@@ -4,6 +4,7 @@ import { addDays, format } from 'date-fns'
 import { renderMessage, MsgType, prefAllows, type MessagePrefs } from '@/lib/comms/templates'
 import { sendSms, sendEmail, commsEnabled } from '@/lib/comms/send'
 import { SKIP_REASON } from '@/lib/comms/skipReasons'
+import { SENT_STATES } from '@/lib/comms/delivery'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { resolveAutomations, Automations } from '@/lib/comms/automations'
 
@@ -46,7 +47,10 @@ export async function GET(req: NextRequest) {
   async function alreadySent(userId: string, jobId: string, template: string): Promise<boolean> {
     // Only a SUCCESSFUL prior send blocks a resend — otherwise a failed attempt
     // (Resend/Twilio down) would log a row and never be retried on the next run.
-    const { data } = await supabase.from('notification_log').select('id').eq('user_id', userId).eq('job_id', jobId).eq('template', template).eq('status', 'sent').limit(1)
+    // SENT_STATES, not status='sent': a delivery webhook may have already carried
+    // that row to 'delivered'/'bounced', and an equality check on 'sent' would miss
+    // it and text the customer a second time.
+    const { data } = await supabase.from('notification_log').select('id').eq('user_id', userId).eq('job_id', jobId).eq('template', template).in('status', SENT_STATES as unknown as string[]).limit(1)
     return !!(data && data.length)
   }
   const sel = 'id, user_id, customer_id, scheduled_date, customers(name, phone, email, sms_opt_in, email_opt_in, message_prefs, reviewed_at, review_declined_at)'
