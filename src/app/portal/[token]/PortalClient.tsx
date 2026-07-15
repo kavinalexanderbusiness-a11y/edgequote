@@ -8,7 +8,9 @@ import { ConfirmHost } from '@/components/ui/ConfirmHost'
 import { recurrenceLabel } from '@/lib/recurrence'
 import { invoiceTotals } from '@/lib/invoiceTotals'
 import { serviceLineTotals } from '@/lib/quoteServices'
-import { formatCurrency, formatDate, cn } from '@/lib/utils'
+import { formatCurrency, formatDate, cn, localTodayISO } from '@/lib/utils'
+import { displayQuoteStatus } from '@/lib/quoteStatus'
+import type { QuoteStatus } from '@/types'
 import { Button } from '@/components/ui/Button'
 import { renderPortalQuoteBlob, renderPortalInvoiceBlob, renderPortalReceiptBlob, downloadBlob, viewBlob, printBlob } from '@/lib/portalPdf'
 import { receiptNumberFor } from '@/lib/payments/ledger'
@@ -24,7 +26,11 @@ import {
 // with photos & invoices, a before/after gallery, and quick service requests.
 
 interface PortalQuoteService { service_type: string; quantity: number; unit: string | null; unit_price: number; est_minutes: number | null; discount_type: 'amount' | 'percent' | null; discount_value: number | null; notes: string | null; sort_order: number }
-interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null }
+// `valid_until` is the date this price stops standing. Null = it never lapses (every
+// quote sent before expiry stamping began). Expiry is DERIVED from it via
+// lib/quoteStatus — never stored on status — so the portal reads the same field and
+// reaches the same answer as the owner's screens, with no second rule to drift.
+interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; valid_until: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null }
 interface PortalInvoice { id: string; invoice_number: string; service_type: string | null; amount: number; status: string; issued_date: string | null; due_date: string | null; notes: string | null; address: string | null; line_items: { description: string; amount: number; kind: string }[] | null; job_id: string | null; created_at: string; discount_type?: 'amount' | 'percent' | null; discount_value?: number | null; amount_paid?: number | null }
 interface PortalJob { id: string; recurrence_id: string | null; service_type: string | null; title: string; scheduled_date: string; status: string; on_my_way_at: string | null; started_at: string | null; completed_at: string | null; notes: string | null }
 interface PortalRec { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null; end_date: string | null }
@@ -467,7 +473,11 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
   const next = derived.nextService
   // A quote awaiting approval is usually WHY the customer opened this link —
   // signpost it up top instead of making them discover the Documents tab.
-  const awaiting = (data.quotes || []).filter(q => q.status === 'sent')
+  // An EXPIRED quote is not awaiting anything: this hero says "Your quote is ready ·
+  // $2,150 — review and approve when you're ready" and taps through to a Documents row
+  // that now says the price has lapsed. Same engine as that row, so the two agree.
+  const awaiting = (data.quotes || []).filter(q =>
+    displayQuoteStatus({ status: q.status as QuoteStatus, valid_until: q.valid_until }, localTodayISO()) === 'sent')
   // A pure prospect (quote in hand, no visits or invoices yet) came to review
   // the quote — skip the empty "no visit scheduled" hero and $0/— stat cards
   // that would push it down and invite the wrong action.
@@ -769,7 +779,12 @@ type DocKind = 'quote' | 'invoice'
 // only facts about THEIR property and THEIR job — never the owner's rate, margin, floor
 // or win-rate. (`rate` isn't in the portal projection, and deriving it from
 // subtotal ÷ man_hours would expose the owner's hourly pricing to the person paying it.)
-interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; amount: number; amountNote?: string; balance: number; filename: string; getBlob: () => Promise<Blob>; lines?: { label: string; amount: number }[]; explain?: string[] }
+// `status` on a quote is the DISPLAY status (lib/quoteStatus), not the stored one — so
+// an expired quote arrives here as 'expired' rather than 'sent'. That is what makes the
+// Accept button disappear on its own: `canAccept` already tests for 'sent', so there is
+// no second expiry check anywhere in the render path to forget or contradict.
+// `expiredOn` is the date it lapsed, shown so the customer knows this isn't a glitch.
+interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; expiredOn?: string; amount: number; amountNote?: string; balance: number; filename: string; getBlob: () => Promise<Blob>; lines?: { label: string; amount: number }[]; explain?: string[] }
 const KIND_META: Record<DocKind, { label: string; icon: typeof FileText; tone: string }> = {
   quote: { label: 'Quote', icon: FileText, tone: 'text-accent-text border-accent/25 bg-accent/10' },
   invoice: { label: 'Invoice', icon: Receipt, tone: 'text-sky-400 border-sky-500/25 bg-sky-500/10' },
@@ -791,6 +806,7 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, lawnSqf
   const [sort, setSort] = useState<'newest' | 'oldest'>('newest')
 
   const gstPct = Number(business?.gst_percent) || 0
+  const today = localTodayISO()
   const docs = useMemo<DocItem[]>(() => {
     const q: DocItem[] = quotes.map(qq => {
       // Multi-service quotes get a per-service breakdown on the row (same
@@ -835,12 +851,23 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, lawnSqf
         planLines.length > 0 ? 'Your first visit is priced above; ongoing visits are charged at the plan rate shown.' : null,
         'Nothing is charged when you approve — you’ll get an invoice once the work is done.',
       ].filter((s): s is string => !!s)
+      // THE shared expiry engine — the same call the owner's quote page and quote list
+      // make. A lapsed quote surfaces as 'expired' here, which is what removes the Accept
+      // button (canAccept tests for 'sent') and swaps the pill, with no separate check.
+      // PortalQuote.status is `string` on purpose — it's RPC JSON, so the portal doesn't
+      // presume the union. displayQuoteStatus only branches on 'sent', and any other
+      // value falls through unchanged, so narrowing here is safe rather than a guess.
+      const display = displayQuoteStatus({ status: qq.status as QuoteStatus, valid_until: qq.valid_until }, today)
+      const expired = display === 'expired'
       return {
         id: 'q' + qq.id, rawId: qq.id, kind: 'quote' as const, number: qq.quote_number, title: qq.service_type || 'Quote',
-        date: qq.issued_date || qq.created_at, status: qq.status, amount: Number(qq.total) || 0,
+        date: qq.issued_date || qq.created_at, status: display, expiredOn: expired ? qq.valid_until || undefined : undefined,
+        amount: Number(qq.total) || 0,
         amountNote: gstPct > 0 ? `+ GST (${gstPct}%) — added on your invoice` : undefined, balance: 0,
         filename: `${qq.quote_number}.pdf`, getBlob: () => renderPortalQuoteBlob(qq, customerName, business), lines,
-        explain: explainBits.length > 1 ? explainBits : undefined,
+        // Don't justify a price that no longer stands — explaining it would invite the
+        // customer to act on a number we're about to tell them we can't honour.
+        explain: !expired && explainBits.length > 1 ? explainBits : undefined,
       }
     })
     // A DRAFT invoice is the owner's unfinished work — a number they're still deciding on.
@@ -925,7 +952,10 @@ function DocRow({ d, paymentsEnabled, pay, payingId, accept, accepting }: {
   const m = KIND_META[d.kind]
   // The one action each document actually needs, right on the row: a sent quote
   // can be accepted; an invoice with a balance can be paid.
+  // `d.status` is the DISPLAY status, so an expired quote is not 'sent' and loses its
+  // Accept button here without a second expiry test.
   const canAccept = d.kind === 'quote' && d.status === 'sent'
+  const isExpired = d.kind === 'quote' && d.status === 'expired'
   const canPay = d.kind === 'invoice' && paymentsEnabled && d.balance > 0 && d.status !== 'draft' && d.status !== 'cancelled'
   return (
     <div className="rounded-card border border-border bg-bg-secondary p-4 card-lift">
@@ -965,6 +995,19 @@ function DocRow({ d, paymentsEnabled, pay, payingId, accept, accepting }: {
               </li>
             ))}
           </ul>
+        </div>
+      )}
+      {/* An expired quote takes the Accept button's place — the customer is told plainly
+          that the price no longer stands, rather than being left to tap a button that
+          would commit them to a number we can't honour. No extension is offered here:
+          whether to stand by an old price is the owner's call, made on their side. */}
+      {isExpired && (
+        <div className="mt-3 rounded-xl border border-amber-500/25 bg-amber-500/[0.06] px-3.5 py-3 flex items-start gap-2">
+          <Clock className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+          <p className="text-xs text-ink-muted">
+            <span className="text-ink font-medium">This quote has expired.</span> Please contact us for an updated quote.
+            {d.expiredOn ? <span className="text-ink-faint"> It was valid until {formatDate(d.expiredOn)}.</span> : null}
+          </p>
         </div>
       )}
       {(canAccept || canPay) && (
@@ -1487,6 +1530,10 @@ function QuoteStatusPill({ status }: { status: string }) {
     paid:      { label: 'Completed',              tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' },
     declined:  { label: 'Declined',               tone: 'text-red-400 border-red-500/30 bg-red-500/10' },
     sent:      { label: 'Awaiting your approval', tone: 'text-amber-400 border-amber-500/30 bg-amber-500/10' },
+    // Derived, never stored (lib/quoteStatus). Deliberately NOT red: an expired quote
+    // isn't a rejection or a failure — the price simply lapsed, and asking for a fresh
+    // one is a normal thing to do.
+    expired:   { label: 'Expired',                tone: 'text-ink-muted border-border bg-bg-tertiary' },
   }
   const m = map[status] ?? { label: 'Quote', tone: 'text-ink-muted border-border bg-bg-tertiary' }
   return <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', m.tone)}>{m.label}</span>
