@@ -125,6 +125,9 @@ export async function runChaseCron<T extends ChaseItem, Ctx>(
     if (!(await spec.claim(item))) continue
     tally.chased++
 
+    // Hoisted so the catch below can tell "threw having sent nothing" (refundable)
+    // from "threw after a message was already out" (absolutely not).
+    let sentAny = false
     try {
       const msg = await spec.render(item, ctx)
       const res = await dispatchToCustomer(sb, {
@@ -138,12 +141,14 @@ export async function runChaseCron<T extends ChaseItem, Ctx>(
         template: spec.template,
         meta: msg.meta,
       })
+      // Set BEFORE the log write: if logging throws, the catch must still know a
+      // message is already with the customer.
+      sentAny = res.sentChannels.length > 0
       await logDispatch(sb, res, { userId: item.user_id, customerId: item.customer_id, template: spec.template })
 
       // Nothing went out AND at least one channel failed in a way that could work
       // later (provider down / timed out / rate-limited) → the attempt bought us
       // nothing, so hand it back.
-      const sentAny = res.sentChannels.length > 0
       const retryableFail = !sentAny && res.attempts.some(a => !a.sent && a.status === 'error' && a.retryable)
 
       if (sentAny) tally.sent++
@@ -152,16 +157,30 @@ export async function runChaseCron<T extends ChaseItem, Ctx>(
       // The attempt is CORRECTLY spent — there is nothing here a retry would fix.
       else tally.skipped++
     } catch (e) {
-      // Thrown before or during dispatch (a render that dies, a client blowing up).
-      // Nothing was sent, so the attempt was never really taken — refund it, or one
-      // bad portal token would retire the quote with zero messages.
+      // Thrown before or during dispatch (a render that dies, a client blowing up):
+      // nothing was sent, so the attempt was never really taken — refund it, or one
+      // bad portal token retires the quote with zero messages.
+      //
+      // But a throw AFTER a send (the log write) must NOT refund: the customer
+      // already has the message, and handing the attempt back would chase them
+      // twice for it — the very thing claim-before-send exists to prevent. When in
+      // doubt we keep the attempt spent; an over-chased customer is worse than an
+      // under-chased quote.
       tally.failed++
-      await refund(item)
-      await logSend(sb, {
-        userId: item.user_id, customerId: item.customer_id, channel: 'sms',
-        template: spec.template, status: 'error',
-        detail: e instanceof Error ? e.message.slice(0, 200) : spec.errorLabel,
-      })
+      if (!sentAny) await refund(item)
+      // Logging the failure must never BE the failure. If the audit write itself
+      // throws, this catch would escape the loop and abort the rest of the owner's
+      // book — the exact thing per-item isolation exists to prevent, defeated by the
+      // error handler. Console is the last resort: no audit row, but the batch lives.
+      try {
+        await logSend(sb, {
+          userId: item.user_id, customerId: item.customer_id, channel: 'sms',
+          template: spec.template, status: 'error',
+          detail: e instanceof Error ? e.message.slice(0, 200) : spec.errorLabel,
+        })
+      } catch (logErr) {
+        console.error(`[chase:${spec.template}] item ${item.id} failed AND its audit row could not be written:`, e, logErr)
+      }
     }
   }
 

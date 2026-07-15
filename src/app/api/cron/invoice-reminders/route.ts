@@ -158,6 +158,6 @@ export async function GET(req: NextRequest) {
   const summary = { ok: true, ...tally, truncated }
   // Log only when there was something to do, so quiet runs stay quiet in the logs.
   if (tally.chased > 0) console.log('[cron/invoice-reminders] run:', JSON.stringify(summary))
-  if (tally.failed > 0) console.error(`[cron/invoice-reminders] ${tally.failed} reminder(s) threw — see notification_log rows with status 'error' (still retryable).`)
+  if (tally.failed > 0) console.error(`[cron/invoice-reminders] ${tally.failed} reminder(s) sent nothing and had their attempt REFUNDED (provider down/timeout/429/5xx, or a throw) — they are chased again next run. See notification_log rows with status 'error'.`)
   return NextResponse.json(summary)
 }

@@ -553,6 +553,40 @@ async function run() {
     db.last_followed_up_at = isoNDaysAgo(3)
     check('outage', '➜ backoff elapses → due again, budget intact', [dueForAutoFollowUp(mkItem() as unknown as Quote, P), db.follow_up_count], [true, 0])
 
+    // ── A throw AFTER a send must NOT refund ──
+    // The customer already has the message; handing the attempt back would chase
+    // them twice for it. Modelled by the notification_log write blowing up on a run
+    // where the provider accepted the SMS.
+    {
+      // Only the FIRST insert throws — that's logDispatch failing right after the
+      // provider accepted the SMS. (The catch's own logSend must still work: an
+      // insert that throws there escapes runChaseCron entirely, which is a real
+      // pre-existing gap in the batch-isolation guarantee, but not this fix's.)
+      let inserts = 0
+      const sbBoom = { from: () => ({ ...table(), insert: async () => { if (++inserts === 1) throw new Error('notification_log unreachable'); return { error: null } } }) } as never
+      reset()
+      const tAfter = await withFetch(async () => new Response('{"sid":"SM1"}', { status: 200 }), () =>
+        runChaseCron<OutageItem, { policy: typeof P }>(sbBoom, {
+          items: [mkItem()], template: 'estimate_followup', errorLabel: 'follow-up failed',
+          loadContext: async () => ({ policy: P }),
+          enabled: () => true,
+          due: q => dueForAutoFollowUp(q as unknown as Quote, P),
+          claim: async q => {
+            const seen = q.follow_up_count ?? 0
+            if (db.follow_up_count !== seen) return false
+            db.follow_up_count = seen + 1; db.last_followed_up_at = new Date().toISOString()
+            return true
+          },
+          refund: async q => {
+            const seen = q.follow_up_count ?? 0
+            if (db.follow_up_count === seen + 1) db.follow_up_count = seen
+          },
+          render: async () => ({ smsText: 's', emailSubject: 'x', emailHtml: 'h', emailText: 't' }),
+        }))
+      check('outage', 'throw AFTER a send: attempt stays SPENT (no double-chase)', db.follow_up_count, 1)
+      check('outage', '➜ still reported failed (the log write really did fail)', tAfter.failed, 1)
+    }
+
     // ── The refund CAS cannot clobber a concurrent run ──
     // Another run has since re-claimed the row (count moved past what our claim
     // wrote). Our refund must match nothing rather than hand back an attempt someone

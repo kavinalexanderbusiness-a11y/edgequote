@@ -24,11 +24,13 @@ export const maxDuration = 300
 interface CronCustomer { name: string; phone: string | null; email: string | null; sms_opt_in: boolean; email_opt_in: boolean; message_prefs?: MessagePrefs | null; reviewed_at: string | null; review_declined_at: string | null }
 interface CronJob { id: string; user_id: string; customer_id: string | null; scheduled_date: string; customers: CronCustomer | null }
 
-// Blast-radius guard, applied to each batch's scan. Truncating is SAFE here:
-// alreadySent() is the dedupe, so a job this run never reached is simply picked up
-// by the next run — nothing is skipped, only deferred. (A reminder for tomorrow
-// still has every run until tomorrow.) Do not "fix" this by removing the cap; an
-// unbounded scan is what makes a run time out mid-batch.
+// Blast-radius guard, applied to each batch's scan. Unlike the chasers, truncation
+// here is NOT harmless: both batches key off a specific date ('tomorrow',
+// 'yesterday'), and the next daily run looks at a different date — so a job past
+// the cap loses its reminder for good. That is exactly why the cap warns loudly.
+// It is still the right trade: without it the run is killed mid-batch by the
+// platform timeout and sends FEWER, at an arbitrary cut-off, silently. 500 jobs on
+// one date is far beyond a single crew's day; if this ever warns, raise the cap.
 const MAX_PER_RUN = 500
 
 export async function GET(req: NextRequest) {
@@ -148,7 +150,9 @@ export async function GET(req: NextRequest) {
   await runBatch(revRows.slice(0, MAX_PER_RUN), 'review_request')
 
   const truncated = remTruncated || revTruncated
-  if (truncated) console.warn(`[cron/notifications] hit MAX_PER_RUN=${MAX_PER_RUN} (reminders: ${remTruncated}, reviews: ${revTruncated}); the rest go out on the next run.`)
+  // Not "we'll get them next run" — tomorrow's reminders and yesterday's review
+  // requests have no next run. Raise the cap.
+  if (truncated) console.warn(`[cron/notifications] hit MAX_PER_RUN=${MAX_PER_RUN} (reminders: ${remTruncated}, reviews: ${revTruncated}) — jobs past the cap were NOT messaged and this date will not be revisited.`)
   const summary = { ok: true, sent, skipped, errors, truncated }
   // Log only when there was something to do, so quiet runs stay quiet in the logs.
   if (remRows.length || revRows.length) console.log('[cron/notifications] run:', JSON.stringify(summary))
