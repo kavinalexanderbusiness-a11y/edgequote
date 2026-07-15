@@ -16,6 +16,9 @@ export type MsgType =
   | 'receipt'
   // CRM growth campaigns (lib/crm/campaigns — driven by /api/cron/campaigns).
   | 'birthday' | 'anniversary' | 'win_back' | 'marketing'
+  // Asks a happy customer to refer a neighbour, and a seasonal service offer.
+  // Both are CEMs — see msgCategory(), which files them under marketing/seasonal.
+  | 'referral_request' | 'seasonal_offer'
   // Standard business announcement — introduction / new phone number.
   | 'introduction'
   // Free-form one-off message (the shared Send Message dialog's blank slate).
@@ -44,6 +47,8 @@ export const MSG_LABELS: Record<MsgType, string> = {
   anniversary: 'Anniversary greeting',
   win_back: 'Win-back / re-engagement',
   marketing: 'Marketing check-in',
+  referral_request: 'Referral request',
+  seasonal_offer: 'Seasonal offer',
   introduction: 'Introduction / new number',
   custom: 'Custom message',
 }
@@ -286,6 +291,28 @@ If there's anything we can help with around your property this season, simply re
 
 Thank you for being a valued customer!`,
 
+  referral_request: `Hi {{first_name}},
+
+It's been a pleasure looking after your property, and we're glad you're happy with the work.
+
+If you know a neighbour who could use a hand with theirs, we'd be grateful if you passed our name along. Most of our work comes from customers kind enough to do exactly that.
+
+Just reply to this message and we'll take good care of them.
+
+Thank you!
+
+— {{business_name}}`,
+
+  seasonal_offer: `Hi {{first_name}},
+
+It's that time of year again, and we're booking visits now.
+
+If you'd like us to take care of your property this season, simply reply to this message and we'll get you on the schedule.
+
+Thank you for being a valued customer!
+
+— {{business_name}}`,
+
   custom: `Hi {{first_name}},
 
 `,
@@ -300,6 +327,7 @@ const SUBJECTS: Record<MsgType, string> = {
   estimate_reminder: 'Your upcoming estimate', payment_reminder: 'Invoice reminder', estimate_followup: 'Following up on your quote',
   receipt: 'Payment received — thank you',
   birthday: 'Happy birthday!', anniversary: 'Thank you', win_back: 'We’d love to see you again', marketing: 'A quick hello',
+  referral_request: 'A small favour?', seasonal_offer: 'Booking now for the season',
   introduction: 'Our new number — please save it',
   custom: '', // falsy → renderMessage falls back to "A message from {business}"
 }
@@ -387,9 +415,19 @@ export function renderBody(rawBody: string, vars: MsgVars, subject: string): Ren
 }
 
 // Resolve the owner's custom template (if any) else the default, and fill it in.
-export function renderMessage(type: MsgType, custom: Partial<Record<MsgType, string>> | null | undefined, vars: MsgVars): RenderedMessage {
+// `subjectOverride` lets a caller that owns its own subject line (a campaign with
+// an owner-written subject) reuse this resolver instead of re-implementing the
+// custom-vs-default merge; blank/absent falls back to the type's stock subject.
+export function renderMessage(
+  type: MsgType,
+  custom: Partial<Record<MsgType, string>> | null | undefined,
+  vars: MsgVars,
+  subjectOverride?: string | null,
+): RenderedMessage {
   const tpl = (custom && custom[type] && custom[type]!.trim()) ? custom[type]! : DEFAULT_TEMPLATES[type]
-  const subject = SUBJECTS[type] || `A message from ${vars.businessName || 'your service provider'}`
+  const subject = subjectOverride?.trim()
+    || SUBJECTS[type]
+    || `A message from ${vars.businessName || 'your service provider'}`
   return renderBody(tpl, vars, subject)
 }
 
@@ -434,14 +472,24 @@ export const MSG_CATEGORY_LABELS: Record<MsgCategory, string> = {
   seasonal: 'Seasonal reminders',
 }
 
+// EVERY MsgType is listed explicitly and there is deliberately NO `default:`.
+// A default would silently file any new template under 'reminders' — a service
+// category no marketing opt-out gates — so a new campaign type could blast
+// customers who opted OUT of marketing. Without the default, TypeScript fails
+// the build on an unhandled MsgType and forces the choice to be made here.
 export function msgCategory(t: MsgType): MsgCategory | null {
   switch (t) {
     case 'invoice': case 'payment_reminder': case 'receipt': return 'invoices'
     case 'quote': case 'estimate_reminder': case 'estimate_followup': return 'estimates'
-    case 'marketing': case 'introduction': case 'win_back': return 'marketing'
-    case 'birthday': case 'anniversary': return 'seasonal'
+    case 'marketing': case 'introduction': case 'win_back': case 'referral_request': return 'marketing'
+    case 'birthday': case 'anniversary': case 'seasonal_offer': return 'seasonal'
     case 'custom': return null // owner-composed one-offs are always deliverable
-    default: return 'reminders' // every service-timing message (reminder, on_my_way, eta, …)
+    // Service-timing messages: tied to a visit the customer booked, so they ride
+    // the channel opt-in rather than the marketing preference.
+    case 'on_my_way': case 'running_late': case 'arrived': case 'job_complete':
+    case 'thanks': case 'review_request': case 'reminder': case 'eta':
+    case 'rain_delay': case 'rescheduled': case 'early_arrival': case 'confirm':
+      return 'reminders'
   }
 }
 
