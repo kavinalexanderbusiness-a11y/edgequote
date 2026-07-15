@@ -15,6 +15,7 @@ import { needsFollowUp } from '@/lib/followup'
 import { localTodayISO, formatCurrency, formatDate, cn } from '@/lib/utils'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { SkeletonTiles } from '@/components/ui/Skeleton'
+import { StatTile } from '@/components/ui/StatTile'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Banner } from '@/components/ui/Banner'
 import {
@@ -154,20 +155,11 @@ export default function WeeklyReviewPage() {
 
       {/* The week in numbers */}
       <div className="grid grid-cols-3 gap-3">
-        <Card className="p-4">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-muted flex items-center gap-1.5"><DollarSign className="w-3.5 h-3.5 text-accent" /> Revenue earned</p>
-          <p className="text-2xl font-bold text-accent mt-1 tabular-nums">{formatCurrency(m.revenue)}</p>
-        </Card>
-        <Card className="p-4">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-muted flex items-center gap-1.5"><CalendarCheck className="w-3.5 h-3.5" /> Jobs completed</p>
-          <p className="text-2xl font-bold text-ink mt-1 tabular-nums">{m.completedCount}{m.missed > 0 && <span className="text-sm font-semibold text-amber-400"> · {m.missed} open</span>}</p>
-        </Card>
-        <Card className="p-4">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-muted flex items-center gap-1.5"><Gauge className="w-3.5 h-3.5" /> Avg route grade</p>
-          {m.avgGrade ? (
-            <p className="text-2xl font-black mt-1" style={{ color: GRADE_COLORS[m.avgGrade] }}>{m.avgGrade}</p>
-          ) : <p className="text-2xl font-bold text-ink-faint mt-1">—</p>}
-        </Card>
+        <StatTile icon={DollarSign} label="Revenue earned" value={formatCurrency(m.revenue)} accent />
+        <StatTile icon={CalendarCheck} label="Jobs completed"
+          value={<>{m.completedCount}{m.missed > 0 && <span className="text-sm font-semibold text-amber-400"> · {m.missed} open</span>}</>} />
+        <StatTile icon={Gauge} label="Avg route grade"
+          value={m.avgGrade ? <span style={{ color: GRADE_COLORS[m.avgGrade] }}>{m.avgGrade}</span> : '—'} />
       </div>
 
       {/* Best / worst neighborhood this week */}
@@ -209,8 +201,10 @@ export default function WeeklyReviewPage() {
 
       {/* Next week's moves */}
       <Card>
-        <div className="px-4 py-3 border-b border-border">
-          <h2 className="text-sm font-semibold text-ink">Next week&apos;s moves</h2>
+        <div className="px-4 py-3 border-b border-border flex items-center gap-2">
+          <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><CalendarCheck className="w-3.5 h-3.5 text-accent" /></span>
+          <h2 className="text-sm font-semibold text-ink tracking-tight">Next week&apos;s moves</h2>
+          <span className="flex-1 h-px bg-border" aria-hidden />
         </div>
         <CardBody className="p-0">
           <div className="divide-y divide-border">

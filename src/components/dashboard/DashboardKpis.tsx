@@ -28,12 +28,12 @@ export function DashboardKpis({ collected, outstanding, jobsThisMonth, conversio
           className="block rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
           <Card className="p-4 h-full card-lift">
             <div className="flex items-center justify-between mb-2">
-              <p className="text-[11px] font-semibold text-ink-muted uppercase tracking-wide">{label}</p>
+              <p className="text-[10px] font-semibold text-ink-faint uppercase tracking-wide">{label}</p>
               <div className={`w-7 h-7 rounded-lg ${bg} flex items-center justify-center`}>
                 <Icon className={`w-3.5 h-3.5 ${color}`} />
               </div>
             </div>
-            <p className="text-xl font-bold text-ink tracking-tight tabular-nums">{value}</p>
+            <p className="text-xl font-black text-ink tracking-tight tabular-nums">{value}</p>
             <p className="text-[11px] text-ink-faint mt-0.5">{sub}</p>
           </Card>
         </Link>

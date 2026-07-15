@@ -252,9 +252,10 @@ export default function RoutesPage() {
           {route && route.ordered.length > 0 && (
             <Card>
               <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-                <Navigation className="w-4 h-4 text-accent" />
-                <h2 className="text-sm font-semibold text-ink">Route breakdown</h2>
-                <span className="ml-auto text-xs text-ink-faint">arrival · value · leg</span>
+                <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><Navigation className="w-3.5 h-3.5 text-accent" /></span>
+                <h2 className="text-sm font-semibold text-ink tracking-tight">Route breakdown</h2>
+                <span className="flex-1 h-px bg-border" aria-hidden />
+                <span className="text-xs text-ink-faint">arrival · value · leg</span>
               </div>
               <CardBody className="space-y-2">
                 <div className="flex items-center gap-3 p-2.5 rounded-xl bg-surface border border-border">

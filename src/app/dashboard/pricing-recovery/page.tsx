@@ -261,8 +261,8 @@ export default function PricingRecoveryPage() {
   }
 
   if (loading) return (
-    <div className="max-w-4xl space-y-6">
-      <PageHeader title="Pricing Recovery" description="Find unpriced work so reports and growth features run on real revenue" />
+    <div className="max-w-5xl mx-auto space-y-6">
+      <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Pricing Recovery" description="Find unpriced work so reports and growth features run on real revenue" />
       <SkeletonTiles count={4} />
     </div>
   )

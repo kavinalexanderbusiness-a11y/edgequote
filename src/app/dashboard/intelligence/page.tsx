@@ -222,7 +222,7 @@ function Section({ title, icon: Icon, children }: { title: string; icon: typeof 
         <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
           <Icon className="w-3.5 h-3.5 text-accent" />
         </span>
-        <p className="text-sm font-bold tracking-tight text-ink">{title}</p>
+        <p className="text-sm font-semibold tracking-tight text-ink">{title}</p>
         <span className="flex-1 h-px bg-border" aria-hidden />
       </div>
       {children}

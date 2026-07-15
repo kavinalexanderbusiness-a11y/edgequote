@@ -323,7 +323,7 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
 
 function ReportStat({ label, value, tone }: { label: string; value: number; tone?: string }) {
   return (
-    <div className="rounded-xl border border-border bg-bg-secondary px-3 py-2">
+    <div className="rounded-card border border-border bg-bg-secondary px-3 py-2">
       <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
       <p className={cn('text-lg font-bold tabular-nums', tone || 'text-ink')}>{value}</p>
     </div>

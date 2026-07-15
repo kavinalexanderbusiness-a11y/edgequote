@@ -11,7 +11,7 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { StatTile } from '@/components/ui/StatTile'
 import { EmptyState } from '@/components/ui/EmptyState'
-import { Skeleton } from '@/components/ui/Skeleton'
+import { Skeleton, SkeletonTiles } from '@/components/ui/Skeleton'
 import { Phone, MessageSquare, FileText, CalendarPlus, HeartPulse, DollarSign, Percent, TrendingUp, AlertTriangle, Repeat } from 'lucide-react'
 
 interface JobLite { customer_id: string | null; scheduled_date: string; status: string; service_type: string | null; quote_id: string | null; recurrence_id: string | null; price: number | null }
@@ -231,9 +231,7 @@ export default function ReactivationPage() {
     return (
       <div className="max-w-5xl mx-auto space-y-6">
         <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Customer Reactivation" description="Win back customers you already paid to acquire." />
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3" aria-hidden>
-          {[0, 1, 2, 3].map(i => <Card key={i} className="p-4"><Skeleton className="h-3 w-20" /><Skeleton className="h-7 w-16 mt-2" /></Card>)}
-        </div>
+        <SkeletonTiles count={4} />
         <Card className="p-5"><Skeleton className="h-4 w-48" /><Skeleton className="h-3 w-72 mt-2.5" /></Card>
       </div>
     )
@@ -275,6 +273,7 @@ export default function ReactivationPage() {
         return (
           <div key={b.key} className="space-y-3">
             <div className="flex items-center gap-2">
+              <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><AlertTriangle className="w-3.5 h-3.5 text-accent" /></span>
               <h2 className={`text-sm font-semibold tracking-tight ${b.tone}`}>{b.label}</h2>
               <span className="text-xs text-ink-faint tabular-nums">{b.sub} · {list.length} customer{list.length !== 1 ? 's' : ''} · {formatCurrency(list.reduce((s, r) => s + r.potentialRecovery, 0))} potential</span>
               <span className="flex-1 h-px bg-border" aria-hidden />

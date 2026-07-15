@@ -501,7 +501,7 @@ export default function MessagesPage() {
                     <p className="text-sm font-bold text-ink truncate flex items-center gap-1.5">
                       {sel.pinned_at && <Pin className="w-3 h-3 text-accent shrink-0" />}{nameOf(sel)}
                       {sel.lead_status === 'new' && <span className="text-[10px] font-bold uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded-full px-2 py-0.5 flex items-center gap-0.5"><Globe className="w-2.5 h-2.5" /> Website Lead</span>}
-                      {sel.archived_at && <span className="text-[10px] font-semibold uppercase text-ink-faint border border-border rounded-full px-2 py-0.5">Archived</span>}
+                      {sel.archived_at && <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint border border-border rounded-full px-2 py-0.5">Archived</span>}
                       {sel.muted && <BellOff className="w-3 h-3 text-ink-faint shrink-0" />}
                     </p>
                     {phoneOf(sel) && <p className="text-[11px] text-ink-faint">{phoneOf(sel)}</p>}

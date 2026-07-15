@@ -315,7 +315,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
               <button key={t.key} onClick={() => { if (t.key === 'documents') setDocsCat('all'); setTab(t.key) }}
                 className={cn('shrink-0 flex items-center gap-1.5 text-xs font-medium rounded-full px-3 py-2 border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
                   tab === t.key ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
-                <t.icon className="w-3.5 h-3.5" /> {t.label}{t.n != null && t.n > 0 && <span className="opacity-70">{t.n}</span>}
+                <t.icon className="w-3.5 h-3.5" /> {t.label}{t.n != null && t.n > 0 && <span className="opacity-70 tabular-nums">{t.n}</span>}
               </button>
             ))}
           </div>
@@ -385,7 +385,7 @@ const STATUS_META: Record<LiveStatus, { label: string; icon: typeof Play; tone: 
 }
 function StatusPill({ s }: { s: LiveStatus }) {
   const m = STATUS_META[s]
-  return <span className={cn('inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', m.tone)}><m.icon className="w-3 h-3" /> {m.label}</span>
+  return <span className={cn('inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border', m.tone)}><m.icon className="w-3 h-3" /> {m.label}</span>
 }
 function StatusStepper({ s }: { s: LiveStatus }) {
   const order: LiveStatus[] = ['scheduled', 'on_my_way', 'in_progress', 'completed']
@@ -432,7 +432,7 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
       {/* Quote awaiting approval — one tap to the Documents tab, pre-filtered to quotes */}
       {awaiting.length > 0 && (
         <button type="button" onClick={onReviewQuotes}
-          className="w-full text-left rounded-card border border-amber-500/30 bg-amber-500/10 p-4 hover:border-amber-500/50 transition-colors card-lift focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+          className="w-full text-left rounded-card border border-amber-500/30 bg-amber-500/10 p-4 hover:border-amber-500/50 active:scale-[0.99] transition-colors card-lift focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
               <div className="w-9 h-9 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-400 flex items-center justify-center shrink-0"><FileText className="w-4 h-4" /></div>
@@ -536,9 +536,9 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
       {/* Contact */}
       {biz && (biz.phone || biz.email_primary) && (
         <div className="flex flex-wrap gap-2">
-          {biz.phone && <a href={`tel:${biz.phone}`} className="flex-1 min-w-[120px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-secondary py-2.5 text-ink hover:border-border-strong"><Phone className="w-4 h-4 text-accent" /> Call</a>}
-          {biz.email_primary && <a href={`mailto:${biz.email_primary}`} className="flex-1 min-w-[120px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-secondary py-2.5 text-ink hover:border-border-strong"><Mail className="w-4 h-4 text-accent" /> Email</a>}
-          {biz.website && <a href={biz.website.startsWith('http') ? biz.website : `https://${biz.website}`} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-[120px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-secondary py-2.5 text-ink hover:border-border-strong"><Globe className="w-4 h-4 text-accent" /> Website</a>}
+          {biz.phone && <a href={`tel:${biz.phone}`} className="flex-1 min-w-[120px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-secondary py-2.5 text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><Phone className="w-4 h-4 text-accent" /> Call</a>}
+          {biz.email_primary && <a href={`mailto:${biz.email_primary}`} className="flex-1 min-w-[120px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-secondary py-2.5 text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><Mail className="w-4 h-4 text-accent" /> Email</a>}
+          {biz.website && <a href={biz.website.startsWith('http') ? biz.website : `https://${biz.website}`} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-[120px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-secondary py-2.5 text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><Globe className="w-4 h-4 text-accent" /> Website</a>}
         </div>
       )}
     </div>
@@ -740,7 +740,7 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, busines
           <button key={c.key} onClick={() => setCat(c.key)} type="button"
             className={cn('text-xs font-medium rounded-full px-3 py-1.5 border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
               cat === c.key ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink')}>
-            {c.label}{c.n > 0 && <span className="opacity-70"> {c.n}</span>}
+            {c.label}{c.n > 0 && <span className="opacity-70 tabular-nums"> {c.n}</span>}
           </button>
         ))}
       </div>
@@ -935,7 +935,7 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
       <div className="rounded-card border border-border bg-bg-secondary p-4 space-y-3">
         <p className="text-[10px] uppercase tracking-[0.14em] text-ink-faint font-semibold">Ways to pay</p>
         <div className="flex items-start gap-3">
-          <span className="text-lg leading-none" aria-hidden><CreditCard className="w-4 h-4" /></span>
+          <span aria-hidden><CreditCard className="w-4 h-4" /></span>
           <div className="min-w-0">
             <p className="text-sm font-semibold text-ink">Card</p>
             <p className="text-xs text-ink-muted">{paymentsEnabled ? 'Pay any invoice securely online with the Pay button.' : 'Ask us for a secure card payment link.'}</p>
@@ -946,7 +946,7 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
             never show a customer owner-facing setup instructions. */}
         {etransferEmail && (
         <div className="flex items-start gap-3 border-t border-border pt-3">
-          <span className="text-lg leading-none" aria-hidden><Landmark className="w-4 h-4" /></span>
+          <span aria-hidden><Landmark className="w-4 h-4" /></span>
           <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold text-ink">E-transfer</p>
             <p className="text-xs text-ink-muted">Recipient: <span className="font-medium text-ink">{business?.company_name || 'Your service provider'}</span></p>
@@ -973,7 +973,7 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
         </div>
         )}
         <div className="flex items-start gap-3 border-t border-border pt-3">
-          <span className="text-lg leading-none" aria-hidden><Banknote className="w-4 h-4" /></span>
+          <span aria-hidden><Banknote className="w-4 h-4" /></span>
           <div className="min-w-0">
             <p className="text-sm font-semibold text-ink">Cash</p>
             <p className="text-xs text-ink-muted">Pay in person at your next visit — we&rsquo;ll record it and send your receipt.</p>

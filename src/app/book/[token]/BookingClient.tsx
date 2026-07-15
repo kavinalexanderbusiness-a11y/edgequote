@@ -492,7 +492,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
             </div>
 
             {/* Order summary — echo the request back so the customer feels confident. */}
-            <div className="rounded-xl border border-border bg-bg-secondary divide-y divide-border text-sm">
+            <div className="rounded-card border border-border bg-bg-secondary divide-y divide-border text-sm">
               {(parsed?.formatted || parsed?.address) && <SummaryRow label="Address" value={parsed.formatted || parsed.address || ''} />}
               {plan && <SummaryRow label="Plan" value={`${plan.label} · ${formatCurrency(plan.price)}${plan.key !== 'one_time' ? '/visit' : ''}`} />}
               {sqft > 0 && <SummaryRow label="Lawn size" value={`~${sqft.toLocaleString()} sq ft`} />}
@@ -501,7 +501,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
             {quoteNumber && <p className="text-[11px] text-ink-faint text-center -mt-2">Keep your confirmation number for your records.</p>}
 
             {/* What happens next — the #1 anxiety point, answered with a concrete SLA. */}
-            <div className="rounded-xl border border-accent/25 bg-accent/[0.06] px-4 py-3.5">
+            <div className="rounded-card border border-accent/25 bg-accent/[0.06] px-4 py-3.5">
               <p className="text-xs font-semibold text-ink mb-1.5">What happens next</p>
               <p className="text-xs text-ink-muted leading-relaxed">
                 {biz.company_name || 'We'} will review your request and confirm your price and first visit — usually within one business day.{(email.trim() || phone.trim()) ? ` We’ll reach you by ${phone.trim() && email.trim() ? 'text and email' : phone.trim() ? 'text' : 'email'}.` : ''}

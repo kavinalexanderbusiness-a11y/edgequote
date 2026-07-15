@@ -869,22 +869,22 @@ export function QuoteBuilder({
             <CardBody className="space-y-3">
               <div className="flex items-center justify-between text-sm">
                 <span className="flex items-center gap-2 text-ink-muted"><Clock className="w-3.5 h-3.5" /> Hours</span>
-                <span className="text-ink font-medium">{Number(hours).toFixed(1)} hrs · {crewSize} crew</span>
+                <span className="text-ink font-medium tabular-nums">{Number(hours).toFixed(1)} hrs · {crewSize} crew</span>
               </div>
               <div className="border-t border-border pt-3 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-ink-muted">First visit{initialManual ? ' (manual)' : ''}</span>
-                  <span className="text-ink font-semibold">{formatCurrency(initialPrice)}</span>
+                  <span className="text-ink font-semibold tabular-nums">{formatCurrency(initialPrice)}</span>
                 </div>
                 {extras.net > 0 && (
                   <div className="flex items-center justify-between text-sm">
                     <span className="flex items-center gap-2 text-ink-muted"><Layers className="w-3.5 h-3.5" /> Additional services ({serviceLines.fields.length})</span>
-                    <span className="text-ink font-medium">{formatCurrency(extras.net)}</span>
+                    <span className="text-ink font-medium tabular-nums">{formatCurrency(extras.net)}</span>
                   </div>
                 )}
                 <div className="flex items-center justify-between text-sm">
                   <span className="flex items-center gap-2 text-ink-muted"><Car className="w-3.5 h-3.5" /> Travel{showTravelSeparately ? ' (shown)' : ''}</span>
-                  <span className="text-ink font-medium">{formatCurrency(Number(travelFee))}</span>
+                  <span className="text-ink font-medium tabular-nums">{formatCurrency(Number(travelFee))}</span>
                 </div>
                 <div className="flex items-center justify-between pt-2 border-t border-border">
                   <span className="text-sm font-semibold text-ink">First visit total</span>
@@ -894,9 +894,9 @@ export function QuoteBuilder({
               {(weeklyPrice > 0 || biweeklyPrice > 0 || monthlyPrice > 0) && (
                 <div className="border-t border-border pt-3 space-y-1.5">
                   <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Plan options</p>
-                  {weeklyPrice > 0 && <div className="flex justify-between text-sm"><span className="text-ink-muted">Weekly</span><span className="text-ink font-medium">{formatCurrency(weeklyPrice)}/visit</span></div>}
-                  {biweeklyPrice > 0 && <div className="flex justify-between text-sm"><span className="text-ink-muted">Bi-Weekly</span><span className="text-ink font-medium">{formatCurrency(biweeklyPrice)}/visit</span></div>}
-                  {monthlyPrice > 0 && <div className="flex justify-between text-sm"><span className="text-ink-muted">Monthly</span><span className="text-ink font-medium">{formatCurrency(monthlyPrice)}/visit</span></div>}
+                  {weeklyPrice > 0 && <div className="flex justify-between text-sm"><span className="text-ink-muted">Weekly</span><span className="text-ink font-medium tabular-nums">{formatCurrency(weeklyPrice)}/visit</span></div>}
+                  {biweeklyPrice > 0 && <div className="flex justify-between text-sm"><span className="text-ink-muted">Bi-Weekly</span><span className="text-ink font-medium tabular-nums">{formatCurrency(biweeklyPrice)}/visit</span></div>}
+                  {monthlyPrice > 0 && <div className="flex justify-between text-sm"><span className="text-ink-muted">Monthly</span><span className="text-ink font-medium tabular-nums">{formatCurrency(monthlyPrice)}/visit</span></div>}
                 </div>
               )}
               <div className="pt-2 space-y-2">

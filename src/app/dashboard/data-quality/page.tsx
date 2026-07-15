@@ -249,7 +249,7 @@ export default function DataQualityPage() {
   }
 
   if (loading) return (
-    <div className="max-w-3xl space-y-6">
+    <div className="max-w-5xl mx-auto space-y-6">
       <PageHeader title="Data Quality" description="Make the data clean and trustworthy before growth features rely on it" />
       <SkeletonTiles count={4} />
     </div>
@@ -465,8 +465,8 @@ export default function DataQualityPage() {
         <Card>
           <CardBody className="space-y-3">
             <div className="flex items-center gap-2">
-              <DollarSign className="w-4 h-4 text-amber-400" />
-              <h2 className="text-sm font-semibold text-ink">Pricing &amp; quote gaps</h2>
+              <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><DollarSign className="w-3.5 h-3.5 text-accent" /></span>
+              <h2 className="text-sm font-semibold text-ink tracking-tight">Pricing &amp; quote gaps</h2>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <StatTile label="Jobs missing a price" value={m.jobsNoPrice} sub={`of ${jobs.length} jobs`} />

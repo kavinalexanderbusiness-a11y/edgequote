@@ -1519,8 +1519,9 @@ export default function SchedulePage() {
             <button
               key={v}
               onClick={() => setView(v)}
+              aria-pressed={view === v}
               className={cn(
-                'px-3 py-1.5 rounded-lg text-sm font-medium capitalize transition-all',
+                'px-3 py-1.5 rounded-lg text-sm font-medium capitalize transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
                 view === v ? 'bg-accent text-black' : 'text-ink-muted hover:text-ink'
               )}
             >
@@ -1602,7 +1603,7 @@ export default function SchedulePage() {
                 )}
               </div>
               <button onClick={() => setDismissedSuggestions(prev => new Set(prev).add(s.id))}
-                className="text-ink-faint hover:text-ink shrink-0" title="Dismiss" aria-label="Dismiss suggestion">
+                className="text-ink-faint hover:text-ink shrink-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" title="Dismiss" aria-label="Dismiss suggestion">
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>

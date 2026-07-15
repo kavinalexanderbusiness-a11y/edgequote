@@ -308,8 +308,9 @@ export default function SaturationPage() {
       {(m.intel.revenue || m.intel.density || m.intel.recurring || m.intel.conversion || m.intel.growth) && (
         <Card>
           <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-            <Trophy className="w-4 h-4 text-accent" />
-            <h2 className="text-sm font-semibold text-ink">Neighborhood intelligence</h2>
+            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><Trophy className="w-3.5 h-3.5 text-accent" /></span>
+            <h2 className="text-sm font-semibold text-ink tracking-tight">Neighborhood intelligence</h2>
+            <span className="flex-1 h-px bg-border" aria-hidden />
           </div>
           <CardBody className="p-0">
             <div className="divide-y divide-border">
@@ -328,8 +329,9 @@ export default function SaturationPage() {
         {/* Where to get more customers */}
         <Card>
           <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-            <Sprout className="w-4 h-4 text-violet-400" />
-            <h2 className="text-sm font-semibold text-ink">Where to get more customers</h2>
+            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><Sprout className="w-3.5 h-3.5 text-accent" /></span>
+            <h2 className="text-sm font-semibold text-ink tracking-tight">Where to get more customers</h2>
+            <span className="flex-1 h-px bg-border" aria-hidden />
           </div>
           <CardBody className="space-y-2.5">
             {m.opportunities.length === 0 ? (
@@ -354,8 +356,9 @@ export default function SaturationPage() {
         {/* Best neighborhoods */}
         <Card>
           <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-            <Trophy className="w-4 h-4 text-amber-400" />
-            <h2 className="text-sm font-semibold text-ink">Best neighborhoods</h2>
+            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><Trophy className="w-3.5 h-3.5 text-accent" /></span>
+            <h2 className="text-sm font-semibold text-ink tracking-tight">Best neighborhoods</h2>
+            <span className="flex-1 h-px bg-border" aria-hidden />
           </div>
           <CardBody className="space-y-2.5">
             {m.best.length === 0 ? (
@@ -386,8 +389,9 @@ export default function SaturationPage() {
       <div className="grid lg:grid-cols-2 gap-4">
         <Card>
           <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-            <TrendingUp className="w-4 h-4 text-emerald-400" />
-            <h2 className="text-sm font-semibold text-ink">Strongest routes</h2>
+            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><TrendingUp className="w-3.5 h-3.5 text-accent" /></span>
+            <h2 className="text-sm font-semibold text-ink tracking-tight">Strongest routes</h2>
+            <span className="flex-1 h-px bg-border" aria-hidden />
           </div>
           <CardBody className="space-y-2">
             {m.strongest.length === 0 ? <InlineEmpty className="py-4">Not enough multi-stop days yet.</InlineEmpty>
@@ -396,8 +400,9 @@ export default function SaturationPage() {
         </Card>
         <Card>
           <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-            <TrendingDown className="w-4 h-4 text-red-400" />
-            <h2 className="text-sm font-semibold text-ink">Weakest routes</h2>
+            <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><TrendingDown className="w-3.5 h-3.5 text-accent" /></span>
+            <h2 className="text-sm font-semibold text-ink tracking-tight">Weakest routes</h2>
+            <span className="flex-1 h-px bg-border" aria-hidden />
           </div>
           <CardBody className="space-y-2">
             {m.weakest.length === 0 ? <InlineEmpty className="py-4">Nothing weak enough to flag.</InlineEmpty>

@@ -23,7 +23,7 @@ import { invoiceTotals, applyDiscount, type DiscountType } from '@/lib/invoiceTo
 import { toast as notify } from '@/lib/toast'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
-import { FileText, User, Check, FileDown, Trash2, CreditCard, Zap, AlertTriangle, Pencil, Percent, DollarSign, X, MessageSquare, MoreHorizontal } from 'lucide-react'
+import { FileText, User, Check, FileDown, Trash2, CreditCard, Zap, AlertTriangle, Pencil, Percent, DollarSign, X, MessageSquare, MoreHorizontal, ChevronDown } from 'lucide-react'
 
 const FILTERS: { value: '' | InvoiceDisplayStatus; label: string }[] = [
   { value: '', label: 'All' },
@@ -304,7 +304,7 @@ export default function InvoicesPage() {
             <Card className={cn(filter === 'draft' && 'border-accent/50')}>
               <CardBody>
                 <p className="text-[10px] text-ink-faint uppercase tracking-wide font-semibold mb-1">Drafts to review</p>
-                <p className={cn('text-2xl font-bold tracking-tight tabular-nums', drafts.length ? 'text-sky-400' : 'text-ink-faint')}>{drafts.length ? formatCurrency(draftsTotal) : '—'}</p>
+                <p className={cn('text-xl font-black tracking-tight tabular-nums', drafts.length ? 'text-sky-400' : 'text-ink-faint')}>{drafts.length ? formatCurrency(draftsTotal) : '—'}</p>
                 {drafts.length > 0 && <p className="text-[11px] text-ink-faint mt-0.5">{drafts.length} draft{drafts.length !== 1 ? 's' : ''} — tap to review</p>}
               </CardBody>
             </Card>
@@ -312,13 +312,15 @@ export default function InvoicesPage() {
           <Card>
             <CardBody>
               <p className="text-[10px] text-ink-faint uppercase tracking-wide font-semibold mb-1">Outstanding</p>
-              <p className="text-2xl font-bold tracking-tight tabular-nums text-amber-400">{formatCurrency(outstanding)}</p>
+              <p className="text-xl font-black tracking-tight tabular-nums text-amber-400">{formatCurrency(outstanding)}</p>
+              <p className="text-[11px] text-ink-faint mt-0.5">Billed, unpaid</p>
             </CardBody>
           </Card>
           <Card>
             <CardBody>
               <p className="text-[10px] text-ink-faint uppercase tracking-wide font-semibold mb-1">Collected</p>
-              <p className="text-2xl font-bold tracking-tight tabular-nums text-accent">{formatCurrency(paidTotal)}</p>
+              <p className="text-xl font-black tracking-tight tabular-nums text-emerald-400">{formatCurrency(paidTotal)}</p>
+              <p className="text-[11px] text-ink-faint mt-0.5">Payments received</p>
             </CardBody>
           </Card>
         </div>
@@ -459,7 +461,7 @@ export default function InvoicesPage() {
                             >
                               {ds === 'paid' && <Check className="w-3 h-3" />}
                               {INVOICE_STATUS_LABELS[ds]}
-                              {clickable && <span aria-hidden className="opacity-60">▾</span>}
+                              {clickable && <ChevronDown aria-hidden className="w-3 h-3 opacity-60" />}
                             </button>
                           )}
                         </Menu>
@@ -651,12 +653,12 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
           <div className="mt-1.5 space-y-1.5">
             {items.map((li, i) => (
               <div key={i} className="flex items-center gap-2">
-                <input value={li.description} placeholder="Description"
+                <input value={li.description} placeholder="Description" aria-label="Line item description"
                   onChange={e => setItems(prev => prev.map((x, j) => j === i ? { ...x, description: e.target.value } : x))}
                   className="flex-1 bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20" />
                 <div className="relative w-28">
-                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-faint text-sm">$</span>
-                  <input type="number" min="0" step="1" value={li.amount}
+                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-faint text-sm" aria-hidden="true">$</span>
+                  <input type="number" min="0" step="1" value={li.amount} aria-label="Line item amount"
                     onChange={e => setItems(prev => prev.map((x, j) => j === i ? { ...x, amount: e.target.value } : x))}
                     className="w-full bg-bg-tertiary border border-border-strong rounded-lg pl-6 pr-2 py-2 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20" />
                 </div>

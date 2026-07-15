@@ -50,7 +50,7 @@ export default function LoginPage() {
         <div className="absolute w-[400px] h-[400px] rounded-full bg-blue-500 opacity-[0.04] blur-[120px] -top-20 -right-20" />
       </div>
 
-      <div className="w-full max-w-sm relative">
+      <main className="w-full max-w-sm relative">
         {/* Logo */}
         <div className="flex flex-col items-center mb-8">
           {brand.url ? (
@@ -62,7 +62,7 @@ export default function LoginPage() {
               <Zap className="w-6 h-6 text-black fill-black" />
             </div>
           )}
-          <h1 className="text-xl font-bold text-ink">EdgeQuote AI</h1>
+          <h1 className="text-xl font-bold tracking-tight text-ink">EdgeQuote AI</h1>
           <p className="text-sm text-ink-muted mt-1">Edge Property Services — Internal Tool</p>
         </div>
 
@@ -102,7 +102,7 @@ export default function LoginPage() {
         <p className="text-center text-xs text-ink-faint mt-6">
           Internal tool — not publicly accessible
         </p>
-      </div>
+      </main>
     </div>
   )
 }

@@ -6,7 +6,7 @@ import { measurementStats, MeasureStats } from '@/lib/autoMeasure'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { StatTile } from '@/components/ui/StatTile'
-import { EmptyState } from '@/components/ui/EmptyState'
+import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { SkeletonTiles } from '@/components/ui/Skeleton'
 import { Ruler, TrendingUp, Target, MapPin, Gauge } from 'lucide-react'
 
@@ -103,7 +103,7 @@ function HoodList({ title, rows }: { title: string; rows: { neighborhood: string
         <span className="flex-1 h-px bg-border" aria-hidden />
       </div>
       {rows.length === 0 ? (
-        <p className="text-xs text-ink-muted">Need ≥3 measurements in an area to rank it.</p>
+        <InlineEmpty className="py-3">Need ≥3 measurements in an area to rank it.</InlineEmpty>
       ) : (
         <div className="divide-y divide-border">
           {rows.map(h => (

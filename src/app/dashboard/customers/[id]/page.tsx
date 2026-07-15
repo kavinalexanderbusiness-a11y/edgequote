@@ -29,7 +29,7 @@ import { InlineEmpty } from '@/components/ui/EmptyState'
 import { Button } from '@/components/ui/Button'
 import { Textarea } from '@/components/ui/Textarea'
 import { SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
-import { formatCurrency, formatDate, getInitials } from '@/lib/utils'
+import { formatCurrency, formatDate, getInitials, cn } from '@/lib/utils'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { CustomerComms } from '@/components/customers/CustomerComms'
 import { CommsHealth } from '@/components/customers/CommsHealth'
@@ -41,7 +41,7 @@ import {
   Phone, MessageSquare, FilePlus, CalendarPlus, Mail, MapPin, Repeat,
   FileText, Send, RotateCw, CheckCircle2, Wrench, Receipt, DollarSign, Sparkles, Users,
   Edit2, ExternalLink, Ruler, AlertTriangle, StickyNote, Wallet, Timer, CalendarClock,
-  Link2, Check, Cake, PartyPopper, Camera,
+  Link2, Check, Cake, PartyPopper, Camera, History,
 } from 'lucide-react'
 
 const WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
@@ -83,6 +83,19 @@ const EVENT_META: Record<TimelineEvent['kind'], { icon: typeof FileText; color: 
   message_out:     { icon: Send,         color: 'text-ink-muted bg-surface border-border' },
   payment:         { icon: DollarSign,   color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' },
   portal_request:  { icon: StickyNote,   color: 'text-amber-400 bg-amber-500/10 border-amber-500/20' },
+}
+
+// At-a-glance messaging eligibility beside a contact method: whether this channel
+// is allowed to send. No silent guessing — the profile says on or off.
+function ConsentBadge({ on, label }: { on: boolean; label: string }) {
+  return (
+    <span
+      title={on ? `${label} allowed — automatic and one-tap messages can send.` : `${label} off — turn it on in Communication below to message this customer here.`}
+      className={cn('text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 border shrink-0',
+        on ? 'text-emerald-400 border-emerald-500/25 bg-emerald-500/10' : 'text-ink-faint border-border bg-bg-tertiary')}>
+      {label} {on ? 'on' : 'off'}
+    </span>
+  )
 }
 
 export default function CustomerDetailPage() {
@@ -522,8 +535,18 @@ export default function CustomerDetailPage() {
                 )}
               </div>
               <div className="flex items-center gap-x-4 gap-y-1 mt-1 flex-wrap text-sm">
-                {customer.phone && <a href={`tel:${customer.phone}`} className="flex items-center gap-1 text-accent hover:underline"><Phone className="w-3.5 h-3.5" />{customer.phone}</a>}
-                {customer.email && <a href={`mailto:${customer.email}`} className="flex items-center gap-1 text-ink-muted hover:text-ink"><Mail className="w-3.5 h-3.5" />{customer.email}</a>}
+                {customer.phone && (
+                  <span className="flex items-center gap-1.5">
+                    <a href={`tel:${customer.phone}`} className="flex items-center gap-1 text-accent hover:underline"><Phone className="w-3.5 h-3.5" />{customer.phone}</a>
+                    <ConsentBadge on={!!customer.sms_opt_in} label="Texts" />
+                  </span>
+                )}
+                {customer.email && (
+                  <span className="flex items-center gap-1.5">
+                    <a href={`mailto:${customer.email}`} className="flex items-center gap-1 text-ink-muted hover:text-ink"><Mail className="w-3.5 h-3.5" />{customer.email}</a>
+                    <ConsentBadge on={!!customer.email_opt_in} label="Email" />
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-x-3 gap-y-1 mt-1.5 flex-wrap">
                 {customer.acquisition_source && (
@@ -798,7 +821,10 @@ export default function CustomerDetailPage() {
       <div className="grid lg:grid-cols-2 gap-6">
         {/* Timeline */}
         <Card>
-          <CardHeader><h2 className="text-sm font-semibold text-ink">Timeline</h2></CardHeader>
+          <CardHeader className="flex items-center gap-2">
+            <History className="w-4 h-4 text-accent" />
+            <h2 className="text-sm font-semibold text-ink">Timeline</h2>
+          </CardHeader>
           <CardBody>
             {events.length === 0 ? (
               <InlineEmpty className="py-6">No history yet.</InlineEmpty>
@@ -839,12 +865,12 @@ export default function CustomerDetailPage() {
             ) : properties.map(p => {
               const jobCount = jobs.filter(j => j.property_id === p.id).length
               const measures = [
-                p.lawn_sqft != null && `Lawn ${p.lawn_sqft} ft²`,
-                p.fence_length != null && `Fence ${p.fence_length} ft`,
-                p.mulch_area != null && `Mulch ${p.mulch_area} ft²`,
-                p.rock_area != null && `Rock ${p.rock_area} ft²`,
-                p.driveway_area != null && `Driveway ${p.driveway_area} ft²`,
-                p.lot_size != null && `Lot ${p.lot_size} ft²`,
+                p.lawn_sqft != null && `Lawn ${Number(p.lawn_sqft).toLocaleString()} ft²`,
+                p.fence_length != null && `Fence ${Number(p.fence_length).toLocaleString()} ft`,
+                p.mulch_area != null && `Mulch ${Number(p.mulch_area).toLocaleString()} ft²`,
+                p.rock_area != null && `Rock ${Number(p.rock_area).toLocaleString()} ft²`,
+                p.driveway_area != null && `Driveway ${Number(p.driveway_area).toLocaleString()} ft²`,
+                p.lot_size != null && `Lot ${Number(p.lot_size).toLocaleString()} ft²`,
               ].filter(Boolean) as string[]
               const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p.address)}`
               return (

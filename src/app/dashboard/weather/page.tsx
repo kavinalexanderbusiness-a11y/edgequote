@@ -112,7 +112,7 @@ export default function WeatherPage() {
       {/* Days the owner manually marked unavailable — explained, not just skipped */}
       {r.blockedDays.length > 0 && (
         <Card className="p-4">
-          <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-2 flex items-center gap-1.5"><CalendarOff className="w-3.5 h-3.5" /> Days you&apos;ve marked off</p>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint mb-2 flex items-center gap-1.5"><CalendarOff className="w-3.5 h-3.5" /> Days you&apos;ve marked off</p>
           <div className="space-y-1">
             {r.blockedDays.map(b => (
               <p key={b.date} className="text-sm text-ink-muted">
@@ -132,7 +132,7 @@ export default function WeatherPage() {
 
       {/* 7-day outlook — rain %, wind, temp, severe, with a work-score colour */}
       <Card className="p-4">
-        <p className="text-[10px] uppercase tracking-wide text-ink-faint mb-2 flex items-center gap-1.5"><Droplets className="w-3.5 h-3.5" /> 7-day outlook</p>
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint mb-2 flex items-center gap-1.5"><Droplets className="w-3.5 h-3.5" /> 7-day outlook</p>
         <div className="flex items-end gap-1.5 h-28">
           {r.forecast.map(f => {
             const lvl = weatherScore(f).level
@@ -182,7 +182,11 @@ export default function WeatherPage() {
           </div>
 
           <div className="space-y-3">
-            <p className="text-sm font-bold text-ink flex items-center gap-2"><AlertTriangle className="w-4 h-4 text-amber-400" /> Days at risk</p>
+            <div className="flex items-center gap-2">
+              <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><AlertTriangle className="w-3.5 h-3.5 text-accent" /></span>
+              <h2 className="text-sm font-semibold text-ink tracking-tight">Days at risk</h2>
+              <span className="flex-1 h-px bg-border" aria-hidden />
+            </div>
             {r.atRiskDays.map(d => <RiskRow key={d.date} d={d} today={today} />)}
           </div>
         </>
@@ -199,7 +203,7 @@ function WeatherCard({ f, label }: { f: DayForecast; label: string }) {
   return (
     <Card className={cn('p-4', LEVEL_STYLE[weatherScore(f).level].ring)}>
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[10px] uppercase tracking-wide text-ink-faint">{label}</p>
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint">{label}</p>
         <ScoreBadge f={f} />
       </div>
       <div className="flex items-center gap-3 mt-1">

@@ -244,7 +244,7 @@ export default function ProfitabilityPage() {
             <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
               <Clock className="w-3.5 h-3.5 text-accent" />
             </span>
-            <h2 className="text-sm font-bold tracking-tight text-ink">Monthly trends</h2>
+            <h2 className="text-sm font-semibold tracking-tight text-ink">Monthly trends</h2>
             <span className="flex-1 h-px bg-border" aria-hidden />
           </div>
           <CardBody className="overflow-x-auto p-0">
@@ -283,7 +283,7 @@ export default function ProfitabilityPage() {
             <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
               <MapPin className="w-3.5 h-3.5 text-accent" />
             </span>
-            <h2 className="text-sm font-bold tracking-tight text-ink">Profitability map</h2>
+            <h2 className="text-sm font-semibold tracking-tight text-ink">Profitability map</h2>
             <span className="flex-1 h-px bg-border" aria-hidden />
           </div>
           <ProfitMap points={mapPoints} />
