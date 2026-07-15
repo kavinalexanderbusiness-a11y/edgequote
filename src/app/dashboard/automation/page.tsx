@@ -21,7 +21,14 @@ import { SectionHeading } from '@/components/ui/SectionHeading'
 import { cn, localTodayISO } from '@/lib/utils'
 import { toneSoft, type Tone } from '@/lib/tone'
 import { AUTOMATION_RULES, ruleFor, rulesForSignal } from '@/lib/automation/rules'
-import type { AutomationRule, RuleMode, RunRecord } from '@/lib/automation/types'
+import type { AutomationRule, RuleMode } from '@/lib/automation/types'
+// The vocabulary this page and the subject timeline BOTH speak. Shared rather than
+// copied: two screens over one ledger that label the same row differently are two
+// answers to one question — see ./shared.
+import {
+  REASON_META, PayloadChips, SubjectLink, signalLabel,
+  type Reason, type SignalRow, type RunRow,
+} from './shared'
 import { loadOwnerContext } from '@/lib/automation/owner'
 import { SENT_STATES } from '@/lib/comms/delivery'
 import { statusMeta, TONE_CLASS } from '@/lib/comms/logStatus'
@@ -104,74 +111,6 @@ const MODE_META: Record<RuleMode, { label: string; tone: Tone; hint: string }> =
   },
 }
 
-type Reason = NonNullable<RunRecord['suppressedReason']>
-
-const REASON_META: Record<Reason, { label: string; tone: Tone; hint: string }> = {
-  mode_suggest: {
-    label: 'Watching — not acting yet',
-    tone: 'info',
-    hint: 'The condition was real and the rule saw it. It has no authority to act yet — by design.',
-  },
-  mode_off: {
-    label: 'No authority to act',
-    tone: 'neutral',
-    hint: 'The rule is off — or it had authority but no dispatcher exists to carry the action out, which the engine records the same way rather than claiming a send that could never happen.',
-  },
-  quiet_hours: {
-    label: 'Outside the send window',
-    tone: 'neutral',
-    hint: 'Correct message, wrong hour. It was held rather than sent outside the rule’s send window.',
-  },
-  frequency_cap: {
-    label: 'Frequency cap',
-    tone: 'warn',
-    hint: 'Already contacted often enough — or the history could not be counted, which the engine treats as a cap hit rather than a reason to send.',
-  },
-  no_consent: {
-    label: 'No consent',
-    tone: 'warn',
-    hint: 'The customer is not opted in on a channel this action would use.',
-  },
-  deduped: {
-    label: 'Already handled',
-    tone: 'neutral',
-    hint: 'An action already exists for this exact dedupe key.',
-  },
-  signal_absent: {
-    label: 'Signal gone',
-    tone: 'neutral',
-    hint: 'The condition stopped being true before the rule acted.',
-  },
-}
-
-// Owner-facing names for the detectors the sweep writes. Falls back to the raw key
-// — a signal this page has never heard of should still render honestly, not vanish.
-const SIGNAL_LABELS: Record<string, string> = {
-  recurring_ran_out: 'Recurring series ran out',
-  churn_risk: 'Drifting past cadence',
-}
-const signalLabel = (k: string) => SIGNAL_LABELS[k] ?? k
-
-// ── Row shapes ───────────────────────────────────────────────────────────────
-interface SignalRow {
-  id: string
-  signal: string
-  subject_type: string
-  subject_id: string
-  detected_on: string
-  payload: Record<string, unknown> | null
-  created_at: string
-}
-interface RunRow {
-  id: string
-  rule_key: string
-  subject_type: string | null
-  subject_id: string | null
-  evaluated_on: string
-  decision: 'fired' | 'suppressed'
-  suppressed_reason: Reason | null
-  created_at: string
-}
 interface StatRow { rule_key: string; decision: string; suppressed_reason: Reason | null }
 interface LogRow {
   id: string
@@ -401,9 +340,6 @@ export default function AutomationPage() {
   // ── Failures (7d) ──────────────────────────────────────────────────────────
   const failures = useMemo(() => logs.filter(l => statusMeta(l.status).tone === 'fail'), [logs])
 
-  const subjectName = (type: string | null, id: string | null) =>
-    id ? (type === 'customer' ? (names[id] ?? 'Unknown customer') : `${type ?? 'subject'} ${id.slice(0, 8)}`) : '—'
-
   // The sweep has never run for this owner — the honest explanation behind every
   // empty section, and the state this page is actually in today.
   const neverSwept = !loading && signals.length === 0 && runs.length === 0
@@ -535,18 +471,11 @@ export default function AutomationPage() {
                     return (
                       <tr key={s.id} className={tableRowHover}>
                         <Td className="font-medium">{signalLabel(s.signal)}</Td>
-                        <Td className="text-ink-muted">{subjectName(s.subject_type, s.subject_id)}</Td>
+                        {/* Through to this subject's whole timeline — what else was
+                            detected about them, and what every rule decided. */}
+                        <Td><SubjectLink type={s.subject_type} id={s.subject_id} names={names} /></Td>
                         <Td className="text-ink-muted tabular-nums whitespace-nowrap">{s.detected_on}</Td>
-                        <Td>
-                          <div className="flex flex-wrap gap-1">
-                            {payloadBits(s.payload).map(b => (
-                              <span key={b.k} className="text-[10px] rounded-full border border-border bg-surface px-2 py-0.5 text-ink-muted whitespace-nowrap">
-                                {b.k} <span className="text-ink tabular-nums">{b.v}</span>
-                              </span>
-                            ))}
-                            {payloadBits(s.payload).length === 0 && <span className="text-xs text-ink-faint">—</span>}
-                          </div>
-                        </Td>
+                        <Td><PayloadChips payload={s.payload} /></Td>
                         <Td className="text-xs text-ink-muted">
                           {watchers.length ? watchers.map(w => w.label).join(', ') : <span className="text-ink-faint">no rule watches this</span>}
                         </Td>
@@ -616,7 +545,9 @@ export default function AutomationPage() {
                         <Td className="font-medium">
                           {rule?.label ?? <span className="text-ink-muted">{r.rule_key} <span className="text-ink-faint">(unregistered)</span></span>}
                         </Td>
-                        <Td className="text-ink-muted">{subjectName(r.subject_type, r.subject_id)}</Td>
+                        {/* subject_id is nullable here (unlike automation_signals), so
+                            SubjectLink renders the plain '—' rather than a dead link. */}
+                        <Td><SubjectLink type={r.subject_type} id={r.subject_id} names={names} /></Td>
                         <Td>
                           {r.decision === 'fired'
                             ? <Badge tone="success" icon={CheckCircle2}>Fired</Badge>
@@ -854,20 +785,6 @@ export default function AutomationPage() {
  *  than a hand-listed `status === 'error'`, so the two can never drift apart. */
 function isRetryable(status: string): boolean {
   return !(SENT_STATES as readonly string[]).includes((status || '').toLowerCase())
-}
-
-function payloadBits(p: Record<string, unknown> | null): { k: string; v: string }[] {
-  const out: { k: string; v: string }[] = []
-  if (!p) return out
-  const push = (k: string, v: unknown) => { if (v !== null && v !== undefined && v !== '') out.push({ k, v: String(v) }) }
-  push('days since', p.daysSince)
-  push('cadence', p.cadenceDays != null ? `${p.cadenceDays}d` : null)
-  push('level', p.level)
-  push('ratio', p.ratio)
-  push('overdue', p.overdueDays != null ? `${p.overdueDays}d` : null)
-  push('last service', p.lastServiceDate)
-  if (p.urgent === true) out.push({ k: 'urgent', v: 'yes' })
-  return out
 }
 
 function TrendBars({ label, days, pick, tone }: {
