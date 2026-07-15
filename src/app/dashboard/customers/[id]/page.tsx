@@ -178,10 +178,15 @@ export default function CustomerDetailPage() {
     const { error } = await supabase.from('customers').update(patch).eq('id', id)
     if (error) { toast.error('Could not save the customer: ' + error.message); return }   // keep the form open to retry
     if (values.address) {
-      await supabase.from('properties').update({
+      // The address half was unchecked: contact details saved, the address silently
+      // didn't, the modal closed as if all was well, and reload() snapped the old
+      // address back. Address drives routing/travel/measurement — a silent revert
+      // sends a crew to the wrong house.
+      const { error: addrErr } = await supabase.from('properties').update({
         address: values.address, city: values.city || null,
         province: values.province || 'AB', postal_code: values.postal_code || null,
       }).eq('customer_id', id).eq('is_primary', true)
+      if (addrErr) { toast.error('Saved the contact details, but the address couldn’t be updated — please try again.'); return }
     }
     setEditing(false)
     reload()

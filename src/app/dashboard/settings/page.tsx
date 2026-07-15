@@ -77,9 +77,13 @@ export default function SettingsPage() {
   function pickTheme(p: ThemePref) { setThemePref(p); applyThemePref(p) }
 
   async function persistLogoScale(v: number) {
+    const prev = logoScale
     setLogoScale(v)
     const { data: { user } } = await supabase.auth.getUser()
-    await supabase.from('business_settings').update({ logo_scale: v }).eq('user_id', user!.id)
+    const { error } = await supabase.from('business_settings').update({ logo_scale: v }).eq('user_id', user!.id)
+    // Same trap as the logo url: caching a scale the DB rejected would look right here
+    // and wrong on every document + device, permanently.
+    if (error) { setLogoScale(prev); toast.error('Could not save the logo size — please try again.'); return }
     // Sidebar/login read this cache so the logo scales everywhere immediately.
     try { window.localStorage.setItem('eq-logo', JSON.stringify({ url: logoUrl, scale: v })) } catch { /* ignore */ }
   }
@@ -137,13 +141,21 @@ export default function SettingsPage() {
       .from('branding')
       .upload(path, file, { upsert: true })
 
-    if (!upErr) {
-      const { data } = supabase.storage.from('branding').getPublicUrl(path)
-      const url = `${data.publicUrl}?t=${Date.now()}`
-      setLogoUrl(url)
-      await supabase.from('business_settings')
-        .update({ logo_url: url })
-        .eq('user_id', user!.id)
+    if (upErr) { toast.error('Could not upload the logo — please try again.'); setUploading(false); return }
+    const { data } = supabase.storage.from('branding').getPublicUrl(path)
+    const url = `${data.publicUrl}?t=${Date.now()}`
+    const prevLogo = logoUrl
+    setLogoUrl(url)
+    // The DB write is what quotes/invoices/other devices read. If it fails we must NOT
+    // cache the url locally — that would show the logo correctly on this browser
+    // forever while every document renders without it, with no way to notice.
+    const { error } = await supabase.from('business_settings')
+      .update({ logo_url: url })
+      .eq('user_id', user!.id)
+    if (error) {
+      setLogoUrl(prevLogo)
+      toast.error('Your logo uploaded but couldn’t be applied — please try again.')
+    } else {
       try { window.localStorage.setItem('eq-logo', JSON.stringify({ url, scale: logoScale })) } catch { /* ignore */ }
     }
     setUploading(false)
@@ -155,6 +167,8 @@ export default function SettingsPage() {
     // creates this row, so for an account that doesn't have one yet an .update()
     // matches zero rows, reports no error, and silently discards every field —
     // while the UI still says "Saved". Keyed on the existing unique(user_id).
+    // And Supabase RESOLVES on a failed write (RLS, constraint, expired session) —
+    // it never throws — so the error MUST be checked before we claim "Saved".
     const { error } = await supabase.from('business_settings')
       .upsert({
         user_id: user!.id,
@@ -185,11 +199,19 @@ export default function SettingsPage() {
     if (error) { toast.error('Could not save settings: ' + error.message); return }
     // The sticky footer promises "save everything" — so it must also persist any
     // edited travel-fee tier rows (they previously needed their own per-row save).
-    await Promise.all(localTiers.filter(t => t.id).map(t =>
+    // The footer makes the promise, so the footer has to verify it: one failed tier
+    // must not hide behind a green check.
+    const tierResults = await Promise.all(localTiers.filter(t => t.id).map(t =>
       supabase.from('travel_fee_tiers')
         .update({ min_km: t.min_km, max_km: t.max_km, fee: t.fee, is_custom: t.fee === null })
         .eq('id', t.id),
     ))
+    if (tierResults.some(r => r.error)) {
+      // Return before refresh() so the owner's edited tiers stay on screen to retry —
+      // re-syncing from the server here would erase what they just entered.
+      toast.error('Your settings saved, but a travel-fee tier didn’t — please try again.')
+      return
+    }
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
     refresh()

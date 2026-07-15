@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
+import { toast } from '@/lib/toast'
 import { ensureBookingToken } from '@/lib/booking'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -105,10 +106,16 @@ export function WebsiteIntegration() {
   }
 
   async function saveLimit(v: number) {
+    const prev = hourlyLimit
     const n = Number.isFinite(v) && v >= 0 ? Math.round(v) : 30
     setHourlyLimit(n)
     const { data: { user } } = await supabase.auth.getUser()
-    if (user) await supabase.from('business_settings').update({ website_lead_hourly_limit: n }).eq('user_id', user.id)
+    if (!user) return
+    // This is the rate limit gating the PUBLIC lead endpoint — an input that keeps
+    // showing a limit the server never accepted is a security control that lies.
+    // (toggleBooking above already reverts on error; this just missed the pattern.)
+    const { error } = await supabase.from('business_settings').update({ website_lead_hourly_limit: n }).eq('user_id', user.id)
+    if (error) { setHourlyLimit(prev); toast.error('Could not save the hourly limit — please try again.') }
   }
 
   async function copy(key: string, text: string) {

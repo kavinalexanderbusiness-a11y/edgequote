@@ -11,8 +11,11 @@ import { Zap } from 'lucide-react'
 const KEYS: (keyof Automations)[] = ['reminder', 'job_complete', 'review', 'marketing_draft']
 const HINTS: Record<keyof Automations, string> = {
   reminder: 'Texts/emails the customer the evening before their visit.',
-  job_complete: 'Sends automatically when you mark a visit complete.',
-  review: 'Asks for a Google review the day after a completed visit.',
+  // Honest scope: only the Complete button attempts this send (the quick-edit status
+  // dropdown doesn't), and a send can still be skipped for consent/contact reasons —
+  // so point the owner at the evidence rather than promising delivery.
+  job_complete: 'Attempts a message when you tap Complete on a visit — their timeline shows whether it went.',
+  review: 'Asks for a review the day after a completed visit.',
   marketing_draft: 'Prepares a marketing post draft when a job has before & after photos — you review before anything posts.',
 }
 

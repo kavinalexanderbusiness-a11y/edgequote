@@ -1127,6 +1127,11 @@ export default function SchedulePage() {
     const res = await createDraftInvoiceForCompletedJob(supabase, { ...job, status: 'completed', actual_minutes: actual })
     if (res.created) { invoiceCreated = true; setBanner(`Draft invoice ${res.invoiceNumber} created. Review in Invoices.`) }
     else if (res.reason === 'no-amount') setBanner('Done — no invoice drafted because this job has no price. Set a price to bill it.')
+    // A failed draft used to say NOTHING, which is indistinguishable from the success
+    // banner you scrolled past — the visit leaves the un-invoiced queue and the money
+    // is never billed, with no trace pointing at it. ('exists' stays quiet: an invoice
+    // does exist, so nothing is misclaimed.)
+    else if (res.reason === 'error') setBanner('Job completed, but the draft invoice could not be created — invoice it manually from the job.')
     // Automated job-complete message (opt-in + dedupe are enforced by the route).
     if (automations.job_complete && job.customer_id) {
       fetch('/api/comms/send', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ customerId: job.customer_id, template: 'job_complete', jobId: job.id, dedupe: true }) }).catch(() => {})

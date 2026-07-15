@@ -181,7 +181,11 @@ export function SendMessageDialog({
     }
     setBusy(false)
     const out: SendOutcome = bulk
-      ? { ok: sent > 0, text: `Sent to ${sent} customer${sent !== 1 ? 's' : ''}${skipped ? ` · ${skipped} skipped (no opt-in or contact on file)` : ''}.` }
+      // Never hardcode "no opt-in" — `skipped` also counts provider errors and
+      // messaging-disabled. Blaming consent during a Twilio outage tells the owner
+      // 40 customers withheld permission they actually gave. (skipReasons.ts exists
+      // for exactly this; the bulk path used to bypass it.)
+      ? { ok: sent > 0, text: `Sent to ${sent} customer${sent !== 1 ? 's' : ''}${skipped ? ` · ${skipped} couldn’t be sent — see each customer’s timeline for the reason` : ''}.` }
       : (single ?? { ok: sent > 0, text: sent ? 'Sent.' : 'Not sent.' })
     setOutcome(out)
     if (sent > 0) onSent?.()
