@@ -99,3 +99,10 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      # Prompt regressions are SILENT: a bad prompt still returns fluent text, so
+      # typecheck and build both pass while the AI quietly writes about lawns for a
+      # plumber. This renders the real prompt for a lawn business and a non-lawn
+      # business and asserts the difference. No API key, no network, deterministic.
+      - name: Verify AI business context
+        run: npm run verify:ai-context

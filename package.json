@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "verify:ai-context": "tsx scripts/verify-ai-context.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",
