@@ -12,7 +12,6 @@ import { Select } from '@/components/ui/Select'
 import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
 import { Skeleton } from '@/components/ui/Skeleton'
-import { StickyActionBar } from '@/components/ui/StickyActionBar'
 import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { CommunicationsTest } from '@/components/settings/CommunicationsTest'
 import { MessageTemplateEditor } from '@/components/settings/MessageTemplateEditor'
@@ -26,7 +25,7 @@ import { useForm, Controller } from 'react-hook-form'
 import { cn } from '@/lib/utils'
 import { ThemePref, getThemePref, applyThemePref } from '@/lib/theme'
 import { ServiceSeasons, ServiceSeason, DEFAULT_SEASONS, settingsToSeasons, seasonLabel } from '@/lib/seasons'
-import { Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard, Building2, DollarSign, MessageSquare, Bell, Link as LinkIcon, Zap, RotateCcw } from 'lucide-react'
+import { Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard, Building2, DollarSign, MessageSquare, Bell, Link as LinkIcon, Zap, RotateCcw, Image as ImageIcon, Palette, Clock, MapPin } from 'lucide-react'
 
 const SETTINGS_TABS: TabItem[] = [
   { key: 'business', label: 'Business', icon: Building2 },
@@ -259,7 +258,7 @@ export default function SettingsPage() {
           what people come here to check; branding follows below. */}
       <div className={cn('order-2 space-y-6', tab !== 'business' && 'hidden')}>
       <Card>
-        <CardHeader><h2 className="text-sm font-semibold text-ink">Branding</h2></CardHeader>
+        <CardHeader><h2 className="text-sm font-semibold text-ink flex items-center gap-2"><ImageIcon className="w-4 h-4 text-accent" /> Branding</h2></CardHeader>
         <CardBody className="space-y-5">
           <div className="flex items-center gap-5 flex-wrap">
             <div className="w-32 h-32 rounded-xl border border-border-strong bg-black flex items-center justify-center overflow-hidden shrink-0">
@@ -310,7 +309,7 @@ export default function SettingsPage() {
       <Card>
         <CardHeader>
           <div>
-            <h2 className="text-sm font-semibold text-ink">Appearance</h2>
+            <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Palette className="w-4 h-4 text-accent" /> Appearance</h2>
             <p className="text-xs text-ink-faint mt-0.5">Applies across the whole app and is remembered on this device.</p>
           </div>
         </CardHeader>
@@ -340,7 +339,7 @@ export default function SettingsPage() {
           page, submits via form=) saves every field. */}
       <form id="settings-form" onSubmit={handleSubmit(onSubmit)} className="order-1 space-y-6">
         <Card className={cn(tab !== 'business' && 'hidden')}>
-          <CardHeader><h2 className="text-sm font-semibold text-ink">Company Information</h2></CardHeader>
+          <CardHeader><h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Building2 className="w-4 h-4 text-accent" /> Company Information</h2></CardHeader>
           <CardBody className="space-y-4">
             <Input label="Company Name" {...register('company_name')} />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -434,7 +433,7 @@ export default function SettingsPage() {
         <Card className={cn(tab !== 'scheduling' && 'hidden')}>
           <CardHeader>
             <div>
-              <h2 className="text-sm font-semibold text-ink">Work Schedule</h2>
+              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Clock className="w-4 h-4 text-accent" /> Work Schedule</h2>
               <p className="text-xs text-ink-faint mt-0.5">Drives the weekly scheduler, per-stop arrival times and the day-load signal.</p>
             </div>
           </CardHeader>
@@ -499,7 +498,7 @@ export default function SettingsPage() {
         <Card className={cn(tab !== 'pricing' && 'hidden')}>
           <CardHeader>
             <div>
-              <h2 className="text-sm font-semibold text-ink">Lawn Pricing</h2>
+              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><DollarSign className="w-4 h-4 text-accent" /> Lawn Pricing</h2>
               <p className="text-xs text-ink-faint mt-0.5">Drives suggested measurement prices. Recommended = base price × multiplier.</p>
             </div>
           </CardHeader>
@@ -529,24 +528,13 @@ export default function SettingsPage() {
           </CardBody>
         </Card>
 
-        {/* Persistent Save footer — visible on any form-bearing tab, submits
-            every field (Company Info, Payment & Fees, Work Schedule, Service
-            Seasons, Lawn Pricing) regardless of which tab is active. */}
-        {showSave && (
-          <StickyActionBar className="-mx-1 flex items-center justify-end gap-3">
-            <span className="text-xs text-ink-faint mr-auto">Saves all business, pricing &amp; scheduling settings.</span>
-            <Button type="submit" loading={isSubmitting}>
-              {saved ? <><Check className="w-4 h-4" /> Saved</> : 'Save Settings'}
-            </Button>
-          </StickyActionBar>
-        )}
       </form>
 
       {/* PRICING — standalone (not part of the react-hook-form) */}
       <Card className={cn('order-3', tab !== 'pricing' && 'hidden')}>
         <CardHeader className="flex items-center justify-between">
           <div>
-            <h2 className="text-sm font-semibold text-ink">Travel Fee Tiers</h2>
+            <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><MapPin className="w-4 h-4 text-accent" /> Travel Fee Tiers</h2>
             <p className="text-xs text-ink-faint mt-0.5">Fully configurable. Leave fee blank for &quot;custom quote&quot;.</p>
           </div>
           <Button variant="secondary" size="sm" onClick={addTier}><Plus className="w-3.5 h-3.5" /> Add tier</Button>
