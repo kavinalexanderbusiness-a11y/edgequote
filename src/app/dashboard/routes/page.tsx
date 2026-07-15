@@ -12,10 +12,11 @@ import { Coord, geocodeAddress } from '@/lib/geo'
 import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, routeStats, computeDayEtas, DEFAULT_JOB_MIN } from '@/lib/route'
 import { loadTravelModel } from '@/lib/travelLearning'
 import {
-  ProfitJob, ProfitQuote, ProfitContext, RecInfo, Grade, GRADE_COLORS,
+  ProfitJob, ProfitQuote, ProfitContext, RecInfo, GRADE_COLORS,
   dayProfitability, jobValue, improvementSuggestions,
 } from '@/lib/profitability'
 import { RouteMap, RouteMapStop } from '@/components/routes/RouteMap'
+import { GradeBadge } from '@/components/ui/GradeBadge'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { Home, ExternalLink, Navigation, Lightbulb, Layers, AlertTriangle, MapPin } from 'lucide-react'
 
@@ -301,15 +302,6 @@ export default function RoutesPage() {
           )}
         </div>
       )}
-    </div>
-  )
-}
-
-function GradeBadge({ grade }: { grade: Grade }) {
-  return (
-    <div className="w-10 h-10 rounded-xl flex items-center justify-center text-lg font-black shrink-0"
-      style={{ backgroundColor: GRADE_COLORS[grade] + '22', color: GRADE_COLORS[grade], border: `1px solid ${GRADE_COLORS[grade]}55` }}>
-      {grade}
     </div>
   )
 }

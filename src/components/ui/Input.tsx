@@ -1,10 +1,12 @@
-import { InputHTMLAttributes, forwardRef, useId } from 'react'
+import { InputHTMLAttributes, ReactNode, forwardRef, useId } from 'react'
 import { cn } from '@/lib/utils'
 
 interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: string
   error?: string
-  hint?: string
+  /** ReactNode, not string: a hint that needed to emphasise part of itself (e.g.
+      "**0 = unlimited**") was the reason a caller kept hand-rolling the field. */
+  hint?: ReactNode
   /** 'sm' = the blessed compact field (rounded-lg px-3 py-2 text-sm) for dense
       inline panels — instead of hand-rolling a smaller input per file. */
   fieldSize?: 'sm' | 'md'

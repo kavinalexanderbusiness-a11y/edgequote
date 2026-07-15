@@ -25,6 +25,7 @@ import { useForm, Controller } from 'react-hook-form'
 import { cn } from '@/lib/utils'
 import { ThemePref, getThemePref, applyThemePref } from '@/lib/theme'
 import { ServiceSeasons, ServiceSeason, DEFAULT_SEASONS, settingsToSeasons, seasonLabel } from '@/lib/seasons'
+import { weekdayLong } from '@/lib/preferences'
 import { Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard, Building2, DollarSign, MessageSquare, Bell, Link as LinkIcon, Zap, RotateCcw, Image as ImageIcon, Palette, Clock, MapPin } from 'lucide-react'
 
 const SETTINGS_TABS: TabItem[] = [
@@ -38,10 +39,7 @@ const SETTINGS_TABS: TabItem[] = [
 type SettingsTab = (typeof SETTINGS_TABS)[number]['key']
 
 // Mon→Sun display, mapped to date-fns getDay indices (Sun=0…Sat=6).
-const WEEKDAYS = [
-  { i: 1, l: 'Monday' }, { i: 2, l: 'Tuesday' }, { i: 3, l: 'Wednesday' }, { i: 4, l: 'Thursday' },
-  { i: 5, l: 'Friday' }, { i: 6, l: 'Saturday' }, { i: 0, l: 'Sunday' },
-]
+const WEEKDAYS = [1, 2, 3, 4, 5, 6, 0].map(i => ({ i, l: weekdayLong(i) }))
 const DEFAULT_WORK_DAYS = [5, 6, 0] // Fri/Sat/Sun
 
 export default function SettingsPage() {

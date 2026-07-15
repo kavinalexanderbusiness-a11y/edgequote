@@ -7,7 +7,7 @@ import { Suggestion, SuggestionAction, SuggestionCategory, CATEGORY_META, Confid
 import { loadSuggestions } from '@/lib/suggestionsLoad'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { SkeletonRows } from '@/components/ui/Skeleton'
-import { InlineEmpty } from '@/components/ui/EmptyState'
+import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { FilterPill } from '@/components/ui/FilterPill'
 import { formatCurrency, cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
@@ -168,13 +168,13 @@ export function SuggestionsCenter() {
         {loading && items.length === 0 ? (
           <SkeletonRows count={3} />
         ) : items.length === 0 ? (
-          <div className="py-10 text-center">
-            <div className="w-11 h-11 mx-auto rounded-full bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center mb-3">
-              <Check className="w-5 h-5 text-emerald-400" />
-            </div>
-            <p className="text-sm font-semibold text-ink">Nothing needs your attention</p>
-            <p className="text-xs text-ink-muted mt-1">Your advisor re-reads the business as jobs, quotes and payments land.</p>
-          </div>
+          <EmptyState
+            tone="positive"
+            icon={Check}
+            title="Nothing needs your attention"
+            description="Your advisor re-reads the business as jobs, quotes and payments land."
+            className="py-10"
+          />
         ) : filtered.length === 0 ? (
           <InlineEmpty icon={Sparkles}>Nothing in this category right now.</InlineEmpty>
         ) : (

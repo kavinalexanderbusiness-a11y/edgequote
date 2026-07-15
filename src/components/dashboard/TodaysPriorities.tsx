@@ -3,12 +3,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
-import { formatCurrency } from '@/lib/utils'
+import { formatCurrency, localTodayISO } from '@/lib/utils'
 import { needsFollowUp } from '@/lib/followup'
 import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
 import { invoiceBalance } from '@/lib/payments/ledger'
 import type { Quote } from '@/types'
 import { SkeletonRows } from '@/components/ui/Skeleton'
+import { EmptyState } from '@/components/ui/EmptyState'
 import {
   ListChecks, CheckCircle2, ArrowRight,
   DollarSign, FileText, Bell, CalendarPlus, AlertTriangle, MessageSquare, Repeat,
@@ -28,11 +29,6 @@ interface Priority {
   href: string
   tone: string            // icon + accent colour for this row
   score: number           // urgency × value — higher sorts first
-}
-
-function localTodayISO(): string {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 interface JobLite { quote_id: string | null; customer_id: string | null; status: string; scheduled_date: string; recurrence_id: string | null; price: number | null }
@@ -211,13 +207,13 @@ export function TodaysPriorities() {
       </div>
 
       {items.length === 0 ? (
-        <div className="px-5 py-10 text-center">
-          <div className="w-11 h-11 mx-auto rounded-full bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center mb-3">
-            <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-          </div>
-          <p className="text-sm font-semibold text-ink">You&rsquo;re all caught up</p>
-          <p className="text-xs text-ink-muted mt-1">No follow-ups, unsent invoices, or unread replies right now.</p>
-        </div>
+        <EmptyState
+          tone="positive"
+          icon={CheckCircle2}
+          title="You’re all caught up"
+          description="No follow-ups, unsent invoices, or unread replies right now."
+          className="py-10"
+        />
       ) : (
         <ol className="divide-y divide-border">
           {items.map((p, i) => (

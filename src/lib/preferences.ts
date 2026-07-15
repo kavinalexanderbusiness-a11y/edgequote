@@ -28,9 +28,12 @@ export const EMPTY_PREFS: SchedulePrefs = { preferredDays: [], avoidDays: [], ti
 
 const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const WEEKDAY_LONG = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 export function weekdayShort(idx: number): string { return WEEKDAY_SHORT[((idx % 7) + 7) % 7] }
 export function weekdayLong(idx: number): string { return WEEKDAY_LONG[((idx % 7) + 7) % 7] }
+// 0-indexed (0=Jan … 11=Dec) — pass `month - 1` when coming from a 1-based date part.
+export function monthShort(idx: number): string { return MONTH_SHORT[((idx % 12) + 12) % 12] }
 
 const cleanDays = (v: number[] | null | undefined): number[] =>
   Array.isArray(v) ? v.filter(n => Number.isInteger(n) && n >= 0 && n <= 6) : []

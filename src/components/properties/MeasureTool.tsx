@@ -15,6 +15,7 @@ import { DEFAULT_CREW_COST, crewCostPerHour as resolveCrewCost } from '@/lib/eco
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { Coord, haversineKm, nearbyJobCount, fetchLocatedUpcomingJobs } from '@/lib/geo'
 import { Button } from '@/components/ui/Button'
+import { Banner } from '@/components/ui/Banner'
 import { Undo2, Trash2, Check, Ruler, ZoomIn, ZoomOut, RotateCcw, FileText, Car, ShieldCheck, History, Move, Loader2 } from 'lucide-react'
 
 const M2_TO_SQFT = 10.7639
@@ -647,10 +648,12 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
 
   if (loadError) {
     return (
-      <div className="text-sm text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-3 space-y-1">
-        <p>The map couldn&apos;t load. Error detail:</p>
-        <p className="font-mono text-xs text-amber-300 break-words">{loadError}</p>
-      </div>
+      <Banner tone="warn">
+        <div className="space-y-1">
+          <p>The map couldn&apos;t load. Error detail:</p>
+          <p className="font-mono text-xs text-amber-300 break-words">{loadError}</p>
+        </div>
+      </Banner>
     )
   }
 
@@ -683,14 +686,14 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
 
       {/* Geocoding honesty — same vocabulary as the QuoteMeasure banner. */}
       {ready && geoFix === 'approx' && (
-        <p className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-3 py-2">
+        <Banner tone="warn">
           Approximate location — the amber pin may not be the exact lot. Verify before quoting.
-        </p>
+        </Banner>
       )}
       {ready && geoFix === 'failed' && (
-        <p className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-3 py-2">
+        <Banner tone="warn">
           Couldn&apos;t locate this address — showing the general area with no property pin. Check the address before quoting.
-        </p>
+        </Banner>
       )}
 
       {/* Map with overlaid zoom controls */}

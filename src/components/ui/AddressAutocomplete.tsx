@@ -22,7 +22,8 @@ interface AddressAutocompleteProps {
   onSelect?: (parsed: ParsedAddress) => void
   placeholder?: string
   error?: string
-  hint?: string
+  /** ReactNode to match Input/Select — the form primitives take the same shapes. */
+  hint?: React.ReactNode
 }
 
 interface SuggestionItem {

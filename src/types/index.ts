@@ -1,3 +1,5 @@
+import { type Tone, toneSoft } from '@/lib/tone'
+
 export type QuoteStatus =
   | 'draft' | 'sent' | 'accepted' | 'scheduled' | 'completed' | 'paid' | 'declined'
 
@@ -184,10 +186,18 @@ export const CONFIDENCE_LABELS: Record<PricingConfidence, string> = {
   low: 'Low confidence',
 }
 
+// Confidence maps onto the shared semantic tones — these three class strings were
+// a verbatim re-spelling of toneSoft, in the one file lib/tone.ts tells pages not
+// to spell colours in. Referencing the tone map keeps the pill identical today and
+// keeps it in lock-step if a tone is ever retuned.
+export const confidenceTone: Record<PricingConfidence, Tone> = {
+  high: 'success', medium: 'warn', low: 'danger',
+}
+
 export const CONFIDENCE_COLORS: Record<PricingConfidence, string> = {
-  high:   'bg-emerald-500/15 text-emerald-400 border-emerald-500/25',
-  medium: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
-  low:    'bg-red-500/10 text-red-400 border-red-500/20',
+  high:   toneSoft[confidenceTone.high],
+  medium: toneSoft[confidenceTone.medium],
+  low:    toneSoft[confidenceTone.low],
 }
 
 export interface PropertyFormValues {

@@ -8,6 +8,7 @@
 
 import type { MarketingChannel } from './types'
 import { loadImage, coverCrop } from '@/lib/beforeafter/imageLoad'
+import { clamp } from '@/lib/utils'
 
 export interface PlatformImageSpec { w: number; h: number; label: string }
 
@@ -21,8 +22,6 @@ export const PLATFORM_IMAGE: Record<MarketingChannel, PlatformImageSpec> = {
   nextdoor:  { w: 1080, h: 1080, label: 'Square · 1:1' },
   linkedin:  { w: 1200, h: 627,  label: 'Landscape · 1.91:1' },
 }
-
-const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
 
 // Smart focal point (0..1). Samples a tiny offscreen copy and finds the centroid of
 // visual "interest" — local contrast, with a mild preference for mid-tones so blown-
