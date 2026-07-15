@@ -452,6 +452,20 @@ export default function InvoicesPage() {
                         fetchInvoices()
                         notify.success(msg)
                       }
+                      // A $0 invoice can't be paid: both charge routes reject a
+                      // zero balance with "This invoice is already paid", so
+                      // approving one sends the customer a document that dead-ends.
+                      // The auto-draft engine already refuses to create one — the
+                      // manual path is the only way to reach this state, so it's
+                      // the only place that has to say no. Uses the SAME ledger
+                      // total the list, PDF and charge routes read.
+                      const approveDraft = async () => {
+                        if (invoiceBalance(inv, settings).total <= 0) {
+                          notify.error(`${inv.invoice_number} is $0 — add a line item with a price before approving it.`)
+                          return
+                        }
+                        await setStatus('unpaid', `${inv.invoice_number} approved — ready to send.`)
+                      }
                       const doCancel = async () => {
                         const res = await cancelInvoice(supabase, inv)
                         if (res.error) { notify.error(res.error); return }
@@ -461,7 +475,7 @@ export default function InvoicesPage() {
                       // Drafts list "Approve draft" first — it's the primary next step.
                       const statusItems = [
                         ...(inv.status === 'draft' ? [
-                          { key: 'approve', label: 'Approve draft', onSelect: () => setStatus('unpaid', `${inv.invoice_number} approved — ready to send.`) },
+                          { key: 'approve', label: 'Approve draft', onSelect: approveDraft },
                         ] : []),
                         ...(inv.status === 'draft' || inv.status === 'unpaid' ? [
                           { key: 'mark-sent', label: 'Mark sent', onSelect: () => setStatus('sent', `${inv.invoice_number} marked sent.`) },
@@ -541,6 +555,13 @@ export default function InvoicesPage() {
                     {inv.customer_id && inv.status !== 'cancelled' && (
                       <Button variant="secondary" size="sm" title="Send this invoice to the customer"
                         onClick={async () => {
+                          // Send issues the invoice, so it can reach 'sent' without
+                          // ever passing Approve — the $0 guard has to live on both
+                          // doors, not just the one the owner usually uses.
+                          if (invoiceBalance(inv, settings).total <= 0) {
+                            notify.error(`${inv.invoice_number} is $0 — add a line item with a price before sending it.`)
+                            return
+                          }
                           const held = inv.status === 'draft' && (inv.notes || '').includes('AutoPay held')
                           if (held) {
                             const ok = await confirmDialog({
@@ -728,21 +749,26 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
               <span className="w-3.5" aria-hidden />
             </div>
             {items.map((li, i) => (
-              <div key={i} className="flex items-center gap-2">
+              // Wraps on a phone: qty + unit + amount + remove need ~300px of fixed
+              // width, which left the description a few pixels wide beside them.
+              // Description takes its own row on mobile, one line on sm+.
+              <div key={i} className="flex flex-wrap sm:flex-nowrap items-center gap-2">
                 <input value={li.description} placeholder="Description" aria-label="Line item description"
                   onChange={e => setItems(prev => prev.map((x, j) => j === i ? { ...x, description: e.target.value } : x))}
-                  className="flex-1 min-w-0 bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20" />
-                <input type="number" min="0" step="1" value={li.qty} aria-label="Line item quantity"
+                  className="w-full sm:w-auto sm:flex-1 min-w-0 bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-base sm:text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20" />
+                {/* inputMode=decimal → the numeric keypad on a phone, not the
+                    full keyboard. text-base on mobile stops iOS zooming the field. */}
+                <input type="number" inputMode="decimal" min="0" step="1" value={li.qty} aria-label="Line item quantity"
                   onChange={e => setItems(prev => prev.map((x, j) => j === i ? { ...x, qty: e.target.value } : x))}
-                  className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2 text-sm text-ink tabular-nums outline-none focus:border-accent focus:ring-2 focus:ring-accent/20" />
-                <div className="relative w-28">
+                  className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2 text-base sm:text-sm text-ink tabular-nums outline-none focus:border-accent focus:ring-2 focus:ring-accent/20" />
+                <div className="relative w-24 sm:w-28">
                   <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-faint text-sm" aria-hidden="true">$</span>
-                  <input type="number" min="0" step="1" value={li.unit} aria-label="Line item unit price"
+                  <input type="number" inputMode="decimal" min="0" step="1" value={li.unit} aria-label="Line item unit price"
                     onChange={e => setItems(prev => prev.map((x, j) => j === i ? { ...x, unit: e.target.value } : x))}
-                    className="w-full bg-bg-tertiary border border-border-strong rounded-lg pl-6 pr-2 py-2 text-sm text-ink tabular-nums outline-none focus:border-accent focus:ring-2 focus:ring-accent/20" />
+                    className="w-full bg-bg-tertiary border border-border-strong rounded-lg pl-6 pr-2 py-2 text-base sm:text-sm text-ink tabular-nums outline-none focus:border-accent focus:ring-2 focus:ring-accent/20" />
                 </div>
                 {/* Derived, never typed — qty x unit is the single source for the line. */}
-                <span className="w-20 text-right text-sm font-medium text-ink tabular-nums" aria-label="Line total">{formatCurrency(lineAmount(li))}</span>
+                <span className="flex-1 sm:flex-none sm:w-20 text-right text-sm font-medium text-ink tabular-nums" aria-label="Line total">{formatCurrency(lineAmount(li))}</span>
                 <button type="button" onClick={() => setItems(prev => prev.filter((_, j) => j !== i))} disabled={items.length <= 1}
                   className="rounded-md text-ink-faint hover:text-red-400 disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" aria-label="Remove line" title="Remove line">
                   <Trash2 className="w-3.5 h-3.5" />
