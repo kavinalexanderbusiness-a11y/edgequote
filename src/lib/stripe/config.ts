@@ -270,11 +270,33 @@ export async function fetchSetupIntentCard(
 // because a missed webhook leaves no trace on our side by definition.
 export interface StripeCharge {
   paymentIntentId: string
-  amount: number            // dollars
+  /** Dollars STILL HELD — captured minus refunded. Never the gross figure. */
+  amount: number
+  /** Dollars refunded so far; > 0 means this charge was partially given back. */
+  refunded: number
   createdIso: string
   invoiceId: string | null  // from metadata, when it was one of ours
   invoiceNumber: string | null
   description: string | null
+}
+
+// `latest_charge` is expanded because a PaymentIntent alone CANNOT answer the only
+// question that matters here. A fully refunded charge leaves its PaymentIntent at
+// status='succeeded' with amount_received unchanged — so filtering on status and
+// reporting amount_received would present money the owner already gave back as money
+// they never recorded. They'd "fix" it by recording a payment that doesn't exist.
+// The refund lives on the charge, so we fetch the charge.
+function chargeOf(pi: Record<string, unknown>): { refunded: number; captured: number } | null {
+  // API versions ≥2022-11-15 expose latest_charge; older accounts return charges.data.
+  // Support both rather than silently reporting gross amounts on an older account.
+  const latest = pi.latest_charge
+  const legacy = (pi.charges as { data?: Record<string, unknown>[] } | undefined)?.data?.[0]
+  const ch = (latest && typeof latest === 'object' ? latest : legacy) as Record<string, unknown> | undefined
+  if (!ch) return null
+  return {
+    refunded: (Number(ch.amount_refunded) || 0) / 100,
+    captured: (Number(ch.amount_captured ?? ch.amount) || 0) / 100,
+  }
 }
 
 export async function listSucceededPaymentIntents(
@@ -289,6 +311,7 @@ export async function listSucceededPaymentIntents(
 
   for (let page = 0; page < maxPages; page++) {
     const q = new URLSearchParams({ limit: '100', 'created[gte]': String(createdGte) })
+    q.append('expand[]', 'data.latest_charge')
     if (startingAfter) q.set('starting_after', startingAfter)
     const r = await stripeGet(`payment_intents?${q.toString()}`)
     // A partial read must not read as "nothing unrecorded" — that's the same
@@ -298,9 +321,20 @@ export async function listSucceededPaymentIntents(
     for (const pi of data) {
       if (String(pi.status || '') !== 'succeeded') continue
       const md = (pi.metadata as Record<string, string> | null) || {}
+      const ch = chargeOf(pi)
+      const gross = (Number(pi.amount_received ?? pi.amount) || 0) / 100
+      const refunded = ch?.refunded ?? 0
+      // Net of refunds. If the charge couldn't be read at all, fall back to gross
+      // rather than dropping the row — an over-reported charge gets reviewed by a
+      // human; a dropped one is money that stays invisible.
+      const net = Math.round(((ch ? ch.captured : gross) - refunded) * 100) / 100
+      // Fully refunded → the money is NOT outstanding and never was owed. Reporting
+      // it as unrecorded would invite the owner to book a payment they don't have.
+      if (net <= 0.005) continue
       charges.push({
         paymentIntentId: String(pi.id),
-        amount: (Number(pi.amount_received ?? pi.amount) || 0) / 100,
+        amount: net,
+        refunded,
         createdIso: new Date((Number(pi.created) || 0) * 1000).toISOString(),
         invoiceId: md.invoice_id || null,
         invoiceNumber: md.invoice_number || null,
