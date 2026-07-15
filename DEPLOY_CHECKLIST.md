@@ -18,16 +18,41 @@ fresh database completely; `tsc` + `next build` pass.
 
 **Each migration is listed once.** Pick the path that matches your target database.
 
-### Fresh database / disaster recovery — run ONE file
+### Fresh database / disaster recovery — schema.sql **then every later RUN file**
+
+> ⚠️ **This section used to say "run ONE file — nothing else is required."** That was
+> true when it was written (2026-06-25) and has been wrong since 2026-06-27. As of
+> 2026-07-15 there are **27** `RUN-*.sql` files dated after that snapshot. Running
+> `schema.sql` alone rebuilds a database ~3 weeks behind production, missing the
+> payment ledger, quote_services, granular consent, invoice lifecycle, message
+> idempotency, quote expiry, delivery tracking, equipment/parts and campaign studio.
+> It does not error — it just quietly produces a schema the app fails against.
+
 ```
-# Supabase SQL editor (or: psql "$DATABASE_URL" -f supabase/schema.sql)
+# 1. the snapshot (complete as of 2026-06-25)
 supabase/schema.sql
+
+# 2. THEN every RUN file dated after it, in filename (date) order — they are idempotent
+ls supabase/RUN-*.sql | sort        # apply each in this order
 ```
-`schema.sql` is complete and idempotent: it creates the 7 base tables
-(`business_settings, service_templates, travel_fee_tiers, properties,
-job_recurrences, jobs, invoices`) + RLS policies + indexes, then every dated
-migration through 2026-06-25, including the `invoices(job_id)` unique index. Nothing
-else is required for a fresh DB.
+
+`schema.sql` creates the 7 base tables (`business_settings, service_templates,
+travel_fee_tiers, properties, job_recurrences, jobs, invoices`) + RLS policies +
+indexes, then every dated migration **through 2026-06-25 only**, including the
+`invoices(job_id)` unique index.
+
+**Keep this current.** Supabase's own migration history for this project is empty
+(`list_migrations` → `[]`), so these files are the only record that a rebuild can be
+driven from. When you add a `RUN-*.sql`, it becomes part of this path automatically by
+date — but if you create an object directly in the dashboard and never write a file,
+it exists *only* in production and disaster recovery loses it. That has already
+happened once: `social_connections` and `publish_jobs` (Marketing Studio publishing)
+lived in production with no migration anywhere until they were transcribed back into
+`RUN-2026-07-15-record-marketing-publishing-tables.sql`.
+
+`automation_signals` is still in this state — it exists in production, but its
+migration lives only on the unmerged `guardian-2` branch (`aca9a6b`), so a rebuild
+from `main` will not create it.
 
 ### Existing database — incremental files (already applied this session; listed for the audit trail / a DB that's behind). Apply in this order; each is idempotent:
 1. `supabase/RUN-2026-06-25-autopay-website.sql` — AutoPay (2026-06-25c) + Website Import (2026-06-25d)
