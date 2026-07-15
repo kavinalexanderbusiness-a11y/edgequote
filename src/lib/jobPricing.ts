@@ -111,7 +111,20 @@ export async function listLineItemsByJob(
   const ids = [...new Set(jobIds.filter(Boolean))]
   const out: Record<string, JobLineItem[]> = {}
   if (!ids.length) return out
-  const { data } = await supabase.from('job_line_items').select('*').eq('user_id', userId).in('job_id', ids).order('created_at', { ascending: true })
-  for (const it of (data as JobLineItem[]) || []) (out[it.job_id] ||= []).push(it)
+  // Chunk the id list. The caller passes EVERY job it loaded, and a season of
+  // recurring visits is thousands of uuids — one `in(...)` that long overflows the
+  // request URL (HTTP 414) and the whole call fails, which here would silently
+  // return {} : every add-on disappears from the day board AND from the draft
+  // invoice it should have been billed on. Chunks keep each URL short, and each
+  // chunk stays far below PostgREST's silent 1000-row response cap.
+  const CHUNK = 200
+  const chunks: string[][] = []
+  for (let i = 0; i < ids.length; i += CHUNK) chunks.push(ids.slice(i, i + CHUNK))
+  const results = await Promise.all(chunks.map(chunk =>
+    supabase.from('job_line_items').select('*').eq('user_id', userId).in('job_id', chunk).order('created_at', { ascending: true }),
+  ))
+  for (const r of results) {
+    for (const it of (r.data as JobLineItem[]) || []) (out[it.job_id] ||= []).push(it)
+  }
   return out
 }

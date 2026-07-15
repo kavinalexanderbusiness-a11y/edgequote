@@ -7,6 +7,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { renderMessage } from '@/lib/comms/templates'
 import { sendSms, sendEmail, commsEnabled } from '@/lib/comms/send'
+import { logSend } from '@/lib/comms/log'
 import { getOrCreateConversation } from '@/lib/comms/conversation'
 import { SKIP_REASON } from '@/lib/comms/skipReasons'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
@@ -42,14 +43,17 @@ export async function sendPaymentReceipt(
       reviewLink: biz?.review_url || undefined,
     })
 
+    // Keep each channel's provider id — a receipt that bounces must be able to say
+    // so, rather than reading "Sent" forever.
     const sent: string[] = []
+    const ids: Record<string, { provider: string; id: string | null }> = {}
     if (c.email) {
       const r = await sendEmail(c.email, rendered.subject, rendered.html, rendered.text)
-      if (r.sent) sent.push('email')
+      if (r.sent) { sent.push('email'); ids.email = { provider: 'resend', id: r.id ?? null } }
     }
     if (c.sms_opt_in && c.phone) {
       const r = await sendSms(c.phone, rendered.sms)
-      if (r.sent) sent.push('sms')
+      if (r.sent) { sent.push('sms'); ids.sms = { provider: 'twilio', id: r.id ?? null } }
     }
 
     // Thread the receipt into the conversation + audit log, mirroring the send route.
@@ -57,9 +61,13 @@ export async function sendPaymentReceipt(
     if (sent.length) {
       const convoId = await getOrCreateConversation(sb, opts.userId, opts.customerId)
       if (convoId) {
-        const { data: m } = await sb.from('messages')
-          .insert({ user_id: opts.userId, conversation_id: convoId, customer_id: opts.customerId, direction: 'outbound', channel: sent[0], body: rendered.sms, status: 'sent', meta: { template: 'receipt' } })
+        const primary = ids[sent[0]]
+        const msgBase = { user_id: opts.userId, conversation_id: convoId, customer_id: opts.customerId, direction: 'outbound', channel: sent[0], body: rendered.sms, status: 'sent', meta: { template: 'receipt' } }
+        let { data: m } = await sb.from('messages')
+          .insert({ ...msgBase, provider: primary?.provider ?? null, provider_message_id: primary?.id ?? null })
           .select('id').single()
+        // Pre-migration fallback: never lose the bubble over a missing column.
+        if (!m) ({ data: m } = await sb.from('messages').insert(msgBase).select('id').single())
         messageId = (m as { id: string } | null)?.id ?? null
       }
     }
@@ -73,20 +81,15 @@ export async function sendPaymentReceipt(
       const detail = wasSent ? null
         : ch === 'email' ? SKIP_REASON.NO_EMAIL
         : !c.sms_opt_in ? SKIP_REASON.NO_OPT_IN : SKIP_REASON.NO_PHONE
-      await logReceipt(sb, opts.userId, opts.customerId, ch, wasSent ? 'sent' : 'skipped', wasSent ? messageId : null, detail)
+      await logSend(sb, {
+        userId: opts.userId, customerId: opts.customerId, channel: ch, template: 'receipt',
+        status: wasSent ? 'sent' : 'skipped', detail,
+        messageId: wasSent ? messageId : null,
+        provider: ids[ch]?.provider ?? null, providerId: ids[ch]?.id ?? null,
+      })
     }
   } catch (e) {
     console.error('[receipt] send failed:', e)
   }
 }
 
-async function logReceipt(sb: SupabaseClient, userId: string, customerId: string, channel: string, status: string, messageId: string | null, detail: string | null = null): Promise<void> {
-  const base = { user_id: userId, customer_id: customerId, job_id: null, channel, template: 'receipt', status, detail }
-  if (messageId) {
-    const { error } = await sb.from('notification_log').insert({ ...base, message_id: messageId })
-    if (!error) return
-    await sb.from('notification_log').insert(base)
-    return
-  }
-  await sb.from('notification_log').insert(base)
-}

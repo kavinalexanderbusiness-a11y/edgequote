@@ -5,6 +5,7 @@ import { sendSms, sendEmail, commsEnabled } from '@/lib/comms/send'
 import { getOrCreateConversation } from '@/lib/comms/conversation'
 import { SKIP_REASON } from '@/lib/comms/skipReasons'
 import { SENT_STATES } from '@/lib/comms/delivery'
+import { logSend } from '@/lib/comms/log'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { claimSend, finalizeSend } from '@/lib/comms/idempotency'
 
@@ -162,21 +163,3 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ enabled, results, preview: outText, threaded: !!messageId })
 }
 
-// Insert a notification_log row. Links to the thread message when one exists and
-// carries the provider's message id (what the delivery webhooks match on). Falls
-// back to a bare insert if those columns haven't been migrated yet, so the audit
-// trail is never silently dropped over a missing column.
-async function logSend(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  l: { userId: string; customerId: string; jobId: string | null; channel: string; template: string; status: string; detail?: string; messageId: string | null; provider?: string | null; providerId?: string | null },
-): Promise<void> {
-  const base = { user_id: l.userId, customer_id: l.customerId, job_id: l.jobId, channel: l.channel, template: l.template, status: l.status, detail: l.detail ?? null }
-  const full: Record<string, unknown> = { ...base }
-  if (l.messageId) full.message_id = l.messageId
-  if (l.provider) full.provider = l.provider
-  if (l.providerId) full.provider_message_id = l.providerId
-  if (Object.keys(full).length === Object.keys(base).length) { await supabase.from('notification_log').insert(base); return }
-  const { error } = await supabase.from('notification_log').insert(full)
-  if (!error) return
-  await supabase.from('notification_log').insert(base)
-}

@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { addDays, format } from 'date-fns'
 import { renderMessage, MsgType, prefAllows, type MessagePrefs } from '@/lib/comms/templates'
-import { sendSms, sendEmail, commsEnabled } from '@/lib/comms/send'
+import { sendSms, sendEmail, commsEnabled, type SendResult } from '@/lib/comms/send'
 import { SKIP_REASON } from '@/lib/comms/skipReasons'
 import { SENT_STATES } from '@/lib/comms/delivery'
+import { logSend } from '@/lib/comms/log'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { resolveAutomations, Automations } from '@/lib/comms/automations'
 
@@ -73,18 +74,24 @@ export async function GET(req: NextRequest) {
       // send AND no notification_log row, so the timeline showed nothing at all and
       // the owner had no way to know a reminder/review request never went out. The
       // canonical reasons + branch order mirror lib/comms/dispatch.ts so automatic
-      // sends read identically to manual ones. alreadySent() only blocks on
-      // status='sent', so a skipped row never suppresses a later real send.
-      const logRow = (channel: 'sms' | 'email', status: string, detail: string | null) =>
-        supabase.from('notification_log').insert({ user_id: j.user_id, customer_id: j.customer_id, job_id: j.id, channel, template, status, detail })
+      // sends read identically to manual ones. alreadySent() blocks only on a real
+      // prior send (SENT_STATES), so a skipped row never suppresses a later one.
+      const logRow = (channel: 'sms' | 'email', status: string, detail: string | null, r?: SendResult) =>
+        logSend(supabase, {
+          userId: j.user_id, customerId: j.customer_id, jobId: j.id, channel, template, status, detail,
+          // The provider's id — without it these rows could never be corrected past
+          // 'sent', so a bounced reminder would read as delivered forever.
+          provider: r?.sent ? (channel === 'sms' ? 'twilio' : 'resend') : null,
+          providerId: r?.id ?? null,
+        })
 
       if (!c.sms_opt_in) await logRow('sms', 'skipped', SKIP_REASON.NO_OPT_IN)
       else if (!c.phone) await logRow('sms', 'skipped', SKIP_REASON.NO_PHONE)
-      else { const r = await sendSms(c.phone, msg.sms); await logRow('sms', r.reason, r.error ?? null); if (r.sent) sent++ }
+      else { const r = await sendSms(c.phone, msg.sms); await logRow('sms', r.reason, r.error ?? null, r); if (r.sent) sent++ }
 
       if (!c.email_opt_in) await logRow('email', 'skipped', SKIP_REASON.NO_OPT_IN)
       else if (!c.email) await logRow('email', 'skipped', SKIP_REASON.NO_EMAIL)
-      else { const r = await sendEmail(c.email, msg.subject, msg.html, msg.text); await logRow('email', r.reason, r.error ?? null); if (r.sent) sent++ }
+      else { const r = await sendEmail(c.email, msg.subject, msg.html, msg.text); await logRow('email', r.reason, r.error ?? null, r); if (r.sent) sent++ }
     }
   }
 

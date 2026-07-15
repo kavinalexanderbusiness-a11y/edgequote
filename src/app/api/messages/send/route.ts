@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { sendSms } from '@/lib/comms/send'
+import { logSend } from '@/lib/comms/log'
 import { getOrCreateConversation } from '@/lib/comms/conversation'
 import { claimSend, finalizeSend } from '@/lib/comms/idempotency'
 
@@ -48,15 +49,17 @@ export async function POST(req: NextRequest) {
 
   const r = await sendSms(phone, text)
   // Persist Twilio's SID so /api/sms/status can carry these rows from 'sent'
-  // (accepted) to 'delivered'/'failed'. Written through a helper that degrades to
-  // the pre-migration shape rather than losing the message record.
+  // (accepted) to 'delivered'/'failed'. Both writes degrade to the pre-migration
+  // shape rather than losing the record.
   const providerCols = r.sent && r.id ? { provider: 'twilio', provider_message_id: r.id } : {}
   const msgBase = { user_id: user.id, conversation_id: convoId, customer_id: customerId, direction: 'outbound', channel: 'sms', body: text, status: r.reason }
   const { error: msgErr } = await supabase.from('messages').insert({ ...msgBase, ...providerCols })
   if (msgErr) await supabase.from('messages').insert(msgBase)
-  const logBase = { user_id: user.id, customer_id: customerId, channel: 'sms', template: 'reply', status: r.reason, detail: r.error ?? null }
-  const { error: logErr } = await supabase.from('notification_log').insert({ ...logBase, ...providerCols })
-  if (logErr) await supabase.from('notification_log').insert(logBase)
+  await logSend(supabase, {
+    userId: user.id, customerId, channel: 'sms', template: 'reply',
+    status: r.reason, detail: r.error ?? null,
+    provider: r.sent ? 'twilio' : null, providerId: r.id ?? null,
+  })
   await finalizeSend(supabase, user.id, clientMessageId, r.reason)
 
   const error = r.reason === 'disabled' ? 'SMS isn’t set up yet (add your Twilio keys).' : r.reason === 'error' ? 'The message could not be sent.' : undefined

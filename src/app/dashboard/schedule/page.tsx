@@ -447,14 +447,37 @@ export default function SchedulePage() {
   // When arriving from a customer (?customer=…), open a new-job form for them.
   const [customerPrefill, setCustomerPrefill] = useState<Partial<JobFormValues> | null>(null)
 
+  // Read EVERY job, in pages. PostgREST caps a response at 1000 rows and does not
+  // raise an error, so the previous unbounded select silently dropped everything
+  // past the cap — and because the order is scheduled_date ASCENDING, what got
+  // dropped was the FURTHEST-FUTURE work. Once a season of pre-generated recurring
+  // visits passes the cap, upcoming jobs simply vanish from the calendar, the
+  // optimizer, cadence validation and Schedule Health, with no error to see: the
+  // owner double-books against a timeline that looks empty. `id` is a stable
+  // tiebreak — dozens of stops share one date, and without it the row order across
+  // pages isn't deterministic, so rows could repeat or be skipped at a boundary.
+  const fetchAllJobs = useCallback(async (userId: string): Promise<{ rows: Job[]; error: string | null }> => {
+    const PAGE_ROWS = 1000
+    const rows: Job[] = []
+    for (let from = 0; ; from += PAGE_ROWS) {
+      const { data, error } = await supabase
+        .from('jobs')
+        .select('*, customers(id, name, phone, preferred_days, avoid_days, pref_time_start, pref_time_end), properties(id, address, lat, lng, neighborhood, preferred_days, avoid_days, pref_time_start, pref_time_end)')
+        .eq('user_id', userId)
+        .order('scheduled_date')
+        .order('id')
+        .range(from, from + PAGE_ROWS - 1)
+      if (error) return { rows, error: error.message }
+      const batch = (data as Job[]) || []
+      rows.push(...batch)
+      if (batch.length < PAGE_ROWS) return { rows, error: null }
+    }
+  }, [supabase])
+
   const fetchJobs = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
     const [jRes, cRes, rRes, qRes, sRes, iRes, hRes, dRes] = await Promise.all([
-      supabase
-        .from('jobs')
-        .select('*, customers(id, name, phone, preferred_days, avoid_days, pref_time_start, pref_time_end), properties(id, address, lat, lng, neighborhood, preferred_days, avoid_days, pref_time_start, pref_time_end)')
-        .eq('user_id', user!.id)
-        .order('scheduled_date'),
+      fetchAllJobs(user!.id),
       supabase.from('customers').select('*').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — can't schedule an archived customer without restoring
       supabase.from('job_recurrences').select('*').eq('user_id', user!.id),
       supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
@@ -465,10 +488,18 @@ export default function SchedulePage() {
     ])
     setUid(user!.id)
     setDayStatusMap(buildDayStatusMap((dRes.data as DayStatusRow[]) || []))
-    const loadedJobs = (jRes.data as Job[]) || []
-    setJobs(loadedJobs)
+    // A failed jobs read must NEVER paint an empty schedule: "no work today" is
+    // indistinguishable from a clear day, and that's how a stop gets missed. Keep
+    // whatever is already on screen, say so plainly, and let the rest of the page
+    // finish refreshing (so loading always resolves).
+    if (jRes.error) {
+      setBanner('Could not load the schedule — check your connection and refresh. Showing the last data loaded.')
+    } else {
+      const loadedJobs = jRes.rows
+      setJobs(loadedJobs)
+      setAddonsByJobId(await listLineItemsByJob(supabase, user!.id, loadedJobs.map(j => j.id)))
+    }
     setInvoicedJobIds(new Set(((iRes.data as { job_id: string }[]) || []).map(r => r.job_id)))
-    setAddonsByJobId(await listLineItemsByJob(supabase, user!.id, loadedJobs.map(j => j.id)))
     setIgnoredHealthKeys(new Set(((hRes.data as { issue_key: string }[] | null) || []).map(r => r.issue_key)))
     setCustomers((cRes.data as Customer[]) || [])
     const labels: Record<string, string> = {}
@@ -500,7 +531,7 @@ export default function SchedulePage() {
       }
     }
     setLoading(false)
-  }, [supabase])
+  }, [supabase, fetchAllJobs])
 
   useEffect(() => { fetchJobs() }, [fetchJobs])
 

@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { renderMessage, MsgType, type MessagePrefs } from '@/lib/comms/templates'
 import { commsEnabled } from '@/lib/comms/send'
 import { dispatchToCustomer } from '@/lib/comms/dispatch'
+import { logDispatch, logSend } from '@/lib/comms/log'
 import { ensurePortalToken, portalUrl } from '@/lib/portal'
 import { resolveAutomations, Automations } from '@/lib/comms/automations'
 import { dueForAutoReminder, resolveReminderPolicy, type ReminderPolicy, type RemindableInvoice } from '@/lib/payments/dunning'
@@ -145,18 +146,20 @@ export async function GET(req: NextRequest) {
         template: 'payment_reminder',
         meta: { invoice_id: inv.id, invoice_number: inv.invoice_number, reminder_number: seen + 1, balance, automated: true },
       })
-      for (const a of res.attempts) {
-        await supabase.from('notification_log').insert({
-          user_id: inv.user_id, customer_id: inv.customer_id, channel: a.channel,
-          template: 'payment_reminder', status: a.status, detail: a.detail, message_id: res.messageId,
-        })
-      }
+      // THE shared writer: carries each attempt's provider id, so a delivery
+      // webhook can later move these rows past 'sent' (and only links a bubble to
+      // attempts that actually sent).
+      await logDispatch(supabase, res, { userId: inv.user_id, customerId: inv.customer_id, template: 'payment_reminder' })
       if (res.sentChannels.length) sent++; else skipped++
     } catch (e) {
       failed++
-      await supabase.from('notification_log').insert({
-        user_id: inv.user_id, customer_id: inv.customer_id, channel: 'sms',
-        template: 'payment_reminder', status: 'failed',
+      // 'error', not 'failed': the dispatcher threw, so we do NOT know the message
+      // reached a provider — that's a send-time failure and must stay retryable.
+      // 'failed' is reserved for a provider telling us delivery failed (see
+      // lib/comms/delivery SENT_STATES), which would suppress future attempts.
+      await logSend(supabase, {
+        userId: inv.user_id, customerId: inv.customer_id, channel: 'sms',
+        template: 'payment_reminder', status: 'error',
         detail: e instanceof Error ? e.message.slice(0, 200) : 'reminder failed',
       })
     }
