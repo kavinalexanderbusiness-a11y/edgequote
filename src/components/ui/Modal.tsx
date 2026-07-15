@@ -98,7 +98,7 @@ export function Modal({ open, onClose, title, icon: Icon, children, footer, size
       >
         {(title || dismissable) && (
           <div className="flex items-center gap-2 px-5 py-4 border-b border-border shrink-0">
-            {Icon && <Icon className="w-4 h-4 text-accent shrink-0" aria-hidden="true" />}
+            {Icon && <Icon className="w-4 h-4 text-accent-text shrink-0" aria-hidden="true" />}
             {title && <h2 id={titleId} className="text-sm font-semibold text-ink min-w-0 truncate">{title}</h2>}
             {dismissable && (
               <button

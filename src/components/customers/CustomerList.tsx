@@ -270,7 +270,7 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
               {/* Info */}
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <Link href={`/dashboard/customers/${c.id}`} className="text-sm font-semibold text-ink hover:text-accent transition-colors">{c.name}</Link>
+                  <Link href={`/dashboard/customers/${c.id}`} className="text-sm font-semibold text-ink hover:text-accent-text transition-colors">{c.name}</Link>
                   {c.sms_opt_in && <span className="text-[10px] uppercase tracking-wide text-emerald-400 border border-emerald-500/30 bg-emerald-500/10 rounded px-1.5 py-0.5">SMS</span>}
                   {c.email_opt_in && <span className="text-[10px] uppercase tracking-wide text-emerald-400 border border-emerald-500/30 bg-emerald-500/10 rounded px-1.5 py-0.5">Email</span>}
                 </div>
@@ -281,7 +281,7 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
                     </a>
                   )}
                   {c.phone && (
-                    <a href={`tel:${c.phone}`} className="flex items-center gap-1 text-xs text-accent hover:underline">
+                    <a href={`tel:${c.phone}`} className="flex items-center gap-1 text-xs text-accent-text hover:underline">
                       <Phone className="w-3 h-3" /> {c.phone}
                     </a>
                   )}

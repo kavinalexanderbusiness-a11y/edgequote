@@ -44,7 +44,7 @@ export function AutomationToggles() {
   return (
     <Card>
       <CardHeader>
-        <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Zap className="w-4 h-4 text-accent" /> Automated messages</h2>
+        <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Zap className="w-4 h-4 text-accent-text" /> Automated messages</h2>
         <p className="text-xs text-ink-faint mt-0.5">Which messages send on their own. Per-customer SMS/email opt-in still applies — nothing sends to a customer who hasn’t consented.</p>
       </CardHeader>
       <CardBody>

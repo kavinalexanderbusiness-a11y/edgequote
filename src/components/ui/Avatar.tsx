@@ -10,7 +10,7 @@ import { cn, getInitials } from '@/lib/utils'
 // Tints mirror the app's badge language (bg/10 · border/20 · text-400) and live
 // here (a scanned path) so Tailwind never purges them.
 const PALETTE = [
-  'bg-accent/10 border-accent/25 text-accent',
+  'bg-accent/10 border-accent/25 text-accent-text',
   'bg-emerald-500/10 border-emerald-500/25 text-emerald-400',
   'bg-sky-500/10 border-sky-500/25 text-sky-400',
   'bg-violet-500/10 border-violet-500/25 text-violet-400',

@@ -66,11 +66,11 @@ function FeatureCard({ href, icon: Icon, title, blurb }: { href: string; icon: t
       <Card className="p-5 h-full border-accent/25 card-lift hover:border-accent/50">
         <div className="flex items-center gap-3.5">
           <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
-            <Icon className="w-5 h-5 text-accent" />
+            <Icon className="w-5 h-5 text-accent-text" />
           </div>
           <div className="min-w-0 flex-1">
             <p className="text-sm font-bold tracking-tight text-ink flex items-center gap-1.5">
-              {title} <ArrowRight className="w-3.5 h-3.5 text-accent transition-transform group-hover:translate-x-0.5" />
+              {title} <ArrowRight className="w-3.5 h-3.5 text-accent-text transition-transform group-hover:translate-x-0.5" />
             </p>
             <p className="text-xs text-ink-muted mt-0.5">{blurb}</p>
           </div>
@@ -117,7 +117,7 @@ export default function GrowPage() {
                 <Card className="p-5 card-lift hover:border-accent/40 h-full">
                   <div className="flex items-start gap-3.5">
                     <div className="w-9 h-9 rounded-xl bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-                      <Icon className="w-4 h-4 text-accent" />
+                      <Icon className="w-4 h-4 text-accent-text" />
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-semibold tracking-tight text-ink flex items-center gap-1.5">

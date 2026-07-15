@@ -88,7 +88,7 @@ export default function WeatherPage() {
 
       {/* Which location the forecast is for — always visible so you know it's right */}
       <div className="flex flex-wrap items-center gap-2">
-        <span className="inline-flex items-center gap-1.5 text-sm font-semibold rounded-full px-3 py-1 border border-accent/30 bg-accent/10 text-accent">
+        <span className="inline-flex items-center gap-1.5 text-sm font-semibold rounded-full px-3 py-1 border border-accent/30 bg-accent/10 text-accent-text">
           <MapPin className="w-3.5 h-3.5" /> Forecast for {r.locationLabel}
         </span>
         {r.usingDefaultLocation && (
@@ -183,7 +183,7 @@ export default function WeatherPage() {
 
           <div className="space-y-3">
             <div className="flex items-center gap-2">
-              <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><AlertTriangle className="w-3.5 h-3.5 text-accent" /></span>
+              <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><AlertTriangle className="w-3.5 h-3.5 text-accent-text" /></span>
               <h2 className="text-sm font-semibold text-ink tracking-tight">Days at risk</h2>
               <span className="flex-1 h-px bg-border" aria-hidden />
             </div>

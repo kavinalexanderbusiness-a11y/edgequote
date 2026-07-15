@@ -6,7 +6,7 @@ import { Trophy, ShieldAlert, Route } from 'lucide-react'
 
 const AGG_META = {
   aggressive: { label: 'Competitive recurring pricing', cls: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' },
-  standard: { label: 'Standard recurring discount', cls: 'text-accent border-accent/30 bg-accent/10' },
+  standard: { label: 'Standard recurring discount', cls: 'text-accent-text border-accent/30 bg-accent/10' },
   protective: { label: 'Hold / raise pricing', cls: 'text-amber-400 border-amber-500/30 bg-amber-500/10' },
 } as const
 
@@ -43,11 +43,11 @@ export function PricePackagePanel({ pkg, onUse }: { pkg: PricingPackage; onUse: 
               className={cn('text-left rounded-xl border px-3 py-2.5 transition-all hover:border-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
                 isRec ? 'border-accent/50 bg-accent/10' : 'border-border')}>
               <p className="text-[11px] uppercase tracking-wide text-ink-faint flex items-center gap-1">
-                {CADENCE_LABELS[c.cadence]}{isRec && <Trophy className="w-3 h-3 text-accent" />}
+                {CADENCE_LABELS[c.cadence]}{isRec && <Trophy className="w-3 h-3 text-accent-text" />}
               </p>
               <p className="text-lg font-bold text-ink tabular-nums">${c.price.toLocaleString()}</p>
               {c.annual && <p className="text-[10px] text-ink-faint leading-tight mt-0.5">{c.annual}</p>}
-              <p className={cn('text-[10px] font-semibold mt-1', isRec ? 'text-accent' : 'text-ink-faint')}>Use {CADENCE_LABELS[c.cadence]} →</p>
+              <p className={cn('text-[10px] font-semibold mt-1', isRec ? 'text-accent-text' : 'text-ink-faint')}>Use {CADENCE_LABELS[c.cadence]} →</p>
             </button>
           )
         })}
@@ -72,7 +72,7 @@ export function PricePackagePanel({ pkg, onUse }: { pkg: PricingPackage; onUse: 
 
       {/* 🏆 Which option to push, and why */}
       <div className="rounded-xl border border-accent/30 bg-accent/5 px-3 py-2.5">
-        <p className="text-xs font-bold text-accent flex items-center gap-1.5"><Trophy className="w-3.5 h-3.5" /> Recommended: {recLabel} service</p>
+        <p className="text-xs font-bold text-accent-text flex items-center gap-1.5"><Trophy className="w-3.5 h-3.5" /> Recommended: {recLabel} service</p>
         <ul className="mt-1 space-y-0.5">
           {pkg.recommended.reasons.map((r, i) => <li key={i} className="text-[11px] text-ink-muted">• {r}</li>)}
         </ul>

@@ -390,7 +390,7 @@ function Section({ title, sub, icon: Icon, children }: { title: string; sub: str
     <div className="space-y-2">
       <div className="flex items-center gap-2">
         <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-          <Icon className="w-3.5 h-3.5 text-accent" />
+          <Icon className="w-3.5 h-3.5 text-accent-text" />
         </span>
         <h2 className="text-sm font-semibold text-ink tracking-tight">{title}</h2>
         <span className="text-xs text-ink-faint">{sub}</span>
@@ -415,7 +415,7 @@ function RecoveryRow({ title, sub, source, price, onPrice, missing, primary, sec
           <div className="min-w-0">
             <p className="text-sm font-bold text-ink truncate">{title}</p>
             <p className="text-xs text-ink-muted mt-0.5 truncate">{sub}</p>
-            <p className="text-[11px] text-ink-faint mt-0.5 flex items-center gap-1"><Sparkles className="w-3 h-3 text-accent" /> Suggested from {source}</p>
+            <p className="text-[11px] text-ink-faint mt-0.5 flex items-center gap-1"><Sparkles className="w-3 h-3 text-accent-text" /> Suggested from {source}</p>
           </div>
           <div className="text-right shrink-0">
             <p className="text-[10px] uppercase tracking-wide text-ink-faint">At risk</p>

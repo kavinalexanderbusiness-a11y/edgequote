@@ -157,7 +157,7 @@ export function TodaysPriorities() {
       }
       if (ranOutCusts.size > 0) {
         next.push({
-          key: 'reactivation', icon: Repeat, tone: 'text-accent bg-accent/10 border-accent/20',
+          key: 'reactivation', icon: Repeat, tone: 'text-accent-text bg-accent/10 border-accent/20',
           label: 'Re-book recurring customers', detail: ranOutValue > 0 ? `${ranOutCusts.size} · ${formatCurrency(ranOutValue)}/visit` : `${ranOutCusts.size} customer${ranOutCusts.size !== 1 ? 's' : ''}`,
           href: '/dashboard/reactivation', score: 40_000 + ranOutValue,
         })
@@ -190,7 +190,7 @@ export function TodaysPriorities() {
       <div className="rounded-card border border-accent/20 hero-aurora overflow-hidden">
         <div className="px-4 sm:px-5 py-3.5 border-b border-border flex items-center gap-2.5">
           <span className="w-7 h-7 rounded-lg bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
-            <ListChecks className="w-4 h-4 text-accent" />
+            <ListChecks className="w-4 h-4 text-accent-text" />
           </span>
           <h2 className="text-sm font-bold tracking-tight text-ink">Today&rsquo;s Priorities</h2>
         </div>
@@ -205,7 +205,7 @@ export function TodaysPriorities() {
     <div className="rounded-card border border-accent/20 hero-aurora overflow-hidden">
       <div className="px-4 sm:px-5 py-3.5 border-b border-border flex items-center gap-2.5">
         <span className="w-7 h-7 rounded-lg bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
-          <ListChecks className="w-4 h-4 text-accent" />
+          <ListChecks className="w-4 h-4 text-accent-text" />
         </span>
         <h2 className="text-sm font-bold tracking-tight text-ink">Today&rsquo;s Priorities</h2>
       </div>
@@ -226,7 +226,7 @@ export function TodaysPriorities() {
                 href={p.href}
                 className="group flex items-center gap-3 px-4 sm:px-5 py-3.5 hover:bg-surface/40 active:bg-surface/60 transition-colors"
               >
-                <span className={`shrink-0 w-5 h-5 rounded text-[10px] font-bold flex items-center justify-center tabular-nums ${i === 0 ? 'bg-accent/15 text-accent' : 'bg-bg-tertiary text-ink-faint'}`}>{i + 1}</span>
+                <span className={`shrink-0 w-5 h-5 rounded text-[10px] font-bold flex items-center justify-center tabular-nums ${i === 0 ? 'bg-accent/15 text-accent-text' : 'bg-bg-tertiary text-ink-faint'}`}>{i + 1}</span>
                 <span className={`shrink-0 w-9 h-9 rounded-lg border flex items-center justify-center ${p.tone}`}>
                   <p.icon className="w-4 h-4" />
                 </span>

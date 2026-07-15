@@ -444,7 +444,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
               specific to this service (req: auto-select the service before measuring). */}
           {services && services.length > 0 && (
             <div className="flex items-center gap-2 flex-wrap rounded-xl border border-accent/20 bg-accent/[0.04] px-3 py-2">
-              <Ruler className="w-3.5 h-3.5 text-accent shrink-0" />
+              <Ruler className="w-3.5 h-3.5 text-accent-text shrink-0" />
               <span className="text-xs font-medium text-ink">Service</span>
               <select
                 value={serviceType ?? ''}
@@ -532,7 +532,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
               <div className="bg-bg-tertiary border border-border rounded-card p-4 space-y-3">
                 <div className="flex items-center justify-between flex-wrap gap-3">
                   <div className="flex items-center gap-2">
-                    <Ruler className="w-4 h-4 text-accent" />
+                    <Ruler className="w-4 h-4 text-accent-text" />
                     <span className="text-sm text-ink-muted">Total area:</span>
                     <span className="text-lg font-bold text-ink tabular-nums">{totalSqft.toLocaleString()} sq ft</span>
                     {shapes > 0 && <span className="text-xs text-ink-faint">({shapes} + current)</span>}
@@ -541,7 +541,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
                   <label className="flex items-center gap-1.5 text-xs text-ink-muted" title="Lawn condition multiplier — 0.75 easy, 1.0 standard, 1.25 overgrown">
                     <span>
                       Condition<span className="block text-[10px] text-ink-faint">1.0 standard · 1.25 overgrown</span>
-                      {overgrowth !== 1 && <span className="block text-[10px] font-semibold text-accent">×{overgrowth} applied to prices</span>}
+                      {overgrowth !== 1 && <span className="block text-[10px] font-semibold text-accent-text">×{overgrowth} applied to prices</span>}
                     </span>
                     <input
                       type="number" min="0" step="0.05"

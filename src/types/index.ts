@@ -894,7 +894,7 @@ export const STATUS_LABELS: Record<QuoteStatus, string> = {
 export const STATUS_COLORS: Record<QuoteStatus, string> = {
   draft:     'bg-ink-faint/20 text-ink-muted border-ink-faint/30',
   sent:      'bg-blue-500/10 text-blue-400 border-blue-500/20',
-  accepted:  'bg-accent-dim text-accent border-accent/20',
+  accepted:  'bg-accent-dim text-accent-text border-accent/20',
   scheduled: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
   completed: 'bg-teal-500/10 text-teal-400 border-teal-500/20',
   paid:      'bg-emerald-500/15 text-emerald-400 border-emerald-500/25',

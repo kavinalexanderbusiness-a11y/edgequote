@@ -61,7 +61,7 @@ export function CommsHealth({ customer, onChange }: {
               <w.icon className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" /> {w.text}
             </p>
             {w.add && adding !== w.add && (
-              <button onClick={() => startAdd(w.add!)} className="text-xs font-medium text-accent hover:underline shrink-0 whitespace-nowrap rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+              <button onClick={() => startAdd(w.add!)} className="text-xs font-medium text-accent-text hover:underline shrink-0 whitespace-nowrap rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                 {w.add === 'email' ? 'Add email →' : 'Add phone →'}
               </button>
             )}

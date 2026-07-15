@@ -127,11 +127,11 @@ export function CustomerPicker({
                     <span className="block text-ink truncate">{r.c.name}</span>
                     {(r.c.phone || r.c.address) && <span className="block text-[11px] text-ink-faint truncate">{[r.c.phone, r.c.address].filter(Boolean).join(' · ')}</span>}
                   </span>
-                  {value === r.c.id && <Check className="w-4 h-4 text-accent shrink-0" />}
+                  {value === r.c.id && <Check className="w-4 h-4 text-accent-text shrink-0" />}
                 </button>
               ) : (
                 <button key="manual" type="button" onMouseEnter={() => setHi(i)} onClick={() => choose(i)}
-                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 border-t border-border text-accent transition-colors', i === hi ? 'bg-surface' : 'hover:bg-surface')}>
+                  className={cn('w-full text-left px-3.5 py-2.5 text-sm flex items-center gap-2 border-t border-border text-accent-text transition-colors', i === hi ? 'bg-surface' : 'hover:bg-surface')}>
                   <Plus className="w-3.5 h-3.5 shrink-0" /> Enter manually
                 </button>
               )

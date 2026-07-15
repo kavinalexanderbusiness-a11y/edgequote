@@ -127,7 +127,7 @@ export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel
         <div className="rounded-xl border border-border bg-surface/40 p-4 space-y-3">
           <div className="flex items-start gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-              <ShieldCheck className="w-4 h-4 text-accent" />
+              <ShieldCheck className="w-4 h-4 text-accent-text" />
             </div>
             <div className="min-w-0">
               <p className="text-sm font-semibold text-ink">Contact permissions</p>
@@ -177,7 +177,7 @@ export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel
               ? <>Looks like this customer already exists — <span className="font-semibold">{dupMatch.customer.name}</span> (same {dupMatch.reason}).</>
               : <>Possible existing customer — <span className="font-semibold">{dupMatch.customer.name}</span> (same name).</>}
           </p>
-          <Link href={`/dashboard/customers/${dupMatch.customer.id}`} className="inline-flex items-center gap-1 mt-1 text-accent font-medium hover:underline">
+          <Link href={`/dashboard/customers/${dupMatch.customer.id}`} className="inline-flex items-center gap-1 mt-1 text-accent-text font-medium hover:underline">
             Open {dupMatch.customer.name.split(' ')[0]} instead →
           </Link>
         </Banner>
@@ -283,7 +283,7 @@ function ConsentRow({ icon: Icon, title, desc, on, onChange, contactPresent, add
   return (
     <div className={cn('flex items-start gap-3 rounded-lg border px-3 py-2.5 transition-colors',
       on && contactPresent ? 'border-accent/30 bg-accent/[0.04]' : 'border-border bg-bg-tertiary/40')}>
-      <Icon className={cn('w-4 h-4 shrink-0 mt-0.5', on && contactPresent ? 'text-accent' : 'text-ink-faint')} />
+      <Icon className={cn('w-4 h-4 shrink-0 mt-0.5', on && contactPresent ? 'text-accent-text' : 'text-ink-faint')} />
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium text-ink">{title}</p>
         <p className="text-xs text-ink-muted mt-0.5 leading-snug">{desc}</p>

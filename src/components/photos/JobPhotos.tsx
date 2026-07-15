@@ -249,7 +249,7 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
         </>}
         <span className="text-[11px] ml-auto inline-flex items-center gap-1.5">
           {uploadingCount > 0
-            ? <span className="text-accent inline-flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Uploading {uploadingCount}…</span>
+            ? <span className="text-accent-text inline-flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> Uploading {uploadingCount}…</span>
             : photos.length > 0 ? <span className="text-ink-faint">{photos.length} photo{photos.length !== 1 ? 's' : ''}</span> : null}
         </span>
       </div>
@@ -308,7 +308,7 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
             ))}
           </div>
           {filtered.length > shown && (
-            <button type="button" onClick={() => setShown(s => s + 24)} className="mt-2 w-full text-xs font-medium text-accent hover:underline py-1.5">
+            <button type="button" onClick={() => setShown(s => s + 24)} className="mt-2 w-full text-xs font-medium text-accent-text hover:underline py-1.5">
               Show {Math.min(24, filtered.length - shown)} more ({filtered.length - shown} hidden)
             </button>
           )}
@@ -363,7 +363,7 @@ export function JobPhotos({ propertyId, jobId, customerId, variant = 'visit', in
               ) : null}
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
-                  <a href={current.url} target="_blank" rel="noopener noreferrer" className="text-xs text-accent hover:underline">Open full size</a>
+                  <a href={current.url} target="_blank" rel="noopener noreferrer" className="text-xs text-accent-text hover:underline">Open full size</a>
                   <button type="button" onClick={() => download(current)} disabled={downloading === current.id}
                     className="text-xs font-medium text-ink-muted hover:text-ink flex items-center gap-1 disabled:opacity-50">
                     {downloading === current.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />} Download

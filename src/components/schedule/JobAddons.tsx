@@ -83,7 +83,7 @@ export function JobAddons({ baseValue, items, isRecurring, onAdd, onDelete, prev
           {items.map(it => (
             <div key={it.id} className="flex items-center gap-2 text-sm">
               <span className="flex-1 min-w-0 truncate text-ink flex items-center gap-1.5">
-                {it.recurring && <Repeat className="w-3 h-3 shrink-0 text-accent" />}{it.description}
+                {it.recurring && <Repeat className="w-3 h-3 shrink-0 text-accent-text" />}{it.description}
               </span>
               <span className="font-semibold text-ink shrink-0">{formatCurrency(Number(it.amount))}</span>
               <button type="button" onClick={() => remove(it)} disabled={deletingId === it.id} title="Remove add-on"
@@ -99,12 +99,12 @@ export function JobAddons({ baseValue, items, isRecurring, onAdd, onDelete, prev
       {copyable.length > 0 && onCopyPrevious && (
         <button type="button" onClick={copyPrev} disabled={copyBusy}
           className="w-full flex items-center gap-2 rounded-lg border border-accent/30 bg-accent/5 px-2.5 py-1.5 text-left hover:bg-accent/10 transition-colors disabled:opacity-50">
-          <Copy className="w-3.5 h-3.5 text-accent shrink-0" />
+          <Copy className="w-3.5 h-3.5 text-accent-text shrink-0" />
           <span className="text-xs text-ink min-w-0 flex-1">
             <span className="font-semibold">Copy previous add-ons</span>
             <span className="text-ink-muted"> · {copyable.map(p => p.description).join(' + ')}</span>
           </span>
-          <span className="text-xs font-bold text-accent shrink-0">{formatCurrency(copyable.reduce((s, p) => s + (Number(p.amount) || 0), 0))}</span>
+          <span className="text-xs font-bold text-accent-text shrink-0">{formatCurrency(copyable.reduce((s, p) => s + (Number(p.amount) || 0), 0))}</span>
         </button>
       )}
 
@@ -144,12 +144,12 @@ export function JobAddons({ baseValue, items, isRecurring, onAdd, onDelete, prev
               {SCOPES.map(s => (
                 <button key={s.scope} type="button" onClick={() => setScope(s.scope)}
                   className={cn('text-[11px] font-medium rounded-lg px-2 py-1 border transition-colors',
-                    scope === s.scope ? 'bg-accent/15 text-accent border-accent/40' : 'border-border text-ink-muted hover:text-ink')}>
+                    scope === s.scope ? 'bg-accent/15 text-accent-text border-accent/40' : 'border-border text-ink-muted hover:text-ink')}>
                   {s.label}
                 </button>
               ))}
               {recommendRecurring && (
-                <span className="text-[10px] font-semibold uppercase tracking-wide text-accent flex items-center gap-1">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-accent-text flex items-center gap-1">
                   <Sparkles className="w-3 h-3" /> Recommended: recurring
                 </span>
               )}
@@ -168,7 +168,7 @@ export function JobAddons({ baseValue, items, isRecurring, onAdd, onDelete, prev
       {/* Total Job Value — always visible */}
       <div className="flex items-center justify-between border-t border-border pt-2">
         <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-muted">Total job value</span>
-        <span className="text-base font-bold text-accent">{formatCurrency(total)}</span>
+        <span className="text-base font-bold text-accent-text">{formatCurrency(total)}</span>
       </div>
     </div>
   )

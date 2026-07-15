@@ -113,7 +113,7 @@ export function ReviewLifecycle({ customer, onChange }: {
   return (
     <Card>
       <CardHeader className="flex items-center gap-2">
-        <Star className="w-4 h-4 text-accent" />
+        <Star className="w-4 h-4 text-accent-text" />
         <h2 className="text-sm font-semibold text-ink">Review</h2>
         <span className={`ml-auto text-[10px] uppercase tracking-wide font-semibold rounded px-1.5 py-0.5 border ${meta.tone}`}>{meta.label}</span>
       </CardHeader>

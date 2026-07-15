@@ -73,7 +73,7 @@ export function MorningBriefing() {
     <div className="rounded-card border border-accent/20 bg-gradient-to-br from-accent/[0.06] to-transparent p-4">
       <div className="flex items-center gap-2 mb-3">
         <div className="w-8 h-8 rounded-lg bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-          <Sunrise className="w-4 h-4 text-accent" />
+          <Sunrise className="w-4 h-4 text-accent-text" />
         </div>
         <div className="min-w-0">
           <p className="text-sm font-bold text-ink">Morning briefing</p>

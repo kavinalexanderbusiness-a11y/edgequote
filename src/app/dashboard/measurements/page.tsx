@@ -64,7 +64,7 @@ export default function MeasurementsPage() {
           <Card><CardBody>
             <div className="flex items-center gap-2 mb-2">
               <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-                <Gauge className="w-3.5 h-3.5 text-accent" />
+                <Gauge className="w-3.5 h-3.5 text-accent-text" />
               </span>
               <p className="text-sm font-semibold text-ink tracking-tight">Accuracy by confidence level</p>
               <span className="flex-1 h-px bg-border" aria-hidden />
@@ -97,7 +97,7 @@ function HoodList({ title, rows }: { title: string; rows: { neighborhood: string
     <Card><CardBody>
       <div className="flex items-center gap-2 mb-2">
         <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-          <MapPin className="w-3.5 h-3.5 text-accent" />
+          <MapPin className="w-3.5 h-3.5 text-accent-text" />
         </span>
         <p className="text-sm font-semibold text-ink tracking-tight">{title}</p>
         <span className="flex-1 h-px bg-border" aria-hidden />

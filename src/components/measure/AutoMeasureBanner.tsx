@@ -62,7 +62,7 @@ export function AutoMeasureBanner({ lat, lng, neighborhood, onAuto, onUse }: {
   return (
     <div className="rounded-card border border-accent/30 bg-accent/5 px-4 py-3 animate-fade">
       <div className="flex items-center justify-between gap-3">
-        <span className="text-sm font-semibold text-ink flex items-center gap-2"><Sparkles className="w-4 h-4 text-accent" /> Auto-measured lawn</span>
+        <span className="text-sm font-semibold text-ink flex items-center gap-2"><Sparkles className="w-4 h-4 text-accent-text" /> Auto-measured lawn</span>
         <ConfidenceBadge confidence={result.confidence} />
       </div>
       {/* The copilot says its basis — never a bare number under a one-word badge. */}

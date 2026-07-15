@@ -29,6 +29,10 @@ const config: Config = {
           DEFAULT: 'rgb(var(--c-accent) / <alpha-value>)',
           hover: 'rgb(var(--c-accent-hover) / <alpha-value>)',
           dim: 'var(--c-accent-dim)',
+          // Accent as TEXT only (`text-accent-text`). The DEFAULT above is a FILL
+          // colour and fails AA as text on white; this one passes in both themes.
+          // Never use for fills/borders/rings — see globals.css for the rationale.
+          text: 'rgb(var(--c-accent-text) / <alpha-value>)',
         },
         ink: {
           DEFAULT: 'rgb(var(--c-ink) / <alpha-value>)',

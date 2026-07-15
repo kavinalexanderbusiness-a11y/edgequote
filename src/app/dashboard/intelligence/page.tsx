@@ -220,7 +220,7 @@ function Section({ title, icon: Icon, children }: { title: string; icon: typeof 
     <div className="space-y-3 animate-rise">
       <div className="flex items-center gap-2.5">
         <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-          <Icon className="w-3.5 h-3.5 text-accent" />
+          <Icon className="w-3.5 h-3.5 text-accent-text" />
         </span>
         <p className="text-sm font-semibold tracking-tight text-ink">{title}</p>
         <span className="flex-1 h-px bg-border" aria-hidden />
@@ -256,7 +256,7 @@ function RankList({ title, items, fmt, subFmt }: { title: string; items: NamedVa
               <span className="text-ink truncate flex items-center gap-2">
                 <span className={cn(
                   'w-4 h-4 rounded text-[10px] font-bold flex items-center justify-center shrink-0 tabular-nums',
-                  i === 0 ? 'bg-accent/15 text-accent' : 'bg-bg-tertiary text-ink-faint'
+                  i === 0 ? 'bg-accent/15 text-accent-text' : 'bg-bg-tertiary text-ink-faint'
                 )}>{i + 1}</span>
                 <span className={cn('truncate', i === 0 && 'font-medium')}>{it.name}</span>
               </span>

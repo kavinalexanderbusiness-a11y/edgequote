@@ -249,7 +249,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
 
   if (loading) return (
     <div className="min-h-screen flex flex-col items-center justify-center gap-3 text-center px-8">
-      <div className="w-11 h-11 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center"><Leaf className="w-5 h-5 text-accent" /></div>
+      <div className="w-11 h-11 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center"><Leaf className="w-5 h-5 text-accent-text" /></div>
       <p className="text-sm text-ink-muted flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading your account…</p>
     </div>
   )
@@ -300,7 +300,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
         {/* Brand header */}
         <div className="flex items-center gap-3 mb-4">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          {biz?.logo_url ? <img src={biz.logo_url} alt="" className="h-10 w-auto object-contain" /> : <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center"><Leaf className="w-5 h-5 text-accent" /></div>}
+          {biz?.logo_url ? <img src={biz.logo_url} alt="" className="h-10 w-auto object-contain" /> : <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center"><Leaf className="w-5 h-5 text-accent-text" /></div>}
           <div className="min-w-0">
             <p className="text-base font-bold text-ink truncate tracking-tight">{biz?.company_name || 'Your Service Provider'}</p>
             {/* Plain "Welcome" — a first-time quote recipient has never been here. */}
@@ -455,7 +455,7 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
       {/* Next service hero (hidden for a pure prospect — the quote card above is their whole visit) */}
       {!prospect && (
       <div className="rounded-card border border-accent/20 hero-aurora p-4">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-accent mb-1">Next service</p>
+        <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-accent-text mb-1">Next service</p>
         {next ? (
           <>
             <div className="flex items-center justify-between gap-2">
@@ -492,7 +492,7 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
             className="text-left rounded-card border border-amber-500/30 bg-amber-500/[0.06] p-3.5 transition-colors hover:border-amber-500/50 active:scale-[0.99] disabled:opacity-60 card-lift focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
             <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint flex items-center gap-1"><Receipt className="w-3 h-3" /> Outstanding balance</p>
             <p className="text-lg font-bold mt-1 text-amber-400 tabular-nums">{formatCurrency(derived.outstanding)}</p>
-            <span className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-accent">
+            <span className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-accent-text">
               {payingId ? <Loader2 className="w-3 h-3 animate-spin" /> : <CreditCard className="w-3 h-3" />}
               {paymentsEnabled ? (owing.length === 1 ? 'Pay now' : 'View & pay') : 'View invoices'}
             </span>
@@ -511,7 +511,7 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
           <div className="space-y-1.5">
             {derived.plans.map(p => (
               <div key={p.id} className="flex items-center gap-2 text-sm">
-                <Repeat className="w-3.5 h-3.5 text-accent shrink-0" />
+                <Repeat className="w-3.5 h-3.5 text-accent-text shrink-0" />
                 <span className="text-ink font-medium">{p.service}</span>
                 <span className="text-ink-muted">· {p.label}</span>
               </div>
@@ -536,9 +536,9 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
       {/* Contact */}
       {biz && (biz.phone || biz.email_primary) && (
         <div className="flex flex-wrap gap-2">
-          {biz.phone && <a href={`tel:${biz.phone}`} className="flex-1 min-w-[120px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-secondary py-2.5 text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><Phone className="w-4 h-4 text-accent" /> Call</a>}
-          {biz.email_primary && <a href={`mailto:${biz.email_primary}`} className="flex-1 min-w-[120px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-secondary py-2.5 text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><Mail className="w-4 h-4 text-accent" /> Email</a>}
-          {biz.website && <a href={biz.website.startsWith('http') ? biz.website : `https://${biz.website}`} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-[120px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-secondary py-2.5 text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><Globe className="w-4 h-4 text-accent" /> Website</a>}
+          {biz.phone && <a href={`tel:${biz.phone}`} className="flex-1 min-w-[120px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-secondary py-2.5 text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><Phone className="w-4 h-4 text-accent-text" /> Call</a>}
+          {biz.email_primary && <a href={`mailto:${biz.email_primary}`} className="flex-1 min-w-[120px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-secondary py-2.5 text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><Mail className="w-4 h-4 text-accent-text" /> Email</a>}
+          {biz.website && <a href={biz.website.startsWith('http') ? biz.website : `https://${biz.website}`} target="_blank" rel="noopener noreferrer" className="flex-1 min-w-[120px] flex items-center justify-center gap-1.5 text-sm font-medium rounded-xl border border-border bg-bg-secondary py-2.5 text-ink hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><Globe className="w-4 h-4 text-accent-text" /> Website</a>}
         </div>
       )}
     </div>
@@ -649,7 +649,7 @@ type DocKind = 'quote' | 'invoice'
 // an invoice or accepting a quote happens right on the row (no separate tabs).
 interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; amount: number; balance: number; filename: string; getBlob: () => Promise<Blob>; lines?: { label: string; amount: number }[] }
 const KIND_META: Record<DocKind, { label: string; icon: typeof FileText; tone: string }> = {
-  quote: { label: 'Quote', icon: FileText, tone: 'text-accent border-accent/25 bg-accent/10' },
+  quote: { label: 'Quote', icon: FileText, tone: 'text-accent-text border-accent/25 bg-accent/10' },
   invoice: { label: 'Invoice', icon: Receipt, tone: 'text-sky-400 border-sky-500/25 bg-sky-500/10' },
 }
 
@@ -951,7 +951,7 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
             <p className="text-sm font-semibold text-ink">E-transfer</p>
             <p className="text-xs text-ink-muted">Recipient: <span className="font-medium text-ink">{business?.company_name || 'Your service provider'}</span></p>
             <p className="text-xs text-ink-muted mt-1">Send payment to:</p>
-            <p className="text-sm font-semibold text-accent break-all">{etransferEmail}</p>
+            <p className="text-sm font-semibold text-accent-text break-all">{etransferEmail}</p>
             {owingNums.length === 1 && (
               <p className="text-xs text-ink-muted mt-1">Please include invoice number <span className="font-semibold text-ink">{owingNums[0]}</span> in the e-transfer message.</p>
             )}
@@ -983,8 +983,8 @@ function PaymentsTab({ payments, invoices, outstanding, token, paymentsEnabled, 
       {paymentsEnabled && <AutoPayCard token={token} card={card} autopayEnabled={autopayEnabled} onChanged={onChanged} />}
       {availableCredit > 0 && (
         <div className="rounded-card border border-accent/25 bg-accent/[0.06] p-3.5 flex items-center justify-between gap-3">
-          <p className="text-[10px] uppercase tracking-[0.14em] text-accent font-semibold flex items-center gap-1"><Wallet className="w-3 h-3" /> Available credit</p>
-          <p className="text-lg font-bold text-accent tabular-nums">{formatCurrency(availableCredit)}</p>
+          <p className="text-[10px] uppercase tracking-[0.14em] text-accent-text font-semibold flex items-center gap-1"><Wallet className="w-3 h-3" /> Available credit</p>
+          <p className="text-lg font-bold text-accent-text tabular-nums">{formatCurrency(availableCredit)}</p>
         </div>
       )}
       <div className="grid grid-cols-2 gap-3">
@@ -1072,7 +1072,7 @@ function AutoPayCard({ token, card, autopayEnabled, onChanged }: {
 
   return (
     <div className="rounded-card border border-border bg-bg-secondary p-4">
-      <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><CreditCard className="w-4 h-4 text-accent" /> Payment method &amp; AutoPay</p>
+      <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><CreditCard className="w-4 h-4 text-accent-text" /> Payment method &amp; AutoPay</p>
       <p className="text-xs text-ink-muted mt-0.5 mb-3">Save a card to pay recurring invoices automatically. Your card is stored securely by Stripe — never by us.</p>
       {card ? (
         <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-bg-tertiary px-3 py-2.5">
@@ -1081,7 +1081,7 @@ function AutoPayCard({ token, card, autopayEnabled, onChanged }: {
             <span className="truncate">{brand} •••• {card.last4 || '????'}{exp ? ` · ${exp}` : ''}</span>
           </span>
           <div className="flex items-center gap-3 shrink-0">
-            <button onClick={addCard} disabled={busy !== null} className="text-xs font-medium text-accent hover:underline disabled:opacity-50 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">Replace</button>
+            <button onClick={addCard} disabled={busy !== null} className="text-xs font-medium text-accent-text hover:underline disabled:opacity-50 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">Replace</button>
             <button onClick={removeCard} disabled={busy !== null} className="text-xs font-medium text-red-400/70 hover:text-red-400 disabled:opacity-50 flex items-center gap-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"><Trash2 className="w-3.5 h-3.5" /> Remove</button>
           </div>
         </div>
@@ -1091,7 +1091,7 @@ function AutoPayCard({ token, card, autopayEnabled, onChanged }: {
         </Button>
       )}
       <div className="flex items-center justify-between gap-3 mt-3 rounded-lg border border-border bg-bg-tertiary px-3 py-2.5">
-        <span className="text-sm text-ink flex items-center gap-2"><Zap className="w-4 h-4 text-accent" /> AutoPay recurring invoices</span>
+        <span className="text-sm text-ink flex items-center gap-2"><Zap className="w-4 h-4 text-accent-text" /> AutoPay recurring invoices</span>
         <button onClick={toggle} disabled={!card && !autopay} aria-pressed={autopay} aria-label="AutoPay recurring invoices"
           className={cn('relative w-11 h-6 rounded-full transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50', autopay ? 'bg-accent' : 'bg-border-strong', (!card && !autopay) && 'opacity-40 cursor-not-allowed')}>
           <span className={cn('absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform', autopay && 'translate-x-5')} />
@@ -1111,7 +1111,7 @@ function RequestTab({ presets, reqMsg, setReqMsg, request, reqBusy, reqSent, biz
   return (
     <div className="space-y-3">
       <div className="rounded-card border border-border bg-bg-secondary p-4">
-        <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><Sparkles className="w-4 h-4 text-accent" /> Request a service</p>
+        <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><Sparkles className="w-4 h-4 text-accent-text" /> Request a service</p>
         <p className="text-xs text-ink-muted mt-0.5 mb-3">Tap a service to request a quote — {biz?.company_name || 'we'}’ll be in touch.</p>
         <div className="grid grid-cols-2 gap-2">
           {presets.map(p => {
@@ -1201,7 +1201,7 @@ function ConsentCard({ token, consent, onSave }: { token: string; consent: { sms
 
   return (
     <div className="rounded-card border border-border bg-bg-secondary p-4 mt-3">
-      <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><MessageSquare className="w-4 h-4 text-accent" /> Message preferences</p>
+      <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><MessageSquare className="w-4 h-4 text-accent-text" /> Message preferences</p>
       <p className="text-xs text-ink-muted mt-0.5 mb-3">Choose how we can reach you — you can change this anytime. Message &amp; data rates may apply to texts.</p>
       <div className="space-y-2">
         <PrefRow label="Text messages (SMS)" icon={MessageSquare} on={consent.sms} onChange={v => onSave({ ...consent, sms: v })} />

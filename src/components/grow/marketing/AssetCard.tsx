@@ -51,7 +51,7 @@ export function AssetCard({ candidate, selected, onClick }: {
           </p>
           <div className="flex items-center gap-1.5 mt-1">
             {candidate.hasBefore && candidate.hasAfter && (
-              <span className="inline-flex items-center gap-1 text-[10px] text-accent">
+              <span className="inline-flex items-center gap-1 text-[10px] text-accent-text">
                 <ArrowLeftRight className="w-3 h-3" /> Before &amp; after
               </span>
             )}

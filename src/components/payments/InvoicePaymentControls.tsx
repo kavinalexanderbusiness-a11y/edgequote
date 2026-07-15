@@ -209,14 +209,14 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   <button onClick={() => downloadRowReceipt(p)} disabled={rowBusy === p.id}
-                    className="p-1.5 text-ink-faint hover:text-accent transition-colors"
+                    className="p-1.5 text-ink-faint hover:text-accent-text transition-colors"
                     aria-label={negative ? 'Download refund receipt' : 'Download receipt'}
                     title={`Download ${negative ? 'refund receipt' : 'receipt'} ${receiptNumberFor(p.id)}`}>
                     <FileDown className="w-3.5 h-3.5" />
                   </button>
                   {invoice.customers?.phone && (
                     <button onClick={() => sendReceipt(p, 'sms')} disabled={rowBusy === p.id || sendingReceipt !== null}
-                      className="p-1.5 text-ink-faint hover:text-accent transition-colors"
+                      className="p-1.5 text-ink-faint hover:text-accent-text transition-colors"
                       aria-label="Text this receipt to the customer" title={`Text ${negative ? 'refund receipt' : 'receipt'} ${receiptNumberFor(p.id)} to the customer`}>
                       <MessageSquare className="w-3.5 h-3.5" />
                     </button>
@@ -276,7 +276,7 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
         <form onSubmit={e => { e.preventDefault(); if (Number(amount) > 0 && !busy) save() }}
           className="rounded-lg border border-border bg-bg-secondary p-3 space-y-2.5">
           <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold text-ink flex items-center gap-1.5"><Wallet className="w-3.5 h-3.5 text-accent" /> Record a payment</p>
+            <p className="text-xs font-semibold text-ink flex items-center gap-1.5"><Wallet className="w-3.5 h-3.5 text-accent-text" /> Record a payment</p>
             <button type="button" onClick={() => setOpen(false)} className="h-7 w-7 rounded-lg flex items-center justify-center text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" aria-label="Close"><X className="w-4 h-4" /></button>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">

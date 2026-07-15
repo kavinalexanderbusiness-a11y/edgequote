@@ -103,7 +103,7 @@ function JobChip({ job, onSelect, onDragStart, recurLabel, value, addonCount, on
               same in every view. */}
           <span className={cn('truncate', job.status === 'completed' && 'line-through opacity-80')}>{job.start_time ? job.start_time.slice(0, 5) + ' ' : ''}{job.customers?.name || job.title}</span>
           {addonCount != null && addonCount > 0 && (
-            <span className="shrink-0 text-[10px] font-bold text-accent" title={`${addonCount} add-on service${addonCount !== 1 ? 's' : ''}`}>+{addonCount}</span>
+            <span className="shrink-0 text-[10px] font-bold text-accent-text" title={`${addonCount} add-on service${addonCount !== 1 ? 's' : ''}`}>+{addonCount}</span>
           )}
           {value != null && <span className={cn('ml-auto shrink-0 pl-1 font-semibold', value > 0 ? 'opacity-90' : 'text-amber-400')}>{value > 0 ? `$${value}` : '$?'}</span>}
         </span>

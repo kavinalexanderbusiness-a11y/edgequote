@@ -57,7 +57,7 @@ export function PaymentHistory({ settings }: { settings?: BusinessSettings | nul
       <CardBody>
         <div className="flex items-center justify-between mb-3">
           <p className="text-sm font-semibold text-ink flex items-center gap-2">
-            <Wallet className="w-4 h-4 text-accent" /> Payment timeline
+            <Wallet className="w-4 h-4 text-accent-text" /> Payment timeline
           </p>
           <p className="text-xs text-ink-muted">{formatCurrency(total)} received · last {paidRows.length} payment{paidRows.length !== 1 ? 's' : ''}</p>
         </div>
@@ -80,7 +80,7 @@ export function PaymentHistory({ settings }: { settings?: BusinessSettings | nul
                   </span>
                   {r.kind === 'payment' && r.invoices && (
                     <button onClick={() => downloadReceipt(r)} disabled={receiptId === r.id}
-                      className="p-1.5 rounded-lg text-ink-faint hover:text-accent transition-colors"
+                      className="p-1.5 rounded-lg text-ink-faint hover:text-accent-text transition-colors"
                       aria-label={negative ? 'Download refund receipt' : 'Download receipt'}
                       title={`Download ${Number(r.amount) < 0 ? 'refund receipt' : 'receipt'} ${receiptNumberFor(r.id)}`}>
                       {receiptId === r.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileDown className="w-3.5 h-3.5" />}

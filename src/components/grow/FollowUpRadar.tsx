@@ -38,7 +38,7 @@ export function FollowUpRadar() {
     <div className="rounded-card border border-border bg-bg-secondary overflow-hidden animate-rise">
       <div className="px-5 py-4 border-b border-border flex items-start gap-3">
         <div className="w-9 h-9 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
-          <Bell className="w-4 h-4 text-accent" />
+          <Bell className="w-4 h-4 text-accent-text" />
         </div>
         <div className="min-w-0">
           <p className="text-base font-bold tracking-tight text-ink">Follow-up radar</p>
@@ -90,7 +90,7 @@ export function FollowUpRadar() {
             })}
           </div>
           {items.length > 8 && (
-            <button onClick={() => setShowAll(s => !s)} aria-expanded={showAll} className="w-full py-2.5 text-xs font-medium text-accent hover:bg-surface-raised border-t border-border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40">
+            <button onClick={() => setShowAll(s => !s)} aria-expanded={showAll} className="w-full py-2.5 text-xs font-medium text-accent-text hover:bg-surface-raised border-t border-border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40">
               {showAll ? 'Show less' : `Show all ${items.length}`}
             </button>
           )}

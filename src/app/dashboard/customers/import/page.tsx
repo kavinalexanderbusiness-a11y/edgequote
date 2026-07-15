@@ -141,7 +141,7 @@ export default function ImportCustomersPage() {
             <CardBody className="space-y-3">
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <p className="text-xs text-ink-muted">Columns: <span className="text-ink">name</span> (required), email, phone, address, city, province, postal_code, notes, sms_opt_in, email_opt_in</p>
-                <label className="inline-flex items-center gap-1.5 text-xs font-medium text-accent cursor-pointer rounded-md focus-within:ring-2 focus-within:ring-accent/40">
+                <label className="inline-flex items-center gap-1.5 text-xs font-medium text-accent-text cursor-pointer rounded-md focus-within:ring-2 focus-within:ring-accent/40">
                   <Upload className="w-3.5 h-3.5" /> Upload CSV file
                   <input type="file" accept=".csv,text/csv" onChange={onFile} className="sr-only" />
                 </label>

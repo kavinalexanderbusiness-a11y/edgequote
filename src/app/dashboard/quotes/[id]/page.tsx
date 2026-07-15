@@ -639,7 +639,7 @@ export default function QuoteDetailPage() {
           <Card>
             <CardBody className="space-y-2">
               <p className="text-sm font-semibold text-ink flex items-center gap-2">
-                <Camera className="w-4 h-4 text-accent" /> Customer photos
+                <Camera className="w-4 h-4 text-accent-text" /> Customer photos
                 <span className="ml-auto text-xs font-normal text-ink-faint">{photos.length} attached at booking</span>
               </p>
               <JobPhotos propertyId={null} variant="gallery" readOnly initialPhotos={photos} />
@@ -655,7 +655,7 @@ export default function QuoteDetailPage() {
       {quote.status === 'accepted' && (
         <div className="flex items-center justify-between flex-wrap gap-3 text-sm bg-accent/10 border border-accent/20 rounded-xl px-4 py-3">
           <span className="text-ink font-medium flex items-center gap-2">
-            <CalendarPlus className="w-4 h-4 shrink-0 text-accent" /> Accepted — this job isn’t scheduled yet.
+            <CalendarPlus className="w-4 h-4 shrink-0 text-accent-text" /> Accepted — this job isn’t scheduled yet.
           </span>
           <div className="flex items-center gap-2">
             {/* Honest label — this books the job on TODAY's route (move it after). */}
@@ -732,7 +732,7 @@ export default function QuoteDetailPage() {
               <a
                 href={customerPhone ? `tel:${customerPhone}` : undefined}
                 aria-disabled={!customerPhone}
-                className={`h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${customerPhone ? 'bg-accent/10 border-accent/20 text-accent hover:bg-accent/20' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}
+                className={`h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${customerPhone ? 'bg-accent/10 border-accent/20 text-accent-text hover:bg-accent/20' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}
               >
                 <Phone className="w-4 h-4" /> Call
               </a>
@@ -851,7 +851,7 @@ export default function QuoteDetailPage() {
             )}
             <div className="flex justify-between items-center pt-2 border-t border-border">
               <span className="text-sm font-semibold text-ink">{(quote.weekly_price || quote.biweekly_price || quote.monthly_price) ? 'First Visit Total' : 'Quote Total'}</span>
-              <span className="text-3xl font-bold text-accent tabular-nums">{formatCurrency(quote.total)}</span>
+              <span className="text-3xl font-bold text-accent-text tabular-nums">{formatCurrency(quote.total)}</span>
             </div>
             {(quote.weekly_price || quote.biweekly_price || quote.monthly_price) ? (
               <div className="pt-3 border-t border-border space-y-1.5">

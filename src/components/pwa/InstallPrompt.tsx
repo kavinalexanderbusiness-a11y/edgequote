@@ -77,7 +77,7 @@ export function InstallPrompt() {
   return (
     <div className="fixed inset-x-0 bottom-0 z-[90] flex justify-center px-3 pb-[calc(12px+env(safe-area-inset-bottom))] pointer-events-none">
       <div className="pointer-events-auto w-full max-w-md rounded-2xl border border-border bg-bg-secondary/95 backdrop-blur shadow-2xl p-3.5 flex items-start gap-3">
-        <div className="w-10 h-10 rounded-xl bg-accent/10 border border-accent/30 text-accent flex items-center justify-center shrink-0">
+        <div className="w-10 h-10 rounded-xl bg-accent/10 border border-accent/30 text-accent-text flex items-center justify-center shrink-0">
           <Download className="w-5 h-5" />
         </div>
         <div className="min-w-0 flex-1">

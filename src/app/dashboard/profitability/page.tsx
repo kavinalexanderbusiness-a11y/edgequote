@@ -242,7 +242,7 @@ export default function ProfitabilityPage() {
         <Card>
           <div className="px-4 py-3 border-b border-border flex items-center gap-2.5">
             <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-              <Clock className="w-3.5 h-3.5 text-accent" />
+              <Clock className="w-3.5 h-3.5 text-accent-text" />
             </span>
             <h2 className="text-sm font-semibold tracking-tight text-ink">Monthly trends</h2>
             <span className="flex-1 h-px bg-border" aria-hidden />
@@ -281,7 +281,7 @@ export default function ProfitabilityPage() {
         <div className="space-y-2">
           <div className="flex items-center gap-2.5">
             <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-              <MapPin className="w-3.5 h-3.5 text-accent" />
+              <MapPin className="w-3.5 h-3.5 text-accent-text" />
             </span>
             <h2 className="text-sm font-semibold tracking-tight text-ink">Profitability map</h2>
             <span className="flex-1 h-px bg-border" aria-hidden />
@@ -315,7 +315,7 @@ function RouteCard({ r }: { r: RouteProfit }) {
                 {formatDate(r.date)}
                 {r.future && <span className="text-[10px] font-semibold uppercase tracking-wide text-blue-400 border border-blue-500/30 rounded px-1.5 py-0.5">Booked</span>}
               </p>
-              <p className="text-lg font-bold text-accent tabular-nums">{formatCurrency(r.revenue)}</p>
+              <p className="text-lg font-bold text-accent-text tabular-nums">{formatCurrency(r.revenue)}</p>
             </div>
             <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mt-2 text-xs">
               <Metric label={r.hasDriveData ? '$/hr' : '$/hr*'} value={`$${r.revPerHour}`} />
@@ -352,7 +352,7 @@ function AggCard({ a }: { a: AggRow }) {
           <div className="min-w-0 flex-1">
             <div className="flex items-center justify-between gap-2">
               <p className="text-sm font-bold text-ink">{a.label}</p>
-              <p className="text-lg font-bold text-accent tabular-nums">{formatCurrency(a.revenue)}</p>
+              <p className="text-lg font-bold text-accent-text tabular-nums">{formatCurrency(a.revenue)}</p>
             </div>
             <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mt-1.5 text-xs">
               <Metric label="$/hr" value={`$${a.revPerHour}`} />

@@ -79,15 +79,15 @@ const EVENT_META: Record<TimelineEvent['kind'], { icon: typeof FileText; color: 
   quote_sent:      { icon: Send,         color: 'text-blue-400 bg-blue-500/10 border-blue-500/20' },
   followup:        { icon: RotateCw,     color: 'text-amber-400 bg-amber-500/10 border-amber-500/20' },
   quote_accepted:  { icon: CheckCircle2, color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' },
-  job_scheduled:   { icon: CalendarPlus, color: 'text-accent bg-accent/10 border-accent/20' },
+  job_scheduled:   { icon: CalendarPlus, color: 'text-accent-text bg-accent/10 border-accent/20' },
   job_completed:   { icon: Wrench,       color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' },
   invoice_created: { icon: Receipt,      color: 'text-ink-muted bg-surface border-border' },
-  invoice_paid:    { icon: DollarSign,   color: 'text-accent bg-accent/10 border-accent/20' },
+  invoice_paid:    { icon: DollarSign,   color: 'text-accent-text bg-accent/10 border-accent/20' },
   message_in:      { icon: MessageSquare,color: 'text-blue-400 bg-blue-500/10 border-blue-500/20' },
   message_out:     { icon: Send,         color: 'text-ink-muted bg-surface border-border' },
   payment:         { icon: DollarSign,   color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' },
   portal_request:  { icon: StickyNote,   color: 'text-amber-400 bg-amber-500/10 border-amber-500/20' },
-  lead:            { icon: Globe,         color: 'text-accent bg-accent/10 border-accent/25' },
+  lead:            { icon: Globe,         color: 'text-accent-text bg-accent/10 border-accent/25' },
 }
 
 // At-a-glance messaging eligibility beside a contact method: whether this channel
@@ -461,7 +461,7 @@ export default function CustomerDetailPage() {
   ) : (
     <div className="text-center py-16 text-sm">
       <p className="text-red-400">Customer not found — they may have been deleted.</p>
-      <Link href="/dashboard/customers" className="mt-2 inline-block underline font-medium text-accent">Back to Customers</Link>
+      <Link href="/dashboard/customers" className="mt-2 inline-block underline font-medium text-accent-text">Back to Customers</Link>
     </div>
   )
 
@@ -515,7 +515,7 @@ export default function CustomerDetailPage() {
     openItems.push({ key: `fu-${q.id}`, icon: RotateCw, label: `Follow up: ${q.quote_number}`, sub: `${q.service_type} · ${formatCurrency(Number(q.total))}${q.sent_at ? ` · sent ${daysSince(q.sent_at)}d ago` : ''}`, href: `/dashboard/quotes/${q.id}`, tone: 'text-amber-400' })
   }
   for (const q of quotes.filter(q => q.status === 'accepted')) {
-    openItems.push({ key: `sch-${q.id}`, icon: CalendarPlus, label: `Schedule: ${q.quote_number}`, sub: `${q.service_type} · ${formatCurrency(Number(q.total))}`, href: `/dashboard/schedule?quote=${q.id}`, tone: 'text-accent' })
+    openItems.push({ key: `sch-${q.id}`, icon: CalendarPlus, label: `Schedule: ${q.quote_number}`, sub: `${q.service_type} · ${formatCurrency(Number(q.total))}`, href: `/dashboard/schedule?quote=${q.id}`, tone: 'text-accent-text' })
   }
   for (const inv of invoices.filter(i => OPEN_INVOICE.has(i.status))) {
     const overdue = !!inv.due_date && inv.due_date < today
@@ -534,7 +534,7 @@ export default function CustomerDetailPage() {
     : null
 
   const revenueCards = [
-    { label: 'Booked Revenue', value: formatCurrency(bookedRevenue), sub: 'Won quotes', icon: DollarSign, color: 'text-accent' },
+    { label: 'Booked Revenue', value: formatCurrency(bookedRevenue), sub: 'Won quotes', icon: DollarSign, color: 'text-accent-text' },
     { label: 'Collected', value: formatCurrency(collectedRevenue), sub: 'Invoices paid', icon: Wallet, color: 'text-emerald-400' },
     { label: 'Outstanding', value: formatCurrency(outstandingRevenue), sub: 'Billed, unpaid', icon: AlertTriangle, color: 'text-amber-400' },
     {
@@ -581,7 +581,7 @@ export default function CustomerDetailPage() {
               {(isHighValue || recurringStatus) && (
                 <div className="flex items-center gap-2 flex-wrap">
                   {isHighValue && (
-                    <span className="text-[10px] uppercase tracking-wide text-accent border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5 font-semibold flex items-center gap-1">
+                    <span className="text-[10px] uppercase tracking-wide text-accent-text border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5 font-semibold flex items-center gap-1">
                       <Sparkles className="w-3 h-3" /> High value
                     </span>
                   )}
@@ -595,7 +595,7 @@ export default function CustomerDetailPage() {
               <div className="flex items-center gap-x-4 gap-y-1 mt-1 flex-wrap text-sm">
                 {customer.phone && (
                   <span className="flex items-center gap-1.5">
-                    <a href={`tel:${customer.phone}`} className="flex items-center gap-1 text-accent hover:underline"><Phone className="w-3.5 h-3.5" />{customer.phone}</a>
+                    <a href={`tel:${customer.phone}`} className="flex items-center gap-1 text-accent-text hover:underline"><Phone className="w-3.5 h-3.5" />{customer.phone}</a>
                     <ConsentBadge on={!!customer.sms_opt_in} label="Texts" />
                   </span>
                 )}
@@ -667,7 +667,7 @@ export default function CustomerDetailPage() {
       {bookingPhotos.length > 0 && (
         <Card>
           <CardHeader className="flex items-center gap-2">
-            <Camera className="w-4 h-4 text-accent" />
+            <Camera className="w-4 h-4 text-accent-text" />
             <h2 className="text-sm font-semibold text-ink">Customer photos</h2>
             <span className="ml-auto text-xs text-ink-faint">{bookingPhotos.length} from booking</span>
           </CardHeader>
@@ -730,9 +730,9 @@ export default function CustomerDetailPage() {
       {/* Notes & access info — prominent, quick-edit */}
       <Card>
         <CardHeader className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><StickyNote className="w-4 h-4 text-accent" /> Notes & Access Info</h2>
+          <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><StickyNote className="w-4 h-4 text-accent-text" /> Notes & Access Info</h2>
           {!editingNotes && (
-            <button onClick={() => setEditingNotes(true)} className="text-xs text-accent hover:underline flex items-center gap-1">
+            <button onClick={() => setEditingNotes(true)} className="text-xs text-accent-text hover:underline flex items-center gap-1">
               <Edit2 className="w-3 h-3" /> Edit
             </button>
           )}
@@ -765,9 +765,9 @@ export default function CustomerDetailPage() {
       {/* Scheduling preferences — customer-wide default (properties can override) */}
       <Card>
         <CardHeader className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><CalendarClock className="w-4 h-4 text-accent" /> Scheduling Preferences</h2>
+          <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><CalendarClock className="w-4 h-4 text-accent-text" /> Scheduling Preferences</h2>
           {!editingPrefs && (
-            <button onClick={startEditPrefs} className="text-xs text-accent hover:underline flex items-center gap-1">
+            <button onClick={startEditPrefs} className="text-xs text-accent-text hover:underline flex items-center gap-1">
               <Edit2 className="w-3 h-3" /> Edit
             </button>
           )}
@@ -819,7 +819,7 @@ export default function CustomerDetailPage() {
       {servicePlans.length > 0 && (
         <Card>
           <CardHeader className="flex items-center gap-2">
-            <Repeat className="w-4 h-4 text-accent" />
+            <Repeat className="w-4 h-4 text-accent-text" />
             <h2 className="text-sm font-semibold text-ink">Current Service Plan</h2>
           </CardHeader>
           <CardBody className="space-y-3">
@@ -839,9 +839,9 @@ export default function CustomerDetailPage() {
       {/* Upcoming work */}
       <Card>
         <CardHeader className="flex items-center gap-2">
-          <CalendarPlus className="w-4 h-4 text-accent" />
+          <CalendarPlus className="w-4 h-4 text-accent-text" />
           <h2 className="text-sm font-semibold text-ink">Upcoming Work</h2>
-          {nextVisit && <span className="ml-auto text-xs text-ink-muted">Next visit: <span className="text-accent font-semibold">{formatDate(nextVisit.scheduled_date)}</span></span>}
+          {nextVisit && <span className="ml-auto text-xs text-ink-muted">Next visit: <span className="text-accent-text font-semibold">{formatDate(nextVisit.scheduled_date)}</span></span>}
         </CardHeader>
         <CardBody className="space-y-3">
           {recurrences.length > 0 && servicePlans.length === 0 && (
@@ -849,7 +849,7 @@ export default function CustomerDetailPage() {
               {recurrences.map(r => {
                 const remaining = remainingVisits(r.id)
                 return (
-                  <span key={r.id} className="text-xs flex items-center gap-1 text-accent border border-accent/20 bg-accent/10 rounded-lg px-2.5 py-1">
+                  <span key={r.id} className="text-xs flex items-center gap-1 text-accent-text border border-accent/20 bg-accent/10 rounded-lg px-2.5 py-1">
                     <Repeat className="w-3 h-3" /> {recurrenceLabel(r.interval_unit, r.interval_count, r.freq)}
                     {r.end_date ? ` until ${formatDate(r.end_date)}` : r.end_count ? ` · ${remaining} of ${r.end_count} left` : ' · ongoing'}
                     {!r.end_date && !r.end_count && remaining > 0 ? ` · ${remaining} upcoming` : ''}
@@ -863,7 +863,7 @@ export default function CustomerDetailPage() {
             // above already states it).
             <p className="text-sm text-ink-muted">
               No upcoming visits scheduled.{' '}
-              <Link href={`/dashboard/schedule?customer=${customer.id}`} className="text-accent font-medium hover:underline">Schedule a visit →</Link>
+              <Link href={`/dashboard/schedule?customer=${customer.id}`} className="text-accent-text font-medium hover:underline">Schedule a visit →</Link>
             </p>
           ) : (
             <div className="divide-y divide-border -mx-2">
@@ -887,7 +887,7 @@ export default function CustomerDetailPage() {
         {/* Timeline */}
         <Card>
           <CardHeader className="flex items-center gap-2">
-            <History className="w-4 h-4 text-accent" />
+            <History className="w-4 h-4 text-accent-text" />
             <h2 className="text-sm font-semibold text-ink">Timeline</h2>
           </CardHeader>
           <CardBody>
@@ -915,7 +915,7 @@ export default function CustomerDetailPage() {
                 })}
                 {events.length > TIMELINE_CAP && (
                   <button onClick={() => setShowAllEvents(s => !s)}
-                    className="text-xs font-medium text-accent hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                    className="text-xs font-medium text-accent-text hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                     {showAllEvents ? 'Show less' : `Show ${events.length - TIMELINE_CAP} more`}
                   </button>
                 )}
@@ -927,7 +927,7 @@ export default function CustomerDetailPage() {
         {/* Properties */}
         <Card>
           <CardHeader className="flex items-center gap-2">
-            <MapPin className="w-4 h-4 text-accent" />
+            <MapPin className="w-4 h-4 text-accent-text" />
             <h2 className="text-sm font-semibold text-ink">Properties</h2>
           </CardHeader>
           <CardBody className="space-y-3">
@@ -979,7 +979,7 @@ export default function CustomerDetailPage() {
                     {editingPropPrefs === p.id ? (
                       <div className="space-y-3">
                         <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint flex items-center gap-1.5">
-                          <CalendarClock className="w-3.5 h-3.5 text-accent" /> Scheduling override
+                          <CalendarClock className="w-3.5 h-3.5 text-accent-text" /> Scheduling override
                         </p>
                         <SchedulePrefsFields value={propPrefsDraft} onChange={setPropPrefsDraft} />
                         <div className="flex items-center gap-2">
@@ -989,7 +989,7 @@ export default function CustomerDetailPage() {
                       </div>
                     ) : (
                       <button onClick={() => startEditPropPrefs(p)} className="w-full text-left flex items-center gap-1.5 text-[11px] text-ink-muted hover:text-ink transition-colors">
-                        <CalendarClock className="w-3.5 h-3.5 text-accent shrink-0" />
+                        <CalendarClock className="w-3.5 h-3.5 text-accent-text shrink-0" />
                         <span className="min-w-0 truncate">
                           {hasAnyPref(p)
                             ? <>Override: {prefSummary(resolvePrefs(null, p))}</>
@@ -1048,7 +1048,7 @@ function ServicePlanRow({ plan, customerId, pausing, onPause }: {
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-sm font-bold text-ink flex items-center gap-1.5">
-            <Repeat className={`w-3.5 h-3.5 shrink-0 ${plan.paused ? 'text-ink-faint' : 'text-accent'}`} />
+            <Repeat className={`w-3.5 h-3.5 shrink-0 ${plan.paused ? 'text-ink-faint' : 'text-accent-text'}`} />
             {plan.serviceName}
             {plan.paused && <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint border border-border rounded px-1.5 py-0.5">Paused</span>}
           </p>
@@ -1060,7 +1060,7 @@ function ServicePlanRow({ plan, customerId, pausing, onPause }: {
           <p className="text-xs mt-0.5">
             {plan.paused
               ? <span className="text-ink-faint">No upcoming visits — schedule it again to resume</span>
-              : <span className="text-accent font-semibold">{plan.remaining} visit{plan.remaining !== 1 ? 's' : ''} remaining{plan.nextVisitDate ? ` · next ${formatDate(plan.nextVisitDate)}` : ''}</span>}
+              : <span className="text-accent-text font-semibold">{plan.remaining} visit{plan.remaining !== 1 ? 's' : ''} remaining{plan.nextVisitDate ? ` · next ${formatDate(plan.nextVisitDate)}` : ''}</span>}
           </p>
           {/* Initial vs recurring pricing — only when they actually differ */}
           {(plan.recurringPrice ?? 0) > 0 && (

@@ -31,7 +31,7 @@ type Tone = keyof typeof TONE
 
 function gradeTone(score: ProspectAssessment['score']): string {
   if (score === 'A+' || score === 'A') return 'text-emerald-400'
-  if (score === 'B') return 'text-accent'
+  if (score === 'B') return 'text-accent-text'
   if (score === 'C') return 'text-amber-400'
   return 'text-red-400'
 }
@@ -218,7 +218,7 @@ export function DecisionSummary({
                 {a.growth.bullets.map((b, i) => <li key={i} className="text-[11px] text-ink-muted">• {b}</li>)}
               </ul>
               {a.growth.narrative && (
-                <p className="text-xs font-medium text-accent flex items-start gap-1.5">
+                <p className="text-xs font-medium text-accent-text flex items-start gap-1.5">
                   <TrendingUp className="w-3.5 h-3.5 shrink-0 mt-0.5" /> {a.growth.narrative}
                 </p>
               )}

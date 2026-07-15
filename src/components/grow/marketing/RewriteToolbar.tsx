@@ -32,7 +32,7 @@ function Pill({ action, busy, disabled, onRewrite }: { action: RewriteAction; bu
       className={cn(
         'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs font-medium border transition-colors whitespace-nowrap',
         'bg-surface text-ink-muted border-border hover:text-ink hover:border-accent/50 disabled:opacity-40 disabled:cursor-not-allowed',
-        isBusy && 'border-accent text-accent',
+        isBusy && 'border-accent text-accent-text',
       )}
     >
       {isBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Icon className="w-3 h-3" />}
@@ -51,7 +51,7 @@ export function RewriteToolbar({ disabled, busy, onRewrite }: {
     <div className="rounded-card border border-border bg-surface/60 p-3 space-y-2.5">
       <div className="flex items-center justify-between gap-2">
         <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint inline-flex items-center gap-1.5">
-          <Wand2 className="w-3.5 h-3.5 text-accent" /> AI edits
+          <Wand2 className="w-3.5 h-3.5 text-accent-text" /> AI edits
         </p>
         <button
           type="button"
@@ -60,7 +60,7 @@ export function RewriteToolbar({ disabled, busy, onRewrite }: {
           className={cn(
             'inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium border transition-colors whitespace-nowrap',
             'bg-surface text-ink-muted border-border hover:text-ink hover:border-accent/50 disabled:opacity-40 disabled:cursor-not-allowed',
-            b === 'rewrite' && 'border-accent text-accent',
+            b === 'rewrite' && 'border-accent text-accent-text',
           )}
         >
           {b === 'rewrite' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}

@@ -314,18 +314,18 @@ export default function PropertiesPage() {
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex items-start gap-3 min-w-0">
                     <div className="w-9 h-9 rounded-lg bg-accent/10 flex items-center justify-center shrink-0 mt-0.5">
-                      <Home className="w-4 h-4 text-accent" />
+                      <Home className="w-4 h-4 text-accent-text" />
                     </div>
                     <div className="space-y-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="text-sm font-semibold text-ink">{property.address}</p>
                         {property.is_primary && (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border uppercase tracking-wide bg-accent-dim text-accent border-accent/20">
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border uppercase tracking-wide bg-accent-dim text-accent-text border-accent/20">
                             Primary
                           </span>
                         )}
                         {activePlan && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border uppercase tracking-wide bg-accent/10 text-accent border-accent/20">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border uppercase tracking-wide bg-accent/10 text-accent-text border-accent/20">
                             <Repeat className="w-3 h-3" /> {activePlan.cadenceLabel}
                           </span>
                         )}
@@ -335,7 +335,7 @@ export default function PropertiesPage() {
                             health.tone === 'good' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
                             : health.tone === 'warn' ? 'border-amber-500/30 bg-amber-500/10 text-amber-400'
                             : health.tone === 'new' ? 'border-sky-500/30 bg-sky-500/10 text-sky-400'
-                            : 'border-accent/20 bg-accent/10 text-accent'}`}>
+                            : 'border-accent/20 bg-accent/10 text-accent-text'}`}>
                           <Heart className="w-2.5 h-2.5" /> {health.score} · {health.label}
                         </span>
                       </div>
@@ -365,13 +365,13 @@ export default function PropertiesPage() {
                           <History className="w-3 h-3 shrink-0" />
                           Measured {formatDate(last.date)}
                           {hist.length > 1 && <span>· {hist.length}× measured</span>}
-                          {Array.isArray(property.lawn_polygon) && property.lawn_polygon.length > 0 && <span className="text-accent">· boundary saved</span>}
+                          {Array.isArray(property.lawn_polygon) && property.lawn_polygon.length > 0 && <span className="text-accent-text">· boundary saved</span>}
                           {stale && <span className="text-amber-400">· may be outdated</span>}
                         </p>
                       )}
                       {(perf?.lastServiceDate || nextVisit) && (
                         <p className="text-xs text-ink-faint flex items-center gap-1">
-                          <CalendarClock className="w-3 h-3 shrink-0 text-accent" />
+                          <CalendarClock className="w-3 h-3 shrink-0 text-accent-text" />
                           {perf?.lastServiceDate && <>Last service {formatDate(perf.lastServiceDate)}</>}
                           {perf?.lastServiceDate && nextVisit && <span> · </span>}
                           {nextVisit && <>Next {formatDate(nextVisit.date)}{nextVisit.count > 1 ? ` (${nextVisit.count})` : ''}</>}
@@ -411,7 +411,7 @@ export default function PropertiesPage() {
                       <Link href={measureHref} className="text-[11px] text-ink-faint hover:text-ink text-right">Re-measure</Link>
                     )}
                     {property.lat && property.lng ? (
-                      <p className="text-xs text-accent font-medium text-right flex items-center justify-end gap-1"><MapPin className="w-3 h-3" /> Located</p>
+                      <p className="text-xs text-accent-text font-medium text-right flex items-center justify-end gap-1"><MapPin className="w-3 h-3" /> Located</p>
                     ) : (
                       <p className="text-xs text-ink-faint text-right">No coords yet</p>
                     )}
@@ -425,7 +425,7 @@ export default function PropertiesPage() {
                   <div className={`mt-3 flex items-center gap-2 rounded-xl border px-3 py-2 ${health.tone === 'warn' ? 'border-amber-500/30 bg-amber-500/10' : 'border-accent/25 bg-accent/[0.06]'}`}>
                     {health.tone === 'warn'
                       ? <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
-                      : <Lightbulb className="w-4 h-4 text-accent shrink-0" />}
+                      : <Lightbulb className="w-4 h-4 text-accent-text shrink-0" />}
                     <p className="text-xs text-ink flex-1 min-w-0">{health.recommendation}</p>
                   </div>
                 )}
@@ -438,7 +438,7 @@ export default function PropertiesPage() {
                         className={`rounded-xl border px-3 py-2 flex items-center justify-between gap-3 ${plan.paused ? 'border-border bg-bg-tertiary' : 'border-accent/20 bg-accent/5'}`}>
                         <div className="min-w-0">
                           <p className="text-xs font-semibold text-ink flex items-center gap-1.5 truncate">
-                            <Repeat className={`w-3 h-3 shrink-0 ${plan.paused ? 'text-ink-faint' : 'text-accent'}`} />
+                            <Repeat className={`w-3 h-3 shrink-0 ${plan.paused ? 'text-ink-faint' : 'text-accent-text'}`} />
                             {plan.serviceName}
                             {plan.paused && <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint border border-border rounded px-1 py-0.5">Paused</span>}
                           </p>
@@ -463,7 +463,7 @@ export default function PropertiesPage() {
                   <div className="mt-3 rounded-xl border border-border bg-bg-tertiary px-3 py-2.5">
                     <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-muted mb-1.5">Performance</p>
                     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
-                      <PerfStat icon={DollarSign} label="Lifetime revenue" value={formatCurrency(perf.lifetimeRevenue)} tone="text-accent" />
+                      <PerfStat icon={DollarSign} label="Lifetime revenue" value={formatCurrency(perf.lifetimeRevenue)} tone="text-accent-text" />
                       <PerfStat icon={CheckCircle2} label="Completed visits" value={String(perf.completedVisits)} />
                       <PerfStat icon={Receipt} label="Avg invoice" value={perf.avgInvoice > 0 ? formatCurrency(perf.avgInvoice) : '—'} />
                       <PerfStat icon={Timer} label="Avg service time" value={perf.avgActualMin != null ? `${perf.avgActualMin} min` : '—'} />
@@ -517,7 +517,7 @@ export default function PropertiesPage() {
                 {saved && (
                   <div className="mt-3 rounded-xl border border-accent/20 bg-accent/5 px-3 py-2.5">
                     <div className="flex items-center justify-between gap-2 flex-wrap">
-                      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-accent">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-accent-text">
                         Latest measurement · {saved.sqft.toLocaleString()} ft² · Calculated {formatDate(saved.date)}
                       </p>
                       <div className="flex items-center gap-1">
@@ -525,7 +525,7 @@ export default function PropertiesPage() {
                             card's primary action is already Create quote. */}
                         {health.action !== 'quote' && property.customer_id && (
                           <Link href={`/dashboard/quotes/new?customer=${property.customer_id}&property=${property.id}`}
-                            className="text-[11px] font-medium text-accent hover:underline px-1.5 py-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                            className="text-[11px] font-medium text-accent-text hover:underline px-1.5 py-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                             Quote this →
                           </Link>
                         )}
@@ -541,7 +541,7 @@ export default function PropertiesPage() {
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-1.5">
                       {([['One-Time', saved.rec.one_time, 'one_time'], ['Weekly', saved.rec.weekly, 'weekly'], ['Bi-Weekly', saved.rec.biweekly, 'biweekly'], ['Monthly', saved.rec.monthly, 'monthly']] as const).map(([label, price, key]) => (
                         <div key={label} className={`rounded-lg border px-2 py-1.5 ${saved.rec.cadence === key ? 'border-accent/50 bg-accent/10' : 'border-border bg-bg-tertiary'}`}>
-                          <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1">{label}{saved.rec.cadence === key && <Trophy className="w-2.5 h-2.5 text-accent" />}</p>
+                          <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1">{label}{saved.rec.cadence === key && <Trophy className="w-2.5 h-2.5 text-accent-text" />}</p>
                           <p className="text-sm font-bold text-ink tabular-nums">${price}</p>
                         </div>
                       ))}

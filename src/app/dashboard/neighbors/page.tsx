@@ -230,7 +230,7 @@ export default function NeighborsPage() {
         ))}
         <div className="rounded-lg border border-border bg-bg-tertiary px-3 py-2">
           <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">Conversion</p>
-          <p className="text-lg font-bold text-accent tabular-nums">{counts.conversion}%</p>
+          <p className="text-lg font-bold text-accent-text tabular-nums">{counts.conversion}%</p>
         </div>
       </div>
 
@@ -239,7 +239,7 @@ export default function NeighborsPage() {
         <Card>
           <div className="px-4 py-3 border-b border-border flex items-center gap-2">
             <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-              <Sprout className="w-3.5 h-3.5 text-accent" />
+              <Sprout className="w-3.5 h-3.5 text-accent-text" />
             </span>
             <h2 className="text-sm font-semibold text-ink tracking-tight">Where to knock next</h2>
             <span className="flex-1 h-px bg-border" aria-hidden />

@@ -346,7 +346,7 @@ export default function InvoicesPage() {
         <div className="flex items-center gap-2 text-xs text-ink-muted">
           <span>Showing {focus.invoice ? `invoice ${focus.invoice}` : 'the invoice for that job'}</span>
           <button onClick={() => { setFocus(null); if (typeof window !== 'undefined') window.history.replaceState({}, '', '/dashboard/invoices') }}
-            className="font-semibold text-accent hover:underline">Show all</button>
+            className="font-semibold text-accent-text hover:underline">Show all</button>
         </div>
       )}
 
@@ -373,7 +373,7 @@ export default function InvoicesPage() {
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
                   <div className="flex items-start gap-3 min-w-0">
                     <div className="w-9 h-9 rounded-lg bg-accent/10 flex items-center justify-center shrink-0 mt-0.5">
-                      <FileText className="w-4 h-4 text-accent" />
+                      <FileText className="w-4 h-4 text-accent-text" />
                     </div>
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
@@ -411,7 +411,7 @@ export default function InvoicesPage() {
                           {t.hasGst && (
                             <p className="text-[10px] text-ink-faint tabular-nums">incl. {formatCurrency(t.gstAmount)} GST</p>
                           )}
-                          {addonN > 0 && <p className="text-[10px] font-semibold text-accent">+{addonN} service{addonN !== 1 ? 's' : ''}</p>}
+                          {addonN > 0 && <p className="text-[10px] font-semibold text-accent-text">+{addonN} service{addonN !== 1 ? 's' : ''}</p>}
                         </div>
                       )
                     })()}
@@ -656,7 +656,7 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
     // type="button" — the untyped-button-submits-the-form trap).
     <form onSubmit={e => { e.preventDefault(); if (!saving) save() }} className="mt-3 pt-3 border-t border-border space-y-3">
       <div className="flex items-center justify-between">
-        <p className="text-xs font-semibold text-ink uppercase tracking-wide flex items-center gap-1.5"><Pencil className="w-3.5 h-3.5 text-accent" /> Edit draft</p>
+        <p className="text-xs font-semibold text-ink uppercase tracking-wide flex items-center gap-1.5"><Pencil className="w-3.5 h-3.5 text-accent-text" /> Edit draft</p>
         <button type="button" onClick={onCancel} className="h-7 w-7 rounded-lg flex items-center justify-center text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" aria-label="Close editor"><X className="w-4 h-4" /></button>
       </div>
 
@@ -700,7 +700,7 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
       <button type="button" onClick={() => setItems(prev => prev.length
           ? [...prev, { description: '', amount: '0', kind: 'addon' }]
           : [{ description: service.trim() || inv.service_type || 'Service', amount: base || '0', kind: 'service' }, { description: '', amount: '0', kind: 'addon' }])}
-        className="text-xs font-semibold text-accent hover:underline rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+        className="text-xs font-semibold text-accent-text hover:underline rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
         + Add line item
       </button>
 
@@ -735,7 +735,7 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
         {t.hasDiscount && <Row label={`Discount${t.discountLabel ? ` (${t.discountLabel})` : ''}`} value={`−${formatCurrency(t.discountAmount)}`} tone="text-emerald-400" />}
         {t.hasDiscount && <Row label="After discount" value={formatCurrency(t.discountedSubtotal)} muted />}
         {t.hasGst && <Row label={`GST (${t.gstPercent}% — set in Settings)`} value={formatCurrency(t.gstAmount)} muted />}
-        <div className="flex justify-between pt-1.5 border-t border-border"><span className="font-semibold text-ink">Total</span><span className="font-bold text-accent">{formatCurrency(t.total)}</span></div>
+        <div className="flex justify-between pt-1.5 border-t border-border"><span className="font-semibold text-ink">Total</span><span className="font-bold text-accent-text">{formatCurrency(t.total)}</span></div>
       </div>
 
       <div className="flex items-center gap-2">

@@ -124,7 +124,7 @@ export function PublishPanel({ piece, ch, userId, hasPhoto, onSavePhoto, beforeP
   return (
     <div className="rounded-card border border-border bg-surface/60 p-3 space-y-2.5">
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint inline-flex items-center gap-1.5"><Send className="w-3.5 h-3.5 text-accent" /> Publish</p>
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint inline-flex items-center gap-1.5"><Send className="w-3.5 h-3.5 text-accent-text" /> Publish</p>
         <button onClick={() => setHub(true)} className="text-[11px] text-ink-faint hover:text-ink inline-flex items-center gap-1"><Settings2 className="w-3 h-3" /> Manage accounts</button>
       </div>
 
@@ -144,7 +144,7 @@ export function PublishPanel({ piece, ch, userId, hasPhoto, onSavePhoto, beforeP
       {currentJob && (
         <p className="text-[11px] text-ink-faint inline-flex items-center gap-1.5 flex-wrap">
           Status: <span className="text-ink-muted">{STATUS_LABEL[currentJob.status]}</span>
-          {currentJob.external_url && <a href={currentJob.external_url} target="_blank" rel="noreferrer" className="text-accent inline-flex items-center gap-0.5">view <ExternalLink className="w-3 h-3" /></a>}
+          {currentJob.external_url && <a href={currentJob.external_url} target="_blank" rel="noreferrer" className="text-accent-text inline-flex items-center gap-0.5">view <ExternalLink className="w-3 h-3" /></a>}
           {currentJob.error && <span className="text-red-400">· {currentJob.error}</span>}
         </p>
       )}

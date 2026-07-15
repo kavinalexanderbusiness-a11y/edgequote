@@ -245,7 +245,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
 
   if (loading) return (
     <Center>
-      <div className="w-11 h-11 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center mb-3"><Leaf className="w-5 h-5 text-accent" /></div>
+      <div className="w-11 h-11 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center mb-3"><Leaf className="w-5 h-5 text-accent-text" /></div>
       <p className="text-sm text-ink-muted flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Loading your instant quote…</p>
     </Center>
   )
@@ -265,7 +265,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
         {/* Brand header */}
         <div className="flex items-center gap-3 mb-5">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          {biz.logo_url ? <img src={biz.logo_url} alt="" className="h-10 w-auto object-contain" /> : <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center"><Leaf className="w-5 h-5 text-accent" /></div>}
+          {biz.logo_url ? <img src={biz.logo_url} alt="" className="h-10 w-auto object-contain" /> : <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center"><Leaf className="w-5 h-5 text-accent-text" /></div>}
           <div className="min-w-0">
             <p className="text-base font-bold text-ink truncate tracking-tight">{biz.company_name || 'Get an instant quote'}</p>
             <p className="text-xs text-ink-muted">Instant lawn-care quote · book in minutes</p>
@@ -306,13 +306,13 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
                 <div className="rounded-card overflow-hidden border border-border-strong">
                   <div ref={previewEl} className="w-full h-56 bg-bg-tertiary" />
                   <div className="px-4 py-2.5 bg-bg-secondary border-t border-border flex items-center gap-2">
-                    <MapPin className="w-3.5 h-3.5 text-accent shrink-0" />
+                    <MapPin className="w-3.5 h-3.5 text-accent-text shrink-0" />
                     <p className="text-xs text-ink truncate">{parsed?.formatted || parsed?.address}</p>
                   </div>
                 </div>
                 <div className="rounded-card border border-accent/30 bg-accent/5 px-4 py-4">
                   <div className="flex items-center justify-between gap-3">
-                    <span className="text-sm text-ink-muted flex items-center gap-2"><Ruler className="w-4 h-4 text-accent" /> Estimated lawn size</span>
+                    <span className="text-sm text-ink-muted flex items-center gap-2"><Ruler className="w-4 h-4 text-accent-text" /> Estimated lawn size</span>
                     <ConfidenceBadge confidence={autoResult.confidence} />
                   </div>
                   <div className="flex items-end gap-2 mt-2">
@@ -348,7 +348,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
                 <div ref={mapEl} className="w-full h-72 rounded-xl overflow-hidden border border-border-strong bg-bg-tertiary" />
                 <div className="flex items-center justify-between mt-3">
                   <div className="flex items-center gap-2 text-sm text-ink tabular-nums">
-                    <Ruler className="w-4 h-4 text-accent" /> {sqft > 0 ? `${sqft.toLocaleString()} sq ft` : 'Tap 3+ corners to start'}
+                    <Ruler className="w-4 h-4 text-accent-text" /> {sqft > 0 ? `${sqft.toLocaleString()} sq ft` : 'Tap 3+ corners to start'}
                   </div>
                   <div className="flex items-center gap-1.5">
                     <Button variant="ghost" size="sm" onClick={undo} title="Undo last point"><Undo2 className="w-4 h-4" /></Button>
@@ -374,7 +374,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
                   className={cn('w-full text-left rounded-card border px-4 py-3 transition-all flex items-center justify-between gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50',
                     plan?.key === p.key ? 'border-accent bg-accent/10' : 'border-border hover:border-accent/40')}>
                   <div>
-                    <p className="text-sm font-semibold text-ink flex items-center gap-2">{p.label}{p.recommended && <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-accent border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5">Best value</span>}</p>
+                    <p className="text-sm font-semibold text-ink flex items-center gap-2">{p.label}{p.recommended && <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-accent-text border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5">Best value</span>}</p>
                     {p.annual ? <p className="text-xs text-ink-faint mt-0.5 tabular-nums">{formatCurrency(p.price)}/visit · ~{formatCurrency(p.annual)}/season</p> : <p className="text-xs text-ink-faint mt-0.5">single visit</p>}
                   </div>
                   <div className="text-right shrink-0">
@@ -417,7 +417,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
               <div className="flex flex-col gap-1.5">
                 <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Photos <span className="font-normal text-ink-faint normal-case">(optional)</span></label>
                 <p className="text-[11px] text-ink-faint -mt-0.5">Show us gates, slopes, or problem areas so we can quote accurately. Up to 6.</p>
-                <label className={cn('inline-flex items-center gap-1.5 text-xs font-medium w-fit rounded-md focus-within:ring-2 focus-within:ring-accent/50', photoUrls.length >= 6 ? 'text-ink-faint cursor-not-allowed' : 'text-accent cursor-pointer')}>
+                <label className={cn('inline-flex items-center gap-1.5 text-xs font-medium w-fit rounded-md focus-within:ring-2 focus-within:ring-accent/50', photoUrls.length >= 6 ? 'text-ink-faint cursor-not-allowed' : 'text-accent-text cursor-pointer')}>
                   {uploadingPhotos ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Camera className="w-3.5 h-3.5" />} {uploadingPhotos ? 'Uploading…' : photoUrls.length >= 6 ? 'Maximum 6 photos added' : 'Add photos of your lawn'}
                   <input type="file" accept="image/*" multiple onChange={addPhotos} className="sr-only" disabled={uploadingPhotos || photoUrls.length >= 6} />
                 </label>
@@ -512,7 +512,7 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
               <div className="text-center">
                 <p className="text-xs text-ink-faint mb-1.5">Questions before then?</p>
                 <div className="flex flex-col items-center gap-1.5">
-                  {biz.phone && <a href={`tel:${biz.phone}`} className="text-sm text-accent flex items-center gap-1.5"><Phone className="w-4 h-4" /> {biz.phone}</a>}
+                  {biz.phone && <a href={`tel:${biz.phone}`} className="text-sm text-accent-text flex items-center gap-1.5"><Phone className="w-4 h-4" /> {biz.phone}</a>}
                   {biz.email_primary && <a href={`mailto:${biz.email_primary}`} className="text-sm text-ink-muted flex items-center gap-1.5"><Mail className="w-4 h-4" /> {biz.email_primary}</a>}
                 </div>
               </div>

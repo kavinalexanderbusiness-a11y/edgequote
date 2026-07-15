@@ -88,7 +88,7 @@ export function MessagingUsage() {
     <Card>
       <CardHeader>
         <div>
-          <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><MessageSquareText className="w-4 h-4 text-accent" /> Messaging Usage &amp; Pricing</h2>
+          <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><MessageSquareText className="w-4 h-4 text-accent-text" /> Messaging Usage &amp; Pricing</h2>
           <p className="text-xs text-ink-faint mt-0.5">Set your estimated per-segment cost — every composer preview uses these values. For awareness, not billing.</p>
         </div>
       </CardHeader>
@@ -130,7 +130,7 @@ export function MessagingUsage() {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
               <UsageStat label="SMS sent today" value={String(stats.sentToday)} />
               <UsageStat label="SMS sent this month" value={String(stats.sentMonth)} />
-              <UsageStat label="Est. spend this month" value={formatSmsCost(stats.spend, pricing.currency)} tone="text-accent" />
+              <UsageStat label="Est. spend this month" value={formatSmsCost(stats.spend, pricing.currency)} tone="text-accent-text" />
               <UsageStat label="Avg cost / segment" value={formatSmsCost(stats.avg, pricing.currency)} />
             </div>
             <p className="text-[11px] text-ink-faint italic">

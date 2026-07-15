@@ -101,13 +101,13 @@ export default function RevenueIntelligencePage() {
       {summary.topAction && (
         <div className="rounded-card border border-accent/30 hero-aurora p-5 flex flex-wrap items-center gap-4 animate-rise">
           <div className="w-10 h-10 rounded-xl bg-accent/15 border border-accent/25 icon-glow flex items-center justify-center shrink-0">
-            <Trophy className="w-5 h-5 text-accent" />
+            <Trophy className="w-5 h-5 text-accent-text" />
           </div>
           <div className="min-w-0 flex-1">
             <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">Top move right now</p>
             <p className="text-base font-bold tracking-tight text-ink mt-0.5">{summary.topAction.action} — {summary.topAction.customerName}</p>
             <p className="text-xs text-ink-muted mt-1 tabular-nums">
-              <span className="font-semibold text-accent">+{formatCurrency(summary.topAction.expectedValue)}{summary.topAction.oneTime ? ' one-time' : '/yr'}</span>
+              <span className="font-semibold text-accent-text">+{formatCurrency(summary.topAction.expectedValue)}{summary.topAction.oneTime ? ' one-time' : '/yr'}</span>
               {' '}· {summary.topAction.score}% likely to land, based on this customer’s history
             </p>
           </div>
@@ -144,7 +144,7 @@ export default function RevenueIntelligencePage() {
       {/* LTV Forecast */}
       <div id="ltv-forecast" className="rounded-card border border-border bg-bg-secondary overflow-hidden scroll-mt-4">
         <button onClick={() => setShowForecast(s => !s)} aria-expanded={showForecast} className="w-full px-5 py-3.5 flex items-center justify-between text-left rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40">
-          <span className="text-sm font-bold text-ink flex items-center gap-2"><Sparkles className="w-4 h-4 text-accent" /> Lifetime Value Forecast</span>
+          <span className="text-sm font-bold text-ink flex items-center gap-2"><Sparkles className="w-4 h-4 text-accent-text" /> Lifetime Value Forecast</span>
           <span className="text-xs text-ink-muted">{showForecast ? 'Hide' : `Show top ${Math.min(12, ltvForecast.length)}`}</span>
         </button>
         {showForecast && (
@@ -152,7 +152,7 @@ export default function RevenueIntelligencePage() {
             {ltvForecast.slice(0, 12).map(f => (
               <div key={f.customerId} className="px-5 py-2.5 flex items-center gap-3">
                 <div className="min-w-0 flex-1">
-                  <Link href={`/dashboard/customers/${f.customerId}`} className="text-sm font-semibold text-ink truncate hover:text-accent">{f.customerName}</Link>
+                  <Link href={`/dashboard/customers/${f.customerId}`} className="text-sm font-semibold text-ink truncate hover:text-accent-text">{f.customerName}</Link>
                   <p className="text-[11px] text-ink-faint tabular-nums">Now {formatCurrency(f.currentLtv)} → forecast {formatCurrency(f.forecastLtv)} · {formatCurrency(f.revenueRemaining)} remaining</p>
                 </div>
                 {f.churnRiskImpact > 0 && (
@@ -206,7 +206,7 @@ function OppCard({ o, index, status, busy, onAct }: { o: Opportunity; index: num
           </div>
           <p className="text-sm font-bold tracking-tight text-ink mt-1.5">{o.action} — {o.customerName}</p>
         </div>
-        <span className="shrink-0 text-sm font-bold text-accent flex items-center gap-1 tabular-nums"><TrendingUp className="w-3.5 h-3.5" /> +{formatCurrency(o.expectedValue)}{o.oneTime ? '' : '/yr'}</span>
+        <span className="shrink-0 text-sm font-bold text-accent-text flex items-center gap-1 tabular-nums"><TrendingUp className="w-3.5 h-3.5" /> +{formatCurrency(o.expectedValue)}{o.oneTime ? '' : '/yr'}</span>
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -214,7 +214,7 @@ function OppCard({ o, index, status, busy, onAct }: { o: Opportunity; index: num
           <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-emerald-400"><Trophy className="w-4 h-4" /> Won</span>
         ) : done ? (
           <>
-            <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-ink-muted"><Check className="w-3.5 h-3.5 text-accent" /> Acted</span>
+            <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-ink-muted"><Check className="w-3.5 h-3.5 text-accent-text" /> Acted</span>
             <Button size="sm" variant="secondary" onClick={() => onAct(o, 'won')} loading={busy}><Trophy className="w-3.5 h-3.5" /> Mark won</Button>
           </>
         ) : (
@@ -230,7 +230,7 @@ function OppCard({ o, index, status, busy, onAct }: { o: Opportunity; index: num
 
       {showWhy && (
         <ul className="mt-2 space-y-0.5 border-t border-border pt-2">
-          {o.why.map((w, i) => <li key={i} className="text-xs text-ink-muted flex gap-1.5"><span className="text-accent/60 shrink-0">•</span><span>{w}</span></li>)}
+          {o.why.map((w, i) => <li key={i} className="text-xs text-ink-muted flex gap-1.5"><span className="text-accent-text/60 shrink-0">•</span><span>{w}</span></li>)}
         </ul>
       )}
     </div>

@@ -229,7 +229,7 @@ const Bubble = memo(function Bubble({ it, customerId }: { it: Item; customerId: 
           {meta.label}{reason && it.status !== 'sent' ? ` (${reason})` : ''} · {templateLabel} · {it.channel} · {time}
         </span>
         {skip?.action && (
-          <Link href={`/dashboard/customers/${customerId}`} className="block text-[10px] text-accent hover:underline">
+          <Link href={`/dashboard/customers/${customerId}`} className="block text-[10px] text-accent-text hover:underline">
             {skip.action === 'add_email' ? 'Add an email address →' : 'Add a phone number →'}
           </Link>
         )}

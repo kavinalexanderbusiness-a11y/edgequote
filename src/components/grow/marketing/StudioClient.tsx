@@ -188,7 +188,7 @@ export function StudioClient({ candidates, aiEnabled, businessName, logoUrl, use
                 </div>
               </div>
               <div className="flex items-start gap-2 rounded-xl bg-accent/[0.06] border border-accent/15 px-3 py-2">
-                <Lightbulb className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+                <Lightbulb className="w-4 h-4 text-accent-text shrink-0 mt-0.5" />
                 <p className="text-xs text-ink-muted">{selected.rationale}</p>
               </div>
               {(selected.bestBeforeUrl || selected.bestAfterUrl) && (

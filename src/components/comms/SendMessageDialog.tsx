@@ -198,7 +198,7 @@ export function SendMessageDialog({
             <div className="flex items-center justify-between mb-1.5">
               <p className="text-[10px] uppercase tracking-wide text-ink-faint">Recipients · <span className="text-ink-muted font-semibold">{chosen.length} of {all.length}</span></p>
               <div className="flex items-center gap-2 text-[11px]">
-                <button type="button" onClick={() => setSelected(new Set(all.map(r => r.customerId)))} className="text-accent hover:underline font-medium">Select all</button>
+                <button type="button" onClick={() => setSelected(new Set(all.map(r => r.customerId)))} className="text-accent-text hover:underline font-medium">Select all</button>
                 <span className="text-ink-faint">·</span>
                 <button type="button" onClick={() => setSelected(new Set())} className="text-ink-muted hover:text-ink">Clear</button>
               </div>

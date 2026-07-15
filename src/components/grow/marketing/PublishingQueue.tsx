@@ -15,7 +15,7 @@ import type { MarketingChannel, PublishJob, PublishJobStatus, SocialConnection }
 
 const STATUS: Record<PublishJobStatus, { label: string; chip: string }> = {
   draft:      { label: 'Draft',      chip: 'border-border text-ink-muted' },
-  scheduled:  { label: 'Scheduled',  chip: 'border-accent/40 text-accent' },
+  scheduled:  { label: 'Scheduled',  chip: 'border-accent/40 text-accent-text' },
   queued:     { label: 'Ready to post', chip: 'border-sky-500/30 text-sky-400' },
   publishing: { label: 'Publishing', chip: 'border-amber-500/30 text-amber-400' },
   published:  { label: 'Published',  chip: 'border-emerald-500/30 text-emerald-400' },
@@ -158,7 +158,7 @@ export function PublishingQueue({ userId }: { userId: string }) {
 
         {/* Caption + hashtags — the rich history detail */}
         {piece?.caption && <p className="text-[11px] text-ink-muted line-clamp-2 pl-6">{piece.caption}</p>}
-        {piece?.hashtags?.length ? <p className="text-[10px] text-accent/80 truncate pl-6">{piece.hashtags.slice(0, 6).map(h => `#${h.replace(/^#/, '')}`).join(' ')}</p> : null}
+        {piece?.hashtags?.length ? <p className="text-[10px] text-accent-text/80 truncate pl-6">{piece.hashtags.slice(0, 6).map(h => `#${h.replace(/^#/, '')}`).join(' ')}</p> : null}
         {j.error && <p className="text-[10px] text-red-400 pl-6">{j.error}</p>}
 
         {/* Actions */}
@@ -172,7 +172,7 @@ export function PublishingQueue({ userId }: { userId: string }) {
           )}
           {j.status === 'failed' && <Button size="sm" variant="ghost" loading={retrying === j.id} onClick={() => retry(j)}><RotateCcw className="w-3.5 h-3.5" /> Retry</Button>}
           {(j.status === 'scheduled' || j.status === 'queued') && <Button size="sm" variant="ghost" className="text-red-400/70 hover:text-red-400" onClick={() => cancel(j)} title="Cancel"><X className="w-3.5 h-3.5" /> Cancel</Button>}
-          {j.status === 'published' && j.external_url && <a href={j.external_url} target="_blank" rel="noreferrer" className="text-accent inline-flex items-center gap-1 text-[11px]" title="View post"><ExternalLink className="w-3.5 h-3.5" /> View post</a>}
+          {j.status === 'published' && j.external_url && <a href={j.external_url} target="_blank" rel="noreferrer" className="text-accent-text inline-flex items-center gap-1 text-[11px]" title="View post"><ExternalLink className="w-3.5 h-3.5" /> View post</a>}
         </div>
       </div>
     )

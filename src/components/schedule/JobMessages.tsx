@@ -146,7 +146,7 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
         {ACTIONS.filter(a => a.type !== 'review_request' || !reviewed).map(a => (
           <button key={a.type} type="button" onClick={() => open(a.type)} disabled={busy}
             className={cn('h-9 rounded-lg border text-xs font-medium flex items-center justify-center gap-1.5 active:scale-95 transition-transform disabled:opacity-50',
-              active === a.type ? 'border-accent bg-accent/15 text-accent ring-1 ring-accent/40'
+              active === a.type ? 'border-accent bg-accent/15 text-accent-text ring-1 ring-accent/40'
                 : a.tone || 'border-border text-ink-muted hover:text-ink hover:bg-black/10')}>
             <a.icon className="w-3.5 h-3.5" /> {a.label}
           </button>
@@ -157,7 +157,7 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
       {activeAction && (
         <div className="rounded-lg border border-border bg-bg-secondary p-2.5 space-y-2.5">
           <div className="flex items-center justify-between gap-2">
-            <p className="text-[11px] font-semibold text-ink flex items-center gap-1.5"><activeAction.icon className="w-3.5 h-3.5 text-accent" /> {activeAction.label}</p>
+            <p className="text-[11px] font-semibold text-ink flex items-center gap-1.5"><activeAction.icon className="w-3.5 h-3.5 text-accent-text" /> {activeAction.label}</p>
             <button type="button" onClick={() => setActive(null)} className="text-ink-faint hover:text-ink" aria-label="Close"><X className="w-3.5 h-3.5" /></button>
           </div>
           <p className="text-[10px] text-ink-faint">
@@ -232,7 +232,7 @@ function ChannelChip({ label, icon: Icon, on, onClick }: { label: string; icon: 
   return (
     <button type="button" onClick={onClick}
       className={cn('h-7 px-2 rounded-lg border text-[11px] font-medium flex items-center gap-1 transition-colors',
-        on ? 'border-accent/40 bg-accent/10 text-accent' : 'border-border text-ink-faint hover:text-ink')}>
+        on ? 'border-accent/40 bg-accent/10 text-accent-text' : 'border-border text-ink-faint hover:text-ink')}>
       <Icon className="w-3 h-3" /> {label} {on && <Check className="w-3 h-3" />}
     </button>
   )

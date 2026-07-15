@@ -258,7 +258,7 @@ export default function SettingsPage() {
           what people come here to check; branding follows below. */}
       <div className={cn('order-2 space-y-6', tab !== 'business' && 'hidden')}>
       <Card>
-        <CardHeader><h2 className="text-sm font-semibold text-ink flex items-center gap-2"><ImageIcon className="w-4 h-4 text-accent" /> Branding</h2></CardHeader>
+        <CardHeader><h2 className="text-sm font-semibold text-ink flex items-center gap-2"><ImageIcon className="w-4 h-4 text-accent-text" /> Branding</h2></CardHeader>
         <CardBody className="space-y-5">
           <div className="flex items-center gap-5 flex-wrap">
             <div className="w-32 h-32 rounded-xl border border-border-strong bg-black flex items-center justify-center overflow-hidden shrink-0">
@@ -310,7 +310,7 @@ export default function SettingsPage() {
       <Card>
         <CardHeader>
           <div>
-            <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Palette className="w-4 h-4 text-accent" /> Appearance</h2>
+            <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Palette className="w-4 h-4 text-accent-text" /> Appearance</h2>
             <p className="text-xs text-ink-faint mt-0.5">Applies across the whole app and is remembered on this device.</p>
           </div>
         </CardHeader>
@@ -340,7 +340,7 @@ export default function SettingsPage() {
           page, submits via form=) saves every field. */}
       <form id="settings-form" onSubmit={handleSubmit(onSubmit)} className="order-1 space-y-6">
         <Card className={cn(tab !== 'business' && 'hidden')}>
-          <CardHeader><h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Building2 className="w-4 h-4 text-accent" /> Company Information</h2></CardHeader>
+          <CardHeader><h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Building2 className="w-4 h-4 text-accent-text" /> Company Information</h2></CardHeader>
           <CardBody className="space-y-4">
             <Input label="Company Name" {...register('company_name')} />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -382,7 +382,7 @@ export default function SettingsPage() {
         <Card className={cn(tab !== 'pricing' && 'hidden')}>
           <CardHeader>
             <div>
-              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><CreditCard className="w-4 h-4 text-accent" /> Payment &amp; Fees</h2>
+              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><CreditCard className="w-4 h-4 text-accent-text" /> Payment &amp; Fees</h2>
               <p className="text-xs text-ink-faint mt-0.5">How card-processing cost is recovered. The default bakes a small increase into NEW quotes — never a card surcharge (compliant in Alberta; no separate fee line is shown to customers).</p>
             </div>
           </CardHeader>
@@ -409,7 +409,7 @@ export default function SettingsPage() {
 
             {/* ── Recurring AutoPay ── */}
             <div className="pt-4 mt-2 border-t border-border">
-              <h3 className="text-sm font-semibold text-ink flex items-center gap-2"><Zap className="w-4 h-4 text-accent" /> Recurring AutoPay</h3>
+              <h3 className="text-sm font-semibold text-ink flex items-center gap-2"><Zap className="w-4 h-4 text-accent-text" /> Recurring AutoPay</h3>
               <p className="text-xs text-ink-faint mt-0.5 mb-3">For customers with a saved card and AutoPay enabled. A customer can override the timing on their profile.</p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="flex flex-col gap-1.5">
@@ -432,7 +432,7 @@ export default function SettingsPage() {
         <Card className={cn(tab !== 'scheduling' && 'hidden')}>
           <CardHeader>
             <div>
-              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Clock className="w-4 h-4 text-accent" /> Work Schedule</h2>
+              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Clock className="w-4 h-4 text-accent-text" /> Work Schedule</h2>
               <p className="text-xs text-ink-faint mt-0.5">Drives the weekly scheduler, per-stop arrival times and the day-load signal.</p>
             </div>
           </CardHeader>
@@ -469,7 +469,7 @@ export default function SettingsPage() {
         <Card className={cn(tab !== 'scheduling' && 'hidden')}>
           <CardHeader>
             <div>
-              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><CalendarRange className="w-4 h-4 text-accent" /> Service Seasons</h2>
+              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><CalendarRange className="w-4 h-4 text-accent-text" /> Service Seasons</h2>
               <p className="text-xs text-ink-faint mt-0.5">Recurring lawn &amp; snow services default to ending at season end. Off-season customers won&apos;t show as lapsed in Reactivation.</p>
             </div>
           </CardHeader>
@@ -497,7 +497,7 @@ export default function SettingsPage() {
         <Card className={cn(tab !== 'pricing' && 'hidden')}>
           <CardHeader>
             <div>
-              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><DollarSign className="w-4 h-4 text-accent" /> Lawn Pricing</h2>
+              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><DollarSign className="w-4 h-4 text-accent-text" /> Lawn Pricing</h2>
               <p className="text-xs text-ink-faint mt-0.5">Drives suggested measurement prices. Recommended = base price × multiplier.</p>
             </div>
           </CardHeader>
@@ -533,7 +533,7 @@ export default function SettingsPage() {
       <Card className={cn('order-3', tab !== 'pricing' && 'hidden')}>
         <CardHeader className="flex items-center justify-between">
           <div>
-            <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><MapPin className="w-4 h-4 text-accent" /> Travel Fee Tiers</h2>
+            <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><MapPin className="w-4 h-4 text-accent-text" /> Travel Fee Tiers</h2>
             <p className="text-xs text-ink-faint mt-0.5">Fully configurable. Leave fee blank for &quot;custom quote&quot;.</p>
           </div>
           <Button variant="secondary" size="sm" onClick={addTier}><Plus className="w-3.5 h-3.5" /> Add tier</Button>
@@ -617,7 +617,7 @@ function SeasonEditor({ icon, title, hint, season, onChange }: {
       <div className="flex items-center gap-2 mb-1">
         {icon}
         <span className="text-sm font-semibold text-ink">{title}</span>
-        <span className="ml-auto text-xs font-medium text-accent">{seasonLabel(season)}</span>
+        <span className="ml-auto text-xs font-medium text-accent-text">{seasonLabel(season)}</span>
       </div>
       <p className="text-[11px] text-ink-faint mb-2">{hint}</p>
       <div className="flex items-center gap-2 flex-wrap text-xs text-ink-muted">

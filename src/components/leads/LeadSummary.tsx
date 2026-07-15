@@ -51,7 +51,7 @@ export function LeadSummary({ lead, footer, className }: { lead: WebsiteLead; fo
   return (
     <div className={`rounded-card border border-accent/30 bg-accent/[0.06] p-3.5 ${className || ''}`}>
       <div className="flex items-center justify-between gap-2">
-        <p className="text-xs font-bold uppercase tracking-wide text-accent flex items-center gap-1.5">
+        <p className="text-xs font-bold uppercase tracking-wide text-accent-text flex items-center gap-1.5">
           <Globe className="w-3.5 h-3.5" /> {source} lead
           {isFresh && <span className="text-[9px] font-bold text-black bg-accent rounded-full px-1.5 py-px leading-none tracking-wider">NEW</span>}
         </p>

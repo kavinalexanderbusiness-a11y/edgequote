@@ -254,7 +254,7 @@ export default function ReactivationPage() {
         <div className="space-y-3">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
-              <Repeat className="w-3.5 h-3.5 text-accent" />
+              <Repeat className="w-3.5 h-3.5 text-accent-text" />
             </span>
             <h2 className="text-sm font-semibold text-ink tracking-tight">Recurring series ran out</h2>
             <span className="text-xs text-ink-faint tabular-nums">No next visit booked · {ranOut.length} customer{ranOut.length !== 1 ? 's' : ''} · {formatCurrency(ranOut.reduce((s, r) => s + r.perVisit, 0))}/visit at stake</span>
@@ -273,7 +273,7 @@ export default function ReactivationPage() {
         return (
           <div key={b.key} className="space-y-3">
             <div className="flex items-center gap-2">
-              <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><AlertTriangle className="w-3.5 h-3.5 text-accent" /></span>
+              <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0"><AlertTriangle className="w-3.5 h-3.5 text-accent-text" /></span>
               <h2 className={`text-sm font-semibold tracking-tight ${b.tone}`}>{b.label}</h2>
               <span className="text-xs text-ink-faint tabular-nums">{b.sub} · {list.length} customer{list.length !== 1 ? 's' : ''} · {formatCurrency(list.reduce((s, r) => s + r.potentialRecovery, 0))} potential</span>
               <span className="flex-1 h-px bg-border" aria-hidden />
@@ -297,7 +297,7 @@ function RiskCard({ r }: { r: RiskCustomer }) {
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <Link href={`/dashboard/customers/${c.id}`} className="text-sm font-bold text-ink hover:text-accent truncate">{c.name}</Link>
+              <Link href={`/dashboard/customers/${c.id}`} className="text-sm font-bold text-ink hover:text-accent-text truncate">{c.name}</Link>
               {r.isVip && <VipChip />}
             </div>
             <p className="text-xs text-ink-muted mt-0.5">
@@ -306,7 +306,7 @@ function RiskCard({ r }: { r: RiskCustomer }) {
           </div>
           <div className="text-right shrink-0">
             <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">Potential</p>
-            <p className="text-lg font-bold text-accent tabular-nums">{formatCurrency(r.potentialRecovery)}</p>
+            <p className="text-lg font-bold text-accent-text tabular-nums">{formatCurrency(r.potentialRecovery)}</p>
           </div>
         </div>
 
@@ -319,7 +319,7 @@ function RiskCard({ r }: { r: RiskCustomer }) {
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           <a href={phone ? `tel:${phone}` : undefined} aria-disabled={!phone}
-            className={`h-10 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border transition-colors ${phone ? 'bg-accent/10 border-accent/20 text-accent hover:bg-accent/20' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}>
+            className={`h-10 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border transition-colors ${phone ? 'bg-accent/10 border-accent/20 text-accent-text hover:bg-accent/20' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}>
             <Phone className="w-4 h-4" /> Call
           </a>
           <a href={phone ? `sms:${phone}` : undefined} aria-disabled={!phone}
@@ -367,7 +367,7 @@ function RanOutCard({ r }: { r: RanOutCustomer }) {
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <Link href={`/dashboard/customers/${c.id}`} className="text-sm font-bold text-ink hover:text-accent truncate">{c.name}</Link>
+              <Link href={`/dashboard/customers/${c.id}`} className="text-sm font-bold text-ink hover:text-accent-text truncate">{c.name}</Link>
               {r.isVip && <VipChip />}
             </div>
             <p className="text-xs text-ink-muted mt-0.5">
@@ -376,7 +376,7 @@ function RanOutCard({ r }: { r: RanOutCustomer }) {
           </div>
           <div className="text-right shrink-0">
             <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">Per visit</p>
-            <p className="text-lg font-bold text-accent tabular-nums">{r.perVisit > 0 ? formatCurrency(r.perVisit) : '—'}</p>
+            <p className="text-lg font-bold text-accent-text tabular-nums">{r.perVisit > 0 ? formatCurrency(r.perVisit) : '—'}</p>
           </div>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
@@ -385,7 +385,7 @@ function RanOutCard({ r }: { r: RanOutCustomer }) {
             <CalendarPlus className="w-4 h-4" /> Schedule next
           </Link>
           <a href={phone ? `tel:${phone}` : undefined} aria-disabled={!phone}
-            className={`h-10 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border transition-colors ${phone ? 'bg-accent/10 border-accent/20 text-accent hover:bg-accent/20' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}>
+            className={`h-10 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border transition-colors ${phone ? 'bg-accent/10 border-accent/20 text-accent-text hover:bg-accent/20' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}>
             <Phone className="w-4 h-4" /> Call
           </a>
           <a href={phone ? `sms:${phone}` : undefined} aria-disabled={!phone}

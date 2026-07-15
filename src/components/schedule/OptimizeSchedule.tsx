@@ -218,7 +218,7 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
       <div ref={dialogRef} className="min-h-full flex items-start justify-center p-4 sm:p-6">
         <Card role="dialog" aria-modal="true" aria-labelledby="optimize-title" tabIndex={-1} className="w-full max-w-2xl my-2 shadow-2xl focus:outline-none" onClick={e => e.stopPropagation()}>
           <div className="px-5 py-4 border-b border-border flex items-center justify-between">
-            <h2 id="optimize-title" className="text-sm font-semibold tracking-tight text-ink flex items-center gap-2"><Rocket className="w-4 h-4 text-accent" aria-hidden="true" /> Optimize Schedule</h2>
+            <h2 id="optimize-title" className="text-sm font-semibold tracking-tight text-ink flex items-center gap-2"><Rocket className="w-4 h-4 text-accent-text" aria-hidden="true" /> Optimize Schedule</h2>
             <button type="button" onClick={onClose} aria-label="Close" className="w-9 h-9 -mr-2 flex items-center justify-center text-ink-faint hover:text-ink"><X className="w-4 h-4" /></button>
           </div>
           <CardBody className="space-y-4">
@@ -244,7 +244,7 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
                 {SCOPES.map(s => (
                   <button key={s.key} onClick={() => setScope(s.key)} disabled={running}
                     className={cn('text-xs font-medium px-2.5 py-1.5 rounded-lg border transition-colors disabled:opacity-60',
-                      scope === s.key ? 'border-accent bg-accent/10 text-accent' : 'border-border-strong bg-surface text-ink-muted hover:border-accent/50')}>
+                      scope === s.key ? 'border-accent bg-accent/10 text-accent-text' : 'border-border-strong bg-surface text-ink-muted hover:border-accent/50')}>
                     {s.label}
                   </button>
                 ))}
@@ -260,7 +260,7 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
                     title={invoicedIds === null ? 'Loading job data…' : undefined}
                     className={cn('rounded-xl border p-3 text-left transition-colors disabled:opacity-60',
                       mode === key && result ? 'border-accent bg-accent/10' : 'border-border-strong bg-surface hover:border-accent/50')}>
-                    <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><Icon className="w-4 h-4 text-accent" /> {label}</p>
+                    <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><Icon className="w-4 h-4 text-accent-text" /> {label}</p>
                     <p className="text-[11px] text-ink-faint mt-0.5">{sub}</p>
                   </button>
                 ))}
@@ -302,7 +302,7 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
                     {/* Why — plain-language explanation */}
                     {result.reasons.length > 0 && (
                       <div className="rounded-xl border border-accent/20 bg-accent/5 px-3 py-2.5">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-accent flex items-center gap-1.5 mb-1">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-accent-text flex items-center gap-1.5 mb-1">
                           <Lightbulb className="w-3.5 h-3.5" /> Why this is better
                         </p>
                         <ul className="space-y-0.5">
@@ -321,9 +321,9 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
                           Review changes · {selectedMoves.length} of {result.moves.length} selected
                         </p>
                         <div className="flex items-center gap-2 text-[11px] font-medium">
-                          <button onClick={() => setDeselected(new Set())} className="text-accent hover:underline">All</button>
+                          <button onClick={() => setDeselected(new Set())} className="text-accent-text hover:underline">All</button>
                           <span className="text-ink-faint">·</span>
-                          <button onClick={() => setDeselected(new Set(result.moves.map(m => m.jobId)))} className="text-accent hover:underline">None</button>
+                          <button onClick={() => setDeselected(new Set(result.moves.map(m => m.jobId)))} className="text-accent-text hover:underline">None</button>
                         </div>
                       </div>
                       <div className="max-h-56 overflow-y-auto divide-y divide-border">
@@ -341,7 +341,7 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
                                   {m.value > 0 && <span className="text-ink-faint shrink-0">{formatCurrency(m.value)}</span>}
                                 </span>
                                 <span className="text-ink-muted shrink-0">{fmtDay(m.from)}</span>
-                                <ArrowRight className="w-3 h-3 text-accent shrink-0" />
+                                <ArrowRight className="w-3 h-3 text-accent-text shrink-0" />
                                 <span className="text-ink font-medium shrink-0">{fmtDay(m.to)}</span>
                               </label>
                               {on && issue && (
@@ -413,7 +413,7 @@ export function OptimizeSchedule({ jobs, recurrences, valueByJobId, baseCoord, p
 function CompareCard({ title, m, fmtDrive, highlight }: { title: string; m: OptimizationResult['before']; fmtDrive: (n: number) => string; highlight?: boolean }) {
   return (
     <div className={cn('rounded-xl border p-3 space-y-1.5', highlight ? 'border-accent/50 bg-accent/5' : 'border-border bg-bg-tertiary')}>
-      <p className={cn('text-[11px] font-semibold uppercase tracking-wide', highlight ? 'text-accent' : 'text-ink-faint')}>{title}</p>
+      <p className={cn('text-[11px] font-semibold uppercase tracking-wide', highlight ? 'text-accent-text' : 'text-ink-faint')}>{title}</p>
       <Row Icon={Clock} label="Drive time" value={fmtDrive(m.driveMinutes)} />
       <Row Icon={Navigation} label="Distance" value={`${m.totalKm} km`} />
       <Row Icon={Gauge} label="Density score" value={`${m.densityScore}/100`} />

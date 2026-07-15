@@ -94,7 +94,7 @@ export default function CrmAutomationPage() {
         <div className="rounded-card border border-accent/25 hero-aurora p-4 sm:p-5 animate-rise">
           <div className="flex items-center gap-2.5 mb-3">
             <span className="w-7 h-7 rounded-lg bg-accent/15 border border-accent/25 icon-glow flex items-center justify-center shrink-0">
-              <Zap className="w-4 h-4 text-accent" />
+              <Zap className="w-4 h-4 text-accent-text" />
             </span>
             <div>
               <p className="text-sm font-bold tracking-tight text-ink">Due now</p>
@@ -155,7 +155,7 @@ export default function CrmAutomationPage() {
         <Card className="p-5 card-lift">
           <div className="flex items-center gap-2 mb-3">
             <div className="w-9 h-9 rounded-xl bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
-              <Gift className="w-4 h-4 text-accent" />
+              <Gift className="w-4 h-4 text-accent-text" />
             </div>
             <p className="text-sm font-bold tracking-tight text-ink">Referrals</p>
           </div>

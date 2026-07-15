@@ -124,12 +124,12 @@ export function WeekendOutlook() {
       <CardHeader className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span className="flex items-center gap-2.5">
           <span className="w-7 h-7 rounded-lg bg-accent/15 border border-accent/25 flex items-center justify-center shrink-0">
-            <CalendarRange className="w-4 h-4 text-accent" />
+            <CalendarRange className="w-4 h-4 text-accent-text" />
           </span>
           <h2 className="text-sm font-bold tracking-tight text-ink">Your next work days</h2>
         </span>
         <span className="ml-auto flex items-center gap-3 text-xs text-ink-muted tabular-nums">
-          <span className="flex items-center gap-1"><DollarSign className="w-3 h-3 text-accent" />{formatCurrency(totalRev)}</span>
+          <span className="flex items-center gap-1"><DollarSign className="w-3 h-3 text-accent-text" />{formatCurrency(totalRev)}</span>
           <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{totalHours}h</span>
           <span>{totalJobs} job{totalJobs !== 1 ? 's' : ''}</span>
         </span>
@@ -142,7 +142,7 @@ export function WeekendOutlook() {
                 <p className="text-sm font-semibold tracking-tight text-ink">{g.weekday} <span className="text-ink-faint font-normal">{format(parseISO(g.date + 'T00:00:00'), 'MMM d')}</span></p>
                 {g.jobs.length > 0 ? (
                   <span className="text-xs text-ink-muted flex items-center gap-1.5 flex-wrap justify-end tabular-nums">
-                    <span>{g.jobs.length} job{g.jobs.length !== 1 ? 's' : ''} · {g.hours}h · done ~{g.finish} · <span className="text-accent font-semibold">{formatCurrency(g.revenue)}</span></span>
+                    <span>{g.jobs.length} job{g.jobs.length !== 1 ? 's' : ''} · {g.hours}h · done ~{g.finish} · <span className="text-accent-text font-semibold">{formatCurrency(g.revenue)}</span></span>
                     {g.loadState !== 'full' && (
                       <span className={cn('text-[10px] font-semibold uppercase tracking-wide rounded px-1.5 py-0.5 border',
                         g.loadState === 'overloaded' ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10')}>
@@ -152,7 +152,7 @@ export function WeekendOutlook() {
                   </span>
                 ) : (
                   // Accent, not amber — open capacity is opportunity, and amber is reserved for risk on this page.
-                  <Link href="/dashboard/schedule" className="text-xs text-accent font-medium flex items-center gap-1 hover:underline"><Plus className="w-3 h-3" /> Open — add a job</Link>
+                  <Link href="/dashboard/schedule" className="text-xs text-accent-text font-medium flex items-center gap-1 hover:underline"><Plus className="w-3 h-3" /> Open — add a job</Link>
                 )}
               </div>
               {g.jobs.length > 0 && (
@@ -167,7 +167,7 @@ export function WeekendOutlook() {
                       <span className="flex items-center gap-1 shrink-0">
                         <span className={j.value > 0 ? 'text-ink-muted' : 'text-amber-400'}>{j.value > 0 ? formatCurrency(j.value) : '$?'}</span>
                         {/* 40px hit areas — these get tapped with gloves on */}
-                        {j.phone && <a href={`tel:${j.phone}`} className="text-accent hover:opacity-80 w-10 h-10 -my-2.5 flex items-center justify-center" title="Call"><Phone className="w-4 h-4" /></a>}
+                        {j.phone && <a href={`tel:${j.phone}`} className="text-accent-text hover:opacity-80 w-10 h-10 -my-2.5 flex items-center justify-center" title="Call"><Phone className="w-4 h-4" /></a>}
                         {j.address && <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(j.address)}`} target="_blank" rel="noopener noreferrer" className="text-ink-muted hover:text-ink w-10 h-10 -my-2.5 flex items-center justify-center" title="Map"><MapPin className="w-4 h-4" /></a>}
                       </span>
                     </div>
@@ -178,7 +178,7 @@ export function WeekendOutlook() {
           ))}
         </div>
         <div className="px-5 py-2.5 border-t border-border">
-          <Link href="/dashboard/schedule" className="text-xs text-accent font-medium hover:underline">Open Schedule →</Link>
+          <Link href="/dashboard/schedule" className="text-xs text-accent-text font-medium hover:underline">Open Schedule →</Link>
         </div>
       </CardBody>
     </Card>

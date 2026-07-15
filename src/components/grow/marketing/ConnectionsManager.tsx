@@ -79,7 +79,7 @@ export function ConnectionsManager({ userId }: { userId: string }) {
                 {/* Only show one-tap Connect when the OAuth app is actually live —
                     otherwise it dead-ends. Today that's never, so manual is the path. */}
                 {canConnectApi(def.key) && (
-                  <a href={`/api/marketing/connect/${def.key}`} className="text-[11px] text-accent hover:underline inline-flex items-center gap-1" title={`Connect via ${p.apiName}`}>
+                  <a href={`/api/marketing/connect/${def.key}`} className="text-[11px] text-accent-text hover:underline inline-flex items-center gap-1" title={`Connect via ${p.apiName}`}>
                     <Link2 className="w-3 h-3" /> Connect
                   </a>
                 )}

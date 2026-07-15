@@ -117,7 +117,7 @@ export default function NotificationsPage() {
       <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
         {g.count === 1 && g.href && (
           <button onClick={() => openItem(g.items[0])}
-            className="text-[11px] font-semibold text-accent hover:underline px-1.5 py-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{actionLabel ?? notificationActionLabel(g.type)}</button>
+            className="text-[11px] font-semibold text-accent-text hover:underline px-1.5 py-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{actionLabel ?? notificationActionLabel(g.type)}</button>
         )}
         {supportsManage && (
           <button onClick={() => snooze(g.ids)} title="Remind me tomorrow" aria-label="Snooze"
@@ -196,7 +196,7 @@ export default function NotificationsPage() {
                   return (
                     <div key={g.key}>
                       <div className={cn('px-4 py-3.5 flex items-start gap-3', lead ? 'bg-accent/[0.06]' : g.unread && 'bg-accent/[0.04]')}>
-                        <div className={cn('w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border', emphasise ? 'border-accent/30 bg-accent/10 text-accent' : 'border-border text-ink-muted')}><Icon className="w-4 h-4" /></div>
+                        <div className={cn('w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border', emphasise ? 'border-accent/30 bg-accent/10 text-accent-text' : 'border-border text-ink-muted')}><Icon className="w-4 h-4" /></div>
                         <button onClick={onMain} className="min-w-0 flex-1 text-left rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                           <p className={cn('text-sm flex items-center gap-2', emphasise ? 'font-semibold text-ink' : 'text-ink-muted')}>
                             {title}
@@ -221,7 +221,7 @@ export default function NotificationsPage() {
                                 <p className="text-[10px] text-ink-faint mt-0.5">{timeAgo(n.created_at)}</p>
                               </button>
                               <div className="flex items-center gap-1 shrink-0">
-                                {n.href && <button onClick={() => openItem(n)} className="text-[11px] font-semibold text-accent hover:underline px-1.5 py-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{nLead ? 'Build quote' : notificationActionLabel(n.type)}</button>}
+                                {n.href && <button onClick={() => openItem(n)} className="text-[11px] font-semibold text-accent-text hover:underline px-1.5 py-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">{nLead ? 'Build quote' : notificationActionLabel(n.type)}</button>}
                                 {supportsManage && <button onClick={() => snooze([n.id])} title="Remind me tomorrow" aria-label="Snooze" className="h-6 w-6 rounded-lg text-ink-faint hover:text-ink hover:bg-surface flex items-center justify-center"><Clock className="w-3 h-3" /></button>}
                                 <button onClick={() => dismiss([n.id])} title={supportsManage ? 'Dismiss' : 'Mark read'} aria-label="Dismiss" className="h-6 w-6 rounded-lg text-ink-faint hover:text-ink hover:bg-surface flex items-center justify-center"><X className="w-3 h-3" /></button>
                               </div>

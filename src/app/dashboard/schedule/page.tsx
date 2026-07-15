@@ -1511,7 +1511,7 @@ export default function SchedulePage() {
       <WeatherStrip />
 
       {quoteCtx && (
-        <div className="text-sm text-accent bg-accent/10 border border-accent/20 rounded-xl px-4 py-2.5">
+        <div className="text-sm text-accent-text bg-accent/10 border border-accent/20 rounded-xl px-4 py-2.5">
           Scheduling from accepted quote <span className="font-semibold">{quoteCtx.quote_number}</span> — pick a date and set recurrence below.
         </div>
       )}
@@ -1571,8 +1571,8 @@ export default function SchedulePage() {
                 : s.kind === 'stuck'
                   ? <Info className="w-4 h-4 text-ink-muted shrink-0 mt-0.5" />
                   : s.kind === 'recurring'
-                    ? <Repeat className="w-4 h-4 text-accent shrink-0 mt-0.5" />
-                    : <Lightbulb className="w-4 h-4 text-accent shrink-0 mt-0.5" />}
+                    ? <Repeat className="w-4 h-4 text-accent-text shrink-0 mt-0.5" />
+                    : <Lightbulb className="w-4 h-4 text-accent-text shrink-0 mt-0.5" />}
               <div className="min-w-0 flex-1">
                 <p className={cn('text-sm font-semibold', s.kind === 'stuck' ? 'text-ink' : s.severity === 'high' ? 'text-amber-300' : 'text-ink')}>{s.title}</p>
                 <p className="text-xs text-ink-muted mt-0.5">{s.detail}</p>

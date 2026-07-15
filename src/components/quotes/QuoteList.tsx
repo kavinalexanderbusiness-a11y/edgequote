@@ -299,7 +299,7 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
                       {/* A real link makes the row keyboard-operable (the row's own
                           onClick only serves the mouse) and gives it an accessible name. */}
                       <Link href={`/dashboard/quotes/${q.id}`} onClick={e => e.stopPropagation()}
-                        className="rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 hover:text-accent transition-colors">
+                        className="rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 hover:text-accent-text transition-colors">
                         {q.customer_name}
                       </Link>
                       {needsFollowUp(q) && q.sent_at && (

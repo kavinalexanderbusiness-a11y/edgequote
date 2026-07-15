@@ -174,7 +174,7 @@ export function Menu({ items, align = 'start', width = 288, ariaLabel = 'Menu', 
                     : (i === active ? 'bg-surface text-ink' : 'text-ink-muted hover:bg-surface hover:text-ink'),
                   it.disabled && 'opacity-50 pointer-events-none',
                 )}>
-                {Icon && <Icon className={cn('w-4 h-4 shrink-0 mt-0.5', it.danger ? 'text-red-400' : 'text-accent')} />}
+                {Icon && <Icon className={cn('w-4 h-4 shrink-0 mt-0.5', it.danger ? 'text-red-400' : 'text-accent-text')} />}
                 <span className="min-w-0">
                   <span className={cn('block text-sm font-medium', it.danger ? 'text-red-400' : 'text-ink')}>{it.label}</span>
                   {it.description && <span className="block text-[11px] text-ink-faint leading-snug line-clamp-2 mt-0.5">{it.description}</span>}

@@ -189,7 +189,7 @@ export function WebsiteIntegration() {
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between gap-3">
-            <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Activity className="w-4 h-4 text-accent" /> Website Health</h2>
+            <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Activity className="w-4 h-4 text-accent-text" /> Website Health</h2>
             <Button size="sm" variant="ghost" onClick={() => { probe(); loadLastLead() }} disabled={reach === 'checking'}>
               <RefreshCw className={cn('w-3.5 h-3.5', reach === 'checking' && 'animate-spin')} /> Recheck
             </Button>
@@ -215,7 +215,7 @@ export function WebsiteIntegration() {
         <CardHeader>
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Globe className="w-4 h-4 text-accent" /> Online Booking & Website Integration</h2>
+              <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Globe className="w-4 h-4 text-accent-text" /> Online Booking & Website Integration</h2>
               <p className="text-xs text-ink-faint mt-0.5">Connect any website — Netlify, WordPress, Wix, Squarespace — straight to EdgeQuote. One token, no code on our side to change.</p>
             </div>
             <StatusPill connected={connected} enabled={enabled} />
@@ -232,8 +232,8 @@ export function WebsiteIntegration() {
               <Toggle checked={enabled} disabled={busy} onChange={toggleBooking} ariaLabel="Enable online booking" />
             </div>
             <ul className="mt-3 pt-3 border-t border-border space-y-1.5 text-xs text-ink-muted">
-              <li className="flex gap-2"><LinkIcon className="w-3.5 h-3.5 text-accent shrink-0 mt-0.5" /><span><b className="text-ink">Booking link</b> — visitors get an instant quote from your pricing and book themselves; a <b>“sent” quote</b> is created automatically.</span></li>
-              <li className="flex gap-2"><Inbox className="w-3.5 h-3.5 text-accent shrink-0 mt-0.5" /><span><b className="text-ink">Website forms</b> — submissions become a customer + property + lead in <b>Messages → Website Leads</b> for you to quote.</span></li>
+              <li className="flex gap-2"><LinkIcon className="w-3.5 h-3.5 text-accent-text shrink-0 mt-0.5" /><span><b className="text-ink">Booking link</b> — visitors get an instant quote from your pricing and book themselves; a <b>“sent” quote</b> is created automatically.</span></li>
+              <li className="flex gap-2"><Inbox className="w-3.5 h-3.5 text-accent-text shrink-0 mt-0.5" /><span><b className="text-ink">Website forms</b> — submissions become a customer + property + lead in <b>Messages → Website Leads</b> for you to quote.</span></li>
               <li className="flex gap-2"><AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" /><span>Turned off, every public submission is rejected — your link and forms stop accepting anything.</span></li>
             </ul>
           </div>
@@ -258,7 +258,7 @@ export function WebsiteIntegration() {
                     <ResultLine ok={test.checks.lead} label="Lead created" />
                     <ResultLine ok={test.checks.customer} label="Customer created / matched" />
                     <ResultLine ok={test.checks.property} label="Property created" />
-                    <Link href="/dashboard/messages" className="inline-flex items-center gap-1.5 text-xs font-semibold text-accent hover:underline pt-1">
+                    <Link href="/dashboard/messages" className="inline-flex items-center gap-1.5 text-xs font-semibold text-accent-text hover:underline pt-1">
                       <MessageSquare className="w-3.5 h-3.5" /> Open Messages → Website Leads
                     </Link>
                   </div>

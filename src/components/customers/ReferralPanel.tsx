@@ -17,7 +17,7 @@ import { Gift, Plus, Check, Trophy, ThumbsDown, Trash2, ExternalLink } from 'luc
 const STATUS_META: Record<Referral['status'], { label: string; tone: string }> = {
   invited:  { label: 'Invited',  tone: 'text-amber-400 border-amber-500/30 bg-amber-500/10' },
   joined:   { label: 'Joined',   tone: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' },
-  rewarded: { label: 'Rewarded', tone: 'text-accent border-accent/30 bg-accent/10' },
+  rewarded: { label: 'Rewarded', tone: 'text-accent-text border-accent/30 bg-accent/10' },
   declined: { label: 'Declined', tone: 'text-ink-faint border-border bg-bg-tertiary' },
 }
 
@@ -95,10 +95,10 @@ export function ReferralPanel({ customer, referrer, referredRevenue }: {
   return (
     <Card>
       <CardHeader className="flex items-center gap-2">
-        <Gift className="w-4 h-4 text-accent" />
+        <Gift className="w-4 h-4 text-accent-text" />
         <h2 className="text-sm font-semibold text-ink">Referrals</h2>
         <span className="ml-auto text-xs text-ink-muted">
-          {joined} joined{referredRevenue > 0 ? <> · <span className="text-accent font-semibold">{formatCurrency(referredRevenue)}</span> generated</> : ''}
+          {joined} joined{referredRevenue > 0 ? <> · <span className="text-accent-text font-semibold">{formatCurrency(referredRevenue)}</span> generated</> : ''}
         </span>
       </CardHeader>
       <CardBody className="space-y-3">
@@ -126,7 +126,7 @@ export function ReferralPanel({ customer, referrer, referredRevenue }: {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
                       {linkedName && r.referred_customer_id ? (
-                        <Link href={`/dashboard/customers/${r.referred_customer_id}`} className="text-sm font-medium text-ink hover:text-accent flex items-center gap-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                        <Link href={`/dashboard/customers/${r.referred_customer_id}`} className="text-sm font-medium text-ink hover:text-accent-text flex items-center gap-1 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                           {linkedName} <ExternalLink className="w-3 h-3 text-ink-faint" />
                         </Link>
                       ) : (
@@ -146,7 +146,7 @@ export function ReferralPanel({ customer, referrer, referredRevenue }: {
                       </>
                     )}
                     {r.status === 'joined' && (
-                      <button aria-label={`Mark ${who} as rewarded`} title="Mark rewarded" onClick={() => patch(r.id, { status: 'rewarded', rewarded_at: new Date().toISOString() })} className="p-2 rounded-lg text-ink-muted hover:text-accent hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><Trophy className="w-4 h-4" /></button>
+                      <button aria-label={`Mark ${who} as rewarded`} title="Mark rewarded" onClick={() => patch(r.id, { status: 'rewarded', rewarded_at: new Date().toISOString() })} className="p-2 rounded-lg text-ink-muted hover:text-accent-text hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><Trophy className="w-4 h-4" /></button>
                     )}
                     <button aria-label={`Remove referral of ${who}`} title="Remove" onClick={() => remove(r.id)} className="p-2 rounded-lg text-ink-faint hover:text-red-400 hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"><Trash2 className="w-4 h-4" /></button>
                   </div>

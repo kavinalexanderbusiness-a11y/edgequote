@@ -141,9 +141,9 @@ export function DayBulkMessage({ date, jobs, onClose }: { date: string; jobs: Jo
             <div className="flex items-center justify-between">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">{selectedCount} of {recipients.length} selected</p>
               <div className="flex items-center gap-2 text-[11px] font-medium">
-                <button type="button" onClick={selectAll} className="text-accent hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">All</button>
+                <button type="button" onClick={selectAll} className="text-accent-text hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">All</button>
                 <span className="text-ink-faint">·</span>
-                <button type="button" onClick={selectNone} className="text-accent hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">None</button>
+                <button type="button" onClick={selectNone} className="text-accent-text hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">None</button>
               </div>
             </div>
             <div className="flex flex-wrap gap-1.5">
@@ -152,7 +152,7 @@ export function DayBulkMessage({ date, jobs, onClose }: { date: string; jobs: Jo
                 return (
                   <button key={r.customerId} onClick={() => toggle(r.customerId)}
                     className={cn('rounded-full px-2.5 py-1 text-xs border inline-flex items-center gap-1 transition-colors',
-                      on ? 'bg-accent/15 border-accent/40 text-accent' : 'bg-surface border-border text-ink-faint hover:text-ink')}>
+                      on ? 'bg-accent/15 border-accent/40 text-accent-text' : 'bg-surface border-border text-ink-faint hover:text-ink')}>
                     {on && <Check className="w-3 h-3" />} {r.name.split(' ')[0]}
                   </button>
                 )
@@ -164,7 +164,7 @@ export function DayBulkMessage({ date, jobs, onClose }: { date: string; jobs: Jo
               {TEMPLATES.map(t => (
                 <button key={t.key} onClick={() => setTplKey(t.key)}
                   className={cn('h-9 rounded-lg border text-xs font-medium flex items-center justify-center gap-1.5 transition-colors',
-                    tplKey === t.key ? 'border-accent bg-accent/15 text-accent' : 'border-border text-ink-muted hover:text-ink hover:bg-black/10')}>
+                    tplKey === t.key ? 'border-accent bg-accent/15 text-accent-text' : 'border-border text-ink-muted hover:text-ink hover:bg-black/10')}>
                   <t.icon className="w-3.5 h-3.5" /> {t.label}
                 </button>
               ))}
@@ -229,7 +229,7 @@ function ChannelChip({ label, icon: Icon, on, onClick }: { label: string; icon: 
   return (
     <button onClick={onClick}
       className={cn('h-7 px-2 rounded-lg border text-[11px] font-medium flex items-center gap-1 transition-colors',
-        on ? 'border-accent/40 bg-accent/10 text-accent' : 'border-border text-ink-faint hover:text-ink')}>
+        on ? 'border-accent/40 bg-accent/10 text-accent-text' : 'border-border text-ink-faint hover:text-ink')}>
       <Icon className="w-3 h-3" /> {label} {on && <Check className="w-3 h-3" />}
     </button>
   )

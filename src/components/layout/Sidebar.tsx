@@ -112,7 +112,7 @@ export function Sidebar() {
   const linkClass = (active: boolean) =>
     cn(
       'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-      active ? 'bg-accent/10 text-accent' : 'text-ink-muted hover:text-ink hover:bg-surface'
+      active ? 'bg-accent/10 text-accent-text' : 'text-ink-muted hover:text-ink hover:bg-surface'
     )
 
   function navBody(onNavigate?: () => void) {
