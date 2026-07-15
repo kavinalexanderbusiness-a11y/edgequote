@@ -65,6 +65,19 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # This step is why the first 17 CI runs were red, and it's worth writing down.
+      # ESLint had never been configured in this repo — no .eslintrc anywhere — so
+      # `next lint` dropped into an INTERACTIVE setup prompt, which cannot be
+      # answered on a runner. It wasn't finding real problems; it couldn't start.
+      # Fixed by adding .eslintrc.json (eslint + eslint-config-next were already
+      # installed, and 67 files carry eslint-disable comments — only the config
+      # was missing).
+      #
+      # Two rules are warnings rather than errors there, deliberately:
+      # react/no-unescaped-entities (9 hits — all curly apostrophes in JSX text,
+      # pure typography that renders identically) and react-hooks/exhaustive-deps.
+      # The gate should fail for things that break production, not for a quote mark.
+      # Both still print in the output; they just don't block a deploy.
       - name: Lint
         run: npm run lint
 

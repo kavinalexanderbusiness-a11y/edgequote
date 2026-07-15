@@ -1,4 +1,5 @@
 import type { NextConfig } from 'next'
+import { withSentryConfig } from '@sentry/nextjs'
 
 // ── Security headers ─────────────────────────────────────────────────────────
 // This app had NONE. It serves a PUBLIC customer portal and a PUBLIC booking
@@ -60,4 +61,34 @@ const nextConfig: NextConfig = {
   },
 }
 
-export default nextConfig
+// ── Sentry build wiring ──────────────────────────────────────────────────────
+// Wrapping is safe with no Sentry env set: without SENTRY_AUTH_TOKEN the plugin
+// skips source-map upload, and without a DSN the SDK never initialises. So CI and
+// local builds are unaffected, and a deploy that hasn't been given the env vars
+// behaves exactly as it does today.
+export default withSentryConfig(nextConfig, {
+  org: process.env.SENTRY_ORG,
+  project: process.env.SENTRY_PROJECT,
+  authToken: process.env.SENTRY_AUTH_TOKEN,
+
+  // Don't spam the build log — but never hide a genuine failure.
+  silent: !process.env.CI,
+
+  // Upload source maps so a production stack trace names OUR file and line
+  // instead of a minified bundle offset, then DELETE them from the deployed
+  // output. Shipping maps publicly would hand the whole client source to anyone
+  // who opens devtools; this is the setting that gets both.
+  widenClientFileUpload: true,
+  sourcemaps: { deleteSourcemapsAfterUpload: true },
+
+  // Route Sentry's browser requests through our own domain, so ad-blockers don't
+  // silently eat the error reports we're adding this for.
+  tunnelRoute: '/monitoring',
+
+  webpack: {
+    // Strip the SDK's own debug logging from the production bundle.
+    treeshake: { removeDebugLogging: true },
+    // Let Vercel tell Sentry when a deploy happens, so issues attribute to releases.
+    automaticVercelMonitors: true,
+  },
+})

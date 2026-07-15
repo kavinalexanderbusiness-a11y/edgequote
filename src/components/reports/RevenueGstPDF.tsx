@@ -93,6 +93,16 @@ function reportDate(s: string | null): string {
   return new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: 'long', day: 'numeric' }).format(parseLocalDate(s))
 }
 
+// The generated-on stamp. A full ISO timestamp (not a date-only string), because two
+// runs on the SAME day can differ — the minute is what tells them apart.
+function generatedStamp(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  return new Intl.DateTimeFormat('en-CA', {
+    year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  }).format(d)
+}
+
 export interface RevenueGstRow {
   invoiceNumber: string
   issuedDate: string | null      // yyyy-MM-dd
@@ -109,6 +119,16 @@ export interface RevenueGstReport {
   gstPercent: number
   rows: RevenueGstRow[]
   totals: { net: number; gst: number; total: number; paid: number; outstanding: number; count: number }
+  /** Drafts in this period, EXCLUDED from every figure above. Carried onto the
+   *  document because the page's on-screen disclosure doesn't travel with the PDF:
+   *  the moment it's emailed to an accountant, "why is March light?" has no answer
+   *  unless the paper itself says what was left out. */
+  excludedDrafts: { count: number; total: number }
+  /** When this PDF was produced. The report recomputes live from current data, so
+   *  two files both titled "2026 · Q2" can hold different numbers — without this
+   *  there is nothing on either page to say which one is newer, and the operator
+   *  can't show what the figures looked like on filing day. */
+  generatedAt: string            // ISO timestamp, stamped by the caller
 }
 
 interface RevenueGstPDFProps {
@@ -164,6 +184,13 @@ export function RevenueGstDoc({ report, settings }: RevenueGstPDFProps): JSX.Ele
           <View>
             <Text style={styles.barLabel}>Period</Text>
             <Text style={styles.barValue}>{report.periodLabel}</Text>
+          </View>
+          {/* Which copy is this? The figures recompute from live data, so two files
+              titled the same period can disagree; without a stamp neither page can
+              say which is current, and the operator can't evidence what they filed. */}
+          <View>
+            <Text style={styles.barLabel}>Generated</Text>
+            <Text style={styles.barValue}>{generatedStamp(report.generatedAt)}</Text>
           </View>
         </View>
 
@@ -249,9 +276,13 @@ export function RevenueGstDoc({ report, settings }: RevenueGstPDFProps): JSX.Ele
         <View style={styles.disclosureBox}>
           <Text style={styles.sectionTitle}>Basis &amp; Scope</Text>
           <Text style={styles.disclosureText}>
-            Based on invoices issued in this period. Excludes cancelled invoices. GST shown is charged on
-            invoices, not a filing figure. This is a revenue summary, not a profit statement — business
-            expenses are not tracked in EdgeQuote.
+            Accrual basis: based on invoices ISSUED in this period, whether or not they have been paid —
+            not on cash received. Excludes cancelled invoices.
+            {report.excludedDrafts.count > 0
+              ? ` Also excludes ${report.excludedDrafts.count} draft invoice${report.excludedDrafts.count === 1 ? '' : 's'} (${formatCurrency(report.excludedDrafts.total)}) that have not been sent to a customer.`
+              : ' Draft invoices, if any, are excluded until sent.'}
+            {' '}GST shown is charged on invoices, not a filing figure. This is a revenue summary, not a
+            profit statement — business expenses are not tracked in EdgeQuote.
           </Text>
         </View>
 
