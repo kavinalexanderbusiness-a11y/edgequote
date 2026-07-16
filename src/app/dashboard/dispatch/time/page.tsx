@@ -22,7 +22,7 @@ import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
 import { toast as notify } from '@/lib/toast'
 import { formatCurrency, cn } from '@/lib/utils'
-import { HardHat, Play, Square, Clock, DollarSign, Trash2, AlertTriangle, Pencil, Wallet } from 'lucide-react'
+import { HardHat, Play, Square, Clock, DollarSign, Trash2, AlertTriangle, Pencil, Wallet, BarChart3 } from 'lucide-react'
 
 type Period = 'today' | 'week'
 
@@ -153,9 +153,14 @@ export default function TimesheetPage() {
         title="Timesheet"
         description="Clock your people in and out, and see what the hours cost."
         action={
-          <Link href="/dashboard/dispatch/payroll">
-            <Button variant="secondary" size="sm"><Wallet className="w-3.5 h-3.5" /> Payroll</Button>
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link href="/dashboard/dispatch/labor">
+              <Button variant="secondary" size="sm"><BarChart3 className="w-3.5 h-3.5" /> Labour</Button>
+            </Link>
+            <Link href="/dashboard/dispatch/payroll">
+              <Button variant="secondary" size="sm"><Wallet className="w-3.5 h-3.5" /> Payroll</Button>
+            </Link>
+          </div>
         }
       />
 

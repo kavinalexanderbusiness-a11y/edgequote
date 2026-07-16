@@ -10,9 +10,11 @@ import { PAY_PERIOD_LABELS } from '@/types'
 import { loadTechnicians } from '@/lib/crews'
 import { loadTimeEntries, formatDuration, decimalHours } from '@/lib/timeTracking'
 import {
-  payrollRules, payPeriodFor, shiftPayPeriod, payrollSummary, overtimeOff,
+  payrollRules, payPeriodFor, shiftPayPeriod, payrollSummary, overtimeOff, inPeriod,
   type PayPeriod, type PayrollSummary,
 } from '@/lib/payroll'
+import { entryMinutes } from '@/lib/timeTracking'
+import { exportRowsToCsv } from '@/lib/csv'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -20,9 +22,11 @@ import { StatTile } from '@/components/ui/StatTile'
 import { Banner } from '@/components/ui/Banner'
 import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
+import { toast as notify } from '@/lib/toast'
 import { formatCurrency, cn } from '@/lib/utils'
 import {
   Wallet, ChevronLeft, ChevronRight, Clock, AlertTriangle, HardHat, Settings, Timer,
+  Download, Printer, BarChart3,
 } from 'lucide-react'
 
 // ── Payroll summary ──────────────────────────────────────────────────────────
@@ -87,6 +91,45 @@ export default function PayrollPage() {
   const step = (delta: number) => setPeriod(p => (p ? shiftPayPeriod(p, delta, rules) : p))
   const otOff = overtimeOff(rules)
 
+  // Shifts per technician, for the printed timesheets. Oldest first — a timesheet
+  // reads forward through the period, unlike the newest-first screen list.
+  const shiftsByTech = useMemo(() => {
+    const m = new Map<string, TimeEntry[]>()
+    for (const e of entries) {
+      if (period && !inPeriod(e, period)) continue
+      const list = m.get(e.technician_id)
+      if (list) list.push(e); else m.set(e.technician_id, [e])
+    }
+    for (const list of m.values()) list.sort((a, b) => a.clock_in.localeCompare(b.clock_in))
+    return m
+  }, [entries, period])
+
+  // Payroll export — the summary as it is on screen. Hours are emitted as decimal
+  // numbers (not "7h 30m") because every payroll system and spreadsheet wants a
+  // number it can sum; 7.5 sums, "7h 30m" does not.
+  function exportCsv() {
+    if (!sum || !sum.rows.length) { notify.error('Nothing to export for this pay period.'); return }
+    exportRowsToCsv(`payroll-${format(sum.period.start, 'yyyy-MM-dd')}-to-${format(sum.period.end, 'yyyy-MM-dd')}`, sum.rows, [
+      { label: 'Employee', value: r => r.name },
+      { label: 'Period start', value: () => format(sum.period.start, 'yyyy-MM-dd') },
+      { label: 'Period end', value: () => format(sum.period.end, 'yyyy-MM-dd') },
+      { label: 'Regular hours', value: r => decimalHours(r.regularMinutes) },
+      { label: 'Overtime hours', value: r => decimalHours(r.otMinutes) },
+      { label: 'Total hours', value: r => decimalHours(r.totalMinutes) },
+      { label: 'Rate (blended $/hr)', value: r => r.blendedRate },
+      { label: 'OT multiplier', value: () => rules.multiplier },
+      { label: 'Regular pay', value: r => r.regularPay },
+      { label: 'Overtime pay', value: r => r.otPay },
+      { label: 'Gross pay', value: r => r.totalPay },
+      { label: 'Shifts', value: r => r.shifts },
+      // Exported so a bookkeeper can see WHY a total looks light, instead of
+      // finding out on payday.
+      { label: 'Open shifts (unpaid)', value: r => r.openShifts },
+      { label: 'Hours with no wage set', value: r => decimalHours(r.unratedMinutes) },
+    ])
+    notify.success(`Exported ${sum.rows.length} employee${sum.rows.length !== 1 ? 's' : ''} to CSV.`)
+  }
+
   if (loading || !period || !sum) {
     return (
       <div className="max-w-5xl space-y-5">
@@ -107,9 +150,20 @@ export default function PayrollPage() {
         title="Payroll"
         description={`${PAY_PERIOD_LABELS[rules.kind]} · what each person earned, regular and overtime.`}
         action={
-          <Link href="/dashboard/settings#payroll">
-            <Button variant="secondary" size="sm"><Settings className="w-3.5 h-3.5" /> Payroll settings</Button>
-          </Link>
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" size="sm" onClick={exportCsv} disabled={!sum.rows.length}>
+              <Download className="w-3.5 h-3.5" /> Export CSV
+            </Button>
+            <Button variant="secondary" size="sm" onClick={() => window.print()} disabled={!sum.rows.length}>
+              <Printer className="w-3.5 h-3.5" /> Print timesheets
+            </Button>
+            <Link href="/dashboard/dispatch/labor">
+              <Button variant="secondary" size="sm"><BarChart3 className="w-3.5 h-3.5" /> Labour</Button>
+            </Link>
+            <Link href="/dashboard/settings#payroll">
+              <Button variant="secondary" size="sm" aria-label="Payroll settings"><Settings className="w-3.5 h-3.5" /></Button>
+            </Link>
+          </div>
         }
       />
 
@@ -249,6 +303,79 @@ export default function PayrollPage() {
         Gross pay from each shift’s own stamped rate — before tax, deductions and remittances.
         {!otOff && ` Overtime is the greater of the daily or weekly rule, never both.`}
       </p>
+
+      {/* ── Printable timesheets ──────────────────────────────────────────────
+          Off-screen; only paper sees it (globals.css @media print). One sheet per
+          person: their shifts, their totals, and a signature line — the thing an
+          owner hands over or files. Same numbers as above, from the same engine. */}
+      <div className="print-sheet hidden print:block text-[11px]">
+        {sum.rows.map((r, i) => {
+          const shifts = shiftsByTech.get(r.technicianId) ?? []
+          return (
+            <section key={r.technicianId} className={cn('print-keep', i < sum.rows.length - 1 && 'print-break')}>
+              <header className="mb-3">
+                <h1 className="text-base font-bold">{r.name} — Timesheet</h1>
+                <p>
+                  {settings?.company_name ? `${settings.company_name} · ` : ''}
+                  {format(period.start, 'MMM d, yyyy')} – {format(period.end, 'MMM d, yyyy')}
+                  {' · '}{PAY_PERIOD_LABELS[rules.kind]}
+                </p>
+              </header>
+
+              <table className="w-full border-collapse mb-3">
+                <thead>
+                  <tr data-print-rule className="border-b border-black">
+                    <th className="text-left py-1">Date</th>
+                    <th className="text-left py-1">In</th>
+                    <th className="text-left py-1">Out</th>
+                    <th className="text-right py-1">Break</th>
+                    <th className="text-right py-1">Hours</th>
+                    <th className="text-left py-1">Notes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {shifts.length === 0 ? (
+                    <tr><td colSpan={6} className="py-2">No shifts in this period.</td></tr>
+                  ) : shifts.map(e => (
+                    <tr key={e.id} data-print-rule className="border-b border-black/20">
+                      <td className="py-1">{format(new Date(e.clock_in), 'EEE MMM d')}</td>
+                      <td className="py-1">{format(new Date(e.clock_in), 'h:mm a')}</td>
+                      {/* An open shift prints as "—", never as a guessed end time. */}
+                      <td className="py-1">{e.clock_out ? format(new Date(e.clock_out), 'h:mm a') : '—'}</td>
+                      <td className="py-1 text-right">{e.break_minutes ? `${e.break_minutes}m` : '—'}</td>
+                      <td className="py-1 text-right">
+                        {e.clock_out ? decimalHours(entryMinutes(e)) : 'open'}
+                      </td>
+                      <td className="py-1">{e.notes ?? ''}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              <table className="w-full border-collapse mb-4">
+                <tbody>
+                  <tr><td className="py-0.5">Regular hours</td><td className="py-0.5 text-right">{decimalHours(r.regularMinutes)}</td></tr>
+                  <tr><td className="py-0.5">Overtime hours{!otOff && ` (at ${rules.multiplier}×)`}</td><td className="py-0.5 text-right">{decimalHours(r.otMinutes)}</td></tr>
+                  <tr data-print-rule className="border-t border-black"><td className="py-1 font-bold">Total hours</td><td className="py-1 text-right font-bold">{decimalHours(r.totalMinutes)}</td></tr>
+                  <tr><td className="py-0.5">Regular pay</td><td className="py-0.5 text-right">{formatCurrency(r.regularPay)}</td></tr>
+                  <tr><td className="py-0.5">Overtime pay</td><td className="py-0.5 text-right">{formatCurrency(r.otPay)}</td></tr>
+                  <tr data-print-rule className="border-t border-black"><td className="py-1 font-bold">Gross pay</td><td className="py-1 text-right font-bold">{formatCurrency(r.totalPay)}</td></tr>
+                </tbody>
+              </table>
+
+              {r.openShifts > 0 && (
+                <p className="mb-2">Note: {r.openShifts} shift{r.openShifts !== 1 ? 's are' : ' is'} still open and not included in these totals.</p>
+              )}
+
+              <div className="flex gap-8 mt-6">
+                <div data-print-rule className="flex-1 border-t border-black pt-1">Employee signature</div>
+                <div data-print-rule className="flex-1 border-t border-black pt-1">Date</div>
+              </div>
+              <p className="mt-3 text-[9px]">Gross pay before tax, deductions and remittances.</p>
+            </section>
+          )
+        })}
+      </div>
     </div>
   )
 }
