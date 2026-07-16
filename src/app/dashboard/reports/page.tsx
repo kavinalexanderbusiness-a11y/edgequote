@@ -7,6 +7,7 @@ import { invoiceTotals } from '@/lib/invoiceTotals'
 import { invoiceBalance } from '@/lib/payments/ledger'
 import { ledgerRowType, cashAmountOf } from '@/lib/payments/analytics'
 import { exportRowsToCsv } from '@/lib/csv'
+import { fetchAllRows } from '@/lib/fetchAll'
 import { downloadBlob } from '@/lib/portalPdf'
 import type { RevenueGstReport, RevenueGstRow } from '@/components/reports/RevenueGstPDF'
 import { PageHeader } from '@/components/layout/PageHeader'
@@ -66,25 +67,6 @@ function inPeriod(iso: string | null | undefined, year: string, q: { from: numbe
 
 function customerNameOf(row: { customers?: { name: string } | null; customer_name?: string | null }): string {
   return row.customers?.name || row.customer_name || '—'
-}
-
-// Supabase caps a select at 1000 rows. On a list that's a slow scroll; on a tax
-// return it's a figure that is quietly, confidently wrong — the missing invoices
-// look exactly like invoices that never existed. Page until a short batch comes
-// back (the same idiom the schedule uses for its job window), ordered with a
-// stable `id` tiebreak so no row repeats or is skipped at a page boundary.
-const PAGE_ROWS = 1000
-async function fetchAllRows<T>(
-  page: (from: number, to: number) => Promise<{ data: T[] | null; error: { message: string } | null }>,
-): Promise<{ rows: T[]; error: string | null }> {
-  const rows: T[] = []
-  for (let from = 0; ; from += PAGE_ROWS) {
-    const { data, error } = await page(from, from + PAGE_ROWS - 1)
-    if (error) return { rows, error: error.message }
-    const batch = data || []
-    rows.push(...batch)
-    if (batch.length < PAGE_ROWS) return { rows, error: null }
-  }
 }
 
 export default function ReportsPage() {
