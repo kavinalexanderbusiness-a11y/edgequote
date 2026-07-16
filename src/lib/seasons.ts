@@ -47,8 +47,13 @@ export interface ServiceSeasons {
 // Service-type → category. Substring match so "Weekly Mowing", "Bi-Weekly
 // Mowing", "Monthly Lawn Care", "Fertilization" all read as lawn; "Snow
 // Removal/Blowing/Clearing" as snow. Anything else is year-round (no season).
-const LAWN_HINTS = ['mow', 'lawn', 'fertiliz', 'fertilis', 'grass', 'aerat', 'trim', 'edge']
-const SNOW_HINTS = ['snow', 'ice', 'plow', 'plough', 'salt', 'shovel']
+// Exported so the Settings editor can WARN when a custom season's keyword collides
+// with a built-in hint — custom seasons resolve first (deliberately: the owner's
+// word beats ours), which means adding 'trim' to a Tree season silently moves
+// "Hedge Trimming" off the lawn season. That priority is right; it being invisible
+// is not. The UI's only defence is knowing these words.
+export const LAWN_HINTS = ['mow', 'lawn', 'fertiliz', 'fertilis', 'grass', 'aerat', 'trim', 'edge']
+export const SNOW_HINTS = ['snow', 'ice', 'plow', 'plough', 'salt', 'shovel']
 
 // Calgary defaults. lawn/snow resolve through the built-in hint lists (below), not
 // through `match`, so their exact priority is preserved — `label` is only for display.
@@ -82,7 +87,12 @@ export function seasonForService(serviceType: string | null | undefined, seasons
   // the untouched hint logic below. That's what guarantees a lawn business behaves
   // byte-for-byte as before.
   if (s) {
-    for (const key of Object.keys(seasons)) {
+    // Keys are SORTED before iterating. Object.keys order is insertion order in
+    // memory but Postgres jsonb canonicalises key order on save (length, then
+    // bytewise) — so without sorting, which season wins an overlapping keyword
+    // could FLIP between "before save" and "after reload" with no edit by the
+    // owner. Sorting makes resolution identical everywhere, always.
+    for (const key of Object.keys(seasons).sort()) {
       if (key === 'lawn' || key === 'snow') continue
       const season = seasons[key]
       if (season?.match?.some(m => m && s.includes(m.toLowerCase()))) return season
@@ -95,6 +105,16 @@ export function seasonForService(serviceType: string | null | undefined, seasons
 }
 
 function pad(n: number): string { return String(n).padStart(2, '0') }
+
+// Clamp a stored day to a real day of that month IN THAT YEAR. The editor caps
+// days at 31 without month awareness, so "Feb 30" (or Feb 29 crossing into a
+// non-leap year, or Sep 31) can reach the store — and this function used to pad
+// it straight into an invalid date string ('2027-02-30') that crashes formatDate
+// at render and is rejected by the recurrence insert. A season ending "Feb 30"
+// can only ever mean its last real day.
+function clampDay(year: number, month: number, day: number): number {
+  return Math.min(day, new Date(year, month, 0).getDate())
+}
 
 // Does this season wrap the calendar year (start month/day after end)?
 function wraps(s: ServiceSeason): boolean {
@@ -114,12 +134,12 @@ export function seasonEndDateFor(startISO: string, season: ServiceSeason): strin
     // Same-year season (lawn). If we start after this year's end, the relevant
     // end is next year's (e.g. measuring in November for next spring).
     const year = startMD > endMD ? startYear + 1 : startYear
-    return `${year}-${pad(season.endMonth)}-${pad(season.endDay)}`
+    return `${year}-${pad(season.endMonth)}-${pad(clampDay(year, season.endMonth, season.endDay))}`
   }
   // Wrapping season (snow): Nov–Dec start → end next year; Jan–Mar start → end this year.
   const startSegmentIsTail = startMD >= season.startMonth * 100 + season.startDay
   const year = startSegmentIsTail ? startYear + 1 : startYear
-  return `${year}-${pad(season.endMonth)}-${pad(season.endDay)}`
+  return `${year}-${pad(season.endMonth)}-${pad(clampDay(year, season.endMonth, season.endDay))}`
 }
 
 // Is dateISO within the season that contains/follows it? Used to detect whether

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from '@/lib/toast'
 import { useBusinessData } from '@/hooks/useBusinessData'
@@ -25,7 +25,7 @@ import { SkeletonRows } from '@/components/ui/Skeleton'
 import { useForm, Controller } from 'react-hook-form'
 import { cn } from '@/lib/utils'
 import { ThemePref, getThemePref, applyThemePref } from '@/lib/theme'
-import { ServiceSeasons, ServiceSeason, DEFAULT_SEASONS, settingsToSeasons, seasonLabel } from '@/lib/seasons'
+import { ServiceSeasons, ServiceSeason, DEFAULT_SEASONS, settingsToSeasons, seasonLabel, LAWN_HINTS, SNOW_HINTS } from '@/lib/seasons'
 import { weekdayLong } from '@/lib/preferences'
 import { Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard, Building2, DollarSign, MessageSquare, Bell, Link as LinkIcon, Zap, RotateCcw, Image as ImageIcon, Palette, Clock, MapPin, LayoutGrid, X } from 'lucide-react'
 
@@ -59,6 +59,18 @@ export default function SettingsPage() {
   const [themePref, setThemePref] = useState<ThemePref>('dark')
   const [logoScale, setLogoScale] = useState(100)
   const [seasons, setSeasons] = useState<ServiceSeasons>(DEFAULT_SEASONS)
+  // Tracks whether the OWNER has touched seasons this session (a ref, because the
+  // [settings] effect must read the current value without re-firing on it). It
+  // guards two distinct data-loss paths found in review:
+  //  • the background revalidate resetting seasons state mid-edit (effect below);
+  //  • the save upsert writing this tab's seasons over another tab's — Save only
+  //    includes service_seasons when the owner actually changed them here, so
+  //    tweaking GST % in a stale tab can no longer delete a season saved elsewhere.
+  const seasonsDirtyRef = useRef(false)
+  const touchSeasons = (updater: (prev: ServiceSeasons) => ServiceSeasons) => {
+    seasonsDirtyRef.current = true
+    setSeasons(updater)
+  }
   const [tab, setTab] = useState<SettingsTab>('business')
 
   // Restore the active tab from the URL hash so a refresh (or a shared link like
@@ -124,7 +136,12 @@ export default function SettingsPage() {
       setWorkStart(settings.work_start_time || '08:00')
       setCapacityHours(String(settings.daily_capacity_hours ?? 8))
       setLogoScale(settings.logo_scale && settings.logo_scale >= 50 ? settings.logo_scale : 100)
-      setSeasons(settingsToSeasons(settings.service_seasons))
+      // Never clobber seasons the owner is mid-edit on. useBusinessData paints from
+      // cache and ALWAYS background-revalidates, so this effect re-fires seconds
+      // after mount with a fresh `settings` identity — and a just-added custom
+      // season exists only in local state until Save, so the unguarded reset made
+      // it vanish mid-keystroke. Once touched, local state wins until saved.
+      if (!seasonsDirtyRef.current) setSeasons(settingsToSeasons(settings.service_seasons))
     }
   }, [settings, reset])
 
@@ -195,12 +212,18 @@ export default function SettingsPage() {
         preferred_work_days: workDays,
         work_start_time: /^\d{1,2}:\d{2}$/.test(workStart) ? workStart : '08:00',
         daily_capacity_hours: Number(capacityHours) > 0 ? Number(capacityHours) : 8,
-        service_seasons: seasons,
+        // Only write seasons the OWNER changed in THIS tab. Unconditionally writing
+        // the whole object meant a stale tab saving an unrelated field (GST %)
+        // replaced service_seasons with its old copy — permanently deleting any
+        // custom season saved from another tab or device, with both saves reporting
+        // success. Untouched here → the column is omitted and the DB value stands.
+        ...(seasonsDirtyRef.current ? { service_seasons: seasons } : {}),
         base_lat: null, base_lng: null,
       }, { onConflict: 'user_id' })
     // Never claim a save that didn't happen — the old code reported "Saved"
     // unconditionally, so a failure looked identical to success.
     if (error) { toast.error('Could not save settings: ' + error.message); return }
+    seasonsDirtyRef.current = false
     // The sticky footer promises "save everything" — so it must also persist any
     // edited travel-fee tier rows (they previously needed their own per-row save).
     // The footer makes the promise, so the footer has to verify it: one failed tier
@@ -513,16 +536,16 @@ export default function SettingsPage() {
             <SeasonEditor
               icon={<Sun className="w-4 h-4 text-amber-400" />}
               title="Lawn Season"
-              hint="Weekly/Bi-Weekly Mowing, Monthly Lawn Care, Fertilization"
+              hint={`Services whose name contains: ${LAWN_HINTS.join(', ')}`}
               season={seasons.lawn}
-              onChange={s => setSeasons(prev => ({ ...prev, lawn: s }))}
+              onChange={s => touchSeasons(prev => ({ ...prev, lawn: s }))}
             />
             <SeasonEditor
               icon={<Snowflake className="w-4 h-4 text-sky-400" />}
               title="Snow Season"
-              hint="Snow Removal, Snow Blowing, Snow Clearing (can wrap the new year)"
+              hint={`Services whose name contains: ${SNOW_HINTS.join(', ')} (can wrap the new year)`}
               season={seasons.snow}
-              onChange={s => setSeasons(prev => ({ ...prev, snow: s }))}
+              onChange={s => touchSeasons(prev => ({ ...prev, snow: s }))}
             />
 
             {/* Owner-defined seasons — the UI half of the engine's custom-season
@@ -535,8 +558,10 @@ export default function SettingsPage() {
                 icon={<CalendarRange className="w-4 h-4 text-accent-text" />}
                 season={season}
                 editable
-                onChange={s => setSeasons(prev => ({ ...prev, [key]: s }))}
-                onRemove={() => setSeasons(prev => {
+                seasons={seasons}
+                seasonKey={key}
+                onChange={s => touchSeasons(prev => ({ ...prev, [key]: s }))}
+                onRemove={() => touchSeasons(prev => {
                   const next = { ...prev }
                   delete next[key]
                   return next
@@ -544,11 +569,15 @@ export default function SettingsPage() {
               />
             ))}
             <button type="button"
-              onClick={() => setSeasons(prev => {
-                // Keys only need to be unique and stable — the engine iterates them,
-                // nothing else references them. Never collide with the built-ins.
-                let n = 1
-                while (prev[`custom-${n}`]) n++
+              onClick={() => touchSeasons(prev => {
+                // Keys only need to be unique and stable — the engine iterates them
+                // SORTED, nothing else references them. Always max+1, never the
+                // lowest free number: reusing a deleted key's number re-slots the
+                // new season into the deleted one's resolution position, so with an
+                // overlapping keyword the winner would change after a save/reload.
+                const n = Math.max(0, ...Object.keys(prev)
+                  .map(k => /^custom-(\d+)$/.exec(k)).filter((m): m is RegExpExecArray => !!m)
+                  .map(m => Number(m[1]))) + 1
                 return { ...prev, [`custom-${n}`]: { label: '', match: [], startMonth: 5, startDay: 1, endMonth: 9, endDay: 30 } }
               })}
               className="inline-flex items-center gap-1.5 text-xs font-medium text-accent-text hover:underline transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded">
@@ -558,7 +587,7 @@ export default function SettingsPage() {
             {/* Reset restores the built-in DATES only. It must never delete the
                 owner's custom seasons — "reset Calgary defaults" isn't consent to
                 drop the pool season they built. */}
-            <button type="button" onClick={() => setSeasons(prev => ({ ...prev, lawn: DEFAULT_SEASONS.lawn, snow: DEFAULT_SEASONS.snow }))}
+            <button type="button" onClick={() => touchSeasons(prev => ({ ...prev, lawn: DEFAULT_SEASONS.lawn, snow: DEFAULT_SEASONS.snow }))}
               className="block text-xs text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded">
               <RotateCcw className="w-3 h-3 inline mr-1.5" />Reset lawn &amp; snow to Calgary defaults (Apr 15 → Oct 31 · Nov 1 → Mar 31)</button>
           </CardBody>
@@ -686,11 +715,51 @@ const MONTH_OPTS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep
 // name input, adds the match-keywords field (how the engine maps services to this
 // season — see lib/seasons.seasonForService), and offers Remove. Same component
 // so a custom season can never drift visually from the built-in two.
-function SeasonEditor({ icon, title, hint, season, onChange, editable, onRemove }: {
+function SeasonEditor({ icon, title, hint, season, onChange, editable, onRemove, seasons, seasonKey }: {
   icon: React.ReactNode; title?: string; hint?: string; season: ServiceSeason; onChange: (s: ServiceSeason) => void
   editable?: boolean; onRemove?: () => void
+  /** All seasons + this one's key — only for the keyword-collision warnings below. */
+  seasons?: ServiceSeasons; seasonKey?: string
 }) {
   const set = (patch: Partial<ServiceSeason>) => onChange({ ...season, ...patch })
+  // The keywords input renders LOCAL text, not match.join(', ') — a controlled value
+  // re-derived from the parsed array eats the comma as you type it (".filter(Boolean)"
+  // drops the empty segment after "pool,", the re-render writes back "pool", and a
+  // second keyword can never be started). Local state is what was typed; the parsed
+  // array is what the engine gets.
+  const [kwText, setKwText] = useState((season.match || []).join(', '))
+  // Re-sync ONLY when season.match changes from OUTSIDE this input (a background
+  // revalidate replacing clean state). Guarded by parse-equality: while typing,
+  // parse(kwText) always equals season.match (this input just wrote it), so the
+  // sync never fires mid-keystroke and can't eat a trailing comma. Without this,
+  // the input keeps displaying stale text after an external update, and the next
+  // keystroke parses the STALE text — silently dropping keywords added elsewhere.
+  useEffect(() => {
+    const parsed = kwText.split(',').map(s => s.trim()).filter(Boolean)
+    const current = season.match || []
+    if (parsed.length !== current.length || parsed.some((v, i) => v !== current[i])) {
+      setKwText(current.join(', '))
+    }
+  }, [season.match]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keywords that collide with the built-in lawn/snow hints or another season's
+  // keywords. Custom seasons resolve FIRST (the owner's word deliberately beats
+  // ours) and among themselves by sorted key — both invisible from this form, so
+  // an owner typing 'trim' has no way to know they just moved "Hedge Trimming"
+  // off the lawn season. The warning makes the hijack a choice instead of a trap.
+  const collisions: string[] = []
+  if (editable && seasons) {
+    for (const kw of season.match || []) {
+      const k = kw.toLowerCase()
+      if (LAWN_HINTS.some(h => k.includes(h) || h.includes(k))) collisions.push(`“${kw}” also matches built-in Lawn services`)
+      else if (SNOW_HINTS.some(h => k.includes(h) || h.includes(k))) collisions.push(`“${kw}” also matches built-in Snow services`)
+      else {
+        const other = Object.entries(seasons).find(([ok, os]) =>
+          ok !== seasonKey && ok !== 'lawn' && ok !== 'snow' && (os.match || []).some(m => m.toLowerCase() === k))
+        if (other) collisions.push(`“${kw}” is also used by ${other[1].label || 'another season'}`)
+      }
+    }
+  }
   const dayField = (val: number, key: 'startDay' | 'endDay') => (
     <input type="number" min={1} max={31} value={val} aria-label={key === 'startDay' ? 'Start day' : 'End day'}
       onChange={e => set({ [key]: Math.min(31, Math.max(1, Number(e.target.value) || 1)) })}
@@ -702,7 +771,6 @@ function SeasonEditor({ icon, title, hint, season, onChange, editable, onRemove 
       {MONTH_OPTS.map(o => <option key={o.value} value={o.value} className="bg-bg-secondary">{o.label}</option>)}
     </select>
   )
-  const keywords = (season.match || []).join(', ')
   return (
     <div className="rounded-card border border-border p-3">
       <div className="flex items-center gap-2 mb-1">
@@ -733,9 +801,12 @@ function SeasonEditor({ icon, title, hint, season, onChange, editable, onRemove 
         <div className="mt-2">
           <label className="block text-[11px] font-semibold text-ink-muted">
             Applies to services containing
-            <input value={keywords} placeholder="e.g. pool, opening, closing"
+            <input value={kwText} placeholder="e.g. pool, opening, closing"
               aria-label="Matching keywords, comma separated"
-              onChange={e => set({ match: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
+              onChange={e => {
+                setKwText(e.target.value)
+                set({ match: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })
+              }}
               className="mt-1 w-full bg-bg-tertiary border border-border-strong rounded-lg px-2.5 py-2 text-sm font-normal text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
           </label>
           {/* An empty match list is a season that can never fire — the engine only
@@ -744,6 +815,9 @@ function SeasonEditor({ icon, title, hint, season, onChange, editable, onRemove 
           {(season.match || []).length === 0 && (
             <p className="text-[11px] text-amber-400 mt-1">Add at least one word from the service names this applies to — without one, this season won&rsquo;t apply to anything.</p>
           )}
+          {collisions.slice(0, 3).map(c => (
+            <p key={c} className="text-[11px] text-amber-400 mt-1">{c} — those services will follow this season instead.</p>
+          ))}
         </div>
       )}
     </div>

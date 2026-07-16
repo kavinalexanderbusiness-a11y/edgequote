@@ -651,11 +651,16 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
               </div>
             )}
 
-            {/* Season chip — what season this service belongs to */}
+            {/* Season chip — what season this service belongs to. An owner-defined
+                season resolves here too (category stays 'year_round' for those, so
+                the old snow?/lawn binary called a Pool Opening a "Lawn service") —
+                its own label wins, falling back to the binary only for the built-ins. */}
             {serviceSeason && (
               <p className="text-xs text-ink-muted flex items-center gap-1.5">
-                {category === 'snow' ? <Snowflake className="w-3.5 h-3.5 text-sky-400" /> : <Sun className="w-3.5 h-3.5 text-amber-400" />}
-                {category === 'snow' ? 'Snow' : 'Lawn'} service · season {seasonLabel(serviceSeason)}
+                {category === 'snow' ? <Snowflake className="w-3.5 h-3.5 text-sky-400" />
+                  : category === 'lawn' ? <Sun className="w-3.5 h-3.5 text-amber-400" />
+                  : <CalendarRange className="w-3.5 h-3.5 text-accent-text" />}
+                {serviceSeason.label || (category === 'snow' ? 'Snow' : 'Lawn')} service · season {seasonLabel(serviceSeason)}
               </p>
             )}
 
