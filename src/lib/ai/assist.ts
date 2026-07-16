@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { modelForTier, type AiTier } from '@/lib/ai/anthropic'
 import { getPropertyContext, propertyContextBlock } from '@/lib/ai/propertyContext'
+import { loadBusinessContext, contextLine, type BusinessContext } from '@/lib/marketing/businessContext'
 import { MSG_VARIABLES } from '@/lib/comms/templates'
 
 // ── The AI assist engine ──────────────────────────────────────────────────────
@@ -83,13 +84,28 @@ const STYLE = `Voice: a competent, friendly local contractor writing in their ow
 //
 // The "say nothing" rule matters most on a brand-new customer with no history: with
 // no services in context, a guess is what produces "your lawn" for an electrician.
-const TRADE = `What this business actually does: read it from the context — the service names, job titles, quote line items and notes are their real work. Use their vocabulary for it. Never assume a trade, and never assume the work is lawn care, landscaping, or anything outdoors. If the context doesn't say what the work is, keep it general ("the visit", "the work", "the job") rather than guessing — guessing wrong reads as though we don't know them.`
+const TRADE_UNKNOWN = `What this business actually does: read it from the context — the service names, job titles, quote line items and notes are their real work. Use their vocabulary for it. Never assume a trade, and never assume the work is lawn care, landscaping, or anything outdoors. If the context doesn't say what the work is, keep it general ("the visit", "the work", "the job") rather than guessing — guessing wrong reads as though we don't know them.`
+
+// The owner's OWN service catalog beats inference. `service_templates` is the list
+// they deliberately curated, and lib/marketing/businessContext already resolves it
+// (templates decide WHAT is sold; job history only ranks it) — so this reads that
+// seam rather than growing a second one. It matters because the alternative is
+// inference over `jobs.service_type`, which is free text typed in the field and
+// really does contain customer names ("Robert mowing") and non-services ("Call"):
+// the exact reason businessContext exists. When the owner has no templates yet it
+// returns null and we fall back to reading the trade from context, as before.
+function tradeBlock(biz: BusinessContext): string {
+  const line = contextLine(biz)
+  return line
+    ? `What this business actually does — this is their own service list, treat it as the authority: ${line} Use their vocabulary for it. If a detail of the work isn't in the context, keep it general ("the visit", "the work") rather than guessing.`
+    : TRADE_UNKNOWN
+}
 
 const GUARDRAILS = `
 Hard rules — these override everything else:
 - Only state facts that appear in the context above. No invented prices, dates, times, names, services, or history. A missing detail is OMITTED, never guessed and never replaced with a placeholder.
-- NEVER output bracketed placeholders of any kind: no [Name], [date], [your company], <insert …>, ____. If you don't have the detail, write around it.
-- Keep template tokens exactly as written when they appear in the draft (e.g. {{portal_link}}, [Customer Portal Link]) — the system replaces them at send time.
+- NEVER INVENT a placeholder for a detail you don't have: no [Name], [date], [your company], <insert …>, ____. If you don't have the detail, write around it. The tokens listed above are the only fill-in-the-blank markers that exist.
+- PRESERVE VERBATIM, never delete or reword, the two markers the system replaces at send time: {{…}} tokens, and the exact literal text [Customer Portal Link] (this one is the customer's pay/portal link — it is NOT an invented placeholder, and dropping it sends a message with no link). This rule wins over the one above.
 - Plain text only. No markdown syntax (no **, #, backticks, or bullet symbols other than "- " where the format explicitly asks for it) — the output is shown and sent as-is.
 - Output ONLY the requested text. No preamble, no quotes around it, no explanation, no sign-off block unless the format asks for one.`
 
@@ -103,10 +119,27 @@ const daysBetween = (a: string, b: string) => Math.round((new Date(b + 'T00:00:0
 // these resolve PER CUSTOMER at send time — which makes even a bulk draft
 // personally addressed. Sourced from the same registry the template editor
 // documents (lib/comms/templates), so the model and the owner see one list.
-const DRAFT_TOKENS = new Set(['first_name', 'business_name', 'review_link', 'portal_link', 'amount', 'date'])
-function tokenGuidance(): string {
-  const rows = MSG_VARIABLES.filter(v => DRAFT_TOKENS.has(v.key)).map(v => `{{${v.key}}} = ${v.hint}`)
-  return `Personalization tokens you MAY use — they are replaced with each recipient's real values at send time, so they are the ONLY safe way to reference a detail you don't have: ${rows.join('; ')}. Use a token only where its value is clearly needed (a review ask needs {{review_link}}); never invent other tokens.`
+// Tokens that ALWAYS resolve: the send route derives them per recipient from the
+// customer row and business settings, so they are safe on any draft, bulk included.
+const ALWAYS_TOKENS = ['first_name', 'business_name', 'review_link', 'portal_link']
+
+// Tokens that resolve ONLY from owner-supplied vars on this specific send. Offering
+// one whose value is absent is how a draft acquires an unfillable hole: {{date}}
+// with no dateLabel interpolates to the literal "soon" ("see you on soon"), and
+// {{amount}} with no amount interpolates to nothing ("your balance is ."). The
+// model can't know which vars this send carries — so only advertise the ones that
+// will actually have a value.
+const VAR_TOKENS: Array<{ key: string; has: (v: AssistPayload['vars']) => boolean }> = [
+  { key: 'amount', has: v => !!trunc(v?.amount, 1) },
+  { key: 'date', has: v => !!trunc(v?.dateLabel, 1) },
+]
+
+function tokenGuidance(vars: AssistPayload['vars']): string {
+  const keys = [...ALWAYS_TOKENS, ...VAR_TOKENS.filter(t => t.has(vars)).map(t => t.key)]
+  const rows = MSG_VARIABLES.filter(v => keys.includes(v.key)).map(v => `{{${v.key}}} = ${v.hint}`)
+  // Name no token outside `rows` — an example mentioning one is the same as
+  // offering it, which is the whole failure this gating exists to prevent.
+  return `Personalization tokens you MAY use — they are replaced with each recipient's real values at send time, so they are the ONLY safe way to reference a detail you don't have: ${rows.join('; ')}. Each is replaced by a bare value and nothing else, so write any wording around it yourself — a token never supplies a preposition, a currency symbol or punctuation. Use one only where its value is clearly needed; never invent a token, and never use one that is not on this list.`
 }
 
 // What each template key actually means — the model gets an intent, not a slug.
@@ -121,6 +154,13 @@ const TEMPLATE_INTENT: Record<string, string> = {
   review_request: 'ask happy customers for a short review, with the review link',
   reminder: 'remind them about an upcoming visit or an amount due',
   thanks: 'thank them — for their business, a payment, or a referral',
+  // The two money messages. Both are live entry points (the quote page and the
+  // invoice page open the composer with these templates) and both used to fall
+  // through to `custom` — "infer the intent from their draft and instruction" —
+  // which on a fresh write has neither to infer from. No goal, no draft: the two
+  // messages that decide whether we get paid were the two written blind.
+  quote: 'send the customer their quote: tell them it is ready, point them to the link to review it, and make accepting it feel easy — never restate or estimate the price, the quote itself carries it',
+  invoice: 'send the customer their invoice: tell them it is ready, point them to the link to view and pay it, and keep it matter-of-fact and easy to act on — never dun or pressure them',
   custom: 'whatever the owner needs — infer the intent from their draft and instruction',
 }
 
@@ -241,6 +281,12 @@ async function customerContext(supabase: SupabaseClient, userId: string, custome
     block: lines.join('\n'), company, name: c.name, firstName: c.name.split(' ')[0],
     hasThread: msgs.length > 0,
     services: [...new Set(done.map(j => j.service_type).filter(Boolean))].slice(0, 4) as string[],
+    // Safe-to-surface relationship facts, for the tasks whose OUTPUT the customer
+    // reads (a quote's scope notes print on the PDF). `block` must never go to
+    // those: it carries the owner's private notes, lifetime revenue and invoice
+    // numbers. These three carry the history without carrying the dossier.
+    visitCount: done.length,
+    lastVisit: done.length ? done[0].scheduled_date : null,
   }
 }
 
@@ -265,6 +311,33 @@ async function ownerVoice(supabase: SupabaseClient, userId: string, activeTempla
   }
 }
 
+// The property the owner already described, in their own words.
+//
+// getPropertyContext reads `property_intelligence` — AI Vision's cache — which only
+// exists once Vision has actually analysed that property. In this database it holds
+// zero rows against every property on file, so the Vision path resolves to '' every
+// time and the scope writer has been working blind. The `properties` row the owner
+// filled in themselves was there the whole time.
+//
+// Vision still wins when it exists (it sees things nobody typed); this is the floor
+// beneath it, not a replacement. Resolved server-side from the customer when the
+// caller didn't pass a property — the quote builder usually hasn't got one to pass.
+async function propertySiteLine(
+  supabase: SupabaseClient, userId: string, propertyId?: string, customerId?: string,
+): Promise<string> {
+  let q = supabase.from('properties').select('notes').eq('user_id', userId)
+  if (propertyId) q = q.eq('id', propertyId)
+  else if (customerId) q = q.eq('customer_id', customerId)
+  else return ''
+  const { data } = await q.limit(1)
+  const notes = trunc((data as Array<{ notes: string | null }> | null)?.[0]?.notes, 300)
+  if (!notes) return ''
+  // These are the OWNER's private site notes, and this task's output prints on the
+  // customer's quote. The notes field invites gate codes by design (the builder's
+  // own placeholder asks for them), so the model is told what it may do with them.
+  return `The owner's private site notes for this property — use them ONLY to judge which single expectation is worth setting, never copy them into the quote, and never repeat a gate code, lock combination, alarm code or key location into a document the customer will read: ${notes}`
+}
+
 // The linked visit, fetched server-side — real dates beat client-passed labels.
 async function jobLine(supabase: SupabaseClient, userId: string, jobId: string | undefined): Promise<string> {
   if (!jobId) return ''
@@ -287,9 +360,17 @@ export async function buildAssistInput(
   switch (p.task) {
     case 'draft_message': {
       const channels = (p.channels || []).filter(c => c === 'sms' || c === 'email')
+      // Three shapes, not two. There was an SMS branch and an everything-else branch,
+      // so an EMAIL-only send was written to the "text and/or email" rules: squeezed
+      // under 500 characters, greeting optional, no room to say anything properly.
+      // An email and a text are not the same message and never were.
       const smsOnly = channels.length === 1 && channels[0] === 'sms'
+      const emailOnly = channels.length === 1 && channels[0] === 'email'
       const intent = TEMPLATE_INTENT[trunc(p.template, 40)] || TEMPLATE_INTENT.custom
-      const voice = await ownerVoice(supabase, userId, trunc(p.template, 40))
+      const [voice, biz] = await Promise.all([
+        ownerVoice(supabase, userId, trunc(p.template, 40)),
+        loadBusinessContext(supabase, userId),
+      ])
       const company = voice.company
       let context = ''
       let hasThread = false
@@ -308,13 +389,15 @@ export async function buildAssistInput(
       ].filter(Boolean).join('; ')
       const rewrite = !!trunc(p.currentText, 10)
       const system = `You write customer messages for ${company}, a small local services business.
-${TRADE}
+${tradeBlock(biz)}
 ${STYLE}
 ${smsOnly
   ? 'Format: a TEXT MESSAGE. 1–3 short sentences, under 300 characters (one SMS segment of 160 is even better). No greeting line, no sign-off block — at most the business name worked in once, naturally.'
-  : 'Format: goes out as a text and/or an email body. Under 500 characters, a few short sentences. Start with the customer\'s first name only if the context gives it. No subject line, no signature block; the business name at most once.'}
+  : emailOnly
+    ? 'Format: an EMAIL body. Two or three short paragraphs, up to about 120 words — an email has room, so use it to be clear rather than terse, but never pad. Open by greeting the customer by first name on its own line. Do NOT write a subject line and do NOT write a signature block; the system adds both.'
+    : 'Format: ONE text that goes out as both a text message and an email body, so it has to work as a text: under 500 characters, a few short sentences. Start with the customer\'s first name only if the context gives it. No subject line, no signature block; the business name at most once.'}
 ${p.bulk ? 'This text goes to MANY customers at once: never type a literal name or any per-customer detail — but you SHOULD greet with the {{first_name}} token, which resolves to each recipient\'s own name at send time. Everything else must read correct for every recipient (seasonal/general phrasing).' : ''}
-${tokenGuidance()}
+${tokenGuidance(p.vars)}
 ${voice.exemplars.length ? `How this business actually writes — match this voice over the generic default (copy the tone, not the content; ignore any **bold** marks, they are template styling):\n${voice.exemplars.map(e => `EXAMPLE: "${e}"`).join('\n')}` : ''}
 The message must be complete and sendable as-is — if it makes an offer or asks something, make the next step obvious (reply, link, or call).
 ${GUARDRAILS}`
@@ -334,7 +417,10 @@ ${GUARDRAILS}`
 
     case 'customer_summary': {
       if (!p.customerId) throw new Error('customerId required')
-      const ctx = await customerContext(supabase, userId, p.customerId, { deep: true })
+      const [ctx, biz] = await Promise.all([
+        customerContext(supabase, userId, p.customerId, { deep: true }),
+        loadBusinessContext(supabase, userId),
+      ])
       if (!ctx) throw new Error('customer not found')
       const system = `You brief the owner of ${ctx.company}, a small local services business, on one customer in the 30 seconds before a call or visit.
 Format — exactly these five lines, in this order, each one sentence (max ~20 words), plain text:
@@ -344,7 +430,7 @@ Format — exactly these five lines, in this order, each one sentence (max ~20 w
 - Watch: the one thing that could lose this customer or is waiting on the owner ("nothing" if genuinely nothing). If the context lists Signals, this is usually signal #2.
 - Next: ONE concrete action. The context ends with app-computed Signals in priority order — act on signal #1 and restate its reason with its exact numbers (e.g. "chase invoice #1042 — $180 past due"). If Signals says "none", say so and name the healthiest habit to keep (e.g. "nothing needed — next visit is booked").
 Never invent a recommendation the Signals and data don't support.
-${TRADE}
+${tradeBlock(biz)}
 ${STYLE}
 ${GUARDRAILS}`
       const prompt = `Here is everything on file:\n${ctx.block}\n\nWrite the five-line brief.`
@@ -353,40 +439,70 @@ ${GUARDRAILS}`
 
     case 'review_response': {
       if (!p.customerId) throw new Error('customerId required')
-      const ctx = await customerContext(supabase, userId, p.customerId)
+      const [ctx, biz] = await Promise.all([
+        customerContext(supabase, userId, p.customerId),
+        loadBusinessContext(supabase, userId),
+      ])
       if (!ctx) throw new Error('customer not found')
-      const rating = Math.min(5, Math.max(1, Math.round(p.rating || 5)))
-      const shape = rating >= 4
-        ? 'A positive review: thank them genuinely and SPECIFICALLY — reference the kind of work we actually did for them (from the context) rather than generic praise — and welcome them back. No discounts or incentives, no begging for referrals.'
-        : rating === 3
-          ? 'A mixed review: thank them for the honest feedback, acknowledge there was room to be better, and say you\'d value hearing more directly so the next visit is right.'
-          : 'A critical review: thank them for the feedback, apologize once without excuses and without arguing any detail, and invite them to continue directly (phone or email) so you can make it right. Never dispute their account publicly, never mention compensation.'
+      // The star rating decides whether this reply thanks or apologizes — getting it
+      // wrong is worse than saying less. It is NOT defaulted: an unrecorded rating
+      // (the customers row allows null) must never be read as 5 stars.
+      const rawRating = Number(p.rating)
+      const rating = Number.isFinite(rawRating) && rawRating >= 1
+        ? Math.min(5, Math.max(1, Math.round(rawRating)))
+        : null
+      const shape = rating === null
+        ? 'The star rating was never recorded, so their sentiment is UNKNOWN — this reply must read correctly whether they praised us or complained. Thank them once for taking the time to leave feedback, plainly and without effusive praise, and invite them to reach out directly if there is anything they want handled. Do NOT gush, do NOT apologize for a problem you cannot see, and do NOT characterize the review.'
+        : rating >= 4
+          ? 'A positive review: thank them genuinely and SPECIFICALLY — reference the kind of work we actually did for them (from the context) rather than generic praise — and welcome them back. No discounts or incentives, no begging for referrals.'
+          : rating === 3
+            ? 'A mixed review: thank them for the honest feedback, acknowledge there was room to be better, and say you\'d value hearing more directly so the next visit is right.'
+            : 'A critical review: thank them for the feedback, apologize once without excuses and without arguing any detail, and invite them to continue directly (phone or email) so you can make it right. Never dispute their account publicly, never mention compensation.'
       const system = `You write the business owner's PUBLIC reply to a customer review of ${ctx.company} (posted on ${trunc(p.source, 30) || 'Google'}). 2–4 sentences, under 60 words.
 ${shape}
 This reply is public: use the reviewer's FIRST NAME only, and never reveal their address, prices paid, invoice details, or visit dates. Naming the KIND of work is as specific as it gets, and only using the words the context uses for it — if the context doesn't name it, say "the work" or "the visit".
 Don't open with "Thank you so much" — vary the opener. Use the business name at most once.
-${TRADE}
+${tradeBlock(biz)}
 ${STYLE}
 ${GUARDRAILS}`
-      const prompt = `Reviewer: ${ctx.firstName}. Rating: ${rating}/5.${ctx.services.length ? ` Services we've actually done for them: ${ctx.services.join(', ')}.` : ''}\nBackground (PRIVATE — for your understanding only, not for quoting publicly):\n${ctx.block}\n\nWrite the public reply.`
+      const prompt = `Reviewer: ${ctx.firstName}. Rating: ${rating === null ? 'not recorded — sentiment unknown' : `${rating}/5`}.${ctx.services.length ? ` Services we've actually done for them: ${ctx.services.join(', ')}.` : ''}\nBackground (PRIVATE — for your understanding only, not for quoting publicly):\n${ctx.block}\n\nWrite the public reply.`
       return { system, prompt, maxTokens: 300, model: tiered('balanced') }
     }
 
     case 'quote_scope': {
-      const company = await businessName(supabase, userId)
-      const propCtx = p.propertyId ? await getPropertyContext(supabase, p.propertyId) : null
-      const propLine = propertyContextBlock(propCtx)
-      const services = (p.services || []).map(s => trunc(s.name, 60)).filter(Boolean)
+      const [company, biz, propCtx, ctx] = await Promise.all([
+        businessName(supabase, userId),
+        loadBusinessContext(supabase, userId),
+        p.propertyId ? getPropertyContext(supabase, p.propertyId) : Promise.resolve(null),
+        // The customer id was already in scope at the call site and simply unused, so
+        // the scope writer couldn't say the line that wins a repeat quote: "the same
+        // work we did in April". Only the safe facts are used below — never ctx.block,
+        // which carries private notes and money into a customer-facing document.
+        p.customerId ? customerContext(supabase, userId, p.customerId) : Promise.resolve(null),
+      ])
+      const propLine = propertyContextBlock(propCtx) || await propertySiteLine(supabase, userId, p.propertyId, p.customerId)
+      // The owner's per-item notes were collected by the builder, sent over the wire,
+      // and then dropped here (only `s.name` was read) — the richest description of
+      // the work that exists, thrown away one line before the prompt.
+      const services = (p.services || [])
+        .map(s => ({ name: trunc(s.name, 60), notes: trunc(s.notes, 200) }))
+        .filter(s => s.name || s.notes)
+      const historyLine = ctx && ctx.visitCount > 0
+        ? `This is an existing customer: ${ctx.visitCount} completed visit${ctx.visitCount !== 1 ? 's' : ''}${ctx.lastVisit ? `, most recently on ${ctx.lastVisit}` : ''}${ctx.services.length ? ` (${ctx.services.join(', ')})` : ''}. Reference that history where it genuinely helps ("the same work we did in April") — never mention what they paid.`
+        : ''
       const system = `You write the scope-of-work notes that appear on a quote from ${company}, a small local services company. The reader is the customer deciding whether to accept.
 Write 2–5 short sentences, addressed to the customer ("we'll…", "your…"): exactly WHAT will be done (walk the line items in order), and one expectation worth setting — but ONLY one the context actually supports, and only the kind that fits this trade (for example access or parking, something they need to move or switch off, or clean-up and disposal). Never invent an expectation to fill the slot, and never assume the work depends on weather.
 NEVER state or estimate any price, total, rate, or discount — pricing lives elsewhere on the quote. NEVER promise outcomes, timelines, or guarantees that aren't in the context. No bullet points unless the owner's rough notes already use them.
-${TRADE}
+${tradeBlock(biz)}
 ${STYLE}
 ${GUARDRAILS}`
       const prompt = [
         `Today's date: ${todayISO()}.`,
         p.serviceType ? `Primary service: ${trunc(p.serviceType, 60)}.` : '',
-        services.length ? `Line items on the quote, in order: ${services.join('; ')}.` : '',
+        services.length
+          ? `Line items on the quote, in order:\n${services.map(s => `  - ${s.name || '(unnamed item)'}${s.notes ? `\n    What the owner wrote about this item — their own words for what it involves, and the best description of this work that exists; build the sentence for this item on it: ${s.notes}` : ''}`).join('\n')}`
+          : '',
+        historyLine,
         p.address ? `Property address: ${trunc(p.address, 80)}.` : '',
         // The column behind this is lawn_sqft (the measure tool's origin), but it is
         // just a measured area on a property. Calling it a lawn to the model is how a
@@ -400,11 +516,14 @@ ${GUARDRAILS}`
 
     case 'job_notes': {
       if (!trunc(p.draft, 3)) throw new Error('nothing to clean up')
-      const company = await businessName(supabase, userId)
+      const [company, biz] = await Promise.all([
+        businessName(supabase, userId),
+        loadBusinessContext(supabase, userId),
+      ])
       const system = `You clean up rough job notes for ${company}, a small local services business. The reader is whoever does the work (possibly the owner themselves) opening this job months from now.
 Keep EVERY fact exactly as given — gate codes, door numbers, phone digits, measurements, part numbers, names, prices stay VERBATIM, never rounded or reworded. Fix grammar and shorthand, group related points, drop only pure filler. Same length or shorter.
 If the notes cover distinct topics, prefix them inline with short plain-text labels like "Access:", "Requests:", "Site:" — one line each, no markdown.
-${TRADE}
+${tradeBlock(biz)}
 ${GUARDRAILS}`
       const prompt = [
         p.serviceType ? `Job type: ${trunc(p.serviceType, 60)}.` : '',
