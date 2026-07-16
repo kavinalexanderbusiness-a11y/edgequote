@@ -25,7 +25,7 @@ interface Inv { id: string; invoice_number: string | null; status: string; amoun
 interface Pay { amount: number | null; paid_at: string | null }
 interface Info {
   customer: { id: string; name: string; phone: string | null; email: string | null; sms_opt_in: boolean; email_opt_in: boolean } | null
-  property: { address: string | null; city: string | null; lawn_sqft: number | null } | null
+  property: { address: string | null; city: string | null } | null
   quotes: Qte[]; jobs: Jb[]; invoices: Inv[]; payments: Pay[]
 }
 
@@ -52,7 +52,7 @@ export function ConversationInfo({ customerId }: Props) {
       if (!uid) return
       const [cu, pr, qu, jo, iv, pa] = await Promise.all([
         supabase.from('customers').select('id, name, phone, email, sms_opt_in, email_opt_in').eq('id', customerId).maybeSingle(),
-        supabase.from('properties').select('address, city, lawn_sqft').eq('customer_id', customerId).order('is_primary', { ascending: false }).limit(1),
+        supabase.from('properties').select('address, city').eq('customer_id', customerId).order('is_primary', { ascending: false }).limit(1),
         supabase.from('quotes').select('id, quote_number, status, total, created_at, issued_date, service_type').eq('customer_id', customerId).order('created_at', { ascending: false }),
         supabase.from('jobs').select('id, status, scheduled_date, service_type, title, completed_at').eq('customer_id', customerId).neq('status', 'cancelled').order('scheduled_date', { ascending: false }),
         supabase.from('invoices').select('id, invoice_number, status, amount, created_at, issued_date, paid_at').eq('customer_id', customerId).order('created_at', { ascending: false }),
