@@ -31,7 +31,12 @@ export function describeSkip(detail: string | null | undefined): SkipInfo {
   if (d.includes('unsub')) return { label: 'customer unsubscribed', action: null }
   if (d.includes('email')) return { label: 'no email on file', action: 'add_email' } // "no email", "missing email"
   if (d.includes('phone')) return { label: 'no phone on file', action: 'add_phone' } // "no phone", "no phone number"
-  if (d.includes('contact')) return { label: 'missing contact information', action: null }
+  // No contact AT ALL — the worst case, and the one that used to offer no way out
+  // while the two milder ones both did. It asks for a phone rather than "email or
+  // phone" because a phone is the channel that actually works for this audience
+  // (measured on the live book: 35 customers reachable by SMS, 4 by email) and
+  // because one clear ask beats a choice when you're standing in a driveway.
+  if (d.includes('contact')) return { label: 'no phone or email on file', action: 'add_phone' }
   if (d.includes('disab')) return { label: 'delivery disabled', action: null }
   return { label: detail!, action: null }   // truthful fallback — show exactly what was recorded
 }
