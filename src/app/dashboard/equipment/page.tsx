@@ -26,7 +26,7 @@ import { Banner } from '@/components/ui/Banner'
 import { EquipmentDialog } from '@/components/equipment/EquipmentDialog'
 import { EquipmentDocs } from '@/components/equipment/EquipmentDocs'
 import { ServiceLogDialog } from '@/components/equipment/ServiceLogDialog'
-import { Wrench, Plus, AlertTriangle, CircleDollarSign, Gauge, Pencil, Trash2, History, Clock, ShieldCheck, Package, Truck, ClipboardList } from 'lucide-react'
+import { Wrench, Plus, AlertTriangle, CircleDollarSign, Gauge, Pencil, Trash2, History, Clock, ShieldCheck, Package, Truck, ClipboardList, Boxes } from 'lucide-react'
 
 // ── Equipment ────────────────────────────────────────────────────────────────
 // The fleet: what you own, what it's costing, and what needs servicing before it
@@ -130,6 +130,10 @@ export default function EquipmentPage() {
         description="Your fleet, what it costs to run, and what's due for service before it strands a crew."
         action={
           <div className="flex items-center gap-2 flex-wrap">
+            {/* The shelf as a whole: value, what to reorder, what it costs. */}
+            <Link href="/dashboard/equipment/inventory">
+              <Button variant="secondary"><Boxes className="w-4 h-4" /> Inventory</Button>
+            </Link>
             <Link href="/dashboard/equipment/parts">
               <Button variant="secondary"><Package className="w-4 h-4" /> Parts</Button>
             </Link>
