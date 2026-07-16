@@ -9,6 +9,7 @@ import {
   loadSuppliers, saveSupplier, archiveSupplier, partsForSupplier, isLegacySupplier, sortSuppliers,
 } from '@/lib/suppliers'
 import { partValue } from '@/lib/parts'
+import { loadPurchaseOrders, vendorHistory, type PurchaseOrder, type PurchaseOrderItem, type ReceiptMovement } from '@/lib/purchasing'
 import { formatCurrency, cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
 import { PageContainer } from '@/components/layout/PageContainer'
@@ -22,7 +23,7 @@ import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { Banner } from '@/components/ui/Banner'
 import { Modal } from '@/components/ui/Modal'
-import { Truck, Plus, Pencil, Archive, ArchiveRestore, Phone, Mail, Globe, Package, Link2 } from 'lucide-react'
+import { Truck, Plus, Pencil, Archive, ArchiveRestore, Phone, Mail, Globe, Package, Link2, ClipboardList } from 'lucide-react'
 
 // ── Suppliers ────────────────────────────────────────────────────────────────
 // Who you buy from. A supplier is a COUNTERPARTY, not an inventory system: this
@@ -32,8 +33,9 @@ import { Truck, Plus, Pencil, Archive, ArchiveRestore, Phone, Mail, Globe, Packa
 // Shelf value per vendor reuses THE parts engine (partValue), so a vendor's
 // number can never disagree with the parts page it came from.
 //
-// Money SPENT with a vendor deliberately isn't here yet: that comes from
-// purchase orders, and until those exist any spend figure would be invented.
+// Purchase history (orders + spend) comes from lib/purchasing.vendorHistory,
+// which values what actually ARRIVED — it reads the receipt movements, not what
+// was ordered. An ordered-but-undelivered PO is not money spent.
 
 const EMPTY: SupplierFormValues = {
   name: '', contact_name: '', phone: '', email: '', website: '', account_number: '', address: '', notes: '',
@@ -43,6 +45,10 @@ export default function SuppliersPage() {
   const supabase = useMemo(() => createClient(), [])
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [parts, setParts] = useState<PartWithSupplier[]>([])
+  // Purchase history — spend is only claimable now that receipts exist.
+  const [pos, setPos] = useState<PurchaseOrder[]>([])
+  const [poItems, setPoItems] = useState<PurchaseOrderItem[]>([])
+  const [receipts, setReceipts] = useState<ReceiptMovement[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [uid, setUid] = useState<string | null>(null)
@@ -54,9 +60,10 @@ export default function SuppliersPage() {
     const user = session?.user
     if (!user) { setLoading(false); return }
     setUid(user.id)
-    const [rows, pRes] = await Promise.all([
+    const [rows, pRes, po] = await Promise.all([
       loadSuppliers(supabase, { includeArchived: true }),
       supabase.from('parts').select('*').eq('user_id', user.id),
+      loadPurchaseOrders(supabase),
     ])
     // Never render a vendor list that silently lost its parts: an error here
     // would otherwise show every supplier as "0 parts".
@@ -64,6 +71,7 @@ export default function SuppliersPage() {
     setLoadError(null)
     setSuppliers(rows)
     setParts((pRes.data as PartWithSupplier[]) || [])
+    setPos(po.pos); setPoItems(po.items); setReceipts(po.movements)
     setLoading(false)
   }
   useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -121,6 +129,7 @@ export default function SuppliersPage() {
               {visible.map(s => {
                 const theirParts = partsForSupplier(s.id, parts)
                 const shelf = theirParts.reduce((sum, p) => sum + partValue(p), 0)
+                const hist = vendorHistory(s.id, pos, poItems, receipts)
                 return (
                   <Card key={s.id} className={cn('card-lift', s.archived_at && 'opacity-60')}>
                     <CardBody className="flex items-start justify-between gap-4">
@@ -159,6 +168,16 @@ export default function SuppliersPage() {
                         {/* Vendor history, as far as it can honestly go today:
                             what you buy from them + what that shelf is worth.
                             Spend arrives with purchase orders. */}
+                        {/* Purchase history: orders + money against goods that
+                            ACTUALLY arrived — vendorHistory reads the receipt
+                            movements, not what was ordered. */}
+                        {hist.orders > 0 && (
+                          <p className="text-xs text-ink-muted mt-1.5 tabular-nums flex items-center gap-1">
+                            <ClipboardList className="w-3 h-3 text-ink-faint" aria-hidden />
+                            {hist.orders} order{hist.orders !== 1 ? 's' : ''}
+                            {hist.spend > 0 && <> · {formatCurrency(hist.spend)} received</>}
+                          </p>
+                        )}
                         <p className="text-xs text-ink-muted mt-2 tabular-nums">
                           {theirParts.length > 0 ? (
                             <>

@@ -26,7 +26,7 @@ import { Banner } from '@/components/ui/Banner'
 import { EquipmentDialog } from '@/components/equipment/EquipmentDialog'
 import { EquipmentDocs } from '@/components/equipment/EquipmentDocs'
 import { ServiceLogDialog } from '@/components/equipment/ServiceLogDialog'
-import { Wrench, Plus, AlertTriangle, CircleDollarSign, Gauge, Pencil, Trash2, History, Clock, ShieldCheck, Package } from 'lucide-react'
+import { Wrench, Plus, AlertTriangle, CircleDollarSign, Gauge, Pencil, Trash2, History, Clock, ShieldCheck, Package, Truck, ClipboardList } from 'lucide-react'
 
 // ── Equipment ────────────────────────────────────────────────────────────────
 // The fleet: what you own, what it's costing, and what needs servicing before it
@@ -129,9 +129,17 @@ export default function EquipmentPage() {
         title="Equipment"
         description="Your fleet, what it costs to run, and what's due for service before it strands a crew."
         action={
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <Link href="/dashboard/equipment/parts">
               <Button variant="secondary"><Package className="w-4 h-4" /> Parts</Button>
+            </Link>
+            {/* The shelf's two other halves: who you buy from, and what's on
+                order. Reachable from the fleet, not buried behind a URL. */}
+            <Link href="/dashboard/equipment/suppliers">
+              <Button variant="secondary"><Truck className="w-4 h-4" /> Suppliers</Button>
+            </Link>
+            <Link href="/dashboard/equipment/purchase-orders">
+              <Button variant="secondary"><ClipboardList className="w-4 h-4" /> Orders</Button>
             </Link>
             <Button onClick={() => setEditing('new')}><Plus className="w-4 h-4" /> Add equipment</Button>
           </div>
