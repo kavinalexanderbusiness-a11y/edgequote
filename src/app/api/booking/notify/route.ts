@@ -47,15 +47,19 @@ export async function POST(req: NextRequest) {
   } | null
   if (!biz) return NextResponse.json({ ok: true, skipped: 'invalid token' })
 
-  const service = esc(body.service || 'Lawn Mowing')
+  // The client resolves the real service from the owner's catalog and always sends it.
+  // The fallback is only for a body that omits it, so it must stay trade-neutral — this
+  // alert goes to the owner, and naming a service they don't sell is worse than saying none.
+  const serviceRaw = String(body.service || 'Service')
+  const service = esc(serviceRaw)
   const out: Record<string, boolean> = {}
 
   // ── 1. Owner alert ──────────────────────────────────────────────────────────
   if (enabled.email && biz.email_primary) {
     const name = esc(body.name), address = esc(body.address), cadence = esc(body.cadence), quote = esc(body.quoteNumber)
-    const html = `<p>🌱 You have a new online booking.</p><ul><li><b>Service:</b> ${service}</li><li><b>Name:</b> ${name}</li><li><b>Address:</b> ${address}</li><li><b>Plan:</b> ${cadence}</li><li><b>Quote:</b> ${quote}</li></ul><p>It's saved as a new <b>sent</b> quote — review it in Quotes, confirm the price, and schedule the first visit.</p>`
-    const text = `New online booking\nService: ${body.service || 'Lawn Mowing'}\nName: ${body.name}\nAddress: ${body.address}\nPlan: ${body.cadence}\nQuote: ${body.quoteNumber}\nReview it in Quotes.`
-    const r = await sendEmail(biz.email_primary, `🌱 New online booking — ${body.name || 'customer'} · ${body.service || 'Lawn Mowing'}`, html, text)
+    const html = `<p>🔔 You have a new online booking.</p><ul><li><b>Service:</b> ${service}</li><li><b>Name:</b> ${name}</li><li><b>Address:</b> ${address}</li><li><b>Plan:</b> ${cadence}</li><li><b>Quote:</b> ${quote}</li></ul><p>It's saved as a new <b>sent</b> quote — review it in Quotes, confirm the price, and schedule the first visit.</p>`
+    const text = `New online booking\nService: ${serviceRaw}\nName: ${body.name}\nAddress: ${body.address}\nPlan: ${body.cadence}\nQuote: ${body.quoteNumber}\nReview it in Quotes.`
+    const r = await sendEmail(biz.email_primary, `🔔 New online booking — ${body.name || 'customer'} · ${serviceRaw}`, html, text)
     out.owner = !!r.sent
   }
 

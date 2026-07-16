@@ -20,6 +20,10 @@ import { toast } from '@/lib/toast'
 import { Plus, Edit2, Trash2, X } from 'lucide-react'
 import { scrollBehavior } from '@/lib/motion'
 
+// Sentinel for the "Other…" option. Never persisted: onSubmit swaps it for the
+// typed name, so the DB only ever sees a real category.
+const NEW_CATEGORY = '__new_category'
+
 export default function ServiceTemplatesPage() {
   const { templates, loading, refresh } = useBusinessData()
   const supabase = createClient()
@@ -30,11 +34,15 @@ export default function ServiceTemplatesPage() {
 
   const { register, handleSubmit, reset, watch, setValue, formState: { isSubmitting, errors } } =
     useForm<ServiceTemplateFormValues>({
-      defaultValues: { name: '', category: 'Lawn Care', pricing_display_type: 'starting_from', default_rate: 65, default_description: '', notes: '', is_active: true },
+      // category/rate are re-seeded from this business's own catalogue in openNew();
+      // 'General' is the neutral member of the starter list, not a trade.
+      defaultValues: { name: '', category: 'General', pricing_display_type: 'starting_from', default_rate: 65, default_description: '', notes: '', is_active: true },
     })
 
   const isActive = watch('is_active')
   const pdType = watch('pricing_display_type')
+  const catValue = watch('category')
+  const [customCategory, setCustomCategory] = useState('')
   const priceVal = watch('default_rate')
 
   // The editor is an inline panel rendered at the TOP of the page. Without this,
@@ -46,7 +54,12 @@ export default function ServiceTemplatesPage() {
   }, [showForm, editing])
 
   function openNew() {
-    reset({ name: '', category: 'Lawn Care', pricing_display_type: 'starting_from', default_rate: 65, default_description: '', notes: '', is_active: true })
+    // Seed the category from what this business ACTUALLY files services under —
+    // it used to be hardcoded 'Lawn Care', so every trade's second service landed
+    // in a lawn bucket unless they noticed the dropdown. Falls back to the neutral
+    // 'General' before they have any services.
+    reset({ name: '', category: topCategory, pricing_display_type: 'starting_from', default_rate: 65, default_description: '', notes: '', is_active: true })
+    setCustomCategory('')
     setEditing(null)
     setShowForm(true)
   }
@@ -62,8 +75,17 @@ export default function ServiceTemplatesPage() {
   }
 
   async function onSubmit(values: ServiceTemplateFormValues) {
+    // Resolve the "Other…" sentinel to the typed name. It must never reach the DB —
+    // and a blank one must not either, or the service files under a literal
+    // '__new_category'.
+    let category = values.category
+    if (category === NEW_CATEGORY) {
+      const typed = customCategory.trim()
+      if (!typed) { toast.error('Name the new category, or pick an existing one.'); return }
+      category = typed
+    }
     const { data: { user } } = await supabase.auth.getUser()
-    const payload = { ...values, default_rate: Number(values.default_rate) }
+    const payload = { ...values, category, default_rate: Number(values.default_rate) }
     if (editing) {
       await supabase.from('service_templates').update(payload).eq('id', editing.id)
     } else {
@@ -95,7 +117,19 @@ export default function ServiceTemplatesPage() {
     return acc
   }, {})
 
-  const categoryOptions = SERVICE_CATEGORIES.map(c => ({ value: c, label: c }))
+  // service_templates.category is free TEXT; SERVICE_CATEGORIES is a starter list,
+  // not the set of legal values. Merge in whatever this business actually uses, so
+  // a category that arrived from anywhere else stays selectable instead of
+  // silently resetting to a lawn one on the next edit.
+  const usedCategories = Array.from(new Set(templates.map(t => (t.category || '').trim()).filter(Boolean)))
+  const allCategories = Array.from(new Set<string>([...SERVICE_CATEGORIES, ...usedCategories]))
+  // What this business files most of its work under — the seed for a new service.
+  const topCategory = Object.entries(grouped).sort((a, b) => b[1].length - a[1].length)[0]?.[0] || 'General'
+  // …and an escape from the list entirely. The column is free text; without this
+  // the six starter categories were the only reachable values, so a pool company
+  // filed everything under "General" forever. Select + Input, both existing
+  // primitives — no new control.
+  const categoryOptions = [...allCategories.map(c => ({ value: c, label: c })), { value: NEW_CATEGORY, label: 'Other…' }]
   const pricingTypeOptions = PRICING_DISPLAY_TYPES.map(t => ({ value: t, label: PRICING_DISPLAY_TYPE_LABELS[t] }))
 
   if (loading) return (
@@ -133,7 +167,15 @@ export default function ServiceTemplatesPage() {
                 error={errors.name ? 'Service name is required' : undefined}
                 {...register('name', { required: true })} />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <Select label="Category" options={categoryOptions} {...register('category')} />
+                <div className="space-y-2">
+                  <Select label="Category" options={categoryOptions} {...register('category')} />
+                  {catValue === NEW_CATEGORY && (
+                    <Input label="New category name *" autoFocus value={customCategory}
+                      onChange={e => setCustomCategory(e.target.value)}
+                      placeholder="e.g. Pool Service"
+                      error={showForm && !customCategory.trim() ? 'Name the new category' : undefined} />
+                  )}
+                </div>
                 <Select label="Pricing Display Type" options={pricingTypeOptions} {...register('pricing_display_type')} />
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-start">
@@ -162,7 +204,11 @@ export default function ServiceTemplatesPage() {
       {Object.keys(grouped).length === 0 ? (
         <Card><InlineEmpty>No services yet. Add your first one.</InlineEmpty></Card>
       ) : (
-        SERVICE_CATEGORIES.filter(c => grouped[c]?.length).map(category => (
+        // Render from the categories that EXIST, not from the constant. Iterating
+        // the constant meant a service filed under anything outside those six was
+        // invisible here while still living in the database — free-text column,
+        // hardcoded reader.
+        allCategories.filter(c => grouped[c]?.length).map(category => (
           <div key={category}>
             <h3 className="text-[10px] font-semibold text-ink-faint uppercase tracking-[0.14em] mb-2 px-1">{category}</h3>
             <Card>

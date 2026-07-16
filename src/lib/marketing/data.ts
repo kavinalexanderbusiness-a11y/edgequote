@@ -2,15 +2,26 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { PHOTO_BUCKET } from '@/lib/photos'
 import { scoreCandidate, seasonOf, type ScoreCustomer, type ScoreProperty, type ScorePhoto } from './score'
 import { deriveBrandVoice, type BrandSource, type BrandVoice } from './brandVoice'
+import { loadBusinessContext } from './businessContext'
 import type { ContentPiece, MarketingCandidate, MarketingChannel, Season } from './types'
 
 // The owner's brand voice, loaded once from business_settings. Shared by every
 // generate route so the "who is this business" read lives in one place.
+//
+// That "one place" is exactly why the service context is loaded HERE rather than at
+// each generator: WHAT they sell is part of who they are, and every generate route
+// already threads BrandVoice into its prompt. One read, one render, no call-site
+// changes, and no route can forget it.
 export async function loadBrandVoice(supabase: SupabaseClient, userId: string): Promise<BrandVoice> {
-  const { data } = await supabase.from('business_settings')
-    .select('company_name, owner_name, phone, website, email_primary, base_address, review_url')
-    .eq('user_id', userId).maybeSingle()
-  return deriveBrandVoice(data as BrandSource | null)
+  const [{ data }, ctx] = await Promise.all([
+    supabase.from('business_settings')
+      .select('company_name, owner_name, phone, website, email_primary, base_address, review_url')
+      .eq('user_id', userId).maybeSingle(),
+    // Never throws; returns empty when unknown, and an empty list renders nothing.
+    loadBusinessContext(supabase, userId),
+  ])
+  const voice = deriveBrandVoice(data as BrandSource | null)
+  return { ...voice, services: ctx.services }
 }
 
 // ── Marketing data layer ────────────────────────────────────────────────────────

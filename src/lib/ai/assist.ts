@@ -67,6 +67,24 @@ export interface AssistInput {
 // all sound like the same person: a competent local contractor, not a bot.
 const STYLE = `Voice: a competent, friendly local contractor writing in their own words. Plain everyday language, short sentences, specific over vague. Warm but never gushing; confident but never salesy. Contractions are fine. No corporate filler ("we strive", "valued customer", "please don't hesitate"), no exclamation marks unless genuinely celebratory, no emoji unless the existing text already uses them.`
 
+// ── Which trade is this? ──────────────────────────────────────────────────────
+// ONE shared block, alongside STYLE and GUARDRAILS, because every task had the same
+// hole: the prompts quietly assumed lawn care ("your lawn", "Measured lawn size",
+// "Mowing difficulty", "debris haul-away"). For an HVAC or plumbing business that
+// isn't a wrong word — it's a draft the owner cannot send, from a tool that clearly
+// doesn't know what they do.
+//
+// The fix is NOT a trade setting. The context already carries the answer: real
+// service_type values off the owner's own jobs and quotes, their own line items,
+// their own notes. So the model is told to read the trade rather than be told it —
+// which works for landscaping, HVAC, plumbing, electrical, cleaning, roofing, pest
+// control, painting, junk removal and pool service without any of them being listed,
+// and keeps working for whatever the next one is.
+//
+// The "say nothing" rule matters most on a brand-new customer with no history: with
+// no services in context, a guess is what produces "your lawn" for an electrician.
+const TRADE = `What this business actually does: read it from the context — the service names, job titles, quote line items and notes are their real work. Use their vocabulary for it. Never assume a trade, and never assume the work is lawn care, landscaping, or anything outdoors. If the context doesn't say what the work is, keep it general ("the visit", "the work", "the job") rather than guessing — guessing wrong reads as though we don't know them.`
+
 const GUARDRAILS = `
 Hard rules — these override everything else:
 - Only state facts that appear in the context above. No invented prices, dates, times, names, services, or history. A missing detail is OMITTED, never guessed and never replaced with a placeholder.
@@ -198,7 +216,10 @@ async function customerContext(supabase: SupabaseClient, userId: string, custome
   if (c.last_contacted_at) lines.push(`Last outbound contact: ${String(c.last_contacted_at).slice(0, 10)}.`)
   if (c.reviewed_at) lines.push(`Left a ${c.review_rating ?? '?'}-star review on ${c.review_source || 'Google'} (${String(c.reviewed_at).slice(0, 10)}).`)
   for (const p of props) {
-    lines.push(`Property: ${p.address || 'on file'}${p.neighborhood ? ` (${p.neighborhood})` : ''}${p.lawn_sqft ? `, lawn ≈${p.lawn_sqft} sqft` : ''}${p.notes ? ` — ${trunc(p.notes, 100)}` : ''}.`)
+    // `lawn_sqft` is the column's name, not a claim about what's there — it holds
+    // whatever the measure tool measured. Stated neutrally so the model doesn't
+    // infer a trade from our schema.
+    lines.push(`Property: ${p.address || 'on file'}${p.neighborhood ? ` (${p.neighborhood})` : ''}${p.lawn_sqft ? `, measured area ≈${p.lawn_sqft} sqft` : ''}${p.notes ? ` — ${trunc(p.notes, 100)}` : ''}.`)
   }
   if (jobs.length) {
     lines.push('Recent visits (newest first):')
@@ -286,7 +307,8 @@ export async function buildAssistInput(
         p.vars?.amount ? `amount: ${trunc(p.vars.amount, 20)}` : '',
       ].filter(Boolean).join('; ')
       const rewrite = !!trunc(p.currentText, 10)
-      const system = `You write customer messages for ${company}, a small local property-services company.
+      const system = `You write customer messages for ${company}, a small local services business.
+${TRADE}
 ${STYLE}
 ${smsOnly
   ? 'Format: a TEXT MESSAGE. 1–3 short sentences, under 300 characters (one SMS segment of 160 is even better). No greeting line, no sign-off block — at most the business name worked in once, naturally.'
@@ -314,7 +336,7 @@ ${GUARDRAILS}`
       if (!p.customerId) throw new Error('customerId required')
       const ctx = await customerContext(supabase, userId, p.customerId, { deep: true })
       if (!ctx) throw new Error('customer not found')
-      const system = `You brief the owner of ${ctx.company}, a small property-services company, on one customer in the 30 seconds before a call or visit.
+      const system = `You brief the owner of ${ctx.company}, a small local services business, on one customer in the 30 seconds before a call or visit.
 Format — exactly these five lines, in this order, each one sentence (max ~20 words), plain text:
 - Who: name, where, how long they've been a customer, what they buy.
 - Money: lifetime collected, anything unpaid or past due (exact figures are in the context — use them verbatim).
@@ -322,6 +344,7 @@ Format — exactly these five lines, in this order, each one sentence (max ~20 w
 - Watch: the one thing that could lose this customer or is waiting on the owner ("nothing" if genuinely nothing). If the context lists Signals, this is usually signal #2.
 - Next: ONE concrete action. The context ends with app-computed Signals in priority order — act on signal #1 and restate its reason with its exact numbers (e.g. "chase invoice #1042 — $180 past due"). If Signals says "none", say so and name the healthiest habit to keep (e.g. "nothing needed — next visit is booked").
 Never invent a recommendation the Signals and data don't support.
+${TRADE}
 ${STYLE}
 ${GUARDRAILS}`
       const prompt = `Here is everything on file:\n${ctx.block}\n\nWrite the five-line brief.`
@@ -340,8 +363,9 @@ ${GUARDRAILS}`
           : 'A critical review: thank them for the feedback, apologize once without excuses and without arguing any detail, and invite them to continue directly (phone or email) so you can make it right. Never dispute their account publicly, never mention compensation.'
       const system = `You write the business owner's PUBLIC reply to a customer review of ${ctx.company} (posted on ${trunc(p.source, 30) || 'Google'}). 2–4 sentences, under 60 words.
 ${shape}
-This reply is public: use the reviewer's FIRST NAME only, and never reveal their address, prices paid, invoice details, or visit dates — the kind of service ("your lawn", "the spring cleanup") is as specific as it gets.
+This reply is public: use the reviewer's FIRST NAME only, and never reveal their address, prices paid, invoice details, or visit dates. Naming the KIND of work is as specific as it gets, and only using the words the context uses for it — if the context doesn't name it, say "the work" or "the visit".
 Don't open with "Thank you so much" — vary the opener. Use the business name at most once.
+${TRADE}
 ${STYLE}
 ${GUARDRAILS}`
       const prompt = `Reviewer: ${ctx.firstName}. Rating: ${rating}/5.${ctx.services.length ? ` Services we've actually done for them: ${ctx.services.join(', ')}.` : ''}\nBackground (PRIVATE — for your understanding only, not for quoting publicly):\n${ctx.block}\n\nWrite the public reply.`
@@ -353,9 +377,10 @@ ${GUARDRAILS}`
       const propCtx = p.propertyId ? await getPropertyContext(supabase, p.propertyId) : null
       const propLine = propertyContextBlock(propCtx)
       const services = (p.services || []).map(s => trunc(s.name, 60)).filter(Boolean)
-      const system = `You write the scope-of-work notes that appear on a quote from ${company}, a small property-services company. The reader is the homeowner deciding whether to accept.
-Write 2–5 short sentences, addressed to the customer ("we'll…", "your…"): exactly WHAT will be done (walk the line items in order), and one expectation worth setting (access needed, weather dependency, debris haul-away — only if the context supports it).
+      const system = `You write the scope-of-work notes that appear on a quote from ${company}, a small local services company. The reader is the customer deciding whether to accept.
+Write 2–5 short sentences, addressed to the customer ("we'll…", "your…"): exactly WHAT will be done (walk the line items in order), and one expectation worth setting — but ONLY one the context actually supports, and only the kind that fits this trade (for example access or parking, something they need to move or switch off, or clean-up and disposal). Never invent an expectation to fill the slot, and never assume the work depends on weather.
 NEVER state or estimate any price, total, rate, or discount — pricing lives elsewhere on the quote. NEVER promise outcomes, timelines, or guarantees that aren't in the context. No bullet points unless the owner's rough notes already use them.
+${TRADE}
 ${STYLE}
 ${GUARDRAILS}`
       const prompt = [
@@ -363,7 +388,10 @@ ${GUARDRAILS}`
         p.serviceType ? `Primary service: ${trunc(p.serviceType, 60)}.` : '',
         services.length ? `Line items on the quote, in order: ${services.join('; ')}.` : '',
         p.address ? `Property address: ${trunc(p.address, 80)}.` : '',
-        p.measuredSqft && p.measuredSqft > 0 ? `Measured lawn size: ${Math.round(p.measuredSqft)} sqft (measured, not estimated — you may reference it).` : '',
+        // The column behind this is lawn_sqft (the measure tool's origin), but it is
+        // just a measured area on a property. Calling it a lawn to the model is how a
+        // roofer's quote ends up talking about grass.
+        p.measuredSqft && p.measuredSqft > 0 ? `Measured area at this property: ${Math.round(p.measuredSqft)} sqft (measured on the map, not estimated — you may reference it if it's relevant to this trade).` : '',
         propLine,
         trunc(p.draft, 10) ? `The owner's rough notes to build from (keep every fact in them):\n---\n${trunc(p.draft, 1200)}\n---` : 'Write the scope notes from the line items above.',
       ].filter(Boolean).join('\n')
@@ -373,9 +401,10 @@ ${GUARDRAILS}`
     case 'job_notes': {
       if (!trunc(p.draft, 3)) throw new Error('nothing to clean up')
       const company = await businessName(supabase, userId)
-      const system = `You clean up rough job notes for ${company}, a small property-services company. The reader is the crew (possibly the owner themselves) opening this job months from now.
-Keep EVERY fact exactly as given — gate codes, door numbers, phone digits, measurements, names, prices stay VERBATIM, never rounded or reworded. Fix grammar and shorthand, group related points, drop only pure filler. Same length or shorter.
+      const system = `You clean up rough job notes for ${company}, a small local services business. The reader is whoever does the work (possibly the owner themselves) opening this job months from now.
+Keep EVERY fact exactly as given — gate codes, door numbers, phone digits, measurements, part numbers, names, prices stay VERBATIM, never rounded or reworded. Fix grammar and shorthand, group related points, drop only pure filler. Same length or shorter.
 If the notes cover distinct topics, prefix them inline with short plain-text labels like "Access:", "Requests:", "Site:" — one line each, no markdown.
+${TRADE}
 ${GUARDRAILS}`
       const prompt = [
         p.serviceType ? `Job type: ${trunc(p.serviceType, 60)}.` : '',

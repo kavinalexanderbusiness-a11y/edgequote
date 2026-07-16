@@ -23,6 +23,13 @@ export interface BrandVoice {
   email: string | null
   city: string | null            // inferred from base_address for "local" framing
   reviewUrl: string | null
+  // What this business actually SELLS, derived from their own service_templates and
+  // recent jobs (lib/marketing/businessContext). Empty = we don't know, and the
+  // prompt then says nothing rather than assuming a trade. This is the field that
+  // stops the AI writing about lawns for a plumber: it rides on BrandVoice, which
+  // every generator already threads into every prompt, so there is one place to
+  // load it and one place to render it.
+  services?: string[]
 }
 
 // Best-effort city from a free-text base address ("123 5 Ave SW, Calgary, AB").
@@ -54,6 +61,13 @@ export function brandVoicePromptBlock(v: BrandVoice): string {
   ]
   if (v.ownerName) lines.push(`Owner: ${v.ownerName}`)
   if (v.city) lines.push(`Based in: ${v.city}`)
+  // The trade, in the owner's own words. Only stated when we actually know it —
+  // silence is correct when we don't, because the model inventing "lawn care" from
+  // nothing is exactly the failure this replaces.
+  if (v.services?.length) {
+    lines.push(`Services they sell: ${v.services.slice(0, 8).join(', ')}`)
+    lines.push('Write about THESE services only. Never mention a trade or service they do not sell.')
+  }
   if (v.phone) lines.push(`Phone: ${v.phone}`)
   if (v.website) lines.push(`Website: ${v.website}`)
   return lines.join('\n')

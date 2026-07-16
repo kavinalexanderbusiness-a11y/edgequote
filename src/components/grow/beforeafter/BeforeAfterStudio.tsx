@@ -73,7 +73,8 @@ export function BeforeAfterStudio() {
   const [pairs, setPairs] = useState<BeforeAfterPair[]>([])
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null)
   const [consentSupported, setConsentSupported] = useState(true)
-  const [brand, setBrand] = useState<BrandInfo>({ name: 'Edge Property Services', phone: null, website: null, logo: null, accent: BRAND_ACCENT })
+  // Empty until settings load — never watermark with a brand the owner didn't set.
+  const [brand, setBrand] = useState<BrandInfo>({ name: '', phone: null, website: null, logo: null, accent: BRAND_ACCENT })
 
   // Composition controls — kept global so they persist as you switch pairs.
   const [layout, setLayout] = useState<LayoutKey>('auto')
@@ -247,7 +248,10 @@ export function BeforeAfterStudio() {
       if (!alive) return
       setConsentSupported(consentOk)
       setBrand({
-        name: s?.company_name || 'Edge Property Services',
+        // Burned onto the exported image. Unlike the message composers this needs a
+        // VISIBLE fallback rather than an empty one, but it must never be a real
+        // company — this poster goes out under the owner's own brand.
+        name: s?.company_name || 'your service provider',
         phone: s?.phone || null,
         website: s?.website || null,
         logo: null,

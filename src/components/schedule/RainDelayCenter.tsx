@@ -78,7 +78,9 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
   // post-apply confirmation + notification view.
   const [result, setResult] = useState<{ moved: number; recipients: Recipient[] } | null>(null)
   const [custom, setCustom] = useState<Partial<Record<MsgType, string>> | null>(null)
-  const [company, setCompany] = useState('Edge Property Services')
+  // Empty until settings load — templates.ts owns the "your service provider"
+  // fallback, so no screen needs to guess a company name (least of all a real one).
+  const [company, setCompany] = useState('')
 
   useEffect(() => {
     let active = true

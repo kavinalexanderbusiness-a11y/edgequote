@@ -271,8 +271,67 @@ export interface Job {
   is_initial_visit: boolean
   // Manual day-route sequence (drag-and-drop). null/absent = automatic (optimizer).
   route_order?: number | null
+  // Which crew runs this visit (RUN-2026-07-15-dispatch-crews). null = unassigned —
+  // the single-crew status quo. Orthogonal to crew_size, which stays headcount.
+  crew_id?: string | null
   customers?: Pick<Customer, 'id' | 'name' | 'phone' | 'preferred_days' | 'avoid_days' | 'pref_time_start' | 'pref_time_end'>
   properties?: Pick<Property, 'id' | 'address' | 'lat' | 'lng' | 'neighborhood' | 'preferred_days' | 'avoid_days' | 'pref_time_start' | 'pref_time_end'>
+}
+
+// ── Dispatch & Crew Management (RUN-2026-07-15-dispatch-crews) ────────────────
+// A crew is an IDENTITY (who runs the route), not a headcount. Jobs point at a
+// crew via jobs.crew_id; the dispatch board partitions a day by crew and feeds
+// each subset to the SAME route/ETA/capacity engines the schedule already uses.
+
+export interface Crew {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  name: string
+  // Palette key (lib/crews CREW_PALETTE) — board chip + map pin hue, not a hex.
+  color: string
+  day_start: string | null       // HH:mm[:ss]; null = business work_start_time
+  day_end: string | null
+  capacity_minutes: number | null // explicit daily capacity; null = derive from window
+  is_active: boolean
+  sort_order: number
+}
+
+export type TechnicianStatus = 'available' | 'en_route' | 'on_job' | 'break' | 'off'
+
+export const TECHNICIAN_STATUS_LABELS: Record<TechnicianStatus, string> = {
+  available: 'Available',
+  en_route: 'En route',
+  on_job: 'On job',
+  break: 'On break',
+  off: 'Off today',
+}
+
+export interface Technician {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  crew_id: string | null
+  name: string
+  phone: string | null
+  email: string | null
+  role: string | null
+  status: TechnicianStatus
+  status_changed_at: string
+  is_active: boolean
+}
+
+// One note per (date, crew); crew_id null = the day-level note.
+export interface DispatchNote {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  date: string
+  crew_id: string | null
+  body: string
 }
 
 // Apple-style edit scope for recurring jobs.
@@ -783,6 +842,10 @@ export interface BusinessSettings {
   id: string
   created_at: string
   updated_at: string
+  // Trade/vertical key (registry: src/lib/trades). Selects seed data and default
+  // copy ONLY — engines never branch on it. Optional because rows predate the
+  // column in older local snapshots; the DB default is 'lawn_landscaping'.
+  business_type?: string
   company_name: string
   owner_name: string | null
   phone: string | null
@@ -943,25 +1006,14 @@ export const SERVICE_CATEGORIES = [
   'General',
 ] as const
 
-export const OVERGROWTH_LEVELS = [
-  { label: 'Normal Lawn', multiplier: 1.0, description: 'Standard condition — base price' },
-  { label: '6–12 inches', multiplier: 1.5, description: 'Moderate overgrowth' },
-  { label: '1–2 feet', multiplier: 2.0, description: 'Heavy overgrowth' },
-  { label: 'Over 2 feet', multiplier: 0, description: 'Custom quote required' },
-] as const
+// OVERGROWTH_LEVELS and SERVICE_TYPES were deleted here (2026-07-15). Both were
+// dead — zero references anywhere in src/, no type alias, no importer — and both
+// hardcoded a lawn trade: a fixed 10-service menu and a grass-height multiplier.
+// The live equivalents are owner-owned data, not constants: service_templates IS
+// the service catalogue, and overgrowth is quotes.overgrowth_multiplier, set from
+// the measure tool. Keeping dead lawn lists around is how the next reader
+// concludes the platform has a home industry.
 
-export const SERVICE_TYPES = [
-  'Lawn Mowing',
-  'Yard Cleanup',
-  'Snow Removal',
-  'Landscaping',
-  'Pressure Washing',
-  'Window Cleaning',
-  'Junk Removal',
-  'Fencing',
-  'Painting',
-  'Other',
-] as const
 
 export const STATUS_LABELS: Record<QuoteStatus, string> = {
   draft: 'Draft',

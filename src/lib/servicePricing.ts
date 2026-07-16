@@ -79,23 +79,26 @@ export function priceInputStep(t: PricingDisplayType): string {
 //   labour         → hours × crew × rate (cleanups, hedge, gutter, one-off work)
 export type ServicePricingKind = 'lawn_recurring' | 'per_area' | 'labour'
 
-const LABOUR_KEYS = new Set([
-  'snow', 'spring-cleanup', 'fall-cleanup', 'cleanup', 'sod', 'aeration',
-  'fertilizing', 'weed-control', 'hedge', 'garden-beds', 'gutter', 'pressure-wash',
-])
-
 export function servicePricingKind(
   serviceType: string | null | undefined,
   template?: Pick<PriceableService, 'pricing_display_type'> | null,
 ): ServicePricingKind {
+  // The owner's CONFIGURED display type wins first — this is the path any service
+  // business is on once it has set its templates up, and it knows nothing about
+  // lawns.
   const t = template?.pricing_display_type
   if (t === 'per_sqft') return 'per_area'
   if (t === 'hourly' || t === 'hourly_materials' || t === 'per_linear_ft') return 'labour'
+  // Otherwise fall back to the shared serviceKey() normalizer. Only two families
+  // get special treatment, because only they have a bespoke engine to route to:
+  // mowing has the sqft cadence engine, mulch/rock have area math.
   const key = serviceKey(serviceType || '')
   if (key === 'mowing') return 'lawn_recurring'
   if (key === 'mulch' || key === 'rock') return 'per_area'
-  if (LABOUR_KEYS.has(key)) return 'labour'
-  // No service named yet → the default lawn flow; a named unknown service is
-  // priced from labour (never from lawn sqft math that doesn't apply to it).
+  // Everything else named — window cleaning, snow, gutters, a trade we've never
+  // heard of — is labour. (A LABOUR_KEYS set of lawn/landscaping terms used to sit
+  // here listing a dozen of them; it was dead. Every key it caught is non-empty, so
+  // this same line already returned 'labour' for it. Removing it changes no
+  // outcome and stops implying the engine has to recognise a trade to price it.)
   return serviceType?.trim() ? 'labour' : 'lawn_recurring'
 }
