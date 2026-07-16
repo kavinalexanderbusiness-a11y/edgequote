@@ -117,3 +117,9 @@ jobs:
       # business and asserts the difference. No API key, no network, deterministic.
       - name: Verify AI business context
         run: npm run verify:ai-context
+
+      # The module system decides what every business SEES. Registry integrity,
+      # dependency math, install/uninstall guards, update badges and the
+      # licensing hook are all wrong-VALUE bugs, invisible to tsc and build.
+      - name: Verify module engine
+        run: npm run verify:modules
