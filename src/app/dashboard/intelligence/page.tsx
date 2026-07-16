@@ -9,6 +9,7 @@ import { Skeleton, SkeletonTiles } from '@/components/ui/Skeleton'
 import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { StatTile } from '@/components/ui/StatTile'
 import { Collapsible } from '@/components/ui/Collapsible'
+import { Tabs } from '@/components/ui/Tabs'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { formatCurrency, cn } from '@/lib/utils'
 import type { Tone } from '@/lib/tone'
@@ -20,6 +21,10 @@ export default function IntelligencePage() {
   const [loading, setLoading] = useState(!bi) // cached → render instantly, refresh in background
   // Labour accuracy & crew efficiency — loaded alongside, but never blocks the BI report.
   const [labor, setLabor] = useState<LaborInsights | null>(() => readCache<LaborInsights>('labor', CACHE_TTL.medium))
+  // Which dashboard is on screen. Purely presentational: the report is loaded ONCE
+  // regardless, so switching views costs nothing and can't diverge between tabs —
+  // every view reads the same `bi` object.
+  const [view, setView] = useState<View>('executive')
 
   useEffect(() => {
     (async () => {
@@ -52,10 +57,16 @@ export default function IntelligencePage() {
     <div className="max-w-6xl mx-auto space-y-6">
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Business Intelligence" description={`How your business is performing — and where to focus. As of ${bi.generatedFor}.`} />
 
+      {/* One report, five ways in. Sticky because the tabs are the only navigation on
+          a page this tall, and scrolling a dashboard shouldn't cost you the way back. */}
+      <div className="sticky top-0 z-10 -mx-1 px-1 py-2 bg-bg/90 backdrop-blur">
+        <Tabs tabs={VIEW_TABS} active={view} onChange={k => setView(k as View)} />
+      </div>
+
       {/* ── EXECUTIVE ── The highest-altitude read on the page, so it leads: who the
           revenue depends on, whether it's compounding, and how fast it turns into
           cash. Every figure here is YTD. */}
-      <Section title="Executive" icon={Briefcase}>
+      <Section title="Executive" icon={Briefcase} view="executive" activeView={view}>
         {/* `payingCustomers === 0` is the one check that keeps a wall of "0%" off
             the page — with no YTD revenue there are no shares to take a share of. */}
         {bi.executive.concentration.payingCustomers === 0 ? (
@@ -99,7 +110,7 @@ export default function IntelligencePage() {
       </Section>
 
       {/* ── FINANCIAL ── */}
-      <Section title="Financial" icon={DollarSign}>
+      <Section title="Financial" icon={DollarSign} view="financial" activeView={view}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Stat label="Revenue this month" value={formatCurrency(bi.financial.revenueThisMonth)} delta={bi.financial.monthOverMonthPct} deltaLabel="vs last month" />
           <Stat label="Revenue last month" value={formatCurrency(bi.financial.revenueLastMonth)} />
@@ -125,7 +136,7 @@ export default function IntelligencePage() {
       {/* ── THIS YEAR VS LAST ── Both sides are SEASON-TO-DATE (the engine cuts last
           year at the same month-day), so the delta is like-for-like and safe as a
           headline. Never label it "vs last year (full)". */}
-      <Section title="This year vs last" icon={TrendingUp}>
+      <Section title="This year vs last" icon={TrendingUp} view="financial" activeView={view}>
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
           <Stat label="Revenue this year" value={formatCurrency(bi.yearly.thisYear.revenue)}
             delta={bi.yearly.revenueDeltaPct} deltaLabel="vs last year to date"
@@ -146,7 +157,7 @@ export default function IntelligencePage() {
       </Section>
 
       {/* ── PROFITABILITY ── */}
-      <Section title="Profitability" icon={Gauge}>
+      <Section title="Profitability" icon={Gauge} view="operations" activeView={view}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Stat label="Revenue / labor hour" value={`$${bi.profitability.revenuePerLaborHour}`} />
           <Stat label="Gross profit YTD" value={formatCurrency(bi.profitability.grossProfitYTD)} sub={`${bi.profitability.grossMarginPct}% margin`} />
@@ -161,7 +172,7 @@ export default function IntelligencePage() {
       </Section>
 
       {/* ── CUSTOMERS ── */}
-      <Section title="Customers" icon={Users}>
+      <Section title="Customers" icon={Users} view="customers" activeView={view}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Stat label="Active customers" value={String(bi.customers.active)} sub={`${bi.customers.total} total`} />
           <Stat label="Retention rate" value={bi.customers.retentionRatePct != null ? `${bi.customers.retentionRatePct}%` : '—'} sub={bi.customers.churnRatePct != null ? `${bi.customers.churnRatePct}% churn` : 'recurring only'} />
@@ -172,7 +183,7 @@ export default function IntelligencePage() {
       </Section>
 
       {/* ── SALES ── */}
-      <Section title="Sales" icon={Target}>
+      <Section title="Sales" icon={Target} view="sales" activeView={view}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Stat label="Quote win rate" value={bi.sales.quoteAcceptancePct != null ? `${bi.sales.quoteAcceptancePct}%` : '—'} sub={`${bi.sales.won} won · ${bi.sales.lost} lost`} />
           <Stat label="Avg quote value" value={formatCurrency(bi.sales.avgQuoteValue)} />
@@ -186,7 +197,7 @@ export default function IntelligencePage() {
       </Section>
 
       {/* ── OPERATIONS ── */}
-      <Section title="Operations" icon={Activity}>
+      <Section title="Operations" icon={Activity} view="operations" activeView={view}>
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
           {/* "Estimate accuracy" lives ONCE — in the Labour section below (the two
               engines' numbers could disagree, so only the learned one is shown). */}
@@ -205,7 +216,7 @@ export default function IntelligencePage() {
       </Section>
 
       {/* ── BUSIEST DAYS ── */}
-      <Section title="Busiest days" icon={CalendarDays}>
+      <Section title="Busiest days" icon={CalendarDays} view="operations" activeView={view}>
         {/* `busiest` is null exactly when no weekday has a completed job — the one
             check that keeps a table of zeroes off the page. */}
         {bi.weekday.busiest ? (
@@ -227,7 +238,7 @@ export default function IntelligencePage() {
 
       {/* ── CANCELLATIONS ── A risk metric: the one section where a tint carries
           alarm rather than confidence. */}
-      <Section title="Cancellations" icon={Ban}>
+      <Section title="Cancellations" icon={Ban} view="financial" activeView={view}>
         {bi.cancellations.cancelledYTD === 0 ? (
           <div className="rounded-card border border-border bg-bg-secondary">
             <EmptyState icon={Ban} tone="positive" className="py-10" title="Nothing cancelled this year"
@@ -325,7 +336,7 @@ export default function IntelligencePage() {
       </Collapsible>
 
       {/* ── FORECASTING ── ("Projected this month" lives once, in Financial above) */}
-      <Section title="Forecasting" icon={LineChart}>
+      <Section title="Forecasting" icon={LineChart} view="executive" activeView={view}>
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
           <Stat label="Recurring run-rate" value={formatCurrency(bi.forecasting.projectedRecurringAnnual)} sub="/yr locked in" accent />
           <Stat label="Rest of season" value={formatCurrency(bi.forecasting.projectedSeasonRemaining)} sub="recurring booked" />
@@ -342,7 +353,34 @@ function monthLabel(key: string) { return new Date(`${key}-01T00:00:00`).toLocal
 /** 1-12 → 'Jun'. */
 function monthShort(m: number) { return new Date(2000, m - 1, 1).toLocaleString('en-US', { month: 'short' }) }
 
-function Section({ title, icon: Icon, children }: { title: string; icon: typeof DollarSign; children: React.ReactNode }) {
+// ── Dashboard composition ────────────────────────────────────────────────────────
+// The five "dashboards" (Executive / Customer / Sales / Operations / Financial) were
+// never missing — computeBI() already returns a BIReport pre-grouped into exactly
+// those sections, and this page already rendered each one under its own heading.
+// They were simply stacked into a single 575-line scroll with no way to focus one.
+//
+// So this is composition ONLY: a view picks which of the EXISTING <Section>s are on
+// screen. No card is moved between sections, no figure is recomputed, and nothing
+// here can invent a number — every value still comes from the same `bi` object this
+// page always loaded, via the same loadBusinessIntelligence() call. That's not a
+// convention to remember; a view is just a filter over sections, so there is nowhere
+// for a second calculation to live.
+type View = 'executive' | 'financial' | 'customers' | 'sales' | 'operations'
+
+// Each <Section> declares its own view at its call site, so the mapping lives next
+// to the thing it maps — no second table here to drift out of sync with the page.
+const VIEW_TABS: { key: View; label: string }[] = [
+  { key: 'executive', label: 'Executive' },
+  { key: 'financial', label: 'Financial' },
+  { key: 'customers', label: 'Customers' },
+  { key: 'sales', label: 'Sales' },
+  { key: 'operations', label: 'Operations' },
+]
+
+function Section({ title, icon: Icon, view, activeView, children }: {
+  title: string; icon: typeof DollarSign; view: View; activeView: View; children: React.ReactNode
+}) {
+  if (view !== activeView) return null
   return (
     <div className="space-y-3 animate-rise">
       <div className="flex items-center gap-2.5">
