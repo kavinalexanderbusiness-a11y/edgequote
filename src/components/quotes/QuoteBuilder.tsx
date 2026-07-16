@@ -1048,6 +1048,9 @@ export function QuoteBuilder({
                     setValue('notes', '')
                     const full = await aiScope.run({
                       task: 'quote_scope',
+                      // Lets the scope reference real history ("the same work we did in
+                      // April"). Facts are re-derived server-side from this id, as ever.
+                      customerId: watch('customer_id') || undefined,
                       serviceType: watch('service_type') || undefined,
                       services: (watchedServices || []).map(s => ({ name: s?.service_type, notes: s?.notes })),
                       propertyId: defaultPropertyId || undefined,
