@@ -218,6 +218,12 @@ export const CAMPAIGN_PRESETS: CampaignPreset[] = [
   { kind: 'broadcast',   name: 'Monthly check-in',         channels: ['email'],        schedule: { day_of_month: 1, every_months: 1 }, audience: {} },
   { kind: 'referral',    name: 'Ask happy customers for referrals', channels: ['email'], schedule: { day_of_month: 15, every_months: 6 }, audience: { happy_only: true } },
   { kind: 'review',      name: 'Chase missing reviews',    channels: ['sms', 'email'], schedule: { day_of_month: 1, every_months: 3 }, audience: { not_reviewed: true } },
+  // The trade-neutral seasonal starting point: no custom_body, so it falls through
+  // to the neutral seasonal_offer template. SEASONAL_TEMPLATES below are deliberately
+  // lawn/snow-flavoured seed (pinned verbatim by verify:trades; trade packs carry
+  // their own versions) — this row is how any other trade starts a seasonal campaign
+  // without first rewriting lawn copy. saveAsPreset keeps whatever they make of it.
+  { kind: 'seasonal',    name: 'Seasonal announcement',    channels: ['email'],        schedule: { month: 4, day: 1 }, audience: {} },
   ...SEASONAL_TEMPLATES.map((s): CampaignPreset => ({
     kind: 'seasonal',
     name: s.label,

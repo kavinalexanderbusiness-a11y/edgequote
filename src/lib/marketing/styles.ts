@@ -25,7 +25,7 @@ export const WRITING_STYLES: Record<WritingStyle, { label: string; blurb: string
   educational: {
     label: 'Educational',
     blurb: 'Teach one useful thing',
-    directive: 'Style: teach ONE genuinely useful lawn/property insight tied to this job or season. Helpful first, never a lecture, never salesy. The reader should learn something.',
+    directive: 'Style: teach ONE genuinely useful insight about this kind of work or the season, tied to this job. Helpful first, never a lecture, never salesy. The reader should learn something.',
   },
   storytelling: {
     label: 'Storytelling',
