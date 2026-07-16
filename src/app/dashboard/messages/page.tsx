@@ -42,12 +42,13 @@ interface Convo {
   message_snippet?: string | null; match_type?: string     // search-result extras
 }
 
-// Type axis (one hub): All / SMS / Portal / Website Leads / Archived. Per-row
-// affordances (unread badge, Needs-reply pill, pin/mute) and the action menu carry
-// the status dimension.
-type Filter = 'all' | 'sms' | 'portal' | 'website_lead' | 'archived'
+// Type axis (one hub): All / Needs reply / SMS / Portal / Website Leads /
+// Archived. Needs-reply is the triage view — every conversation whose last word
+// was the customer's — so "who's waiting on me?" is one tap, not a scan.
+type Filter = 'all' | 'needs_reply' | 'sms' | 'portal' | 'website_lead' | 'archived'
 const FILTERS: { key: Filter; label: string; icon: typeof Inbox }[] = [
   { key: 'all', label: 'All', icon: Inbox },
+  { key: 'needs_reply', label: 'Needs reply', icon: Reply },
   { key: 'sms', label: 'SMS', icon: MessageSquare },
   { key: 'portal', label: 'Portal', icon: Globe },
   { key: 'website_lead', label: 'Website leads', icon: Sparkles },
@@ -77,6 +78,7 @@ function inFilter(c: Convo, f: Filter): boolean {
   if (f === 'archived') return !!c.archived_at
   if (c.archived_at) return false
   if (f === 'all') return true
+  if (f === 'needs_reply') return c.last_direction === 'inbound'   // matches the row's amber pill exactly
   if (f === 'website_lead') return c.lead_status === 'new'
   if (c.lead_status === 'new') return false   // open leads live only under their own chip
   if (f === 'sms') return c.last_channel === 'sms' || c.last_channel == null
@@ -109,7 +111,7 @@ export default function MessagesPage() {
   const [hasMore, setHasMore] = useState(true)
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
-  const [counts, setCounts] = useState<Record<Filter, number>>({ all: 0, sms: 0, portal: 0, website_lead: 0, archived: 0 })
+  const [counts, setCounts] = useState<Record<Filter, number>>({ all: 0, needs_reply: 0, sms: 0, portal: 0, website_lead: 0, archived: 0 })
   const [filter, setFilter] = useState<Filter>('all')
   const [sel, setSel] = useState<Convo | null>(null)
   const [query, setQuery] = useState('')
@@ -134,6 +136,7 @@ export default function MessagesPage() {
     async function countFor(f: Filter): Promise<number> {
       let qb = supabase.from('conversations').select('id', { count: 'exact', head: true }).eq('user_id', u)
       if (f === 'all') qb = qb.is('archived_at', null)
+      else if (f === 'needs_reply') qb = qb.is('archived_at', null).eq('last_direction', 'inbound')
       else if (f === 'sms') qb = qb.is('archived_at', null).is('lead_status', null).or('last_channel.eq.sms,last_channel.is.null')
       else if (f === 'portal') qb = qb.is('archived_at', null).is('lead_status', null).eq('last_channel', 'portal')
       else if (f === 'website_lead') qb = qb.is('archived_at', null).eq('lead_status', 'new')
@@ -141,8 +144,8 @@ export default function MessagesPage() {
       const { count } = await qb
       return count || 0
     }
-    const [a, b, c, d, e] = await Promise.all([countFor('all'), countFor('sms'), countFor('portal'), countFor('website_lead'), countFor('archived')])
-    setCounts({ all: a, sms: b, portal: c, website_lead: d, archived: e })
+    const [a, nr, b, c, d, e] = await Promise.all([countFor('all'), countFor('needs_reply'), countFor('sms'), countFor('portal'), countFor('website_lead'), countFor('archived')])
+    setCounts({ all: a, needs_reply: nr, sms: b, portal: c, website_lead: d, archived: e })
   }
 
   async function loadPage(u: string, f: Filter, reset: boolean) {
@@ -155,6 +158,7 @@ export default function MessagesPage() {
     const from = reset ? 0 : rows.length
     let qb = supabase.from('conversations').select(SELECT_COLS).eq('user_id', u)
     if (f === 'all') qb = qb.is('archived_at', null)
+    else if (f === 'needs_reply') qb = qb.is('archived_at', null).eq('last_direction', 'inbound')
     else if (f === 'sms') qb = qb.is('archived_at', null).is('lead_status', null).or('last_channel.eq.sms,last_channel.is.null')
     else if (f === 'portal') qb = qb.is('archived_at', null).is('lead_status', null).eq('last_channel', 'portal')
     else if (f === 'website_lead') qb = qb.is('archived_at', null).eq('lead_status', 'new')
@@ -306,6 +310,39 @@ export default function MessagesPage() {
     select: (c: Convo) => { setSel(c); if (c.unread > 0) { patch(c.id, { unread: 0 }); if (uid) loadCounts(uid) } },
   }
 
+  // One tap to a clean slate — the bell has mark-all-read; the inbox deserves the
+  // same. Server-wide (not just loaded rows), optimistic, verified by the write.
+  async function markAllRead() {
+    if (!uid) return
+    const prevRows = rows
+    setRows(cs => cs.map(c => ({ ...c, unread: 0 })))
+    setSearchResults(rs => rs ? rs.map(c => ({ ...c, unread: 0 })) : rs)
+    const { error } = await supabase.from('conversations').update({ unread: 0 }).eq('user_id', uid).gt('unread', 0)
+    if (error) { setRows(prevRows); toast.error('Could not mark everything read.'); return }
+    loadCounts(uid)
+  }
+
+  // Deep links: ?c=<customerId> opens that conversation directly — this is where
+  // the bell and push notifications land, so a tap on "Dana replied" opens Dana,
+  // not a list. ?f=<filter> lands on a filter (insight tiles use ?f=needs_reply).
+  // Params are consumed then stripped (back/refresh clean).
+  useEffect(() => {
+    if (!uid) return
+    const params = new URLSearchParams(window.location.search)
+    const cparam = params.get('c')
+    const fparam = params.get('f')
+    if (!cparam && !fparam) return
+    window.history.replaceState(null, '', '/dashboard/messages')
+    if (fparam && FILTERS.some(f => f.key === fparam)) setFilter(fparam as Filter)
+    if (cparam) {
+      ;(async () => {
+        const { data } = await supabase.from('conversations').select(SELECT_COLS)
+          .eq('user_id', uid).eq('customer_id', cparam).maybeSingle()
+        if (data) actions.select(data as unknown as Convo)
+      })()
+    }
+  }, [uid]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── New message (compose without leaving the inbox) ──
   const [composeOpen, setComposeOpen] = useState(false)
   const [composeCustomers, setComposeCustomers] = useState<Customer[]>([])
@@ -389,7 +426,17 @@ export default function MessagesPage() {
         e.preventDefault()
         const cur = sel ? list.findIndex(c => c.id === sel.id) : -1
         const idx = e.key === 'ArrowDown' ? Math.min(list.length - 1, cur + 1) : Math.max(0, cur <= 0 ? 0 : cur - 1)
-        if (list[idx]) actions.select(list[idx])
+        if (list[idx]) {
+          actions.select(list[idx])
+          // Keep the selection on-screen — the list is virtualized, so without this
+          // the highlight walks right out of the rendered window.
+          const el = scrollRef.current
+          if (el) {
+            const top = idx * ROW_H
+            if (top < el.scrollTop) el.scrollTop = top
+            else if (top + ROW_H > el.scrollTop + el.clientHeight) el.scrollTop = top + ROW_H - el.clientHeight
+          }
+        }
       }
     }
     window.addEventListener('keydown', onKey)
@@ -444,9 +491,16 @@ export default function MessagesPage() {
               </FilterPill>
             ))}
           </div>
-          <Button variant="ghost" size="sm" className="shrink-0" onClick={() => selectMode ? exitSelect() : setSelectMode(true)}>
-            {selectMode ? 'Cancel' : 'Select'}
-          </Button>
+          <div className="flex items-center gap-1 shrink-0">
+            {rows.some(c => c.unread > 0) && (
+              <Button variant="ghost" size="sm" onClick={markAllRead} title="Mark every conversation read">
+                <MailOpen className="w-3.5 h-3.5" /> All read
+              </Button>
+            )}
+            <Button variant="ghost" size="sm" onClick={() => selectMode ? exitSelect() : setSelectMode(true)}>
+              {selectMode ? 'Cancel' : 'Select'}
+            </Button>
+          </div>
         </div>
       )}
 
@@ -553,7 +607,7 @@ export default function MessagesPage() {
               {sel.lead_status === 'new' && <LeadCard customerId={sel.customer_id} />}
               <ConversationInfo customerId={sel.customer_id} />
               <div className="flex-1 min-h-0">
-                <ConversationThread customerId={sel.customer_id} onRead={() => uid && loadCounts(uid)} />
+                <ConversationThread customerId={sel.customer_id} onRead={() => uid && loadCounts(uid)} autoFocus />
               </div>
             </>
           ) : (

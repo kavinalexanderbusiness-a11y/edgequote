@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { Settings, LogOut, Zap, LayoutTemplate, Menu, X, Search, LifeBuoy } from 'lucide-react'
+import { Settings, LogOut, Zap, LayoutTemplate, Menu, X, Search, LifeBuoy, MessageSquare } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useFocusTrap } from '@/hooks/useFocusTrap'
@@ -75,12 +75,14 @@ export function Sidebar() {
   // Unread Messages badge — live. The sum of conversations.unread, kept in sync
   // through the SAME Realtime stream as the inbox, so the count updates app-wide
   // (on any page) without a refresh or navigation. RLS scopes the stream to us.
+  // Muted conversations are excluded — mute means "stop counting this at me";
+  // the row's own badge still shows inside the inbox.
   useEffect(() => {
     const supabase = createClient()
     let channel: ReturnType<typeof supabase.channel> | null = null
     let active = true
     async function refresh(userId: string) {
-      const { data } = await supabase.from('conversations').select('unread').eq('user_id', userId).gt('unread', 0)
+      const { data } = await supabase.from('conversations').select('unread').eq('user_id', userId).gt('unread', 0).eq('muted', false)
       if (active) setUnread((data as { unread: number }[] | null)?.reduce((s, c) => s + (c.unread || 0), 0) || 0)
     }
     ;(async () => {
@@ -95,6 +97,16 @@ export function Sidebar() {
     })()
     return () => { active = false; if (channel) supabase.removeChannel(channel) }
   }, [])
+
+  // Tab-title badge: "(3) EdgeQuote …" while messages wait — the one attention cue
+  // that works with the app open in a background tab, no permission needed.
+  // Best-effort: a route change re-renders the title without the prefix, and the
+  // next unread change re-applies it.
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const bare = document.title.replace(/^\(\d+\+?\)\s/, '')
+    document.title = unread > 0 ? `(${unread > 9 ? '9+' : unread}) ${bare}` : bare
+  }, [unread])
 
   async function handleSignOut() {
     const supabase = createClient()
@@ -205,6 +217,17 @@ export function Sidebar() {
           <button onClick={openCommand} className="text-ink-muted hover:text-ink p-2" aria-label="Search">
             <Search className="w-5 h-5" />
           </button>
+          {/* Messages, one tap from anywhere on mobile — the unread count was
+              previously invisible until the drawer was opened. */}
+          <Link href="/dashboard/messages" aria-label={unread > 0 ? `Messages, ${unread} unread` : 'Messages'}
+            className="relative text-ink-muted hover:text-ink p-2">
+            <MessageSquare className="w-5 h-5" />
+            {unread > 0 && (
+              <span className="absolute top-0.5 right-0.5 min-w-[16px] h-4 px-0.5 rounded-full bg-accent text-black text-[9px] font-bold tabular-nums flex items-center justify-center">
+                {unread > 9 ? '9+' : unread}
+              </span>
+            )}
+          </Link>
           <NotificationBell />
           <button onClick={() => setOpen(true)} className="text-ink p-2 -mr-2" aria-label="Open menu">
             <Menu className="w-5 h-5" />

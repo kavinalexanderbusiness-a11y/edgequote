@@ -14,7 +14,7 @@ import { statusMeta, TONE_CLASS } from '@/lib/comms/logStatus'
 import { describeSkip } from '@/lib/comms/skipReasons'
 import { cn } from '@/lib/utils'
 import { format } from 'date-fns'
-import { History, Mail, MessageSquare, Bot, Megaphone, Loader2, User } from 'lucide-react'
+import { History, Mail, MessageSquare, Bot, Megaphone, Loader2, User, Reply, Timer, CalendarClock, CheckCheck, Send } from 'lucide-react'
 
 // ── Message history: the business-wide send ledger ─────────────────────────────
 // A READ-ONLY view over notification_log — the audit trail every sender already
@@ -40,6 +40,17 @@ const STATUS_SETS: Record<Exclude<StatusFilter, 'all'>, string[]> = {
 type ChannelFilter = 'all' | 'sms' | 'email'
 const PAGE = 50
 
+// From THE insights engine (comms_insights RPC) — any future surface reuses the
+// same function, so two pages can never disagree about the numbers.
+interface Insights {
+  sends: number; delivered: number; failed: number; skipped: number
+  inbound: number; needs_reply: number; scheduled_pending: number
+  median_reply_minutes: number | null
+}
+
+const fmtReply = (m: number | null) =>
+  m == null ? '—' : m < 60 ? `${Math.round(m)}m` : m < 1440 ? `${(m / 60).toFixed(1)}h` : `${(m / 1440).toFixed(1)}d`
+
 export default function MessageHistoryPage() {
   const supabase = useMemo(() => createClient(), [])
   const [rows, setRows] = useState<Row[]>([])
@@ -50,7 +61,17 @@ export default function MessageHistoryPage() {
   const [channel, setChannel] = useState<ChannelFilter>('all')
   const [template, setTemplate] = useState<string>('all')
   const [query, setQuery] = useState('')
+  const [insights, setInsights] = useState<Insights | null>(null)
   const seq = useRef(0)
+
+  // The strip loads once — it's a 30-day pulse, not a live ticker.
+  useEffect(() => {
+    let active = true
+    supabase.rpc('comms_insights', { p_days: 30 }).then(({ data, error }) => {
+      if (active && !error && data) setInsights(data as Insights)
+    })
+    return () => { active = false }
+  }, [supabase])
 
   async function load(reset: boolean) {
     const mySeq = ++seq.current
@@ -109,6 +130,24 @@ export default function MessageHistoryPage() {
           </div>
         } />
 
+      {/* 30-day pulse. Median reply time is THE number that wins work — leads that
+          hear back fast book; this makes the habit visible. Tiles link to the
+          surface where the number can be acted on. */}
+      {insights && (
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+          <InsightTile icon={Send} label="Sent · 30d" value={String(insights.sends)} />
+          <InsightTile icon={CheckCheck} label="Delivered" tone={insights.failed > 0 ? 'text-amber-400' : undefined}
+            value={insights.sends ? `${Math.round((insights.delivered / insights.sends) * 100)}%` : '—'}
+            sub={insights.failed > 0 ? `${insights.failed} failed` : undefined} />
+          <InsightTile icon={Timer} label="Median reply" value={fmtReply(insights.median_reply_minutes)}
+            sub={insights.inbound ? `${insights.inbound} inbound` : undefined} />
+          <InsightTile icon={Reply} label="Awaiting reply" href="/dashboard/messages?f=needs_reply"
+            value={String(insights.needs_reply)} tone={insights.needs_reply > 0 ? 'text-amber-400' : undefined} />
+          <InsightTile icon={CalendarClock} label="Scheduled" href="/dashboard/messages/scheduled"
+            value={String(insights.scheduled_pending)} />
+        </div>
+      )}
+
       <SearchInput fieldSize="sm" value={query} onChange={e => setQuery(e.target.value)}
         placeholder="Search by customer name…" aria-label="Search history by customer" />
 
@@ -161,6 +200,22 @@ export default function MessageHistoryPage() {
       )}
     </div>
   )
+}
+
+function InsightTile({ icon: Icon, label, value, sub, tone, href }: {
+  icon: typeof Send; label: string; value: string; sub?: string; tone?: string; href?: string
+}) {
+  const body = (
+    <>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint flex items-center gap-1"><Icon className="w-3 h-3" /> {label}</p>
+      <p className={cn('text-lg font-bold tabular-nums mt-0.5', tone || 'text-ink')}>{value}</p>
+      {sub && <p className="text-[10px] text-ink-faint">{sub}</p>}
+    </>
+  )
+  const cls = 'rounded-xl border border-border bg-bg-secondary px-3 py-2 min-w-0'
+  return href
+    ? <Link href={href} className={cn(cls, 'block hover:border-border-strong transition-colors')}>{body}</Link>
+    : <div className={cls}>{body}</div>
 }
 
 function HistoryRow({ r }: { r: Row }) {

@@ -254,26 +254,36 @@ export function SendMessageDialog({
     const sendBodyOverride = edited
     let sent = 0, skipped = 0
     let single: SendOutcome | null = null
-    for (let i = 0; i < chosen.length; i++) {
-      try {
-        const res = await fetch('/api/comms/send', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            customerId: chosen[i].customerId, template: active, jobId: jobId ?? undefined, channels,
-            clientMessageId: idFor(chosen[i].customerId),
-            ...(sendBodyOverride ? { bodyOverride: fromDisplayBody(text) } : {}),
-            vars: { eta, dateLabel: vars?.dateLabel, timeWindow: vars?.timeWindow, address: vars?.address, amount: vars?.amount },
-          }),
-        })
-        const out = summarizeSendOutcome(await res.json())
-        if (!bulk) single = out
-        if (out.ok) sent++; else skipped++
-      } catch (e) {
-        skipped++
-        if (!bulk) single = { ok: false, text: e instanceof Error ? e.message : 'Could not send the message.' }
+    // A bounded pool instead of one-at-a-time: 150 customers at ~1.5s per send was
+    // nearly four minutes of watching a counter. Four in flight keeps well under
+    // provider rate limits (the server throttles per-send anyway) and each recipient
+    // still carries its own idempotency key, so a retry after a partial run stays
+    // exactly-once per customer.
+    let next = 0, done = 0
+    async function worker() {
+      while (next < chosen.length) {
+        const i = next++
+        try {
+          const res = await fetch('/api/comms/send', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              customerId: chosen[i].customerId, template: active, jobId: jobId ?? undefined, channels,
+              clientMessageId: idFor(chosen[i].customerId),
+              ...(sendBodyOverride ? { bodyOverride: fromDisplayBody(text) } : {}),
+              vars: { eta, dateLabel: vars?.dateLabel, timeWindow: vars?.timeWindow, address: vars?.address, amount: vars?.amount },
+            }),
+          })
+          const out = summarizeSendOutcome(await res.json())
+          if (!bulk) single = out
+          if (out.ok) sent++; else skipped++
+        } catch (e) {
+          skipped++
+          if (!bulk) single = { ok: false, text: e instanceof Error ? e.message : 'Could not send the message.' }
+        }
+        setProgress(++done)
       }
-      setProgress(i + 1)
     }
+    await Promise.all(Array.from({ length: Math.min(bulk ? 4 : 1, chosen.length) }, () => worker()))
     setBusy(false)
     const out: SendOutcome = bulk
       // Never hardcode "no opt-in" — `skipped` also counts provider errors and
