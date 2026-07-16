@@ -18,7 +18,7 @@ import { format } from 'date-fns'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
 
-interface Msg { id: string; created_at: string; direction: string; channel: string; body: string; status: string | null }
+interface Msg { id: string; created_at: string; direction: string; channel: string; body: string; status: string | null; meta: { media?: { url: string; type: string }[] } | null }
 interface Log { id: string; created_at: string; channel: string; template: string; status: string; message_id: string | null; detail: string | null }
 type Photo = { thumb: string; full: string }
 type Item = { id: string; at: string; kind: 'in' | 'out' | 'note' | 'event'; channel: string; body: string; status?: string | null; template?: string; detail?: string | null; photos?: Photo[] }
@@ -60,7 +60,7 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
     const uid = session?.user?.id
     if (!uid) { if (mySeq === reqSeq.current) setLoading(false); return }
     const [mRes, lRes, qRes] = await Promise.all([
-      supabase.from('messages').select('id, created_at, direction, channel, body, status').eq('customer_id', cid).eq('user_id', uid).order('created_at'),
+      supabase.from('messages').select('id, created_at, direction, channel, body, status, meta').eq('customer_id', cid).eq('user_id', uid).order('created_at'),
       supabase.from('notification_log').select('id, created_at, channel, template, status, message_id, detail').eq('customer_id', cid).eq('user_id', uid).neq('template', 'reply').order('created_at'),
       // Photos the customer attached during online booking live on the draft quote's
       // lead_meta.photos (booking-uploads bucket) — surface them ON the booking event.
@@ -79,7 +79,15 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
     let bookingAttached = false
     const msgs: Item[] = (mRes.data as Msg[] || []).map(m => {
       const isBooking = m.direction === 'inbound' && /^New online booking/i.test(m.body || '')
-      const photos = isBooking && !bookingAttached && bookingPhotos.length ? (bookingAttached = true, bookingPhotos) : undefined
+      // MMS attachments (inbound webhook stores Twilio media on meta) render on the
+      // bubble through the session-authed proxy — non-image media is skipped.
+      const mms: Photo[] = (m.meta?.media || [])
+        .map((x, i) => ({ x, i }))
+        .filter(({ x }) => !x.type || x.type.startsWith('image/'))
+        .map(({ i }) => ({ thumb: `/api/messages/media?id=${m.id}&i=${i}`, full: `/api/messages/media?id=${m.id}&i=${i}` }))
+      const photos = isBooking && !bookingAttached && bookingPhotos.length
+        ? (bookingAttached = true, bookingPhotos)
+        : (mms.length ? mms : undefined)
       return {
         id: 'm' + m.id, at: m.created_at, channel: m.channel, body: m.body, status: m.status,
         kind: m.direction === 'inbound' ? 'in' : m.direction === 'internal' ? 'note' : 'out',
