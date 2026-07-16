@@ -308,6 +308,10 @@ export const TECHNICIAN_STATUS_LABELS: Record<TechnicianStatus, string> = {
   off: 'Off today',
 }
 
+// THE employee record. Employees do NOT log in — every row is owned by the
+// owner's auth user (same tenancy as customers). `role` is a descriptive job
+// title, NOT access control; there is no permissions system to hang it on.
+// Never add a rival `employees` table — this is it.
 export interface Technician {
   id: string
   created_at: string
@@ -321,6 +325,46 @@ export interface Technician {
   status: TechnicianStatus
   status_changed_at: string
   is_active: boolean
+  /** Default pay rate for the NEXT clock-in. Past shifts keep their own
+   *  snapshot (TimeEntry.hourly_rate) — raising this never rewrites history. */
+  hourly_wage: number | null
+  hired_on: string | null
+  ended_on: string | null
+}
+
+// ── Paid time ────────────────────────────────────────────────────────────────
+// THE paid-time ledger — one row per shift. Distinct from TechnicianStatus:
+// `status` is where someone is RIGHT NOW (dispatch), a TimeEntry is what they
+// get PAID for. A tech can be 'off' with an open shift (forgot to clock out),
+// so hours must never be derived from status.
+export interface TimeEntry {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  technician_id: string
+  /** Job-linked (costable) or null for general time — yard, travel, shop. */
+  job_id: string | null
+  clock_in: string
+  /** null = still on the clock. At most one open entry per tech (DB-enforced). */
+  clock_out: string | null
+  break_minutes: number
+  /** Pay rate SNAPSHOT stamped at clock-in — the reason payroll history is stable. */
+  hourly_rate: number | null
+  notes: string | null
+  /** DB-generated (clock_out - clock_in - break). null while the shift is open. */
+  minutes_worked: number | null
+}
+
+// How often the owner runs payroll. Drives the payroll summary window only —
+// it never changes what a shift is worth.
+export type PayPeriodKind = 'weekly' | 'biweekly' | 'semimonthly' | 'monthly'
+
+export const PAY_PERIOD_LABELS: Record<PayPeriodKind, string> = {
+  weekly: 'Weekly',
+  biweekly: 'Every 2 weeks',
+  semimonthly: 'Twice a month',
+  monthly: 'Monthly',
 }
 
 // One note per (date, crew); crew_id null = the day-level note.
@@ -879,6 +923,21 @@ export interface BusinessSettings {
   work_start_time: string | null
   // Soft daily cap (drive + on-site hours) for overload / room-for-more signals.
   daily_capacity_hours: number | null
+  // ── Payroll: overtime rules + pay period ───────────────────────────────────
+  // Consumed ONLY by lib/payroll (the one payroll engine). Overtime law is
+  // jurisdictional, so both thresholds default to null = "that rule doesn't
+  // apply" — EdgeQuote never guesses a threshold and silently inflates pay.
+  /** Hours in a DAY after which OT applies. null = no daily rule (e.g. Ontario). */
+  ot_daily_hours: number | null
+  /** Hours in a WORK WEEK after which OT applies. null = no weekly rule. */
+  ot_weekly_hours: number | null
+  /** OT pay multiplier (1.5 = time-and-a-half). Never below 1. */
+  ot_multiplier: number
+  pay_period: PayPeriodKind
+  /** Any known period start; biweekly needs it to know WHICH two weeks. */
+  pay_period_anchor: string | null
+  /** 0=Sun…6=Sat — the OT work-week boundary. Explicit, never assumed. */
+  pay_week_starts_on: number
   // Uploaded-logo display scale in percent (100 = default size).
   logo_scale: number | null
   // Dashboard layout: section order + hidden sections.

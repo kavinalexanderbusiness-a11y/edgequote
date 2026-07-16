@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import Link from 'next/link'
 import { format, parseISO, addDays } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
@@ -35,7 +36,7 @@ import { toast as notify } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import {
   Radio, Users, MapIcon, LayoutGrid, ChevronLeft, ChevronRight, Scale, GripVertical,
-  ChevronUp, ChevronDown, Wand2, ExternalLink, Truck, StickyNote, HardHat, Navigation,
+  ChevronUp, ChevronDown, Wand2, ExternalLink, Truck, StickyNote, HardHat, Navigation, Clock,
 } from 'lucide-react'
 
 function todayISO(): string {
@@ -361,9 +362,16 @@ export default function DispatchPage() {
         title="Dispatch"
         description={`${dateLabel} · ${activeJobs.length} visit${activeJobs.length !== 1 ? 's' : ''}`}
         action={
-          <Button variant="secondary" size="sm" onClick={() => setManagerOpen(true)}>
-            <Users className="w-3.5 h-3.5" /> Crews & roster
-          </Button>
+          <div className="flex items-center gap-2">
+            <Link href="/dashboard/dispatch/time">
+              <Button variant="secondary" size="sm">
+                <Clock className="w-3.5 h-3.5" /> Timesheet
+              </Button>
+            </Link>
+            <Button variant="secondary" size="sm" onClick={() => setManagerOpen(true)}>
+              <Users className="w-3.5 h-3.5" /> Crews & roster
+            </Button>
+          </div>
         }
       />
 

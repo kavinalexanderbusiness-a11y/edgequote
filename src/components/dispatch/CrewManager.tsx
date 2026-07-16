@@ -172,13 +172,29 @@ export function CrewManager({ open, onClose, crews, technicians, equipment, onCh
           )}
           {technicians.map(t => (
             <div key={t.id} className={cn('rounded-card border border-border p-3', !t.is_active && 'opacity-70 bg-bg-tertiary')}>
-              <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_1fr_auto] gap-2.5 items-end">
+              <div className="grid grid-cols-1 sm:grid-cols-[1.1fr_1fr_1fr_1fr_0.9fr_auto] gap-2.5 items-end">
                 <Input label="Name" defaultValue={t.name} fieldSize="sm"
                   onBlur={e => { const v = e.target.value.trim(); if (v && v !== t.name) run(`tname-${t.id}`, () => supabase.from('technicians').update({ name: v }).eq('id', t.id).then(r => ({ error: r.error }))) }} />
                 <Input label="Phone" type="tel" defaultValue={t.phone ?? ''} fieldSize="sm"
                   onBlur={e => { const v = e.target.value.trim() || null; if (v !== t.phone) run(`tphone-${t.id}`, () => supabase.from('technicians').update({ phone: v }).eq('id', t.id).then(r => ({ error: r.error }))) }} />
                 <Select label="Crew" fieldSize="sm" value={t.crew_id ?? ''} options={crewOptions}
                   onChange={e => run(`tcrew-${t.id}`, () => supabase.from('technicians').update({ crew_id: e.target.value || null }).eq('id', t.id).then(r => ({ error: r.error })))} />
+                {/* Job title only — EdgeQuote has no permissions system and
+                    technicians don't log in, so this grants nothing. */}
+                <Input label="Role" placeholder="e.g. Crew lead" defaultValue={t.role ?? ''} fieldSize="sm"
+                  title="A job title for your own records — it does not grant access to anything."
+                  onBlur={e => { const v = e.target.value.trim() || null; if (v !== t.role) run(`trole-${t.id}`, () => supabase.from('technicians').update({ role: v }).eq('id', t.id).then(r => ({ error: r.error }))) }} />
+                {/* Default rate for the NEXT clock-in only — past shifts keep the
+                    rate they were stamped with, so a raise never rewrites history. */}
+                <Input label="Wage $/hr" type="number" min="0" step="0.25" fieldSize="sm"
+                  defaultValue={t.hourly_wage ?? ''}
+                  title="Used for shifts started from now on. Past shifts keep the rate they were clocked in at."
+                  onBlur={e => {
+                    const raw = e.target.value.trim()
+                    const v = raw === '' ? null : Number(raw)
+                    if (v != null && (!Number.isFinite(v) || v < 0)) { notify.error('Wage must be 0 or more.'); e.target.value = String(t.hourly_wage ?? ''); return }
+                    if (v !== t.hourly_wage) run(`twage-${t.id}`, () => supabase.from('technicians').update({ hourly_wage: v }).eq('id', t.id).then(r => ({ error: r.error })))
+                  }} />
                 <div className="flex items-center gap-2 pb-1">
                   <Toggle checked={t.is_active} ariaLabel={`${t.name} active`}
                     onChange={v => run(`tact-${t.id}`, () => supabase.from('technicians').update({ is_active: v }).eq('id', t.id).then(r => ({ error: r.error })))} />
