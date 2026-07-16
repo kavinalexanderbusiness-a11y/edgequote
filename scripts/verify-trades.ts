@@ -55,12 +55,14 @@ check('snow season dates = Nov 1 → Mar 31 (DEFAULT_SNOW_SEASON verbatim)',
   { s: 11, sd: 1, e: 3, ed: 31 })
 check('lawn match hints verbatim', LAWN_PACK.seasons.lawn.match, LAWN_HINTS)
 check('snow match hints verbatim', LAWN_PACK.seasons.snow.match, SNOW_HINTS)
+// Dates ONLY, extracted from both sides: the engine's DEFAULT_SEASONS may carry
+// display/matching extras (label, match — added when the engine generalised),
+// and those belong to IT. What must never drift is when the seasons start and end.
+const dates = (s: { startMonth: number; startDay: number; endMonth: number; endDay: number }) =>
+  ({ startMonth: s.startMonth, startDay: s.startDay, endMonth: s.endMonth, endDay: s.endDay })
 check('pack dates equal the ENGINE\'s DEFAULT_SEASONS (both sides pinned)',
-  { lawn: DEFAULT_SEASONS.lawn, snow: DEFAULT_SEASONS.snow },
-  {
-    lawn: { startMonth: LAWN_PACK.seasons.lawn.startMonth, startDay: LAWN_PACK.seasons.lawn.startDay, endMonth: LAWN_PACK.seasons.lawn.endMonth, endDay: LAWN_PACK.seasons.lawn.endDay },
-    snow: { startMonth: LAWN_PACK.seasons.snow.startMonth, startDay: LAWN_PACK.seasons.snow.startDay, endMonth: LAWN_PACK.seasons.snow.endMonth, endDay: LAWN_PACK.seasons.snow.endDay },
-  })
+  { lawn: dates(DEFAULT_SEASONS.lawn), snow: dates(DEFAULT_SEASONS.snow) },
+  { lawn: dates(LAWN_PACK.seasons.lawn), snow: dates(LAWN_PACK.seasons.snow) })
 check('snow is declared before lawn (match precedence mirrors the engine)',
   Object.keys(LAWN_PACK.seasons), ['snow', 'lawn'])
 
