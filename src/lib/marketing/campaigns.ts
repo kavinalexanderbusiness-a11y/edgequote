@@ -30,10 +30,14 @@ const ALL: MarketingChannel[] = ['facebook', 'instagram', 'threads', 'gbp', 'nex
 const LOCAL_FIRST: MarketingChannel[] = ['facebook', 'nextdoor', 'gbp', 'instagram', 'threads', 'linkedin']
 
 export const CAMPAIGN_DEFS: CampaignDef[] = [
-  { kind: 'spring',     label: 'Spring Cleanup',    icon: Flower2,     description: 'Kick off the season — spring cleanup, first cuts, get on the schedule.', anchorMode: 'either', defaultChannels: ALL, season: 'spring', defaultName: 'Spring Cleanup' },
-  { kind: 'summer',     label: 'Summer Care',       icon: Sun,         description: 'Peak-season mowing & maintenance — keep lawns crisp through the heat.',    anchorMode: 'either', defaultChannels: ALL, season: 'summer', defaultName: 'Summer Lawn Care' },
-  { kind: 'fall',       label: 'Fall Cleanup',      icon: Leaf,        description: 'Leaf cleanup, aeration, the last tidy before the snow flies.',             anchorMode: 'either', defaultChannels: ALL, season: 'fall',   defaultName: 'Fall Cleanup' },
-  { kind: 'winter',     label: 'Snow & Ice',        icon: Snowflake,   description: 'Snow removal & ice control — book your driveway and walks now.',           anchorMode: 'either', defaultChannels: ALL, season: 'winter', defaultName: 'Snow & Ice Removal' },
+  // Descriptions and defaultNames are un-overridable picker chrome — they must not
+  // name a trade. The trade-specific push lives in campaignDirective below, which
+  // sees the owner's real services and only falls back to lawn/snow examples when
+  // the business is still unknown (same rule as businessContext).
+  { kind: 'spring',     label: 'Spring Kickoff',    icon: Flower2,     description: 'Kick off the season — spring bookings, first visits, get on the schedule.', anchorMode: 'either', defaultChannels: ALL, season: 'spring', defaultName: 'Spring Kickoff' },
+  { kind: 'summer',     label: 'Summer Care',       icon: Sun,         description: 'Peak-season work — steady, dependable service through the heat.',    anchorMode: 'either', defaultChannels: ALL, season: 'summer', defaultName: 'Summer Care' },
+  { kind: 'fall',       label: 'Fall Push',         icon: Leaf,        description: 'The last big push — cleanup and prep before winter arrives.',             anchorMode: 'either', defaultChannels: ALL, season: 'fall',   defaultName: 'Fall Push' },
+  { kind: 'winter',     label: 'Winter Ready',      icon: Snowflake,   description: 'Winter services — get customers booked before the season turns.',           anchorMode: 'either', defaultChannels: ALL, season: 'winter', defaultName: 'Winter Ready' },
   { kind: 'holiday',    label: 'Holiday Promo',     icon: PartyPopper, description: 'Tie a friendly promotion to an upcoming holiday or long weekend.',         anchorMode: 'either', defaultChannels: ALL, season: null,     defaultName: 'Holiday Promotion' },
   { kind: 'rain_delay', label: 'Rain Delay',        icon: CloudRain,   description: 'Heads-up that weather may push the schedule — set expectations kindly.',    anchorMode: 'themed', defaultChannels: LOCAL_FIRST, season: null, defaultName: 'Weather Update' },
   { kind: 'referral',   label: 'Referral Drive',    icon: Gift,        description: 'Ask happy customers to refer someone — word-of-mouth growth.',          anchorMode: 'themed', defaultChannels: LOCAL_FIRST, season: null, defaultName: 'Refer a Friend' },
@@ -56,11 +60,24 @@ export function isCampaignKind(v: unknown): v is CampaignKind {
 // owner's brand facts (review link, location) so the call to action is real.
 export function campaignDirective(kind: CampaignKind, voice: BrandVoice, opts?: { holiday?: string | null }): string {
   const where = voice.city ? ` in ${voice.city}` : ''
+  // Seasonal pushes are about THEIR seasonal services. When we know what the
+  // business sells (voice.services rides in via loadBrandVoice), the directive
+  // points at those; only a business we can't read yet gets the original lawn/snow
+  // examples — the same zero-regression fallback rule as businessContext.
+  const known = !!voice.services?.length
   switch (kind) {
-    case 'spring':  return `This post launches a SPRING CLEANUP push. Encourage neighbours${where} to book their spring cleanup / first mow and get on the season's schedule early.`
-    case 'summer':  return `This post is part of a SUMMER CARE push. Focus on dependable, regular mowing and keeping lawns healthy through the summer heat.`
-    case 'fall':    return `This post launches a FALL CLEANUP push. Focus on leaf cleanup and getting the yard ready before the snow.`
-    case 'winter':  return `This post is part of a SNOW & ICE push. Encourage neighbours to lock in reliable snow removal for their driveway and walks before the first storm.`
+    case 'spring':  return known
+      ? `This post launches a SPRING push. Encourage neighbours${where} to book the spring services this business sells (see the BUSINESS block) and get on the season's schedule early. Never name a service they don't sell.`
+      : `This post launches a SPRING CLEANUP push. Encourage neighbours${where} to book their spring cleanup / first mow and get on the season's schedule early.`
+    case 'summer':  return known
+      ? `This post is part of a SUMMER push. Focus on dependable, regular service through the summer heat — anchored in the services this business sells (see the BUSINESS block). Never name a service they don't sell.`
+      : `This post is part of a SUMMER CARE push. Focus on dependable, regular mowing and keeping lawns healthy through the summer heat.`
+    case 'fall':    return known
+      ? `This post launches a FALL push. Focus on the fall work this business sells (see the BUSINESS block) and getting properties ready before winter. Never name a service they don't sell.`
+      : `This post launches a FALL CLEANUP push. Focus on leaf cleanup and getting the yard ready before the snow.`
+    case 'winter':  return known
+      ? `This post is part of a WINTER push. Encourage neighbours to book the winter services this business sells (see the BUSINESS block) before the season turns. Never name a service they don't sell.`
+      : `This post is part of a SNOW & ICE push. Encourage neighbours to lock in reliable snow removal for their driveway and walks before the first storm.`
     case 'holiday': return `This post ties a friendly seasonal message${opts?.holiday ? ` to ${opts.holiday}` : ' to an upcoming holiday'}. Keep it warm and community-minded — a gentle nudge to book, not a hard sell. Do not invent a specific discount amount unless told one.`
     case 'rain_delay': return `This is a WEATHER UPDATE. Let customers know weather may shift the schedule, that you’ll keep them posted and reschedule fairly. Reassuring and professional — not an apology spiral.`
     case 'referral': return `This is a REFERRAL ASK. Thank existing customers and invite them to refer someone. Friendly and low-pressure. Do not promise a specific reward unless told one.`
@@ -76,12 +93,15 @@ export function campaignSubject(kind: CampaignKind, voice: BrandVoice, opts?: { 
   const facts: string[] = []
   const def = campaignDef(kind)
   const season = opts?.season ?? def.season
-  facts.push(`Business: ${voice.businessName}, a local property-care business${voice.city ? ` in ${voice.city}` : ''}.`)
+  facts.push(`Business: ${voice.businessName}, a local property-services business${voice.city ? ` in ${voice.city}` : ''}.`)
+  // Same known/unknown split as campaignDirective: themed facts name the trade only
+  // when the business hasn't told us theirs.
+  const known = !!voice.services?.length
   switch (kind) {
-    case 'spring': facts.push('Theme: spring cleanup and the first cuts of the year.'); break
-    case 'summer': facts.push('Theme: regular summer mowing and lawn health in the heat.'); break
-    case 'fall':   facts.push('Theme: fall leaf cleanup and getting yards ready for winter.'); break
-    case 'winter': facts.push('Theme: snow removal and ice control for driveways and walks.'); break
+    case 'spring': facts.push(known ? 'Theme: the spring push — opening the season and the first visits of the year.' : 'Theme: spring cleanup and the first cuts of the year.'); break
+    case 'summer': facts.push(known ? 'Theme: dependable, regular service through the summer heat.' : 'Theme: regular summer mowing and lawn health in the heat.'); break
+    case 'fall':   facts.push(known ? 'Theme: the fall push — cleanup and prep before winter.' : 'Theme: fall leaf cleanup and getting yards ready for winter.'); break
+    case 'winter': facts.push(known ? 'Theme: winter services, booked before the season turns.' : 'Theme: snow removal and ice control for driveways and walks.'); break
     case 'holiday': facts.push(`Theme: a friendly seasonal greeting${opts?.holiday ? ` for ${opts.holiday}` : ''}.`); break
     case 'rain_delay': facts.push('Theme: a weather/scheduling update — possible rain delays and fair rescheduling.'); break
     case 'referral': facts.push('Theme: word-of-mouth referrals from happy customers.'); break

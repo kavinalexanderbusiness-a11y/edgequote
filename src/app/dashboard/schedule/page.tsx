@@ -50,7 +50,7 @@ import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repe
 import { OptimizeSchedule } from '@/components/schedule/OptimizeSchedule'
 import { RainDelayCenter } from '@/components/schedule/RainDelayCenter'
 import { WeatherStrip } from '@/components/weather/WeatherStrip'
-import { CloudRain } from 'lucide-react'
+import { CalendarClock } from 'lucide-react'
 import { analyzeSchedule, optimizeSchedule, planRainDelay, MOVE_REASON_LABEL } from '@/lib/optimizer'
 import type { PlannedMove, OptimizeScope, OptimizeMode, OptJob, ScheduleSuggestion, CadenceVisit, CadenceRecs } from '@/lib/optimizer'
 import { evaluateScheduleMove } from '@/lib/scheduleWarnings'
@@ -1846,8 +1846,8 @@ export default function SchedulePage() {
         description={`${jobs.length} job${jobs.length !== 1 ? 's' : ''} on the calendar`}
         action={
           <div className="flex items-center gap-2">
-            <Button variant="secondary" onClick={() => setShowRainCenter(true)} title="Weather Operations — move jobs (rain, equipment, absence, holiday, emergency) and notify customers">
-              <CloudRain className="w-4 h-4" /> Weather Ops
+            <Button variant="secondary" onClick={() => setShowRainCenter(true)} title="Reschedule — move jobs (weather, equipment, absence, holiday, emergency) and notify customers">
+              <CalendarClock className="w-4 h-4" /> Reschedule
             </Button>
             <Button variant="secondary" onClick={() => launchOptimizer()} title="Optimize your schedule — pick scope and goal">
               <Rocket className="w-4 h-4" /> Optimize

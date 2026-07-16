@@ -9,7 +9,7 @@ import {
   Search, CornerDownLeft, ArrowUp, ArrowDown, Loader2,
   Users, FileText, Receipt, CalendarDays, MessageSquare, Navigation, Sprout,
   Settings, LayoutDashboard, UserPlus, FilePlus2, ReceiptText, Send,
-  Home, Image as ImageIcon, CreditCard, Eye, Phone, CalendarPlus, Sparkles, LifeBuoy, Store,
+  Home, Image as ImageIcon, CreditCard, Eye, Phone, CalendarPlus, Sparkles, LifeBuoy, Store, BookOpen,
 } from 'lucide-react'
 import { searchHelp, helpHref } from '@/lib/help/content'
 import { useModules } from '@/hooks/useModules'
@@ -25,6 +25,7 @@ interface Section { title: string; items: Item[] }
 // never disagrees with navigation. Only non-module destinations live here.
 const EXTRA_NAV: { label: string; href: string; icon: Icon }[] = [
   { label: 'Marketplace', href: '/dashboard/marketplace', icon: Store },
+  { label: 'API Docs', href: '/dashboard/integrations/docs', icon: BookOpen },
   { label: 'Routes', href: '/dashboard/routes', icon: Navigation },
   { label: 'Measurement Accuracy', href: '/dashboard/measurements', icon: Eye },
   { label: 'Help', href: '/dashboard/help', icon: LifeBuoy },

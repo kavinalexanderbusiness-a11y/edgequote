@@ -881,8 +881,15 @@ export interface BusinessSettings {
   daily_capacity_hours: number | null
   // Uploaded-logo display scale in percent (100 = default size).
   logo_scale: number | null
-  // Dashboard layout: section order + hidden sections.
+  // DEAD — the old home-dashboard shell's layout. That shell was removed in
+  // 019c24c and nothing reads this; the stored ids name deleted components.
+  // Left in place (dropping a column is a separate, explicit decision).
+  // The analytics workspace uses `analytics_layout` below, NOT this.
   dashboard_cards: { order: string[]; hidden: string[] } | null
+  // Analytics workspace layout: widget order + hidden set for
+  // /dashboard/intelligence. Unknown ids are ignored and missing ids fall back to
+  // the default order — see lib/analytics/layout.normalizeLayout.
+  analytics_layout: { order: string[]; hidden: string[] } | null
   // Service seasons (lawn/snow) as recurring month/day anchors. Drives the
   // "Season End" recurrence default and seasonal reactivation suppression.
   // null = use Calgary defaults (lib/seasons DEFAULT_SEASONS).
@@ -1046,4 +1053,98 @@ export const STATUS_COLORS: Record<QuoteStatus, string> = {
   completed: 'bg-teal-500/10 text-teal-400 border-teal-500/20',
   paid:      'bg-emerald-500/15 text-emerald-400 border-emerald-500/25',
   declined:  'bg-red-500/10 text-red-400 border-red-500/20',
+}
+
+// ── Integrations platform (api_keys / webhook_* / inbound_*) ────────────────
+// Rows for the 2026-07-15 integrations migration. API keys never carry the
+// plaintext key (hash + display prefix only); endpoint secrets and inbound
+// tokens ARE owner-readable — they're the owner's own credentials.
+
+export type ApiScopeName = 'read' | 'write'
+
+export interface ApiKeyRow {
+  id: string
+  created_at: string
+  user_id: string
+  name: string
+  prefix: string
+  scopes: ApiScopeName[]
+  last_used_at: string | null
+  usage_count: number
+  revoked_at: string | null
+}
+
+export type WebhookSource = 'manual' | 'api' | 'zapier' | 'make'
+
+export interface WebhookEndpointRow {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  url: string
+  description: string | null
+  secret: string
+  events: string[] // ['*'] or exact event keys
+  source: WebhookSource
+  active: boolean
+  disabled_reason: string | null
+  consecutive_failures: number
+  last_success_at: string | null
+  last_failure_at: string | null
+}
+
+export type WebhookDeliveryStatus = 'pending' | 'processing' | 'success' | 'dead'
+
+export interface WebhookDeliveryRow {
+  id: string
+  created_at: string
+  user_id: string
+  endpoint_id: string
+  event_id: string | null
+  event: string
+  payload: Record<string, unknown>
+  status: WebhookDeliveryStatus
+  attempts: number
+  next_attempt_at: string
+  last_attempt_at: string | null
+  delivered_at: string | null
+  response_status: number | null
+  response_body: string | null
+  duration_ms: number | null
+  last_error: string | null
+}
+
+export type InboundAction = 'lead' | 'customer'
+
+export interface InboundWebhookRow {
+  id: string
+  created_at: string
+  user_id: string
+  name: string
+  token: string
+  action: InboundAction
+  active: boolean
+  received_count: number
+  last_received_at: string | null
+}
+
+export interface InboundEventRow {
+  id: string
+  created_at: string
+  user_id: string
+  hook_id: string
+  ok: boolean
+  summary: string | null
+  entity_id: string | null
+  payload: Record<string, unknown>
+}
+
+export interface IntegrationEventRow {
+  id: string
+  created_at: string
+  user_id: string
+  event: string
+  entity_type: string
+  entity_id: string | null
+  payload: Record<string, unknown>
 }

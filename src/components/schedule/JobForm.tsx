@@ -668,9 +668,9 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
             {!isEdit && (
             <div className="flex flex-wrap gap-2">
               {([
-                { kind: 'weekly', label: 'Weekly Lawn Care' },
-                { kind: 'biweekly', label: 'Bi-Weekly Lawn Care' },
-                { kind: 'monthly', label: 'Monthly Service' },
+                { kind: 'weekly', label: 'Weekly' },
+                { kind: 'biweekly', label: 'Every 2 weeks' },
+                { kind: 'monthly', label: 'Monthly' },
               ] as const).map(p => (
                 <button key={p.kind} type="button" onClick={() => applyCadencePreset(p.kind)}
                   className="text-xs font-medium px-3 py-1.5 rounded-lg border border-accent/30 bg-accent/10 text-accent-text hover:bg-accent/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">

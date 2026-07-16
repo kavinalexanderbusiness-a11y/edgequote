@@ -502,9 +502,10 @@ function isoWeekKey(dateISO: string): string {
 interface DayEval { driveMin: number; laborMin: number; km: number; totalMin: number; cells: number }
 
 export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): OptimizationResult {
-  const capMin = (opts.capacityHours > 0 ? opts.capacityHours : 8) * 60
   // Per-day capacity (Day Settings crew/hours overrides) → falls back to the flat
-  // capacity when no override exists, so normal days are unchanged.
+  // capacity when no override exists, so normal days are unchanged. THE only capacity
+  // source in this function: a flat `capMin` used to sit beside it and fed the scorer,
+  // which is how an owner's override could be shown and then ignored.
   const capMinFor = (date: string) => (opts.capacityForDate ? opts.capacityForDate(date) : (opts.capacityHours > 0 ? opts.capacityHours : 8)) * 60
   const prefSet = opts.preferredDays.length ? new Set(opts.preferredDays) : null
   // A day the owner blocked (rain/vacation/…) is never a legal MOVE destination.
@@ -672,12 +673,17 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
   }
   interface DayContrib { drive: number; over: number; overDay: number; active: number; cells: number; total: number }
   const ZERO_CONTRIB: DayContrib = { drive: 0, over: 0, overDay: 0, active: 0, cells: 0, total: 0 }
-  const contribOf = (e: DayEval, size: number): DayContrib => {
+  // The date is required, not convenient: over-capacity must be scored against THIS
+  // day's capacity. This read the flat `capMin` while every other capacity check in
+  // the file used capMinFor(date) — so a day the owner had overridden in Day Settings
+  // (fewer hours, smaller crew, blocked) was REPORTED as overloaded and then never
+  // optimized against. The search couldn't see the one number the owner set by hand.
+  const contribOf = (e: DayEval, size: number, dateISO: string): DayContrib => {
     if (size === 0) return ZERO_CONTRIB
-    const over = Math.max(0, e.totalMin - capMin)
+    const over = Math.max(0, e.totalMin - capMinFor(dateISO))
     return { drive: e.driveMin, over, overDay: over > 0 ? 1 : 0, active: 1, cells: Math.max(0, e.cells - 1), total: e.totalMin }
   }
-  const dayContrib = (date: string): DayContrib => contribOf(evalDay(date), dayJobs.get(date)?.size ?? 0)
+  const dayContrib = (date: string): DayContrib => contribOf(evalDay(date), dayJobs.get(date)?.size ?? 0, date)
   let aggDrive = 0, aggOver = 0, aggOverDays = 0, aggDays = 0, aggCells = 0, aggSum = 0, aggSumSq = 0, jobPenaltyTotal = 0
   const jobPenalty = new Map<string, number>()
   function recomputeAggregates(): void {
@@ -738,8 +744,8 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
     const s1 = daySorted.get(from) ?? []
     const s2 = daySorted.get(to) ?? []
     return costWith([
-      { d: dayContrib(from), n: contribOf(evalSet(withRemoved(s1, j.id)), s1.length - 1) },
-      { d: dayContrib(to), n: contribOf(evalSet(withInserted(s2, j.id)), s2.length + 1) },
+      { d: dayContrib(from), n: contribOf(evalSet(withRemoved(s1, j.id)), s1.length - 1, from) },
+      { d: dayContrib(to), n: contribOf(evalSet(withInserted(s2, j.id)), s2.length + 1, to) },
     ], penaltyOf(j, to) - (jobPenalty.get(j.id) ?? 0))
   }
   // Cost if j1 (on its current day) and j2 (on day d2) traded days (no mutation).
@@ -750,8 +756,8 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
     const n1 = withInserted(withRemoved(s1, j1.id), j2.id)
     const n2 = withInserted(withRemoved(s2, j2.id), j1.id)
     return costWith([
-      { d: dayContrib(d1), n: contribOf(evalSet(n1), n1.length) },
-      { d: dayContrib(d2), n: contribOf(evalSet(n2), n2.length) },
+      { d: dayContrib(d1), n: contribOf(evalSet(n1), n1.length, d1) },
+      { d: dayContrib(d2), n: contribOf(evalSet(n2), n2.length, d2) },
     ], penaltyOf(j1, d2) - (jobPenalty.get(j1.id) ?? 0) + penaltyOf(j2, d1) - (jobPenalty.get(j2.id) ?? 0))
   }
 

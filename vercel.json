@@ -39,6 +39,10 @@
     {
       "path": "/api/cron/scheduled-messages",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/integrations",
+      "schedule": "*/10 * * * *"
     }
   ]
 }
