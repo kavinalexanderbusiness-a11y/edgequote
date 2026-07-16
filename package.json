@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "verify:automations": "tsx scripts/verify-automations.ts",
+    "verify:trades": "tsx scripts/verify-trades.ts",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",

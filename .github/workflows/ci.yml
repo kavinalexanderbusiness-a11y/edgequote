@@ -81,6 +81,17 @@ jobs:
       - name: Verify automations
         run: npm run verify:automations
 
+      # The vertical foundation's two promises, as build failures rather than
+      # comments: (1) GOLDEN — the lawn trade pack is behaviour-identical to the
+      # engine constants it copies (seasons, hints, campaign presets are
+      # deep-equalled against lib/seasons.ts and lib/crm/campaigns.ts), so
+      # existing lawn businesses cannot drift; (2) CLOSURE — lib/trades imports
+      # nothing, and nothing imports lib/trades outside an explicit allowlist
+      # that engine paths are hard-blocked from ever joining. business_type
+      # selects seed data and copy; the day an engine branches on it, this fails.
+      - name: Verify trade packs
+        run: npm run verify:trades
+
       # This step is why the first 17 CI runs were red, and it's worth writing down.
       # ESLint had never been configured in this repo — no .eslintrc anywhere — so
       # `next lint` dropped into an INTERACTIVE setup prompt, which cannot be
