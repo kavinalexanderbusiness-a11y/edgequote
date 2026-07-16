@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { format, parseISO, addDays } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
-import { Job, Crew, Technician, DispatchNote, TechnicianStatus, TECHNICIAN_STATUS_LABELS, JOB_STATUS_LABELS } from '@/types'
+import { useBulkSelect } from '@/hooks/useBulkSelect'
+import { Job, Crew, Technician, DispatchNote, TechnicianStatus, TECHNICIAN_STATUS_LABELS, JOB_STATUS_LABELS, JobStatus } from '@/types'
 import {
   partitionByCrew, laneSequence, laneWorkMinutes, laneLoad, crewCapacityMinutes, crewDayStart,
   balanceDay, BalancePlan, UNASSIGNED_ID, CrewLaneData,
@@ -17,10 +18,20 @@ import {
   DEFAULT_JOB_MIN, DEFAULT_WORK_START,
 } from '@/lib/route'
 import { DayStatusRow, DAY_STATUS_SELECT, dayStatusLabel } from '@/lib/dayStatus'
+import {
+  laneStats, LaneStats, detectDayConflicts, DispatchConflict, laneConflictSummary,
+  DispatchSheet, SheetLane, sheetCsvRows, SHEET_CSV_COLUMNS, openPrintSheet,
+} from '@/lib/dispatchOps'
+import { exportRowsToCsv } from '@/lib/csv'
+import { notifyRescheduleBatch } from '@/lib/reschedule'
+import { DisruptionReason } from '@/lib/disruption'
 import { Coord } from '@/lib/geo'
 import { RouteTimeline, TimelineStop } from '@/components/schedule/RouteTimeline'
 import { DispatchMap, DispatchMapLane } from '@/components/dispatch/DispatchMap'
 import { CrewManager, AssignableEquipment } from '@/components/dispatch/CrewManager'
+import { ConflictPanel } from '@/components/dispatch/ConflictPanel'
+import { DispatchFilters, DispatchFilterState, EMPTY_DISPATCH_FILTER, hasActiveFilter } from '@/components/dispatch/DispatchFilters'
+import { RescheduleDialog } from '@/components/dispatch/RescheduleDialog'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/Button'
 import { StatTile } from '@/components/ui/StatTile'
@@ -31,11 +42,13 @@ import { Menu, MenuItem } from '@/components/ui/Menu'
 import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { SkeletonTiles, SkeletonRows } from '@/components/ui/Skeleton'
 import { Modal } from '@/components/ui/Modal'
+import { BulkActionBar, BulkAction, SelectCheckbox, SelectAllToggle } from '@/components/ui/BulkActions'
 import { toast as notify } from '@/lib/toast'
 import { cn } from '@/lib/utils'
 import {
-  Radio, Users, MapIcon, LayoutGrid, ChevronLeft, ChevronRight, Scale, GripVertical,
+  Radio, Users, UserMinus, MapIcon, LayoutGrid, ChevronLeft, ChevronRight, Scale, GripVertical,
   ChevronUp, ChevronDown, Wand2, ExternalLink, Truck, StickyNote, HardHat, Navigation,
+  Printer, FileDown, CalendarDays, AlertTriangle,
 } from 'lucide-react'
 
 function todayISO(): string {
@@ -66,6 +79,14 @@ function jobStop(j: Job): RouteStop {
   }
 }
 
+// Keyboard-move state: one visit "grabbed" off the board, arrows steer it.
+interface KbGrab {
+  jobId: string
+  homeLaneId: string
+  homeCrewId: string | null
+  homeOrder: string[]
+}
+
 export default function DispatchPage() {
   const supabase = useMemo(() => createClient(), [])
   const [uid, setUid] = useState<string | null>(null)
@@ -84,6 +105,13 @@ export default function DispatchPage() {
   const [balancePlan, setBalancePlan] = useState<BalancePlan | null>(null)
   const [applyingBalance, setApplyingBalance] = useState(false)
   const [optimizingLane, setOptimizingLane] = useState<string | null>(null)
+  const [filter, setFilter] = useState<DispatchFilterState>(EMPTY_DISPATCH_FILTER)
+  const [assignPickOpen, setAssignPickOpen] = useState(false)
+  const [reschedOpen, setReschedOpen] = useState(false)
+  const [bulkBusy, setBulkBusy] = useState<string | null>(null)
+  const [flashJobId, setFlashJobId] = useState<string | null>(null)
+  const [kbGrab, setKbGrab] = useState<KbGrab | null>(null)
+  const [announce, setAnnounce] = useState('')
   const geocodedFor = useRef<string | null>(null)
   // Serialized route_order writes — a second reorder waits for the first, so
   // two quick moves can't interleave their day-wide sequence writes.
@@ -186,6 +214,9 @@ export default function DispatchPage() {
     }
     return out
   }, [lanes, settings, dayRow])
+  // Pointer-drag handlers outlive renders; they read routes through this ref.
+  const laneRoutesRef = useRef(laneRoutes)
+  laneRoutesRef.current = laneRoutes
 
   const activeJobs = useMemo(() => jobs.filter(j => j.status !== 'cancelled'), [jobs])
   const assignedCount = activeJobs.filter(j => j.crew_id && crews.some(c => c.id === j.crew_id && c.is_active)).length
@@ -208,24 +239,61 @@ export default function DispatchPage() {
       .map(s => ({ lat: s.lat as number, lng: s.lng as number, order: s.order, title: s.title })),
   })), [lanes, laneRoutes])
 
-  // ── Actions ──
-  const moveJob = useCallback(async (jobId: string, toCrewId: string | null) => {
-    const job = jobs.find(j => j.id === jobId)
-    if (!job || (job.crew_id ?? null) === toCrewId) return
-    const prev = { crew_id: job.crew_id ?? null, route_order: job.route_order ?? null }
-    setJobs(cur => cur.map(j => j.id === jobId ? { ...j, crew_id: toCrewId, route_order: null } : j))
-    const err = await assignJobCrew(supabase, jobId, toCrewId)
-    if (err) {
-      setJobs(cur => cur.map(j => j.id === jobId ? { ...j, ...prev } : j))
-      notify.error('Could not move the job: ' + err)
-      return
-    }
-    const toName = toCrewId ? crews.find(c => c.id === toCrewId)?.name ?? 'crew' : 'Unassigned'
-    notify(`${job.customers?.name || job.title} → ${toName}`, {
-      undo: async () => { await supabase.from('jobs').update(prev).eq('id', jobId); fetchAll() },
-    })
-  }, [jobs, crews, supabase, fetchAll])
+  // ── Conflicts (facts about the FULL day — filters never hide a problem) ──
+  const conflicts: DispatchConflict[] = useMemo(() => detectDayConflicts(
+    lanes.map(lane => {
+      const route = laneRoutes[lane.laneId]
+      const etaByJob = new Map((route?.etas.stops ?? []).map(s => [s.jobId, s.arrivalMin]))
+      const laneTechs = technicians.filter(t => t.is_active && (lane.crew ? t.crew_id === lane.crew.id : false))
+      return {
+        laneId: lane.laneId,
+        laneName: lane.crew?.name ?? 'Unassigned',
+        isUnassigned: lane.laneId === UNASSIGNED_ID,
+        startMin: route?.etas.startMin ?? 0,
+        finishMin: route?.etas.finishMin ?? 0,
+        capacityMin: route?.capacityMin ?? 0,
+        workMin: route?.workMin ?? 0,
+        stops: (route?.seq ?? []).map(j => ({
+          jobId: j.id,
+          title: j.customers?.name || j.title,
+          startTime: j.start_time,
+          durMin: j.duration_minutes || DEFAULT_JOB_MIN,
+          arrivalMin: etaByJob.get(j.id) ?? null,
+        })),
+        availableTechs: laneTechs.filter(t => t.status !== 'off').length,
+        rosteredTechs: laneTechs.length,
+      }
+    }),
+    { dayBlocked: !!dayRow?.blocks, activeCrewCount },
+  ), [lanes, laneRoutes, technicians, dayRow, activeCrewCount])
 
+  // ── Filters (display only — the engines above never see them) ──
+  const laneMatchesFilter = useCallback((lane: CrewLaneData): boolean => {
+    if (filter.crewIds.length > 0 && !filter.crewIds.includes(lane.laneId)) return false
+    if (filter.technicianId) {
+      const t = technicians.find(x => x.id === filter.technicianId)
+      if (!t) return false
+      const home = t.crew_id ?? UNASSIGNED_ID
+      if (home !== lane.laneId) return false
+    }
+    if (filter.vehicleId) {
+      const v = equipment.find(x => x.id === filter.vehicleId)
+      if (!v || (v.crew_id ?? UNASSIGNED_ID) !== lane.laneId) return false
+    }
+    return true
+  }, [filter, technicians, equipment])
+
+  const visibleLanes = useMemo(() => lanes.filter(laneMatchesFilter), [lanes, laneMatchesFilter])
+  const statusVisible = useCallback((j: Job) =>
+    filter.statuses.length === 0 || filter.statuses.includes(j.status as JobStatus), [filter.statuses])
+
+  // ── Bulk selection (over what's visible, in board order) ──
+  const selectableJobs = useMemo(() =>
+    visibleLanes.flatMap(l => (laneRoutes[l.laneId]?.seq ?? []).filter(statusVisible)),
+  [visibleLanes, laneRoutes, statusVisible])
+  const bulk = useBulkSelect(selectableJobs)
+
+  // ── Actions ──
   // Write a lane's visit order as route_order 1..n (serialized, optimistic).
   const applyLaneOrder = useCallback((laneJobIds: string[]) => {
     setJobs(cur => {
@@ -240,6 +308,42 @@ export default function DispatchPage() {
     })
   }, [supabase, fetchAll])
 
+  // Move one visit to a crew (null = unassign). `beforeJobId` places it at a
+  // specific slot in the target lane (undefined = end, the legacy behaviour).
+  const moveJob = useCallback(async (jobId: string, toCrewId: string | null, beforeJobId?: string | null) => {
+    const job = jobs.find(j => j.id === jobId)
+    if (!job || (job.crew_id ?? null) === toCrewId) return
+    const prev = { crew_id: job.crew_id ?? null, route_order: job.route_order ?? null }
+    setJobs(cur => cur.map(j => j.id === jobId ? { ...j, crew_id: toCrewId, route_order: null } : j))
+    const err = await assignJobCrew(supabase, jobId, toCrewId)
+    if (err) {
+      setJobs(cur => cur.map(j => j.id === jobId ? { ...j, ...prev } : j))
+      notify.error('Could not move the job: ' + err)
+      return
+    }
+    if (beforeJobId !== undefined) {
+      const targetLane = toCrewId ?? UNASSIGNED_ID
+      const rest = (laneRoutesRef.current[targetLane]?.seq ?? []).map(j => j.id).filter(id => id !== jobId)
+      const at = beforeJobId ? rest.indexOf(beforeJobId) : -1
+      const next = at >= 0 ? [...rest.slice(0, at), jobId, ...rest.slice(at)] : [...rest, jobId]
+      applyLaneOrder(next)
+    }
+    const toName = toCrewId ? crews.find(c => c.id === toCrewId)?.name ?? 'crew' : 'Unassigned'
+    notify(`${job.customers?.name || job.title} → ${toName}`, {
+      undo: async () => { await supabase.from('jobs').update(prev).eq('id', jobId); fetchAll() },
+    })
+  }, [jobs, crews, supabase, fetchAll, applyLaneOrder])
+
+  // Reorder within a lane: place the dragged visit before `anchorId` (null = end).
+  const reorderWithinLane = useCallback((laneId: string, jobId: string, anchorId: string | null) => {
+    const seq = (laneRoutesRef.current[laneId]?.seq ?? []).map(j => j.id)
+    const rest = seq.filter(id => id !== jobId)
+    const at = anchorId ? rest.indexOf(anchorId) : -1
+    const next = at >= 0 ? [...rest.slice(0, at), jobId, ...rest.slice(at)] : [...rest, jobId]
+    if (next.join() === seq.join()) return
+    applyLaneOrder(next)
+  }, [applyLaneOrder])
+
   const nudgeJob = useCallback((laneId: string, jobId: string, dir: -1 | 1) => {
     const seq = laneRoutes[laneId]?.seq.map(j => j.id) ?? []
     const i = seq.indexOf(jobId)
@@ -252,23 +356,23 @@ export default function DispatchPage() {
 
   // Per-lane route optimization: the SAME optimizeRoute (real-road first,
   // haversine fallback) the schedule uses, persisted as this lane's order.
-  const bestOrderLane = useCallback(async (laneId: string) => {
-    const route = laneRoutes[laneId]
+  const bestOrderLane = useCallback(async (laneId: string, opts?: { quiet?: boolean }) => {
+    const route = laneRoutesRef.current[laneId]
     if (!route || !settings.base) return
     setOptimizingLane(laneId)
     try {
       const stops = route.seq.map(jobStop)
       await geocodeMissingStops(supabase, stops)
       const r = await optimizeRoute(settings.base, stops)
-      if (r.ordered.length === 0) { notify('No located stops to order in this lane.'); return }
+      if (r.ordered.length === 0) { if (!opts?.quiet) notify('No located stops to order in this lane.'); return }
       const orderedIds = r.ordered.map(s => s.jobId)
       const rest = route.seq.map(j => j.id).filter(id => !orderedIds.includes(id))
       applyLaneOrder([...orderedIds, ...rest])
-      notify.success(`Route ordered — ~${r.totalKm} km${r.usedGoogle ? ' by road' : ''}${rest.length ? ` · ${rest.length} without an address kept at the end` : ''}`)
+      if (!opts?.quiet) notify.success(`Route ordered — ~${r.totalKm} km${r.usedGoogle ? ' by road' : ''}${rest.length ? ` · ${rest.length} without an address kept at the end` : ''}`)
     } finally {
       setOptimizingLane(null)
     }
-  }, [laneRoutes, settings.base, supabase, applyLaneOrder])
+  }, [settings.base, supabase, applyLaneOrder])
 
   const openBalance = useCallback(() => {
     setBalancePlan(balanceDay(lanes.map(l => ({
@@ -299,11 +403,152 @@ export default function DispatchPage() {
     })
   }, [balancePlan, jobs, supabase, fetchAll])
 
+  // ── Bulk actions (act on the current selection, then say what happened) ──
+  const bulkAssign = useCallback(async (toCrewId: string | null) => {
+    const targets = bulk.selectedItems.filter(j => (j.crew_id ?? null) !== toCrewId)
+    if (targets.length === 0) { setAssignPickOpen(false); bulk.clear(); return }
+    setBulkBusy(toCrewId === null ? 'unassign' : 'assign')
+    const snapshot = targets.map(j => ({ id: j.id, crew_id: j.crew_id ?? null, route_order: j.route_order ?? null }))
+    setJobs(cur => cur.map(j => targets.some(t => t.id === j.id) ? { ...j, crew_id: toCrewId, route_order: null } : j))
+    const errs = (await Promise.all(targets.map(t => assignJobCrew(supabase, t.id, toCrewId)))).filter(Boolean)
+    setBulkBusy(null)
+    setAssignPickOpen(false)
+    bulk.clear()
+    if (errs.length > 0) { notify.error(`${errs.length} move${errs.length !== 1 ? 's' : ''} failed: ` + errs[0]); fetchAll(); return }
+    const toName = toCrewId ? crews.find(c => c.id === toCrewId)?.name ?? 'crew' : 'Unassigned'
+    notify(`${targets.length} visit${targets.length !== 1 ? 's' : ''} → ${toName}`, {
+      undo: async () => {
+        await Promise.all(snapshot.map(s => supabase.from('jobs').update({ crew_id: s.crew_id, route_order: s.route_order }).eq('id', s.id)))
+        fetchAll()
+      },
+    })
+  }, [bulk, crews, supabase, fetchAll])
+
+  const bulkOptimize = useCallback(async () => {
+    // "Optimize selected" = re-run each touched lane through the ONE optimizer.
+    // A lane's ETAs interlock, so ordering a subset in isolation would lie.
+    const laneIds = [...new Set(bulk.selectedItems.map(j => {
+      const cid = j.crew_id ?? null
+      return cid && crews.some(c => c.id === cid && c.is_active) ? cid : UNASSIGNED_ID
+    }))].filter(id => (laneRoutesRef.current[id]?.seq.filter(j => j.status === 'scheduled').length ?? 0) >= 2)
+    if (laneIds.length === 0) { notify('Nothing to optimize — the selected lanes have fewer than 2 open stops.'); return }
+    setBulkBusy('optimize')
+    for (const id of laneIds) await bestOrderLane(id, { quiet: true })
+    setBulkBusy(null)
+    const names = laneIds.map(id => id === UNASSIGNED_ID ? 'Unassigned' : crews.find(c => c.id === id)?.name ?? 'crew')
+    notify.success(`Best order applied to ${names.join(', ')}.`)
+  }, [bulk.selectedItems, crews, bestOrderLane])
+
+  const reschedulable = useMemo(() => bulk.selectedItems.filter(j => j.status === 'scheduled'), [bulk.selectedItems])
+
+  const bulkReschedule = useCallback(async (toDate: string, opts: { notify: boolean; reason: DisruptionReason }) => {
+    if (reschedulable.length === 0) { setReschedOpen(false); return }
+    setBulkBusy('reschedule')
+    const snapshot = reschedulable.map(j => ({ id: j.id, scheduled_date: j.scheduled_date, route_order: j.route_order ?? null }))
+    const results = await Promise.all(reschedulable.map(j =>
+      supabase.from('jobs').update({ scheduled_date: toDate, route_order: null }).eq('id', j.id),
+    ))
+    const failed = results.filter(r => r.error).length
+    let notified = 0
+    if (opts.notify && failed === 0) {
+      // The EXISTING reschedule seam: opt-in gated per customer, idempotent, logged.
+      const notices = reschedulable.filter(j => j.customers?.id).map(j => ({
+        customerId: j.customers!.id, toDate, fromDate: date, reason: opts.reason, jobId: j.id,
+      }))
+      notified = (await notifyRescheduleBatch(notices)).filter(r => r.ok).length
+    }
+    setBulkBusy(null)
+    setReschedOpen(false)
+    const skipped = bulk.count - reschedulable.length
+    bulk.clear()
+    fetchAll()
+    if (failed > 0) { notify.error(`${failed} visit${failed !== 1 ? 's' : ''} could not be moved.`); return }
+    const dateLabel = format(parseISO(toDate + 'T00:00:00'), 'EEE, MMM d')
+    notify(
+      `${reschedulable.length} visit${reschedulable.length !== 1 ? 's' : ''} → ${dateLabel}` +
+      (notified > 0 ? ` · ${notified} customer${notified !== 1 ? 's' : ''} notified` : '') +
+      (skipped > 0 ? ` · ${skipped} in-progress/done left alone` : ''),
+      {
+        undo: async () => {
+          await Promise.all(snapshot.map(s => supabase.from('jobs').update({ scheduled_date: s.scheduled_date, route_order: s.route_order }).eq('id', s.id)))
+          fetchAll()
+          if (notified > 0) notify('Dates restored — the notices already sent can’t be recalled.')
+        },
+      },
+    )
+  }, [reschedulable, bulk, supabase, date, fetchAll])
+
+  // ── The daily sheet (ONE derivation → CSV and print read the same rows) ──
+  const buildSheet = useCallback((onlyIds?: Set<string>): DispatchSheet => {
+    const sheetLanes: SheetLane[] = lanes.map(lane => {
+      const route = laneRoutes[lane.laneId]
+      if (!route) return null
+      const etaByJob = new Map(route.etas.stops.map(s => [s.jobId, s.arrival]))
+      const included = route.seq.filter(j => !onlyIds || onlyIds.has(j.id))
+      if (included.length === 0) return null
+      const stats = laneStats(route.etas.startMin, route.etas.finishMin, route.workMin, route.capacityMin)
+      return {
+        name: lane.crew?.name ?? 'Unassigned',
+        hex: lane.palette.hex,
+        techs: technicians.filter(t => t.is_active && (lane.crew ? t.crew_id === lane.crew.id : t.crew_id === null)).map(t => t.name),
+        vehicles: equipment.filter(e => lane.crew ? e.crew_id === lane.crew.id : false).map(e => e.name),
+        note: notes.find(n => n.crew_id === lane.laneId)?.body ?? null,
+        startLabel: minutesToTime12(route.etas.startMin),
+        finishLabel: route.seq.length > 0 ? route.etas.finish : null,
+        driveMin: stats.driveMin,
+        workMin: stats.workMin,
+        stops: included.map(j => ({
+          order: route.seq.indexOf(j) + 1,
+          eta: etaByJob.get(j.id) ?? null,
+          promised: j.start_time ? minutesToTime12(timeToMinutes(j.start_time)) : null,
+          customer: j.customers?.name || j.title,
+          address: j.properties?.address || '',
+          phone: j.customers?.phone || '',
+          service: j.service_type || '',
+          durMin: j.duration_minutes || DEFAULT_JOB_MIN,
+          status: JOB_STATUS_LABELS[j.status] ?? j.status,
+        })),
+      }
+    }).filter((l): l is SheetLane => l !== null)
+    return {
+      dateISO: date,
+      dateLabel: format(parseISO(date + 'T00:00:00'), 'EEEE, MMM d, yyyy'),
+      dayNote: notes.find(n => n.crew_id === null)?.body ?? null,
+      lanes: sheetLanes,
+    }
+  }, [lanes, laneRoutes, technicians, equipment, notes, date])
+
+  const printDay = useCallback(() => {
+    const sheet = buildSheet()
+    if (sheet.lanes.length === 0) { notify('Nothing scheduled to print.'); return }
+    if (!openPrintSheet(sheet)) notify.error('The print window was blocked — allow pop-ups for this site.')
+  }, [buildSheet])
+
+  const exportDayCsv = useCallback((onlyIds?: Set<string>) => {
+    const sheet = buildSheet(onlyIds)
+    const rows = sheetCsvRows(sheet)
+    if (rows.length === 0) { notify('Nothing to export.'); return }
+    exportRowsToCsv(`dispatch-${date}`, rows, SHEET_CSV_COLUMNS)
+  }, [buildSheet, date])
+
   // ── Cross-lane drag (pointer events — the Calendar's touch-safe engine) ──
   const dragRef = useRef<{ jobId: string; fromLane: string; title: string; started: boolean; sx: number; sy: number } | null>(null)
   const [dragging, setDragging] = useState<{ jobId: string; title: string } | null>(null)
   const [overLane, setOverLane] = useState<string | null>(null)
+  const [overAnchor, setOverAnchor] = useState<string | null>(null)   // insert BEFORE this stop (null = end)
   const [ghost, setGhost] = useState<{ x: number; y: number } | null>(null)
+
+  // Where would a drop land? The first non-dragged stop row whose midpoint is
+  // below the pointer — insertion happens before it (none → end of lane).
+  const dropAnchorAt = useCallback((laneEl: HTMLElement, y: number, draggedId: string): string | null => {
+    const rows = Array.from(laneEl.querySelectorAll<HTMLElement>('[data-stop-row]'))
+    for (const row of rows) {
+      if (row.dataset.stopRow === draggedId) continue
+      const r = row.getBoundingClientRect()
+      if (y < r.top + r.height / 2) return row.dataset.stopRow ?? null
+    }
+    return null
+  }, [])
 
   const onDragHandleDown = useCallback((e: React.PointerEvent, job: Job, laneId: string) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return
@@ -319,31 +564,104 @@ export default function DispatchPage() {
       }
       ev.preventDefault()
       setGhost({ x: ev.clientX, y: ev.clientY })
-      const el = document.elementFromPoint(ev.clientX, ev.clientY)
-      setOverLane((el?.closest('[data-lane]') as HTMLElement | null)?.dataset.lane ?? null)
+      const laneEl = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('[data-lane]') as HTMLElement | null
+      setOverLane(laneEl?.dataset.lane ?? null)
+      setOverAnchor(laneEl ? dropAnchorAt(laneEl, ev.clientY, d.jobId) : null)
     }
     const finish = (ev: PointerEvent) => {
       const d = dragRef.current
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointercancel', finish)
-      if (d?.started) {
-        const el = document.elementFromPoint(ev.clientX, ev.clientY)
-        const target = (el?.closest('[data-lane]') as HTMLElement | null)?.dataset.lane
-        if (ev.type === 'pointerup' && target && target !== d.fromLane) {
-          moveJob(d.jobId, target === UNASSIGNED_ID ? null : target)
+      if (d?.started && ev.type === 'pointerup') {
+        const laneEl = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('[data-lane]') as HTMLElement | null
+        const target = laneEl?.dataset.lane
+        if (target && laneEl) {
+          const anchor = dropAnchorAt(laneEl, ev.clientY, d.jobId)
+          if (target === d.fromLane) {
+            reorderWithinLane(target, d.jobId, anchor)
+          } else {
+            moveJob(d.jobId, target === UNASSIGNED_ID ? null : target, anchor)
+          }
         }
       }
       dragRef.current = null
-      setDragging(null); setOverLane(null); setGhost(null)
+      setDragging(null); setOverLane(null); setOverAnchor(null); setGhost(null)
     }
     window.addEventListener('pointermove', onMove, { passive: false })
     window.addEventListener('pointerup', finish, { once: true })
     window.addEventListener('pointercancel', finish, { once: true })
-  }, [moveJob])
+  }, [moveJob, reorderWithinLane, dropAnchorAt])
+
+  // ── Keyboard moves (grab → arrows → drop/cancel), announced politely ──
+  const refocusGrip = useCallback((jobId: string) => {
+    requestAnimationFrame(() => document.getElementById(`dispatch-grip-${jobId}`)?.focus())
+  }, [])
+
+  const onGripKeyDown = useCallback((e: React.KeyboardEvent, job: Job, laneId: string) => {
+    const grabbed = kbGrab?.jobId === job.id
+    const title = job.customers?.name || job.title
+    if (!grabbed && (e.key === 'Enter' || e.key === ' ')) {
+      e.preventDefault()
+      setKbGrab({ jobId: job.id, homeLaneId: laneId, homeCrewId: job.crew_id ?? null, homeOrder: (laneRoutes[laneId]?.seq ?? []).map(j => j.id) })
+      setAnnounce(`${title} grabbed. Up and down reorder it, left and right change crews, Enter drops it, Escape puts it back.`)
+      return
+    }
+    if (!grabbed) return
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      e.preventDefault()
+      nudgeJob(laneId, job.id, e.key === 'ArrowUp' ? -1 : 1)
+      setAnnounce(`${title} moved ${e.key === 'ArrowUp' ? 'earlier' : 'later'}.`)
+    } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      e.preventDefault()
+      const idx = visibleLanes.findIndex(l => l.laneId === laneId)
+      const next = visibleLanes[idx + (e.key === 'ArrowLeft' ? -1 : 1)]
+      if (!next) return
+      moveJob(job.id, next.laneId === UNASSIGNED_ID ? null : next.laneId, null)
+      setAnnounce(`${title} moved to ${next.crew?.name ?? 'Unassigned'}.`)
+      refocusGrip(job.id)
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      setKbGrab(null)
+      setAnnounce(`${title} dropped.`)
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      const g = kbGrab
+      if (!g) return
+      setKbGrab(null)
+      ;(async () => {
+        if ((job.crew_id ?? null) !== g.homeCrewId) await moveJob(job.id, g.homeCrewId, null)
+        applyLaneOrder(g.homeOrder)
+        setAnnounce(`${title} put back.`)
+        refocusGrip(job.id)
+      })()
+    }
+  }, [kbGrab, laneRoutes, visibleLanes, nudgeJob, moveJob, applyLaneOrder, refocusGrip])
+
+  // Jump from the conflict panel to the lane/stop it names, revealing it if a
+  // filter had it hidden. Conflicts outrank filters.
+  const jumpTo = useCallback((laneId: string, jobId?: string) => {
+    const laneHidden = !visibleLanes.some(l => l.laneId === laneId)
+    const job = jobId ? jobs.find(j => j.id === jobId) : null
+    const stopHidden = job ? !statusVisible(job) : false
+    if (laneHidden || stopHidden) setFilter(EMPTY_DISPATCH_FILTER)
+    requestAnimationFrame(() => {
+      const el = document.getElementById(jobId ? `dispatch-stop-${jobId}` : `dispatch-lane-${laneId}`)
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      if (jobId) { setFlashJobId(jobId); setTimeout(() => setFlashJobId(cur => cur === jobId ? null : cur), 1800) }
+    })
+  }, [visibleLanes, jobs, statusVisible])
 
   // ── Render ──
   const dateLabel = format(parseISO(date + 'T00:00:00'), 'EEEE, MMM d')
   const dayNote = notes.find(n => n.crew_id === null)
+
+  const bulkActions: BulkAction[] = [
+    { key: 'assign', label: 'Assign to crew…', icon: Users, onClick: () => setAssignPickOpen(true), tone: 'primary', hidden: activeCrewCount === 0 },
+    { key: 'unassign', label: 'Unassign', icon: UserMinus, onClick: () => bulkAssign(null), hidden: activeCrewCount === 0 || !bulk.selectedItems.some(j => j.crew_id) },
+    { key: 'optimize', label: 'Optimize routes', icon: Wand2, onClick: bulkOptimize, disabled: !settings.base },
+    { key: 'reschedule', label: 'Reschedule…', icon: CalendarDays, onClick: () => setReschedOpen(true), disabled: reschedulable.length === 0 },
+    { key: 'export', label: 'Export CSV', icon: FileDown, onClick: () => exportDayCsv(bulk.selected) },
+  ]
 
   if (loading) {
     return (
@@ -357,6 +675,9 @@ export default function DispatchPage() {
 
   return (
     <div className="max-w-7xl space-y-5">
+      {/* Keyboard-move narration for screen readers. */}
+      <div aria-live="polite" className="sr-only">{announce}</div>
+
       <PageHeader
         title="Dispatch"
         description={`${dateLabel} · ${activeJobs.length} visit${activeJobs.length !== 1 ? 's' : ''}`}
@@ -379,7 +700,7 @@ export default function DispatchPage() {
         </Banner>
       )}
 
-      {/* Toolbar: date nav · view · balance */}
+      {/* Toolbar: date nav · view · sheet · balance */}
       <div className="flex items-center gap-2 flex-wrap">
         <div className="flex items-center gap-1">
           <Button variant="ghost" size="sm" onClick={() => setDate(d => format(addDays(parseISO(d + 'T00:00:00'), -1), 'yyyy-MM-dd'))} aria-label="Previous day">
@@ -388,6 +709,13 @@ export default function DispatchPage() {
           <Button variant="ghost" size="sm" onClick={() => setDate(d => format(addDays(parseISO(d + 'T00:00:00'), 1), 'yyyy-MM-dd'))} aria-label="Next day">
             <ChevronRight className="w-4 h-4" />
           </Button>
+          <input
+            type="date"
+            value={date}
+            onChange={e => { if (e.target.value) setDate(e.target.value) }}
+            aria-label="Jump to date"
+            className="rounded-lg border border-border bg-surface px-2 py-1.5 text-xs text-ink-muted hover:text-ink hover:border-border-strong transition-colors tabular-nums focus-visible:outline-none focus:ring-2 focus:ring-accent/40 [color-scheme:dark]"
+          />
           {!isToday && (
             <Button variant="secondary" size="sm" onClick={() => setDate(todayISO())}>Today</Button>
           )}
@@ -395,6 +723,16 @@ export default function DispatchPage() {
         <div className="ml-auto flex items-center gap-1.5">
           <FilterPill active={view === 'board'} onClick={() => setView('board')}><LayoutGrid className="w-3.5 h-3.5" /> Board</FilterPill>
           <FilterPill active={view === 'map'} onClick={() => setView('map')}><MapIcon className="w-3.5 h-3.5" /> Map</FilterPill>
+          <Menu width={210} ariaLabel="Dispatch sheet" items={[
+            { key: 'print', label: 'Print day sheet', icon: Printer, onSelect: printDay },
+            { key: 'csv', label: 'Export day CSV', icon: FileDown, onSelect: () => exportDayCsv() },
+          ]}>
+            {({ toggle, triggerProps }) => (
+              <Button variant="secondary" size="sm" onClick={toggle} {...triggerProps}>
+                <Printer className="w-3.5 h-3.5" /> Sheet
+              </Button>
+            )}
+          </Menu>
           <Button variant="secondary" size="sm" onClick={openBalance} disabled={activeCrewCount < 1 || activeJobs.length === 0}
             title="Even out the day's booked minutes across crews">
             <Scale className="w-3.5 h-3.5" /> Balance
@@ -419,6 +757,8 @@ export default function DispatchPage() {
         </Banner>
       )}
 
+      <ConflictPanel conflicts={conflicts} onJump={jumpTo} />
+
       {view === 'map' ? (
         <div className="animate-rise">
           <DispatchMap base={settings.base} lanes={mapLanes} height={560} />
@@ -431,6 +771,16 @@ export default function DispatchPage() {
           description="Visits land here from the Schedule. Once a day has work, dispatch it across crews." />
       ) : (
         <>
+          {/* Filters + select-all */}
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <DispatchFilters value={filter} onChange={setFilter} crews={crews} technicians={technicians} equipment={equipment} />
+            <SelectAllToggle allSelected={bulk.allSelected} onToggle={bulk.toggleAll} count={selectableJobs.length} noun="visit" />
+          </div>
+
+          {bulk.someSelected && (
+            <BulkActionBar count={bulk.count} actions={bulkActions} onClear={bulk.clear} busyKey={bulkBusy} />
+          )}
+
           {/* Day-level note */}
           <NoteBox
             icon={StickyNote}
@@ -443,8 +793,27 @@ export default function DispatchPage() {
             }}
           />
 
+          {/* Mobile lane jumper — the lanes stack on a phone; this is the map of the stack. */}
+          {visibleLanes.filter(l => (laneRoutes[l.laneId]?.seq.length ?? 0) > 0).length > 1 && (
+            <nav aria-label="Jump to crew" className="sm:hidden sticky top-0 z-20 -mx-1 px-1 py-1.5 bg-bg/85 backdrop-blur flex items-center gap-1.5 overflow-x-auto">
+              {visibleLanes.filter(l => (laneRoutes[l.laneId]?.seq.length ?? 0) > 0).map(lane => {
+                const badge = laneConflictSummary(conflicts, lane.laneId)
+                return (
+                  <button key={lane.laneId} type="button"
+                    onClick={() => document.getElementById(`dispatch-lane-${lane.laneId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                    className="shrink-0 inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1.5 text-[11px] font-medium text-ink-muted active:scale-[0.97] transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                    <span className={cn('w-1.5 h-1.5 rounded-full', lane.palette.dot)} aria-hidden />
+                    {lane.crew?.name ?? 'Unassigned'}
+                    <span className="text-ink-faint tabular-nums">{laneRoutes[lane.laneId]?.seq.length ?? 0}</span>
+                    {badge && <AlertTriangle className={cn('w-3 h-3', badge.severity === 'error' ? 'text-red-400' : badge.severity === 'warn' ? 'text-amber-400' : 'text-sky-400')} aria-label={`${badge.count} conflicts`} />}
+                  </button>
+                )
+              })}
+            </nav>
+          )}
+
           <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3 items-start">
-            {lanes.map((lane, i) => (
+            {visibleLanes.map((lane, i) => (
               <CrewLaneCard
                 key={lane.laneId}
                 lane={lane}
@@ -456,9 +825,17 @@ export default function DispatchPage() {
                 nowMin={nowMin}
                 base={settings.base}
                 index={i}
-                isDropTarget={overLane === lane.laneId && dragging != null && dragRef.current?.fromLane !== lane.laneId}
+                conflictBadge={laneConflictSummary(conflicts, lane.laneId)}
+                statusVisible={statusVisible}
+                isDropTarget={overLane === lane.laneId && dragging != null}
+                dropAnchor={overLane === lane.laneId ? overAnchor : undefined}
                 dragging={dragging}
+                kbGrabbedId={kbGrab?.jobId ?? null}
+                flashJobId={flashJobId}
+                isSelected={bulk.isSelected}
+                onToggleSelect={bulk.toggle}
                 onDragHandleDown={onDragHandleDown}
+                onGripKeyDown={onGripKeyDown}
                 onNudge={nudgeJob}
                 onMoveTo={moveJob}
                 onBestOrder={bestOrderLane}
@@ -475,6 +852,16 @@ export default function DispatchPage() {
               />
             ))}
           </div>
+          {visibleLanes.length === 0 && (
+            <InlineEmpty icon={Radio} className="py-8">
+              Nothing matches these filters. <button type="button" className="underline hover:text-ink" onClick={() => setFilter(EMPTY_DISPATCH_FILTER)}>Clear them</button>.
+            </InlineEmpty>
+          )}
+          {hasActiveFilter(filter) && visibleLanes.length > 0 && visibleLanes.length < lanes.filter(l => (laneRoutes[l.laneId]?.seq.length ?? 0) > 0).length && (
+            <p className="text-[11px] text-ink-faint">
+              {lanes.filter(l => (laneRoutes[l.laneId]?.seq.length ?? 0) > 0).length - visibleLanes.filter(l => (laneRoutes[l.laneId]?.seq.length ?? 0) > 0).length} lane(s) hidden by filters.
+            </p>
+          )}
         </>
       )}
 
@@ -497,6 +884,42 @@ export default function DispatchPage() {
         />
       )}
 
+      {/* Bulk: crew picker */}
+      {assignPickOpen && (
+        <Modal open onClose={() => setAssignPickOpen(false)} title={`Assign ${bulk.count} visit${bulk.count !== 1 ? 's' : ''}`} icon={Users} size="sm">
+          <div className="space-y-1.5">
+            {lanes.filter(l => l.crew?.is_active).map(lane => {
+              const route = laneRoutes[lane.laneId]
+              const load = laneLoad(route?.workMin ?? 0, route?.capacityMin ?? 0)
+              return (
+                <button key={lane.laneId} type="button" onClick={() => bulkAssign(lane.laneId)} disabled={bulkBusy != null}
+                  className="w-full flex items-center gap-2.5 rounded-lg border border-border bg-surface px-3 py-2.5 text-left text-sm hover:border-border-strong hover:bg-bg-tertiary transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                  <span className={cn('w-2 h-2 rounded-full shrink-0', lane.palette.dot)} aria-hidden />
+                  <span className="font-semibold text-ink truncate">{lane.crew!.name}</span>
+                  <span className={cn('ml-auto text-[11px] tabular-nums shrink-0',
+                    load.state === 'overloaded' ? 'text-red-400' : load.state === 'full' ? 'text-amber-400' : 'text-ink-faint')}>
+                    {Math.round((route?.workMin ?? 0) / 60 * 10) / 10}h booked{load.state === 'overloaded' ? ' · over' : ''}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+        </Modal>
+      )}
+
+      {/* Bulk: reschedule */}
+      {reschedOpen && (
+        <RescheduleDialog
+          open
+          count={reschedulable.length}
+          notifiableCount={reschedulable.filter(j => j.customers?.id).length}
+          fromDate={date}
+          busy={bulkBusy === 'reschedule'}
+          onClose={() => setReschedOpen(false)}
+          onApply={bulkReschedule}
+        />
+      )}
+
       <CrewManager
         open={managerOpen}
         onClose={() => setManagerOpen(false)}
@@ -511,8 +934,9 @@ export default function DispatchPage() {
 
 // ── Crew lane ────────────────────────────────────────────────────────────────
 function CrewLaneCard({
-  lane, route, technicians, vehicles, note, crews, nowMin, base, index,
-  isDropTarget, dragging, onDragHandleDown, onNudge, onMoveTo, onBestOrder, optimizing, onSetTechStatus, onSaveNote,
+  lane, route, technicians, vehicles, note, crews, nowMin, base, index, conflictBadge, statusVisible,
+  isDropTarget, dropAnchor, dragging, kbGrabbedId, flashJobId, isSelected, onToggleSelect,
+  onDragHandleDown, onGripKeyDown, onNudge, onMoveTo, onBestOrder, optimizing, onSetTechStatus, onSaveNote,
 }: {
   lane: CrewLaneData
   route: LaneRoute | undefined
@@ -523,9 +947,17 @@ function CrewLaneCard({
   nowMin?: number
   base: Coord | null
   index: number
+  conflictBadge: { count: number; severity: 'error' | 'warn' | 'info' } | null
+  statusVisible: (j: Job) => boolean
   isDropTarget: boolean
+  dropAnchor?: string | null      // stop id the drop lands BEFORE (null = end); undefined = not this lane
   dragging: { jobId: string } | null
+  kbGrabbedId: string | null
+  flashJobId: string | null
+  isSelected: (id: string) => boolean
+  onToggleSelect: (id: string, shiftKey?: boolean) => void
   onDragHandleDown: (e: React.PointerEvent, job: Job, laneId: string) => void
+  onGripKeyDown: (e: React.KeyboardEvent, job: Job, laneId: string) => void
   onNudge: (laneId: string, jobId: string, dir: -1 | 1) => void
   onMoveTo: (jobId: string, crewId: string | null) => void
   onBestOrder: (laneId: string) => void
@@ -534,7 +966,13 @@ function CrewLaneCard({
   onSaveNote: (body: string) => void
 }) {
   const seq = route?.seq ?? []
+  const visibleSeq = seq.filter(statusVisible)
+  const hiddenCount = seq.length - visibleSeq.length
   const load = laneLoad(route?.workMin ?? 0, route?.capacityMin ?? 0)
+  const stats: LaneStats | null = route && seq.length > 0
+    ? laneStats(route.etas.startMin, route.etas.finishMin, route.workMin, route.capacityMin)
+    : null
+  const doneCount = seq.filter(j => j.status === 'completed').length
   const etaByJob = new Map((route?.etas.stops ?? []).map(s => [s.jobId, s]))
   const isUnassigned = lane.laneId === UNASSIGNED_ID
   const cancelledCount = lane.jobs.filter(j => j.status === 'cancelled').length
@@ -550,12 +988,15 @@ function CrewLaneCard({
   // Skip an empty unassigned lane UNLESS a drag is looking for a drop target.
   if (isUnassigned && seq.length === 0 && !dragging) return null
 
+  const dropLine = <div className="h-0.5 rounded-full bg-accent shadow-[0_0_6px_rgba(0,0,0,0.3)] my-0.5 animate-fade" aria-hidden />
+
   return (
     <section
+      id={`dispatch-lane-${lane.laneId}`}
       data-lane={lane.laneId}
       aria-label={`${lane.crew?.name ?? 'Unassigned'} lane`}
       className={cn(
-        'rounded-card border bg-bg-secondary p-4 space-y-3 animate-rise transition-shadow',
+        'rounded-card border bg-bg-secondary p-4 space-y-3 animate-rise transition-shadow scroll-mt-14',
         index < 6 && `stagger-${index + 1}`,
         isDropTarget ? 'border-accent ring-2 ring-accent/40' : 'border-border',
         isUnassigned && 'border-dashed',
@@ -566,6 +1007,16 @@ function CrewLaneCard({
         <span className={cn('w-2.5 h-2.5 rounded-full shrink-0', lane.palette.dot)} aria-hidden />
         <h2 className="text-sm font-bold tracking-tight text-ink truncate">{lane.crew?.name ?? 'Unassigned'}</h2>
         <span className="text-[11px] text-ink-faint tabular-nums shrink-0">{seq.length} stop{seq.length !== 1 ? 's' : ''}</span>
+        {conflictBadge && (
+          <span
+            title={`${conflictBadge.count} conflict${conflictBadge.count !== 1 ? 's' : ''} in this lane`}
+            className={cn('inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold tabular-nums shrink-0',
+              conflictBadge.severity === 'error' ? 'border-red-500/40 bg-red-500/10 text-red-400'
+                : conflictBadge.severity === 'warn' ? 'border-amber-500/40 bg-amber-500/10 text-amber-400'
+                : 'border-sky-500/40 bg-sky-500/10 text-sky-400')}>
+            <AlertTriangle className="w-2.5 h-2.5" aria-hidden /> {conflictBadge.count}
+          </span>
+        )}
         {route && seq.length > 0 && (
           <span className="ml-auto text-[11px] text-ink-muted tabular-nums shrink-0">wraps ~{route.etas.finish}</span>
         )}
@@ -591,6 +1042,17 @@ function CrewLaneCard({
         </div>
       )}
 
+      {/* Route statistics — the ETA chain's totals, stated once. */}
+      {!isUnassigned && stats && (
+        <p className="text-[11px] text-ink-faint tabular-nums">
+          On-site {Math.round(stats.workMin / 60 * 10) / 10}h · Drive ~{stats.driveMin}m
+          {stats.utilizationPct != null && (
+            <> · Day used <span className={cn('font-semibold', stats.utilizationPct > 100 ? 'text-red-400' : stats.utilizationPct >= 90 ? 'text-amber-400' : 'text-ink-muted')}>{stats.utilizationPct}%</span></>
+          )}
+          {doneCount > 0 && <> · {doneCount}/{seq.length} done</>}
+        </p>
+      )}
+
       {/* Roster chips: technicians (status menu) + vehicles */}
       {(technicians.length > 0 || vehicles.length > 0) && (
         <div className="flex items-center gap-1.5 flex-wrap">
@@ -604,7 +1066,7 @@ function CrewLaneCard({
               {({ toggle, triggerProps }) => (
                 <button type="button" onClick={toggle} {...triggerProps}
                   title={`${t.name} — ${TECHNICIAN_STATUS_LABELS[t.status]}`}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2 py-0.5 text-[11px] font-medium text-ink-muted hover:text-ink hover:border-border-strong transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                  className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2 py-1 text-[11px] font-medium text-ink-muted hover:text-ink hover:border-border-strong transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                   <HardHat className="w-3 h-3 text-ink-faint" />
                   <span className="truncate max-w-[9rem]">{t.name}</span>
                   <span className={cn('w-1.5 h-1.5 rounded-full', TECH_STATUS_META[t.status].dot)} aria-hidden />
@@ -614,7 +1076,7 @@ function CrewLaneCard({
             </Menu>
           ))}
           {vehicles.map(v => (
-            <span key={v.id} title={v.category} className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2 py-0.5 text-[11px] text-ink-faint">
+            <span key={v.id} title={v.category} className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2 py-1 text-[11px] text-ink-faint">
               <Truck className="w-3 h-3" /> <span className="truncate max-w-[8rem]">{v.name}</span>
             </span>
           ))}
@@ -634,71 +1096,100 @@ function CrewLaneCard({
       )}
 
       {/* Stops */}
-      {seq.length === 0 ? (
-        <InlineEmpty icon={Radio} className="py-5">
-          {isUnassigned ? 'Nothing unassigned — drop a visit here to pull it off a crew.' : 'No visits — drag one in, or Balance the day.'}
-        </InlineEmpty>
+      {visibleSeq.length === 0 ? (
+        <>
+          {isDropTarget && dropAnchor === null && dropLine}
+          <InlineEmpty icon={Radio} className="py-5">
+            {seq.length > 0 ? `All ${seq.length} hidden by filters.` : isUnassigned ? 'Nothing unassigned — drop a visit here to pull it off a crew.' : 'No visits — drag one in, or Balance the day.'}
+          </InlineEmpty>
+        </>
       ) : (
         <div className="space-y-1.5">
-          {seq.map((job, i) => {
+          {visibleSeq.map(job => {
+            const i = seq.indexOf(job)
             const eta = etaByJob.get(job.id)
+            const grabbed = kbGrabbedId === job.id
+            const promisedMin = job.start_time ? timeToMinutes(job.start_time) : null
+            const late = promisedMin != null && eta != null && eta.arrivalMin > promisedMin + 15
             const menuItems: MenuItem[] = [
               ...crews.filter(c => c.is_active && c.id !== job.crew_id).map((c): MenuItem => ({
                 key: c.id, label: `Move to ${c.name}`, icon: Users, onSelect: () => onMoveTo(job.id, c.id),
               })),
-              ...(job.crew_id ? [{ key: 'unassign', label: 'Unassign', icon: Radio, onSelect: () => onMoveTo(job.id, null) } as MenuItem] : []),
+              ...(job.crew_id ? [{ key: 'unassign', label: 'Unassign', icon: UserMinus, onSelect: () => onMoveTo(job.id, null) } as MenuItem] : []),
               ...(job.properties?.address || (job.properties?.lat != null) ? [{
                 key: 'directions', label: 'Directions', icon: Navigation,
                 onSelect: () => window.open(directionsUrl({ lat: job.properties?.lat ?? null, lng: job.properties?.lng ?? null, address: job.properties?.address }, base), '_blank'),
               } as MenuItem] : []),
             ]
             return (
-              <div key={job.id} id={`dispatch-stop-${job.id}`}
-                className={cn('rounded-lg border border-border bg-surface px-2.5 py-2 flex items-center gap-2',
-                  dragging?.jobId === job.id && 'opacity-40',
-                  job.status === 'completed' && 'opacity-60')}>
-                <button
-                  type="button"
-                  onPointerDown={e => onDragHandleDown(e, job, lane.laneId)}
-                  className="shrink-0 cursor-grab active:cursor-grabbing text-ink-faint hover:text-ink touch-none rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                  title="Drag to another crew"
-                  aria-label={`Drag ${job.customers?.name || job.title} to another crew`}
-                >
-                  <GripVertical className="w-4 h-4" />
-                </button>
-                <span className="w-5 h-5 rounded-md bg-bg-tertiary border border-border text-[10px] font-bold text-ink-muted flex items-center justify-center shrink-0 tabular-nums">{i + 1}</span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-semibold text-ink truncate">{job.customers?.name || job.title}</p>
-                  <p className="text-[11px] text-ink-faint truncate tabular-nums">
-                    {eta ? `ETA ${eta.arrival}` : 'ETA —'} · {job.duration_minutes || DEFAULT_JOB_MIN}m
-                    {job.service_type ? ` · ${job.service_type}` : ''}
-                  </p>
-                </div>
-                {job.status !== 'scheduled' && (
-                  <Badge tone={jobStatusTone[job.status]} className="shrink-0 !text-[9px]">{JOB_STATUS_LABELS[job.status]}</Badge>
-                )}
-                <div className="flex flex-col shrink-0">
-                  <button type="button" onClick={() => onNudge(lane.laneId, job.id, -1)} disabled={i === 0}
-                    className="text-ink-faint hover:text-ink disabled:opacity-25 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" aria-label="Move earlier">
-                    <ChevronUp className="w-3.5 h-3.5" />
+              <div key={job.id}>
+                {isDropTarget && dropAnchor === job.id && dropLine}
+                <div id={`dispatch-stop-${job.id}`} data-stop-row={job.id}
+                  className={cn('rounded-lg border bg-surface px-2.5 py-2 flex items-center gap-2 transition-shadow',
+                    dragging?.jobId === job.id && 'opacity-40',
+                    grabbed ? 'border-accent ring-2 ring-accent/40' : 'border-border',
+                    flashJobId === job.id && 'ring-2 ring-accent border-accent',
+                    job.status === 'completed' && 'opacity-60')}>
+                  <SelectCheckbox
+                    checked={isSelected(job.id)}
+                    onToggle={shift => onToggleSelect(job.id, shift)}
+                    label={`Select ${job.customers?.name || job.title}`}
+                  />
+                  <button
+                    type="button"
+                    id={`dispatch-grip-${job.id}`}
+                    onPointerDown={e => onDragHandleDown(e, job, lane.laneId)}
+                    onKeyDown={e => onGripKeyDown(e, job, lane.laneId)}
+                    aria-pressed={grabbed}
+                    className={cn('shrink-0 cursor-grab active:cursor-grabbing touch-none rounded p-0.5 -m-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                      grabbed ? 'text-accent' : 'text-ink-faint hover:text-ink')}
+                    title="Drag to move — or press Enter, then use the arrows"
+                    aria-label={`Move ${job.customers?.name || job.title}. Press Enter to grab, then arrows to reorder or change crews.`}
+                  >
+                    <GripVertical className="w-4 h-4" />
                   </button>
-                  <button type="button" onClick={() => onNudge(lane.laneId, job.id, 1)} disabled={i === seq.length - 1}
-                    className="text-ink-faint hover:text-ink disabled:opacity-25 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" aria-label="Move later">
-                    <ChevronDown className="w-3.5 h-3.5" />
-                  </button>
+                  <span className="w-5 h-5 rounded-md bg-bg-tertiary border border-border text-[10px] font-bold text-ink-muted flex items-center justify-center shrink-0 tabular-nums">{i + 1}</span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-semibold text-ink truncate">{job.customers?.name || job.title}</p>
+                    <p className="text-[11px] text-ink-faint truncate tabular-nums">
+                      {eta ? `ETA ${eta.arrival}` : 'ETA —'}
+                      {promisedMin != null && (
+                        <span className={late ? 'text-red-400 font-semibold' : undefined}> · promised {minutesToTime12(promisedMin)}</span>
+                      )}
+                      {' '}· {job.duration_minutes || DEFAULT_JOB_MIN}m
+                      {job.service_type ? ` · ${job.service_type}` : ''}
+                    </p>
+                  </div>
+                  {job.status !== 'scheduled' && (
+                    <Badge tone={jobStatusTone[job.status]} className="shrink-0 !text-[9px]">{JOB_STATUS_LABELS[job.status]}</Badge>
+                  )}
+                  <div className="flex flex-col shrink-0">
+                    <button type="button" onClick={() => onNudge(lane.laneId, job.id, -1)} disabled={i === 0}
+                      className="text-ink-faint hover:text-ink disabled:opacity-25 rounded p-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" aria-label="Move earlier">
+                      <ChevronUp className="w-3.5 h-3.5" />
+                    </button>
+                    <button type="button" onClick={() => onNudge(lane.laneId, job.id, 1)} disabled={i === seq.length - 1}
+                      className="text-ink-faint hover:text-ink disabled:opacity-25 rounded p-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" aria-label="Move later">
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  {menuItems.length > 0 && (
+                    <Menu width={220} align="end" ariaLabel="Visit actions" items={menuItems}>
+                      {({ toggle, triggerProps }) => (
+                        <button type="button" onClick={toggle} {...triggerProps} aria-label="Visit actions"
+                          className="shrink-0 text-ink-faint hover:text-ink rounded px-1.5 py-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">⋯</button>
+                      )}
+                    </Menu>
+                  )}
                 </div>
-                {menuItems.length > 0 && (
-                  <Menu width={220} align="end" ariaLabel="Visit actions" items={menuItems}>
-                    {({ toggle, triggerProps }) => (
-                      <button type="button" onClick={toggle} {...triggerProps} aria-label="Visit actions"
-                        className="shrink-0 text-ink-faint hover:text-ink rounded px-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">⋯</button>
-                    )}
-                  </Menu>
-                )}
               </div>
             )
           })}
+          {isDropTarget && dropAnchor === null && dropLine}
         </div>
+      )}
+      {hiddenCount > 0 && visibleSeq.length > 0 && (
+        <p className="text-[11px] text-ink-faint">{hiddenCount} stop{hiddenCount !== 1 ? 's' : ''} hidden by filters — the timeline and totals still count them.</p>
       )}
       {cancelledCount > 0 && (
         <p className="text-[11px] text-ink-faint">{cancelledCount} cancelled visit{cancelledCount !== 1 ? 's' : ''} hidden.</p>
