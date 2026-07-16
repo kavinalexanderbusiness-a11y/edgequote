@@ -581,6 +581,123 @@ export function paymentMethodLabel(method: string | null | undefined): string {
   return method.charAt(0).toUpperCase() + method.slice(1)
 }
 
+// ── Money OUT: expenses, vendors, expense categories ─────────────────────────
+// The counterpart to Payment above. `payments` is the single source of truth for
+// money RECEIVED; these three are money SPENT. They are separate tables (an
+// expense has no invoice, and trg_recompute_invoice_paid derives invoice state
+// from payment rows) and ONE engine — lib/accounting — reads both.
+
+export interface Vendor {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  name: string
+  contact_name: string | null
+  phone: string | null
+  email: string | null
+  website: string | null
+  /** The owner's account number with this vendor. */
+  account_number: string | null
+  notes: string | null
+  archived_at: string | null
+}
+
+export interface ExpenseCategory {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  name: string
+  /** Not every dollar out is deductible (owner draws, personal). The P&L reads this. */
+  tax_deductible: boolean
+  /** The QBO/Xero account this maps to — the seam the export layer fills in later. */
+  external_account: string | null
+  sort_order: number
+  archived_at: string | null
+}
+
+export interface Expense {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  vendor_id: string | null
+  category_id: string | null
+  /** Optional job link — job costing falls out of this row, with no second table. */
+  job_id: string | null
+  /**
+   * GROSS — the total paid, exactly as the receipt reads. NEVER net.
+   * Cash flow sums this; the P&L sums `amount - tax_amount`. See lib/accounting.
+   */
+  amount: number
+  /** Tax INCLUDED in `amount` (GST paid → an ITC). DB guards tax_amount <= amount. */
+  tax_amount: number
+  spent_at: string
+  description: string | null
+  payment_method: string | null
+  /** Receipt or invoice number from the vendor. */
+  reference: string | null
+  /** Object path in the private expense-receipts bucket. Read via signed URL only. */
+  receipt_path: string | null
+  notes: string | null
+  archived_at: string | null
+}
+
+/** An expense with its lookups resolved — what every list and report actually reads. */
+export interface ExpenseWithRelations extends Expense {
+  vendors?: Pick<Vendor, 'id' | 'name'> | null
+  expense_categories?: Pick<ExpenseCategory, 'id' | 'name' | 'tax_deductible'> | null
+  jobs?: { id: string; title: string | null; scheduled_date: string | null } | null
+}
+
+// Money fields are STRINGS here for the same reason service costs are: Number('')
+// is 0, so a numeric field cannot tell "blank" from "zero". On an expense that
+// distinction is the difference between "no tax on this receipt" and "I haven't
+// entered the tax yet" — both are real, and only the owner knows which.
+// Mapped '' → null / 0 explicitly on submit, never by coercion.
+export interface ExpenseFormValues {
+  vendor_id: string
+  category_id: string
+  job_id: string
+  amount: string
+  tax_amount: string
+  spent_at: string
+  description: string
+  payment_method: string
+  reference: string
+  notes: string
+}
+
+export interface VendorFormValues {
+  name: string
+  contact_name: string
+  phone: string
+  email: string
+  website: string
+  account_number: string
+  notes: string
+}
+
+// How the money left the business. Deliberately NOT PAYMENT_METHODS: that list is
+// how customers pay the owner (and carries 'credit', which cannot buy fuel).
+// Money out has its own vocabulary — cheque and debit are alive here even though
+// they were retired on the money-in side.
+export const EXPENSE_PAYMENT_METHODS: { value: string; label: string }[] = [
+  { value: 'card', label: 'Card' },
+  { value: 'debit', label: 'Debit' },
+  { value: 'cash', label: 'Cash' },
+  { value: 'etransfer', label: 'E-transfer' },
+  { value: 'cheque', label: 'Cheque' },
+  { value: 'other', label: 'Other' },
+]
+
+export function expensePaymentMethodLabel(method: string | null | undefined): string {
+  if (!method) return '—'
+  const hit = EXPENSE_PAYMENT_METHODS.find(m => m.value === method)
+  return hit ? hit.label : method.charAt(0).toUpperCase() + method.slice(1)
+}
+
 export interface Quote {
   id: string
   created_at: string
