@@ -117,5 +117,92 @@ export function servicePricingKind(
   // here listing a dozen of them; it was dead. Every key it caught is non-empty, so
   // this same line already returned 'labour' for it. Removing it changes no
   // outcome and stops implying the engine has to recognise a trade to price it.)
-  return serviceType?.trim() ? 'labour' : 'lawn_recurring'
+  //
+  // An UNNAMED service is not a lawn. This line used to read
+  //   `return serviceType?.trim() ? 'labour' : 'lawn_recurring'`
+  // so an empty service_type — the state EVERY quote starts in, before the owner
+  // has picked anything — fell into the grass cadence engine. On a customer whose
+  // property already has a saved measurement (sqft auto-fills), that rendered the
+  // full Weekly/Bi-Weekly mowing panel on a quote for a service nobody had chosen
+  // yet. 'labour' is the honest neutral: no bespoke engine, price it from hours,
+  // and with no hours entered there is nothing to recommend — which is exactly
+  // what an empty form should say.
+  return 'labour'
+}
+
+// ── The service's own recommendation ───────────────────────────────────────────
+// THE seam that answers "what can we honestly recommend for this service?" — it
+// does not price anything itself. Every number it returns comes from an engine or
+// a column that already exists:
+//   area_rate     → the owner's own $/unit template rate × a real measurement
+//   labour        → lib/pricing's laborSuggestion (passed in — this file must not
+//                   import pricing.ts, and pricing.ts must never learn about
+//                   templates)
+//   catalog_price → the owner's own "starting from" price for this exact service
+//
+// It returns null when none of those hold. That null is the whole point. The
+// builder used to fall back to `2 hr × 1 crew × $50` — numbers nobody entered —
+// and render the result as a confirmed price. An unknown price is not $100, the
+// same way an unknown cost is not $0 (see lib/margin.ts). When we have no basis,
+// we say so and leave the field empty.
+export type ServiceRecSource = 'area_rate' | 'labour' | 'catalog_price'
+
+export interface ServiceRec {
+  price: number
+  /** Plain-language "where this number came from" — always shown next to it. */
+  basis: string
+  materials: boolean
+  source: ServiceRecSource
+}
+
+export interface ServiceRecInput {
+  kind: ServicePricingKind
+  template: (PriceableService & { name: string }) | null
+  measuredSqft: number
+  /** From lib/pricing's laborSuggestion. null when hours or rate are unknown —
+   *  callers must NOT substitute a default; that is the bug this replaces. */
+  labour: { price: number; hours: number; crewSize: number; rate: number } | null
+}
+
+export function serviceRecommendation(i: ServiceRecInput): ServiceRec | null {
+  const materials = (i.template?.pricing_display_type || '').includes('materials')
+
+  // 1. Area rate — the most specific thing we can say: the owner's configured
+  //    $/sq ft against a measurement that actually exists.
+  if (i.kind === 'per_area' && i.template?.pricing_display_type === 'per_sqft') {
+    const rate = Number(i.template.default_rate) || 0
+    if (rate > 0 && i.measuredSqft > 0) {
+      return {
+        price: Math.round(rate * i.measuredSqft),
+        basis: `${unitRate(rate)}/sq ft × ${Math.round(i.measuredSqft).toLocaleString()} sq ft`,
+        materials, source: 'area_rate',
+      }
+    }
+  }
+
+  // 2. Labour — hours × crew × rate, and ONLY when both hours and rate are real.
+  //    Hours come from the learned estimator or the owner's own typing; the rate
+  //    from an hourly template or the business's configured Default Labour Rate.
+  if (i.labour && i.labour.hours > 0 && i.labour.rate > 0 && i.labour.price > 0) {
+    const { hours, crewSize, rate } = i.labour
+    return {
+      price: i.labour.price,
+      basis: `${hours} hr × ${crewSize} crew × ${dollars(rate)}/hr`,
+      materials, source: 'labour',
+    }
+  }
+
+  // 3. The owner's catalogued starting price. Not a guess — they typed it against
+  //    this exact service. This is what "Furnace Repair, starting from $189" should
+  //    quote before anyone estimates hours; the old code ignored it and proposed
+  //    $100 from the fabricated defaults, 47% under the business's own price.
+  if (i.template?.pricing_display_type === 'starting_from' || i.template?.pricing_display_type === 'starting_from_materials') {
+    const price = Number(i.template.default_rate) || 0
+    if (price > 0) {
+      return { price, basis: `Your starting price for ${i.template.name}`, materials, source: 'catalog_price' }
+    }
+  }
+
+  // 4. Nothing honest to say. The caller must render that, not a number.
+  return null
 }

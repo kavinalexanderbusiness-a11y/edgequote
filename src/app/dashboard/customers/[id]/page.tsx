@@ -866,12 +866,19 @@ export default function CustomerDetailPage() {
               // business with lawn_sqft = 0 still gets today's "Lawn 0 ft²" chip. It's
               // arguably noise, but it is EXISTING noise, and this change is not
               // allowed to alter what a lawn business sees.
+              // fence/mulch/rock/driveway use `> 0`, not `!= null`: zero feet of
+              // fence is not a measurement, it is the absence of one, and "Fence
+              // 0 ft" would state a fact nobody established. (These four have no
+              // writer anywhere in the app and are 0/62 populated in production —
+              // so this changes nothing on screen today. It makes the rule true in
+              // the code rather than true by accident, which is what stops the next
+              // person wiring a writer that defaults them to 0.)
               const measures = [
                 showLawnFieldFor(shape, p.lawn_sqft) && p.lawn_sqft != null && `Lawn ${Number(p.lawn_sqft).toLocaleString()} ft²`,
-                p.fence_length != null && `Fence ${Number(p.fence_length).toLocaleString()} ft`,
-                p.mulch_area != null && `Mulch ${Number(p.mulch_area).toLocaleString()} ft²`,
-                p.rock_area != null && `Rock ${Number(p.rock_area).toLocaleString()} ft²`,
-                p.driveway_area != null && `Driveway ${Number(p.driveway_area).toLocaleString()} ft²`,
+                Number(p.fence_length) > 0 && `Fence ${Number(p.fence_length).toLocaleString()} ft`,
+                Number(p.mulch_area) > 0 && `Mulch ${Number(p.mulch_area).toLocaleString()} ft²`,
+                Number(p.rock_area) > 0 && `Rock ${Number(p.rock_area).toLocaleString()} ft²`,
+                Number(p.driveway_area) > 0 && `Driveway ${Number(p.driveway_area).toLocaleString()} ft²`,
                 p.lot_size != null && `Lot ${Number(p.lot_size).toLocaleString()} ft²`,
               ].filter(Boolean) as string[]
               const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p.address)}`

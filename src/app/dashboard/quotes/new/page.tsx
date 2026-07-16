@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Customer, QuoteFormValues, ServiceTemplate, TravelFeeTier, BusinessSettings, LawnSections, PricingConfidence } from '@/types'
+import { Customer, QuoteFormValues, ServiceTemplate, TravelFeeTier, BusinessSettings, LawnSections, PricingConfidence, SavedRecommendation } from '@/types'
 import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { SkeletonRows } from '@/components/ui/Skeleton'
@@ -11,6 +11,7 @@ import { Banner } from '@/components/ui/Banner'
 import { applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix, formatCurrency } from '@/lib/utils'
 import { Globe } from 'lucide-react'
 import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes } from '@/lib/pricing'
+import { servicePricingKind } from '@/lib/servicePricing'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { applyFeeRecovery } from '@/lib/invoiceTotals'
 import { sumServiceLines } from '@/lib/quoteServices'
@@ -213,10 +214,24 @@ export default function NewQuotePage() {
         // New or unchanged → sync silently. A CHANGED size replaces the saved
         // measurement non-blockingly (no up-front confirm) and offers a quick Undo.
         if (changed) {
-          const cfg = pricingConfigFromSettings(settings)
-          const pkg = pricingPackage(measuredSqft, cfg, { overgrowth: Number(values.overgrowth_multiplier) || 1, nearbyCount: 0 })
-          const rec = buildSavedRecommendation(pkg, estimateVisitMinutes(measuredSqft))
-          if (measurement?.cadence && measurement.cadence !== 'one_time') rec.cadence = measurement.cadence
+          // The AREA is a fact about the property and is always saved. The
+          // RECOMMENDATION is not: buildSavedRecommendation wraps pricingPackage —
+          // the grass cadence engine — so attaching it to a pressure-washing or
+          // furnace quote's measurement wrote weekly/bi-weekly MOWING prices into
+          // that property's history, where every later quote reads them back as
+          // "the saved recommendation" for whatever service comes next. One wrong
+          // quote used to poison the property permanently. Only a lawn-cadence
+          // service gets a lawn recommendation; everything else saves the
+          // measurement alone, and `recommendation` stays undefined (which
+          // latestSavedRecommendation already skips).
+          const kind = servicePricingKind(values.service_type, templates.find(t => t.id === values.service_template_id) ?? null)
+          let rec: SavedRecommendation | undefined
+          if (kind === 'lawn_recurring') {
+            const cfg = pricingConfigFromSettings(settings)
+            const pkg = pricingPackage(measuredSqft, cfg, { overgrowth: Number(values.overgrowth_multiplier) || 1, nearbyCount: 0 })
+            rec = buildSavedRecommendation(pkg, estimateVisitMinutes(measuredSqft))
+            if (measurement?.cadence && measurement.cadence !== 'one_time') rec.cadence = measurement.cadence
+          }
           const hist = Array.isArray((prop as { measurement_history: unknown } | null)?.measurement_history)
             ? (prop as { measurement_history: unknown[] }).measurement_history : []
           const patch: Record<string, unknown> = {
