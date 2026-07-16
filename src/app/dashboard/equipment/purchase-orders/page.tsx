@@ -27,6 +27,7 @@ import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { Banner } from '@/components/ui/Banner'
 import { Modal } from '@/components/ui/Modal'
+import { ScanInput } from '@/components/inventory/ScanInput'
 import { ClipboardList, Plus, PackageCheck, Trash2, Truck, CircleDollarSign } from 'lucide-react'
 
 // ── Purchase orders + receiving ──────────────────────────────────────────────
@@ -235,8 +236,26 @@ function ReceiveDialog({ userId, po, items, parts, movements, onClose, onDone }:
     Object.fromEntries(items.map(i => [i.id, String(outstandingQty(i, movements) || '')])))
   const [notes, setNotes] = useState('')
   const [saving, setSaving] = useState(false)
+  const [scanHint, setScanHint] = useState<string | null>(null)
 
   const anything = items.some(i => Number(qty[i.id]) > 0)
+
+  // Scan-to-receive: scanning a box counts one unit onto the line it belongs to.
+  // This is why receiving is worth scanning at all — you're holding the box, not
+  // the keyboard. It only fills the FORM; nothing moves until Receive is pressed,
+  // so a misfire is fixed by editing a number, not by reversing a stock movement.
+  const scanParts = useMemo(
+    () => items.map(i => parts.get(i.part_id)).filter(Boolean) as Part[], [items, parts])
+
+  function onScan(part: Part) {
+    const line = items.find(i => i.part_id === part.id)
+    if (!line) { setScanHint(`${part.name} isn't on this order.`); return }
+    setQty(q => {
+      const next = (Number(q[line.id]) || 0) + 1
+      return { ...q, [line.id]: String(next) }
+    })
+    setScanHint(`${part.name} +1`)
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -259,6 +278,15 @@ function ReceiveDialog({ userId, po, items, parts, movements, onClose, onDone }:
         <p className="text-xs text-ink-muted">
           Enter what actually arrived. Receiving writes a stock movement per line — it never edits the count directly.
         </p>
+
+        {/* Scanning only fills the form — nothing moves until Receive. */}
+        {scanParts.length > 0 && (
+          <div className="rounded-xl border border-border p-3">
+            <ScanInput parts={scanParts} onPick={onScan} placeholder="Scan each box to count it in" />
+            {scanHint && <p className="mt-1.5 text-xs text-ink-muted">{scanHint}</p>}
+          </div>
+        )}
+
         <div className="space-y-2.5">
           {items.map(i => {
             const part = parts.get(i.part_id)
