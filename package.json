@@ -17,6 +17,8 @@
     "verify:seasons": "tsx scripts/verify-seasons.ts",
     "verify:modules": "tsx scripts/verify-modules.ts",
     "verify:pricing": "tsx scripts/verify-pricing.ts",
+    "verify:guardrails": "tsx scripts/verify-guardrails.ts",
+    "verify:labor": "tsx scripts/verify-labor.ts",
     "verify:analytics": "tsx scripts/verify-analytics.ts",
     "verify:integrations": "tsx scripts/verify-integrations.ts",
     "verify:inventory": "tsx scripts/verify-inventory.ts",

@@ -113,6 +113,30 @@ jobs:
       - name: Verify onboarding
         run: npm run verify:onboarding
 
+      # ── Pricing ────────────────────────────────────────────────────────────
+      # These three existed and were never wired here, which made their promises
+      # honour-system. verify-pricing.ts opens by saying it pins the lawn engine so
+      # "anyone who changes lawn pricing has to break this file to do it" — that is
+      # only true if it RUNS. A wrong price is a wrong VALUE, not a type error:
+      # tsc and next build both pass while the number on the owner's screen is
+      # wrong, so these are the only gate that can catch it.
+      #   pricing    — margins never read unknown cost as $0; the lawn cadence
+      #                engine is byte-identical; one unit vocabulary.
+      #   guardrails — the guardrail agrees with the engine it guards. It shipped
+      #                holding a private copy of the engine's cadence multipliers,
+      #                so for graded customers it warned about the app's own
+      #                recommendation. Nothing but execution catches that.
+      #   labor      — the estimator never blends an invented constant into a
+      #                property's real timed history, and never counts a job twice.
+      - name: Verify pricing
+        run: npm run verify:pricing
+
+      - name: Verify price guardrails
+        run: npm run verify:guardrails
+
+      - name: Verify labour estimator
+        run: npm run verify:labor
+
       # This step is why the first 17 CI runs were red, and it's worth writing down.
       # ESLint had never been configured in this repo — no .eslintrc anywhere — so
       # `next lint` dropped into an INTERACTIVE setup prompt, which cannot be
