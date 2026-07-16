@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { loadBusinessIntelligence, BIReport, NamedValue, WeekdayStat, YearComparison } from '@/lib/businessIntelligence'
 import { loadLaborInsights, LaborInsights, ServiceAccuracy, ServiceProfit } from '@/lib/labor'
+import { loadMarketingPerformance, type MarketingCampaignRow } from '@/lib/analytics/marketing'
+import { summarizeStats } from '@/lib/crm/campaignStats'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Skeleton, SkeletonTiles } from '@/components/ui/Skeleton'
 import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
@@ -14,7 +16,7 @@ import { AnalyticsWorkspace, WidgetChrome, useWidget } from '@/components/analyt
 import type { WidgetId } from '@/lib/analytics/layout'
 import { formatCurrency, cn } from '@/lib/utils'
 import type { Tone } from '@/lib/tone'
-import { TrendingUp, TrendingDown, DollarSign, Gauge, Users, Target, Activity, LineChart, Home, AlertTriangle, CalendarDays, Ban, Briefcase } from 'lucide-react'
+import { TrendingUp, TrendingDown, DollarSign, Gauge, Users, Target, Activity, LineChart, Home, AlertTriangle, CalendarDays, Ban, Briefcase, Megaphone } from 'lucide-react'
 
 export default function IntelligencePage() {
   const supabase = useMemo(() => createClient(), [])
@@ -22,6 +24,7 @@ export default function IntelligencePage() {
   const [loading, setLoading] = useState(!bi) // cached → render instantly, refresh in background
   // Labour accuracy & crew efficiency — loaded alongside, but never blocks the BI report.
   const [labor, setLabor] = useState<LaborInsights | null>(() => readCache<LaborInsights>('labor', CACHE_TTL.medium))
+  const [marketing, setMarketing] = useState<MarketingCampaignRow[] | null>(() => readCache<MarketingCampaignRow[]>('marketing', CACHE_TTL.medium))
 
   useEffect(() => {
     (async () => {
@@ -34,6 +37,17 @@ export default function IntelligencePage() {
     (async () => {
       try { const r = await loadLaborInsights(supabase); if (r) { setLabor(r.insights); writeCache('labor', r.insights) } }
       catch { /* labour insights are supplementary — never break the BI report */ }
+    })()
+  }, [supabase])
+
+  // Campaign outcomes, on the same terms as labour: loaded alongside, never
+  // blocking the BI report. Marketing lives in its own engine (crm_campaign_log,
+  // not the jobs/invoices the BIReport is built from), so it cannot ride along in
+  // loadBusinessIntelligence without that loader growing a second dataset.
+  useEffect(() => {
+    (async () => {
+      try { const r = await loadMarketingPerformance(supabase); setMarketing(r); writeCache('marketing', r) }
+      catch { /* campaign stats are supplementary — never break the BI report */ }
     })()
   }, [supabase])
 
@@ -343,6 +357,56 @@ export default function IntelligencePage() {
           <Stat label="Growth trend" value={bi.forecasting.growthForecastPct != null ? `${bi.forecasting.growthForecastPct > 0 ? '+' : ''}${bi.forecasting.growthForecastPct}%` : '—'} delta={bi.forecasting.growthForecastPct} deltaLabel="3-mo revenue" />
         </div>
       </Section>
+      {/* ── MARKETING ── Campaign outcomes, per campaign. Every figure below is a
+          field of the CampaignStats object loadCampaignStats returned, or the
+          string summarizeStats phrased from it. Nothing is summed, averaged or
+          rated here: there is no cross-campaign total because no engine defines
+          one, and a rate invented in this JSX could quietly disagree with what
+          `sent` means to the send path. Per-campaign is what the engine knows. */}
+      <Section id="marketing" title="Marketing" icon={Megaphone}>
+        {marketing === null ? (
+          <Skeleton className="h-24 w-full rounded-card" />
+        ) : marketing.length === 0 ? (
+          <div className="rounded-card border border-border bg-bg-secondary p-4">
+            <InlineEmpty icon={Megaphone} className="py-3">
+              No campaigns yet — set one up in Grow and its sends, deliveries and opens show up here.
+            </InlineEmpty>
+          </div>
+        ) : (
+          <div className="rounded-card border border-border bg-bg-secondary divide-y divide-border">
+            {marketing.map(c => (
+              <div key={c.id} className="p-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium text-ink truncate">{c.name}</p>
+                    {/* A paused campaign's history still counts — say why it's quiet
+                        rather than dropping it and making past sends disappear. */}
+                    {!c.enabled && (
+                      <span className="text-[10px] uppercase tracking-wide text-ink-faint border border-border rounded px-1 py-px shrink-0">Paused</span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-ink-faint truncate tabular-nums">
+                    {/* summarizeStats IS the phrasing engine — the Grow page renders
+                        this same string from this same object, so the two surfaces
+                        cannot drift. */}
+                    {c.stats.total > 0 ? summarizeStats(c.stats) : 'Never run'}
+                    {c.lastRunAt && ` · last ran ${new Date(c.lastRunAt).toLocaleDateString()}`}
+                  </p>
+                </div>
+                {/* Delivered/opened, straight off the stats object. Opens are email
+                    only — SMS never reports them — so a campaign with no email
+                    would read a misleading "0 opened". Show it only when the
+                    engine actually counted one. */}
+                <div className="flex items-center gap-4 shrink-0 tabular-nums">
+                  <MiniStat label="sent" value={c.stats.sent} />
+                  <MiniStat label="delivered" value={c.stats.delivered} />
+                  {c.stats.opened > 0 && <MiniStat label="opened" value={c.stats.opened} />}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
       </AnalyticsWorkspace>
     </div>
   )
@@ -369,6 +433,16 @@ function LaborWidget({ children }: { children: React.ReactNode }) {
 // Sections are the workspace's widgets. `id` is all a section needs to become
 // arrangeable — order, hiding and drag all come from the workspace context, so
 // the markup below stays exactly where it is and doesn't know it can move.
+/** A bare count with its noun. Display only — the number arrives already counted. */
+function MiniStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="text-right">
+      <p className="text-sm font-semibold text-ink tabular-nums">{value}</p>
+      <p className="text-[10px] text-ink-faint">{label}</p>
+    </div>
+  )
+}
+
 function Section({ id, title, icon: Icon, children }: { id: WidgetId; title: string; icon: typeof DollarSign; children: React.ReactNode }) {
   const { style, className, dragProps } = useWidget(id)
   return (

@@ -14,6 +14,7 @@
 export type WidgetId =
   | 'executive' | 'financial' | 'yearly' | 'profitability' | 'customers'
   | 'sales' | 'operations' | 'weekday' | 'cancellations' | 'labor' | 'forecasting'
+  | 'marketing'
 
 export interface WidgetMeta {
   id: WidgetId
@@ -42,6 +43,12 @@ export const WIDGETS: WidgetMeta[] = [
   { id: 'cancellations', title: 'Cancellations',  blurb: 'What falls through, and what it costs' },
   { id: 'labor',         title: 'Labour accuracy', blurb: 'Estimated vs actual time, and crew efficiency' },
   { id: 'forecasting',   title: 'Forecasting',    blurb: 'Where this month and the season are heading' },
+  // Appended LAST on purpose. normalizeLayout appends ids it hasn't seen to the
+  // END of a saved order, so anyone with a layout saved before this release gets
+  // Marketing last. Slotting it mid-registry would put it mid-page for new users
+  // and last for everyone else — the same widget in two places depending on when
+  // you first opened the page. Last for everyone is the only consistent choice.
+  { id: 'marketing',     title: 'Marketing',      blurb: 'What each campaign sent, and what got delivered and opened' },
 ]
 
 const ALL_IDS = WIDGETS.map(w => w.id)
