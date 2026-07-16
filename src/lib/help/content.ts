@@ -59,7 +59,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
         body: [
           'Work flows in one direction: **quote → approved → job on the calendar → visit completed → invoice → payment**. Each step creates the next, which is why the app rarely asks you to enter the same thing twice.',
           'A **quote** is the price. A **job** is a visit on a specific day. An **invoice** is a bill for work already done. The app drafts the invoice for you when you complete a visit — you review it, you send it.',
-          'Anything recurring (weekly mowing, say) is a **plan**: one recurrence that generates many visits. Change the plan and future visits follow; past visits keep the price they were billed at.',
+          'Anything recurring (a weekly visit, say) is a **plan**: one recurrence that generates many visits. Change the plan and future visits follow; past visits keep the price they were billed at.',
         ],
       },
     ],
@@ -116,7 +116,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       {
         heading: 'What the customer actually sees',
         body: [
-          'They get a private portal link — no password, no account. It shows the quote total, any ongoing plan price per visit, and a plain-English explanation of what’s behind the number: their measured lawn size, the time the work takes, and any travel charge.',
+          'They get a private portal link — no password, no account. It shows the quote total, any ongoing plan price per visit, and a plain-English explanation of what’s behind the number: the measured size of their property, the time the work takes, and any travel charge.',
           'Before they can approve, they’re asked to confirm the amount, and told that approving doesn’t charge them. That’s deliberate — it’s the fear that stops people tapping.',
         ],
       },
@@ -421,7 +421,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
         heading: 'What’s hidden from them',
         body: [
           '**Draft quotes and draft invoices** — your unfinished work stays yours.',
-          '**Your rates, margins and costs.** The portal explains a price in terms of *their* property — the size of their lawn, the time it takes — and never exposes your hourly rate or what you make on the job.',
+          '**Your rates, margins and costs.** The portal explains a price in terms of *their* property — its size, the time it takes — and never exposes your hourly rate or what you make on the job.',
           '**Internal notes and pricing intelligence.** None of it reaches them.',
         ],
       },
@@ -437,7 +437,7 @@ export const HELP_ARTICLES: HelpArticle[] = [
       {
         heading: 'How it works',
         body: [
-          'Turn it on in **Settings → Booking link** and you get a public URL to put on your website or in your bio. A homeowner enters their address, the app measures their lawn from satellite, shows them a price, and books.',
+          'Turn it on in **Settings → Booking link** and you get a public URL to put on your website or in your bio. A homeowner enters their address, the app measures their property from satellite, shows them a price, and books.',
           'The result lands as a **sent quote** plus a lead in Messages. Nothing is charged and nothing is scheduled — you confirm the price and pick the day.',
         ],
       },
