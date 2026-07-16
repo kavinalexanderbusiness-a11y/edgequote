@@ -1036,6 +1036,36 @@ async function run() {
       // customer owns would invent money that never happened there.
       check('timeline', '➜ customer-level events do not repeat under each property', timelineForProperty(evs, 'prop-B').length, 0)
     }
+    // Expenses and price changes carry only a job_id, and a photo may carry one
+    // instead of a property_id. The job knows the address, so these must reach the
+    // property timeline — money spent at a property plainly happened there.
+    {
+      const jobAtA = { ...base, id: 'j5', title: 'Mow', scheduled_date: '2026-03-01', status: 'scheduled', property_id: 'prop-A' }
+      const evs = buildTimeline({
+        jobs: [jobAtA],
+        expenses: [{ id: 'e1', description: 'Blades', amount: 40, spent_at: '2026-03-02', created_at: base.created_at, job_id: 'j5' }],
+        priceChanges: [{ id: 'pc1', old_amount: 50, new_amount: 60, reason: 'bigger lawn', created_at: base.created_at, job_id: 'j5' }],
+        photos: [{ id: 'ph1', url: 'u', created_at: base.created_at, job_id: 'j5' }],
+      })
+      const atA = timelineForProperty(evs, 'prop-A').map(e => e.kind).sort()
+      check('timeline', 'a job-scoped expense reaches its job’s property', atA.includes('expense'), true)
+      check('timeline', '➜ so does a price change', atA.includes('price_change'), true)
+      check('timeline', '➜ and a photo with only a job_id', atA.includes('photo'), true)
+      check('timeline', '➜ none of them leak to a different property', timelineForProperty(evs, 'prop-B').length, 0)
+      // An expense whose job wasn't loaded (or has no address) must stay
+      // customer-level rather than being pinned to an arbitrary property.
+      const orphan = buildTimeline({
+        expenses: [{ id: 'e2', description: 'Fuel', amount: 20, spent_at: '2026-03-02', created_at: base.created_at, job_id: 'j-unknown' }],
+      })
+      check('timeline', '➜ an expense with no known job stays customer-level', orphan[0].propertyId ?? null, null)
+      // A job with no property_id must not hand its expenses a bogus address.
+      const noProp = buildTimeline({
+        jobs: [{ ...base, id: 'j6', title: 'Mow', scheduled_date: '2026-03-01', status: 'scheduled' }],
+        expenses: [{ id: 'e3', description: 'Fuel', amount: 20, spent_at: '2026-03-02', created_at: base.created_at, job_id: 'j6' }],
+      })
+      check('timeline', '➜ a job without an address gives its expense none either',
+        noProp.find(e => e.kind === 'expense')?.propertyId ?? null, null)
+    }
     // Every kind must belong to exactly one filter group, or a chip's count lies
     // and a filtered view drops events with no chip to bring them back.
     check('timeline', 'every event kind maps to a filter group',

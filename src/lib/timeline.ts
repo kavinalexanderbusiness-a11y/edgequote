@@ -104,6 +104,15 @@ export function buildTimeline(s: TimelineSources): TimelineEvent[] {
   const gross = (amount: unknown) => Math.round((Number(amount) || 0) * gstMult * 100) / 100
   const out: TimelineEvent[] = []
 
+  // Expenses and price changes are keyed by job_id only, and a photo may carry one
+  // instead of a property_id — but the job already knows its address. Without this
+  // hop those events have no property and vanish from a property timeline, even
+  // though they plainly happened there. Empty when the caller passed no jobs, which
+  // just means those events stay customer-level.
+  const jobToProperty = new Map<string, string | null>()
+  for (const j of s.jobs || []) jobToProperty.set(j.id, j.property_id ?? null)
+  const jobProperty = (jobId: string | null | undefined) => (jobId ? jobToProperty.get(jobId) ?? null : null)
+
   for (const q of s.quotes || []) {
     const href = `/dashboard/quotes/${q.id}`
     const pid = q.property_id
@@ -178,7 +187,7 @@ export function buildTimeline(s: TimelineSources): TimelineEvent[] {
     const label = k === 'before' ? 'Before photo' : k === 'after' ? 'After photo' : 'Photo added'
     const at = ph.taken_at || ph.created_at
     if (!at) continue
-    out.push({ at, kind: 'photo', title: label, sub: ph.caption || undefined, thumb: ph.url, propertyId: ph.property_id })
+    out.push({ at, kind: 'photo', title: label, sub: ph.caption || undefined, thumb: ph.url, propertyId: ph.property_id ?? jobProperty(ph.job_id) })
   }
 
   for (const mm of s.measurements || []) {
@@ -196,7 +205,7 @@ export function buildTimeline(s: TimelineSources): TimelineEvent[] {
   // joining through their jobs. spent_at is the business date; created_at is just
   // when it got typed in.
   for (const e of s.expenses || []) {
-    out.push({ at: e.spent_at || e.created_at, kind: 'expense', title: `Expense · ${money(e.amount)}`, sub: join(e.description, e.category) })
+    out.push({ at: e.spent_at || e.created_at, kind: 'expense', title: `Expense · ${money(e.amount)}`, sub: join(e.description, e.category), propertyId: jobProperty(e.job_id) })
   }
 
   for (const c of s.consentChanges || []) {
@@ -213,6 +222,7 @@ export function buildTimeline(s: TimelineSources): TimelineEvent[] {
       at: pc.created_at, kind: 'price_change',
       title: `Price changed · ${money(pc.old_amount)} → ${money(pc.new_amount)}`,
       sub: join(pc.scope, pc.reason),
+      propertyId: jobProperty(pc.job_id),
     })
   }
 
