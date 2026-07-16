@@ -12,6 +12,7 @@ import { payrollRules, payPeriodFor, payrollSummary } from '@/lib/payroll'
 import {
   buildLaborContext, laborByJob, laborByCustomer, laborByMonth, laborByCrew,
   technicianUtilization, reconcileToPayroll, directLabourCost,
+  crewProfitability, technicianPerformance,
   type LaborBucket, type LaborJobInfo,
 } from '@/lib/laborCost'
 import { exportRowsToCsv } from '@/lib/csv'
@@ -84,7 +85,7 @@ export default function LaborPage() {
         supabase.from('business_settings').select('*').eq('user_id', user.id).maybeSingle(),
         loadTechnicians(supabase, user.id),
         loadCrews(supabase, user.id),
-        supabase.from('jobs').select('id, customer_id, scheduled_date, service_type, price').eq('user_id', user.id),
+        supabase.from('jobs').select('id, customer_id, scheduled_date, service_type, price, duration_minutes').eq('user_id', user.id),
         supabase.from('customers').select('id, name').eq('user_id', user.id),
         loadTimeEntries(supabase, user.id, { fromISO: window_.from.toISOString(), toISO: window_.to.toISOString() }),
       ])
@@ -120,6 +121,8 @@ export default function LaborPage() {
   }, [slice, entries, ctx])
 
   const util = useMemo(() => technicianUtilization(entries, ctx), [entries, ctx])
+  const crewProfit = useMemo(() => crewProfitability(entries, ctx), [entries, ctx])
+  const perf = useMemo(() => technicianPerformance(entries, ctx), [entries, ctx])
   const direct = useMemo(() => directLabourCost(entries), [entries])
   const totalMinutes = useMemo(() => buckets.reduce((s, b) => s + b.minutes, 0), [buckets])
   const jobMinutes = useMemo(() => util.reduce((s, u) => s + u.jobMinutes, 0), [util])
@@ -167,6 +170,39 @@ export default function LaborPage() {
       { label: 'Cost on jobs', value: u => u.jobCost },
     ])
     notify.success(`Exported ${util.length} employee${util.length !== 1 ? 's' : ''} to CSV.`)
+  }
+
+  function exportPerf() {
+    if (!perf.length) { notify.error('No productivity data to export.'); return }
+    exportRowsToCsv(`productivity-${format(window_.from, 'yyyy-MM-dd')}-to-${format(new Date(), 'yyyy-MM-dd')}`, perf, [
+      { label: 'Employee', value: p => p.name },
+      { label: 'Crew', value: p => p.crewName ?? 'No crew' },
+      { label: 'Paid hours', value: p => decimalHours(p.totalMinutes) },
+      { label: 'Hours on jobs', value: p => decimalHours(p.jobMinutes) },
+      { label: 'Utilization %', value: p => p.utilizationPct ?? '' },
+      { label: 'Jobs touched', value: p => p.jobsTouched },
+      { label: 'Revenue share', value: p => p.revenueShare },
+      { label: 'Revenue per paid hour', value: p => p.revPerHour ?? '' },
+      { label: 'Estimate variance % (job-level)', value: p => p.estimateVariancePct ?? '' },
+      { label: 'Direct labour cost', value: p => p.cost },
+    ])
+    notify.success(`Exported ${perf.length} employee${perf.length !== 1 ? 's' : ''} to CSV.`)
+  }
+
+  function exportCrewProfit() {
+    if (!crewProfit.length) { notify.error('No crew data to export.'); return }
+    exportRowsToCsv(`crew-profitability-${format(window_.from, 'yyyy-MM-dd')}-to-${format(new Date(), 'yyyy-MM-dd')}`, crewProfit, [
+      { label: 'Crew', value: c => c.name },
+      { label: 'People', value: c => c.technicians },
+      { label: 'Jobs', value: c => c.jobs },
+      { label: 'Hours', value: c => decimalHours(c.minutes) },
+      { label: 'Revenue (share by hours)', value: c => c.revenue },
+      { label: 'Direct labour cost', value: c => c.cost },
+      { label: 'Profit', value: c => c.profit },
+      { label: 'Margin %', value: c => c.marginPct ?? '' },
+      { label: 'Revenue per labour hour', value: c => c.revPerHour ?? '' },
+    ])
+    notify.success(`Exported ${crewProfit.length} crew${crewProfit.length !== 1 ? 's' : ''} to CSV.`)
   }
 
   if (loading) {
@@ -274,6 +310,131 @@ export default function LaborPage() {
           )}
         </CardBody>
       </Card>
+
+      {/* ── Crew profitability ── */}
+      {crewProfit.length > 0 && (
+        <Card>
+          <CardBody className="p-0">
+            <div className="px-5 py-3 border-b border-border flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold text-ink">Crew profitability</h2>
+                <p className="text-[11px] text-ink-faint">
+                  Revenue shared between crews by the hours each actually clocked on a job.
+                </p>
+              </div>
+              <Button variant="secondary" size="sm" onClick={exportCrewProfit} className="shrink-0">
+                <Download className="w-3.5 h-3.5" /> CSV
+              </Button>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border">
+                    <th className="text-left px-5 py-2.5 text-[10px] font-semibold text-ink-faint uppercase tracking-wide">Crew</th>
+                    <th className="text-right px-3 py-2.5 text-[10px] font-semibold text-ink-faint uppercase tracking-wide">Revenue</th>
+                    <th className="text-right px-3 py-2.5 text-[10px] font-semibold text-ink-faint uppercase tracking-wide">Labour</th>
+                    <th className="text-right px-3 py-2.5 text-[10px] font-semibold text-ink-faint uppercase tracking-wide hidden sm:table-cell">Rev/hr</th>
+                    <th className="text-right px-5 py-2.5 text-[10px] font-semibold text-ink-faint uppercase tracking-wide">Profit</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {crewProfit.map(c => (
+                    <tr key={c.crewId} className="hover:bg-surface-raised transition-colors">
+                      <td className="px-5 py-3">
+                        <p className="font-medium text-ink truncate">{c.name}</p>
+                        <p className="text-[11px] text-ink-faint tabular-nums">
+                          {c.technicians} {c.technicians !== 1 ? 'people' : 'person'} · {c.jobs} job{c.jobs !== 1 ? 's' : ''} · {formatDuration(c.minutes)}
+                        </p>
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums text-ink">{formatCurrency(c.revenue)}</td>
+                      <td className="px-3 py-3 text-right tabular-nums text-ink-muted">{formatCurrency(c.cost)}</td>
+                      <td className="px-3 py-3 text-right tabular-nums text-ink-muted hidden sm:table-cell">
+                        {c.revPerHour == null ? '—' : `${formatCurrency(c.revPerHour)}/h`}
+                      </td>
+                      <td className="px-5 py-3 text-right tabular-nums">
+                        <span className={cn('font-bold', c.profit >= 0 ? 'text-ink' : 'text-red-400')}>
+                          {formatCurrency(c.profit)}
+                        </span>
+                        {c.marginPct != null && (
+                          <span className="block text-[11px] text-ink-faint">{c.marginPct}% margin</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardBody>
+        </Card>
+      )}
+
+      {/* ── Productivity ── */}
+      {perf.length > 0 && (
+        <Card>
+          <CardBody className="p-0">
+            <div className="px-5 py-3 border-b border-border flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold text-ink">Productivity</h2>
+                <p className="text-[11px] text-ink-faint">Sorted by hours worked — deliberately not ranked.</p>
+              </div>
+              <Button variant="secondary" size="sm" onClick={exportPerf} className="shrink-0">
+                <Download className="w-3.5 h-3.5" /> CSV
+              </Button>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border">
+                    <th className="text-left px-5 py-2.5 text-[10px] font-semibold text-ink-faint uppercase tracking-wide">Person</th>
+                    <th className="text-right px-3 py-2.5 text-[10px] font-semibold text-ink-faint uppercase tracking-wide">Jobs</th>
+                    <th className="text-right px-3 py-2.5 text-[10px] font-semibold text-ink-faint uppercase tracking-wide hidden sm:table-cell">Rev/hr</th>
+                    <th className="text-right px-5 py-2.5 text-[10px] font-semibold text-ink-faint uppercase tracking-wide">Vs estimate</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {perf.map(p => (
+                    <tr key={p.technicianId} className="hover:bg-surface-raised transition-colors">
+                      <td className="px-5 py-3">
+                        <p className="font-medium text-ink truncate">
+                          {p.name}
+                          {p.crewName && <span className="text-[11px] font-normal text-ink-faint"> · {p.crewName}</span>}
+                        </p>
+                        <p className="text-[11px] text-ink-faint tabular-nums">
+                          {formatDuration(p.totalMinutes)} paid · {p.utilizationPct ?? '—'}% on jobs
+                        </p>
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums text-ink">
+                        {p.jobsTouched}
+                        <span className="block text-[11px] text-ink-faint">{formatCurrency(p.revenueShare)}</span>
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums text-ink-muted hidden sm:table-cell">
+                        {p.revPerHour == null ? '—' : `${formatCurrency(p.revPerHour)}/h`}
+                      </td>
+                      <td className="px-5 py-3 text-right tabular-nums">
+                        {p.estimateVariancePct == null ? <span className="text-ink-faint">—</span> : (
+                          <span className={cn(p.estimateVariancePct > 15 ? 'text-amber-400 font-semibold' : 'text-ink-muted')}>
+                            {p.estimateVariancePct > 0 ? '+' : ''}{p.estimateVariancePct}%
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {/* These numbers get used in conversations about people's pay. Say
+                what they can't tell you, right where they're read. */}
+            <div className="px-5 py-3 border-t border-border">
+              <p className="text-[11px] text-ink-faint">
+                Read these together, not as a score. Revenue per hour reflects the jobs someone was
+                <em> given</em>, not how fast they work. “Vs estimate” compares a whole job against its
+                estimate — it judges the estimate as much as the person, and a job with two people on it
+                shares one estimate. EdgeQuote won’t rank your crew for you.
+              </p>
+            </div>
+          </CardBody>
+        </Card>
+      )}
 
       {/* ── Cost breakdown ── */}
       <Card>

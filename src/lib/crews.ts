@@ -243,7 +243,7 @@ export const CREW_SELECT = 'id, created_at, updated_at, user_id, name, color, da
 // Explicit list, so it MUST be extended when the Technician type grows — a
 // missing column here reads as undefined at runtime while TypeScript still
 // believes the field exists (e.g. every wage silently becoming "not set").
-export const TECHNICIAN_SELECT = 'id, created_at, updated_at, user_id, crew_id, name, phone, email, role, status, status_changed_at, is_active, hourly_wage, hired_on, ended_on'
+export const TECHNICIAN_SELECT = 'id, created_at, updated_at, user_id, crew_id, name, phone, email, role, status, status_changed_at, is_active, hourly_wage, hired_on, ended_on, pto_annual_hours'
 
 export async function loadCrews(supabase: SupabaseClient, userId: string): Promise<Crew[]> {
   const { data } = await supabase.from('crews').select(CREW_SELECT).eq('user_id', userId).order('sort_order').order('created_at')

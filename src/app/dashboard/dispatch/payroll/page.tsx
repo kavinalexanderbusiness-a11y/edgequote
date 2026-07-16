@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { addDays, format } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
-import type { BusinessSettings, Technician, TimeEntry } from '@/types'
+import type { BusinessSettings, PtoEntry, Technician, TimeEntry } from '@/types'
 import { PAY_PERIOD_LABELS } from '@/types'
 import { loadTechnicians } from '@/lib/crews'
 import { loadTimeEntries, formatDuration, decimalHours } from '@/lib/timeTracking'
@@ -14,6 +15,8 @@ import {
   type PayPeriod, type PayrollSummary,
 } from '@/lib/payroll'
 import { entryMinutes } from '@/lib/timeTracking'
+import { buildDraftPayRun } from '@/lib/payRun'
+import { FinalizePayRunDialog } from '@/components/dispatch/FinalizePayRunDialog'
 import { exportRowsToCsv } from '@/lib/csv'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
@@ -26,7 +29,7 @@ import { toast as notify } from '@/lib/toast'
 import { formatCurrency, cn } from '@/lib/utils'
 import {
   Wallet, ChevronLeft, ChevronRight, Clock, AlertTriangle, HardHat, Settings, Timer,
-  Download, Printer, BarChart3,
+  Download, Printer, BarChart3, Lock, History, Palmtree,
 } from 'lucide-react'
 
 // ── Payroll summary ──────────────────────────────────────────────────────────
@@ -38,10 +41,13 @@ import {
 // owns. There is no separate "employees" area, and no second people system.
 export default function PayrollPage() {
   const supabase = useMemo(() => createClient(), [])
+  const router = useRouter()
   const [uid, setUid] = useState<string | null>(null)
   const [settings, setSettings] = useState<BusinessSettings | null>(null)
   const [techs, setTechs] = useState<Technician[]>([])
   const [entries, setEntries] = useState<TimeEntry[]>([])
+  const [ptoEntries, setPtoEntries] = useState<PtoEntry[]>([])
+  const [finalizeOpen, setFinalizeOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   // Which period we're looking at. Null until settings load (the rules decide
@@ -67,11 +73,19 @@ export default function PayrollPage() {
       const r = payrollRules(s)
       const p = period ?? payPeriodFor(new Date(), r)
       setPeriod(p)
-      const e = await loadTimeEntries(supabase, user.id, {
-        fromISO: p.start.toISOString(),
-        toISO: addDays(p.end, 1).toISOString(),
-      })
+      const [e, ptoRes] = await Promise.all([
+        loadTimeEntries(supabase, user.id, {
+          fromISO: p.start.toISOString(),
+          toISO: addDays(p.end, 1).toISOString(),
+        }),
+        // PTO is a SEPARATE ledger — loaded alongside, never merged into
+        // `entries`. Merging would feed vacation hours to lib/payroll as worked
+        // time and invent overtime (see lib/pto).
+        supabase.from('pto_entries').select('*').eq('user_id', user.id)
+          .gte('date', format(p.start, 'yyyy-MM-dd')).lte('date', format(p.end, 'yyyy-MM-dd')),
+      ])
       setEntries(e)
+      setPtoEntries((ptoRes.data as PtoEntry[]) ?? [])
       setLoadError(null)
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : 'Could not load payroll.')
@@ -86,6 +100,13 @@ export default function PayrollPage() {
   const sum: PayrollSummary | null = useMemo(
     () => (period ? payrollSummary(entries, techs, rules, period) : null),
     [entries, techs, rules, period],
+  )
+
+  // The same draft the Finalize dialog would freeze — built here so the on-screen
+  // gross (worked + time off) is exactly what gets written, never a near-miss.
+  const draft = useMemo(
+    () => (period ? buildDraftPayRun({ entries, ptoEntries, technicians: techs, rules, period }) : null),
+    [entries, ptoEntries, techs, rules, period],
   )
 
   const step = (delta: number) => setPeriod(p => (p ? shiftPayPeriod(p, delta, rules) : p))
@@ -151,14 +172,20 @@ export default function PayrollPage() {
         description={`${PAY_PERIOD_LABELS[rules.kind]} · what each person earned, regular and overtime.`}
         action={
           <div className="flex items-center gap-2">
+            <Button size="sm" onClick={() => setFinalizeOpen(true)} disabled={!draft?.lines.length}>
+              <Lock className="w-3.5 h-3.5" /> Finalize
+            </Button>
             <Button variant="secondary" size="sm" onClick={exportCsv} disabled={!sum.rows.length}>
-              <Download className="w-3.5 h-3.5" /> Export CSV
+              <Download className="w-3.5 h-3.5" /> CSV
             </Button>
             <Button variant="secondary" size="sm" onClick={() => window.print()} disabled={!sum.rows.length}>
-              <Printer className="w-3.5 h-3.5" /> Print timesheets
+              <Printer className="w-3.5 h-3.5" /> Print
             </Button>
+            <Link href="/dashboard/dispatch/payroll/history">
+              <Button variant="secondary" size="sm"><History className="w-3.5 h-3.5" /> History</Button>
+            </Link>
             <Link href="/dashboard/dispatch/labor">
-              <Button variant="secondary" size="sm"><BarChart3 className="w-3.5 h-3.5" /> Labour</Button>
+              <Button variant="secondary" size="sm" aria-label="Labour analytics"><BarChart3 className="w-3.5 h-3.5" /></Button>
             </Link>
             <Link href="/dashboard/settings#payroll">
               <Button variant="secondary" size="sm" aria-label="Payroll settings"><Settings className="w-3.5 h-3.5" /></Button>
@@ -201,10 +228,11 @@ export default function PayrollPage() {
         <StatTile label="Overtime hours" icon={Timer} value={formatDuration(sum.otMinutes)}
           sub={otOff ? 'No OT rule set' : `${decimalHours(sum.otMinutes)} h at ${rules.multiplier}x`}
           tone={sum.otMinutes > 0 ? 'warn' : undefined} tonedSurface={sum.otMinutes > 0} />
-        <StatTile label="People paid" icon={HardHat} value={String(sum.rows.filter(r => r.totalPay > 0).length)}
-          sub={`${sum.rows.length} on the sheet`} />
-        <StatTile label="Total pay" icon={Wallet} value={formatCurrency(sum.totalPay)}
-          sub="Gross, before deductions" accent />
+        <StatTile label="Paid time off" icon={Palmtree} value={`${draft?.ptoHours ?? 0} h`}
+          sub={draft && draft.ptoPay > 0 ? formatCurrency(draft.ptoPay) : 'Not hours worked'}
+          onClick={() => router.push('/dashboard/dispatch/time-off')} />
+        <StatTile label="Total pay" icon={Wallet} value={formatCurrency(draft?.grossPay ?? sum.totalPay)}
+          sub="Worked + time off, before deductions" accent />
       </div>
 
       {/* Honest caveats — each one is a reason a number might not be what the
@@ -303,6 +331,17 @@ export default function PayrollPage() {
         Gross pay from each shift’s own stamped rate — before tax, deductions and remittances.
         {!otOff && ` Overtime is the greater of the daily or weekly rule, never both.`}
       </p>
+
+      {finalizeOpen && draft && uid && (
+        <FinalizePayRunDialog
+          open
+          draft={draft}
+          supabase={supabase}
+          userId={uid}
+          onClose={() => setFinalizeOpen(false)}
+          onFinalized={id => router.push(`/dashboard/dispatch/payroll/history/${id}`)}
+        />
+      )}
 
       {/* ── Printable timesheets ──────────────────────────────────────────────
           Off-screen; only paper sees it (globals.css @media print). One sheet per

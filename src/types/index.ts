@@ -330,6 +330,9 @@ export interface Technician {
   hourly_wage: number | null
   hired_on: string | null
   ended_on: string | null
+  /** Annual PTO allowance in hours. null = no allowance configured, so usage is
+   *  tracked but no balance is claimed — never guess someone's entitlement. */
+  pto_annual_hours: number | null
 }
 
 // ── Paid time ────────────────────────────────────────────────────────────────
@@ -354,6 +357,115 @@ export interface TimeEntry {
   notes: string | null
   /** DB-generated (clock_out - clock_in - break). null while the shift is open. */
   minutes_worked: number | null
+}
+
+// ── Paid time NOT worked ─────────────────────────────────────────────────────
+// PTO is a SEPARATE ledger from TimeEntry on purpose. Vacation/holiday hours are
+// not "hours worked", so they must never reach an overtime threshold: 40h worked
+// + 8h vacation is 40h for OT, not 48h. Storing these as TimeEntry rows would
+// make lib/payroll invent overtime on every week containing a day off.
+export type PtoKind = 'vacation' | 'sick' | 'holiday' | 'personal' | 'bereavement'
+
+export const PTO_KIND_LABELS: Record<PtoKind, string> = {
+  vacation: 'Vacation',
+  sick: 'Sick',
+  holiday: 'Holiday',
+  personal: 'Personal',
+  bereavement: 'Bereavement',
+}
+
+export interface PtoEntry {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  technician_id: string
+  /** 'YYYY-MM-DD' — a day off is a calendar day, not an instant. */
+  date: string
+  hours: number
+  kind: PtoKind
+  /** Unpaid leave is still tracked: it's absence, just not money. */
+  is_paid: boolean
+  /** Rate SNAPSHOT, same rule as TimeEntry.hourly_rate — a raise never
+   *  re-values vacation already taken. null = no wage set → hours, no money. */
+  hourly_rate: number | null
+  /** Set when this row was generated from the holiday calendar. */
+  holiday_id: string | null
+  notes: string | null
+}
+
+/** THE holiday calendar for the business. Payroll reads it; nothing guesses it. */
+export interface Holiday {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  date: string
+  name: string
+  is_paid: boolean
+  default_hours: number
+}
+
+/** Append-only audit trail, written by a DB trigger. NEVER a pricing source —
+ *  past shifts carry their own snapshot rate (see TimeEntry.hourly_rate). */
+export interface WageHistoryEntry {
+  id: string
+  created_at: string
+  user_id: string
+  technician_id: string
+  old_wage: number | null
+  new_wage: number | null
+  note: string | null
+  /** Monotonic. Order by this — created_at can tie. */
+  seq: number
+}
+
+// ── Pay runs: what you ACTUALLY paid, frozen ─────────────────────────────────
+// A finalized run snapshots the totals AND the OT rules used to reach them, so
+// editing an old shift (or changing the OT rules) can never restate a cheque you
+// already cut. Same reasoning as TimeEntry.hourly_rate, one level up.
+export interface PayRun {
+  id: string
+  created_at: string
+  user_id: string
+  period_start: string
+  period_end: string
+  period_kind: PayPeriodKind
+  finalized_at: string
+  note: string | null
+  ot_daily_hours: number | null
+  ot_weekly_hours: number | null
+  ot_multiplier: number
+  pay_week_starts_on: number
+  regular_minutes: number
+  ot_minutes: number
+  worked_pay: number
+  pto_hours: number
+  pto_pay: number
+  gross_pay: number
+  employee_count: number
+}
+
+/** One line per employee — THE pay stub. `technician_name` is snapshot so the
+ *  stub survives the employee being deleted (their time entries do not). */
+export interface PayRunLine {
+  id: string
+  created_at: string
+  user_id: string
+  pay_run_id: string
+  technician_id: string | null
+  technician_name: string
+  technician_role: string | null
+  regular_minutes: number
+  ot_minutes: number
+  blended_rate: number
+  regular_pay: number
+  ot_pay: number
+  pto_hours: number
+  pto_pay: number
+  gross_pay: number
+  shifts: number
+  unrated_minutes: number
 }
 
 // How often the owner runs payroll. Drives the payroll summary window only —

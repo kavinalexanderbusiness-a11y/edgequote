@@ -47,6 +47,8 @@ export interface LaborJobInfo {
   scheduled_date: string | null
   service_type: string | null
   price: number | null
+  /** Estimated on-site minutes, for estimate-vs-actual. null = never estimated. */
+  duration_minutes?: number | null
 }
 
 export interface LaborContext {
@@ -250,6 +252,181 @@ export function technicianUtilization(entries: TimeEntry[], ctx: LaborContext): 
       }
     })
     .sort((x, y) => (y.utilizationPct ?? -1) - (x.utilizationPct ?? -1) || y.totalMinutes - x.totalMinutes)
+}
+
+// ── Crew profitability ───────────────────────────────────────────────────────
+// Cost is easy (the clock says who worked). Revenue is the hard part, because a
+// job's price is ONE number and two crews can touch it.
+//
+// Revenue is SPLIT PROPORTIONALLY by clocked minutes on that job. The
+// alternatives are both wrong in ways that matter:
+//   * count the full price for every crew that touched it -> revenue is
+//     double-counted and the totals no longer sum to what you actually billed;
+//   * give it all to the job's assigned crew_id -> the crew that did the work
+//     carries the cost while another carries the revenue, and both are wrong.
+// Splitting by minutes keeps revenue conserved (the parts sum to the whole) and
+// consistent with how cost is attributed — both follow the clock.
+//
+// NOTE this uses the technician's crew, not jobs.crew_id: the assignment is the
+// plan, the clock is what happened. Cost follows the clock, so revenue must too.
+export interface CrewProfit {
+  crewId: string
+  name: string
+  minutes: number
+  cost: number
+  revenue: number
+  profit: number
+  /** profit / revenue as a %. null when there is no revenue to divide by. */
+  marginPct: number | null
+  /** Revenue per clocked labour hour — comparable across crews of any size. */
+  revPerHour: number | null
+  jobs: number
+  technicians: number
+}
+
+export function crewProfitability(entries: TimeEntry[], ctx: LaborContext): CrewProfit[] {
+  // Pass 1: total clocked minutes per job, the denominator of every split.
+  const jobTotalMinutes = new Map<string, number>()
+  for (const e of costable(entries)) {
+    if (!e.job_id) continue
+    jobTotalMinutes.set(e.job_id, (jobTotalMinutes.get(e.job_id) ?? 0) + entryMinutes(e))
+  }
+
+  interface CrewAcc { minutes: number; cost: number; revenue: number; jobs: Set<string>; techs: Set<string> }
+  const map = new Map<string, CrewAcc>()
+
+  for (const e of costable(entries)) {
+    const crewId = ctx.technicians.get(e.technician_id)?.crew_id ?? null
+    const key = crewId ?? UNASSIGNED_KEY
+    const a = map.get(key) ?? { minutes: 0, cost: 0, revenue: 0, jobs: new Set(), techs: new Set() }
+    const m = entryMinutes(e)
+    a.minutes += m
+    a.cost += entryCost(e)
+    a.techs.add(e.technician_id)
+    if (e.job_id) {
+      a.jobs.add(e.job_id)
+      const price = ctx.jobs.get(e.job_id)?.price
+      const total = jobTotalMinutes.get(e.job_id) ?? 0
+      // Proportional share. total>0 is guaranteed here (this entry contributed to
+      // it), but the guard keeps a 0-minute shift from dividing by zero.
+      if (price != null && total > 0) a.revenue += Number(price) * (m / total)
+    }
+    map.set(key, a)
+  }
+
+  return Array.from(map.entries())
+    .map(([crewId, a]) => {
+      const revenue = round2(a.revenue)
+      const cost = round2(a.cost)
+      const profit = round2(revenue - cost)
+      return {
+        crewId,
+        name: crewId === UNASSIGNED_KEY ? 'No crew' : ctx.crewNames.get(crewId) ?? 'Deleted crew',
+        minutes: a.minutes,
+        cost,
+        revenue,
+        profit,
+        marginPct: revenue > 0 ? Math.round((profit / revenue) * 1000) / 10 : null,
+        revPerHour: a.minutes > 0 ? round2(revenue / (a.minutes / 60)) : null,
+        jobs: a.jobs.size,
+        technicians: a.techs.size,
+      }
+    })
+    .sort((x, y) => y.profit - x.profit || y.revenue - x.revenue || x.name.localeCompare(y.name))
+}
+
+// ── Technician performance ───────────────────────────────────────────────────
+// DELIBERATELY NOT A SCORE, AND DELIBERATELY NOT RANKED BY ONE.
+//
+// It would be easy to blend utilization, revenue/hour and estimate variance into
+// a single number and sort people by it. It would also be misleading: whoever is
+// handed the awkward jobs, the callbacks and the training of new hires would come
+// out "worst", and the number would look objective while being an artifact of who
+// got assigned what. These figures get used in real conversations about real
+// people's pay and jobs, so this returns FACTS with their context attached and
+// lets a human read them.
+//
+// Every figure here is confounded in a way worth stating out loud:
+//   * revPerHour   -> a property of the JOBS someone was assigned, not their speed.
+//   * estimateVar  -> measures the ESTIMATE as much as the person; a job with two
+//                     techs shares one estimate, so it can't be pinned on either.
+//   * utilization  -> low means unbooked time, which is usually the schedule's
+//                     doing, not the person's.
+export interface TechPerformance {
+  technicianId: string
+  name: string
+  crewName: string | null
+  totalMinutes: number
+  jobMinutes: number
+  utilizationPct: number | null
+  cost: number
+  /** Distinct jobs they clocked any time against. */
+  jobsTouched: number
+  /** Revenue of jobs they worked, split by their share of the clocked minutes. */
+  revenueShare: number
+  /** revenueShare per clocked hour. null when nothing was clocked. */
+  revPerHour: number | null
+  /** Actual vs estimated minutes on the jobs they touched, as a %: +20 = those
+   *  jobs ran 20% long. null when none of them was ever estimated. Job-level. */
+  estimateVariancePct: number | null
+}
+
+export function technicianPerformance(entries: TimeEntry[], ctx: LaborContext): TechPerformance[] {
+  const jobTotalMinutes = new Map<string, number>()
+  for (const e of costable(entries)) {
+    if (!e.job_id) continue
+    jobTotalMinutes.set(e.job_id, (jobTotalMinutes.get(e.job_id) ?? 0) + entryMinutes(e))
+  }
+
+  interface Acc { total: number; job: number; cost: number; revenue: number; jobs: Set<string> }
+  const map = new Map<string, Acc>()
+  for (const e of costable(entries)) {
+    const a = map.get(e.technician_id) ?? { total: 0, job: 0, cost: 0, revenue: 0, jobs: new Set<string>() }
+    const m = entryMinutes(e)
+    a.total += m
+    a.cost += entryCost(e)
+    if (e.job_id) {
+      a.job += m
+      a.jobs.add(e.job_id)
+      const price = ctx.jobs.get(e.job_id)?.price
+      const total = jobTotalMinutes.get(e.job_id) ?? 0
+      if (price != null && total > 0) a.revenue += Number(price) * (m / total)
+    }
+    map.set(e.technician_id, a)
+  }
+
+  return Array.from(map.entries())
+    .map(([technicianId, a]) => {
+      const t = ctx.technicians.get(technicianId)
+      const crewId = t?.crew_id ?? null
+
+      // Estimate variance across the jobs they touched — computed on the JOB's
+      // full clocked time vs the JOB's estimate, never on this person's slice.
+      let estActual = 0, estPlanned = 0
+      for (const jobId of a.jobs) {
+        const est = ctx.jobs.get(jobId)?.duration_minutes
+        if (est == null || est <= 0) continue
+        estPlanned += Number(est)
+        estActual += jobTotalMinutes.get(jobId) ?? 0
+      }
+
+      return {
+        technicianId,
+        name: t?.name ?? 'Removed technician',
+        crewName: crewId ? ctx.crewNames.get(crewId) ?? null : null,
+        totalMinutes: a.total,
+        jobMinutes: a.job,
+        utilizationPct: a.total > 0 ? Math.round((a.job / a.total) * 1000) / 10 : null,
+        cost: round2(a.cost),
+        jobsTouched: a.jobs.size,
+        revenueShare: round2(a.revenue),
+        revPerHour: a.total > 0 ? round2(a.revenue / (a.total / 60)) : null,
+        estimateVariancePct: estPlanned > 0 ? Math.round(((estActual - estPlanned) / estPlanned) * 1000) / 10 : null,
+      }
+    })
+    // Sorted by hours worked — a neutral fact, NOT by any performance measure.
+    // Sorting by "best" would manufacture the ranking this type refuses to make.
+    .sort((x, y) => y.totalMinutes - x.totalMinutes || x.name.localeCompare(y.name))
 }
 
 // ── Reconciliation to payroll ────────────────────────────────────────────────

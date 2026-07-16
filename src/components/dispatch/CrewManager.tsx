@@ -10,6 +10,8 @@ import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
 import { Toggle } from '@/components/ui/Toggle'
 import { InlineEmpty } from '@/components/ui/EmptyState'
+import { WageHistoryDialog } from '@/components/dispatch/WageHistoryDialog'
+import { History } from 'lucide-react'
 import { toast as notify } from '@/lib/toast'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { cn } from '@/lib/utils'
@@ -41,6 +43,7 @@ export function CrewManager({ open, onClose, crews, technicians, equipment, onCh
   const [newCrew, setNewCrew] = useState('')
   const [newTech, setNewTech] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
+  const [wageHistoryFor, setWageHistoryFor] = useState<Technician | null>(null)
 
   const crewOptions = [
     { value: '', label: 'No crew' },
@@ -198,6 +201,12 @@ export function CrewManager({ open, onClose, crews, technicians, equipment, onCh
                 <div className="flex items-center gap-2 pb-1">
                   <Toggle checked={t.is_active} ariaLabel={`${t.name} active`}
                     onChange={v => run(`tact-${t.id}`, () => supabase.from('technicians').update({ is_active: v }).eq('id', t.id).then(r => ({ error: r.error })))} />
+                  {/* Every wage change is logged by a DB trigger, so this reads a
+                      complete trail no matter where the change came from. */}
+                  <Button variant="ghost" size="sm" type="button" onClick={() => setWageHistoryFor(t)}
+                    title={`${t.name}'s wage history`} aria-label={`${t.name}'s wage history`}>
+                    <History className="w-3.5 h-3.5" />
+                  </Button>
                   <Button variant="ghost" size="sm" type="button" onClick={() => deleteTech(t)}
                     loading={busy === `del-${t.id}`} className="hover:text-red-400" title="Remove technician">
                     <Trash2 className="w-3.5 h-3.5" />
@@ -244,6 +253,10 @@ export function CrewManager({ open, onClose, crews, technicians, equipment, onCh
           <p className="text-[11px] text-ink-faint">Manage the fleet itself in the Equipment module — dispatch only decides who takes what.</p>
         </section>
       </div>
+
+      {wageHistoryFor && (
+        <WageHistoryDialog technician={wageHistoryFor} supabase={supabase} onClose={() => setWageHistoryFor(null)} />
+      )}
     </Modal>
   )
 }
