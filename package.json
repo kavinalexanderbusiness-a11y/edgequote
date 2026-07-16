@@ -15,7 +15,8 @@
     "verify:ai-context": "tsx scripts/verify-ai-context.ts",
     "verify:seasons": "tsx scripts/verify-seasons.ts",
     "verify:modules": "tsx scripts/verify-modules.ts",
-    "verify:pricing": "tsx scripts/verify-pricing.ts"
+    "verify:pricing": "tsx scripts/verify-pricing.ts",
+    "verify:analytics": "tsx scripts/verify-analytics.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",
