@@ -17,9 +17,13 @@ const SEV_DOT: Record<ConflictSeverity, string> = {
   info: 'bg-sky-400',
 }
 
-export function ConflictPanel({ conflicts, onJump }: {
+export function ConflictPanel({ conflicts, onJump, fixFor }: {
   conflicts: DispatchConflict[]
   onJump: (laneId: string, jobId?: string) => void
+  /** The one-tap remedy for a conflict, when one exists — supplied by the page
+   *  so this panel stays display-only (it wires to existing handlers, never
+   *  its own logic). */
+  fixFor?: (c: DispatchConflict) => { label: string; run: () => void } | null
 }) {
   const [open, setOpen] = useState(true)
   if (conflicts.length === 0) return null
@@ -59,19 +63,31 @@ export function ConflictPanel({ conflicts, onJump }: {
 
       {open && (
         <ul className="px-3 pb-3 space-y-1">
-          {conflicts.map((c, i) => (
-            <li key={`${c.kind}-${c.laneId}-${c.jobId ?? i}`}>
-              <button
-                type="button"
-                onClick={() => onJump(c.laneId, c.jobId)}
-                title="Jump to it on the board"
-                className="w-full flex items-start gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-left text-xs text-ink-muted hover:text-ink hover:border-border-strong transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-              >
-                <span className={cn('w-1.5 h-1.5 rounded-full mt-1.5 shrink-0', SEV_DOT[c.severity])} aria-hidden />
-                <span className="min-w-0">{c.message}</span>
-              </button>
-            </li>
-          ))}
+          {conflicts.map((c, i) => {
+            const fix = fixFor?.(c) ?? null
+            return (
+              <li key={`${c.kind}-${c.laneId}-${c.jobId ?? i}`} className="flex items-stretch gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => onJump(c.laneId, c.jobId)}
+                  title="Jump to it on the board"
+                  className="flex-1 min-w-0 flex items-start gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-left text-xs text-ink-muted hover:text-ink hover:border-border-strong transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                >
+                  <span className={cn('w-1.5 h-1.5 rounded-full mt-1.5 shrink-0', SEV_DOT[c.severity])} aria-hidden />
+                  <span className="min-w-0">{c.message}</span>
+                </button>
+                {fix && (
+                  <button
+                    type="button"
+                    onClick={fix.run}
+                    className="shrink-0 self-center inline-flex items-center rounded-lg border border-border-strong px-2.5 py-1.5 text-[11px] font-semibold text-ink-muted hover:text-ink hover:bg-black/10 transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                  >
+                    {fix.label}
+                  </button>
+                )}
+              </li>
+            )
+          })}
         </ul>
       )}
     </section>

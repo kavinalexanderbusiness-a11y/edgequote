@@ -14,7 +14,7 @@
 
 import { CsvColumn } from '@/lib/csv'
 import { laneLoad } from '@/lib/crews'
-import { minutesToTime12, timeToMinutes } from '@/lib/route'
+import { minutesToTime12, timeToMinutes, nearestNeighborRoute, RouteStop } from '@/lib/route'
 
 // ── Lane statistics ──────────────────────────────────────────────────────────
 // All four numbers fall out of the ETA chain the timeline already draws:
@@ -40,6 +40,40 @@ export function laneStats(startMin: number, finishMin: number, workMin: number, 
     finishMin,
     overMin: Math.max(0, Math.round(finishMin - (startMin + capacityMin))),
   }
+}
+
+// ── Live progress (today only) ───────────────────────────────────────────────
+// Where the crew stands against its own ETA chain RIGHT NOW. "Behind" is the
+// clock versus the plan the engine drew: the first unfinished stop should have
+// been reached (or, if it's running, finished) by now. Pure read — no new
+// timing model, just the ETA chain held up against the wall clock.
+export interface LaneProgress {
+  nextJobId: string | null   // first stop that isn't done yet
+  behindMin: number          // 0 = on time or ahead
+}
+
+export function laneProgress(
+  nowMin: number,
+  stops: { jobId: string; arrivalMin: number | null; durMin: number; status: string }[],
+): LaneProgress {
+  const next = stops.find(s => s.status !== 'completed' && s.status !== 'cancelled')
+  if (!next || next.arrivalMin == null) return { nextJobId: next?.jobId ?? null, behindMin: 0 }
+  // A running stop is judged by its planned finish; a pending one by its arrival.
+  const due = next.status === 'in_progress' ? next.arrivalMin + next.durMin : next.arrivalMin
+  return { nextJobId: next.jobId, behindMin: Math.max(0, Math.round(nowMin - due)) }
+}
+
+// ── Optimizer savings hint ───────────────────────────────────────────────────
+// How much shorter the ONE optimizer's order would be than the current manual
+// order — same nearest-neighbour + 2-opt estimator the engine itself falls back
+// to, so the hint can never promise what "Best order" won't deliver. Returns 0
+// when the gain is noise (< 1 km or < 12%).
+export function bestOrderSavingsKm(base: { lat: number; lng: number }, stops: RouteStop[], currentKm: number): number {
+  const located = stops.filter(s => s.lat != null && s.lng != null)
+  if (located.length < 3 || currentKm <= 0) return 0
+  const best = nearestNeighborRoute(base, located).totalKm
+  const saved = Math.round((currentKm - best) * 10) / 10
+  return saved >= 1 && saved / currentKm >= 0.12 ? saved : 0
 }
 
 // ── Conflict detection ───────────────────────────────────────────────────────
