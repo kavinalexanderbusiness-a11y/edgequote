@@ -96,6 +96,22 @@ export function costBasisLabel(t: PricingDisplayType): string {
 //   labour         → hours × crew × rate (cleanups, hedge, gutter, one-off work)
 export type ServicePricingKind = 'lawn_recurring' | 'per_area' | 'labour'
 
+// Does the LAWN CADENCE engine price this service? Read narrowly: pricingPackage()
+// charges `base + (lawn_sqft/1000 × mow_rate)` on a Weekly/Bi-Weekly cadence — a
+// sentence about mowing a lawn. Route "String Trimming" here and the owner is
+// quoted a mowing price, on a mowing cadence, for trimming.
+//
+// Deliberately NOT serviceKey()'s 'mowing' bucket: that one also catches
+// trim/string/edg/cut so a trimming visit's minutes still teach the mowing crew's
+// labour model — right for LEARNING, wrong for PRICING. Narrow it there and the
+// learning regresses; those are two questions, not one.
+//
+// Applied INSIDE the 'mowing' arm, never before it — SERVICE_DEFS is ordered, so a
+// name carrying two services ("mow + prune") resolves to the earlier def, 'hedge'.
+// Matching this pattern up front would promote it to a lawn cadence and reprice
+// it. Only ever narrows 'mowing'; pinned in verify-pricing.ts §13.
+const LAWN_CADENCE_SERVICE = /mow|grass[\s-]*cut|lawn[\s-]*cut/i
+
 export function servicePricingKind(
   serviceType: string | null | undefined,
   template?: Pick<PriceableService, 'pricing_display_type'> | null,
@@ -109,8 +125,12 @@ export function servicePricingKind(
   // Otherwise fall back to the shared serviceKey() normalizer. Only two families
   // get special treatment, because only they have a bespoke engine to route to:
   // mowing has the sqft cadence engine, mulch/rock have area math.
-  const key = serviceKey(serviceType || '')
-  if (key === 'mowing') return 'lawn_recurring'
+  const s = (serviceType || '').trim()
+  const key = serviceKey(s)
+  // The cadence engine only speaks for services it can actually price (above).
+  // A 'mowing'-bucketed service that isn't literally mowing — "String Trimming",
+  // "Lawn Edging" — falls through to labour like any other one-off.
+  if (key === 'mowing' && LAWN_CADENCE_SERVICE.test(s)) return 'lawn_recurring'
   if (key === 'mulch' || key === 'rock') return 'per_area'
   // Everything else named — window cleaning, snow, gutters, a trade we've never
   // heard of — is labour. (A LABOUR_KEYS set of lawn/landscaping terms used to sit
