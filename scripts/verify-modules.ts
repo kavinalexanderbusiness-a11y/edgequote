@@ -15,6 +15,7 @@ import {
   FEATURE_MODULES, MODULE_CATEGORIES, visibleModules, installedKeys,
   normalizeEnabled, dependencyClosure, installSet, uninstallSet,
   uninstallBlockers, pendingUpdate, stampMeta, readMeta, isEntitled, moduleByKey,
+  recentlyUpdated, searchModules,
 } from '../src/lib/modules'
 
 let failures = 0
@@ -109,7 +110,27 @@ console.log('\nUpdate system (module_meta):')
   check('readMeta rejects non-object garbage', Object.keys(readMeta([1, 2])).length === 0 && Object.keys(readMeta('x')).length === 0)
 }
 
-// ── 5. Licensing hook ─────────────────────────────────────────────────────────
+// ── 5. Marketplace surface (search / recently updated / listing metadata) ────
+console.log('\nMarketplace (search, recently updated, listing metadata):')
+{
+  check('every module has a parseable updatedAt date',
+    FEATURE_MODULES.every(m => /^\d{4}-\d{2}-\d{2}$/.test(m.updatedAt) && !Number.isNaN(Date.parse(m.updatedAt))))
+  const recent = recentlyUpdated(4)
+  check('recentlyUpdated returns the requested count', recent.length === 4)
+  check('recentlyUpdated is newest-first',
+    recent.every((m, i) => i === 0 || recent[i - 1].updatedAt >= m.updatedAt),
+    recent.map(m => `${m.key}:${m.updatedAt}`).join(' '))
+  check('recentlyUpdated never mutates the registry order',
+    FEATURE_MODULES[0].key === 'dashboard')
+  check('empty search returns the whole catalogue', searchModules('').length === FEATURE_MODULES.length)
+  check('search matches the name ("payments")', searchModules('payments').some(m => m.key === 'payments'))
+  check('search matches the permission surface ("sms" is nowhere in labels)',
+    searchModules('messages:send').some(m => m.key === 'messages'))
+  check('search matches the category label ("growth")', searchModules('growth').some(m => m.category === 'growth'))
+  check('search misses cleanly', searchModules('zzz-not-a-module').length === 0)
+}
+
+// ── 6. Licensing hook ─────────────────────────────────────────────────────────
 console.log('\nLicensing hook:')
 {
   check('every current module is free (no sku) and entitled',

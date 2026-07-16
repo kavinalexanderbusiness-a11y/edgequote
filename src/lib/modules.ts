@@ -53,61 +53,82 @@ export interface FeatureModule {
   permissions: string[]
   /** Future licensing hook — entitlement key. Absent = free forever. */
   sku?: string
+  /** ISO date of the module's last meaningful change — drives "Recently updated". */
+  updatedAt: string
+  /** Marketplace screenshots (public URLs). Empty/absent → the listing renders a styled placeholder. */
+  screenshots?: string[]
 }
 
 export const FEATURE_MODULES: FeatureModule[] = [
   { key: 'dashboard',  label: 'Dashboard',  href: '/dashboard',            icon: LayoutDashboard, core: true,
-    category: 'operations', version: 1,
+    category: 'operations', version: 1, updatedAt: '2026-07-15',
     description: 'The morning command center — money, priorities, and the day ahead.',
     permissions: ['customers:read', 'jobs:read', 'invoices:read'] },
   { key: 'schedule',   label: 'Schedule',   href: '/dashboard/schedule',   icon: CalendarDays,
-    category: 'operations', version: 1,
+    category: 'operations', version: 1, updatedAt: '2026-07-09',
     description: 'Visits, routes, capacity and the day plan.',
     permissions: ['jobs:read', 'jobs:write', 'customers:read', 'messages:send'] },
   { key: 'dispatch',   label: 'Dispatch',   href: '/dashboard/dispatch',   icon: Radio,
-    category: 'operations', version: 1, requires: ['schedule'],
+    category: 'operations', version: 1, updatedAt: '2026-07-15', requires: ['schedule'],
     description: 'Crews, technicians and the day\'s routes on one board.',
     permissions: ['jobs:read', 'jobs:write', 'crews:read', 'crews:write', 'equipment:read', 'equipment:write'] },
   { key: 'customers',  label: 'Customers',  href: '/dashboard/customers',  icon: Users,
-    category: 'customers', version: 1,
+    category: 'customers', version: 1, updatedAt: '2026-07-15',
     description: 'Every customer, their history, and the conversation.',
     permissions: ['customers:read', 'customers:write', 'messages:send'] },
   { key: 'properties', label: 'Properties', href: '/dashboard/properties', icon: Home,
-    category: 'operations', version: 1, requires: ['customers'],
+    category: 'operations', version: 1, updatedAt: '2026-07-08', requires: ['customers'],
     description: 'Sites and service locations, with measurements and notes.',
     permissions: ['properties:read', 'properties:write', 'customers:read'] },
   { key: 'quotes',     label: 'Quotes',     href: '/dashboard/quotes',     icon: FileText,
-    category: 'money', version: 1, requires: ['customers'],
+    category: 'money', version: 1, updatedAt: '2026-07-13', requires: ['customers'],
     description: 'Quote work, send it, and track it to a decision.',
     permissions: ['quotes:read', 'quotes:write', 'customers:read', 'messages:send'] },
   { key: 'invoices',   label: 'Invoices',   href: '/dashboard/invoices',   icon: Receipt,
-    category: 'money', version: 1, requires: ['customers'],
+    category: 'money', version: 1, updatedAt: '2026-07-15', requires: ['customers'],
     description: 'Invoicing, receipts and what you\'re owed.',
     permissions: ['invoices:read', 'invoices:write', 'customers:read', 'messages:send'] },
   { key: 'payments',   label: 'Payments',   href: '/dashboard/payments',   icon: Wallet,
-    category: 'money', version: 1, requires: ['invoices'],
+    category: 'money', version: 1, updatedAt: '2026-07-15', requires: ['invoices'],
     description: 'The money ledger — every payment, refund and dispute.',
     permissions: ['payments:read', 'payments:write', 'invoices:read'] },
   { key: 'messages',   label: 'Messages',   href: '/dashboard/messages',   icon: MessageSquare,
-    category: 'customers', version: 1, requires: ['customers'],
+    category: 'customers', version: 1, updatedAt: '2026-07-09', requires: ['customers'],
     description: 'Two-way SMS and email with every customer, in one inbox.',
     permissions: ['messages:read', 'messages:send', 'customers:read'] },
   { key: 'equipment',  label: 'Equipment',  href: '/dashboard/equipment',  icon: Wrench,
-    category: 'operations', version: 1,
+    category: 'operations', version: 1, updatedAt: '2026-07-15',
     description: 'The gear that does the work — tracking and upkeep.',
     permissions: ['equipment:read', 'equipment:write'] },
   { key: 'automation', label: 'Automation', href: '/dashboard/automation', icon: Bot,
-    category: 'growth', version: 1, featured: true, requires: ['messages'],
+    category: 'growth', version: 1, updatedAt: '2026-07-15', featured: true, requires: ['messages'],
     description: 'Rules that watch the business and act (or ask) on your behalf.',
     permissions: ['automations:read', 'automations:write', 'messages:send', 'customers:read'] },
   { key: 'grow',       label: 'Grow',       href: '/dashboard/grow',       icon: Sprout,
-    category: 'growth', version: 1, featured: true,
+    category: 'growth', version: 1, updatedAt: '2026-07-14', featured: true,
     description: 'Analytics, marketing and the tools that win more work.',
     permissions: ['customers:read', 'jobs:read', 'quotes:read', 'marketing:write'] },
 ]
 
 const byKey = new Map(FEATURE_MODULES.map(m => [m.key, m]))
 export const moduleByKey = (key: string): FeatureModule | undefined => byKey.get(key)
+
+// Marketplace "Recently updated" rail — newest change first, stable on ties.
+export function recentlyUpdated(limit = 4): FeatureModule[] {
+  return [...FEATURE_MODULES].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, limit)
+}
+
+// Marketplace search — matches name, pitch, category label and declared data
+// surface, so "invoice" finds Payments and "sms" finds Messages.
+export function searchModules(query: string): FeatureModule[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return FEATURE_MODULES
+  return FEATURE_MODULES.filter(m =>
+    m.label.toLowerCase().includes(q) ||
+    m.description.toLowerCase().includes(q) ||
+    MODULE_CATEGORIES[m.category].toLowerCase().includes(q) ||
+    m.permissions.some(p => p.includes(q)))
+}
 const NON_CORE_KEYS = FEATURE_MODULES.filter(m => !m.core).map(m => m.key)
 
 // ── Composition (what a business sees) ────────────────────────────────────────
