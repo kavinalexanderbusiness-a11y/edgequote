@@ -4,8 +4,16 @@ import { useEffect, useRef, useState } from 'react'
 import { loadGoogleMaps } from '@/lib/googleMaps'
 import { Coord } from '@/lib/geo'
 import { Banner } from '@/components/ui/Banner'
+import { cn } from '@/lib/utils'
 
-export interface DispatchMapStop { lat: number; lng: number; order: number; title: string }
+export interface DispatchMapStop {
+  lat: number
+  lng: number
+  order: number
+  title: string
+  jobId?: string          // lets a marker click land on the board's stop card
+  eta?: string | null     // shown in the marker tooltip — plan, not promise
+}
 export interface DispatchMapLane {
   id: string
   name: string
@@ -17,14 +25,21 @@ export interface DispatchMapLane {
 // mapping system) — but ONE numbered pin set + polyline PER CREW, coloured by
 // the crew's palette hex, so the whole day's dispatch reads at a glance.
 // Route math happens upstream (sequenceRoute/optimizeRoute); this only draws.
+// The legend is the layer control: tap a crew to hide/show its route, so one
+// crew's day can be read without the other four on top of it.
 export function DispatchMap({
-  base, lanes, height = 480,
-}: { base: Coord | null; lanes: DispatchMapLane[]; height?: number }) {
+  base, lanes, height = 480, onSelectStop,
+}: { base: Coord | null; lanes: DispatchMapLane[]; height?: number; onSelectStop?: (jobId: string) => void }) {
   const mapEl = useRef<HTMLDivElement>(null)
   const gmap = useRef<any>(null)
   const overlays = useRef<any[]>([])
   const [ready, setReady] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const [hidden, setHidden] = useState<Set<string>>(new Set())
+  // Marker click handlers are attached once per draw; read the callback through
+  // a ref so a re-render can't strand them on a stale closure.
+  const selectRef = useRef(onSelectStop)
+  selectRef.current = onSelectStop
 
   useEffect(() => {
     let cancelled = false
@@ -68,16 +83,22 @@ export function DispatchMap({
     }
 
     for (const lane of lanes) {
-      if (lane.stops.length === 0) continue
+      if (lane.stops.length === 0 || hidden.has(lane.id)) continue
       const path: { lat: number; lng: number }[] = base ? [{ lat: base.lat, lng: base.lng }] : []
       for (const s of lane.stops) {
         const pos = { lat: s.lat, lng: s.lng }
         path.push(pos); bounds.extend(pos)
-        overlays.current.push(new g.maps.Marker({
-          position: pos, map: gmap.current, title: `${lane.name} — ${s.order}. ${s.title}`,
+        const marker = new g.maps.Marker({
+          position: pos, map: gmap.current,
+          title: `${lane.name} — ${s.order}. ${s.title}${s.eta ? ` · ETA ${s.eta}` : ''}${s.jobId ? ' (click to open on the board)' : ''}`,
           label: { text: String(s.order), color: '#0B0B0B', fontSize: '11px', fontWeight: '700' },
           icon: { path: g.maps.SymbolPath.CIRCLE, scale: 12, fillColor: lane.hex, fillOpacity: 1, strokeColor: '#0B0B0B', strokeWeight: 1 },
-        }))
+        })
+        if (s.jobId) {
+          const id = s.jobId
+          marker.addListener('click', () => selectRef.current?.(id))
+        }
+        overlays.current.push(marker)
       }
       if (base) path.push({ lat: base.lat, lng: base.lng }) // each crew closes its own loop
       if (path.length > 1) {
@@ -87,8 +108,8 @@ export function DispatchMap({
         }))
       }
     }
-    if (base || lanes.some(l => l.stops.length)) gmap.current.fitBounds(bounds, 56)
-  }, [ready, lanes, base])
+    if (base || lanes.some(l => l.stops.length && !hidden.has(l.id))) gmap.current.fitBounds(bounds, 56)
+  }, [ready, lanes, base, hidden])
 
   if (err) {
     return <Banner tone="warn">{err}</Banner>
@@ -100,16 +121,33 @@ export function DispatchMap({
       {!ready && (
         <div className="absolute inset-0 flex items-center justify-center text-sm text-ink-muted bg-bg-secondary/80">Loading map…</div>
       )}
-      <div className="absolute bottom-2 left-2 flex items-center gap-2.5 flex-wrap max-w-[calc(100%-1rem)] bg-bg-secondary/90 border border-border rounded-lg px-2.5 py-1.5 text-[10px] text-ink-muted">
+      <div className="absolute bottom-2 left-2 flex items-center gap-1 flex-wrap max-w-[calc(100%-1rem)] bg-bg-secondary/90 border border-border rounded-lg px-1.5 py-1 text-[10px] text-ink-muted">
         {base && (
-          <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-full border border-black/60" style={{ background: '#E5E7EB' }} />Base</span>
+          <span className="flex items-center gap-1 px-1 py-0.5"><span className="w-2.5 h-2.5 rounded-full border border-black/60" style={{ background: '#E5E7EB' }} />Base</span>
         )}
-        {legend.map(l => (
-          <span key={l.id} className="flex items-center gap-1">
-            <span className="w-2.5 h-2.5 rounded-full" style={{ background: l.hex }} />
-            {l.name} <span className="tabular-nums opacity-70">({l.stops.length})</span>
-          </span>
-        ))}
+        {legend.map(l => {
+          const off = hidden.has(l.id)
+          return (
+            <button
+              key={l.id}
+              type="button"
+              aria-pressed={!off}
+              title={off ? `Show ${l.name}` : `Hide ${l.name}`}
+              onClick={() => setHidden(prev => {
+                const n = new Set(prev)
+                if (n.has(l.id)) n.delete(l.id); else n.add(l.id)
+                return n
+              })}
+              className={cn(
+                'flex items-center gap-1 rounded-md px-1 py-0.5 transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 hover:bg-black/10',
+                off && 'opacity-40 line-through',
+              )}
+            >
+              <span className="w-2.5 h-2.5 rounded-full" style={{ background: l.hex }} />
+              {l.name} <span className="tabular-nums opacity-70">({l.stops.length})</span>
+            </button>
+          )
+        })}
       </div>
     </div>
   )

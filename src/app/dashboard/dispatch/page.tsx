@@ -1,10 +1,11 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { format, parseISO, addDays } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { useBulkSelect } from '@/hooks/useBulkSelect'
+import { useFlipList } from '@/hooks/useFlipList'
 import { Job, Crew, Technician, DispatchNote, TechnicianStatus, TECHNICIAN_STATUS_LABELS, JOB_STATUS_LABELS, JobStatus } from '@/types'
 import {
   partitionByCrew, laneSequence, laneWorkMinutes, laneLoad, crewCapacityMinutes, crewDayStart,
@@ -15,11 +16,12 @@ import {
 import {
   RouteStop, OrderedRouteStop, sequenceRoute, optimizeRoute, geocodeMissingStops,
   computeDayEtas, DayEtas, timeToMinutes, minutesToTime12, roundTripMapsUrl, directionsUrl,
-  DEFAULT_JOB_MIN, DEFAULT_WORK_START,
+  legMinutes, DEFAULT_JOB_MIN, DEFAULT_WORK_START,
 } from '@/lib/route'
 import { DayStatusRow, DAY_STATUS_SELECT, dayStatusLabel } from '@/lib/dayStatus'
 import {
   laneStats, LaneStats, detectDayConflicts, DispatchConflict, laneConflictSummary,
+  laneProgress, bestOrderSavingsKm,
   DispatchSheet, SheetLane, sheetCsvRows, SHEET_CSV_COLUMNS, openPrintSheet,
 } from '@/lib/dispatchOps'
 import { exportRowsToCsv } from '@/lib/csv'
@@ -48,7 +50,7 @@ import { cn } from '@/lib/utils'
 import {
   Radio, Users, UserMinus, MapIcon, LayoutGrid, ChevronLeft, ChevronRight, Scale, GripVertical,
   ChevronUp, ChevronDown, Wand2, ExternalLink, Truck, StickyNote, HardHat, Navigation,
-  Printer, FileDown, CalendarDays, AlertTriangle,
+  Printer, FileDown, CalendarDays, AlertTriangle, Keyboard, Phone, MessageSquare, Check,
 } from 'lucide-react'
 
 function todayISO(): string {
@@ -112,6 +114,11 @@ export default function DispatchPage() {
   const [flashJobId, setFlashJobId] = useState<string | null>(null)
   const [kbGrab, setKbGrab] = useState<KbGrab | null>(null)
   const [announce, setAnnounce] = useState('')
+  const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  // Ticks once a minute while viewing today, so the "now" line, ETAs-vs-clock
+  // and behind-schedule chips stay honest without anyone touching the page.
+  const [nowTick, setNowTick] = useState(0)
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const geocodedFor = useRef<string | null>(null)
   // Serialized route_order writes — a second reorder waits for the first, so
   // two quick moves can't interleave their day-wide sequence writes.
@@ -221,7 +228,14 @@ export default function DispatchPage() {
   const activeJobs = useMemo(() => jobs.filter(j => j.status !== 'cancelled'), [jobs])
   const assignedCount = activeJobs.filter(j => j.crew_id && crews.some(c => c.id === j.crew_id && c.is_active)).length
   const isToday = date === todayISO()
-  const nowMin = isToday ? new Date().getHours() * 60 + new Date().getMinutes() : undefined
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const nowMin = useMemo(() => isToday ? new Date().getHours() * 60 + new Date().getMinutes() : undefined, [isToday, nowTick])
+  useEffect(() => {
+    if (!isToday) return
+    const t = setInterval(() => setNowTick(n => n + 1), 60_000)
+    return () => clearInterval(t)
+  }, [isToday])
+  useEffect(() => () => { if (flashTimer.current) clearTimeout(flashTimer.current) }, [])
   const latestFinish = useMemo(() => {
     const fins = lanes.filter(l => laneRoutes[l.laneId]?.seq.length).map(l => laneRoutes[l.laneId].etas.finishMin)
     return fins.length ? Math.max(...fins) : null
@@ -230,14 +244,45 @@ export default function DispatchPage() {
     Math.round(lanes.reduce((s, l) => s + (laneRoutes[l.laneId]?.totalKm ?? 0), 0) * 10) / 10,
   [lanes, laneRoutes])
 
-  const mapLanes: DispatchMapLane[] = useMemo(() => lanes.map(lane => ({
-    id: lane.laneId,
-    name: lane.crew?.name ?? 'Unassigned',
-    hex: lane.palette.hex,
-    stops: (laneRoutes[lane.laneId]?.ordered ?? [])
-      .filter(s => s.lat != null && s.lng != null)
-      .map(s => ({ lat: s.lat as number, lng: s.lng as number, order: s.order, title: s.title })),
-  })), [lanes, laneRoutes])
+  const mapLanes: DispatchMapLane[] = useMemo(() => lanes.map(lane => {
+    const route = laneRoutes[lane.laneId]
+    const etaByJob = new Map((route?.etas.stops ?? []).map(s => [s.jobId, s.arrival]))
+    return {
+      id: lane.laneId,
+      name: lane.crew?.name ?? 'Unassigned',
+      hex: lane.palette.hex,
+      stops: (route?.ordered ?? [])
+        .filter(s => s.lat != null && s.lng != null)
+        .map(s => ({ lat: s.lat as number, lng: s.lng as number, order: s.order, title: s.title, jobId: s.jobId, eta: etaByJob.get(s.jobId) ?? null })),
+    }
+  }), [lanes, laneRoutes])
+
+  // ── Per-lane aux data, memoized once so the lane cards can be memo()'d ──
+  const laneAux = useMemo(() => {
+    const out: Record<string, { techs: Technician[]; vehicles: AssignableEquipment[]; note: DispatchNote | null }> = {}
+    for (const lane of lanes) {
+      out[lane.laneId] = {
+        techs: technicians.filter(t => t.is_active && (lane.crew ? t.crew_id === lane.crew.id : t.crew_id === null)),
+        vehicles: equipment.filter(e => (lane.crew ? e.crew_id === lane.crew.id : false)),
+        note: notes.find(n => n.crew_id === lane.laneId) ?? null,
+      }
+    }
+    return out
+  }, [lanes, technicians, equipment, notes])
+
+  // The optimizer's own estimator, held against the current manual order — a
+  // hint only when "Best order" would genuinely shorten the drive.
+  const laneSavings = useMemo(() => {
+    const out: Record<string, number> = {}
+    if (!settings.base) return out
+    for (const lane of lanes) {
+      if (lane.laneId === UNASSIGNED_ID) continue
+      const r = laneRoutes[lane.laneId]
+      if (!r || r.seq.filter(j => j.status === 'scheduled').length < 3) continue
+      out[lane.laneId] = bestOrderSavingsKm(settings.base, r.seq.map(jobStop), r.totalKm)
+    }
+    return out
+  }, [lanes, laneRoutes, settings.base])
 
   // ── Conflicts (facts about the FULL day — filters never hide a problem) ──
   const conflicts: DispatchConflict[] = useMemo(() => detectDayConflicts(
@@ -266,6 +311,12 @@ export default function DispatchPage() {
     }),
     { dayBlocked: !!dayRow?.blocks, activeCrewCount },
   ), [lanes, laneRoutes, technicians, dayRow, activeCrewCount])
+
+  const laneBadges = useMemo(() => {
+    const out: Record<string, { count: number; severity: 'error' | 'warn' | 'info' } | null> = {}
+    for (const lane of lanes) out[lane.laneId] = laneConflictSummary(conflicts, lane.laneId)
+    return out
+  }, [lanes, conflicts])
 
   // ── Filters (display only — the engines above never see them) ──
   const laneMatchesFilter = useCallback((lane: CrewLaneData): boolean => {
@@ -367,8 +418,23 @@ export default function DispatchPage() {
       if (r.ordered.length === 0) { if (!opts?.quiet) notify('No located stops to order in this lane.'); return }
       const orderedIds = r.ordered.map(s => s.jobId)
       const rest = route.seq.map(j => j.id).filter(id => !orderedIds.includes(id))
-      applyLaneOrder([...orderedIds, ...rest])
-      if (!opts?.quiet) notify.success(`Route ordered — ~${r.totalKm} km${r.usedGoogle ? ' by road' : ''}${rest.length ? ` · ${rest.length} without an address kept at the end` : ''}`)
+      const idsAfter = [...orderedIds, ...rest]
+      applyLaneOrder(idsAfter)
+      if (!opts?.quiet) {
+        // Say what actually changed — the after picture run through the SAME
+        // engines (sequenceRoute → computeDayEtas), so both sides of the arrow
+        // use one estimator and the toast can't overpromise.
+        const after = sequenceRoute(settings.base, stops, idsAfter)
+        const durations = Object.fromEntries(route.seq.map(j => [j.id, j.duration_minutes || DEFAULT_JOB_MIN]))
+        const afterEtas = computeDayEtas(route.startHHmm, after.ordered, durations)
+        const kmPart = route.totalKm > 0 && after.totalKm < route.totalKm
+          ? `${route.totalKm} → ${after.totalKm} km`
+          : `~${after.totalKm} km`
+        const wrapPart = afterEtas.finishMin < route.etas.finishMin
+          ? ` · wraps ${route.etas.finish} → ${afterEtas.finish}`
+          : ''
+        notify.success(`Route ordered${r.usedGoogle ? ' by road' : ''} — ${kmPart}${wrapPart}${rest.length ? ` · ${rest.length} without an address kept at the end` : ''}`)
+      }
     } finally {
       setOptimizingLane(null)
     }
@@ -532,11 +598,21 @@ export default function DispatchPage() {
   }, [buildSheet, date])
 
   // ── Cross-lane drag (pointer events — the Calendar's touch-safe engine) ──
-  const dragRef = useRef<{ jobId: string; fromLane: string; title: string; started: boolean; sx: number; sy: number } | null>(null)
-  const [dragging, setDragging] = useState<{ jobId: string; title: string } | null>(null)
+  // The ghost follows the pointer via a direct style write on an always-mounted
+  // element — 60fps with ZERO re-renders per move. React state only changes when
+  // the drop target (lane / insertion slot) changes, which is what the board
+  // actually needs to redraw. Hit-testing is rAF-throttled; dragging near the
+  // viewport edge auto-scrolls the page; Escape abandons the drag.
+  const dragRef = useRef<{
+    jobId: string; fromLane: string; title: string; started: boolean
+    sx: number; sy: number; lastX: number; lastY: number
+    scrollDir: -1 | 0 | 1; hitRaf: number | null; scrollRaf: number | null
+  } | null>(null)
+  const ghostRef = useRef<HTMLDivElement | null>(null)
+  const [dragging, setDragging] = useState<{ jobId: string; title: string; durMin: number } | null>(null)
   const [overLane, setOverLane] = useState<string | null>(null)
   const [overAnchor, setOverAnchor] = useState<string | null>(null)   // insert BEFORE this stop (null = end)
-  const [ghost, setGhost] = useState<{ x: number; y: number } | null>(null)
+  const overRef = useRef<{ lane: string | null; anchor: string | null }>({ lane: null, anchor: null })
 
   // Where would a drop land? The first non-dragged stop row whose midpoint is
   // below the pointer — insertion happens before it (none → end of lane).
@@ -553,25 +629,88 @@ export default function DispatchPage() {
   const onDragHandleDown = useCallback((e: React.PointerEvent, job: Job, laneId: string) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return
     e.preventDefault()
-    dragRef.current = { jobId: job.id, fromLane: laneId, title: job.customers?.name || job.title, started: false, sx: e.clientX, sy: e.clientY }
+    dragRef.current = {
+      jobId: job.id, fromLane: laneId, title: job.customers?.name || job.title, started: false,
+      sx: e.clientX, sy: e.clientY, lastX: e.clientX, lastY: e.clientY,
+      scrollDir: 0, hitRaf: null, scrollRaf: null,
+    }
+
+    const positionGhost = (x: number, y: number) => {
+      if (ghostRef.current) ghostRef.current.style.transform = `translate(${x}px, ${y - 8}px)`
+    }
+
+    const hitTest = () => {
+      const d = dragRef.current
+      if (!d?.started) return
+      const laneEl = document.elementFromPoint(d.lastX, d.lastY)?.closest('[data-lane]') as HTMLElement | null
+      const lane = laneEl?.dataset.lane ?? null
+      const anchor = laneEl ? dropAnchorAt(laneEl, d.lastY, d.jobId) : null
+      if (lane !== overRef.current.lane) { overRef.current.lane = lane; setOverLane(lane) }
+      if (anchor !== overRef.current.anchor) { overRef.current.anchor = anchor; setOverAnchor(anchor) }
+    }
+    const scheduleHitTest = () => {
+      const d = dragRef.current
+      if (!d || d.hitRaf != null) return
+      d.hitRaf = requestAnimationFrame(() => { if (dragRef.current) dragRef.current.hitRaf = null; hitTest() })
+    }
+
+    // Auto-scroll while the pointer parks near the top/bottom edge — the drop
+    // target three lanes down must be reachable without letting go. The board
+    // lives in the dashboard's own scroll container (not the window), so find
+    // the actual scroller from the grip.
+    const scroller = ((): HTMLElement => {
+      let el: HTMLElement | null = e.currentTarget as HTMLElement
+      while (el) {
+        const s = getComputedStyle(el)
+        if (/(auto|scroll)/.test(s.overflowY) && el.scrollHeight > el.clientHeight) return el
+        el = el.parentElement
+      }
+      return (document.scrollingElement as HTMLElement | null) ?? document.documentElement
+    })()
+    const srect = scroller.getBoundingClientRect()
+    const edgeTop = Math.max(srect.top, 0) + 88
+    const edgeBottom = Math.min(srect.bottom, window.innerHeight) - 88
+    const scrollStep = () => {
+      const d = dragRef.current
+      if (!d) return
+      if (d.started && d.scrollDir !== 0) {
+        scroller.scrollBy(0, d.scrollDir * 14)
+        hitTest()   // content moved under a stationary pointer
+      }
+      d.scrollRaf = requestAnimationFrame(scrollStep)
+    }
+
     const onMove = (ev: PointerEvent) => {
       const d = dragRef.current
       if (!d) return
       if (!d.started) {
         if (Math.abs(ev.clientX - d.sx) + Math.abs(ev.clientY - d.sy) < 6) return
         d.started = true
-        setDragging({ jobId: d.jobId, title: d.title })
+        setDragging({ jobId: d.jobId, title: d.title, durMin: job.duration_minutes || DEFAULT_JOB_MIN })
+        d.scrollRaf = requestAnimationFrame(scrollStep)
       }
       ev.preventDefault()
-      setGhost({ x: ev.clientX, y: ev.clientY })
-      const laneEl = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('[data-lane]') as HTMLElement | null
-      setOverLane(laneEl?.dataset.lane ?? null)
-      setOverAnchor(laneEl ? dropAnchorAt(laneEl, ev.clientY, d.jobId) : null)
+      d.lastX = ev.clientX; d.lastY = ev.clientY
+      positionGhost(ev.clientX, ev.clientY)
+      d.scrollDir = ev.clientY < edgeTop ? -1 : ev.clientY > edgeBottom ? 1 : 0
+      scheduleHitTest()
     }
+
+    const cleanup = () => {
+      const d = dragRef.current
+      if (d?.hitRaf != null) cancelAnimationFrame(d.hitRaf)
+      if (d?.scrollRaf != null) cancelAnimationFrame(d.scrollRaf)
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+      window.removeEventListener('keydown', onKey)
+      dragRef.current = null
+      overRef.current = { lane: null, anchor: null }
+      setDragging(null); setOverLane(null); setOverAnchor(null)
+    }
+
     const finish = (ev: PointerEvent) => {
       const d = dragRef.current
-      window.removeEventListener('pointermove', onMove)
-      window.removeEventListener('pointercancel', finish)
       if (d?.started && ev.type === 'pointerup') {
         const laneEl = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('[data-lane]') as HTMLElement | null
         const target = laneEl?.dataset.lane
@@ -584,12 +723,18 @@ export default function DispatchPage() {
           }
         }
       }
-      dragRef.current = null
-      setDragging(null); setOverLane(null); setOverAnchor(null); setGhost(null)
+      cleanup()
     }
+
+    // Escape abandons the drag — nothing moves, nothing is written.
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') { ev.preventDefault(); cleanup() }
+    }
+
     window.addEventListener('pointermove', onMove, { passive: false })
-    window.addEventListener('pointerup', finish, { once: true })
-    window.addEventListener('pointercancel', finish, { once: true })
+    window.addEventListener('pointerup', finish)
+    window.addEventListener('pointercancel', finish)
+    window.addEventListener('keydown', onKey)
   }, [moveJob, reorderWithinLane, dropAnchorAt])
 
   // ── Keyboard moves (grab → arrows → drop/cancel), announced politely ──
@@ -647,9 +792,101 @@ export default function DispatchPage() {
     requestAnimationFrame(() => {
       const el = document.getElementById(jobId ? `dispatch-stop-${jobId}` : `dispatch-lane-${laneId}`)
       el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      if (jobId) { setFlashJobId(jobId); setTimeout(() => setFlashJobId(cur => cur === jobId ? null : cur), 1800) }
+      if (jobId) {
+        setFlashJobId(jobId)
+        if (flashTimer.current) clearTimeout(flashTimer.current)
+        flashTimer.current = setTimeout(() => setFlashJobId(cur => cur === jobId ? null : cur), 1800)
+      }
     })
   }, [visibleLanes, jobs, statusVisible])
+
+  // A map pin is a question about a stop — the board card is the answer.
+  const mapSelectStop = useCallback((jobId: string) => {
+    const j = jobs.find(x => x.id === jobId)
+    if (!j) return
+    const laneId = j.crew_id && crews.some(c => c.id === j.crew_id && c.is_active) ? j.crew_id : UNASSIGNED_ID
+    setView('board')
+    jumpTo(laneId, jobId)
+  }, [jobs, crews, jumpTo])
+
+  // If the grabbed visit leaves the day (realtime, another session, a filter on
+  // a deleted job), release the keyboard grab instead of steering a phantom.
+  useEffect(() => {
+    if (kbGrab && !jobs.some(j => j.id === kbGrab.jobId)) {
+      setKbGrab(null)
+      setAnnounce('That visit is no longer on this day.')
+    }
+  }, [jobs, kbGrab])
+
+  // ── Page shortcuts (same guards as the list idiom: never while typing,
+  // never with a modifier, never when a dialog owns the keyboard) ──
+  const printDayRef = useRef<() => void>(() => {})
+  printDayRef.current = printDay
+  const kbBusyRef = useRef(false)
+  kbBusyRef.current = kbGrab != null
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      const t = e.target as HTMLElement | null
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
+      if (document.querySelector('[role="dialog"]')) return
+      if (kbBusyRef.current || dragRef.current) return   // a grabbed/dragged visit owns the keys
+      switch (e.key) {
+        case '[': setDate(d => format(addDays(parseISO(d + 'T00:00:00'), -1), 'yyyy-MM-dd')); break
+        case ']': setDate(d => format(addDays(parseISO(d + 'T00:00:00'), 1), 'yyyy-MM-dd')); break
+        case 't': case 'T': setDate(todayISO()); break
+        case 'b': case 'B': setView('board'); break
+        case 'm': case 'M': setView('map'); break
+        case 'p': case 'P': printDayRef.current(); break
+        case '?': setShortcutsOpen(true); break
+        default: return
+      }
+      e.preventDefault()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [])
+
+  // Would dropping the dragged visit here overbook the receiving crew? Same
+  // numbers as the capacity meter — the ring just says it before the drop.
+  const dropWouldOverload = useMemo(() => {
+    if (!dragging || !overLane || overLane === UNASSIGNED_ID) return false
+    const j = jobs.find(x => x.id === dragging.jobId)
+    const fromLane = j?.crew_id && crews.some(c => c.id === j.crew_id && c.is_active) ? j.crew_id : UNASSIGNED_ID
+    if (fromLane === overLane) return false
+    const r = laneRoutes[overLane]
+    if (!r || r.capacityMin <= 0) return false
+    return r.workMin + dragging.durMin > r.capacityMin
+  }, [dragging, overLane, jobs, crews, laneRoutes])
+
+  // Stable handlers so the memo()'d lane cards only re-render on real changes.
+  const setTechStatusStable = useCallback(async (t: Technician, status: TechnicianStatus) => {
+    const err = await setTechnicianStatus(supabase, t.id, status)
+    if (err) notify.error('Could not update status: ' + err); else fetchAll()
+  }, [supabase, fetchAll])
+
+  const saveLaneNote = useCallback(async (laneId: string, body: string) => {
+    if (!uid) return
+    const err = await saveDispatchNote(supabase, uid, date, laneId === UNASSIGNED_ID ? null : laneId, body)
+    if (err) notify.error('Could not save the note: ' + err); else fetchAll()
+  }, [uid, supabase, date, fetchAll])
+
+  // The one-tap remedy for each conflict kind — every fix is an EXISTING
+  // handler; the panel never grows its own logic.
+  const conflictFix = useCallback((c: DispatchConflict): { label: string; run: () => void } | null => {
+    switch (c.kind) {
+      case 'overloaded':
+      case 'unassigned_work':
+        return { label: 'Balance day', run: openBalance }
+      case 'overrun':
+      case 'late_arrival':
+        return settings.base ? { label: 'Optimize route', run: () => bestOrderLane(c.laneId) } : null
+      case 'no_roster':
+        return { label: 'Open roster', run: () => setManagerOpen(true) }
+      default:
+        return null
+    }
+  }, [openBalance, bestOrderLane, settings.base])
 
   // ── Render ──
   const dateLabel = format(parseISO(date + 'T00:00:00'), 'EEEE, MMM d')
@@ -726,6 +963,7 @@ export default function DispatchPage() {
           <Menu width={210} ariaLabel="Dispatch sheet" items={[
             { key: 'print', label: 'Print day sheet', icon: Printer, onSelect: printDay },
             { key: 'csv', label: 'Export day CSV', icon: FileDown, onSelect: () => exportDayCsv() },
+            { key: 'keys', label: 'Keyboard shortcuts', icon: Keyboard, onSelect: () => setShortcutsOpen(true) },
           ]}>
             {({ toggle, triggerProps }) => (
               <Button variant="secondary" size="sm" onClick={toggle} {...triggerProps}>
@@ -757,11 +995,11 @@ export default function DispatchPage() {
         </Banner>
       )}
 
-      <ConflictPanel conflicts={conflicts} onJump={jumpTo} />
+      <ConflictPanel conflicts={conflicts} onJump={jumpTo} fixFor={conflictFix} />
 
       {view === 'map' ? (
         <div className="animate-rise">
-          <DispatchMap base={settings.base} lanes={mapLanes} height={560} />
+          <DispatchMap base={settings.base} lanes={mapLanes} height={560} onSelectStop={mapSelectStop} />
           {!settings.base && (
             <p className="text-[11px] text-ink-faint mt-2">No base address set — routes can’t anchor to a start point. Set it in Settings → Business.</p>
           )}
@@ -786,6 +1024,7 @@ export default function DispatchPage() {
             icon={StickyNote}
             placeholder="Day note for the whole operation — gate codes, yard reminders, weather calls…"
             value={dayNote?.body ?? ''}
+            updatedAt={dayNote?.updated_at ?? null}
             onSave={async body => {
               if (!uid) return
               const err = await saveDispatchNote(supabase, uid, date, null, body)
@@ -797,7 +1036,7 @@ export default function DispatchPage() {
           {visibleLanes.filter(l => (laneRoutes[l.laneId]?.seq.length ?? 0) > 0).length > 1 && (
             <nav aria-label="Jump to crew" className="sm:hidden sticky top-0 z-20 -mx-1 px-1 py-1.5 bg-bg/85 backdrop-blur flex items-center gap-1.5 overflow-x-auto">
               {visibleLanes.filter(l => (laneRoutes[l.laneId]?.seq.length ?? 0) > 0).map(lane => {
-                const badge = laneConflictSummary(conflicts, lane.laneId)
+                const badge = laneBadges[lane.laneId]
                 return (
                   <button key={lane.laneId} type="button"
                     onClick={() => document.getElementById(`dispatch-lane-${lane.laneId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
@@ -818,21 +1057,23 @@ export default function DispatchPage() {
                 key={lane.laneId}
                 lane={lane}
                 route={laneRoutes[lane.laneId]}
-                technicians={technicians.filter(t => t.is_active && (lane.crew ? t.crew_id === lane.crew.id : t.crew_id === null))}
-                vehicles={equipment.filter(e => (lane.crew ? e.crew_id === lane.crew.id : false))}
-                note={notes.find(n => n.crew_id === lane.laneId) ?? null}
+                technicians={laneAux[lane.laneId]?.techs ?? []}
+                vehicles={laneAux[lane.laneId]?.vehicles ?? []}
+                note={laneAux[lane.laneId]?.note ?? null}
                 crews={crews}
                 nowMin={nowMin}
                 base={settings.base}
                 index={i}
-                conflictBadge={laneConflictSummary(conflicts, lane.laneId)}
+                conflictBadge={laneBadges[lane.laneId] ?? null}
+                savingsKm={laneSavings[lane.laneId] ?? 0}
                 statusVisible={statusVisible}
                 isDropTarget={overLane === lane.laneId && dragging != null}
+                dropOverload={overLane === lane.laneId && dropWouldOverload}
                 dropAnchor={overLane === lane.laneId ? overAnchor : undefined}
                 dragging={dragging}
                 kbGrabbedId={kbGrab?.jobId ?? null}
                 flashJobId={flashJobId}
-                isSelected={bulk.isSelected}
+                selectedSet={bulk.selected}
                 onToggleSelect={bulk.toggle}
                 onDragHandleDown={onDragHandleDown}
                 onGripKeyDown={onGripKeyDown}
@@ -840,15 +1081,8 @@ export default function DispatchPage() {
                 onMoveTo={moveJob}
                 onBestOrder={bestOrderLane}
                 optimizing={optimizingLane === lane.laneId}
-                onSetTechStatus={async (t, status) => {
-                  const err = await setTechnicianStatus(supabase, t.id, status)
-                  if (err) notify.error('Could not update status: ' + err); else fetchAll()
-                }}
-                onSaveNote={async body => {
-                  if (!uid) return
-                  const err = await saveDispatchNote(supabase, uid, date, lane.laneId === UNASSIGNED_ID ? null : lane.laneId, body)
-                  if (err) notify.error('Could not save the note: ' + err); else fetchAll()
-                }}
+                onSetTechStatus={setTechStatusStable}
+                onSaveNote={saveLaneNote}
               />
             ))}
           </div>
@@ -865,12 +1099,45 @@ export default function DispatchPage() {
         </>
       )}
 
-      {/* Drag ghost */}
-      {dragging && ghost && (
-        <div className="fixed z-[300] pointer-events-none -translate-x-1/2 -translate-y-full rounded-lg border border-accent/40 bg-bg-secondary shadow-2xl px-3 py-1.5 text-xs font-semibold text-ink"
-          style={{ left: ghost.x, top: ghost.y - 8 }}>
-          {dragging.title}
+      {/* Drag ghost — always mounted; the pointer drives it via a direct
+          transform write, so following the finger costs zero re-renders. */}
+      <div
+        ref={ghostRef}
+        aria-hidden
+        className={cn('fixed left-0 top-0 z-[300] pointer-events-none will-change-transform', !dragging && 'hidden')}
+      >
+        <div className={cn(
+          '-translate-x-1/2 -translate-y-full rounded-lg border bg-bg-secondary shadow-2xl px-3 py-1.5 text-xs font-semibold text-ink rotate-[-1.5deg] scale-105 transition-colors',
+          dropWouldOverload ? 'border-red-400/60' : 'border-accent/40',
+        )}>
+          {dragging?.title}
+          {dropWouldOverload && <span className="block text-[10px] font-medium text-red-400">would overbook this crew</span>}
         </div>
+      </div>
+
+      {/* Keyboard shortcuts */}
+      {shortcutsOpen && (
+        <Modal open onClose={() => setShortcutsOpen(false)} title="Keyboard shortcuts" icon={Keyboard} size="sm">
+          <div className="space-y-3 text-sm">
+            {([
+              ['Day', [['[', 'Previous day'], [']', 'Next day'], ['T', 'Today']]],
+              ['View', [['B', 'Board'], ['M', 'Map'], ['P', 'Print day sheet'], ['?', 'This help']]],
+              ['Visits', [['Enter', 'Grab / drop the focused visit'], ['↑ ↓', 'Reorder a grabbed visit'], ['← →', 'Move a grabbed visit between crews'], ['Esc', 'Put a grabbed visit back · cancel a drag · clear selection'], ['Shift+click', 'Select a range']]],
+            ] as [string, [string, string][]][]).map(([group, keys]) => (
+              <div key={group}>
+                <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-1.5">{group}</p>
+                <div className="space-y-1">
+                  {keys.map(([k, what]) => (
+                    <div key={k} className="flex items-center justify-between gap-3">
+                      <span className="text-xs text-ink-muted">{what}</span>
+                      <kbd className="shrink-0 rounded-md border border-border-strong bg-bg-tertiary px-1.5 py-0.5 text-[11px] font-semibold text-ink tabular-nums">{k}</kbd>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Modal>
       )}
 
       {/* Balance preview */}
@@ -933,9 +1200,11 @@ export default function DispatchPage() {
 }
 
 // ── Crew lane ────────────────────────────────────────────────────────────────
-function CrewLaneCard({
-  lane, route, technicians, vehicles, note, crews, nowMin, base, index, conflictBadge, statusVisible,
-  isDropTarget, dropAnchor, dragging, kbGrabbedId, flashJobId, isSelected, onToggleSelect,
+// memo()'d: with the drag ghost off React state, a pointer drag re-renders a
+// lane only when its own drop target changes — never per pointer move.
+const CrewLaneCard = memo(function CrewLaneCard({
+  lane, route, technicians, vehicles, note, crews, nowMin, base, index, conflictBadge, savingsKm, statusVisible,
+  isDropTarget, dropOverload, dropAnchor, dragging, kbGrabbedId, flashJobId, selectedSet, onToggleSelect,
   onDragHandleDown, onGripKeyDown, onNudge, onMoveTo, onBestOrder, optimizing, onSetTechStatus, onSaveNote,
 }: {
   lane: CrewLaneData
@@ -948,13 +1217,15 @@ function CrewLaneCard({
   base: Coord | null
   index: number
   conflictBadge: { count: number; severity: 'error' | 'warn' | 'info' } | null
+  savingsKm: number
   statusVisible: (j: Job) => boolean
   isDropTarget: boolean
+  dropOverload: boolean           // dropping the dragged visit here would overbook this crew
   dropAnchor?: string | null      // stop id the drop lands BEFORE (null = end); undefined = not this lane
   dragging: { jobId: string } | null
   kbGrabbedId: string | null
   flashJobId: string | null
-  isSelected: (id: string) => boolean
+  selectedSet: Set<string>
   onToggleSelect: (id: string, shiftKey?: boolean) => void
   onDragHandleDown: (e: React.PointerEvent, job: Job, laneId: string) => void
   onGripKeyDown: (e: React.KeyboardEvent, job: Job, laneId: string) => void
@@ -963,7 +1234,7 @@ function CrewLaneCard({
   onBestOrder: (laneId: string) => void
   optimizing: boolean
   onSetTechStatus: (t: Technician, s: TechnicianStatus) => void
-  onSaveNote: (body: string) => void
+  onSaveNote: (laneId: string, body: string) => void
 }) {
   const seq = route?.seq ?? []
   const visibleSeq = seq.filter(statusVisible)
@@ -974,8 +1245,26 @@ function CrewLaneCard({
     : null
   const doneCount = seq.filter(j => j.status === 'completed').length
   const etaByJob = new Map((route?.etas.stops ?? []).map(s => [s.jobId, s]))
+  const legKmByJob = new Map((route?.ordered ?? []).map(o => [o.jobId, o.legKm]))
   const isUnassigned = lane.laneId === UNASSIGNED_ID
   const cancelledCount = lane.jobs.filter(j => j.status === 'cancelled').length
+  // Reorders glide instead of teleporting (FLIP; inert under reduced motion).
+  const flipRef = useFlipList<HTMLDivElement>(visibleSeq.map(j => j.id).join(','))
+  // Where the crew stands against its own plan — today only.
+  const progress = nowMin != null && route && seq.length > 0
+    ? laneProgress(nowMin, seq.map(j => ({
+        jobId: j.id,
+        arrivalMin: etaByJob.get(j.id)?.arrivalMin ?? null,
+        durMin: j.duration_minutes || DEFAULT_JOB_MIN,
+        status: j.status,
+      })))
+    : null
+  // Drive legs between rows only make sense when no row is filtered out —
+  // otherwise the leg would appear to start from a stop that isn't shown.
+  const showLegs = hiddenCount === 0
+  const sinceMin = (iso: string | null | undefined): number | null =>
+    iso ? Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000)) : null
+  const fmtSince = (m: number) => (m < 60 ? `${m}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`)
 
   const timelineStops: TimelineStop[] = seq.map(j => ({
     jobId: j.id,
@@ -998,7 +1287,9 @@ function CrewLaneCard({
       className={cn(
         'rounded-card border bg-bg-secondary p-4 space-y-3 animate-rise transition-shadow scroll-mt-14',
         index < 6 && `stagger-${index + 1}`,
-        isDropTarget ? 'border-accent ring-2 ring-accent/40' : 'border-border',
+        isDropTarget
+          ? (dropOverload ? 'border-red-400/70 ring-2 ring-red-400/40' : 'border-accent ring-2 ring-accent/40')
+          : 'border-border',
         isUnassigned && 'border-dashed',
       )}
     >
@@ -1015,6 +1306,14 @@ function CrewLaneCard({
                 : conflictBadge.severity === 'warn' ? 'border-amber-500/40 bg-amber-500/10 text-amber-400'
                 : 'border-sky-500/40 bg-sky-500/10 text-sky-400')}>
             <AlertTriangle className="w-2.5 h-2.5" aria-hidden /> {conflictBadge.count}
+          </span>
+        )}
+        {progress != null && progress.behindMin >= 10 && (
+          <span
+            title="The clock versus this lane's own ETA chain — the next unfinished stop should have been reached by now."
+            className={cn('inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold tabular-nums shrink-0',
+              progress.behindMin >= 30 ? 'border-red-500/40 bg-red-500/10 text-red-400' : 'border-amber-500/40 bg-amber-500/10 text-amber-400')}>
+            ~{progress.behindMin}m behind
           </span>
         )}
         {route && seq.length > 0 && (
@@ -1056,25 +1355,37 @@ function CrewLaneCard({
       {/* Roster chips: technicians (status menu) + vehicles */}
       {(technicians.length > 0 || vehicles.length > 0) && (
         <div className="flex items-center gap-1.5 flex-wrap">
-          {technicians.map(t => (
-            <Menu key={t.id} width={200} ariaLabel={`${t.name} status`}
-              items={TECH_STATUSES.map((s): MenuItem => ({
-                key: s, label: TECHNICIAN_STATUS_LABELS[s],
-                onSelect: () => onSetTechStatus(t, s),
-                disabled: s === t.status,
-              }))}>
-              {({ toggle, triggerProps }) => (
-                <button type="button" onClick={toggle} {...triggerProps}
-                  title={`${t.name} — ${TECHNICIAN_STATUS_LABELS[t.status]}`}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2 py-1 text-[11px] font-medium text-ink-muted hover:text-ink hover:border-border-strong transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                  <HardHat className="w-3 h-3 text-ink-faint" />
-                  <span className="truncate max-w-[9rem]">{t.name}</span>
-                  <span className={cn('w-1.5 h-1.5 rounded-full', TECH_STATUS_META[t.status].dot)} aria-hidden />
-                  <span className="text-ink-faint">{TECHNICIAN_STATUS_LABELS[t.status]}</span>
-                </button>
-              )}
-            </Menu>
-          ))}
+          {technicians.map(t => {
+            const since = sinceMin(t.status_changed_at)
+            const active = t.status === 'en_route' || t.status === 'on_job' || t.status === 'break'
+            return (
+              <Menu key={t.id} width={200} ariaLabel={`${t.name} actions`}
+                items={[
+                  ...TECH_STATUSES.map((s): MenuItem => ({
+                    key: s, label: TECHNICIAN_STATUS_LABELS[s],
+                    onSelect: () => onSetTechStatus(t, s),
+                    disabled: s === t.status,
+                  })),
+                  ...(t.phone ? [
+                    { key: 'call', label: `Call ${t.name}`, icon: Phone, onSelect: () => { window.location.href = `tel:${t.phone}` } },
+                    { key: 'sms', label: `Text ${t.name}`, icon: MessageSquare, onSelect: () => { window.location.href = `sms:${t.phone}` } },
+                  ] as MenuItem[] : []),
+                ]}>
+                {({ toggle, triggerProps }) => (
+                  <button type="button" onClick={toggle} {...triggerProps}
+                    title={`${t.name} — ${TECHNICIAN_STATUS_LABELS[t.status]}${since != null ? ` for ${fmtSince(since)}` : ''}`}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2 py-1 text-[11px] font-medium text-ink-muted hover:text-ink hover:border-border-strong transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                    <HardHat className="w-3 h-3 text-ink-faint" />
+                    <span className="truncate max-w-[9rem]">{t.name}</span>
+                    <span className={cn('w-1.5 h-1.5 rounded-full', TECH_STATUS_META[t.status].dot)} aria-hidden />
+                    <span className="text-ink-faint tabular-nums">
+                      {TECHNICIAN_STATUS_LABELS[t.status]}{active && since != null ? ` · ${fmtSince(since)}` : ''}
+                    </span>
+                  </button>
+                )}
+              </Menu>
+            )
+          })}
           {vehicles.map(v => (
             <span key={v.id} title={v.category} className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-2 py-1 text-[11px] text-ink-faint">
               <Truck className="w-3 h-3" /> <span className="truncate max-w-[8rem]">{v.name}</span>
@@ -1104,13 +1415,16 @@ function CrewLaneCard({
           </InlineEmpty>
         </>
       ) : (
-        <div className="space-y-1.5">
-          {visibleSeq.map(job => {
+        <div ref={flipRef} className="space-y-1.5">
+          {visibleSeq.map((job, vi) => {
             const i = seq.indexOf(job)
             const eta = etaByJob.get(job.id)
             const grabbed = kbGrabbedId === job.id
             const promisedMin = job.start_time ? timeToMinutes(job.start_time) : null
             const late = promisedMin != null && eta != null && eta.arrivalMin > promisedMin + 15
+            const isNext = progress?.nextJobId === job.id && job.status !== 'completed'
+            const legKm = showLegs ? legKmByJob.get(job.id) ?? null : null
+            const legMin = legKm != null ? legMinutes(legKm) : null
             const menuItems: MenuItem[] = [
               ...crews.filter(c => c.is_active && c.id !== job.crew_id).map((c): MenuItem => ({
                 key: c.id, label: `Move to ${c.name}`, icon: Users, onSelect: () => onMoveTo(job.id, c.id),
@@ -1122,16 +1436,22 @@ function CrewLaneCard({
               } as MenuItem] : []),
             ]
             return (
-              <div key={job.id}>
+              <div key={job.id} data-flip-id={job.id}>
+                {legMin != null && legMin >= 5 && (
+                  <p className="pl-12 pb-1 text-[10px] leading-none text-ink-faint tabular-nums" aria-hidden>
+                    ↓ ~{legMin}m {vi === 0 ? 'from base' : 'drive'}
+                  </p>
+                )}
                 {isDropTarget && dropAnchor === job.id && dropLine}
                 <div id={`dispatch-stop-${job.id}`} data-stop-row={job.id}
                   className={cn('rounded-lg border bg-surface px-2.5 py-2 flex items-center gap-2 transition-shadow',
                     dragging?.jobId === job.id && 'opacity-40',
                     grabbed ? 'border-accent ring-2 ring-accent/40' : 'border-border',
                     flashJobId === job.id && 'ring-2 ring-accent border-accent',
+                    isNext && !grabbed && 'border-l-2 border-l-accent',
                     job.status === 'completed' && 'opacity-60')}>
                   <SelectCheckbox
-                    checked={isSelected(job.id)}
+                    checked={selectedSet.has(job.id)}
                     onToggle={shift => onToggleSelect(job.id, shift)}
                     label={`Select ${job.customers?.name || job.title}`}
                   />
@@ -1141,6 +1461,7 @@ function CrewLaneCard({
                     onPointerDown={e => onDragHandleDown(e, job, lane.laneId)}
                     onKeyDown={e => onGripKeyDown(e, job, lane.laneId)}
                     aria-pressed={grabbed}
+                    aria-keyshortcuts="Enter"
                     className={cn('shrink-0 cursor-grab active:cursor-grabbing touch-none rounded p-0.5 -m-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
                       grabbed ? 'text-accent' : 'text-ink-faint hover:text-ink')}
                     title="Drag to move — or press Enter, then use the arrows"
@@ -1150,7 +1471,14 @@ function CrewLaneCard({
                   </button>
                   <span className="w-5 h-5 rounded-md bg-bg-tertiary border border-border text-[10px] font-bold text-ink-muted flex items-center justify-center shrink-0 tabular-nums">{i + 1}</span>
                   <div className="min-w-0 flex-1">
-                    <p className="text-xs font-semibold text-ink truncate">{job.customers?.name || job.title}</p>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <p className="text-xs font-semibold text-ink truncate">{job.customers?.name || job.title}</p>
+                      {isNext && (
+                        <span className="shrink-0 rounded border border-accent/30 bg-accent/10 px-1 py-px text-[9px] font-bold uppercase tracking-wide text-accent-text" title="First unfinished stop on this route">
+                          next
+                        </span>
+                      )}
+                    </div>
                     <p className="text-[11px] text-ink-faint truncate tabular-nums">
                       {eta ? `ETA ${eta.arrival}` : 'ETA —'}
                       {promisedMin != null && (
@@ -1203,6 +1531,16 @@ function CrewLaneCard({
             title={base ? 'Reorder this crew’s stops into the best route' : 'Set a base address in Settings first'}>
             <Wand2 className="w-3.5 h-3.5" /> Best order
           </Button>
+          {savingsKm > 0 && !optimizing && (
+            <button
+              type="button"
+              onClick={() => onBestOrder(lane.laneId)}
+              title="The optimizer's own estimate against the current order — tap to apply Best order."
+              className="inline-flex items-center gap-1 rounded-full border border-accent/30 bg-accent/10 px-2 py-0.5 text-[11px] font-semibold text-accent-text tabular-nums hover:bg-accent/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 animate-fade"
+            >
+              save ~{savingsKm} km
+            </button>
+          )}
           {base && route && route.ordered.some(s => s.lat != null) && (
             <a href={roundTripMapsUrl(base, route.ordered)} target="_blank" rel="noreferrer"
               className="inline-flex items-center gap-1.5 text-sm text-ink-muted hover:text-ink px-2 py-1 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
@@ -1216,46 +1554,80 @@ function CrewLaneCard({
       )}
       {!isUnassigned && (
         <NoteBox compact icon={StickyNote} placeholder={`Note for ${lane.crew?.name ?? 'this crew'}…`}
-          value={note?.body ?? ''} onSave={onSaveNote} />
+          value={note?.body ?? ''} updatedAt={note?.updated_at ?? null} onSave={body => onSaveNote(lane.laneId, body)} />
       )}
     </section>
   )
-}
+})
 
 // ── Dispatch note ────────────────────────────────────────────────────────────
-// One note per (day, crew): type, blur (or Cmd/Ctrl+Enter) saves; clearing it
-// deletes the row. Controlled locally so realtime refreshes never eat keystrokes.
-function NoteBox({ value, onSave, placeholder, compact, icon: Icon }: {
+// One note per (day, crew). Saves ITSELF: 1.5s after the typing pauses (blur and
+// Cmd/Ctrl+Enter still flush immediately), then shows a quiet "Saved ✓" — a gate
+// code jotted mid-phone-call must not depend on remembering to click away.
+// Clearing the text deletes the row. Controlled locally so realtime refreshes
+// never eat keystrokes; a failed save is toasted by the page and refetched over.
+function NoteBox({ value, onSave, placeholder, compact, icon: Icon, updatedAt }: {
   value: string
   onSave: (body: string) => void
   placeholder: string
   compact?: boolean
   icon: typeof StickyNote
+  updatedAt?: string | null
 }) {
   const [draft, setDraft] = useState(value)
+  const [phase, setPhase] = useState<'idle' | 'dirty' | 'saved'>('idle')
   const lastSaved = useRef(value)
+  const debounceT = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const savedT = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   useEffect(() => {
     // Adopt remote changes only when the box isn't mid-edit.
     if (value !== lastSaved.current && draft === lastSaved.current) setDraft(value)
     lastSaved.current = value
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value])
-  const dirty = draft !== value
-  const save = () => { if (dirty) { onSave(draft); lastSaved.current = draft } }
+  useEffect(() => () => {
+    if (debounceT.current) clearTimeout(debounceT.current)
+    if (savedT.current) clearTimeout(savedT.current)
+  }, [])
+
+  const commit = (text: string) => {
+    if (debounceT.current) { clearTimeout(debounceT.current); debounceT.current = null }
+    if (text === lastSaved.current) { setPhase('idle'); return }
+    onSave(text)
+    lastSaved.current = text
+    setPhase('saved')
+    if (savedT.current) clearTimeout(savedT.current)
+    savedT.current = setTimeout(() => setPhase(p => (p === 'saved' ? 'idle' : p)), 2000)
+  }
+  const onChange = (text: string) => {
+    setDraft(text)
+    setPhase('dirty')
+    if (debounceT.current) clearTimeout(debounceT.current)
+    debounceT.current = setTimeout(() => commit(text), 1500)
+  }
+
   return (
     <div className={cn('flex items-start gap-2', compact ? '' : 'rounded-card border border-border bg-bg-secondary p-3 animate-rise')}>
-      <Icon className="w-3.5 h-3.5 text-ink-faint shrink-0 mt-1.5" aria-hidden />
+      <Icon className="w-3.5 h-3.5 text-ink-faint shrink-0 mt-1.5" aria-hidden
+        {...(updatedAt ? { 'aria-label': `Note last saved ${new Date(updatedAt).toLocaleString()}` } : {})} />
       <textarea
         value={draft}
-        onChange={e => setDraft(e.target.value)}
-        onBlur={save}
-        onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); save() } }}
+        onChange={e => onChange(e.target.value)}
+        onBlur={() => commit(draft)}
+        onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); commit(draft) } }}
         placeholder={placeholder}
         rows={draft.length > 80 || draft.includes('\n') ? 2 : 1}
         aria-label={placeholder}
+        title={updatedAt ? `Last saved ${new Date(updatedAt).toLocaleString()}` : undefined}
         className="flex-1 resize-none bg-transparent text-xs text-ink placeholder:text-ink-faint outline-none border-b border-transparent focus:border-border-strong transition-colors py-1"
       />
-      {dirty && <span className="text-[10px] text-amber-400 shrink-0 mt-1.5">unsaved</span>}
+      {phase === 'dirty' && <span className="text-[10px] text-ink-faint shrink-0 mt-1.5 animate-fade">…</span>}
+      {phase === 'saved' && (
+        <span className="inline-flex items-center gap-0.5 text-[10px] text-emerald-400 shrink-0 mt-1.5 animate-fade">
+          <Check className="w-3 h-3" aria-hidden /> Saved
+        </span>
+      )}
     </div>
   )
 }
