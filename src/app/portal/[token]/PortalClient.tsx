@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { format } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { confirm as confirmDialog } from '@/lib/confirm'
@@ -19,12 +19,16 @@ import {
   Home, History, Image as ImageIcon, FileText, Receipt, MessageSquarePlus, Check, Loader2,
   Phone, Globe, Mail, Leaf, CheckCircle2, Navigation, Play, CalendarClock, Repeat, MapPin, Ruler, Sparkles, CreditCard, MessageSquare,
   Eye, Download, Printer, FolderOpen, Search, ArrowUpDown, Activity, Wallet, Star, Zap, ShieldCheck, Trash2, X, Landmark, Banknote, Copy, Clock, AlertTriangle,
+  Send, CalendarPlus, SkipForward, PauseCircle, XCircle,
 } from 'lucide-react'
 
 // ── Premium Customer Portal ─────────────────────────────────────────────────────
 // Public, no-login, scoped to the token's customer via get_portal_data. A clean
 // service-app experience: a Home overview, live job status, a per-visit timeline
-// with photos & invoices, a before/after gallery, and quick service requests.
+// with photos & invoices, a before/after gallery, two-way messages, and
+// self-service requests (services, appointments, reschedules, plan changes) —
+// every request threads into the owner's ONE Messages hub and waits for a human
+// yes; the portal never mutates the schedule or a plan on its own.
 
 interface PortalQuoteService { service_type: string; quantity: number; unit: string | null; unit_price: number; est_minutes: number | null; discount_type: 'amount' | 'percent' | null; discount_value: number | null; notes: string | null; sort_order: number }
 // `valid_until` is the date this price stops standing. Null = it never lapses (every
@@ -43,6 +47,11 @@ interface PortalCard { brand: string | null; last4: string | null; exp_month: nu
 // customers are offered pool visits, a window cleaner's are offered window
 // cleaning. Optional so a portal served by an older RPC still renders.
 interface PortalService { name: string; category: string | null; default_rate: number | null; pricing_display_type: string | null; default_description: string | null }
+// One row of the customer's conversation with the business — the SAME messages
+// table the owner's Messages hub reads, fetched lazily by the Messages tab via a
+// token-scoped RPC (portal_get_messages) so get_portal_data stays untouched.
+// direction is from the OWNER's perspective: 'inbound' = the customer speaking.
+interface PortalMessage { id: string; direction: string; channel: string; body: string; created_at: string }
 interface PortalData {
   // review_declined_at: the customer's own "No thanks". Read here so a decline saved on
   // a previous visit keeps the review card down — without it, "no" would only last as
@@ -57,14 +66,26 @@ interface PortalData {
   services?: PortalService[] | null
 }
 
-type Tab = 'home' | 'timeline' | 'service' | 'photos' | 'property' | 'documents' | 'payments' | 'request'
+type Tab = 'home' | 'timeline' | 'service' | 'photos' | 'property' | 'documents' | 'payments' | 'messages' | 'request'
 type LiveStatus = 'scheduled' | 'on_my_way' | 'in_progress' | 'completed'
 
 interface Derived {
   upcoming: PortalJob[]; completed: PortalJob[]; nextService: PortalJob | null
   lastCompleted: PortalJob | null; outstanding: number
-  plans: { id: string; label: string; service: string; nextDate: string | null; endDate: string | null }[]
+  // nextJobId: the concrete visit behind nextDate — what a "skip next visit"
+  // request points at, so the owner knows exactly which job is meant.
+  plans: { id: string; label: string; service: string; nextDate: string | null; nextJobId: string | null; endDate: string | null }[]
 }
+
+// Every customer action below is a REQUEST that threads into the owner's ONE
+// Messages hub (service_requests → sr_to_conversation) — nothing in the portal
+// mutates jobs or plans directly. The message string is what the owner reads;
+// the structured fields exist so their side can grow one-tap actions later.
+type SubmitRequestFn = (opts: {
+  message: string; kind: 'service' | 'appointment' | 'reschedule' | 'plan_change'
+  preferredDate?: string | null; jobId?: string | null; recurrenceId?: string | null
+  details?: Record<string, unknown> | null
+}) => Promise<boolean>
 
 // What a customer can request comes from the owner's OWN catalogue
 // (service_templates, via get_portal_data) — never a hardcoded list. The portal
@@ -266,6 +287,19 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     if (ok) { setReqSent(key); if (key === 'custom') setReqMsg(''); setTimeout(() => setReqSent(null), 4000) }
     else setActionError('Your request didn’t go through — please try again, or call us directly.')
   }
+  // Structured requests (appointment / reschedule / plan change) — same pipeline as
+  // request() above, carrying the structure alongside the human-readable message.
+  // The RPC re-verifies that any referenced job/plan belongs to this token's customer.
+  const submitRequest: SubmitRequestFn = async (opts) => {
+    setActionError(null)
+    const { data: ok, error } = await supabase.rpc('portal_submit_request', {
+      p_token: token, p_message: opts.message, p_kind: opts.kind,
+      p_preferred_date: opts.preferredDate ?? null, p_job_id: opts.jobId ?? null,
+      p_recurrence_id: opts.recurrenceId ?? null, p_details: opts.details ?? null,
+    })
+    if (error || !ok) { setActionError('Your request didn’t go through — please try again, or call us directly.'); return false }
+    return true
+  }
   // The customer opened this invoice (PDF or pay) — stamp viewed_at once so the
   // owner's list shows 'Viewed'. Fire-and-forget; idempotent server-side.
   function markInvoiceViewed(invoiceId: string) {
@@ -330,6 +364,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
         label: recurrenceLabel(r.interval_unit as 'day' | 'week' | 'month' | null, r.interval_count, r.freq),
         service: sample?.service_type || sample?.title || 'Service',
         nextDate: next?.scheduled_date || null,
+        nextJobId: next?.id || null,
         // A plan with an end date is a season, and knowing when it stops is part of not
         // feeling locked in. Only shown when the owner actually set one.
         endDate: r.end_date || null,
@@ -386,6 +421,9 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
     { key: 'photos', label: 'Photos', icon: ImageIcon, n: data.photos.length },
     { key: 'timeline', label: 'Timeline', icon: Activity },
     { key: 'property', label: 'Property', icon: MapPin },
+    // Messages is always visible — like Request, the empty state IS the invitation
+    // (the composer), not a dead end.
+    { key: 'messages', label: 'Messages', icon: MessageSquare },
     { key: 'request', label: 'Request', icon: MessageSquarePlus },
   ] as { key: Tab; label: string; icon: typeof Home; n?: number }[]).filter(t =>
     t.key === 'payments' ? (data.payments.length > 0 || (data.invoices || []).length > 0) :
@@ -467,7 +505,8 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
           {tab === 'home' && <HomeTab suppressApproved={justAccepted} data={data} derived={derived} biz={biz} onRequest={() => setTab('request')}
             paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId}
             onOpenInvoices={() => { setDocsCat('invoice'); setTab('documents') }}
-            onReviewQuotes={() => { setDocsCat('quote'); setTab('documents') }} />}
+            onReviewQuotes={() => { setDocsCat('quote'); setTab('documents') }}
+            onMessages={() => setTab('messages')} submitRequest={submitRequest} />}
           {tab === 'home' && biz?.review_url && derived.lastCompleted && !data.customer.reviewed_at && !reviewDeclined && (
             <ReviewCard reviewUrl={biz.review_url} businessName={biz.company_name} reviewed={markedReviewed} onReviewed={markReviewed} onDecline={declineReview} />
           )}
@@ -480,8 +519,9 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
             token={token} paymentsEnabled={paymentsEnabled} card={data.payment_method ?? null} autopayEnabled={!!data.customer.autopay_enabled} onChanged={load} />}
           {tab === 'documents' && <DocumentsTab quotes={data.quotes} invoices={data.invoices} customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} lawnSqft={Number(data.property?.lawn_sqft) || null} business={biz} onInvoiceOpen={markInvoiceViewed}
             paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} accept={accept} accepting={accepting} initialCat={docsCat} />}
+          {tab === 'messages' && <MessagesTab token={token} businessName={biz?.company_name || null} />}
           {tab === 'request' && (
-            <RequestTab presets={requestPresets} reqMsg={reqMsg} setReqMsg={setReqMsg} request={request} reqBusy={reqBusy} reqSent={reqSent} biz={biz} />
+            <RequestTab presets={requestPresets} reqMsg={reqMsg} setReqMsg={setReqMsg} request={request} reqBusy={reqBusy} reqSent={reqSent} biz={biz} submitRequest={submitRequest} />
           )}
         </div>
 
@@ -538,10 +578,11 @@ function StatusStepper({ s }: { s: LiveStatus }) {
 }
 
 // ── Home ──
-function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId, onOpenInvoices, onReviewQuotes, suppressApproved }: {
+function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId, onOpenInvoices, onReviewQuotes, suppressApproved, onMessages, submitRequest }: {
   data: PortalData; derived: Derived; biz: PortalData['business']; onRequest: () => void
   paymentsEnabled: boolean; pay: (id: string) => void; payingId: string | null; onOpenInvoices: () => void; onReviewQuotes: () => void
   suppressApproved?: boolean
+  onMessages: () => void; submitRequest: SubmitRequestFn
 }) {
   const next = derived.nextService
   // A quote awaiting approval is usually WHY the customer opened this link —
@@ -608,6 +649,10 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
             </p>
             <StatusStepper s={liveStatusOf(next)} />
             {liveStatusOf(next) === 'on_my_way' && <p className="text-xs text-sky-400 mt-2 flex items-center gap-1"><Navigation className="w-3.5 h-3.5" /> Your provider is on the way!</p>}
+            {/* Rescheduling used to mean composing a free-text message from scratch.
+                Only offered while the visit is still merely scheduled — once someone
+                is on their way, a date-change form is the wrong tool. */}
+            {liveStatusOf(next) === 'scheduled' && <RescheduleRequest key={next.id} job={next} submitRequest={submitRequest} />}
           </>
         ) : approvedPending ? (
           <div>
@@ -667,35 +712,41 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
       {derived.plans.length > 0 && (
         <div className="rounded-card border border-border bg-bg-secondary p-4">
           <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint mb-2">Active plan{derived.plans.length !== 1 ? 's' : ''}</p>
-          <div className="space-y-1.5">
+          <div className="space-y-3">
             {derived.plans.map(p => (
-              <div key={p.id} className="flex items-start gap-2 text-sm">
-                <Repeat className="w-3.5 h-3.5 text-accent-text shrink-0 mt-1" />
-                <div className="min-w-0">
-                  <p>
-                    <span className="text-ink font-medium">{p.service}</span>
-                    <span className="text-ink-muted"> · {p.label}</span>
-                  </p>
-                  {/* A live plan with nothing on the calendar yet is normal — the owner
-                      books ahead in batches. Saying so is the whole point: silence here is
-                      what made the plan look cancelled. */}
-                  <p className="text-xs text-ink-muted mt-0.5">
-                    {p.nextDate
-                      ? <>Next visit <span className="text-ink font-medium">{formatDate(p.nextDate)}</span>{(() => { const a = daysAwayLabel(p.nextDate, localTodayISO()); return a ? ` (${a.toLowerCase()})` : null })()}</>
-                      : <>Next visit not booked yet — it&rsquo;ll appear here as soon as it is.</>}
-                    {p.endDate ? <> · Runs until {formatDate(p.endDate)}</> : null}
-                  </p>
+              <div key={p.id}>
+                <div className="flex items-start gap-2 text-sm">
+                  <Repeat className="w-3.5 h-3.5 text-accent-text shrink-0 mt-1" />
+                  <div className="min-w-0">
+                    <p>
+                      <span className="text-ink font-medium">{p.service}</span>
+                      <span className="text-ink-muted"> · {p.label}</span>
+                    </p>
+                    {/* A live plan with nothing on the calendar yet is normal — the owner
+                        books ahead in batches. Saying so is the whole point: silence here is
+                        what made the plan look cancelled. */}
+                    <p className="text-xs text-ink-muted mt-0.5">
+                      {p.nextDate
+                        ? <>Next visit <span className="text-ink font-medium">{formatDate(p.nextDate)}</span>{(() => { const a = daysAwayLabel(p.nextDate, localTodayISO()); return a ? ` (${a.toLowerCase()})` : null })()}</>
+                        : <>Next visit not booked yet — it&rsquo;ll appear here as soon as it is.</>}
+                      {p.endDate ? <> · Runs until {formatDate(p.endDate)}</> : null}
+                    </p>
+                  </div>
                 </div>
+                {/* The way out, on the plan itself. These SEND A REQUEST the owner
+                    confirms — the plan doesn't change until a human says so, and the
+                    copy says exactly that. Free-text "send us a message" was the only
+                    door before; it stays below for everything these don't cover. */}
+                <PlanActions plan={p} businessName={biz?.company_name || null} submitRequest={submitRequest} />
               </div>
             ))}
           </div>
           {/* An ongoing arrangement with no visible way out is what makes people feel
-              trapped — and this is the exact card someone looks at when they're wondering
-              whether signing up was a mistake. The Request tab already exists; point at it
-              rather than leaving them to hunt. */}
+              trapped — the buttons above are that way out. This line covers the asks
+              that aren't a button (change frequency, different day of week, …). */}
           <p className="text-xs text-ink-muted mt-2.5 pt-2.5 border-t border-border/60">
-            Need to pause, reschedule, or cancel?{' '}
-            <button type="button" onClick={onRequest} className="text-accent-text font-medium hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">Send us a message</button>
+            Anything else about your plan?{' '}
+            <button type="button" onClick={onMessages} className="text-accent-text font-medium hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">Send us a message</button>
             {biz?.phone ? <> or call <a href={`tel:${biz.phone}`} className="text-accent-text font-medium hover:underline">{biz.phone}</a>.</> : '.'}
           </p>
         </div>
@@ -733,6 +784,118 @@ function StatCard({ label, value, tone, icon: Icon }: { label: string; value: st
     <div className="rounded-card border border-border bg-bg-secondary p-3.5">
       <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint flex items-center gap-1"><Icon className="w-3 h-3" /> {label}</p>
       <p className={cn('text-lg font-bold mt-1 tabular-nums', tone || 'text-ink')}>{value}</p>
+    </div>
+  )
+}
+
+// ── Reschedule request (on the next-visit hero) ────────────────────────────────
+// A quiet link that unfolds into a two-field form. It sends a REQUEST — the visit
+// stays exactly where it is until the owner confirms, and the confirmation copy
+// says so, because "I tapped a button" must never be mistaken for "it moved".
+// Keyed by job id from the parent, so a different next visit gets a fresh form.
+function RescheduleRequest({ job, submitRequest }: { job: PortalJob; submitRequest: SubmitRequestFn }) {
+  const [open, setOpen] = useState(false)
+  const [date, setDate] = useState('')
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [sent, setSent] = useState(false)
+  if (sent) return (
+    <p className="text-xs text-emerald-400 mt-3 pt-3 border-t border-border/40 flex items-start gap-1.5">
+      <CheckCircle2 className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+      <span>Request sent — we&rsquo;ll confirm your new date here and by message. Your visit stays on {formatDate(job.scheduled_date)} until then.</span>
+    </p>
+  )
+  if (!open) return (
+    <p className="text-xs text-ink-muted mt-3 pt-3 border-t border-border/40">
+      Date doesn&rsquo;t work?{' '}
+      <button type="button" onClick={() => setOpen(true)} className="text-accent-text font-medium hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
+        Request a different date
+      </button>
+    </p>
+  )
+  return (
+    <form className="mt-3 pt-3 border-t border-border/40 space-y-2"
+      onSubmit={async e => {
+        e.preventDefault()
+        if (!date || busy) return
+        setBusy(true)
+        const svc = job.service_type || job.title
+        const ok = await submitRequest({
+          kind: 'reschedule', jobId: job.id, preferredDate: date,
+          message: `Reschedule request: ${svc} on ${formatDate(job.scheduled_date)} — could we move it to ${formatDate(date)}?${note.trim() ? ` ${note.trim()}` : ''}`,
+        })
+        setBusy(false)
+        if (ok) setSent(true)
+      }}>
+      <label className="block text-xs font-medium text-ink" htmlFor="resched-date">What date works better?</label>
+      <input id="resched-date" type="date" required value={date} min={localTodayISO()} onChange={e => setDate(e.target.value)}
+        className="w-full h-10 px-3 rounded-xl bg-bg-tertiary border border-border-strong text-base sm:text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+      <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} aria-label="Anything we should know?" placeholder="Anything we should know? (optional)"
+        className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+      <div className="flex items-center gap-2">
+        <Button size="sm" type="submit" loading={busy} disabled={!date}><CalendarClock className="w-4 h-4" /> Send request</Button>
+        <Button size="sm" variant="ghost" type="button" onClick={() => setOpen(false)}>Never mind</Button>
+      </div>
+      <p className="text-[11px] text-ink-faint">This sends a request — your visit stays booked as is until we confirm the new date with you.</p>
+    </form>
+  )
+}
+
+// ── Plan actions (skip next / pause / cancel — all requests, never mutations) ──
+function PlanActions({ plan, businessName, submitRequest }: {
+  plan: Derived['plans'][number]; businessName: string | null; submitRequest: SubmitRequestFn
+}) {
+  const [busy, setBusy] = useState<string | null>(null)
+  const [sent, setSent] = useState<string | null>(null)
+  const who = businessName || 'we'
+  async function act(action: 'skip_next' | 'pause' | 'cancel') {
+    if (busy) return
+    const copy = action === 'skip_next' ? {
+      title: 'Skip your next visit?',
+      confirm: `This sends a request to skip your ${plan.service} visit${plan.nextDate ? ` on ${formatDate(plan.nextDate)}` : ''}. Nothing changes until ${who === 'we' ? 'we confirm' : `${who} confirms`} with you — the rest of your plan stays as is.`,
+      msg: `Plan change request: please skip my next ${plan.service} visit${plan.nextDate ? ` on ${formatDate(plan.nextDate)}` : ''}. Keep the rest of my ${plan.label.toLowerCase()} plan as is.`,
+      done: `Request sent — your visit${plan.nextDate ? ` on ${formatDate(plan.nextDate)}` : ''} stays booked until we confirm the skip with you.`,
+    } : action === 'pause' ? {
+      title: 'Pause your plan?',
+      confirm: `This sends a request to pause your ${plan.label.toLowerCase()} ${plan.service} plan. Nothing changes until ${who === 'we' ? 'we confirm' : `${who} confirms`} with you.`,
+      msg: `Plan change request: please pause my ${plan.label.toLowerCase()} ${plan.service} plan for now — I'll be in touch about starting it back up.`,
+      done: 'Pause request sent — we’ll confirm with you before anything changes.',
+    } : {
+      title: 'Cancel your plan?',
+      confirm: `This sends a cancellation request for your ${plan.label.toLowerCase()} ${plan.service} plan. ${who === 'we' ? 'We' : who}’ll be in touch to confirm — nothing is cancelled until then.`,
+      msg: `Plan change request: I'd like to cancel my ${plan.label.toLowerCase()} ${plan.service} plan. Please confirm the cancellation with me.`,
+      done: 'Cancellation request sent — we’ll be in touch to confirm.',
+    }
+    const confirmed = await confirmDialog({ title: copy.title, message: copy.confirm, confirmLabel: 'Send request', destructive: action === 'cancel' })
+    if (!confirmed) return
+    setBusy(action)
+    const ok = await submitRequest({
+      kind: 'plan_change', recurrenceId: plan.id,
+      jobId: action === 'skip_next' ? plan.nextJobId : null,
+      details: { action }, message: copy.msg,
+    })
+    setBusy(null)
+    if (ok) setSent(copy.done)
+  }
+  if (sent) return (
+    <p className="text-xs text-emerald-400 mt-2 pl-[22px] flex items-start gap-1.5">
+      <CheckCircle2 className="w-3.5 h-3.5 shrink-0 mt-0.5" /> <span>{sent}</span>
+    </p>
+  )
+  const btn = 'inline-flex items-center gap-1 text-xs font-medium rounded-lg border border-border bg-bg-tertiary px-2.5 py-1.5 transition-colors disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50'
+  return (
+    <div className="flex flex-wrap gap-1.5 mt-2 pl-[22px]">
+      {plan.nextDate && plan.nextJobId && (
+        <button type="button" disabled={busy !== null} onClick={() => act('skip_next')} className={cn(btn, 'text-ink-muted hover:text-ink hover:border-border-strong')}>
+          {busy === 'skip_next' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <SkipForward className="w-3.5 h-3.5" />} Skip next visit
+        </button>
+      )}
+      <button type="button" disabled={busy !== null} onClick={() => act('pause')} className={cn(btn, 'text-ink-muted hover:text-ink hover:border-border-strong')}>
+        {busy === 'pause' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <PauseCircle className="w-3.5 h-3.5" />} Pause plan
+      </button>
+      <button type="button" disabled={busy !== null} onClick={() => act('cancel')} className={cn(btn, 'text-red-400/70 hover:text-red-400 hover:border-red-500/30')}>
+        {busy === 'cancel' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <XCircle className="w-3.5 h-3.5" />} Cancel plan
+      </button>
     </div>
   )
 }
@@ -1542,9 +1705,10 @@ function AutoPayCard({ token, card, autopayEnabled, onChanged }: {
 }
 
 // ── Request ──
-function RequestTab({ presets, reqMsg, setReqMsg, request, reqBusy, reqSent, biz }: {
+function RequestTab({ presets, reqMsg, setReqMsg, request, reqBusy, reqSent, biz, submitRequest }: {
   presets: string[]; reqMsg: string; setReqMsg: (s: string) => void
   request: (msg: string, key: string) => void; reqBusy: string | null; reqSent: string | null; biz: PortalData['business']
+  submitRequest: SubmitRequestFn
 }) {
   return (
     <div className="space-y-3">
@@ -1572,6 +1736,8 @@ function RequestTab({ presets, reqMsg, setReqMsg, request, reqBusy, reqSent, biz
       </div>
       )}
 
+      <AppointmentCard presets={presets} biz={biz} submitRequest={submitRequest} />
+
       <div className="rounded-card border border-border bg-bg-secondary p-4">
         <p className="text-sm font-semibold text-ink mb-1">{presets.length > 0 ? 'Something else?' : 'Request a service'}</p>
         {reqSent === 'custom' ? (
@@ -1584,6 +1750,196 @@ function RequestTab({ presets, reqMsg, setReqMsg, request, reqBusy, reqSent, biz
           </form>
         )}
       </div>
+    </div>
+  )
+}
+
+// ── Appointment request (a visit on a date, not just "a service sometime") ────
+// The preset buttons above ask for a QUOTE; this asks for a VISIT — with the date
+// preference that makes it schedulable. Free text alone forced customers to
+// narrate a date ("sometime the week of the 20th, mornings") that the owner then
+// re-typed into the calendar; preferred_date arrives structured now.
+function AppointmentCard({ presets, biz, submitRequest }: { presets: string[]; biz: PortalData['business']; submitRequest: SubmitRequestFn }) {
+  const [svc, setSvc] = useState('')
+  const [date, setDate] = useState('')
+  const [win, setWin] = useState<'anytime' | 'morning' | 'afternoon'>('anytime')
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [sent, setSent] = useState(false)
+  const inputCls = 'w-full h-10 px-3 rounded-xl bg-bg-tertiary border border-border-strong text-base sm:text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20'
+  if (sent) return (
+    <div className="rounded-card border border-emerald-500/30 bg-emerald-500/[0.06] p-4">
+      <p className="text-sm font-semibold text-emerald-400 flex items-center gap-1.5"><CheckCircle2 className="w-4 h-4" /> Appointment request sent</p>
+      {/* "We'll be in touch" leaves people watching their phone — say where the
+          answer lands. The booked visit appears on the Home tab like every other. */}
+      <p className="text-xs text-ink-muted mt-1">{biz?.company_name || 'We'}&rsquo;ll confirm a time with you. Once it&rsquo;s booked, the visit shows up right here in your portal.</p>
+      <Button size="sm" variant="secondary" className="mt-3" onClick={() => { setSent(false); setDate(''); setNote('') }}>Request another time</Button>
+    </div>
+  )
+  return (
+    <div className="rounded-card border border-border bg-bg-secondary p-4">
+      <p className="text-sm font-semibold text-ink flex items-center gap-1.5"><CalendarPlus className="w-4 h-4 text-accent-text" /> Request an appointment</p>
+      <p className="text-xs text-ink-muted mt-0.5 mb-3">Pick a day that suits you — {biz?.company_name || 'we'}&rsquo;ll confirm the time.</p>
+      <form className="space-y-2"
+        onSubmit={async e => {
+          e.preventDefault()
+          if (!date || busy) return
+          setBusy(true)
+          const ok = await submitRequest({
+            kind: 'appointment', preferredDate: date,
+            details: { window: win, service: svc || null },
+            message: `Appointment request: ${svc || 'a visit'} — preferred ${formatDate(date)}${win !== 'anytime' ? `, ${win}` : ''}.${note.trim() ? ` ${note.trim()}` : ''}`,
+          })
+          setBusy(false)
+          if (ok) setSent(true)
+        }}>
+        {presets.length > 0 && (
+          <div>
+            <label className="block text-xs font-medium text-ink mb-1" htmlFor="appt-svc">Service</label>
+            <select id="appt-svc" value={svc} onChange={e => setSvc(e.target.value)} className={inputCls}>
+              <option value="">Not sure yet</option>
+              {presets.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </div>
+        )}
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="block text-xs font-medium text-ink mb-1" htmlFor="appt-date">Preferred date</label>
+            <input id="appt-date" type="date" required value={date} min={localTodayISO()} onChange={e => setDate(e.target.value)} className={inputCls} />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-ink mb-1" htmlFor="appt-win">Time of day</label>
+            <select id="appt-win" value={win} onChange={e => setWin(e.target.value as 'anytime' | 'morning' | 'afternoon')} className={inputCls}>
+              <option value="anytime">Anytime</option>
+              <option value="morning">Morning</option>
+              <option value="afternoon">Afternoon</option>
+            </select>
+          </div>
+        </div>
+        <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} aria-label="Anything we should know?" placeholder="Anything we should know? (optional)"
+          className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-2.5 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+        <Button size="sm" type="submit" loading={busy} disabled={!date}><CalendarPlus className="w-4 h-4" /> Request this day</Button>
+        <p className="text-[11px] text-ink-faint">This sends a request — nothing is booked until we confirm with you.</p>
+      </form>
+    </div>
+  )
+}
+
+// ── Messages (the customer's copy of the ONE conversation) ────────────────────
+// Reads the SAME messages table the owner's Messages hub writes — outbound texts
+// the business sent, requests the customer made, and portal chat, one thread.
+// Sending inserts an inbound 'portal' message; the existing triggers bump the
+// owner's unread and raise their notification. Nothing here touches lib/comms —
+// this tab never SENDS to a phone or inbox, it just writes the shared record.
+function MessagesTab({ token, businessName }: { token: string; businessName: string | null }) {
+  const supabase = useMemo(() => createClient(), [])
+  const [msgs, setMsgs] = useState<PortalMessage[] | null>(null)
+  const [body, setBody] = useState('')
+  const [sending, setSending] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const threadRef = useRef<HTMLDivElement | null>(null)
+
+  // Load on open + a modest poll so an owner reply appears without a manual
+  // refresh. 30s is deliberate: portal tabs are short-lived and anon.
+  useEffect(() => {
+    let alive = true
+    async function loadMsgs() {
+      const { data } = await supabase.rpc('portal_get_messages', { p_token: token })
+      if (alive) setMsgs(m => (Array.isArray(data) ? (data as PortalMessage[]) : (m ?? [])))
+    }
+    loadMsgs()
+    const t = setInterval(loadMsgs, 30_000)
+    return () => { alive = false; clearInterval(t) }
+  }, [token, supabase])
+
+  // Keep the newest message in view — scroll the thread box, never the page.
+  const count = msgs?.length ?? 0
+  useEffect(() => { const el = threadRef.current; if (el) el.scrollTop = el.scrollHeight }, [count])
+
+  async function send() {
+    const text = body.trim()
+    if (!text || sending) return
+    setSending(true); setErr(null)
+    const { data: ok, error } = await supabase.rpc('portal_send_message', { p_token: token, p_body: text })
+    if (error || !ok) {
+      setErr('Your message didn’t send — please try again, or call us directly.')
+    } else {
+      setBody('')
+      // Show it immediately, then reconcile with the server copy (which also
+      // picks up anything that arrived meanwhile).
+      setMsgs(m => [...(m ?? []), { id: `local-${Date.now()}`, direction: 'inbound', channel: 'portal', body: text, created_at: new Date().toISOString() }])
+      setTimeout(async () => {
+        const { data } = await supabase.rpc('portal_get_messages', { p_token: token })
+        if (Array.isArray(data)) setMsgs(data as PortalMessage[])
+      }, 1200)
+    }
+    setSending(false)
+  }
+
+  // Day separators — a thread without dates turns "did they reply yesterday or
+  // last month?" into archaeology.
+  const rows = useMemo(() => {
+    const out: ({ kind: 'day'; key: string; label: string } | { kind: 'msg'; m: PortalMessage })[] = []
+    let lastDay = ''
+    for (const m of msgs ?? []) {
+      const day = (m.created_at || '').slice(0, 10)
+      if (day && day !== lastDay) { out.push({ kind: 'day', key: 'd' + day, label: formatDate(day) }); lastDay = day }
+      out.push({ kind: 'msg', m })
+    }
+    return out
+  }, [msgs])
+
+  const who = businessName || 'Your service provider'
+  return (
+    <div className="space-y-3">
+      <div className="rounded-card border border-border bg-bg-secondary">
+        {msgs === null ? (
+          <p className="text-sm text-ink-muted flex items-center gap-2 px-4 py-8 justify-center"><Loader2 className="w-4 h-4 animate-spin" /> Loading your messages…</p>
+        ) : rows.length === 0 ? (
+          <div className="py-10 px-6 text-center">
+            <MessageSquare className="w-7 h-7 text-ink-faint mx-auto mb-2.5" />
+            <p className="text-sm text-ink-muted max-w-xs mx-auto">No messages yet — write to us below and we&rsquo;ll reply right here.</p>
+          </div>
+        ) : (
+          <div ref={threadRef} className="max-h-[26rem] overflow-y-auto px-3.5 py-3 space-y-2">
+            {rows.map(r => r.kind === 'day' ? (
+              <p key={r.key} className="text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint pt-2">{r.label}</p>
+            ) : (
+              <MessageBubble key={r.m.id} m={r.m} who={who} />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Composer — same shape as the Request tab's ask, plus the promise of where
+          the reply lands. */}
+      <div className="rounded-card border border-border bg-bg-secondary p-4">
+        <form onSubmit={e => { e.preventDefault(); send() }}>
+          <textarea value={body} onChange={e => setBody(e.target.value)} rows={2} aria-label="Your message" placeholder={`Message ${businessName || 'us'}…`}
+            className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+          <div className="flex items-center justify-between gap-3 mt-2">
+            <p className="text-[11px] text-ink-faint">Goes straight to {businessName ? `${businessName}’s` : 'our'} inbox — replies appear right here.</p>
+            <Button size="sm" type="submit" loading={sending} disabled={!body.trim()}><Send className="w-4 h-4" /> Send</Button>
+          </div>
+        </form>
+        {err && <p className="text-xs text-red-400 mt-2">{err}</p>}
+      </div>
+    </div>
+  )
+}
+function MessageBubble({ m, who }: { m: PortalMessage; who: string }) {
+  // direction is the OWNER's perspective — 'inbound' is the customer speaking.
+  const mine = m.direction === 'inbound'
+  const time = m.created_at ? new Date(m.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''
+  const via = m.channel === 'sms' ? ' · by text' : m.channel === 'email' ? ' · by email' : ''
+  return (
+    <div className={cn('max-w-[85%]', mine ? 'ml-auto' : 'mr-auto')}>
+      <div className={cn('rounded-2xl border px-3.5 py-2.5', mine ? 'bg-accent/15 border-accent/25 rounded-br-md' : 'bg-bg-tertiary border-border rounded-bl-md')}>
+        <p className="text-sm text-ink whitespace-pre-wrap break-words">{m.body}</p>
+      </div>
+      <p className={cn('text-[10px] text-ink-faint mt-0.5 px-1', mine ? 'text-right' : 'text-left')}>
+        {mine ? 'You' : who}{time ? ` · ${time}` : ''}{via}
+      </p>
     </div>
   )
 }
