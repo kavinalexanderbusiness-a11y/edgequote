@@ -17,7 +17,8 @@
     "verify:modules": "tsx scripts/verify-modules.ts",
     "verify:pricing": "tsx scripts/verify-pricing.ts",
     "verify:analytics": "tsx scripts/verify-analytics.ts",
-    "verify:integrations": "tsx scripts/verify-integrations.ts"
+    "verify:integrations": "tsx scripts/verify-integrations.ts",
+    "verify:inventory": "tsx scripts/verify-inventory.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",
