@@ -27,7 +27,7 @@ import { cn } from '@/lib/utils'
 import { ThemePref, getThemePref, applyThemePref } from '@/lib/theme'
 import { ServiceSeasons, ServiceSeason, DEFAULT_SEASONS, settingsToSeasons, seasonLabel } from '@/lib/seasons'
 import { weekdayLong } from '@/lib/preferences'
-import { Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard, Building2, DollarSign, MessageSquare, Bell, Link as LinkIcon, Zap, RotateCcw, Image as ImageIcon, Palette, Clock, MapPin, LayoutGrid } from 'lucide-react'
+import { Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard, Building2, DollarSign, MessageSquare, Bell, Link as LinkIcon, Zap, RotateCcw, Image as ImageIcon, Palette, Clock, MapPin, LayoutGrid, X } from 'lucide-react'
 
 const SETTINGS_TABS: TabItem[] = [
   { key: 'business', label: 'Business', icon: Building2 },
@@ -506,7 +506,7 @@ export default function SettingsPage() {
           <CardHeader>
             <div>
               <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><CalendarRange className="w-4 h-4 text-accent-text" /> Service Seasons</h2>
-              <p className="text-xs text-ink-faint mt-0.5">Recurring lawn &amp; snow services default to ending at season end. Off-season customers won&apos;t show as lapsed in Reactivation.</p>
+              <p className="text-xs text-ink-faint mt-0.5">Seasonal services default to ending at season end, and off-season customers won&apos;t show as lapsed in Reactivation. Add a season for any service line that runs part of the year.</p>
             </div>
           </CardHeader>
           <CardBody className="space-y-5">
@@ -524,9 +524,43 @@ export default function SettingsPage() {
               season={seasons.snow}
               onChange={s => setSeasons(prev => ({ ...prev, snow: s }))}
             />
-            <button type="button" onClick={() => setSeasons(DEFAULT_SEASONS)}
-              className="inline-flex items-center gap-1.5 text-xs text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded">
-              <RotateCcw className="w-3 h-3" /> Reset to Calgary defaults (Apr 15 → Oct 31 · Nov 1 → Mar 31)</button>
+
+            {/* Owner-defined seasons — the UI half of the engine's custom-season
+                support (lib/seasons.seasonForService). Any trade declares its own
+                season here: a name, the words its service names contain, and dates.
+                No industry picker; the season IS the configuration. */}
+            {Object.entries(seasons).filter(([k]) => k !== 'lawn' && k !== 'snow').map(([key, season]) => (
+              <SeasonEditor
+                key={key}
+                icon={<CalendarRange className="w-4 h-4 text-accent-text" />}
+                season={season}
+                editable
+                onChange={s => setSeasons(prev => ({ ...prev, [key]: s }))}
+                onRemove={() => setSeasons(prev => {
+                  const next = { ...prev }
+                  delete next[key]
+                  return next
+                })}
+              />
+            ))}
+            <button type="button"
+              onClick={() => setSeasons(prev => {
+                // Keys only need to be unique and stable — the engine iterates them,
+                // nothing else references them. Never collide with the built-ins.
+                let n = 1
+                while (prev[`custom-${n}`]) n++
+                return { ...prev, [`custom-${n}`]: { label: '', match: [], startMonth: 5, startDay: 1, endMonth: 9, endDay: 30 } }
+              })}
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-accent-text hover:underline transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded">
+              <Plus className="w-3.5 h-3.5" /> Add a season
+            </button>
+
+            {/* Reset restores the built-in DATES only. It must never delete the
+                owner's custom seasons — "reset Calgary defaults" isn't consent to
+                drop the pool season they built. */}
+            <button type="button" onClick={() => setSeasons(prev => ({ ...prev, lawn: DEFAULT_SEASONS.lawn, snow: DEFAULT_SEASONS.snow }))}
+              className="block text-xs text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded">
+              <RotateCcw className="w-3 h-3 inline mr-1.5" />Reset lawn &amp; snow to Calgary defaults (Apr 15 → Oct 31 · Nov 1 → Mar 31)</button>
           </CardBody>
         </Card>
 
@@ -647,8 +681,14 @@ export default function SettingsPage() {
 const MONTH_OPTS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
   .map((m, i) => ({ value: i + 1, label: m }))
 
-function SeasonEditor({ icon, title, hint, season, onChange }: {
-  icon: React.ReactNode; title: string; hint: string; season: ServiceSeason; onChange: (s: ServiceSeason) => void
+// One editor for every season. The two built-ins pass a fixed `title`; an
+// owner-defined season passes `editable` instead, which swaps the title for a
+// name input, adds the match-keywords field (how the engine maps services to this
+// season — see lib/seasons.seasonForService), and offers Remove. Same component
+// so a custom season can never drift visually from the built-in two.
+function SeasonEditor({ icon, title, hint, season, onChange, editable, onRemove }: {
+  icon: React.ReactNode; title?: string; hint?: string; season: ServiceSeason; onChange: (s: ServiceSeason) => void
+  editable?: boolean; onRemove?: () => void
 }) {
   const set = (patch: Partial<ServiceSeason>) => onChange({ ...season, ...patch })
   const dayField = (val: number, key: 'startDay' | 'endDay') => (
@@ -662,19 +702,50 @@ function SeasonEditor({ icon, title, hint, season, onChange }: {
       {MONTH_OPTS.map(o => <option key={o.value} value={o.value} className="bg-bg-secondary">{o.label}</option>)}
     </select>
   )
+  const keywords = (season.match || []).join(', ')
   return (
     <div className="rounded-card border border-border p-3">
       <div className="flex items-center gap-2 mb-1">
         {icon}
-        <span className="text-sm font-semibold text-ink">{title}</span>
-        <span className="ml-auto text-xs font-medium text-accent-text">{seasonLabel(season)}</span>
+        {editable ? (
+          <input value={season.label || ''} placeholder="e.g. Pool season"
+            aria-label="Season name"
+            onChange={e => set({ label: e.target.value })}
+            className="flex-1 min-w-0 bg-bg-tertiary border border-border-strong rounded-lg px-2.5 py-1.5 text-sm font-semibold text-ink placeholder:font-normal placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+        ) : (
+          <span className="text-sm font-semibold text-ink">{title}</span>
+        )}
+        <span className="ml-auto text-xs font-medium text-accent-text shrink-0">{seasonLabel(season)}</span>
+        {onRemove && (
+          <button type="button" onClick={onRemove} aria-label={`Remove ${season.label || 'this season'}`} title="Remove this season"
+            className="h-7 w-7 rounded-lg flex items-center justify-center text-ink-faint hover:text-red-400 transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        )}
       </div>
-      <p className="text-[11px] text-ink-faint mb-2">{hint}</p>
+      {hint && <p className="text-[11px] text-ink-faint mb-2">{hint}</p>}
       <div className="flex items-center gap-2 flex-wrap text-xs text-ink-muted">
         <span>Starts</span>{monthField(season.startMonth, 'startMonth')}{dayField(season.startDay, 'startDay')}
         <span className="mx-1">→</span>
         <span>Ends</span>{monthField(season.endMonth, 'endMonth')}{dayField(season.endDay, 'endDay')}
       </div>
+      {editable && (
+        <div className="mt-2">
+          <label className="block text-[11px] font-semibold text-ink-muted">
+            Applies to services containing
+            <input value={keywords} placeholder="e.g. pool, opening, closing"
+              aria-label="Matching keywords, comma separated"
+              onChange={e => set({ match: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
+              className="mt-1 w-full bg-bg-tertiary border border-border-strong rounded-lg px-2.5 py-2 text-sm font-normal text-ink placeholder:text-ink-faint outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+          </label>
+          {/* An empty match list is a season that can never fire — the engine only
+              resolves a custom season through these keywords. Say so here, not in a
+              support ticket three months into the off-season. */}
+          {(season.match || []).length === 0 && (
+            <p className="text-[11px] text-amber-400 mt-1">Add at least one word from the service names this applies to — without one, this season won&rsquo;t apply to anything.</p>
+          )}
+        </div>
+      )}
     </div>
   )
 }
