@@ -92,6 +92,14 @@ jobs:
       - name: Verify trade packs
         run: npm run verify:trades
 
+      # Seeding's one promise — it only ever fills EMPTINESS — is a pure function
+      # (seedPlan), so an existing business coming through setup byte-identical is
+      # provable without a database. This drives every gate through production's
+      # real shape (27 templates, stored seasons) and the adversarial ones. If a
+      # future edit ever lets seeding write over owner data, this is what stops it.
+      - name: Verify onboarding
+        run: npm run verify:onboarding
+
       # This step is why the first 17 CI runs were red, and it's worth writing down.
       # ESLint had never been configured in this repo — no .eslintrc anywhere — so
       # `next lint` dropped into an INTERACTIVE setup prompt, which cannot be

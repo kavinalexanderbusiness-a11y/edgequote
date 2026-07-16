@@ -14,6 +14,18 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
   if (!user) redirect('/login')
 
+  // First run: an account with NO business_settings row has never been set up —
+  // nothing creates that row at signup, so its absence is the one unambiguous
+  // "brand new" signal. Send them to /setup (which lives OUTSIDE this layout, so
+  // this can never loop). The row's mere existence stands the redirect down:
+  // every existing business has one, and /setup's own "skip" creates it — so
+  // this fires exactly once per new account and never for anyone configured.
+  // Errors fail OPEN (no redirect): a transient read failure must not lock a
+  // working business out of its dashboard.
+  const { data: bizRow, error: bizErr } = await supabase
+    .from('business_settings').select('user_id').eq('user_id', user.id).maybeSingle()
+  if (!bizErr && !bizRow) redirect('/setup')
+
   return (
     <div className="lg:flex min-h-screen">
       {/* Keyboard users can jump the sidebar straight to page content. Visually
