@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from '@/lib/toast'
 import { useBusinessData } from '@/hooks/useBusinessData'
@@ -27,7 +28,7 @@ import { cn } from '@/lib/utils'
 import { ThemePref, getThemePref, applyThemePref } from '@/lib/theme'
 import { ServiceSeasons, ServiceSeason, DEFAULT_SEASONS, settingsToSeasons, seasonLabel, LAWN_HINTS, SNOW_HINTS } from '@/lib/seasons'
 import { weekdayLong } from '@/lib/preferences'
-import { Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard, Building2, DollarSign, MessageSquare, Bell, Link as LinkIcon, Zap, RotateCcw, Image as ImageIcon, Palette, Clock, MapPin, LayoutGrid, X } from 'lucide-react'
+import { Upload, Plus, Trash2, Check, Sun, Moon, Monitor, Snowflake, CalendarRange, CreditCard, Building2, DollarSign, MessageSquare, Bell, Link as LinkIcon, Zap, RotateCcw, Image as ImageIcon, Palette, Clock, MapPin, LayoutGrid, X, ArrowRight } from 'lucide-react'
 
 const SETTINGS_TABS: TabItem[] = [
   { key: 'business', label: 'Business', icon: Building2 },
@@ -313,6 +314,16 @@ export default function SettingsPage() {
           form in the DOM so Company Information leads the Business tab — it's
           what people come here to check; branding follows below. */}
       <div className={cn('order-2 space-y-6', tab !== 'business' && 'hidden')}>
+      {/* Business type lives on /setup (the first-run wizard doubles as the safe
+          reseed surface) — this is just the doorway, so the concept is findable
+          after day one without duplicating the picker here. */}
+      <Link href="/setup" className="flex items-center justify-between gap-3 rounded-card border border-border bg-bg-secondary px-4 py-3 hover:border-accent/40 transition-colors group">
+        <div>
+          <p className="text-sm font-semibold text-ink">Business type &amp; starter catalogue</p>
+          <p className="text-xs text-ink-muted mt-0.5">What trade you are, and the seeded defaults that came with it. Reseeding never touches configured data.</p>
+        </div>
+        <ArrowRight className="w-4 h-4 text-ink-faint group-hover:text-accent-text transition-colors shrink-0" />
+      </Link>
       <Card>
         <CardHeader><h2 className="text-sm font-semibold text-ink flex items-center gap-2"><ImageIcon className="w-4 h-4 text-accent-text" /> Branding</h2></CardHeader>
         <CardBody className="space-y-5">

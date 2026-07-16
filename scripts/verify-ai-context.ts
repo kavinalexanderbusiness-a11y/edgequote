@@ -11,8 +11,9 @@
 // key, no network, no cost, and fully deterministic — so it can run in CI beside
 // the other verifiers.
 
-import { brandVoicePromptBlock, BANNED_PHRASES, type BrandVoice } from '../src/lib/marketing/brandVoice'
+import { brandVoicePromptBlock, BANNED_PHRASES, MARKETING_SYSTEM, type BrandVoice } from '../src/lib/marketing/brandVoice'
 import { contextLine, looksSeasonal, EMPTY_CONTEXT, type BusinessContext } from '../src/lib/marketing/businessContext'
+import { campaignDirective, campaignSubject } from '../src/lib/marketing/campaigns'
 
 let failures = 0
 const ok = (name: string) => console.log(`  ✓ ${name}`)
@@ -95,6 +96,39 @@ check('electrician does NOT read as seasonal', !looksSeasonal(ctx(ELECTRICIAN)),
 // spurious one is an annoyance. Fail toward the annoyance.
 check('unknown business stays seasonal (fails safe)', looksSeasonal(EMPTY_CONTEXT),
   'an unreadable business would silently lose its seasonal campaigns')
+
+// 7. Seasonal campaign directives ride on voice.services, same contract as the
+//    prompt block: a business we can't read keeps the ORIGINAL lawn/snow copy
+//    (zero regression for the launch audience); a business we CAN read gets a
+//    directive that names no trade — the BUSINESS block supplies the trade.
+const SEASONAL_KINDS = ['spring', 'summer', 'fall', 'winter'] as const
+const unknownVoice: BrandVoice = { ...base, services: [] }
+const plumberVoice: BrandVoice = { ...base, services: PLUMBER }
+check('unknown business keeps the legacy lawn/snow seasonal directives',
+  /first mow/.test(campaignDirective('spring', unknownVoice)) &&
+  /mowing/.test(campaignDirective('summer', unknownVoice)) &&
+  /leaf cleanup/.test(campaignDirective('fall', unknownVoice)) &&
+  /snow removal/.test(campaignDirective('winter', unknownVoice)),
+  'the empty-business fallback lost its original copy — a new lawn signup regressed')
+for (const kind of SEASONAL_KINDS) {
+  check(`known business gets a trade-neutral ${kind} directive`,
+    !/lawn|mow|grass|leaf|snow|driveway/i.test(campaignDirective(kind, plumberVoice)),
+    `directive still names a trade:\n${campaignDirective(kind, plumberVoice)}`)
+  check(`known business gets trade-neutral ${kind} subject facts`,
+    !campaignSubject(kind, plumberVoice).facts.some(f => /lawn|mow|grass|leaf|snow|driveway/i.test(f)),
+    `facts still name a trade:\n${campaignSubject(kind, plumberVoice).facts.join('\n')}`)
+}
+check('unknown business keeps the legacy seasonal subject facts',
+  campaignSubject('summer', unknownVoice).facts.some(f => /mowing/.test(f)),
+  'the empty-business subject fallback lost its original copy')
+
+// 8. The marketing persona names no trade — the BUSINESS block is the only
+//    trade authority, so the system prompt asserting one would contradict it.
+//    First paragraph only: rule 4 quotes the banned lawn CLICHÉS on purpose
+//    (bans are quality guards, not trade assumptions — see check 5).
+check('MARKETING_SYSTEM persona asserts no trade',
+  !/lawn|mow|grass|snow|landscap/i.test(MARKETING_SYSTEM.split('\n\n')[0]),
+  'the system persona names a trade again — a plumber\'s feed will sound like a lawn company')
 
 console.log(failures === 0
   ? '\n✓ AI business context verified for lawn and non-lawn businesses.\n'
