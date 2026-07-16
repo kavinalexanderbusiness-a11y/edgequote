@@ -404,10 +404,26 @@ export function QuoteBuilder({
       : SERVICE_UNITS.map(u => ({ value: u.value, label: u.label }))
   ), [units])
 
-  const activeTemplates = useMemo(() => templates.filter(t => t.is_active), [templates])
+  // Favourites first, then the business's own sort_order within each group.
+  // THIS is what a favourite is for: the settings toggle promises "shown first in
+  // the quote builder", and this is the only place that promise can be kept — the
+  // picker is the sole reader of display order. Marking a favourite does nothing
+  // without this line. Stable within groups (the queries already order by
+  // sort_order), so a business with no favourites sees the exact order it saw
+  // before — the sort is a no-op until someone opts in.
+  const activeTemplates = useMemo(
+    () => templates.filter(t => t.is_active)
+      .slice()   // never sort the shared store's array in place
+      .sort((a, b) => Number(!!b.is_favorite) - Number(!!a.is_favorite)),
+    [templates],
+  )
   const templateOptions = useMemo(() => [
     { value: '', label: 'Select a service...' },
-    ...activeTemplates.map(t => ({ value: t.id, label: `${t.name} — ${formatServicePrice(t)}` })),
+    ...activeTemplates.map(t => ({
+      // A native <select> can't render an icon, so the star carries the grouping.
+      value: t.id,
+      label: `${t.is_favorite ? '★ ' : ''}${t.name} — ${formatServicePrice(t)}`,
+    })),
   ], [activeTemplates])
   const statusOptions = [
     { value: 'draft', label: 'Draft' }, { value: 'sent', label: 'Sent' },

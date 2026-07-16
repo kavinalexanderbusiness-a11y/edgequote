@@ -958,6 +958,12 @@ export interface ServiceTemplate {
   is_active: boolean
   sort_order: number
   user_id: string
+  // What this service COSTS to deliver, per unit. Both nullable, and null means
+  // "never told us" — NOT zero. lib/margin.ts turns them into a margin only when
+  // known, so a service with no cost shows no margin instead of claiming 100%.
+  unit_cost: number | null      // labour / subcontract
+  material_cost: number | null  // materials consumed
+  is_favorite: boolean
 }
 
 export interface ServiceTemplateFormValues {
@@ -968,6 +974,13 @@ export interface ServiceTemplateFormValues {
   default_description: string
   notes: string
   is_active: boolean
+  // STRINGS on purpose, unlike default_rate. A number-typed field cannot express
+  // the difference between "0" and "left blank", and `Number('')` is 0 — which
+  // would silently record every untouched service as costing nothing, i.e. 100%
+  // margin. Held as text here and mapped '' → null on submit.
+  unit_cost: string
+  material_cost: string
+  is_favorite: boolean
 }
 
 export interface BusinessSettingsFormValues {
