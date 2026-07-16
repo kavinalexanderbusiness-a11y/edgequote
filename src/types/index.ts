@@ -271,8 +271,67 @@ export interface Job {
   is_initial_visit: boolean
   // Manual day-route sequence (drag-and-drop). null/absent = automatic (optimizer).
   route_order?: number | null
+  // Which crew runs this visit (RUN-2026-07-15-dispatch-crews). null = unassigned —
+  // the single-crew status quo. Orthogonal to crew_size, which stays headcount.
+  crew_id?: string | null
   customers?: Pick<Customer, 'id' | 'name' | 'phone' | 'preferred_days' | 'avoid_days' | 'pref_time_start' | 'pref_time_end'>
   properties?: Pick<Property, 'id' | 'address' | 'lat' | 'lng' | 'neighborhood' | 'preferred_days' | 'avoid_days' | 'pref_time_start' | 'pref_time_end'>
+}
+
+// ── Dispatch & Crew Management (RUN-2026-07-15-dispatch-crews) ────────────────
+// A crew is an IDENTITY (who runs the route), not a headcount. Jobs point at a
+// crew via jobs.crew_id; the dispatch board partitions a day by crew and feeds
+// each subset to the SAME route/ETA/capacity engines the schedule already uses.
+
+export interface Crew {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  name: string
+  // Palette key (lib/crews CREW_PALETTE) — board chip + map pin hue, not a hex.
+  color: string
+  day_start: string | null       // HH:mm[:ss]; null = business work_start_time
+  day_end: string | null
+  capacity_minutes: number | null // explicit daily capacity; null = derive from window
+  is_active: boolean
+  sort_order: number
+}
+
+export type TechnicianStatus = 'available' | 'en_route' | 'on_job' | 'break' | 'off'
+
+export const TECHNICIAN_STATUS_LABELS: Record<TechnicianStatus, string> = {
+  available: 'Available',
+  en_route: 'En route',
+  on_job: 'On job',
+  break: 'On break',
+  off: 'Off today',
+}
+
+export interface Technician {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  crew_id: string | null
+  name: string
+  phone: string | null
+  email: string | null
+  role: string | null
+  status: TechnicianStatus
+  status_changed_at: string
+  is_active: boolean
+}
+
+// One note per (date, crew); crew_id null = the day-level note.
+export interface DispatchNote {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  date: string
+  crew_id: string | null
+  body: string
 }
 
 // Apple-style edit scope for recurring jobs.

@@ -1,6 +1,6 @@
 import type { LucideIcon } from 'lucide-react'
 import {
-  LayoutDashboard, CalendarDays, Users, Home, FileText, Receipt, Wallet, MessageSquare, Wrench, Bot, Sprout,
+  LayoutDashboard, CalendarDays, Users, Home, FileText, Receipt, Wallet, MessageSquare, Wrench, Bot, Sprout, Radio,
 } from 'lucide-react'
 
 // ── Feature-module registry ───────────────────────────────────────────────────
@@ -39,6 +39,8 @@ export const FEATURE_MODULES: FeatureModule[] = [
     description: 'The morning command center — money, priorities, and the day ahead.' },
   { key: 'schedule',   label: 'Schedule',   href: '/dashboard/schedule',   icon: CalendarDays,
     description: 'Visits, routes, capacity and the day plan.' },
+  { key: 'dispatch',   label: 'Dispatch',   href: '/dashboard/dispatch',   icon: Radio,
+    description: 'Crews, technicians and the day\'s routes on one board.' },
   { key: 'customers',  label: 'Customers',  href: '/dashboard/customers',  icon: Users,
     description: 'Every customer, their history, and the conversation.' },
   { key: 'properties', label: 'Properties', href: '/dashboard/properties', icon: Home,
