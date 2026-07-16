@@ -26,6 +26,7 @@ import { loadServiceUnits, type ServiceUnit } from '@/lib/units'
 import { formatCurrency, formatDate, suggestTravelFee, cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
 import { formatServicePrice, servicePricingKind } from '@/lib/servicePricing'
+import { loadBusinessShape, SHAPE_LOADING, type BusinessShape } from '@/lib/businessShape'
 import { laborSuggestion, pricingConfigFromSettings, latestSavedRecommendation, recommendationIsStale, pricingPackage } from '@/lib/pricing'
 import { evaluatePrice, PriceGuardrail } from '@/lib/priceGuardrails'
 import { PriceGuardrailNote } from '@/components/pricing/PriceGuardrailNote'
@@ -143,9 +144,20 @@ export function QuoteBuilder({
   const aiScope = useAiAssist()
   const measuredSqft = Number(watch('measured_sqft')) || 0
 
+  // Which pricing STRUCTURE this service uses — the one seam that decides which
+  // engine recommends and which fields an Accept fills (lawn cadences vs area
+  // rate vs labour). Template display type wins; else the serviceKey normalizer.
+  const svcTemplate = templates.find(t => t.id === templateId) ?? null
+  const pricingKind = servicePricingKind(watch('service_type'), svcTemplate)
+
   // Smart Price Guardrails — per-cadence, never-block warnings (measured lawn +
   // crew cost). Each filled cadence is judged against ITS own recommended price.
   const priceGuardrails = useMemo<PriceGuardrail[]>(() => {
+    // Every judgement below is the LAWN engine's: recommendedForCadence() is a mow
+    // rate × ft², and the warning it emits literally reads "…for this 2,000 ft²
+    // lawn". Pointed at a driveway with an area, it was confidently wrong about a
+    // trade it wasn't measuring. It speaks for lawn-cadence services only.
+    if (pricingKind !== 'lawn_recurring') return []
     const cfg = pricingConfigFromSettings(settings)
     const crewCost = settings?.crew_cost_per_hour && settings.crew_cost_per_hour > 0 ? settings.crew_cost_per_hour : 40
     const out: PriceGuardrail[] = []
@@ -154,7 +166,7 @@ export function QuoteBuilder({
     }
     add('one_time', initialPrice); add('weekly', weeklyPrice); add('biweekly', biweeklyPrice); add('monthly', monthlyPrice)
     return out
-  }, [settings, measuredSqft, initialPrice, weeklyPrice, biweeklyPrice, monthlyPrice])
+  }, [pricingKind, settings, measuredSqft, initialPrice, weeklyPrice, biweeklyPrice, monthlyPrice])
 
   // Live duplicate detection — when entering a brand-new lead, surface a likely
   // existing customer so we link instead of creating a duplicate. Reuses the
@@ -170,12 +182,6 @@ export function QuoteBuilder({
   const watchedServices = watch('services')
   const extras = useMemo(() => sumServiceLines(watchedServices), [watchedServices])
   const effectiveTotal = initialPrice + extras.net + Number(travelFee || 0)
-
-  // Which pricing STRUCTURE this service uses — the one seam that decides which
-  // engine recommends and which fields an Accept fills (lawn cadences vs area
-  // rate vs labour). Template display type wins; else the serviceKey normalizer.
-  const svcTemplate = templates.find(t => t.id === templateId) ?? null
-  const pricingKind = servicePricingKind(watch('service_type'), svcTemplate)
 
   // Live suggested prices straight from the measured lawn — the compact one-tap
   // pricing. Same engine as everywhere else; ONLY for lawn-cadence services (a
@@ -398,6 +404,25 @@ export function QuoteBuilder({
     loadServiceUnits(createClient()).then(u => { if (alive) setUnits(u) })
     return () => { alive = false }
   }, [])
+
+  // What this business DOES — derived from their catalogue + job history by THE
+  // shared rule (no business_type column, nothing asked, nothing written). Only
+  // used to name the area field: "Lawn Size" is the right name for a lawn
+  // company's property attribute and the wrong one for a plumber's. Defaults to
+  // SHAPE_LOADING (showLawnFields: true), so a lawn account — and every account
+  // while the reads are in flight — renders exactly the label it renders today.
+  const [shape, setShape] = useState<BusinessShape>(SHAPE_LOADING)
+  useEffect(() => {
+    let alive = true
+    const sb = createClient()
+    sb.auth.getUser().then(({ data: { user } }) => {
+      if (!user) return
+      loadBusinessShape(sb, user.id)
+        .catch(() => SHAPE_LOADING) // a failed read must never hide a lawn company's field
+        .then(s => { if (alive) setShape(s) })
+    })
+    return () => { alive = false }
+  }, [])
   const unitOptions = useMemo(() => (
     units.length
       ? units.map(u => ({ value: u.code, label: u.label }))
@@ -574,11 +599,15 @@ export function QuoteBuilder({
                 error={errors.service_type?.message}
                 {...register('service_type', { required: 'Service is required' })} />
 
-              {/* Lawn size — a CORE property attribute (powers pricing, labour & future
-                  analytics). Auto-filled from a website/satellite measurement or the
-                  property's saved size; always editable, and synced back to the property
-                  on save. */}
-              <Input label="Lawn Size (ft²)" type="number" step="1" min="0"
+              {/* Measured area — a CORE property attribute (powers pricing, labour &
+                  future analytics). Auto-filled from a website/satellite measurement or
+                  the property's saved size; always editable, and synced back to the
+                  property on save.
+                  The FIELD always renders — it is the only way to type an area, and the
+                  area-rate recommendation is computed from it, so hiding it would break
+                  per-sqft pricing for exactly the trades that need it. Only its NAME is
+                  derived: a plumber should not be asked for a lawn size. */}
+              <Input label={shape.showLawnFields ? 'Lawn Size (ft²)' : 'Area (ft²)'} type="number" step="1" min="0"
                 placeholder="e.g. 5,000"
                 hint="Powers pricing & labour. Auto-filled from a measurement or the saved property size — edit to correct."
                 {...register('measured_sqft', { min: 0 })} />
@@ -765,7 +794,7 @@ export function QuoteBuilder({
           </div>
 
           <Collapsible title="Labour calculator" icon={Calculator} summary={laborSummary}>
-            <p className="text-xs text-ink-faint">Adjusts the suggested price above. Most mowing quotes can skip this and just type a price.</p>
+            <p className="text-xs text-ink-faint">Adjusts the suggested price above. Most quotes can skip this and just type a price.</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Input label="Estimated Hours" type="number" step="0.25" min="0"
                 error={errors.hours?.message}
@@ -1024,24 +1053,52 @@ export function QuoteBuilder({
           serviceType={watch('service_type')}
           propertyId={defaultPropertyId}
           customerId={customerId && customerId !== '__manual' ? customerId : undefined}
-          services={templates.map(t => t.name).filter((n): n is string => !!n)}
-          onServiceChange={(n) => setValue('service_type', n)}
+          pricingKind={pricingKind}
+          // The builder's OWN picker (templateOptions) offers activeTemplates —
+          // the modal offering `templates` meant it listed retired services the
+          // picker deliberately hides, and picking one re-populated the quote
+          // with a service the owner had taken off the menu.
+          services={activeTemplates.map(t => t.name).filter((n): n is string => !!n)}
+          onServiceChange={(n) => {
+            setValue('service_type', n)
+            // Bind the TEMPLATE too, not just its name. servicePricingKind()
+            // reads the template's pricing_display_type FIRST, so a name with no
+            // template behind it left svcTemplate null, fell through to 'labour',
+            // and the template's own per-sqft rate was never applied. Setting the
+            // id runs the same effect the builder's picker does (name, hourly
+            // rate, default description) — one path, not two.
+            setValue('service_template_id', activeTemplates.find(t => t.name === n)?.id ?? '')
+          }}
           onClose={() => setShowMeasure(false)}
           onApply={(sel) => {
-            // Fill the WHOLE pricing structure in one apply — first visit at the
-            // one-time price plus every recurring option, so the customer sees all
-            // choices with zero re-typing. Monthly stays blank unless enabled (or
-            // the measure flow explicitly recommended monthly).
-            setValue('initial_price', sel.oneTime)
-            setValue('weekly_price', sel.weekly)
-            setValue('biweekly_price', sel.biweekly)
-            if (includeMonthly || sel.cadence === 'monthly') {
-              setValue('monthly_price', sel.monthly)
-              if (sel.cadence === 'monthly') setIncludeMonthly(true)
-            }
+            // The measured area comes back for EVERY service kind — it's what the
+            // area-rate recommendation above is computed from.
             setValue('measured_sqft', sel.totalSqft)
-            setValue('suggested_price', sel.suggested)
-            setInitialManual(true); setShowMeasure(false)
+            // The cadence prices come back ONLY for a lawn-cadence service. For
+            // any other kind the modal prices nothing, and these fields must stay
+            // untouched: they persist and print to the customer's PDF, so writing
+            // a grass-derived weekly price onto a hedge quote is a wrong number in
+            // front of the customer. The service's own recommendation (area × the
+            // template's rate, or labour) is the card above — accepted explicitly.
+            if (sel.pricing) {
+              // Fill the WHOLE pricing structure in one apply — first visit at the
+              // one-time price plus every recurring option, so the customer sees all
+              // choices with zero re-typing. Monthly stays blank unless enabled (or
+              // the measure flow explicitly recommended monthly).
+              setValue('initial_price', sel.pricing.oneTime)
+              setValue('weekly_price', sel.pricing.weekly)
+              setValue('biweekly_price', sel.pricing.biweekly)
+              if (includeMonthly || sel.pricing.cadence === 'monthly') {
+                setValue('monthly_price', sel.pricing.monthly)
+                if (sel.pricing.cadence === 'monthly') setIncludeMonthly(true)
+              }
+              setValue('suggested_price', sel.pricing.suggested)
+              // Only a real applied price is a manual price. Claiming it for an
+              // area-only apply would freeze the labour suggestion at whatever
+              // was in the field and badge the quote "Manual price".
+              setInitialManual(true)
+            }
+            setShowMeasure(false)
           }}
         />
       )}

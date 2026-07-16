@@ -7,6 +7,7 @@ import { loadGoogleMaps, addPropertyPin, flashRing, type PropertyPinHandle } fro
 import { pricingPackage, estimateVisitMinutes, PricingConfig, CadenceKey } from '@/lib/pricing'
 import { Coord } from '@/lib/geo'
 import { ProspectContext, loadProspectContext, gradedProspectPricing } from '@/lib/prospect'
+import type { ServicePricingKind } from '@/lib/servicePricing'
 import { PricePackagePanel, CadenceSelection } from '@/components/pricing/PricePackagePanel'
 import { DecisionSummary } from '@/components/pricing/DecisionSummary'
 import { AutoMeasureBanner } from '@/components/measure/AutoMeasureBanner'
@@ -26,16 +27,28 @@ interface MeasureDraft {
   ts: number
 }
 
-// Everything the builder needs to fill the quote's pricing structure in one tap.
+// What the builder gets back from a measurement.
+//
+// The measured AREA is the modal's one unconditional job — every service kind
+// wants it. The cadence PACKAGE is not: it is the lawn engine's One-Time/Weekly/
+// Bi-Weekly structure, and it is only meaningful for a lawn-cadence service. It
+// is therefore optional, and absent for every other kind — a hedge job must not
+// come back carrying a weekly price computed from that many ft² of grass, because
+// those fields persist and print to the customer's PDF.
 export interface MeasureApplyPayload {
-  cadence: CadenceKey
-  price: number       // the selected cadence's per-visit price
-  oneTime: number
-  weekly: number
-  biweekly: number
-  monthly: number
   totalSqft: number
-  suggested: number   // one-time + travel (pricing-analysis provenance)
+  /** Present ONLY for `lawn_recurring`. Any other kind returns area and no price:
+   *  its recommendation is the builder's own (area × the template's rate, or
+   *  labour), which is the engine that actually knows how to price it. */
+  pricing?: {
+    cadence: CadenceKey
+    price: number     // the selected cadence's per-visit price
+    oneTime: number
+    weekly: number
+    biweekly: number
+    monthly: number
+    suggested: number // one-time + travel (pricing-analysis provenance)
+  }
 }
 
 interface Props {
@@ -43,6 +56,10 @@ interface Props {
   travelFee: number
   cfg: PricingConfig
   serviceType?: string | null   // the selected service — pricing/duration learn from THIS service only
+  /** WHICH pricing structure the selected service uses. Resolved by the builder
+   *  (where the service template already lives) via THE servicePricingKind seam —
+   *  never re-derived here, because a second inference is a second answer. */
+  pricingKind: ServicePricingKind
   propertyId?: string | null
   customerId?: string | null
   services?: string[]           // selectable service names (so the service is chosen BEFORE measuring)
@@ -51,7 +68,7 @@ interface Props {
   onClose: () => void
 }
 
-export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId, customerId, services, onServiceChange, onApply, onClose }: Props) {
+export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind, propertyId, customerId, services, onServiceChange, onApply, onClose }: Props) {
   const supabase = createClient()
   const [center, setCenter] = useState<Coord | null>(null)
   const [hoodName, setHoodName] = useState<string | null>(null)
@@ -392,8 +409,17 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
   // re-run against the grade-adjusted package, so the hero recommendation, CTA,
   // Pricing Details, Pricing Guidance and "Use recommended" all show the SAME
   // number — never a $65 hero over $70 details.
+  //
+  // THE GATE: this whole package is the LAWN cadence engine (mow rate × ft², then
+  // Weekly/Bi-Weekly discounts off it). It ran unconditionally, so a driveway
+  // seal or a hedge trim was priced as that many square feet of grass. It speaks
+  // for lawn-cadence services ONLY — every other kind is priced by the builder's
+  // own service-appropriate recommendation, and the modal just hands back area.
+  // The engine below is untouched; it is simply not asked a question it can't
+  // answer.
+  const isLawnCadence = pricingKind === 'lawn_recurring'
   const nearby = prospect?.nearbyJobs ?? 0
-  const graded = totalSqft > 0 && prospect
+  const graded = isLawnCadence && totalSqft > 0 && prospect
     ? gradedProspectPricing(totalSqft, cfg, { overgrowth, nearbyCount: nearby, neighborhoodName: hoodName }, prospect, {
         distanceKm: null, travelFee: Number(travelFee) || 0, neighborhoodName: hoodName,
         estimatedMinutes: estimateVisitMinutes(totalSqft, prospect.observedMinPer1000),
@@ -401,8 +427,10 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
       })
     : null
   const assessment = graded?.assessment ?? null
-  const pkg = graded?.pkg
-    ?? (totalSqft > 0 ? pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount: nearby, neighborhoodName: hoodName }) : null)
+  const pkg = !isLawnCadence
+    ? null
+    : (graded?.pkg
+        ?? (totalSqft > 0 ? pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount: nearby, neighborhoodName: hoodName }) : null))
 
   // Record auto vs accepted so the estimate self-calibrates (best-effort).
   function recordMeasure() {
@@ -420,15 +448,29 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
     recordMeasure()
     clearDraft() // the measurement was used — nothing unfinished to resume
     onApply({
-      cadence: sel.cadence,
-      price: sel.price,
-      oneTime: pkg.oneTime,
-      weekly: pkg.options[0].price,
-      biweekly: pkg.options[1].price,
-      monthly: pkg.options[2].price,
       totalSqft,
-      suggested: pkg.oneTime + Number(travelFee || 0),
+      pricing: {
+        cadence: sel.cadence,
+        price: sel.price,
+        oneTime: pkg.oneTime,
+        weekly: pkg.options[0].price,
+        biweekly: pkg.options[1].price,
+        monthly: pkg.options[2].price,
+        suggested: pkg.oneTime + Number(travelFee || 0),
+      },
     })
+  }
+
+  // The modal's other job, alone: hand back the measured area and price NOTHING.
+  // This is the honest answer for a non-lawn-cadence service — the builder's own
+  // recommendation card prices it from the template's rate (or labour), which is
+  // the engine that knows the trade. Inventing a number here, or shipping a $0,
+  // would both be worse than saying nothing.
+  function applyMeasurementOnly() {
+    if (totalSqft <= 0) return
+    recordMeasure()
+    clearDraft()
+    onApply({ totalSqft })
   }
 
   return (
@@ -508,7 +550,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
                 {ready && (
                   <div className="absolute top-3 left-3 max-w-[75%] px-3 py-1.5 rounded-lg bg-bg-secondary/90 border border-border-strong text-xs font-medium text-ink pointer-events-none">
                     {points === 0
-                      ? (shapes > 0 ? 'Click around the edge of the next area.' : 'Click around the edge of the lawn.')
+                      ? (shapes > 0 ? 'Click around the edge of the next area.' : 'Click around the edge of the area.')
                       : points < 3
                         ? 'Continue clicking to outline the property.'
                         : 'Click near the starting point to finish.'}
@@ -537,22 +579,36 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
                     <span className="text-lg font-bold text-ink tabular-nums">{totalSqft.toLocaleString()} sq ft</span>
                     {shapes > 0 && <span className="text-xs text-ink-faint">({shapes} + current)</span>}
                   </div>
-                  {/* Same field order + hint as the Measure page — the two surfaces read identically. */}
-                  <label className="flex items-center gap-1.5 text-xs text-ink-muted" title="Lawn condition multiplier — 0.75 easy, 1.0 standard, 1.25 overgrown">
-                    <span>
-                      Condition<span className="block text-[10px] text-ink-faint">1.0 standard · 1.25 overgrown</span>
-                      {overgrowth !== 1 && <span className="block text-[10px] font-semibold text-accent-text">×{overgrowth} applied to prices</span>}
-                    </span>
-                    <input
-                      type="number" min="0" step="0.05"
-                      value={overgrowthRaw}
-                      onChange={e => setOvergrowthRaw(e.target.value)}
-                      className="w-16 bg-bg border border-border-strong rounded-lg px-2.5 py-2 text-base sm:text-sm text-ink tabular-nums outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20"
-                    />
-                  </label>
+                  {/* Same field order + hint as the Measure page — the two surfaces read identically.
+                      Condition feeds the cadence package and NOTHING else, so it follows the package:
+                      with no prices on screen it is a dead input claiming "applied to prices". */}
+                  {isLawnCadence && (
+                    <label className="flex items-center gap-1.5 text-xs text-ink-muted" title="Condition multiplier — 0.75 easy, 1.0 standard, 1.25 overgrown">
+                      <span>
+                        Condition<span className="block text-[10px] text-ink-faint">1.0 standard · 1.25 overgrown</span>
+                        {overgrowth !== 1 && <span className="block text-[10px] font-semibold text-accent-text">×{overgrowth} applied to prices</span>}
+                      </span>
+                      <input
+                        type="number" min="0" step="0.05"
+                        value={overgrowthRaw}
+                        onChange={e => setOvergrowthRaw(e.target.value)}
+                        className="w-16 bg-bg border border-border-strong rounded-lg px-2.5 py-2 text-base sm:text-sm text-ink tabular-nums outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20"
+                      />
+                    </label>
+                  )}
                 </div>
 
-                {pkg ? (
+                {!isLawnCadence ? (
+                  /* Not a lawn-cadence service: the measured area is the whole
+                     deliverable. No cadence package, and deliberately no price —
+                     the builder's Recommended price card prices this service from
+                     its own rate the moment the area lands. */
+                  <div className="border-t border-border pt-3 text-xs text-ink-faint">
+                    {totalSqft > 0
+                      ? <>Measured area applies to this quote. <span className="text-ink-muted font-medium">{serviceType || 'This service'}</span> isn&apos;t billed on a recurring per-visit cadence — its recommended price is on the quote, from your service&apos;s own rate.</>
+                      : 'Trace the property to measure the area for this quote.'}
+                  </div>
+                ) : pkg ? (
                   <div className="border-t border-border pt-3 space-y-3 animate-fade">
                     <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-2">
                       Pricing recommendation{Number(travelFee || 0) > 0 ? ` · $${Number(travelFee).toLocaleString()} travel stays on the quote` : ''}
@@ -574,22 +630,28 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
                   </div>
                 ) : (
                   <div className="border-t border-border pt-3 text-xs text-ink-faint">
-                    Trace the lawn to see the full pricing recommendation (set rates in Settings).
+                    Trace the area to see the full pricing recommendation (set rates in Settings).
                   </div>
                 )}
               </div>
 
               <div className="flex items-center justify-end gap-2">
                 <Button type="button" variant="ghost" onClick={requestClose}>Cancel</Button>
-                {pkg && (
-                  <Button type="button" onClick={() => applySelection({ cadence: pkg.recommended.cadence, price: pkg.recommended.cadence === 'weekly' ? pkg.options[0].price : pkg.recommended.cadence === 'biweekly' ? pkg.options[1].price : pkg.recommended.cadence === 'monthly' ? pkg.options[2].price : pkg.oneTime })}>
-                    Use recommended
-                  </Button>
-                )}
+                {isLawnCadence
+                  ? pkg && (
+                    <Button type="button" onClick={() => applySelection({ cadence: pkg.recommended.cadence, price: pkg.recommended.cadence === 'weekly' ? pkg.options[0].price : pkg.recommended.cadence === 'biweekly' ? pkg.options[1].price : pkg.recommended.cadence === 'monthly' ? pkg.options[2].price : pkg.oneTime })}>
+                      Use recommended
+                    </Button>
+                  )
+                  : totalSqft > 0 && (
+                    <Button type="button" onClick={applyMeasurementOnly}>
+                      Use measurement
+                    </Button>
+                  )}
               </div>
 
               <p className="text-xs text-ink-faint">
-                Tap each corner of the lawn to trace it — tap near your starting point (or <span className="text-ink font-medium">Add area</span>) to close the shape. For front + back, close one area, then trace the next — they add up. The price is your rate × area, plus the travel fee from the quote.
+                Tap each corner of the area to trace it — tap near your starting point (or <span className="text-ink font-medium">Add area</span>) to close the shape. For front + back, close one area, then trace the next — they add up.{isLawnCadence ? ' The price is your rate × area, plus the travel fee from the quote.' : ''}
               </p>
             </>
           )}
