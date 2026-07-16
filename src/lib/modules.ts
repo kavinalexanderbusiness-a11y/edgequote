@@ -5,61 +5,112 @@ import {
 
 // ── Feature-module registry ───────────────────────────────────────────────────
 // THE declarative catalogue of EdgeQuote's feature modules — the platform seam
-// for per-business composition. Navigation renders FROM this registry; a
+// for per-business composition and the foundation the marketplace stands on.
+// Navigation (sidebar + command palette) renders FROM this registry; a
 // business's `business_settings.enabled_modules` (jsonb string[]) decides which
-// modules appear. NULL means "all modules" — every existing business keeps
-// exactly what it has today, so the seam costs nothing until it's used.
+// modules are installed. NULL means "all modules" — every existing business
+// keeps exactly what it has today, and future modules arrive auto-installed.
 //
-// Why a registry instead of a hardcoded nav: a field-service platform serves
-// trades with different shapes (an indoor trade may never measure a property;
-// a solo operator may not need Equipment). Composition happens by CONFIG over
-// one codebase — never by industry picker and never by forked builds. This is
-// also the anchor for what comes later: a settings screen toggles entries, a
-// future marketplace lists them, custom modules append to them. Adding a
-// module = one entry here + its routes; nothing else to wire.
+// Marketplace model (owner-approved): modules are FIRST-PARTY CODE composed by
+// config — there are no runtime plugins. A marketplace listing is a registry
+// entry; installing is enabling; per-module state (installed version, install
+// date) lives in `business_settings.module_meta`. The `sku` field is the
+// licensing hook: absent = free; when paid modules exist, `isEntitled()` is
+// the ONE place entitlement gets checked.
 //
-// Enforcement is at the navigation level (a disabled module is hidden, not
-// 404'd) — data stays intact and deep links keep working, which is the
-// backwards-compatible reading of "disabled".
+// "Uninstall" is deliberately gentle: it hides the module from navigation.
+// Data, pages and deep links stay intact — reversible, safe, honest.
+
+export type ModuleCategory = 'operations' | 'money' | 'customers' | 'growth'
+export const MODULE_CATEGORIES: Record<ModuleCategory, string> = {
+  operations: 'Operations',
+  money: 'Money',
+  customers: 'Customers',
+  growth: 'Growth',
+}
+export const CATEGORY_ORDER: ModuleCategory[] = ['operations', 'customers', 'money', 'growth']
 
 export interface FeatureModule {
-  /** Stable id — stored in business_settings.enabled_modules; never rename. */
+  /** Stable id — stored in enabled_modules / module_meta; never rename. */
   key: string
   label: string
   href: string
   icon: LucideIcon
-  /** Core modules are always visible and cannot be disabled. */
+  /** Required modules: always installed, can never be removed. */
   core?: boolean
-  /** One-liner for the future module-management / marketplace surface. */
+  /** One-liner for the Modules surface / marketplace listing. */
   description: string
+  category: ModuleCategory
+  /** Bump when the module meaningfully changes — drives the "Updated" badge. */
+  version: number
+  /** One line shown to businesses whose installed version is older. */
+  whatsNew?: string
+  /** Module keys this one needs. Install pulls them in; they can't be removed while this is installed. */
+  requires?: string[]
+  /** Marketplace surfacing. */
+  featured?: boolean
+  /** Declared data/action surface — the module's permission manifest (informational, like an app-store listing). */
+  permissions: string[]
+  /** Future licensing hook — entitlement key. Absent = free forever. */
+  sku?: string
 }
 
 export const FEATURE_MODULES: FeatureModule[] = [
   { key: 'dashboard',  label: 'Dashboard',  href: '/dashboard',            icon: LayoutDashboard, core: true,
-    description: 'The morning command center — money, priorities, and the day ahead.' },
+    category: 'operations', version: 1,
+    description: 'The morning command center — money, priorities, and the day ahead.',
+    permissions: ['customers:read', 'jobs:read', 'invoices:read'] },
   { key: 'schedule',   label: 'Schedule',   href: '/dashboard/schedule',   icon: CalendarDays,
-    description: 'Visits, routes, capacity and the day plan.' },
+    category: 'operations', version: 1,
+    description: 'Visits, routes, capacity and the day plan.',
+    permissions: ['jobs:read', 'jobs:write', 'customers:read', 'messages:send'] },
   { key: 'dispatch',   label: 'Dispatch',   href: '/dashboard/dispatch',   icon: Radio,
-    description: 'Crews, technicians and the day\'s routes on one board.' },
+    category: 'operations', version: 1, requires: ['schedule'],
+    description: 'Crews, technicians and the day\'s routes on one board.',
+    permissions: ['jobs:read', 'jobs:write', 'crews:read', 'crews:write', 'equipment:read', 'equipment:write'] },
   { key: 'customers',  label: 'Customers',  href: '/dashboard/customers',  icon: Users,
-    description: 'Every customer, their history, and the conversation.' },
+    category: 'customers', version: 1,
+    description: 'Every customer, their history, and the conversation.',
+    permissions: ['customers:read', 'customers:write', 'messages:send'] },
   { key: 'properties', label: 'Properties', href: '/dashboard/properties', icon: Home,
-    description: 'Sites and service locations, with measurements and notes.' },
+    category: 'operations', version: 1, requires: ['customers'],
+    description: 'Sites and service locations, with measurements and notes.',
+    permissions: ['properties:read', 'properties:write', 'customers:read'] },
   { key: 'quotes',     label: 'Quotes',     href: '/dashboard/quotes',     icon: FileText,
-    description: 'Quote work, send it, and track it to a decision.' },
+    category: 'money', version: 1, requires: ['customers'],
+    description: 'Quote work, send it, and track it to a decision.',
+    permissions: ['quotes:read', 'quotes:write', 'customers:read', 'messages:send'] },
   { key: 'invoices',   label: 'Invoices',   href: '/dashboard/invoices',   icon: Receipt,
-    description: 'Invoicing, receipts and what you\'re owed.' },
+    category: 'money', version: 1, requires: ['customers'],
+    description: 'Invoicing, receipts and what you\'re owed.',
+    permissions: ['invoices:read', 'invoices:write', 'customers:read', 'messages:send'] },
   { key: 'payments',   label: 'Payments',   href: '/dashboard/payments',   icon: Wallet,
-    description: 'The money ledger — every payment, refund and dispute.' },
+    category: 'money', version: 1, requires: ['invoices'],
+    description: 'The money ledger — every payment, refund and dispute.',
+    permissions: ['payments:read', 'payments:write', 'invoices:read'] },
   { key: 'messages',   label: 'Messages',   href: '/dashboard/messages',   icon: MessageSquare,
-    description: 'Two-way SMS and email with every customer, in one inbox.' },
+    category: 'customers', version: 1, requires: ['customers'],
+    description: 'Two-way SMS and email with every customer, in one inbox.',
+    permissions: ['messages:read', 'messages:send', 'customers:read'] },
   { key: 'equipment',  label: 'Equipment',  href: '/dashboard/equipment',  icon: Wrench,
-    description: 'The gear that does the work — tracking and upkeep.' },
+    category: 'operations', version: 1,
+    description: 'The gear that does the work — tracking and upkeep.',
+    permissions: ['equipment:read', 'equipment:write'] },
   { key: 'automation', label: 'Automation', href: '/dashboard/automation', icon: Bot,
-    description: 'Rules that watch the business and act (or ask) on your behalf.' },
+    category: 'growth', version: 1, featured: true, requires: ['messages'],
+    description: 'Rules that watch the business and act (or ask) on your behalf.',
+    permissions: ['automations:read', 'automations:write', 'messages:send', 'customers:read'] },
   { key: 'grow',       label: 'Grow',       href: '/dashboard/grow',       icon: Sprout,
-    description: 'Analytics, marketing and the tools that win more work.' },
+    category: 'growth', version: 1, featured: true,
+    description: 'Analytics, marketing and the tools that win more work.',
+    permissions: ['customers:read', 'jobs:read', 'quotes:read', 'marketing:write'] },
 ]
+
+const byKey = new Map(FEATURE_MODULES.map(m => [m.key, m]))
+export const moduleByKey = (key: string): FeatureModule | undefined => byKey.get(key)
+const NON_CORE_KEYS = FEATURE_MODULES.filter(m => !m.core).map(m => m.key)
+
+// ── Composition (what a business sees) ────────────────────────────────────────
 
 // The modules a business actually sees. `enabled` comes straight from
 // business_settings.enabled_modules: not-an-array (null/undefined/garbage) =
@@ -68,4 +119,99 @@ export function visibleModules(enabled: unknown): FeatureModule[] {
   if (!Array.isArray(enabled)) return FEATURE_MODULES
   const keys = new Set(enabled.filter((k): k is string => typeof k === 'string'))
   return FEATURE_MODULES.filter(m => m.core || keys.has(m.key))
+}
+
+// The installed NON-CORE keys implied by a stored value (core is always in).
+export function installedKeys(enabled: unknown): string[] {
+  if (!Array.isArray(enabled)) return [...NON_CORE_KEYS]
+  const valid = new Set(NON_CORE_KEYS)
+  return enabled.filter((k): k is string => typeof k === 'string' && valid.has(k))
+}
+
+// What to STORE for a given set of installed non-core keys. The full set
+// normalizes to NULL — "all modules, including future ones" — so a business
+// that reinstalls everything is never frozen out of next release's module.
+export function normalizeEnabled(keys: string[]): string[] | null {
+  const set = new Set(keys)
+  return NON_CORE_KEYS.every(k => set.has(k)) ? null : NON_CORE_KEYS.filter(k => set.has(k))
+}
+
+// ── Dependencies ──────────────────────────────────────────────────────────────
+
+// Transitive dependency closure of a module (excluding itself, excluding core —
+// core is always installed so it's never actionable as a dependency).
+export function dependencyClosure(key: string): string[] {
+  const out: string[] = []
+  const seen = new Set<string>([key])
+  const walk = (k: string) => {
+    for (const dep of byKey.get(k)?.requires ?? []) {
+      if (seen.has(dep)) continue
+      seen.add(dep)
+      if (!byKey.get(dep)?.core) out.push(dep)
+      walk(dep)
+    }
+  }
+  walk(key)
+  return out
+}
+
+// Installing a module installs its dependencies too — one atomic set.
+export function installSet(installed: string[], key: string): string[] {
+  const next = new Set(installed)
+  next.add(key)
+  for (const dep of dependencyClosure(key)) next.add(dep)
+  return NON_CORE_KEYS.filter(k => next.has(k))
+}
+
+// The INSTALLED modules that (transitively) require `key` — the reason an
+// uninstall gets blocked. Empty array = safe to remove.
+export function uninstallBlockers(installed: string[], key: string): FeatureModule[] {
+  const set = new Set(installed)
+  return FEATURE_MODULES.filter(m =>
+    m.key !== key && (m.core || set.has(m.key)) && dependencyClosure(m.key).includes(key))
+}
+
+export function uninstallSet(installed: string[], key: string): string[] {
+  return installed.filter(k => k !== key)
+}
+
+// ── Update system ─────────────────────────────────────────────────────────────
+
+// Per-module install state, stored in business_settings.module_meta:
+//   { [key]: { v: installedVersion, at: ISO installed/acknowledged } }
+export interface ModuleMeta { v?: number; at?: string }
+export type ModuleMetaMap = Record<string, ModuleMeta>
+
+export function readMeta(raw: unknown): ModuleMetaMap {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  return raw as ModuleMetaMap
+}
+
+// A module has a pending update when the business installed an older version
+// and the registry has since moved on. No meta = adopted before the update
+// system existed = treat as current (never nag existing businesses).
+export function pendingUpdate(m: FeatureModule, meta: ModuleMetaMap): boolean {
+  const v = meta[m.key]?.v
+  return typeof v === 'number' && v < m.version
+}
+
+export function stampMeta(meta: ModuleMetaMap, keys: string[], now = new Date().toISOString()): ModuleMetaMap {
+  const next: ModuleMetaMap = { ...meta }
+  for (const k of keys) {
+    const m = byKey.get(k)
+    if (m) next[k] = { v: m.version, at: now }
+  }
+  return next
+}
+
+// ── Licensing hook (future) ───────────────────────────────────────────────────
+
+// THE entitlement check. Every current module is free (no sku), so this is
+// always true today — but every consumer already routes through it, which is
+// the whole point: when paid modules exist, entitlements plug in HERE and only
+// here. `entitlements` will be the business's license record (shape TBD).
+export function isEntitled(m: FeatureModule, entitlements?: unknown): boolean {
+  if (!m.sku) return true
+  void entitlements // TODO(licensing): consult the business's entitlements for m.sku
+  return true
 }

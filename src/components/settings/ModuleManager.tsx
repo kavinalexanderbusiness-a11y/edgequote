@@ -3,47 +3,93 @@
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Toggle } from '@/components/ui/Toggle'
 import { Skeleton } from '@/components/ui/Skeleton'
+import { Button } from '@/components/ui/Button'
 import { useModules } from '@/hooks/useModules'
-import { FEATURE_MODULES } from '@/lib/modules'
+import {
+  MODULE_CATEGORIES, CATEGORY_ORDER, pendingUpdate, isEntitled, moduleByKey,
+  type FeatureModule,
+} from '@/lib/modules'
 import { toast } from '@/lib/toast'
-import { LayoutGrid } from 'lucide-react'
+import { LayoutGrid, Star, ArrowUpCircle } from 'lucide-react'
 
 // ── Modules — the management surface over THE feature-module registry ─────────
-// Each business composes its own EdgeQuote: the registry (lib/modules.ts) is
-// the catalogue, this screen is where an owner turns modules on and off, and
-// the sidebar + command palette render the result. This is deliberately shaped
-// like a marketplace listing (icon, name, one-line pitch, switch) — a future
-// marketplace lists new entries here; custom modules append to the registry.
-// No runtime plugins: every module is first-party code, composed by config.
-//
-// Turning a module off hides it from navigation only — its data, pages and
-// deep links stay fully intact, so "off" is always reversible and always safe.
+// Shaped like a marketplace on purpose: featured modules up top, the catalogue
+// grouped by category, and each listing carrying its pitch, version, what it
+// depends on, and the data it declares it touches. Install pulls dependencies
+// in atomically; uninstall is refused (with names) while other installed
+// modules need it. Everything is first-party code composed by config — no
+// runtime plugins. "Off" only tidies navigation: data, pages and deep links
+// stay intact, so it's always reversible and always safe.
 export function ModuleManager() {
-  const { all, enabled, loaded, setEnabled } = useModules()
-  const nonCoreKeys = FEATURE_MODULES.filter(m => !m.core).map(m => m.key)
+  const { all, installed, meta, loaded, install, uninstall, acknowledgeUpdate, wouldInstall } = useModules()
+  const on = new Set(installed)
 
-  // The set of non-core modules currently ON. null = all (including future ones).
-  const on = new Set(Array.isArray(enabled)
-    ? (enabled as unknown[]).filter((k): k is string => typeof k === 'string')
-    : nonCoreKeys)
-
-  async function toggle(key: string, next: boolean) {
-    const nextOn = new Set(on)
-    if (next) nextOn.add(key); else nextOn.delete(key)
-    // Everything back on → store NULL, not the full list: NULL keeps future
-    // modules auto-enabled; a frozen list would silently hide next year's module.
-    const keys = nonCoreKeys.every(k => nextOn.has(k)) ? null : nonCoreKeys.filter(k => nextOn.has(k))
-    const err = await setEnabled(keys)
-    if (err) toast.error('Could not save modules: ' + err)
+  async function toggle(m: FeatureModule, next: boolean) {
+    if (next) {
+      const extra = wouldInstall(m.key).map(k => moduleByKey(k)?.label).filter(Boolean)
+      const err = await install(m.key)
+      if (err) toast.error('Could not install: ' + err)
+      else if (extra.length) toast.success(`${m.label} installed — brought along ${extra.join(', ')} (required).`)
+    } else {
+      const err = await uninstall(m.key)
+      if (err) toast.error(err)
+    }
   }
+
+  function Row({ m }: { m: FeatureModule }) {
+    const active = m.core || on.has(m.key)
+    const updated = active && pendingUpdate(m, meta)
+    const requires = (m.requires ?? []).map(k => moduleByKey(k)?.label).filter(Boolean)
+    return (
+      <div className="py-2.5 first:pt-0 last:pb-0">
+        <div className="flex items-center gap-3">
+          <span className="w-8 h-8 rounded-lg bg-surface-raised border border-border flex items-center justify-center shrink-0">
+            <m.icon className="w-4 h-4 text-ink-muted" aria-hidden="true" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-ink flex items-center gap-1.5">
+              {m.label}
+              {m.featured && <Star className="w-3 h-3 text-amber-400 fill-amber-400" aria-label="Featured" />}
+            </p>
+            <p className="text-xs text-ink-faint">{m.description}</p>
+            <p className="text-[10px] text-ink-faint mt-0.5 tabular-nums">
+              v{m.version}
+              {requires.length > 0 && <> · needs {requires.join(', ')}</>}
+              {' '}· uses {m.permissions.map(p => p.split(':')[0]).filter((v, i, a) => a.indexOf(v) === i).join(', ')}
+            </p>
+          </div>
+          {m.core ? (
+            <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-ink-faint border border-border rounded-full px-2 py-0.5">Core</span>
+          ) : (
+            <Toggle checked={active} onChange={v => toggle(m, v)} ariaLabel={`${m.label} module`}
+              disabled={!isEntitled(m)} />
+          )}
+        </div>
+        {updated && (
+          <div className="mt-1.5 ml-11 flex items-center gap-2 rounded-lg border border-accent/25 bg-accent/[0.06] px-2.5 py-1.5">
+            <ArrowUpCircle className="w-3.5 h-3.5 text-accent-text shrink-0" aria-hidden="true" />
+            <p className="text-xs text-ink flex-1 min-w-0">
+              <span className="font-semibold">Updated.</span>{m.whatsNew ? ` ${m.whatsNew}` : ''}
+            </p>
+            <Button size="sm" variant="ghost" onClick={async () => {
+              const err = await acknowledgeUpdate(m.key)
+              if (err) toast.error('Could not save: ' + err)
+            }}>Got it</Button>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  const featured = all.filter(m => m.featured && !m.core && !on.has(m.key))
 
   return (
     <Card>
       <CardHeader>
         <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><LayoutGrid className="w-4 h-4 text-accent-text" /> Modules</h2>
         <p className="text-xs text-ink-faint mt-0.5">
-          Compose your EdgeQuote — hide the parts your business doesn&rsquo;t use. Turning a module off only
-          tidies navigation: its data and links stay intact, and you can turn it back on any time.
+          Compose your EdgeQuote — install the parts your business uses. Removing a module only
+          tidies navigation: its data and links stay intact, and you can bring it back any time.
         </p>
       </CardHeader>
       <CardBody>
@@ -57,23 +103,29 @@ export function ModuleManager() {
             ))}
           </div>
         ) : (
-          <div className="divide-y divide-border">
-            {all.map(m => (
-              <div key={m.key} className="flex items-center gap-3 py-2.5 first:pt-0 last:pb-0">
-                <span className="w-8 h-8 rounded-lg bg-surface-raised border border-border flex items-center justify-center shrink-0">
-                  <m.icon className="w-4 h-4 text-ink-muted" aria-hidden="true" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-ink">{m.label}</p>
-                  <p className="text-xs text-ink-faint">{m.description}</p>
+          <div className="space-y-5">
+            {featured.length > 0 && (
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint mb-1.5 flex items-center gap-1">
+                  <Star className="w-3 h-3 text-amber-400" aria-hidden="true" /> Featured — not installed
+                </p>
+                <div className="divide-y divide-border rounded-xl border border-accent/20 bg-accent/[0.03] px-3">
+                  {featured.map(m => <Row key={m.key} m={m} />)}
                 </div>
-                {m.core ? (
-                  <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-ink-faint border border-border rounded-full px-2 py-0.5">Core</span>
-                ) : (
-                  <Toggle checked={on.has(m.key)} onChange={v => toggle(m.key, v)} ariaLabel={`${m.label} module`} />
-                )}
               </div>
-            ))}
+            )}
+            {CATEGORY_ORDER.map(cat => {
+              const mods = all.filter(m => m.category === cat)
+              if (!mods.length) return null
+              return (
+                <div key={cat}>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-faint mb-1.5">{MODULE_CATEGORIES[cat]}</p>
+                  <div className="divide-y divide-border">
+                    {mods.map(m => <Row key={m.key} m={m} />)}
+                  </div>
+                </div>
+              )
+            })}
           </div>
         )}
       </CardBody>
