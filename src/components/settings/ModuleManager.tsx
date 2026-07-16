@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Toggle } from '@/components/ui/Toggle'
 import { Skeleton } from '@/components/ui/Skeleton'
@@ -86,11 +87,19 @@ export function ModuleManager() {
   return (
     <Card>
       <CardHeader>
-        <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><LayoutGrid className="w-4 h-4 text-accent-text" /> Modules</h2>
-        <p className="text-xs text-ink-faint mt-0.5">
-          Compose your EdgeQuote — install the parts your business uses. Removing a module only
-          tidies navigation: its data and links stay intact, and you can bring it back any time.
-        </p>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><LayoutGrid className="w-4 h-4 text-accent-text" /> Modules</h2>
+            <p className="text-xs text-ink-faint mt-0.5">
+              Compose your EdgeQuote — install the parts your business uses. Removing a module only
+              tidies navigation: its data and links stay intact, and you can bring it back any time.
+            </p>
+          </div>
+          <Link href="/dashboard/marketplace"
+            className="shrink-0 text-xs font-semibold text-accent-text hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+            Browse the marketplace →
+          </Link>
+        </div>
       </CardHeader>
       <CardBody>
         {!loaded ? (

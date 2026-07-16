@@ -69,6 +69,23 @@ export function priceInputStep(t: PricingDisplayType): string {
   return t === 'per_sqft' || t === 'per_linear_ft' ? '0.25' : '5'
 }
 
+// The basis a COST must be entered on — the mirror of priceInputLabel above.
+// A margin only means something when both sides share a unit: $/hr judged against
+// $/hr, $/ft² against $/ft². Labelling the cost fields with this (instead of a
+// generic "unit cost") is what stops an owner entering a whole-job cost against an
+// hourly rate and reading back a nonsense margin.
+export function costBasisLabel(t: PricingDisplayType): string {
+  switch (t) {
+    case 'hourly':
+    case 'hourly_materials': return 'per hour'
+    case 'per_sqft': return 'per sq ft'
+    case 'per_linear_ft': return 'per linear ft'
+    case 'starting_from_materials':
+    case 'starting_from':
+    default: return 'per job'
+  }
+}
+
 // ── Service pricing KIND ────────────────────────────────────────────────────────
 // Which pricing structure a service uses — decides WHICH recommendation engine
 // speaks (the lawn cadence engine vs area-rate vs labour) and which quote fields

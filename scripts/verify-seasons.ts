@@ -103,6 +103,38 @@ console.log('\nLegacy stored seasons (no match arrays) — identical to defaults
   check('garbage input → safe defaults', settingsToSeasons(null).lawn.startMonth === 4)
 }
 
+// ── 5. RESOLUTION ORDER — deterministic across save/reload ────────────────────
+// Postgres jsonb canonicalises key order, so which of two overlapping custom
+// seasons wins must NOT depend on in-memory insertion order — the engine sorts.
+console.log('\nOverlapping custom seasons — same winner before and after a save/reload:')
+{
+  const a = { label: 'Pest', match: ['spray'], startMonth: 4, startDay: 1, endMonth: 8, endDay: 31 }
+  const b = { label: 'Sprinkler', match: ['spray'], startMonth: 5, startDay: 1, endMonth: 9, endDay: 30 }
+  // Same seasons, two insertion orders (pre-save vs post-jsonb-roundtrip).
+  const orderOne = settingsToSeasons({ lawn: DEFAULT_LAWN_SEASON, snow: DEFAULT_SNOW_SEASON, 'custom-2': a, 'custom-1': b })
+  const orderTwo = settingsToSeasons({ lawn: DEFAULT_LAWN_SEASON, snow: DEFAULT_SNOW_SEASON, 'custom-1': b, 'custom-2': a })
+  const w1 = seasonForService('Spring Spray Treatment', orderOne)
+  const w2 = seasonForService('Spring Spray Treatment', orderTwo)
+  check('winner is identical regardless of object key order',
+    w1?.label === w2?.label && w1?.label === 'Sprinkler',
+    `orderOne → ${w1?.label}, orderTwo → ${w2?.label} (sorted keys: custom-1 first)`)
+}
+
+// ── 6. IMPOSSIBLE DAYS — clamp to the month's real end, never an invalid date ──
+// The editor caps days at 31 with no month awareness, so "Feb 30" can reach the
+// store; unclamped, seasonEndDateFor emitted '2027-02-30', which crashes
+// formatDate at render and is rejected by the job_recurrences insert.
+console.log('\nMonth-impossible end days — clamped to a real date:')
+{
+  const feb30 = { label: 'Odd', match: ['odd'], startMonth: 11, startDay: 1, endMonth: 2, endDay: 30 }
+  check('Feb 30 in a non-leap year → Feb 28', seasonEndDateFor('2026-12-01', feb30) === '2027-02-28', seasonEndDateFor('2026-12-01', feb30))
+  const feb29 = { ...feb30, endDay: 29 }
+  check('Feb 29 in a leap year stays Feb 29', seasonEndDateFor('2027-12-01', feb29) === '2028-02-29', seasonEndDateFor('2027-12-01', feb29))
+  const sep31 = { label: 'Odd2', match: ['odd'], startMonth: 5, startDay: 1, endMonth: 9, endDay: 31 }
+  check('Sep 31 → Sep 30', seasonEndDateFor('2026-05-01', sep31) === '2026-09-30', seasonEndDateFor('2026-05-01', sep31))
+  check('valid dates untouched (Oct 31 stays Oct 31)', seasonEndDateFor('2026-04-20', DEFAULT_LAWN_SEASON) === '2026-10-31')
+}
+
 console.log('')
 if (failures) { console.log(`✗ ${failures} check(s) failed\n`); process.exit(1) }
 console.log('✓ all seasons checks passed — lawn unchanged, non-lawn trades now seasonal\n')

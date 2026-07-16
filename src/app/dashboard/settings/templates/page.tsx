@@ -15,14 +15,33 @@ import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
 import { Toggle } from '@/components/ui/Toggle'
 import { useForm } from 'react-hook-form'
-import { formatServicePrice, priceInputLabel, priceInputStep } from '@/lib/servicePricing'
+import { formatServicePrice, priceInputLabel, priceInputStep, costBasisLabel } from '@/lib/servicePricing'
+import { totalUnitCost, marginPct, markupPct, unitProfit, marginTone, formatPct } from '@/lib/margin'
+import { toneText } from '@/lib/tone'
+import { formatCurrency, cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
-import { Plus, Edit2, Trash2, X } from 'lucide-react'
+import { Plus, Edit2, Trash2, X, Star } from 'lucide-react'
 import { scrollBehavior } from '@/lib/motion'
 
 // Sentinel for the "Other…" option. Never persisted: onSubmit swaps it for the
 // typed name, so the DB only ever sees a real category.
 const NEW_CATEGORY = '__new_category'
+
+// ── Cost fields: blank is NOT zero ────────────────────────────────────────────
+// The cost inputs are held as strings precisely so "" (never entered) stays
+// distinguishable from "0" (really costs nothing). `Number('')` is 0, so parsing
+// these with Number() anywhere would tell every owner who has never entered a
+// cost that their services are 100% margin. Blank → null → the UI shows nothing.
+function parseCost(v: string | null | undefined): number | null {
+  const s = (v ?? '').trim()
+  if (!s) return null
+  const n = Number(s)
+  if (!Number.isFinite(n) || n < 0) return null
+  return Math.round(n * 100) / 100
+}
+
+// null → '' so an unknown cost renders as an empty box, not a literal "null".
+const costToField = (n: number | null | undefined): string => (n == null ? '' : String(n))
 
 export default function ServiceTemplatesPage() {
   const { templates, loading, refresh } = useBusinessData()
@@ -36,7 +55,8 @@ export default function ServiceTemplatesPage() {
     useForm<ServiceTemplateFormValues>({
       // category/rate are re-seeded from this business's own catalogue in openNew();
       // 'General' is the neutral member of the starter list, not a trade.
-      defaultValues: { name: '', category: 'General', pricing_display_type: 'starting_from', default_rate: 65, default_description: '', notes: '', is_active: true },
+      // Costs default to '' — unknown — never 0.
+      defaultValues: { name: '', category: 'General', pricing_display_type: 'starting_from', default_rate: 65, default_description: '', notes: '', is_active: true, unit_cost: '', material_cost: '', is_favorite: false },
     })
 
   const isActive = watch('is_active')
@@ -44,6 +64,16 @@ export default function ServiceTemplatesPage() {
   const catValue = watch('category')
   const [customCategory, setCustomCategory] = useState('')
   const priceVal = watch('default_rate')
+  const isFavorite = watch('is_favorite')
+
+  // Live margin as the owner types — computed by THE shared calculator, never
+  // inline arithmetic, so this panel and every future one agree on what a margin
+  // is. `cost` is null until at least one side is filled in, and every readout
+  // below is gated on that rather than defaulting to zero.
+  const cost = totalUnitCost({ unit_cost: parseCost(watch('unit_cost')), material_cost: parseCost(watch('material_cost')) })
+  const price = Number(priceVal) || 0
+  const margin = marginPct(price, cost)
+  const basis = costBasisLabel(pdType)
 
   // The editor is an inline panel rendered at the TOP of the page. Without this,
   // clicking a row's Edit (or Add) while scrolled down the list opens the form
@@ -58,7 +88,7 @@ export default function ServiceTemplatesPage() {
     // it used to be hardcoded 'Lawn Care', so every trade's second service landed
     // in a lawn bucket unless they noticed the dropdown. Falls back to the neutral
     // 'General' before they have any services.
-    reset({ name: '', category: topCategory, pricing_display_type: 'starting_from', default_rate: 65, default_description: '', notes: '', is_active: true })
+    reset({ name: '', category: topCategory, pricing_display_type: 'starting_from', default_rate: 65, default_description: '', notes: '', is_active: true, unit_cost: '', material_cost: '', is_favorite: false })
     setCustomCategory('')
     setEditing(null)
     setShowForm(true)
@@ -69,6 +99,10 @@ export default function ServiceTemplatesPage() {
       name: t.name, category: t.category, default_rate: t.default_rate,
       pricing_display_type: t.pricing_display_type || 'starting_from',
       default_description: t.default_description || '', notes: t.notes || '', is_active: t.is_active,
+      // A stored null stays blank, so opening and re-saving a service that has no
+      // cost cannot silently write 0 into it.
+      unit_cost: costToField(t.unit_cost), material_cost: costToField(t.material_cost),
+      is_favorite: !!t.is_favorite,
     })
     setEditing(t)
     setShowForm(true)
@@ -85,7 +119,14 @@ export default function ServiceTemplatesPage() {
       category = typed
     }
     const { data: { user } } = await supabase.auth.getUser()
-    const payload = { ...values, category, default_rate: Number(values.default_rate) }
+    const payload = {
+      ...values, category,
+      default_rate: Number(values.default_rate),
+      // Blank stays NULL. This is the one write path for cost, and it is the line
+      // that keeps "unknown" out of the margin maths.
+      unit_cost: parseCost(values.unit_cost),
+      material_cost: parseCost(values.material_cost),
+    }
     if (editing) {
       await supabase.from('service_templates').update(payload).eq('id', editing.id)
     } else {
@@ -99,6 +140,11 @@ export default function ServiceTemplatesPage() {
 
   async function toggleActive(t: ServiceTemplate) {
     await supabase.from('service_templates').update({ is_active: !t.is_active }).eq('id', t.id)
+    refresh()
+  }
+
+  async function toggleFavorite(t: ServiceTemplate) {
+    await supabase.from('service_templates').update({ is_favorite: !t.is_favorite }).eq('id', t.id)
     refresh()
   }
 
@@ -186,10 +232,55 @@ export default function ServiceTemplatesPage() {
                   <p className="text-xs text-ink-muted">Shows as <span className="font-semibold text-accent-text">{formatServicePrice({ pricing_display_type: pdType, default_rate: Number(priceVal) || 0 })}</span></p>
                 </div>
               </div>
+              {/* ── Cost & margin ────────────────────────────────────────────
+                  Optional, and deliberately quiet: an owner who doesn't track cost
+                  should be able to ignore this entirely and see no margin claimed
+                  anywhere. Both fields are labelled with the SAME basis as the
+                  price above, so the margin compares like with like. */}
+              <div className="rounded-xl border border-border bg-surface/30 p-4 space-y-3">
+                <div className="flex items-baseline justify-between gap-3">
+                  <h3 className="text-xs font-semibold text-ink">
+                    Cost to deliver <span className="font-normal text-ink-faint">· optional</span>
+                  </h3>
+                  <span className="text-[11px] text-ink-faint">Priced {basis}</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <Input label={`Labour cost ${basis}`} type="number" step="1" min="0" placeholder="Not tracked"
+                    {...register('unit_cost')} />
+                  <Input label={`Material cost ${basis}`} type="number" step="1" min="0" placeholder="Not tracked"
+                    {...register('material_cost')} />
+                </div>
+                {cost == null ? (
+                  <p className="text-xs text-ink-muted">
+                    Leave blank if you don&apos;t track cost — no margin will be shown or guessed.
+                  </p>
+                ) : (
+                  <p className="text-xs flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                    <span className={cn('font-semibold tabular-nums', toneText[marginTone(margin)])}>
+                      {formatPct(margin)} margin
+                    </span>
+                    <span className="text-ink-faint">·</span>
+                    <span className="text-ink-muted tabular-nums">{formatPct(markupPct(price, cost))} markup</span>
+                    <span className="text-ink-faint">·</span>
+                    <span className="text-ink-muted tabular-nums">
+                      {formatCurrency(unitProfit(price, cost) ?? 0)} profit {basis}
+                    </span>
+                    {margin != null && margin < 0 && (
+                      <span className="text-red-400">— you&apos;re priced below cost</span>
+                    )}
+                  </p>
+                )}
+              </div>
+
               <Textarea label="Default Description" {...register('default_description')} />
               <Textarea label="Internal Notes" {...register('notes')} />
-              <div className="flex items-center justify-between pt-1">
-                <Toggle checked={isActive} onChange={v => setValue('is_active', v)} label={isActive ? 'Active' : 'Inactive'} />
+              <div className="flex items-center justify-between pt-1 gap-3">
+                <div className="flex items-center gap-4">
+                  <Toggle checked={isActive} onChange={v => setValue('is_active', v)} label={isActive ? 'Active' : 'Inactive'} />
+                  {/* Favourites surface this service at the top of the quote
+                      builder's picker — the payoff is there, not here. */}
+                  <Toggle checked={!!isFavorite} onChange={v => setValue('is_favorite', v)} label="Favourite" />
+                </div>
                 <div className="flex gap-2">
                   <Button type="button" variant="ghost" onClick={() => { setShowForm(false); setEditing(null) }}>Cancel</Button>
                   <Button type="submit" loading={isSubmitting}>{editing ? 'Save service' : 'Add service'}</Button>
@@ -217,7 +308,7 @@ export default function ServiceTemplatesPage() {
                   // The whole row opens the editor (the pencil was the only way in);
                   // the inline controls stop the click from bubbling.
                   <div key={t.id} onClick={() => openEdit(t)}
-                    className="flex items-center gap-4 px-5 py-3.5 cursor-pointer hover:bg-surface/40 transition-colors">
+                    className="flex items-center gap-3 sm:gap-4 px-5 py-3.5 cursor-pointer hover:bg-surface/40 transition-colors">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className={`text-sm font-medium ${t.is_active ? 'text-ink' : 'text-ink-faint line-through'}`}>{t.name}</span>
@@ -225,7 +316,27 @@ export default function ServiceTemplatesPage() {
                       </div>
                       {t.default_description && <p className="text-xs text-ink-muted truncate mt-0.5">{t.default_description}</p>}
                     </div>
+                    {/* Margin, only where a cost is known. Services with no cost
+                        show nothing at all — the whole catalogue reading "100%"
+                        would be worse than silence. */}
+                    {(() => {
+                      const m = marginPct(t.default_rate, totalUnitCost(t))
+                      if (m == null) return null
+                      return (
+                        <span className={cn('hidden sm:inline text-xs font-semibold tabular-nums shrink-0', toneText[marginTone(m)])}
+                          title={`${formatPct(m)} margin · ${formatPct(markupPct(t.default_rate, totalUnitCost(t)))} markup`}>
+                          {formatPct(m)}
+                        </span>
+                      )
+                    })()}
                     <span className="text-sm font-semibold text-accent-text shrink-0">{formatServicePrice(t)}</span>
+                    <Button variant="ghost" size="sm" aria-pressed={!!t.is_favorite}
+                      aria-label={t.is_favorite ? `Remove ${t.name} from favourites` : `Make ${t.name} a favourite`}
+                      title={t.is_favorite ? 'Favourite — shown first in the quote builder' : 'Make favourite'}
+                      onClick={e => { e.stopPropagation(); toggleFavorite(t) }}
+                      className={t.is_favorite ? 'text-amber-400 hover:text-amber-300' : 'text-ink-faint hover:text-ink-muted'}>
+                      <Star className={cn('w-4 h-4', t.is_favorite && 'fill-current')} />
+                    </Button>
                     <span onClick={e => e.stopPropagation()}><Toggle checked={t.is_active} onChange={() => toggleActive(t)} /></span>
                     <Button variant="ghost" size="sm" aria-label="Edit service" title="Edit" onClick={e => { e.stopPropagation(); openEdit(t) }}><Edit2 className="w-4 h-4" /></Button>
                     <Button variant="ghost" size="sm" aria-label="Delete service" title="Delete" onClick={e => { e.stopPropagation(); remove(t) }} className="text-red-400/70 hover:text-red-400"><Trash2 className="w-4 h-4" /></Button>
