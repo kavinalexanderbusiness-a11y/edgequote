@@ -327,7 +327,7 @@ export default function CustomerDetailPage() {
     const patch = { notes: notesValue || null }
     try {
       const outcome = await queueOrRun(
-        { kind: 'customer.update', payload: { id: customer.id, patch }, label: `Note · ${customer.name}` },
+        { kind: 'customer.update', payload: { id: customer.id, patch, baseUpdatedAt: customer.updated_at }, label: `Note · ${customer.name}` },
         async () => { const { error } = await supabase.from('customers').update(patch).eq('id', customer.id); if (error) throw new Error(error.message) },
       )
       setCustomer({ ...customer, notes: patch.notes })
@@ -348,7 +348,7 @@ export default function CustomerDetailPage() {
     const row = draftToRow(prefsDraft)
     try {
       const outcome = await queueOrRun(
-        { kind: 'customer.update', payload: { id: customer.id, patch: row }, label: `Edit · ${customer.name}` },
+        { kind: 'customer.update', payload: { id: customer.id, patch: row, baseUpdatedAt: customer.updated_at }, label: `Edit · ${customer.name}` },
         async () => { const { error } = await supabase.from('customers').update(row).eq('id', customer.id); if (error) throw new Error(error.message) },
       )
       setCustomer({ ...customer, ...row })
