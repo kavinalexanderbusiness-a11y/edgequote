@@ -387,9 +387,11 @@ async function quoteIntelContext(supabase: SupabaseClient, userId: string, quote
     q.customer_id ? customerContext(supabase, userId, q.customer_id, { deep: true }) : Promise.resolve(null),
     loadBusinessContext(supabase, userId),
     // History for THIS service across the whole book — bounded, newest first.
-    // 'sent' rides along so ghosts can be COUNTED (neutral bucket), never learned from.
-    supabase.from('quotes').select('service_type, status, total, customer_id, created_at')
-      .eq('user_id', userId).neq('id', quoteId).in('status', ['accepted', 'declined', 'expired', 'sent'])
+    // 'sent' rides along so the neutral buckets can be COUNTED, never learned from.
+    // There is NO 'expired' status in this schema — expiry is display-only,
+    // derived from expires_at on a still-'sent' quote (see quote-expiry ruling).
+    supabase.from('quotes').select('service_type, status, total, customer_id, created_at, expires_at')
+      .eq('user_id', userId).neq('id', quoteId).in('status', ['accepted', 'scheduled', 'completed', 'paid', 'declined', 'sent'])
       .order('created_at', { ascending: false }).limit(400),
     supabase.from('labor_observations').select('service_type, estimated_minutes, actual_minutes')
       .eq('user_id', userId).order('service_date', { ascending: false }).limit(500),
@@ -402,19 +404,24 @@ async function quoteIntelContext(supabase: SupabaseClient, userId: string, quote
   const label = serviceLabel(key) || primaryType || 'this service'
 
   // ── Win/loss for this service (whole book) — code-computed facts ────────────
-  const hist = ((histRes.data as Array<{ service_type: string | null; status: string; total: number | null; customer_id: string | null; created_at: string }> | null) || [])
+  // Won = the house WON set (accepted/scheduled/completed/paid — a quote that
+  // progressed IS a win, same rule as lib/timeline). Lost = explicit decline.
+  // Neutral, tracked separately per the owner's ruling: still-'sent' quotes,
+  // split into expired (expires_at passed — silence, not a no) and awaiting.
+  const WON_STATUSES = new Set(['accepted', 'scheduled', 'completed', 'paid'])
+  const hist = ((histRes.data as Array<{ service_type: string | null; status: string; total: number | null; customer_id: string | null; created_at: string; expires_at: string | null }> | null) || [])
   const same = hist.filter(h => serviceKey(h.service_type || '') === key)
-  const accepted = same.filter(h => h.status === 'accepted')
+  const accepted = same.filter(h => WON_STATUSES.has(h.status))
   const declined = same.filter(h => h.status === 'declined')
-  const expired = same.filter(h => h.status === 'expired')
-  const ghosts = same.filter(h => h.status === 'sent')
+  const expired = same.filter(h => h.status === 'sent' && !!h.expires_at && String(h.expires_at).slice(0, 10) < todayISO())
+  const ghosts = same.filter(h => h.status === 'sent' && (!h.expires_at || String(h.expires_at).slice(0, 10) >= todayISO()))
   const decided = accepted.length + declined.length
   const median = (arr: number[]) => { const s = arr.filter(n => n > 0).sort((a, b) => a - b); return s.length ? s[Math.floor(s.length / 2)] : null }
   const medWon = median(accepted.map(h => Number(h.total) || 0))
   const medLost = median(declined.map(h => Number(h.total) || 0))
   // This customer's own record with us, service-agnostic.
   const custDecided = q.customer_id ? hist.filter(h => h.customer_id === q.customer_id) : []
-  const custAccepted = custDecided.filter(h => h.status === 'accepted').length
+  const custAccepted = custDecided.filter(h => WON_STATUSES.has(h.status)).length
   const custDeclined = custDecided.filter(h => h.status === 'declined').length
 
   // ── Time: the builder's own estimate + how estimates have actually landed ───
@@ -441,9 +448,9 @@ async function quoteIntelContext(supabase: SupabaseClient, userId: string, quote
     facts.push('The pricing engine recorded no suggested price for this quote (no basis at the time).')
   }
   if (q.sent_at) facts.push(`Sent ${String(q.sent_at).slice(0, 10)} (${daysBetween(String(q.sent_at).slice(0, 10), today)} days ago).${q.expires_at ? ` Expires ${String(q.expires_at).slice(0, 10)}.` : ''}`)
-  facts.push(`WIN/LOSS HISTORY for "${label}" across the whole book (computed — only accepted and explicitly declined quotes carry learning weight): ${accepted.length} accepted, ${declined.length} declined${decided ? `; acceptance ${Math.round((accepted.length / decided) * 100)}% of ${decided} decided` : ''}${medWon != null ? `; median accepted total ${money(medWon)}` : ''}${medLost != null ? `; median declined total ${money(medLost)}` : ''}. Tracked separately, NEUTRAL, no learning weight either way: ${ghosts.length} still awaiting an answer${expired.length ? `, ${expired.length} expired (expiry is silence, not a no)` : ''}.`)
+  facts.push(`WIN/LOSS HISTORY for "${label}" across the whole book (computed — only won and explicitly declined quotes carry learning weight; won = accepted, scheduled, completed or paid): ${accepted.length} won, ${declined.length} declined${decided ? `; acceptance ${Math.round((accepted.length / decided) * 100)}% of ${decided} decided` : ''}${medWon != null ? `; median won total ${money(medWon)}` : ''}${medLost != null ? `; median declined total ${money(medLost)}` : ''}. Tracked separately, NEUTRAL, no learning weight either way: ${ghosts.length} still awaiting an answer${expired.length ? `, ${expired.length} expired (expiry is silence, not a no)` : ''}.`)
   if (decided < 4) facts.push(`SAMPLE WARNING: only ${decided} decided quote${decided !== 1 ? 's' : ''} for this service — history is too thin to lean on; say so plainly wherever it matters.`)
-  if (q.customer_id) facts.push(`THIS CUSTOMER'S quote record with us (all services): ${custAccepted} accepted, ${custDeclined} declined.`)
+  if (q.customer_id) facts.push(`THIS CUSTOMER'S quote record with us (all services): ${custAccepted} won, ${custDeclined} declined.`)
   if (estMinutes > 0) facts.push(`TIME: the builder estimated ${estMinutes} minutes across the line items.`)
   if (obs.length) facts.push(`TIME HISTORY for "${label}": ${obs.length} completed observation${obs.length !== 1 ? 's' : ''}${medActual != null ? `, median actual ${medActual} min` : ''}${avgErrPct != null ? `; past estimates ran on average ${Math.abs(avgErrPct)}% ${avgErrPct >= 0 ? 'UNDER actual (jobs take longer than estimated)' : 'OVER actual (jobs finish faster than estimated)'} across ${obsWithEst.length} estimated jobs` : ''}.`)
   else facts.push(`TIME HISTORY: no completed time observations for "${label}" yet.`)
