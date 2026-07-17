@@ -25,8 +25,7 @@ import { sumServiceLines, serviceLineTotals, emptyServiceLine, SERVICE_UNITS } f
 import { loadServiceUnits, type ServiceUnit } from '@/lib/units'
 import { formatCurrency, formatDate, suggestTravelFee, cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
-import { formatServicePrice, servicePricingKind } from '@/lib/servicePricing'
-import { loadBusinessShape, SHAPE_LOADING, type BusinessShape } from '@/lib/businessShape'
+import { formatServicePrice, servicePricingKind, serviceRecommendation } from '@/lib/servicePricing'
 import { laborSuggestion, pricingConfigFromSettings, latestSavedRecommendation, recommendationIsStale, pricingPackage } from '@/lib/pricing'
 import { evaluatePrice, PriceGuardrail } from '@/lib/priceGuardrails'
 import { PriceGuardrailNote } from '@/components/pricing/PriceGuardrailNote'
@@ -56,7 +55,15 @@ interface QuoteBuilderProps {
   autosaveBaselineUpdatedAt?: string | null
 }
 
-const DEFAULT_RATE = 50
+// Where the price in the field came from. NEVER inferred by comparing the field to
+// a recommendation — two numbers being equal is not consent, and that inference is
+// exactly what made a fabricated price render as "✓ Applied" on a form nobody had
+// touched. Only a real user action moves this to 'applied' or 'manual'.
+//   empty     → we have no honest basis for a price. The field stays blank.
+//   suggested → an engine's recommendation is sitting in the field, unconfirmed.
+//   applied   → the owner tapped Accept / a plan tile / Use measured prices.
+//   manual    → the owner typed their own number (or we loaded a saved quote).
+type PriceOrigin = 'empty' | 'suggested' | 'applied' | 'manual'
 
 export function QuoteBuilder({
   customers, templates, tiers, settings, defaultCustomerId, defaultPropertyId, defaultValues, onSubmit, isEdit,
@@ -81,9 +88,27 @@ export function QuoteBuilder({
         suggested_price: 0,
         overgrowth_multiplier: 1,
         distance_km: 0,
-        hours: 2,
+        // Hours has NO default. It used to be 2 — a number nobody entered, about a
+        // job nobody had described yet, which multiplied out into a fabricated
+        // price the form then badged as confirmed. Unknown hours is not 2 hours.
+        // It fills from the learned estimator below (SmartLaborField) the moment
+        // that engine has real history for this service, and stays empty when it
+        // doesn't. Empty hours ⇒ no labour recommendation ⇒ no price. That is the
+        // correct behaviour, not a gap.
+        hours: 0,
+        // 1 is the structural floor, not a guess: crew_size has min=1, you cannot
+        // send zero people, and with hours empty it multiplies into nothing anyway.
+        // (business_settings.default_crew_size exists in the DB but is not in the
+        // TS type and has no Settings UI — plumbing it through would change no
+        // outcome today. Noted in the audit rather than half-built here.)
         crew_size: 1,
-        rate: DEFAULT_RATE,
+        // The owner's OWN configured rate. Settings has had a "Default Labour Rate
+        // ($/man-hour)" field all along (settings/page.tsx) and this form ignored
+        // it, hardcoding 50 — so a business that set its rate to $95 still got
+        // quotes suggested from $50. Both pages gate rendering on `loading`, so
+        // settings is always resolved before this form mounts. No settings ⇒ 0 ⇒
+        // no labour recommendation, which is honest rather than invented.
+        rate: Number(settings?.default_rate) || 0,
         travel_fee: 0,
         notes: '',
         status: 'draft',
@@ -111,7 +136,16 @@ export function QuoteBuilder({
   // Mobile-only: the desktop preview card is lg-only, so the phone needs a way in.
   const [showPreview, setShowPreview] = useState(false)
   const [includeTravel, setIncludeTravel] = useState(true)
-  const [initialManual, setInitialManual] = useState<boolean>((defaultValues?.initial_price ?? 0) > 0)
+  // Loading a saved quote → that price is the owner's own past decision, so it is
+  // never live-overwritten by a suggestion (same behaviour the old boolean had).
+  const [priceOrigin, setPriceOrigin] = useState<PriceOrigin>(
+    (defaultValues?.initial_price ?? 0) > 0 ? 'manual' : 'empty',
+  )
+  // The suggestion engine stops writing to the field once the owner owns the
+  // number — by accepting one or by typing one. Both used to be the single
+  // `initialManual` boolean, which is why an Accept and a hand-typed override were
+  // indistinguishable in the header badge.
+  const priceLocked = priceOrigin === 'applied' || priceOrigin === 'manual'
   const [showBestDays, setShowBestDays] = useState(false)
   // Saved recommendation from the customer's latest property measurement — the
   // source of truth for suggested prices (no re-measuring needed).
@@ -122,7 +156,9 @@ export function QuoteBuilder({
 
   const hours = watch('hours') || 0
   const crewSize = watch('crew_size') || 1
-  const rate = watch('rate') || DEFAULT_RATE
+  // No `|| DEFAULT_RATE` backstop: a missing rate must stay 0 so the labour
+  // recommendation goes silent, rather than quietly reappearing at $50/hr.
+  const rate = watch('rate') || 0
   const travelFee = watch('travel_fee') || 0
   const customerId = watch('customer_id')
   const templateId = watch('service_template_id')
@@ -144,20 +180,9 @@ export function QuoteBuilder({
   const aiScope = useAiAssist()
   const measuredSqft = Number(watch('measured_sqft')) || 0
 
-  // Which pricing STRUCTURE this service uses — the one seam that decides which
-  // engine recommends and which fields an Accept fills (lawn cadences vs area
-  // rate vs labour). Template display type wins; else the serviceKey normalizer.
-  const svcTemplate = templates.find(t => t.id === templateId) ?? null
-  const pricingKind = servicePricingKind(watch('service_type'), svcTemplate)
-
   // Smart Price Guardrails — per-cadence, never-block warnings (measured lawn +
   // crew cost). Each filled cadence is judged against ITS own recommended price.
   const priceGuardrails = useMemo<PriceGuardrail[]>(() => {
-    // Every judgement below is the LAWN engine's: recommendedForCadence() is a mow
-    // rate × ft², and the warning it emits literally reads "…for this 2,000 ft²
-    // lawn". Pointed at a driveway with an area, it was confidently wrong about a
-    // trade it wasn't measuring. It speaks for lawn-cadence services only.
-    if (pricingKind !== 'lawn_recurring') return []
     const cfg = pricingConfigFromSettings(settings)
     const crewCost = settings?.crew_cost_per_hour && settings.crew_cost_per_hour > 0 ? settings.crew_cost_per_hour : 40
     const out: PriceGuardrail[] = []
@@ -166,7 +191,7 @@ export function QuoteBuilder({
     }
     add('one_time', initialPrice); add('weekly', weeklyPrice); add('biweekly', biweeklyPrice); add('monthly', monthlyPrice)
     return out
-  }, [pricingKind, settings, measuredSqft, initialPrice, weeklyPrice, biweeklyPrice, monthlyPrice])
+  }, [settings, measuredSqft, initialPrice, weeklyPrice, biweeklyPrice, monthlyPrice])
 
   // Live duplicate detection — when entering a brand-new lead, surface a likely
   // existing customer so we link instead of creating a duplicate. Reuses the
@@ -182,6 +207,12 @@ export function QuoteBuilder({
   const watchedServices = watch('services')
   const extras = useMemo(() => sumServiceLines(watchedServices), [watchedServices])
   const effectiveTotal = initialPrice + extras.net + Number(travelFee || 0)
+
+  // Which pricing STRUCTURE this service uses — the one seam that decides which
+  // engine recommends and which fields an Accept fills (lawn cadences vs area
+  // rate vs labour). Template display type wins; else the serviceKey normalizer.
+  const svcTemplate = templates.find(t => t.id === templateId) ?? null
+  const pricingKind = servicePricingKind(watch('service_type'), svcTemplate)
 
   // Live suggested prices straight from the measured lawn — the compact one-tap
   // pricing. Same engine as everywhere else; ONLY for lawn-cadence services (a
@@ -199,27 +230,30 @@ export function QuoteBuilder({
     }
   }, [pricingKind, measuredSqft, overgrowth, settings])
 
-  // The service-appropriate single recommendation for NON-lawn kinds.
-  //   per_area → the template's $/sq ft × the measured area (+ materials note)
-  //   labour   → hours × crew × rate (the existing labour engine)
-  const areaRate = svcTemplate && svcTemplate.pricing_display_type === 'per_sqft' ? Number(svcTemplate.default_rate) || 0 : 0
-  const serviceRec = useMemo(() => {
-    if (pricingKind === 'per_area' && areaRate > 0 && measuredSqft > 0) {
-      return {
-        price: Math.round(areaRate * measuredSqft),
-        basis: `${formatCurrency(areaRate)}/sq ft × ${Math.round(measuredSqft).toLocaleString()} sq ft`,
-        materials: svcTemplate?.pricing_display_type?.includes('materials') ?? false,
-      }
-    }
-    if (pricingKind === 'labour' || pricingKind === 'per_area') {
-      return {
-        price: suggestedInitial,
-        basis: `${Number(hours) || 0} hr × ${crewSize} crew × ${formatCurrency(Number(rate))}/hr`,
-        materials: (svcTemplate?.pricing_display_type || '').includes('materials'),
-      }
-    }
-    return null
-  }, [pricingKind, areaRate, measuredSqft, suggestedInitial, hours, crewSize, rate, svcTemplate])
+  // The service's own recommendation, from the ONE seam in lib/servicePricing.
+  // It returns null when we have no honest basis — and null is load-bearing: the
+  // old code fell back to `hours × crew × rate` using defaults nobody entered, so
+  // there was ALWAYS a number, and the card always rendered. Now silence is a
+  // possible answer, and the UI says so (see the "no recommendation" card below).
+  const serviceRec = useMemo(() => serviceRecommendation({
+    kind: pricingKind,
+    template: svcTemplate ? { ...svcTemplate, name: svcTemplate.name } : null,
+    measuredSqft,
+    // The labour figure exists ONLY when hours AND rate are real. laborSuggestion
+    // is still the one labour engine — we just refuse to feed it invented inputs.
+    labour: hours > 0 && rate > 0
+      ? { price: suggestedInitial, hours: Number(hours), crewSize: Number(crewSize), rate: Number(rate) }
+      : null,
+  }), [pricingKind, svcTemplate, measuredSqft, hours, rate, crewSize, suggestedInitial])
+
+  // Why we can't recommend anything — shown verbatim to the owner instead of a
+  // number. Ordered by what they'd do next.
+  const noRecReason = useMemo(() => {
+    if (!watch('service_type')?.trim()) return 'Pick a service and we’ll recommend a price.'
+    if (pricingKind === 'lawn_recurring') return 'Measure the property to see recommended pricing for this service.'
+    if (rate <= 0) return 'No recommendation yet — set your Default Labour Rate in Settings, or type a price.'
+    return 'No recommendation yet — add hours in the Labour calculator, or type a price. EdgeQuote won’t guess.'
+  }, [watch, pricingKind, rate])
 
   // Accept for one-off services: fill the one price that makes sense and CLEAR
   // the lawn cadence fields (weekly mulch makes no sense on a quote).
@@ -230,7 +264,7 @@ export function QuoteBuilder({
     setValue('biweekly_price', 0)
     setValue('monthly_price', 0)
     setValue('suggested_price', serviceRec.price)
-    setInitialManual(true)
+    setPriceOrigin('applied')   // a real tap — this is the ONLY road to "Applied"
     setPickedCadence(null)
   }
 
@@ -249,7 +283,7 @@ export function QuoteBuilder({
     setValue('biweekly_price', suggested.biweekly)
     setValue('monthly_price', includeMonthly ? suggested.monthly : 0)
     setValue('suggested_price', suggested.one_time)
-    setInitialManual(false)
+    setPriceOrigin('applied')   // tapping a plan tile IS an accept
     setPickedCadence(c)
   }
 
@@ -324,11 +358,24 @@ export function QuoteBuilder({
     }
   }, [templateId, templates, setValue, isEdit])
 
+  // The recommendation stays live in the price field until the owner owns the
+  // number. What changed: it can now be ABSENT. This effect used to run on mount
+  // with `suggestedInitial` = 2 × 1 × $50 and write $100 into a form with no
+  // customer, no address and no service — which then rendered as "✓ Applied".
+  // Now serviceRec is null unless something real backs it, and a field that was
+  // only ever holding a suggestion is cleared again when that basis disappears
+  // (e.g. the owner clears the hours) rather than stranding a stale number.
   useEffect(() => {
-    // Labour keeps the price live ONLY while nothing was accepted or typed —
-    // an accepted suggestion (pickedCadence) must never be silently overwritten.
-    if (!initialManual && !pickedCadence) setValue('initial_price', suggestedInitial)
-  }, [suggestedInitial, initialManual, pickedCadence, setValue])
+    if (priceLocked || pickedCadence) return
+    const price = serviceRec?.price ?? 0
+    if (price > 0) {
+      setValue('initial_price', price)
+      setPriceOrigin('suggested')
+    } else if (priceOrigin === 'suggested') {
+      setValue('initial_price', 0)
+      setPriceOrigin('empty')
+    }
+  }, [serviceRec, priceLocked, priceOrigin, pickedCadence, setValue])
 
   const travelSuggestion = distanceKm > 0 ? suggestTravelFee(distanceKm, tiers) : null
 
@@ -404,25 +451,6 @@ export function QuoteBuilder({
     loadServiceUnits(createClient()).then(u => { if (alive) setUnits(u) })
     return () => { alive = false }
   }, [])
-
-  // What this business DOES — derived from their catalogue + job history by THE
-  // shared rule (no business_type column, nothing asked, nothing written). Only
-  // used to name the area field: "Lawn Size" is the right name for a lawn
-  // company's property attribute and the wrong one for a plumber's. Defaults to
-  // SHAPE_LOADING (showLawnFields: true), so a lawn account — and every account
-  // while the reads are in flight — renders exactly the label it renders today.
-  const [shape, setShape] = useState<BusinessShape>(SHAPE_LOADING)
-  useEffect(() => {
-    let alive = true
-    const sb = createClient()
-    sb.auth.getUser().then(({ data: { user } }) => {
-      if (!user) return
-      loadBusinessShape(sb, user.id)
-        .catch(() => SHAPE_LOADING) // a failed read must never hide a lawn company's field
-        .then(s => { if (alive) setShape(s) })
-    })
-    return () => { alive = false }
-  }, [])
   const unitOptions = useMemo(() => (
     units.length
       ? units.map(u => ({ value: u.code, label: u.label }))
@@ -473,7 +501,7 @@ export function QuoteBuilder({
       </div>
       <div className="border-t border-border pt-3 space-y-2">
         <div className="flex items-center justify-between">
-          <span className="text-sm text-ink-muted">First visit{initialManual ? ' (manual)' : ''}</span>
+          <span className="text-sm text-ink-muted">First visit{priceOrigin === 'manual' ? ' (manual)' : ''}</span>
           <span className="text-ink font-semibold tabular-nums">{formatCurrency(initialPrice)}</span>
         </div>
         {extras.net > 0 && (
@@ -522,7 +550,17 @@ export function QuoteBuilder({
               <h2 className="text-sm font-semibold text-ink">{isEdit ? 'Quote details' : 'New quote'}</h2>
               <div className="flex items-center gap-2">
                 <AutosaveStatus status={autosave.status} savedAt={autosave.savedAt} />
-                {initialManual && (
+                {/* Three states, three words. This badge used to read "Manual price"
+                    for BOTH a hand-typed number and an accepted recommendation —
+                    the single boolean behind it couldn't tell them apart, which
+                    undersold every price the engines got right. */}
+                {priceOrigin === 'suggested' && (
+                  <span className="text-[10px] uppercase tracking-wide text-ink-muted border border-border-strong rounded px-1.5 py-0.5">Suggested</span>
+                )}
+                {priceOrigin === 'applied' && (
+                  <span className="text-[10px] uppercase tracking-wide text-emerald-400 border border-emerald-500/30 bg-emerald-500/10 rounded px-1.5 py-0.5">Applied</span>
+                )}
+                {priceOrigin === 'manual' && (
                   <span className="text-[10px] uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5">Manual price</span>
                 )}
               </div>
@@ -599,15 +637,11 @@ export function QuoteBuilder({
                 error={errors.service_type?.message}
                 {...register('service_type', { required: 'Service is required' })} />
 
-              {/* Measured area — a CORE property attribute (powers pricing, labour &
-                  future analytics). Auto-filled from a website/satellite measurement or
-                  the property's saved size; always editable, and synced back to the
-                  property on save.
-                  The FIELD always renders — it is the only way to type an area, and the
-                  area-rate recommendation is computed from it, so hiding it would break
-                  per-sqft pricing for exactly the trades that need it. Only its NAME is
-                  derived: a plumber should not be asked for a lawn size. */}
-              <Input label={shape.showLawnFields ? 'Lawn Size (ft²)' : 'Area (ft²)'} type="number" step="1" min="0"
+              {/* Lawn size — a CORE property attribute (powers pricing, labour & future
+                  analytics). Auto-filled from a website/satellite measurement or the
+                  property's saved size; always editable, and synced back to the property
+                  on save. */}
+              <Input label="Lawn Size (ft²)" type="number" step="1" min="0"
                 placeholder="e.g. 5,000"
                 hint="Powers pricing & labour. Auto-filled from a measurement or the saved property size — edit to correct."
                 {...register('measured_sqft', { min: 0 })} />
@@ -653,7 +687,7 @@ export function QuoteBuilder({
                     // price takes the recommended cadence's slot, the engine fills
                     // the rest (monthly only when enabled). Everything stays editable.
                     if (!suggested) {
-                      setValue('initial_price', price); setValue('suggested_price', price); setInitialManual(true)
+                      setValue('initial_price', price); setValue('suggested_price', price); setPriceOrigin('applied')
                       return
                     }
                     const c = suggested.recommended
@@ -662,7 +696,7 @@ export function QuoteBuilder({
                     setValue('biweekly_price', c === 'biweekly' ? price : suggested.biweekly)
                     setValue('monthly_price', includeMonthly ? (c === 'monthly' ? price : suggested.monthly) : 0)
                     setValue('suggested_price', suggested.one_time)
-                    setInitialManual(false)
+                    setPriceOrigin('applied')
                     setPickedCadence(c === 'monthly' ? null : c)
                   }}
                 />
@@ -679,9 +713,13 @@ export function QuoteBuilder({
                         {serviceRec.basis}{serviceRec.materials ? ' · plus materials' : ''}
                       </p>
                     </div>
-                    {/* Same confirmation language as Pricing Intelligence — Accept
-                        flips to a green "Applied" once the price is in the field. */}
-                    {Math.abs((Number(initialPrice) || 0) - serviceRec.price) < 0.5
+                    {/* "Applied" means the owner accepted it — nothing else. This
+                        used to be `|initialPrice − serviceRec.price| < 0.5`, which
+                        is true by construction the instant the form loads (the
+                        field is filled FROM this number), so a price nobody had
+                        looked at rendered as confirmed. Equal values are not
+                        consent; only priceOrigin === 'applied' is. */}
+                    {priceOrigin === 'applied'
                       ? <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 shrink-0 animate-fade"><CheckCircle2 className="w-3.5 h-3.5" /> Applied</span>
                       : (
                         <Button type="button" size="sm" onClick={applyServiceRec} className="shrink-0">
@@ -690,11 +728,27 @@ export function QuoteBuilder({
                       )}
                   </div>
                   <p className="text-[10px] text-ink-faint mt-1.5">
-                    {pricingKind === 'per_area'
+                    {serviceRec.source === 'area_rate'
                       ? 'One-time job — Accept fills the price; recurring fields stay empty.'
-                      : 'Priced from labour — fine-tune hours & crew in Advanced Pricing below.'}
+                      : serviceRec.source === 'catalog_price'
+                        ? 'Your own starting price for this service — add hours in the Labour calculator to price the actual job.'
+                        : 'Priced from labour — fine-tune hours & crew in Advanced Pricing below.'}
                     {serviceRec.materials ? ' Add materials as Additional services or into the price.' : ''}
                   </p>
+                </div>
+              )}
+
+              {/* ── Nothing honest to recommend ──────────────────────────────────
+                  The state the builder never had. Every path used to end in a
+                  number, because the labour fallback ran on invented defaults —
+                  so "we don't know yet" was unsayable, and the closest thing to it
+                  was a confident $100. Saying it plainly is the whole point: an
+                  owner can trust the numbers that ARE shown only if the product is
+                  willing to show none. */}
+              {!(pricingKind === 'lawn_recurring' && measuredSqft > 0) && !serviceRec && (
+                <div className="rounded-xl border border-border bg-bg-tertiary p-3 animate-fade">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">No recommended price</p>
+                  <p className="text-xs text-ink-muted mt-1">{noRecReason}</p>
                 </div>
               )}
 
@@ -709,7 +763,7 @@ export function QuoteBuilder({
                       { c: 'biweekly', label: 'Bi-Weekly', price: suggested.biweekly, per: '/visit' },
                       { c: 'one_time', label: 'One-Time', price: suggested.one_time, per: '' },
                     ] as const).map(opt => {
-                      const active = pickedCadence === opt.c && !initialManual
+                      const active = pickedCadence === opt.c && priceOrigin === 'applied'
                       return (
                         <button key={opt.c} type="button" onClick={() => applySuggested(opt.c)}
                           className={cn('rounded-xl border p-2.5 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50', // transition-all so the selection ring eases in too
@@ -736,7 +790,7 @@ export function QuoteBuilder({
                         const next = !includeMonthly
                         setIncludeMonthly(next)
                         // Toggling applies immediately when suggestions already filled the fields.
-                        if (suggested && !initialManual) setValue('monthly_price', next ? suggested.monthly : 0)
+                        if (suggested && priceOrigin !== 'manual') setValue('monthly_price', next ? suggested.monthly : 0)
                       }}
                       className={cn('shrink-0 text-[10px] font-semibold rounded-full px-2 py-0.5 border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
                         includeMonthly ? 'text-accent-text border-accent/40 bg-accent/10' : 'text-ink-faint border-border hover:text-ink')}>
@@ -771,7 +825,7 @@ export function QuoteBuilder({
                   setValue('monthly_price', savedRec.rec.monthly)
                   setValue('measured_sqft', savedRec.sqft)
                   setValue('suggested_price', savedRec.rec.one_time)
-                  setInitialManual(true)
+                  setPriceOrigin('applied')   // an explicit tap on a real recommendation
                 }}>
                 <CheckCircle2 className="w-3.5 h-3.5" /> Use measured prices
               </Button>
@@ -781,46 +835,72 @@ export function QuoteBuilder({
             </div>
           )}
 
-          {/* Price */}
+          {/* Price — the hint states where the number came from, and admits when
+              there is no recommendation to fall back to. */}
           <div>
             <Input label="Price ($, first visit)" type="number" step="1" min="0"
-              hint={initialManual ? 'Manual — overrides the labour suggestion.' : `Suggested ${formatCurrency(suggestedInitial)} from labour. Type to override.`}
-              {...register('initial_price', { min: 0, onChange: () => setInitialManual(true) })} />
-            {initialManual && (
-              <Button type="button" variant="ghost" size="sm" onClick={() => setInitialManual(false)} className="mt-1.5">
-                Use suggested ({formatCurrency(suggestedInitial)})
+              hint={
+                priceOrigin === 'manual'
+                  ? (serviceRec ? `Manual — overrides the ${formatCurrency(serviceRec.price)} recommendation.` : 'Manual — no recommendation available for this service.')
+                  : priceOrigin === 'applied'
+                    ? 'Applied from the recommendation. Type to override.'
+                    : serviceRec
+                      ? `Suggested ${formatCurrency(serviceRec.price)} — ${serviceRec.basis}. Type to override.`
+                      : 'No recommendation for this service yet — enter your price.'
+              }
+              {...register('initial_price', { min: 0, onChange: () => { setPriceOrigin('manual'); setPickedCadence(null) } })} />
+            {/* Only offer "use the recommendation" when one actually exists. */}
+            {priceOrigin === 'manual' && serviceRec && (
+              <Button type="button" variant="ghost" size="sm" onClick={() => setPriceOrigin('empty')} className="mt-1.5">
+                Use suggested ({formatCurrency(serviceRec.price)})
               </Button>
             )}
           </div>
 
           <Collapsible title="Labour calculator" icon={Calculator} summary={laborSummary}>
-            <p className="text-xs text-ink-faint">Adjusts the suggested price above. Most quotes can skip this and just type a price.</p>
+            <p className="text-xs text-ink-faint">Hours × crew × rate — this is what the suggested price above is built from when there’s no measurement to price against.</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* NOT required, and no minimum. Unknown hours must be expressible —
+                  it is the honest state of a job nobody has estimated yet, and
+                  `required` here would have forced the fabricated 2 back in through
+                  validation the moment the default was removed. */}
               <Input label="Estimated Hours" type="number" step="0.25" min="0"
+                hint="Blank until you or the estimate below fill it — no price is suggested from labour without it."
                 error={errors.hours?.message}
-                {...register('hours', { required: 'Required', min: { value: 0.25, message: 'Min 0.25' } })} />
+                {...register('hours', { min: { value: 0, message: 'Cannot be negative' } })} />
               <Input label="Crew Size" type="number" min="1" max="20"
                 error={errors.crew_size?.message}
                 {...register('crew_size', { required: 'Required', min: { value: 1, message: 'Min 1' } })} />
             </div>
-            {/* Smart Labor Estimate — reference only on quotes; never changes the price. */}
+            {/* THE learned estimator — the same engine, model and DB-trigger-fed
+                history that fills the duration when you SCHEDULE a job (JobForm).
+                It was mounted here readOnly with an `onApply` no-op and captioned
+                "Reference only", so the trained estimate sat one line above a field
+                hardcoded to 2. It auto-fills only when est.enoughData is true —
+                i.e. when this service has real history — and says "not enough data"
+                otherwise. That refusal to guess is why it can be trusted with the
+                price: it fills the HOURS, the hours drive the suggestion, and the
+                suggestion still needs an Accept. */}
             <SmartLaborField
-              readOnly
+              affectsPrice
               sqft={measuredSqft}
               serviceType={watch('service_type')}
               crewSize={Number(crewSize) || 1}
+              propertyId={defaultPropertyId}
               overgrowth={overgrowth}
               price={initialPrice || weeklyPrice || biweeklyPrice || monthlyPrice || 0}
-              value={null}
-              onApply={() => {}}
+              value={hours > 0 ? Math.round(Number(hours) * 60) : null}
+              onApply={(minutes) => setValue('hours', Math.round((minutes / 60) * 100) / 100)}
             />
             <Input label="Adjustment Multiplier" type="number" step="0.05" min="0"
               hint="Multiplies the rate. e.g. 0.75 (easy), 1.0 (standard), 1.25 (overgrown)."
               {...register('overgrowth_multiplier', { min: 0 })} />
             <Input label="Base Rate ($/man-hour)" type="number" step="5" min="0"
-              hint="Only used to suggest the price above."
+              hint={Number(settings?.default_rate) > 0
+                ? `Your Default Labour Rate from Settings (${formatCurrency(Number(settings?.default_rate))}/hr). Change it here for this quote only.`
+                : 'Set a Default Labour Rate in Settings so quotes can suggest a labour price.'}
               error={errors.rate?.message}
-              {...register('rate', { required: 'Required', min: { value: 0, message: 'Rate cannot be negative' } })} />
+              {...register('rate', { min: { value: 0, message: 'Rate cannot be negative' } })} />
           </Collapsible>
 
           <Collapsible title="Plan pricing" icon={Repeat} summary={recSummary || 'One-time quote'}>
@@ -968,6 +1048,9 @@ export function QuoteBuilder({
                     setValue('notes', '')
                     const full = await aiScope.run({
                       task: 'quote_scope',
+                      // Lets the scope reference real history ("the same work we did in
+                      // April"). Facts are re-derived server-side from this id, as ever.
+                      customerId: watch('customer_id') || undefined,
                       serviceType: watch('service_type') || undefined,
                       services: (watchedServices || []).map(s => ({ name: s?.service_type, notes: s?.notes })),
                       propertyId: defaultPropertyId || undefined,
@@ -1051,53 +1134,48 @@ export function QuoteBuilder({
           travelFee={Number(travelFee) || 0}
           cfg={pricingConfigFromSettings(settings)}
           serviceType={watch('service_type')}
+          pricingKind={pricingKind}
           propertyId={defaultPropertyId}
           customerId={customerId && customerId !== '__manual' ? customerId : undefined}
-          pricingKind={pricingKind}
-          // The builder's OWN picker (templateOptions) offers activeTemplates —
-          // the modal offering `templates` meant it listed retired services the
-          // picker deliberately hides, and picking one re-populated the quote
-          // with a service the owner had taken off the menu.
           services={activeTemplates.map(t => t.name).filter((n): n is string => !!n)}
+          // Setting the NAME alone left service_template_id stale, so svcTemplate
+          // stayed null and pricingKind fell back to matching the name — which is a
+          // guess about the trade, not the owner's answer. A "Lawn Mowing" template
+          // the owner configured as hourly still name-matched to lawn_recurring and
+          // re-opened the cadence gate two lines below. Set the id and let the
+          // template effect above derive name/rate/notes: the picker's one path,
+          // not a second one. Free text (no template) clears the id for the same reason.
           onServiceChange={(n) => {
-            setValue('service_type', n)
-            // Bind the TEMPLATE too, not just its name. servicePricingKind()
-            // reads the template's pricing_display_type FIRST, so a name with no
-            // template behind it left svcTemplate null, fell through to 'labour',
-            // and the template's own per-sqft rate was never applied. Setting the
-            // id runs the same effect the builder's picker does (name, hourly
-            // rate, default description) — one path, not two.
-            setValue('service_template_id', activeTemplates.find(t => t.name === n)?.id ?? '')
+            const t = activeTemplates.find(s => s.name === n)
+            if (t) setValue('service_template_id', t.id)
+            else { setValue('service_template_id', ''); setValue('service_type', n) }
           }}
           onClose={() => setShowMeasure(false)}
           onApply={(sel) => {
-            // The measured area comes back for EVERY service kind — it's what the
-            // area-rate recommendation above is computed from.
+            // The measured AREA is a fact about the property and applies to every
+            // trade — a traced roof is a traced roof. The PRICES in `sel` are not:
+            // they come from pricingPackage(), the grass cadence engine, whose
+            // signature never sees a service. Applying them to a pressure-washing
+            // or furnace quote put a mowing price on it AND (via the old
+            // setInitialManual(true)) locked out the correct labour suggestion, so
+            // the one-tap default was the wrong number. The area always applies;
+            // the lawn structure only applies to lawn-cadence services.
             setValue('measured_sqft', sel.totalSqft)
-            // The cadence prices come back ONLY for a lawn-cadence service. For
-            // any other kind the modal prices nothing, and these fields must stay
-            // untouched: they persist and print to the customer's PDF, so writing
-            // a grass-derived weekly price onto a hedge quote is a wrong number in
-            // front of the customer. The service's own recommendation (area × the
-            // template's rate, or labour) is the card above — accepted explicitly.
-            if (sel.pricing) {
-              // Fill the WHOLE pricing structure in one apply — first visit at the
-              // one-time price plus every recurring option, so the customer sees all
-              // choices with zero re-typing. Monthly stays blank unless enabled (or
-              // the measure flow explicitly recommended monthly).
-              setValue('initial_price', sel.pricing.oneTime)
-              setValue('weekly_price', sel.pricing.weekly)
-              setValue('biweekly_price', sel.pricing.biweekly)
-              if (includeMonthly || sel.pricing.cadence === 'monthly') {
-                setValue('monthly_price', sel.pricing.monthly)
-                if (sel.pricing.cadence === 'monthly') setIncludeMonthly(true)
-              }
-              setValue('suggested_price', sel.pricing.suggested)
-              // Only a real applied price is a manual price. Claiming it for an
-              // area-only apply would freeze the labour suggestion at whatever
-              // was in the field and badge the quote "Manual price".
-              setInitialManual(true)
+            if (pricingKind !== 'lawn_recurring') { setShowMeasure(false); return }
+
+            // Fill the WHOLE pricing structure in one apply — first visit at the
+            // one-time price plus every recurring option, so the customer sees all
+            // choices with zero re-typing. Monthly stays blank unless enabled (or
+            // the measure flow explicitly recommended monthly).
+            setValue('initial_price', sel.oneTime)
+            setValue('weekly_price', sel.weekly)
+            setValue('biweekly_price', sel.biweekly)
+            if (includeMonthly || sel.cadence === 'monthly') {
+              setValue('monthly_price', sel.monthly)
+              if (sel.cadence === 'monthly') setIncludeMonthly(true)
             }
+            setValue('suggested_price', sel.suggested)
+            setPriceOrigin('applied')   // they tapped a tier in the modal
             setShowMeasure(false)
           }}
         />

@@ -584,7 +584,12 @@ export default function SchedulePage() {
     // ONE persisted bundle, written only from reads that actually succeeded. Jobs
     // alone weren't enough: the board derives a recurring visit's price from its
     // quote, so a cached day without quotes shows real work at "$0 · Set price".
-    if (fieldJobs && !qRes.error && !rRes.error && !sRes.error) {
+    // dRes is in this gate now. It used to write `dayStatuses: dRes.error ? [] : …`,
+    // which bypassed the very guard the live path applies two dozen lines up: a failed
+    // day-status read persisted an EMPTY list, so offline buildDayStatusMap([]) painted
+    // every blocked and rained-out day as available — confidently bookable. That is
+    // precisely the class of failure this bundle exists to prevent.
+    if (fieldJobs && !qRes.error && !rRes.error && !sRes.error && !dRes.error) {
       const quoteIds = new Set(fieldJobs.map(j => j.quote_id).filter(Boolean))
       const recIds = new Set(fieldJobs.map(j => j.recurrence_id).filter(Boolean))
       writeCache<FieldBundle>(FIELD_BUNDLE_KEY, {
@@ -593,7 +598,7 @@ export default function SchedulePage() {
         // Only what this window references — the whole quote book would blow quota.
         quotes: ((qRes.data as QuoteLite[]) || []).filter(q => quoteIds.has(q.id)),
         recurrences: ((rRes.data as JobRecurrence[]) || []).filter(r => recIds.has(r.id)),
-        dayStatuses: dRes.error ? [] : ((dRes.data as DayStatusRow[]) || []),
+        dayStatuses: (dRes.data as DayStatusRow[]) || [],
         settings: (sRes.data as FieldSettings | null) ?? null,
       }, { persist: true })
     }
@@ -1302,7 +1307,7 @@ export default function SchedulePage() {
     let outcome: 'ran' | 'queued'
     try {
       outcome = await queueOrRun(
-        { kind: 'job.update', payload: { id: job.id, patch }, label: `Start ${job.title || 'job'}` },
+        { kind: 'job.update', payload: { id: job.id, patch, baseUpdatedAt: job.updated_at }, label: `Start ${job.title || 'job'}` },
         async () => {
           const { error } = await supabase.from('jobs').update(patch).eq('id', job.id)
           if (error) throw new Error(error.message)
@@ -1318,7 +1323,7 @@ export default function SchedulePage() {
     offerUndo(outcome === 'queued' ? 'Job started — will sync' : 'Job started', async () => {
       setJobs(prev2 => prev2.map(j => (j.id === job.id ? { ...j, ...prev } : j)))
       await queueOrRun(
-        { kind: 'job.update', payload: { id: job.id, patch: prev }, label: `Undo start ${job.title || 'job'}` },
+        { kind: 'job.update', payload: { id: job.id, patch: prev, baseUpdatedAt: job.updated_at }, label: `Undo start ${job.title || 'job'}` },
         async () => { await supabase.from('jobs').update(prev).eq('id', job.id) },
       )
     })
@@ -1342,7 +1347,7 @@ export default function SchedulePage() {
     let outcome: 'ran' | 'queued'
     try {
       outcome = await queueOrRun(
-        { kind: 'job.complete', payload: { id: job.id, patch, job: completed, notify }, label: `Complete ${job.title || 'job'}` },
+        { kind: 'job.complete', payload: { id: job.id, patch, job: completed, notify, baseUpdatedAt: job.updated_at }, label: `Complete ${job.title || 'job'}` },
         async () => {
           const { error } = await supabase.from('jobs').update(patch).eq('id', job.id)
           if (error) throw new Error(error.message)
@@ -1370,7 +1375,7 @@ export default function SchedulePage() {
     offerUndo(outcome === 'queued' ? 'Job completed — will sync' : 'Job completed', async () => {
       setJobs(prev2 => prev2.map(j => (j.id === job.id ? { ...j, ...prev } : j)))
       await queueOrRun(
-        { kind: 'job.update', payload: { id: job.id, patch: prev }, label: `Undo complete ${job.title || 'job'}` },
+        { kind: 'job.update', payload: { id: job.id, patch: prev, baseUpdatedAt: job.updated_at }, label: `Undo complete ${job.title || 'job'}` },
         async () => {
           await supabase.from('jobs').update(prev).eq('id', job.id)
           if (invoiceCreated) await supabase.from('invoices').delete().eq('job_id', job.id).eq('status', 'draft')
@@ -1401,8 +1406,8 @@ export default function SchedulePage() {
     try {
       outcome = await queueOrRun(
         completing
-          ? { kind: 'job.complete', payload: { id: job.id, patch: fields, job: completed, notify: false }, label: `Complete ${job.title || 'job'}` }
-          : { kind: 'job.update', payload: { id: job.id, patch: fields, syncPrice: repriced }, label: `Edit ${job.title || 'job'}` },
+          ? { kind: 'job.complete', payload: { id: job.id, patch: fields, job: completed, notify: false, baseUpdatedAt: job.updated_at }, label: `Complete ${job.title || 'job'}` }
+          : { kind: 'job.update', payload: { id: job.id, patch: fields, syncPrice: repriced, baseUpdatedAt: job.updated_at }, label: `Edit ${job.title || 'job'}` },
         async () => {
           const { error } = await supabase.from('jobs').update(fields).eq('id', job.id)
           if (error) throw new Error(error.message)
@@ -1451,7 +1456,7 @@ export default function SchedulePage() {
     let outcome: 'ran' | 'queued'
     try {
       outcome = await queueOrRun(
-        { kind: 'job.update', payload: { id: job.id, patch: { price }, syncPrice: true, syncReason: reason, priceAudit: audit }, label: `Price ${job.title || 'job'}` },
+        { kind: 'job.update', payload: { id: job.id, patch: { price }, syncPrice: true, syncReason: reason, priceAudit: audit, baseUpdatedAt: job.updated_at }, label: `Price ${job.title || 'job'}` },
         async () => {
           const { error } = await supabase.from('jobs').update({ price }).eq('id', job.id)
           if (error) throw new Error(error.message)
@@ -1568,6 +1573,13 @@ export default function SchedulePage() {
       userId: user.id, targetJobIds: ids,
       description: input.description, amount: input.amount, serviceKey: input.serviceKey,
       serviceType: job.service_type, recurring: input.scope !== 'this',
+      // Minted ONCE, here, and carried in the payload — so this add has the same
+      // identity however many times it replays. Without it a retry mints a fresh
+      // group_id, looks like a second add-on, and bills the customer twice; with it
+      // addLineItems sees the rows already landed and re-prices instead of re-adding.
+      // This is what lets the handler safely retry a failed draft re-price.
+      // Same generator the engine already writes into this uuid column.
+      groupId: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : null,
     }
     let outcome: 'ran' | 'queued'
     try {
@@ -1575,12 +1587,13 @@ export default function SchedulePage() {
         { kind: 'job.addons.add', payload: { opts, syncJobIds: ids }, label: `Add “${input.description}” to ${job.title || 'job'}` },
         async () => {
           await addLineItems(supabase, opts)
-          await syncDraftInvoiceAmounts(supabase, ids)
+          const { failed } = await syncDraftInvoiceAmounts(supabase, ids)
+          if (failed > 0) setBanner('Service added, but its draft invoice still shows the old total — open the invoice to re-price it.')
         },
-        // Inserting line items is NOT idempotent — a replay would bill the mulch
-        // twice. Queue only when we're definitively offline (so nothing was sent);
-        // a request that failed mid-flight with the network still up is rethrown for
-        // the contractor to retry deliberately, exactly like an SMS send.
+        // Queue only when we're definitively offline (so nothing was sent). A request
+        // that failed mid-flight with the network still up is rethrown for the
+        // contractor to retry deliberately, exactly like an SMS send — the groupId
+        // above makes a replay safe, but it can't tell us whether the server committed.
         { queueOnRunError: false },
       )
     } catch (e) {
@@ -1598,7 +1611,16 @@ export default function SchedulePage() {
       const { data } = await supabase.from('job_line_items').select('*').eq('group_id', item.group_id)
       if (data?.length) snapshot = data as JobLineItem[]
     }
-    await deleteLineItem(supabase, item)
+    // deleteLineItem throws now. Previously it read no error and returned void, so a
+    // failed delete still fired "Removed …" WITH an Undo — and that Undo re-inserted
+    // rows that had never been deleted, duplicating the charge. Bail before the toast:
+    // never claim work is undone when the row is still there.
+    try {
+      await deleteLineItem(supabase, item)
+    } catch (e) {
+      setBanner('Could not remove that service: ' + (e instanceof Error ? e.message : 'please try again.'))
+      return
+    }
     const affectedJobs = [...new Set(snapshot.map(r => r.job_id))]
     await syncDraftInvoiceAmounts(supabase, affectedJobs)
     await fetchJobs()
@@ -1628,9 +1650,17 @@ export default function SchedulePage() {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
     const existing = new Set((addonsByJobId[job.id] || []).map(i => (i.service_key || i.description).toLowerCase()))
-    for (const a of prev) {
-      if (existing.has((a.serviceKey || a.description).toLowerCase())) continue
-      await addLineItems(supabase, { userId: user.id, targetJobIds: [job.id], description: a.description, amount: a.amount, serviceKey: a.serviceKey, serviceType: job.service_type, recurring: false })
+    // addLineItems throws now, so a failed copy says so instead of quietly adding
+    // nothing. Not queued: this is a convenience that reads the previous visit's
+    // extras, and it already returned early above when there's no session.
+    try {
+      for (const a of prev) {
+        if (existing.has((a.serviceKey || a.description).toLowerCase())) continue
+        await addLineItems(supabase, { userId: user.id, targetJobIds: [job.id], description: a.description, amount: a.amount, serviceKey: a.serviceKey, serviceType: job.service_type, recurring: false })
+      }
+    } catch (e) {
+      setBanner('Could not copy the previous visit’s services: ' + (e instanceof Error ? e.message : 'please try again.'))
+      return
     }
     await syncDraftInvoiceAmounts(supabase, [job.id])
     await fetchJobs()

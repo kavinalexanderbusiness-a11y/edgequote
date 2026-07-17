@@ -144,3 +144,10 @@ jobs:
       # licensing hook are all wrong-VALUE bugs, invisible to tsc and build.
       - name: Verify module engine
         run: npm run verify:modules
+
+      # The integrations platform's contracts are wrong-VALUE bugs too: a
+      # signature that verifies its own tampering, a backoff that never dies,
+      # docs promising an event the catalog dropped, or API serializers
+      # drifting from webhook payload field sets. Pure functions, no network.
+      - name: Verify integrations platform
+        run: npm run verify:integrations

@@ -4,7 +4,7 @@ import type { PhotoKind } from '@/types'
 import { ensurePair, type JobRow } from '@/lib/beforeafter/autopair'
 import { visualHash } from '@/lib/dedup'
 import { toast } from '@/lib/toast'
-import { putPending, allPending, dropPending, bumpPendingAttempts } from '@/lib/offline/photoStore'
+import { putPending, allPending, dropPending, bumpPendingAttempts, sweepPending } from '@/lib/offline/photoStore'
 
 // ── Background upload queue — ONE engine for "uploads that keep going" ────────────
 // A module-level external store (subscribe/emit, mirrors lib/toast) consumed by a
@@ -49,6 +49,10 @@ export interface QueueItem {
   rowId?: string
   takenAt: string | null
   contentHash: string | null   // visual hash (lib/dedup) — durable dedup, stored on the row
+  /** Are this photo's bytes actually on disk? undefined = persistence still in flight.
+   *  There was previously NO answer to this question anywhere, which is why the tile
+   *  could assert "Saved" over a photo that had no backup at all. */
+  durable?: boolean
 }
 
 const MAX_CONCURRENT = 3
@@ -60,6 +64,16 @@ const listeners = new Set<() => void>()
 const seenSigs = new Set<string>()      // session dedup — never upload the same photo twice
 const notifiedGroups = new Set<string>()
 let groupSeq = 0
+// Group ids must be unique ACROSS SESSIONS, not just within one. `g${++groupSeq}`
+// restarted at "g1" every launch while rehydrated photos kept last session's "g1",
+// so maybeFinishGroup filtered both sessions into one group: pairJob became
+// yesterday's job, and ensurePair could write a before/after pair spanning two
+// different properties — yesterday's "before" beside today's "after". It also
+// inherited that group's notifiedGroups entry, so the new batch finished with no
+// toast at all, and clearDone('g1') emptied the other session's tiles.
+const SESSION = (() => {
+  try { return crypto.randomUUID().slice(0, 8) } catch { return String(Date.now() % 1e8) }
+})()
 let supa: ReturnType<typeof createClient> | null = null
 const client = () => (supa ||= createClient())
 
@@ -107,7 +121,7 @@ async function run(id: string) {
   if (!cur) return
   if (row) {
     patch(id, { status: 'done', rowId: row.id, error: undefined })
-    void dropPending(id)                                             // it's on the server now
+    void dropWhenPersisted(id)                                       // it's on the server now
   } else {
     const attempts = cur.attempts + 1
     if (!online()) {
@@ -164,7 +178,7 @@ async function maybeFinishGroup(groupId: string) {
 
 // ── public API ───────────────────────────────────────────────────────────────────
 export function enqueueUploads(group: EnqueueGroup): string {
-  const groupId = `g${++groupSeq}`
+  const groupId = `g-${SESSION}-${++groupSeq}`
   const added: QueueItem[] = []
   for (const e of group.items) {
     const f = e.file
@@ -175,35 +189,83 @@ export function enqueueUploads(group: EnqueueGroup): string {
       id: `${groupId}-${added.length}-${Math.random().toString(36).slice(2, 7)}`,
       sig, file: f, previewUrl: URL.createObjectURL(f), kind: e.kind,
       ctx: group.ctx, groupId, label: group.label || '', pairJob: group.pairJob ?? null,
-      status: 'queued', attempts: 0, takenAt: e.takenAt ?? null, contentHash: e.contentHash ?? null,
+      // Park it as 'paused' when we're ALREADY offline. pump() returns early with no
+      // signal and only the `offline` EVENT set paused — and that event fires on the
+      // transition, not the state. So a photo shot while offline stayed 'queued'
+      // forever and the tile rendered a bare spinner: the honest "Saved — uploads
+      // when you're back" copy never showed in the one scenario it was written for.
+      status: online() ? 'queued' : 'paused',
+      attempts: 0, takenAt: e.takenAt ?? null, contentHash: e.contentHash ?? null,
     })
   }
   if (added.length) {
     items = [...items, ...added]; emit(); pump()
-    // Persist in the background: stays synchronous for callers, and the upload is
-    // already racing anyway — whichever finishes first, the other is a no-op (a
-    // completed upload drops its record; a persisted record for a completed upload
-    // is dropped on success).
     void persist(added)
   }
   return groupId
 }
 
-// Shrink then store. Downscaling first is what makes persistence affordable, and
-// the upload re-runs downscale on the smaller blob as a pass-through (see
-// photos.downscale) — so this costs one encode total, not two.
+// Shrink then store. Downscaling first is what makes persistence affordable, and the
+// upload reuses the SAME blob (see below) so it costs one encode, not two.
+//
+// `persisted` tracks which items have their bytes committed. It exists because
+// dropPending raced persist: on wifi an upload finished in ~200ms and called
+// dropPending on a record persist hadn't written yet (~300ms), so the delete hit
+// nothing and the write landed AFTER — an orphan record for an already-uploaded
+// photo, which the next launch faithfully rehydrated and uploaded a SECOND time.
+// The old comment claimed "whichever finishes first, the other is a no-op". It wasn't.
+const persisted = new Set<string>()
+const persistDone = new Map<string, Promise<void>>()
+
+// One warning per session, not per photo: a full disk fails all six shots of a stop
+// and six identical toasts would bury the point. Long, and error-toned, because this
+// is the one message that should stop a contractor from driving away.
+let warnedNotDurable = false
+function warnNotDurable(): void {
+  if (warnedNotDurable) return
+  warnedNotDurable = true
+  toast('Storage is full — photos can’t be saved for later. Keep the app open until they upload.', { tone: 'error', duration: 12000 })
+}
+
 async function persist(list: QueueItem[]): Promise<void> {
   for (const it of list) {
-    try {
-      const blob = await downscale(it.file)
-      await putPending({
-        id: it.id, sig: it.sig, blob, name: it.file.name, kind: it.kind, ctx: it.ctx,
-        groupId: it.groupId, label: it.label, pairJob: it.pairJob,
-        takenAt: it.takenAt ?? null, contentHash: it.contentHash ?? null, attempts: it.attempts,
-        createdAt: Date.now(),
-      })
-    } catch { /* best-effort — the in-memory upload still runs this session */ }
+    const p = (async () => {
+      try {
+        const blob = await downscale(it.file)
+        // Swap the item onto the downscaled bytes. persist() used to store the small
+        // blob but leave item.file as the original 4MB File, so run() handed THAT to
+        // uploadPhoto, which downscaled from scratch again — two full 12MP decode+
+        // encode passes per photo on the main thread, competing with visualHash's
+        // third, and lengthening the very window where the photo isn't yet on disk.
+        // The "one encode total" claim only ever held on the rehydrated path.
+        patch(it.id, { file: new File([blob], it.file.name, { type: blob.type || it.file.type }) })
+        const ok = await putPending({
+          id: it.id, sig: it.sig, blob, name: it.file.name, kind: it.kind, ctx: it.ctx,
+          groupId: it.groupId, label: it.label, pairJob: it.pairJob,
+          takenAt: it.takenAt ?? null, contentHash: it.contentHash ?? null, attempts: it.attempts,
+          createdAt: Date.now(),
+        })
+        if (ok) persisted.add(it.id)
+        // Record the honest answer so the UI can stop saying "Saved". Best-effort
+        // still: a photo we couldn't back up must STILL upload this session — that's
+        // now its only chance, which is exactly why the contractor has to be told.
+        patch(it.id, { durable: ok })
+        if (!ok) warnNotDurable()
+      } catch { patch(it.id, { durable: false }); warnNotDurable() }
+    })()
+    persistDone.set(it.id, p)
+    await p
   }
+}
+
+// Drop a record only once we know there IS one. Awaiting the in-flight persist first
+// is what closes the orphan race above; if persistence never succeeded there's simply
+// nothing to delete.
+async function dropWhenPersisted(id: string): Promise<void> {
+  const p = persistDone.get(id)
+  if (p) await p.catch(() => {})
+  persistDone.delete(id)
+  if (persisted.has(id)) { persisted.delete(id); await dropPending(id) }
 }
 
 // ── Restart recovery ─────────────────────────────────────────────────────────────
@@ -216,6 +278,9 @@ let rehydrated = false
 export async function rehydrateUploads(): Promise<number> {
   if (rehydrated || typeof window === 'undefined') return 0
   rehydrated = true
+  // Bin what's provably dead BEFORE restoring, so a month of poison records can't
+  // hold the quota that today's photos need. Runs once per launch, off the hot path.
+  await sweepPending(Date.now())
   const recs = await allPending()
   if (!recs.length) return 0
   const restored: QueueItem[] = []
@@ -230,6 +295,8 @@ export async function rehydrateUploads(): Promise<number> {
       ctx: r.ctx, groupId: r.groupId, label: r.label, pairJob: r.pairJob,
       // Attempts reset: the last run died with the app, not on the merits. A photo
       // that has genuinely been rejected MAX_ATTEMPTS times is already off the disk.
+      // It came OFF the disk, so it is by definition still on it.
+      durable: true,
       status: 'queued', attempts: 0, error: undefined,
       takenAt: r.takenAt, contentHash: r.contentHash,
     })
@@ -262,7 +329,7 @@ export function dismissUpload(id: string) {
   try { URL.revokeObjectURL(it.previewUrl) } catch { /* ignore */ }
   seenSigs.delete(it.sig)                     // allow a deliberate re-drop later
   items = items.filter(i => i.id !== id)
-  void dropPending(id)
+  void dropWhenPersisted(id)
   emit()
 }
 
@@ -273,16 +340,30 @@ export function clearDone(groupId?: string) {
   items = items.filter(i => !drop.includes(i))
   // Belt and braces: a 'done' item already dropped its record on success. This only
   // matters if the tray outlived a write that failed silently.
-  for (const d of drop) void dropPending(d.id)
+  for (const d of drop) void dropWhenPersisted(d.id)
   emit()
 }
 
-// Resume on reconnect; reflect offline state.
+// ── Resume ───────────────────────────────────────────────────────────────────────
+// The outbox wakes on online + visibilitychange + a 30s interval (OfflineStatus)
+// precisely because mobile browsers fire `online` unreliably — a phone that regains
+// signal while the tab is backgrounded often never fires it at all. This queue had
+// ONLY the event, so on reconnect the job writes synced and the queue indicator
+// cleared while the photos sat paused: everything LOOKED synced and the contractor
+// drove away. They weren't lost (they're on disk, and rehydrate catches them next
+// launch) — but rehydrate runs once per load, so within a long shift they stalled.
+// Same three triggers now; resume() is a no-op when there's nothing parked.
+function resume(): void {
+  if (!online()) return
+  let woke = false
+  for (const it of items) if (it.status === 'paused') { patch(it.id, { status: 'queued' }); woke = true }
+  if (woke || items.some(i => i.status === 'queued')) pump()
+}
+
 if (typeof window !== 'undefined') {
-  window.addEventListener('online', () => {
-    for (const it of items) if (it.status === 'paused') patch(it.id, { status: 'queued' })
-    pump()
-  })
+  window.addEventListener('online', resume)
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') resume() })
+  window.setInterval(resume, 30_000)
   window.addEventListener('offline', () => {
     for (const it of items) if (it.status === 'queued') patch(it.id, { status: 'paused' })
   })

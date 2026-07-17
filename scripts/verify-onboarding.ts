@@ -9,6 +9,7 @@
 // Style follows verify-automations/verify-trades: pure, deterministic, no I/O.
 
 import { seedPlan, seasonsForStorage, serviceRowsFor, type SeedState } from '../src/lib/onboarding/seed'
+import { deriveSetupHealth, type SetupSnapshot } from '../src/lib/onboarding/setupHealth'
 import { LAWN_PACK, NEUTRAL_PACK, tradePack } from '../src/lib/trades'
 import { SEASONAL_TEMPLATES } from '../src/lib/crm/campaigns'
 
@@ -108,6 +109,62 @@ check('the DEFAULT business_type (every existing row) resolves to the lawn pack'
   tradePack('lawn_landscaping') === LAWN_PACK, true)
 check('a pack with no campaigns falls back to neutral presets, never an empty menu',
   (tradePack('plumbing').seasonalCampaigns.length ? tradePack('plumbing').seasonalCampaigns : NEUTRAL_PACK.seasonalCampaigns).length > 0, true)
+
+// ═══════════════════════════════════════════════════════════════════════════
+H('6. SETUP HEALTH — derived from existing data, mirroring real consumer gates')
+// deriveSetupHealth is pure; each item's `done` must mirror the exact gate its
+// consumer applies (portal e-transfer, review cron, geocode users…). These pin
+// the derivation. The loader's fail-closed contract (readError → the card
+// renders NOTHING, never a checklist of guesses) lives in SetupProgress, which
+// returns before deriving — the snapshot shape here is what makes that possible.
+const FULL: SetupSnapshot = {
+  companyName: 'Edge Property Services', phone: '403-555-0100', emailPrimary: 'kav@edge.ca',
+  baseAddress: '123 Main St SW, Calgary', baseLat: 51.02, baseLng: -114.06,
+  logoUrl: 'https://x/logo.png', termsText: 'Payment due on receipt.',
+  etransferEmail: 'pay@edge.ca', bookingEnabled: true, reviewUrl: 'https://g.page/r/x',
+  activeTemplateCount: 23, unpricedActiveTemplateCount: 0,
+}
+check('fully configured business → complete, card would render nothing',
+  deriveSetupHealth(FULL).complete, true)
+
+// TODAY'S PRODUCTION TRUTH, pinned: the live business is complete on everything
+// except e-transfer (its portal silently hides Ways-to-Pay e-transfer — the
+// portal audit's one open actionable). If this check ever fails, either the
+// checklist drifted or someone fixed e-transfer — both worth noticing.
+const LIVE_BIZ: SetupSnapshot = { ...FULL, etransferEmail: null }
+check('the LIVE business shape → exactly one incomplete item: etransfer',
+  deriveSetupHealth(LIVE_BIZ).items.filter(i => !i.done).map(i => i.key), ['etransfer'])
+check('live shape → 8 of 9 done', { d: deriveSetupHealth(LIVE_BIZ).done, t: deriveSetupHealth(LIVE_BIZ).total }, { d: 8, t: 9 })
+
+const EMPTY_SNAP: SetupSnapshot = {
+  companyName: '', phone: null, emailPrimary: null, baseAddress: null, baseLat: null, baseLng: null,
+  logoUrl: null, termsText: null, etransferEmail: null, bookingEnabled: false, reviewUrl: null,
+  activeTemplateCount: 0, unpricedActiveTemplateCount: 0,
+}
+check('a brand-new business → nothing done', deriveSetupHealth(EMPTY_SNAP).done, 0)
+
+// The gates each item mirrors, driven one at a time:
+// home_base deliberately ignores lat/lng: the settings form NULLS them on every
+// save (pages re-geocode lazily), so requiring them would turn that self-healing
+// transient into a recurring nag that resurrects a dismissed card. The address is
+// the owner-actionable fact. This pins the decision — flipping it back is how the
+// nag loop returns.
+check('address set = home base done, even mid-regeocode (lat/lng transiently null)',
+  deriveSetupHealth({ ...FULL, baseLat: null, baseLng: null }).items.find(i => i.key === 'home_base')!.done, true)
+check('an unpriced ACTIVE service fails service_prices but not services',
+  (() => { const h = deriveSetupHealth({ ...FULL, unpricedActiveTemplateCount: 2 }); return { services: h.items.find(i => i.key === 'services')!.done, prices: h.items.find(i => i.key === 'service_prices')!.done } })(),
+  { services: true, prices: false })
+check('zero active templates fails BOTH catalogue items',
+  deriveSetupHealth({ ...FULL, activeTemplateCount: 0 }).items.filter(i => !i.done).map(i => i.key), ['services', 'service_prices'])
+check('whitespace-only review_url reads as unset (mirrors the cron\'s trim)',
+  deriveSetupHealth({ ...FULL, reviewUrl: '   ' }).items.find(i => i.key === 'review_link')!.done, false)
+check('every item deep-links to a real settings surface',
+  deriveSetupHealth(EMPTY_SNAP).items.every(i =>
+    ['/dashboard/settings#business', '/dashboard/settings#pricing', '/dashboard/settings#booking', '/dashboard/settings#messaging', '/dashboard/settings/templates'].includes(i.href)), true)
+check('every item explains what degrades while incomplete',
+  deriveSetupHealth(EMPTY_SNAP).items.every(i => i.why.length > 20 && i.label.length > 3), true)
+check('keys are unique and stable',
+  new Set(deriveSetupHealth(EMPTY_SNAP).items.map(i => i.key)).size, deriveSetupHealth(EMPTY_SNAP).items.length)
 
 // ═══════════════════════════════════════════════════════════════════════════
 console.log(`\n${'═'.repeat(60)}\n  PASS ${pass}   FAIL ${fail}`)

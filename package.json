@@ -13,9 +13,13 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "verify:ai-context": "tsx scripts/verify-ai-context.ts",
+    "verify:ai-assist": "tsx scripts/verify-ai-assist.ts",
     "verify:seasons": "tsx scripts/verify-seasons.ts",
     "verify:modules": "tsx scripts/verify-modules.ts",
-    "verify:pricing": "tsx scripts/verify-pricing.ts"
+    "verify:pricing": "tsx scripts/verify-pricing.ts",
+    "verify:analytics": "tsx scripts/verify-analytics.ts",
+    "verify:integrations": "tsx scripts/verify-integrations.ts",
+    "verify:inventory": "tsx scripts/verify-inventory.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",

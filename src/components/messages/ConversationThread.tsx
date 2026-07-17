@@ -1,24 +1,27 @@
 'use client'
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { queueOrRun } from '@/lib/offline/outbox'
 import { newClientMessageId } from '@/lib/comms/idempotency'
+import { toast } from '@/lib/toast'
 import { Button } from '@/components/ui/Button'
 import { cn } from '@/lib/utils'
 import { MSG_LABELS, MsgType } from '@/lib/comms/templates'
 import { describeSkip } from '@/lib/comms/skipReasons'
 import { statusMeta, TONE_CLASS } from '@/lib/comms/logStatus'
 import { SmsCost } from '@/components/comms/SmsCost'
+import { AssistButton } from '@/components/ai/AssistButton'
+import { useAiAssist } from '@/hooks/useAiAssist'
 import { thumbUrl } from '@/lib/photos'
 import { extractBookingPhotos } from '@/lib/bookingPhotos'
-import { Send, StickyNote, Clock, Mail, MessageSquare, Camera } from 'lucide-react'
-import { format } from 'date-fns'
+import { Send, StickyNote, Clock, Mail, MessageSquare, Camera, ChevronUp, Loader2 } from 'lucide-react'
+import { format, isToday, isYesterday } from 'date-fns'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
 
-interface Msg { id: string; created_at: string; direction: string; channel: string; body: string; status: string | null }
+interface Msg { id: string; created_at: string; direction: string; channel: string; body: string; status: string | null; meta: { media?: { url: string; type: string }[] } | null }
 interface Log { id: string; created_at: string; channel: string; template: string; status: string; message_id: string | null; detail: string | null }
 type Photo = { thumb: string; full: string }
 type Item = { id: string; at: string; kind: 'in' | 'out' | 'note' | 'event'; channel: string; body: string; status?: string | null; template?: string; detail?: string | null; photos?: Photo[] }
@@ -26,7 +29,11 @@ type Item = { id: string; at: string; kind: 'in' | 'out' | 'note' | 'event'; cha
 // One customer's unified timeline: inbound SMS + portal requests, outbound
 // replies, internal notes, and templated sends (from notification_log). Reply by
 // SMS through the one comms sender, or leave an internal note.
-export function ConversationThread({ customerId, onRead }: { customerId: string; onRead?: () => void }) {
+// A thread can span years. Load the newest window and offer "Show earlier" —
+// nobody scrolls 1,400 bubbles, and an unbounded query grows without limit.
+const THREAD_CAP = 300
+
+export function ConversationThread({ customerId, onRead, autoFocus }: { customerId: string; onRead?: () => void; autoFocus?: boolean }) {
   const supabase = useMemo(() => createClient(), [])
   const [items, setItems] = useState<Item[]>([])
   const [loading, setLoading] = useState(true)
@@ -37,6 +44,13 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
   // A "saved but not delivered" soft-warning is styled amber (not the red of a true
   // failure) — the message DID save to the timeline.
   const [errIsWarn, setErrIsWarn] = useState(false)
+  const [truncated, setTruncated] = useState(false)
+  const showAllRef = useRef(false)
+  // Skip ONE auto-scroll after "Show earlier" — the reader is at the top looking at
+  // history; yanking them to the newest message would lose their place.
+  const skipScrollRef = useRef(false)
+  const scrollBoxRef = useRef<HTMLDivElement>(null)
+  const taRef = useRef<HTMLTextAreaElement>(null)
   const endRef = useRef<HTMLDivElement>(null)
   // Guards a fast conversation switch: a slow load for an earlier customer must never
   // overwrite the thread you've since opened (the component is reused across both).
@@ -59,9 +73,12 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
     const { data: { session } } = await supabase.auth.getSession()
     const uid = session?.user?.id
     if (!uid) { if (mySeq === reqSeq.current) setLoading(false); return }
+    // Newest-first + cap, then reversed for display — the visible window is always
+    // the most recent slice, and "Show earlier" raises the cap.
+    const cap = showAllRef.current ? 5000 : THREAD_CAP
     const [mRes, lRes, qRes] = await Promise.all([
-      supabase.from('messages').select('id, created_at, direction, channel, body, status').eq('customer_id', cid).eq('user_id', uid).order('created_at'),
-      supabase.from('notification_log').select('id, created_at, channel, template, status, message_id, detail').eq('customer_id', cid).eq('user_id', uid).neq('template', 'reply').order('created_at'),
+      supabase.from('messages').select('id, created_at, direction, channel, body, status, meta').eq('customer_id', cid).eq('user_id', uid).order('created_at', { ascending: false }).limit(cap),
+      supabase.from('notification_log').select('id, created_at, channel, template, status, message_id, detail').eq('customer_id', cid).eq('user_id', uid).neq('template', 'reply').order('created_at', { ascending: false }).limit(cap),
       // Photos the customer attached during online booking live on the draft quote's
       // lead_meta.photos (booking-uploads bucket) — surface them ON the booking event.
       supabase.from('quotes').select('lead_meta').eq('customer_id', cid).eq('user_id', uid),
@@ -73,13 +90,30 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
     // Mark THIS conversation read (you opened it) regardless of a later switch; only
     // the latest load is allowed to repaint the visible thread + refresh inbox counts.
     supabase.from('conversations').update({ unread: 0 }).eq('user_id', uid).eq('customer_id', cid).then(() => { if (mySeq === reqSeq.current) onRead?.() })
+    // Reading the thread also clears its bell notifications — ONE read state across
+    // the app, not two. Without this the bell keeps advertising (and the push badge
+    // keeps counting) a message the owner has already read here.
+    supabase.from('notifications').update({ read: true, read_at: new Date().toISOString() })
+      .eq('user_id', uid).eq('customer_id', cid).eq('read', false).in('type', ['new_message', 'portal_request'])
+      .then(() => {})
     if (mySeq !== reqSeq.current) return
     // Attach the booking photos to the online-booking event (its message body starts
     // "New online booking") so the thread shows a "Customer attached N photos" strip.
     let bookingAttached = false
-    const msgs: Item[] = (mRes.data as Msg[] || []).map(m => {
+    const mRows = ((mRes.data as Msg[]) || []).slice().reverse()
+    const lRows = ((lRes.data as Log[]) || []).slice().reverse()
+    setTruncated(!showAllRef.current && (((mRes.data as Msg[]) || []).length === cap || ((lRes.data as Log[]) || []).length === cap))
+    const msgs: Item[] = mRows.map(m => {
       const isBooking = m.direction === 'inbound' && /^New online booking/i.test(m.body || '')
-      const photos = isBooking && !bookingAttached && bookingPhotos.length ? (bookingAttached = true, bookingPhotos) : undefined
+      // MMS attachments (inbound webhook stores Twilio media on meta) render on the
+      // bubble through the session-authed proxy — non-image media is skipped.
+      const mms: Photo[] = (m.meta?.media || [])
+        .map((x, i) => ({ x, i }))
+        .filter(({ x }) => !x.type || x.type.startsWith('image/'))
+        .map(({ i }) => ({ thumb: `/api/messages/media?id=${m.id}&i=${i}`, full: `/api/messages/media?id=${m.id}&i=${i}` }))
+      const photos = isBooking && !bookingAttached && bookingPhotos.length
+        ? (bookingAttached = true, bookingPhotos)
+        : (mms.length ? mms : undefined)
       return {
         id: 'm' + m.id, at: m.created_at, channel: m.channel, body: m.body, status: m.status,
         kind: m.direction === 'inbound' ? 'in' : m.direction === 'internal' ? 'note' : 'out',
@@ -90,7 +124,7 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
     // skip its event pill so a sent message isn't displayed twice.
     // Carry the raw log fields; the timeline badge + TRUTHFUL skip reason are derived
     // at render from status + detail (never a hardcoded "no opt-in").
-    const logs: Item[] = (lRes.data as Log[] || []).filter(l => !l.message_id).map(l => ({
+    const logs: Item[] = lRows.filter(l => !l.message_id).map(l => ({
       id: 'l' + l.id, at: l.created_at, channel: l.channel, kind: 'event',
       status: l.status, template: l.template, detail: l.detail, body: '',
     }))
@@ -99,8 +133,24 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
   }
   loadRef.current = load // keep the debounced reload pointed at the current closure
   // On switch: show the skeleton and load fresh (the seq guard drops any stale load).
-  useEffect(() => { setLoading(true); setErr(null); load() }, [customerId]) // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { endRef.current?.scrollIntoView({ block: 'end' }) }, [items.length])
+  useEffect(() => { showAllRef.current = false; setTruncated(false); setLoading(true); setErr(null); load() }, [customerId]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Scroll the thread CONTAINER, not scrollIntoView — scrolling an inner element
+  // into view can drag the whole page along on mobile. Skipped once after "Show
+  // earlier" so expanding history keeps your reading position.
+  useEffect(() => {
+    if (skipScrollRef.current) { skipScrollRef.current = false; return }
+    const el = scrollBoxRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [items.length])
+  // Desktop inbox: focus the reply box the moment a conversation opens — reading
+  // and replying is THE loop. Opt-in (the customer profile embeds this thread
+  // mid-page, where stealing focus on load would be wrong), and mobile keeps
+  // focus manual (autofocus pops the keyboard over the thread you came to read).
+  useEffect(() => {
+    if (autoFocus && typeof window !== 'undefined' && window.matchMedia('(min-width: 1024px)').matches) {
+      taRef.current?.focus({ preventScroll: true })
+    }
+  }, [customerId, autoFocus])
 
   // Drafts: restore an unsent message when (re)opening a conversation, and auto-save
   // as you type so closing/switching mid-message never loses it. Sending clears it.
@@ -122,6 +172,44 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
       .subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [customerId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // AI draft/rewrite for the reply box — the SAME engine as the big composer
+  // (/api/ai/assist, task draft_message). The context builder pulls THIS
+  // conversation server-side and is instructed to answer the newest inbound
+  // message, so "Draft reply" genuinely replies. Streams into the editable box;
+  // the model never sends anything.
+  const ai = useAiAssist()
+  async function aiDraft() {
+    if (sending || ai.running || note) return
+    const prior = text
+    ai.clearError()
+    setText('')
+    const full = await ai.run(
+      { task: 'draft_message', customerId, template: 'custom', channels: ['sms'], currentText: prior.trim() ? prior : '' },
+      { onDelta: d => setText(p => p + d) },
+    )
+    if (full === null) setText(prior)
+    else if (prior.trim()) toast.undo('Replaced your draft.', () => setText(prior))
+  }
+
+  // Auto-grow the reply box with its content (~2 → 6 rows) — including text that
+  // arrives programmatically (draft restore, AI streaming).
+  useEffect(() => {
+    const el = taRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = Math.min(el.scrollHeight, 160) + 'px'
+  }, [text, note])
+
+  const [loadingEarlier, setLoadingEarlier] = useState(false)
+  async function showEarlier() {
+    if (loadingEarlier) return
+    setLoadingEarlier(true)
+    showAllRef.current = true
+    skipScrollRef.current = true
+    await load()
+    setLoadingEarlier(false)
+  }
 
   async function send() {
     const t = text.trim()
@@ -168,7 +256,7 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <div className="flex-1 overflow-y-auto px-1 py-2 space-y-2 min-h-[220px]">
+      <div ref={scrollBoxRef} className="flex-1 overflow-y-auto px-1 py-2 space-y-2 min-h-[220px]">
         {loading ? (
           <div className="space-y-2.5 py-2">
             {[0, 1, 2, 3, 4].map(i => (
@@ -180,14 +268,44 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
             <EmptyState icon={MessageSquare} className="py-10" title="No messages yet"
               description="Send the first message below — it’ll save to this customer’s history." />
           </div>
-        ) : items.map(it => <Bubble key={it.id} it={it} customerId={customerId} />)}
+        ) : (
+          <>
+            {(truncated || loadingEarlier) && (
+              <div className="text-center pb-1">
+                <button type="button" onClick={showEarlier} disabled={loadingEarlier}
+                  className="inline-flex items-center gap-1 text-[11px] font-medium text-ink-muted hover:text-ink border border-border rounded-full px-3 py-1 transition-colors disabled:opacity-60">
+                  {loadingEarlier ? <Loader2 className="w-3 h-3 animate-spin" /> : <ChevronUp className="w-3 h-3" />}
+                  {loadingEarlier ? 'Loading…' : 'Show earlier messages'}
+                </button>
+              </div>
+            )}
+            {items.map((it, i) => {
+              // LOCAL day boundaries — slicing the ISO string groups by UTC day,
+              // which splits a local evening (e.g. 7:55 PM / 8:05 PM EDT) in two.
+              const newDay = i === 0 || dayKey(items[i - 1].at) !== dayKey(it.at)
+              return (
+                <Fragment key={it.id}>
+                  {newDay && <DaySeparator at={it.at} />}
+                  <Bubble it={it} customerId={customerId} />
+                </Fragment>
+              )
+            })}
+          </>
+        )}
         <div ref={endRef} />
       </div>
 
       <div className="border-t border-border pt-2 mt-1">
         {err && <p className={cn('text-xs mb-1', errIsWarn ? 'text-amber-400' : 'text-red-400')}>{err}</p>}
+        {ai.enabled && !note && (
+          <div className="flex items-center gap-2 mb-1.5">
+            <AssistButton label={text.trim() ? 'Rewrite' : 'Draft reply'} busy={ai.running} onClick={aiDraft}
+              disabled={sending} title="AI drafts from this conversation — you review before anything sends" />
+            {ai.error && <span className="text-[11px] text-red-400">{ai.error}</span>}
+          </div>
+        )}
         <div className="flex items-end gap-2">
-          <textarea value={text} onChange={e => setText(e.target.value)} rows={2}
+          <textarea ref={taRef} value={text} onChange={e => setText(e.target.value)} rows={2}
             aria-label={note ? 'Internal note' : 'Reply message'}
             onKeyDown={e => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) send()
@@ -215,6 +333,43 @@ export function ConversationThread({ customerId, onRead }: { customerId: string;
   )
 }
 
+const dayKey = (iso: string) => { try { return new Date(iso).toDateString() } catch { return iso.slice(0, 10) } }
+
+// Day separators carry the date once, so bubbles only need the time — a
+// years-long thread reads in chapters instead of a wall of stamps.
+function DaySeparator({ at }: { at: string }) {
+  const label = (() => {
+    try {
+      const d = new Date(at)
+      if (isToday(d)) return 'Today'
+      if (isYesterday(d)) return 'Yesterday'
+      return format(d, d.getFullYear() === new Date().getFullYear() ? 'EEEE, MMM d' : 'MMM d, yyyy')
+    } catch { return '' }
+  })()
+  if (!label) return null
+  return (
+    <div className="flex items-center gap-3 py-1">
+      <span className="flex-1 h-px bg-border" aria-hidden />
+      <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-faint">{label}</span>
+      <span className="flex-1 h-px bg-border" aria-hidden />
+    </div>
+  )
+}
+
+// URLs in a bubble (portal links, review links, whatever the customer pasted)
+// open in a new tab instead of reading as dead text.
+function Linkified({ text }: { text: string }) {
+  const parts = text.split(/(https?:\/\/[^\s]+)/g)
+  if (parts.length === 1) return <>{text}</>
+  return (
+    <>
+      {parts.map((p, i) => /^https?:\/\//.test(p)
+        ? <a key={i} href={p} target="_blank" rel="noopener noreferrer" className="underline decoration-current/40 hover:decoration-current break-all">{p}</a>
+        : <Fragment key={i}>{p}</Fragment>)}
+    </>
+  )
+}
+
 // An outbound bubble's real delivery state, via THE shared status vocabulary — so
 // 'delivered'/'opened'/'bounced' from the provider webhooks read as themselves.
 // Absent status falls back to 'sent' (what we knew at hand-off). Only warnings and
@@ -231,7 +386,8 @@ function DeliveryMark({ status }: { status?: string | null }) {
 // Memoized: `it` refs are stable between reloads, so typing in the reply box no longer
 // re-renders (and re-formats the date of) every bubble in a long thread.
 const Bubble = memo(function Bubble({ it, customerId }: { it: Item; customerId: string }) {
-  const time = (() => { try { return format(new Date(it.at), 'MMM d, h:mm a') } catch { return '' } })()
+  // Time-only — the day lives on the separator above this bubble's group.
+  const time = (() => { try { return format(new Date(it.at), 'h:mm a') } catch { return '' } })()
   if (it.kind === 'event') {
     // Badge from status (future-proof) + the TRUTHFUL skip reason from detail.
     const meta = statusMeta(it.status)
@@ -258,7 +414,7 @@ const Bubble = memo(function Bubble({ it, customerId }: { it: Item; customerId: 
     return (
       <div className={cn('ml-auto max-w-[82%] rounded-xl bg-amber-500/10 border border-amber-500/25 px-3 py-2 transition-opacity', (sending || queued) && 'opacity-70')}>
         <p className="text-[10px] font-semibold text-amber-400 uppercase tracking-wide flex items-center gap-1"><StickyNote className="w-3 h-3" /> Internal note</p>
-        <p className="text-sm text-ink whitespace-pre-wrap mt-0.5">{it.body}</p>
+        <p className="text-sm text-ink whitespace-pre-wrap mt-0.5"><Linkified text={it.body} /></p>
         <p className="text-[10px] text-ink-faint mt-0.5 flex items-center gap-1">{sending ? <><Clock className="w-3 h-3" /> Saving…</> : queued ? <><Clock className="w-3 h-3" /> Queued · saves when online</> : time}</p>
       </div>
     )
@@ -268,7 +424,7 @@ const Bubble = memo(function Bubble({ it, customerId }: { it: Item; customerId: 
   const photos = it.photos
   return (
     <div className={cn('max-w-[82%] rounded-xl px-3 py-2 transition-opacity', inbound ? 'bg-bg-tertiary border border-border' : 'ml-auto bg-accent/15 border border-accent/25', (sending || queued) && 'opacity-70')}>
-      <p className="text-sm text-ink whitespace-pre-wrap">{it.body}</p>
+      <p className="text-sm text-ink whitespace-pre-wrap"><Linkified text={it.body} /></p>
       {photos && photos.length > 0 && (
         <>
           <p className="text-[11px] text-ink-muted mt-1.5 flex items-center gap-1.5"><Camera className="w-3.5 h-3.5 text-ink-faint" /> Customer attached {photos.length} photo{photos.length !== 1 ? 's' : ''}</p>

@@ -62,6 +62,8 @@ export interface TimelineEvent {
 // without it rather than a crash — which is what lets the property view pass a subset.
 export interface TimelineSources {
   gstPercent?: number | null
+  /** When present, comms events deep-link into THE conversation (?c=) instead of the bare inbox. */
+  customerId?: string
   quotes?: TlQuote[]
   jobs?: TlJob[]
   invoices?: TlInvoice[]
@@ -77,7 +79,9 @@ export interface TimelineSources {
 }
 
 export interface TlQuote { id: string; quote_number: string; service_type?: string | null; total?: number | null; status: string; created_at: string; updated_at: string; sent_at?: string | null; last_followed_up_at?: string | null; follow_up_count?: number | null; property_id?: string | null }
-export interface TlJob { id: string; title?: string | null; scheduled_date: string; status: string; created_at: string; updated_at: string; completed_at?: string | null; actual_minutes?: number | null; property_id?: string | null }
+/** `recurrence_id` is what lets one booking of a series read as one event rather
+ *  than 25 — see the jobs section of buildTimeline. */
+export interface TlJob { id: string; title?: string | null; scheduled_date: string; status: string; created_at: string; updated_at: string; completed_at?: string | null; actual_minutes?: number | null; property_id?: string | null; recurrence_id?: string | null }
 export interface TlInvoice { id: string; invoice_number: string; amount?: number | null; status: string; created_at: string; updated_at: string; paid_at?: string | null; viewed_at?: string | null; property_id?: string | null }
 export interface TlMessage { direction: string; channel: string; body: string | null; created_at: string }
 export interface TlPayment { amount: number; status: string; kind: string; method: string | null; notes: string | null; created_at: string }
@@ -104,6 +108,15 @@ export function buildTimeline(s: TimelineSources): TimelineEvent[] {
   const gross = (amount: unknown) => Math.round((Number(amount) || 0) * gstMult * 100) / 100
   const out: TimelineEvent[] = []
 
+  // Expenses and price changes are keyed by job_id only, and a photo may carry one
+  // instead of a property_id — but the job already knows its address. Without this
+  // hop those events have no property and vanish from a property timeline, even
+  // though they plainly happened there. Empty when the caller passed no jobs, which
+  // just means those events stay customer-level.
+  const jobToProperty = new Map<string, string | null>()
+  for (const j of s.jobs || []) jobToProperty.set(j.id, j.property_id ?? null)
+  const jobProperty = (jobId: string | null | undefined) => (jobId ? jobToProperty.get(jobId) ?? null : null)
+
   for (const q of s.quotes || []) {
     const href = `/dashboard/quotes/${q.id}`
     const pid = q.property_id
@@ -116,15 +129,54 @@ export function buildTimeline(s: TimelineSources): TimelineEvent[] {
     if (q.status === 'declined') out.push({ at: q.updated_at, kind: 'quote_declined', title: `Quote ${q.quote_number} declined`, sub: money(q.total), href, propertyId: pid })
   }
 
+  // ── Jobs ───────────────────────────────────────────────────────────────────
+  // ONE OPERATOR ACTION IS ONE EVENT. Booking a recurring plan writes the whole
+  // series at once — 25 rows sharing a recurrence_id and a created_at to the
+  // microsecond — and a row-per-job timeline rendered that as 25 identical
+  // "Job scheduled — Weekly Mowing" entries, all on the same date. It buried the
+  // quote, the messages and the payments under the customer's own subscription,
+  // for exactly the recurring customers the business is built on (measured: 6
+  // customers with 18–25 such rows each).
+  //
+  // So `job_scheduled` collapses per (recurrence_id + created_at + property):
+  //   • recurrence_id — a one-off job has none and is never collapsed
+  //   • created_at — a later top-up of the SAME series is a separate action and
+  //     stays a separate event, which is the honest reading
+  //   • property — the cluster carries one propertyId or timelineForProperty
+  //     could not scope it; a series split across addresses stays split
+  //
+  // COMPLETIONS ARE NEVER COLLAPSED: each visit is a real thing that happened on
+  // its own day. Only the booking is one act.
+  const scheduleClusters = new Map<string, { at: string; name: string; recurrenceId: string; propertyId: string | null; dates: string[] }>()
   for (const j of s.jobs || []) {
     const name = j.title || 'Visit'
-    out.push({ at: j.created_at, kind: 'job_scheduled', title: `Job scheduled — ${name}`, sub: `for ${formatDate(j.scheduled_date)}`, propertyId: j.property_id })
+    if (j.recurrence_id) {
+      const key = `${j.recurrence_id}|${j.created_at}|${j.property_id ?? ''}`
+      const cluster = scheduleClusters.get(key)
+      if (cluster) cluster.dates.push(j.scheduled_date)
+      else scheduleClusters.set(key, { at: j.created_at, name, recurrenceId: j.recurrence_id, propertyId: j.property_id ?? null, dates: [j.scheduled_date] })
+    } else {
+      out.push({ at: j.created_at, kind: 'job_scheduled', title: `Job scheduled — ${name}`, sub: `for ${formatDate(j.scheduled_date)}`, propertyId: j.property_id })
+    }
     if (j.status === 'completed') {
       // completed_at, NOT updated_at: editing a finished job's notes months later
       // used to drag "Job completed" to today and reorder the whole history.
       const mins = Number(j.actual_minutes) || 0
       out.push({ at: j.completed_at || j.updated_at, kind: 'job_completed', title: `Job completed — ${name}`, sub: mins > 0 ? `${mins} min on site` : undefined, propertyId: j.property_id })
     }
+  }
+  for (const c of scheduleClusters.values()) {
+    const dates = c.dates.slice().sort()
+    const n = dates.length
+    // A series of one reads as a plain booking — "1 visit scheduled" is a worse
+    // sentence than the one it replaced.
+    const title = n === 1 ? `Job scheduled — ${c.name}` : `${n} visits scheduled — ${c.name}`
+    const span = n === 1 ? `for ${formatDate(dates[0])}` : `${formatDate(dates[0])} → ${formatDate(dates[n - 1])}`
+    out.push({
+      at: c.at, kind: 'job_scheduled', title, sub: span, propertyId: c.propertyId,
+      // The series is a real destination — the same focus link the property card uses.
+      href: `/dashboard/schedule?focus=${c.recurrenceId}`,
+    })
   }
 
   for (const inv of s.invoices || []) {
@@ -137,16 +189,18 @@ export function buildTimeline(s: TimelineSources): TimelineEvent[] {
     if (inv.status === 'paid') out.push({ at: inv.paid_at || inv.updated_at, kind: 'invoice_paid', title: `Invoice ${inv.invoice_number} paid`, sub: money(gross(inv.amount)), href, propertyId: pid })
   }
 
+  // With a customerId, a comms event opens THE conversation, not the bare inbox.
+  const msgHref = s.customerId ? `/dashboard/messages?c=${s.customerId}` : '/dashboard/messages'
   for (const m of s.messages || []) {
     // Internal notes ARE history. They were skipped entirely, so the one place an
     // owner writes down what happened never appeared in what happened.
     if (m.direction === 'internal') {
-      out.push({ at: m.created_at, kind: 'note', title: 'Internal note', sub: clip(m.body, 140), href: '/dashboard/messages' })
+      out.push({ at: m.created_at, kind: 'note', title: 'Internal note', sub: clip(m.body, 140), href: msgHref })
       continue
     }
     const inbound = m.direction === 'inbound'
     const chan = m.channel === 'email' ? 'email' : m.channel === 'portal' ? 'portal message' : 'SMS'
-    out.push({ at: m.created_at, kind: inbound ? 'message_in' : 'message_out', title: `${inbound ? 'Received' : 'Sent'} ${chan}`, sub: clip(m.body, 90), href: '/dashboard/messages' })
+    out.push({ at: m.created_at, kind: inbound ? 'message_in' : 'message_out', title: `${inbound ? 'Received' : 'Sent'} ${chan}`, sub: clip(m.body, 90), href: msgHref })
   }
 
   // The ledger holds payments AND credit movements (kind='credit') AND reversals
@@ -169,7 +223,7 @@ export function buildTimeline(s: TimelineSources): TimelineEvent[] {
     const isLead = /^new .* lead/i.test(msg)
     // Strip the "New Website lead — " prefix so the sub isn't redundant with the title.
     const sub = isLead ? msg.replace(/^new\b.*?\blead\b\s*[—-]?\s*/i, '').slice(0, 160) : msg.slice(0, 160)
-    out.push({ at: sr.created_at, kind: isLead ? 'lead' : 'portal_request', title: isLead ? 'Website lead' : 'Portal service request', sub, href: '/dashboard/messages' })
+    out.push({ at: sr.created_at, kind: isLead ? 'lead' : 'portal_request', title: isLead ? 'Website lead' : 'Portal service request', sub, href: msgHref })
   }
 
   // Photos carry their own kind (before/after/general) — a visit's evidence.
@@ -178,7 +232,7 @@ export function buildTimeline(s: TimelineSources): TimelineEvent[] {
     const label = k === 'before' ? 'Before photo' : k === 'after' ? 'After photo' : 'Photo added'
     const at = ph.taken_at || ph.created_at
     if (!at) continue
-    out.push({ at, kind: 'photo', title: label, sub: ph.caption || undefined, thumb: ph.url, propertyId: ph.property_id })
+    out.push({ at, kind: 'photo', title: label, sub: ph.caption || undefined, thumb: ph.url, propertyId: ph.property_id ?? jobProperty(ph.job_id) })
   }
 
   for (const mm of s.measurements || []) {
@@ -196,7 +250,7 @@ export function buildTimeline(s: TimelineSources): TimelineEvent[] {
   // joining through their jobs. spent_at is the business date; created_at is just
   // when it got typed in.
   for (const e of s.expenses || []) {
-    out.push({ at: e.spent_at || e.created_at, kind: 'expense', title: `Expense · ${money(e.amount)}`, sub: join(e.description, e.category) })
+    out.push({ at: e.spent_at || e.created_at, kind: 'expense', title: `Expense · ${money(e.amount)}`, sub: join(e.description, e.category), propertyId: jobProperty(e.job_id) })
   }
 
   for (const c of s.consentChanges || []) {
@@ -213,6 +267,7 @@ export function buildTimeline(s: TimelineSources): TimelineEvent[] {
       at: pc.created_at, kind: 'price_change',
       title: `Price changed · ${money(pc.old_amount)} → ${money(pc.new_amount)}`,
       sub: join(pc.scope, pc.reason),
+      propertyId: jobProperty(pc.job_id),
     })
   }
 

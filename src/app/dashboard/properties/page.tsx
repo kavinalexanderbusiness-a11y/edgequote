@@ -338,7 +338,12 @@ export default function PropertiesPage() {
                     </div>
                     <div className="space-y-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <p className="text-sm font-semibold text-ink">{property.address}</p>
+                        {/* The address is this card's identity, so it's the way into
+                            the property's history — the one thing this card can't show. */}
+                        <Link href={`/dashboard/properties/${property.id}`}
+                          className="text-sm font-semibold text-ink hover:text-accent-text transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                          {property.address}
+                        </Link>
                         {property.is_primary && (
                           <Badge tone="accent">Primary</Badge>
                         )}

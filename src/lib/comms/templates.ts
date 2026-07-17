@@ -227,7 +227,7 @@ If you have any questions about the quote, simply reply to this message and we'l
 
   invoice: `Hi {{first_name}},
 
-Your invoice from {{business_name}}{{amount}} is ready.
+Your invoice from {{business_name}} for {{amount}} is ready.
 
 You can securely view and pay it anytime using the link below:
 
@@ -290,7 +290,7 @@ Need us sooner, or want to change something? Call or text {{direct_phone}} and q
   // they didn't owe. receiptMessageBody() below takes balanceRemaining and CAN say it.
   receipt: `Hi {{first_name}},
 
-Thank you — we've received your payment{{amount}}.
+Thank you — we've received your payment of {{amount}}.
 
 Your receipt and up-to-date balance are always here:
 
@@ -415,7 +415,12 @@ function interpolate(tpl: string, v: MsgVars): string {
     old_date: v.oldDateLabel || 'your original date',
     time_window: v.timeWindow || 'your scheduled window',
     address: v.address || 'your property',
-    amount: v.amount ? ` for ${v.amount}` : '',
+    // The VALUE, not a phrase. This token used to expand to " for $180" so that
+    // `payment{{amount}}` degraded to `payment` when unset — but a fragment can
+    // only be written into one sentence shape. Anywhere else ("your balance is
+    // {{amount}}") it produced "your balance is  for $180". The connective now
+    // lives in the template, where it is visible to whoever writes the sentence.
+    amount: v.amount || '',
     confirmation_number: v.confirmationNumber || '',
     // Graceful when no business phone is set: "call or text us at this number".
     direct_phone: (v.directPhone || '').trim() || 'this number',

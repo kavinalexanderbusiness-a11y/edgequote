@@ -1,6 +1,6 @@
 import type { LucideIcon } from 'lucide-react'
 import {
-  LayoutDashboard, CalendarDays, Users, Home, FileText, Receipt, Wallet, MessageSquare, Wrench, Bot, Sprout, Radio,
+  LayoutDashboard, CalendarDays, Users, Home, FileText, Receipt, Wallet, MessageSquare, Wrench, Bot, Sprout, Radio, Plug,
 } from 'lucide-react'
 
 // ── Feature-module registry ───────────────────────────────────────────────────
@@ -108,6 +108,10 @@ export const FEATURE_MODULES: FeatureModule[] = [
     category: 'growth', version: 1, updatedAt: '2026-07-14', featured: true,
     description: 'Analytics, marketing and the tools that win more work.',
     permissions: ['customers:read', 'jobs:read', 'quotes:read', 'marketing:write'] },
+  { key: 'integrations', label: 'Integrations', href: '/dashboard/integrations', icon: Plug,
+    category: 'operations', version: 1, updatedAt: '2026-07-16',
+    description: 'REST API, signed webhooks, Zapier and Make — connect EdgeQuote to everything else.',
+    permissions: ['customers:read', 'quotes:read', 'jobs:read', 'invoices:read', 'payments:read', 'customers:write', 'webhooks:send'] },
 ]
 
 const byKey = new Map(FEATURE_MODULES.map(m => [m.key, m]))

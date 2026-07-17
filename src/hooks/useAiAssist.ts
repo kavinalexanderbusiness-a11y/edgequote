@@ -74,7 +74,16 @@ export function useAiAssist() {
           let evt: { t: string; text?: string; error?: string }
           try { evt = JSON.parse(line) } catch { continue }
           if (evt.t === 'delta' && evt.text) handlers.onDelta?.(evt.text)
-          else if (evt.t === 'done') { full = evt.text ?? ''; handlers.onDone?.(full) }
+          else if (evt.t === 'done') {
+            // An empty completion is a FAILURE, not a result. Every surface blanks
+            // its field before streaming and restores the owner's text only on
+            // null — so returning '' here wipes what they wrote and reports
+            // success ("Replaced your message."). Resolve null and say what
+            // happened; one seam, because all five surfaces already handle null.
+            const text = evt.text ?? ''
+            if (text.trim()) { full = text; handlers.onDone?.(text) }
+            else setError('The AI came back empty. Nothing was changed — try again.')
+          }
           else if (evt.t === 'error') setError(evt.error || 'Generation failed.')
         }
       }
