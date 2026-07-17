@@ -224,12 +224,14 @@ export default function NewQuotePage() {
           // service gets a lawn recommendation; everything else saves the
           // measurement alone, and `recommendation` stays undefined (which
           // latestSavedRecommendation already skips).
+          // (`?? 0` — estimateVisitMinutes is null when unmeasured; this branch is
+          // guarded by measuredSqft > 0, so 0 is a type-level fallback, never data.)
           const kind = servicePricingKind(values.service_type, templates.find(t => t.id === values.service_template_id) ?? null)
           let rec: SavedRecommendation | undefined
           if (kind === 'lawn_recurring') {
             const cfg = pricingConfigFromSettings(settings)
             const pkg = pricingPackage(measuredSqft, cfg, { overgrowth: Number(values.overgrowth_multiplier) || 1, nearbyCount: 0 })
-            rec = buildSavedRecommendation(pkg, estimateVisitMinutes(measuredSqft))
+            rec = buildSavedRecommendation(pkg, estimateVisitMinutes(measuredSqft) ?? 0)
             if (measurement?.cadence && measurement.cadence !== 'one_time') rec.cadence = measurement.cadence
           }
           const hist = Array.isArray((prop as { measurement_history: unknown } | null)?.measurement_history)

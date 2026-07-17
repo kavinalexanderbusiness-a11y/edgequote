@@ -82,11 +82,19 @@ export function evaluatePrice(input: {
   })
   const reasons: string[] = []
 
-  // On-site time scales with the work, so overgrowth belongs here too — a ×2 cut
-  // is twice the visit, and charging the same $/hr for it is the point.
-  const onSite = sqft > 0 ? estimateVisitMinutes(sqft) * (input.overgrowth ?? 1) : 0
+  // No measurement → no on-site estimate → NO $/hr. Substituting 0 minutes here
+  // used to collapse `hours` to drive time alone and report a wildly flattering
+  // rate: a $150 stop with a 15-minute drive read $600/hr. Worse than wrong, it
+  // muted check (3) below — an inflated rate never trips the crew-cost floor, so
+  // the one guardrail that would have caught it was switched off by the very
+  // number it was meant to judge.
+  // Where on-site time IS known, it scales with the work — overgrowth belongs
+  // here too: a ×2 cut is twice the visit, and charging the same $/hr for it is
+  // the point.
+  const onSiteBase = estimateVisitMinutes(sqft)
+  const onSite = onSiteBase != null ? onSiteBase * (input.overgrowth ?? 1) : null
   const driveMin = input.driveMin ?? 0
-  const hours = (onSite + driveMin) / 60
+  const hours = onSite != null ? (onSite + driveMin) / 60 : 0
   const revPerHour = hours > 0 && price > 0 ? Math.round(price / hours) : null
 
   let warn = false

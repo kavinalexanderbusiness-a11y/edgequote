@@ -545,7 +545,7 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
     const sections = currentSections()
     const sectionsTotal = Math.round(Object.values(sections).reduce((a, b) => a + b, 0))
     const total = sectionsTotal > 0 ? sectionsTotal : Math.round(overrideRef.current || 0)
-    const estMin = estimateVisitMinutes(total, prospect?.observedMinPer1000)
+    const estMin = (estimateVisitMinutes(total, prospect?.observedMinPer1000) ?? undefined)
     // ONE composed result (gradedProspectPricing) — the saved recurring prices and
     // the saved score come from the SAME grade-adjusted package.
     const gradedSave = prospect
@@ -562,7 +562,8 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
       date: new Date().toISOString(),
       total_sqft: total,
       sections,
-      recommendation: total > 0 ? buildSavedRecommendation(pkgSave, estMin, { score: scoreSave, hood: property.neighborhood }) : null,
+      // Guarded by total > 0, so estMin is always a real estimate here.
+      recommendation: total > 0 ? buildSavedRecommendation(pkgSave, estMin ?? 0, { score: scoreSave, hood: property.neighborhood }) : null,
       rate_per_1000: cfg.mowRatePer1000,
       polygon: polygon.length > 0 ? polygon : null,
       source,
@@ -821,7 +822,7 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
         const graded = prospect
           ? gradedProspectPricing(totalSqft, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood }, prospect, {
               distanceKm, travelFee: effectiveTravel, neighborhoodName: property.neighborhood,
-              estimatedMinutes: estimateVisitMinutes(totalSqft, prospect.observedMinPer1000),
+              estimatedMinutes: estimateVisitMinutes(totalSqft, prospect.observedMinPer1000) ?? undefined,
               timedJobs: prospect.timedJobs, crewCostPerHour: crewCost,
             })
           : null
