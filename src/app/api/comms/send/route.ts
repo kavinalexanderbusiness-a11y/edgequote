@@ -74,7 +74,8 @@ export async function POST(req: NextRequest) {
   const origin = req.nextUrl?.origin || process.env.NEXT_PUBLIC_APP_URL || ''
   const msgVars = {
     firstName: c.name,
-    businessName: biz?.company_name || 'Edge Property Services',
+    // Neutral fallback — never sign messages with a brand the owner didn't set.
+    businessName: biz?.company_name || 'your service provider',
     eta: vars.eta,
     reviewLink: biz?.review_url || undefined,
     portalLink: token ? portalUrl(token, origin) : undefined,

@@ -15,10 +15,19 @@ import { WebsiteLead } from '@/lib/leads'
 import { LeadSummary } from '@/components/leads/LeadSummary'
 import { JobPhotos } from '@/components/photos/JobPhotos'
 import { bookingPhotosFromQuotes } from '@/lib/bookingPhotos'
+import { ensurePropertyForCustomer } from '@/lib/customers'
+import { PropertySelect } from '@/components/ui/PropertySelect'
+import { buildTimeline } from '@/lib/timeline'
+import {
+  loadCustomerTimelineSources, loadJobTimelineSources,
+  type CustomerTimelineSources, type JobTimelineSources,
+} from '@/lib/timelineData'
+import { TimelineCard } from '@/components/timeline/TimelineCard'
 import { needsFollowUp, daysSince } from '@/lib/followup'
 import { recurrenceLabel, recurringCustomerLabel, buildServicePlans, ServicePlan } from '@/lib/recurrence'
 import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
 import { settingsToSeasons, DEFAULT_SEASONS, ServiceSeasons } from '@/lib/seasons'
+import { loadBusinessShape, showLawnFieldFor, SHAPE_LOADING, type BusinessShape } from '@/lib/businessShape'
 import { resolvePrefs, prefSummary, hasAnyPref, monthShort } from '@/lib/preferences'
 import { SchedulePrefsFields, PrefsDraft, EMPTY_DRAFT, toDraft, draftToRow } from '@/components/customers/SchedulePrefsFields'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
@@ -43,14 +52,13 @@ import { ConversationThread } from '@/components/messages/ConversationThread'
 import { PaymentMethodCard } from '@/components/payments/PaymentMethodCard'
 import {
   Phone, MessageSquare, FilePlus, CalendarPlus, Mail, MapPin, Repeat,
-  FileText, Send, RotateCw, CheckCircle2, Wrench, Receipt, DollarSign, Sparkles, Users,
+  FileText, Send, RotateCw, Receipt, DollarSign, Sparkles, Users,
   Edit2, ExternalLink, Ruler, AlertTriangle, StickyNote, Wallet, Timer, CalendarClock,
-  Link2, Check, Cake, PartyPopper, Camera, History, Globe,
+  Link2, Check, Cake, PartyPopper, Camera, History, Globe, Plus, Home,
 } from 'lucide-react'
 
 const WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
 const OPEN_INVOICE = new Set(['unpaid', 'sent', 'partial'])
-const TIMELINE_CAP = 8   // recent events shown before "Show more"
 
 // Month + day from a 'YYYY-MM-DD' string (no timezone drift) — e.g. "Jun 25".
 function mdLabel(dateStr: string | null | undefined): string | null {
@@ -59,30 +67,6 @@ function mdLabel(dateStr: string | null | undefined): string | null {
   const m = Number(p[1]), d = Number(p[2])
   if (!m || !d) return null
   return `${monthShort(m - 1)} ${d}`
-}
-
-interface TimelineEvent {
-  at: string
-  kind: 'quote_created' | 'quote_sent' | 'followup' | 'quote_accepted' | 'job_scheduled' | 'job_completed' | 'invoice_created' | 'invoice_paid' | 'message_in' | 'message_out' | 'payment' | 'portal_request' | 'lead'
-  title: string
-  sub?: string
-  href?: string
-}
-
-const EVENT_META: Record<TimelineEvent['kind'], { icon: typeof FileText; color: string }> = {
-  quote_created:   { icon: FileText,     color: 'text-ink-muted bg-surface border-border' },
-  quote_sent:      { icon: Send,         color: 'text-blue-400 bg-blue-500/10 border-blue-500/20' },
-  followup:        { icon: RotateCw,     color: 'text-amber-400 bg-amber-500/10 border-amber-500/20' },
-  quote_accepted:  { icon: CheckCircle2, color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' },
-  job_scheduled:   { icon: CalendarPlus, color: 'text-accent-text bg-accent/10 border-accent/20' },
-  job_completed:   { icon: Wrench,       color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' },
-  invoice_created: { icon: Receipt,      color: 'text-ink-muted bg-surface border-border' },
-  invoice_paid:    { icon: DollarSign,   color: 'text-accent-text bg-accent/10 border-accent/20' },
-  message_in:      { icon: MessageSquare,color: 'text-blue-400 bg-blue-500/10 border-blue-500/20' },
-  message_out:     { icon: Send,         color: 'text-ink-muted bg-surface border-border' },
-  payment:         { icon: DollarSign,   color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' },
-  portal_request:  { icon: StickyNote,   color: 'text-amber-400 bg-amber-500/10 border-amber-500/20' },
-  lead:            { icon: Globe,         color: 'text-accent-text bg-accent/10 border-accent/25' },
 }
 
 // At-a-glance messaging eligibility beside a contact method: whether this channel
@@ -113,8 +97,14 @@ export default function CustomerDetailPage() {
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [recurrences, setRecurrences] = useState<JobRecurrence[]>([])
   const [lead, setLead] = useState<WebsiteLead | null>(null)
-  const [extraTimeline, setExtraTimeline] = useState<TimelineEvent[]>([])
+  // Raw rows for every source lib/timelineData pulls; the engine turns them into
+  // events. quotes/jobs/invoices already live in their own state above, so they're
+  // handed to buildTimeline directly rather than fetched twice.
+  const [tlSources, setTlSources] = useState<CustomerTimelineSources & JobTimelineSources>({})
   const [seasons, setSeasons] = useState<ServiceSeasons>(DEFAULT_SEASONS)
+  // What this business does, derived from its own catalogue and jobs — never asked.
+  // Starts SHOWING everything, so a lawn field can't blink out mid-load.
+  const [shape, setShape] = useState<BusinessShape>(SHAPE_LOADING)
   const [gstPercent, setGstPercent] = useState(0)
   const [pausing, setPausing] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -125,10 +115,8 @@ export default function CustomerDetailPage() {
   // Edit core details in place — the profile could show a customer but not fix a
   // typo in their email without leaving for the list. Same shared form, in a modal.
   const [editing, setEditing] = useState(false)
+  const [addingProperty, setAddingProperty] = useState(false)
   const [allCustomers, setAllCustomers] = useState<Customer[]>([])
-  // Timeline can run to hundreds of events on a long-standing customer — show the
-  // recent slice, expand on demand.
-  const [showAllEvents, setShowAllEvents] = useState(false)
 
   async function copyPortalLink() {
     if (!customer) return
@@ -177,11 +165,33 @@ export default function CustomerDetailPage() {
       // didn't, the modal closed as if all was well, and reload() snapped the old
       // address back. Address drives routing/travel/measurement — a silent revert
       // sends a crew to the wrong house.
-      const { error: addrErr } = await supabase.from('properties').update({
-        address: values.address, city: values.city || null,
-        province: values.province || 'AB', postal_code: values.postal_code || null,
-      }).eq('customer_id', id).eq('is_primary', true)
-      if (addrErr) { toast.error('Saved the contact details, but the address couldn’t be updated — please try again.'); return }
+      //
+      // The error guard alone wasn't enough. `.update().eq('is_primary', true)`
+      // matching ZERO rows is not an error in PostgREST, so a customer with no
+      // primary property (created without an address, or via a path that never made
+      // one) saved `customers.address`, reported success, and never got a property —
+      // which meant no routing, no measurement, no pricing, and no way to fix it from
+      // their own profile. Verified live: 1 customer sitting in exactly that state.
+      //
+      // ensurePropertyForCustomer is THE find-or-create seam the quote-save path
+      // already uses: it matches the address against their existing properties and
+      // creates one only when nothing matches, so this can't mint a duplicate house.
+      const { data: { user } } = await supabase.auth.getUser()
+      if (!user) { toast.error('You’re signed out — sign in and try again.'); return }
+      const primary = properties.find(p => p.is_primary)
+      if (primary) {
+        const { error: addrErr } = await supabase.from('properties').update({
+          address: values.address, city: values.city || null,
+          province: values.province || 'AB', postal_code: values.postal_code || null,
+        }).eq('id', primary.id)
+        if (addrErr) { toast.error('Saved the contact details, but the address couldn’t be updated — please try again.'); return }
+      } else {
+        const { propertyId } = await ensurePropertyForCustomer(supabase, user.id, id, {
+          address: values.address, city: values.city || null,
+          province: values.province || 'AB', postal_code: values.postal_code || null,
+        })
+        if (!propertyId) { toast.error('Saved the contact details, but the address couldn’t be saved — please try again.'); return }
+      }
     }
     setEditing(false)
     reload()
@@ -223,7 +233,7 @@ export default function CustomerDetailPage() {
       // realtime refresh.
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
-      const [cRes, pRes, qRes, jRes, iRes, refRes, recRes, mRes, payRes, srRes, setRes, lRes] = await Promise.all([
+      const [cRes, pRes, qRes, jRes, iRes, refRes, recRes, setRes, lRes, shapeRes, tlCustomer] = await Promise.all([
         supabase.from('customers').select('*').eq('id', id).eq('user_id', user!.id).single(),
         supabase.from('properties').select('*').eq('customer_id', id).order('is_primary', { ascending: false }),
         supabase.from('quotes').select('*').eq('customer_id', id).order('created_at', { ascending: false }),
@@ -232,14 +242,17 @@ export default function CustomerDetailPage() {
         // Advocates this customer referred (needs only id).
         supabase.from('customers').select('id, name').eq('referred_by_customer_id', id),
         supabase.from('job_recurrences').select('*').eq('customer_id', id),
-        // Unified timeline sources — degrade gracefully if a table isn't present yet.
-        // Payments carry kind/method/notes so credit/refund movements label correctly.
-        supabase.from('messages').select('direction, channel, body, created_at').eq('customer_id', id).order('created_at', { ascending: false }).limit(50),
-        supabase.from('payments').select('amount, status, kind, method, notes, created_at').eq('customer_id', id),
-        supabase.from('service_requests').select('message, created_at').eq('customer_id', id),
         supabase.from('business_settings').select('service_seasons, gst_percent').eq('user_id', user!.id).maybeSingle(),
         // Newest website lead — the full intake detail (service/address/budget/schedule/contact/source).
         supabase.from('website_leads').select('*').eq('customer_id', id).order('created_at', { ascending: false }).limit(1).maybeSingle(),
+        // Does this business do lawn work? Derived from the owner's own catalogue
+        // and job history (see lib/businessShape) — rides along in the batch that
+        // was already going out. Never blocks the page: on failure the shape falls
+        // back to showing everything, which is how the page behaved before it existed.
+        loadBusinessShape(supabase, user!.id).catch(() => SHAPE_LOADING),
+        // Every customer-scoped timeline source, in ONE place — lib/timelineData.
+        // Still part of this batch, so it stays as parallel as it was inline.
+        loadCustomerTimelineSources(supabase, user!.id, id),
       ])
       // A transient/network error must NOT render as "Customer not found." Only a
       // genuine no-rows result (.single() → PGRST116) means the customer is truly gone.
@@ -260,50 +273,29 @@ export default function CustomerDetailPage() {
 
       if (recRes.data) setRecurrences(recRes.data as JobRecurrence[])
       setLead((lRes.data as WebsiteLead | null) ?? null)
+      setShape(shapeRes)
       setSeasons(settingsToSeasons((setRes.data as { service_seasons: unknown } | null)?.service_seasons))
       setGstPercent(Number((setRes.data as { gst_percent?: number | null } | null)?.gst_percent) || 0)
 
-      const extra: TimelineEvent[] = []
-      for (const m of (mRes.data as { direction: string; channel: string; body: string | null; created_at: string }[]) || []) {
-        if (m.direction === 'internal') continue // internal notes live in the notes card
-        const inbound = m.direction === 'inbound'
-        const chan = m.channel === 'email' ? 'email' : m.channel === 'portal' ? 'portal message' : 'SMS'
-        extra.push({ at: m.created_at, kind: inbound ? 'message_in' : 'message_out', title: `${inbound ? 'Received' : 'Sent'} ${chan}`, sub: (m.body || '').slice(0, 90), href: '/dashboard/messages' })
-      }
-      // The ledger holds payments AND customer-credit movements (kind='credit') AND
-      // reversals (negative payments) — label each correctly instead of "Payment received".
-      for (const p of (payRes.data as { amount: number; status: string; kind: string; method: string | null; notes: string | null; created_at: string }[]) || []) {
-        if (p.status !== 'paid') continue
-        const amt = Number(p.amount) || 0
-        if (p.kind === 'credit') {
-          extra.push({ at: p.created_at, kind: 'payment', title: amt >= 0 ? `Credit added · ${formatCurrency(Math.abs(amt))}` : `Credit applied · ${formatCurrency(Math.abs(amt))}`, sub: p.notes || undefined })
-        } else if (amt < 0) {
-          extra.push({ at: p.created_at, kind: 'payment', title: `Refund · ${formatCurrency(Math.abs(amt))}`, sub: p.notes || undefined })
-        } else {
-          extra.push({ at: p.created_at, kind: 'payment', title: 'Payment received', sub: `${formatCurrency(amt)}${p.method && p.method !== 'stripe' ? ` · ${p.method}` : ''}` })
-        }
-      }
-      for (const sr of (srRes.data as { message: string; created_at: string }[]) || []) {
-        const msg = sr.message || ''
-        const isLead = /^new .* lead/i.test(msg)
-        // Strip the "New Website lead — " prefix so the sub isn't redundant with the title.
-        const sub = isLead ? msg.replace(/^new\b.*?\blead\b\s*[—-]?\s*/i, '').slice(0, 160) : msg.slice(0, 160)
-        extra.push({ at: sr.created_at, kind: isLead ? 'lead' : 'portal_request', title: isLead ? 'Website lead' : 'Portal service request', sub, href: '/dashboard/messages' })
-      }
-      setExtraTimeline(extra)
-
-      // Dependent tail — the ONLY reads that need a prior result: the referrer's name
-      // (needs cust.referred_by_customer_id) and the revenue from people this customer
-      // referred (needs the referred list). Run them together, not serially.
+      // Dependent tail — the reads that need a prior result: the referrer's name (needs
+      // cust.referred_by_customer_id), the revenue from people this customer referred
+      // (needs the referred list), and the job-scoped timeline sources (need the job
+      // ids). Run them together, not serially.
       const referredList = (refRes.data as { id: string; name: string }[]) || []
-      const [referrerRes, referredRevRes] = await Promise.all([
+      const jobIds = ((jRes.data as Job[]) || []).map(j => j.id)
+      const [referrerRes, referredRevRes, tlJob] = await Promise.all([
         cust?.referred_by_customer_id
           ? supabase.from('customers').select('id, name').eq('id', cust.referred_by_customer_id).maybeSingle()
           : null,
         referredList.length > 0
           ? supabase.from('quotes').select('total, status').in('customer_id', referredList.map(r => r.id))
           : null,
+        loadJobTimelineSources(supabase, jobIds),
       ])
+
+      // Hand the engine the rows; it decides what an event is. The page no longer
+      // knows how a credit differs from a refund.
+      setTlSources({ ...tlCustomer, ...tlJob })
       if (referrerRes?.data) setReferrer(referrerRes.data as { id: string; name: string })
       if (referredRevRes?.data) {
         const rev = (referredRevRes.data as { total: number; status: string }[])
@@ -335,7 +327,7 @@ export default function CustomerDetailPage() {
     const patch = { notes: notesValue || null }
     try {
       const outcome = await queueOrRun(
-        { kind: 'customer.update', payload: { id: customer.id, patch }, label: `Note · ${customer.name}` },
+        { kind: 'customer.update', payload: { id: customer.id, patch, baseUpdatedAt: customer.updated_at }, label: `Note · ${customer.name}` },
         async () => { const { error } = await supabase.from('customers').update(patch).eq('id', customer.id); if (error) throw new Error(error.message) },
       )
       setCustomer({ ...customer, notes: patch.notes })
@@ -356,7 +348,7 @@ export default function CustomerDetailPage() {
     const row = draftToRow(prefsDraft)
     try {
       const outcome = await queueOrRun(
-        { kind: 'customer.update', payload: { id: customer.id, patch: row }, label: `Edit · ${customer.name}` },
+        { kind: 'customer.update', payload: { id: customer.id, patch: row, baseUpdatedAt: customer.updated_at }, label: `Edit · ${customer.name}` },
         async () => { const { error } = await supabase.from('customers').update(row).eq('id', customer.id); if (error) throw new Error(error.message) },
       )
       setCustomer({ ...customer, ...row })
@@ -427,28 +419,68 @@ export default function CustomerDetailPage() {
     return buildServicePlans(recurrences, jobs, seasons, t, planValueOf)
   }, [quotes, recurrences, jobs, seasons])
 
-  const events = useMemo(() => {
-    // GST-inclusive invoice amounts, so the timeline agrees with the Invoices page + portal.
+  // ── Per-property roll-up ───────────────────────────────────────────────────
+  // What's happening at each address, from the rows this page ALREADY loaded — no
+  // extra query, no second source of truth. A customer with one property gets the
+  // same answer they always had; a landlord with forty can see which of them is
+  // actually earning without opening forty pages.
+  //
+  // Service plans come from buildServicePlans (THE recurrence engine), whose
+  // propertyId is itself inferred from the series' child jobs — job_recurrences has
+  // no property_id column. That works precisely because jobs are 100% property-
+  // populated; it is the reason JobForm's hidden auto-select above is a real bug and
+  // not a cosmetic one.
+  const propRollup = useMemo(() => {
+    const t = localTodayISO()
     const gstMult = 1 + (Number(gstPercent) || 0) / 100
-    const arr: TimelineEvent[] = []
-    for (const q of quotes) {
-      arr.push({ at: q.created_at, kind: 'quote_created', title: `Quote ${q.quote_number} created`, sub: `${q.service_type} · ${formatCurrency(Number(q.total))}`, href: `/dashboard/quotes/${q.id}` })
-      if (q.sent_at) arr.push({ at: q.sent_at, kind: 'quote_sent', title: `Quote ${q.quote_number} sent`, href: `/dashboard/quotes/${q.id}` })
-      if (q.last_followed_up_at) arr.push({ at: q.last_followed_up_at, kind: 'followup', title: `Followed up on ${q.quote_number}`, sub: `${q.follow_up_count} total`, href: `/dashboard/quotes/${q.id}` })
-      if (WON.has(q.status)) arr.push({ at: q.updated_at, kind: 'quote_accepted', title: `Quote ${q.quote_number} accepted`, sub: formatCurrency(Number(q.total)), href: `/dashboard/quotes/${q.id}` })
-    }
+    const byProp: Record<string, {
+      plans: ServicePlan[]; upcoming: Job[]; openQuotes: Quote[]; outstanding: number; lastServiceDate: string | null
+    }> = {}
+    const ensure = (pid: string) => (byProp[pid] ||= { plans: [], upcoming: [], openQuotes: [], outstanding: 0, lastServiceDate: null })
+    for (const p of properties) ensure(p.id)
+    for (const plan of servicePlans) if (plan.propertyId && byProp[plan.propertyId] && !plan.paused) byProp[plan.propertyId].plans.push(plan)
     for (const j of jobs) {
-      arr.push({ at: j.created_at, kind: 'job_scheduled', title: `Job scheduled — ${j.title}`, sub: `for ${formatDate(j.scheduled_date)}` })
-      if (j.status === 'completed') arr.push({ at: j.updated_at, kind: 'job_completed', title: `Job completed — ${j.title}` })
+      if (!j.property_id || !byProp[j.property_id]) continue
+      const e = byProp[j.property_id]
+      if (j.scheduled_date >= t && (j.status === 'scheduled' || j.status === 'in_progress')) e.upcoming.push(j)
+      if (j.status === 'completed' && (!e.lastServiceDate || j.scheduled_date > e.lastServiceDate)) e.lastServiceDate = j.scheduled_date
     }
+    // "Open" = still awaiting an answer. Same terminal rule lib/followup leans on:
+    // anything that left 'sent'/'draft' has been decided.
+    for (const q of quotes) {
+      if (!q.property_id || !byProp[q.property_id]) continue
+      if (q.status === 'sent' || q.status === 'draft') byProp[q.property_id].openQuotes.push(q)
+    }
+    // GST-inclusive balance, cancelled/draft excluded — the same basis as the
+    // Outstanding figure above, so a property's share can never exceed the total.
     for (const inv of invoices) {
-      arr.push({ at: inv.created_at, kind: 'invoice_created', title: `Invoice ${inv.invoice_number} created`, sub: formatCurrency(Math.round(Number(inv.amount) * gstMult * 100) / 100) })
-      if (inv.status === 'paid') arr.push({ at: inv.updated_at, kind: 'invoice_paid', title: `Invoice ${inv.invoice_number} paid`, sub: formatCurrency(Math.round(Number(inv.amount) * gstMult * 100) / 100) })
+      if (!inv.property_id || !byProp[inv.property_id]) continue
+      if (inv.status === 'draft' || inv.status === 'cancelled') continue
+      const bal = Number(inv.amount || 0) * gstMult - (Number(inv.amount_paid) || 0)
+      if (bal > 0.01) byProp[inv.property_id].outstanding += bal
     }
-    arr.push(...extraTimeline) // messages, payments, portal requests
-    arr.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
-    return arr
-  }, [quotes, jobs, invoices, extraTimeline, gstPercent])
+    return byProp
+  }, [properties, servicePlans, jobs, quotes, invoices, gstPercent])
+
+  // The customer-level totals, summed from the same per-property figures so the
+  // header and the rows can never disagree.
+  const rollupTotals = useMemo(() => {
+    const vals = Object.values(propRollup)
+    return {
+      properties: properties.length,
+      activeServices: vals.reduce((s, v) => s + v.plans.length, 0),
+      upcoming: vals.reduce((s, v) => s + v.upcoming.length, 0),
+      openQuotes: vals.reduce((s, v) => s + v.openQuotes.length, 0),
+      outstanding: vals.reduce((s, v) => s + v.outstanding, 0),
+    }
+  }, [propRollup, properties])
+
+  // ONE engine builds the history — see lib/timeline.ts. The page only supplies rows;
+  // TimelineCard does the filtering, searching and grouping over what comes back.
+  const allEvents = useMemo(
+    () => buildTimeline({ ...tlSources, quotes, jobs, invoices, gstPercent }),
+    [tlSources, quotes, jobs, invoices, gstPercent],
+  )
 
   if (loading) return <div className="max-w-5xl mx-auto space-y-6"><SkeletonTiles count={4} /><SkeletonRows count={5} /></div>
   // Cached customer (if any) keeps showing on a revalidation blip; only when there's
@@ -888,72 +920,138 @@ export default function CustomerDetailPage() {
       </Card>
 
       <div className="grid lg:grid-cols-2 gap-6">
-        {/* Timeline */}
-        <Card>
-          <CardHeader className="flex items-center gap-2">
-            <History className="w-4 h-4 text-accent-text" />
-            <h2 className="text-sm font-semibold text-ink">Timeline</h2>
-          </CardHeader>
-          <CardBody>
-            {events.length === 0 ? (
-              <InlineEmpty className="py-6">No history yet.</InlineEmpty>
-            ) : (
-              <div className="space-y-3">
-                {(showAllEvents ? events : events.slice(0, TIMELINE_CAP)).map((e, i) => {
-                  const meta = EVENT_META[e.kind]
-                  const Icon = meta.icon
-                  const row = (
-                    <div className="flex items-start gap-3">
-                      <div className={`w-7 h-7 rounded-lg border flex items-center justify-center shrink-0 ${meta.color}`}>
-                        <Icon className="w-3.5 h-3.5" />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm text-ink">{e.title}</p>
-                        <p className="text-xs text-ink-faint">{formatDate(e.at)}{e.sub ? ` · ${e.sub}` : ''}</p>
-                      </div>
-                    </div>
-                  )
-                  return e.href
-                    ? <Link key={i} href={e.href} className="block hover:opacity-80 transition-opacity">{row}</Link>
-                    : <div key={i}>{row}</div>
-                })}
-                {events.length > TIMELINE_CAP && (
-                  <button onClick={() => setShowAllEvents(s => !s)}
-                    className="text-xs font-medium text-accent-text hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-                    {showAllEvents ? 'Show less' : `Show ${events.length - TIMELINE_CAP} more`}
-                  </button>
-                )}
-              </div>
-            )}
-          </CardBody>
-        </Card>
+        {/* Timeline — the shared card over the shared engine (components/timeline).
+            Keyed by customer: navigating profile→profile (via "Referred by") keeps
+            this component mounted, and a search typed for one customer must not
+            silently filter the next one's history. */}
+        <TimelineCard key={id} events={allEvents} />
 
         {/* Properties */}
         <Card>
           <CardHeader className="flex items-center gap-2">
             <MapPin className="w-4 h-4 text-accent-text" />
             <h2 className="text-sm font-semibold text-ink">Properties</h2>
+            {properties.length > 0 && <span className="text-xs text-ink-faint tabular-nums">{properties.length}</span>}
+            {/* A customer could own a second house and there was no way to say so from
+                their profile — every properties.insert in the app was first-property-
+                only (new customer, CSV import, or implied by a quote's address). The
+                second address was reachable only by typing it into a quote. */}
+            <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setAddingProperty(true)}>
+              <Plus className="w-3.5 h-3.5" /> Add
+            </Button>
           </CardHeader>
           <CardBody className="space-y-3">
-            {properties.length === 0 ? (
-              <InlineEmpty className="py-6">No properties on file.</InlineEmpty>
+            {/* The roll-up: what this customer's whole portfolio is doing, before the
+                per-address detail. Summed from the rows already on the page, so it
+                cannot disagree with the figures elsewhere on this profile. Hidden for
+                a one-property customer — "1 property · 1 active service" is just their
+                only property, restated. */}
+            {properties.length > 1 && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <RollupStat icon={Home} label="Properties" value={String(rollupTotals.properties)} />
+                <RollupStat icon={Repeat} label="Active services" value={String(rollupTotals.activeServices)} />
+                <RollupStat icon={CalendarClock} label="Upcoming visits" value={String(rollupTotals.upcoming)} />
+                <RollupStat icon={FileText} label="Open quotes" value={String(rollupTotals.openQuotes)} />
+                {rollupTotals.outstanding > 0.01 && (
+                  <RollupStat icon={DollarSign} label="Outstanding" value={formatCurrency(rollupTotals.outstanding)} tone="text-amber-400" />
+                )}
+              </div>
+            )}
+            {addingProperty && (
+              <div className="rounded-xl border border-accent/30 bg-accent/[0.04] p-3">
+                {/* THE shared picker's inline-create, reused rather than a second address
+                    form: it calls ensurePropertyForCustomer, so an address added here and
+                    the same address typed into a quote resolve to ONE property. */}
+                <PropertySelect
+                  properties={properties}
+                  value=""
+                  onChange={() => {}}
+                  customerId={id}
+                  onCreated={p => { setProperties(prev => [...prev, p]); setAddingProperty(false); toast.success(`${p.address} added.`) }}
+                  label="Add a property"
+                  hint="Search to check it isn’t already here, or add a new address."
+                  autoFocus
+                />
+                <div className="flex justify-end pt-2">
+                  <Button variant="ghost" size="sm" onClick={() => setAddingProperty(false)}>Done</Button>
+                </div>
+              </div>
+            )}
+            {properties.length === 0 && !addingProperty ? (
+              // Properties are created from the customer's address, so "none" almost
+              // always means "this customer has no address" — which is why they can't
+              // be scheduled, measured or priced. Say that, and offer the fix.
+              <InlineEmpty className="py-6">
+                No properties on file — so there’s no address to schedule, measure or price.
+                <button type="button" onClick={() => setAddingProperty(true)}
+                  className="block mx-auto mt-1.5 text-xs font-medium text-accent-text hover:underline rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                  Add their address →
+                </button>
+              </InlineEmpty>
             ) : properties.map(p => {
               const jobCount = jobs.filter(j => j.property_id === p.id).length
+              // Lawn is the one measurement here that doesn't apply to every trade, so
+              // it renders when the business does lawn work OR when THIS property
+              // already holds a lawn size — never hide data someone entered. The rest
+              // (fence, mulch, rock, driveway, lot) are generic property facts, and are
+              // untouched.
+              //
+              // The `!= null` behind the gate is deliberately left as it was: a lawn
+              // business with lawn_sqft = 0 still gets today's "Lawn 0 ft²" chip. It's
+              // arguably noise, but it is EXISTING noise, and this change is not
+              // allowed to alter what a lawn business sees.
+              // fence/mulch/rock/driveway use `> 0`, not `!= null`: zero feet of
+              // fence is not a measurement, it is the absence of one, and "Fence
+              // 0 ft" would state a fact nobody established. (These four have no
+              // writer anywhere in the app and are 0/62 populated in production —
+              // so this changes nothing on screen today. It makes the rule true in
+              // the code rather than true by accident, which is what stops the next
+              // person wiring a writer that defaults them to 0.)
               const measures = [
-                p.lawn_sqft != null && `Lawn ${Number(p.lawn_sqft).toLocaleString()} ft²`,
-                p.fence_length != null && `Fence ${Number(p.fence_length).toLocaleString()} ft`,
-                p.mulch_area != null && `Mulch ${Number(p.mulch_area).toLocaleString()} ft²`,
-                p.rock_area != null && `Rock ${Number(p.rock_area).toLocaleString()} ft²`,
-                p.driveway_area != null && `Driveway ${Number(p.driveway_area).toLocaleString()} ft²`,
+                showLawnFieldFor(shape, p.lawn_sqft) && p.lawn_sqft != null && `Lawn ${Number(p.lawn_sqft).toLocaleString()} ft²`,
+                Number(p.fence_length) > 0 && `Fence ${Number(p.fence_length).toLocaleString()} ft`,
+                Number(p.mulch_area) > 0 && `Mulch ${Number(p.mulch_area).toLocaleString()} ft²`,
+                Number(p.rock_area) > 0 && `Rock ${Number(p.rock_area).toLocaleString()} ft²`,
+                Number(p.driveway_area) > 0 && `Driveway ${Number(p.driveway_area).toLocaleString()} ft²`,
                 p.lot_size != null && `Lot ${Number(p.lot_size).toLocaleString()} ft²`,
               ].filter(Boolean) as string[]
               const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p.address)}`
               return (
                 <div key={p.id} className="rounded-xl border border-border p-3">
                   <div className="flex items-start justify-between gap-2">
-                    <p className="text-sm font-medium text-ink">{p.address}{p.is_primary ? ' · primary' : ''}</p>
+                    {/* Into this address's own history — for a customer with more than
+                        one property, the profile timeline mixes them together. */}
+                    <Link href={`/dashboard/properties/${p.id}`}
+                      className="text-sm font-medium text-ink hover:text-accent-text transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                      {p.address}{p.is_primary ? ' · primary' : ''}
+                    </Link>
                     <span className="text-xs text-ink-muted shrink-0">{jobCount} job{jobCount !== 1 ? 's' : ''}</span>
                   </div>
+                  {/* What this ADDRESS is doing — the roll-up's per-property half. A job
+                      count alone says how busy it's been, never whether it's earning,
+                      booked, or owing. Each figure is omitted when it's zero: a quiet
+                      property should read as quiet, not as a row of noughts. */}
+                  {(() => {
+                    const r = propRollup[p.id]
+                    if (!r) return null
+                    const facts = [
+                      r.plans.length > 0 && { icon: Repeat, text: r.plans.map(pl => pl.cadenceLabel).join(', '), tone: 'text-accent-text' },
+                      r.upcoming.length > 0 && { icon: CalendarClock, text: `Next ${formatDate(r.upcoming[0].scheduled_date)}${r.upcoming.length > 1 ? ` · ${r.upcoming.length} booked` : ''}`, tone: 'text-ink-muted' },
+                      r.openQuotes.length > 0 && { icon: FileText, text: `${r.openQuotes.length} open quote${r.openQuotes.length !== 1 ? 's' : ''}`, tone: 'text-ink-muted' },
+                      r.outstanding > 0.01 && { icon: DollarSign, text: `${formatCurrency(r.outstanding)} outstanding`, tone: 'text-amber-400' },
+                      !r.plans.length && !r.upcoming.length && r.lastServiceDate && { icon: History, text: `Last serviced ${formatDate(r.lastServiceDate)}`, tone: 'text-ink-faint' },
+                    ].filter(Boolean) as { icon: typeof Repeat; text: string; tone: string }[]
+                    if (!facts.length) return null
+                    return (
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2">
+                        {facts.map(f => (
+                          <span key={f.text} className={`text-[11px] inline-flex items-center gap-1 ${f.tone}`}>
+                            <f.icon className="w-3 h-3 shrink-0" /> {f.text}
+                          </span>
+                        ))}
+                      </div>
+                    )
+                  })()}
                   {measures.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mt-2">
                       {measures.map(m => <span key={m} className="text-[11px] text-ink-muted bg-surface border border-border rounded px-1.5 py-0.5">{m}</span>)}
@@ -962,8 +1060,14 @@ export default function CustomerDetailPage() {
                   <p className="text-[11px] text-ink-faint mt-2">
                     {p.lat != null && p.lng != null ? `${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}` : 'No coordinates yet'}
                   </p>
-                  {/* Property actions — one tap each (2-up on phones for bigger targets) */}
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 mt-3">
+                  {/* Property actions — one tap each (2-up on phones for bigger targets).
+                      Measure traces a LAWN boundary and writes lawn_sqft, so it's the one
+                      action here that a plumber has no use for. It stays for anyone who
+                      does lawn work, and for any property already measured (re-measure
+                      must never become unreachable). The grid drops to 3 columns rather
+                      than leaving a hole where it was. */}
+                  {(() => { const showMeasure = showLawnFieldFor(shape, p.lawn_sqft); return (
+                  <div className={`grid grid-cols-2 gap-1.5 mt-3 ${showMeasure ? 'sm:grid-cols-4' : 'sm:grid-cols-3'}`}>
                     <a href={mapsUrl} target="_blank" rel="noopener noreferrer" title="Open in Google Maps" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
                       <ExternalLink className="w-3.5 h-3.5" /> Maps
                     </a>
@@ -973,10 +1077,13 @@ export default function CustomerDetailPage() {
                     <Link href={`/dashboard/schedule?customer=${customer.id}&property=${p.id}`} title="Schedule job" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
                       <CalendarPlus className="w-3.5 h-3.5" /> Job
                     </Link>
-                    <Link href={`/dashboard/properties/measure?id=${p.id}`} title="Re-measure property" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
-                      <Ruler className="w-3.5 h-3.5" /> Measure
-                    </Link>
+                    {showMeasure && (
+                      <Link href={`/dashboard/properties/measure?id=${p.id}`} title="Re-measure property" className="h-9 rounded-lg flex items-center justify-center gap-1 text-[11px] font-medium border border-border bg-surface text-ink-muted hover:text-ink hover:border-border-strong transition-colors">
+                        <Ruler className="w-3.5 h-3.5" /> Measure
+                      </Link>
+                    )}
                   </div>
+                  ) })()}
 
                   {/* Scheduling override for this property (falls back to the customer default) */}
                   <div className="mt-3 pt-3 border-t border-border">
@@ -1039,6 +1146,21 @@ export default function CustomerDetailPage() {
           onCancel={() => setEditing(false)}
         />
       </Modal>
+    </div>
+  )
+}
+
+// One figure in the portfolio roll-up. Deliberately a plain fact with a label and
+// no trend, sparkline or delta: the question it answers is "how many, right now".
+function RollupStat({ icon: Icon, label, value, tone = 'text-ink' }: {
+  icon: typeof Home; label: string; value: string; tone?: string
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-bg-tertiary px-2.5 py-2">
+      <p className="text-[10px] uppercase tracking-wide text-ink-faint flex items-center gap-1">
+        <Icon className="w-3 h-3 shrink-0" /> {label}
+      </p>
+      <p className={`text-sm font-bold tabular-nums ${tone}`}>{value}</p>
     </div>
   )
 }

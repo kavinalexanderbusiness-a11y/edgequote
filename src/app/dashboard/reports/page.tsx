@@ -5,9 +5,14 @@ import { createClient } from '@/lib/supabase/client'
 import { Invoice, Payment, BusinessSettings, INVOICE_STATUS_LABELS, paymentMethodLabel } from '@/types'
 import { invoiceTotals } from '@/lib/invoiceTotals'
 import { invoiceBalance } from '@/lib/payments/ledger'
+import { gstReturn } from '@/lib/accounting/gst'
+import { quarterRange, yearRange, type Period as AcctPeriod } from '@/lib/accounting/period'
+import { ledgerRowType, cashAmountOf } from '@/lib/payments/analytics'
 import { exportRowsToCsv } from '@/lib/csv'
+import { fetchAllRows } from '@/lib/fetchAll'
 import { downloadBlob } from '@/lib/portalPdf'
 import type { RevenueGstReport, RevenueGstRow } from '@/components/reports/RevenueGstPDF'
+import Link from 'next/link'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -18,7 +23,7 @@ import { InlineEmpty } from '@/components/ui/EmptyState'
 import { Banner } from '@/components/ui/Banner'
 import { toast } from '@/lib/toast'
 import { formatCurrency, toLocalISO } from '@/lib/utils'
-import { FileText, FileDown, Receipt, DollarSign, Percent, Clock, AlertTriangle, Info } from 'lucide-react'
+import { FileText, FileDown, Receipt, DollarSign, Percent, Clock, AlertTriangle, Info, Mail } from 'lucide-react'
 
 // ── Reports & Exports ─────────────────────────────────────────────────────────
 // The accountant handoff: pick a period, take the three files your bookkeeper
@@ -35,8 +40,12 @@ type ReportInvoice = Pick<Invoice,
   | 'discount_type' | 'discount_value' | 'customer_id' | 'customer_name' | 'service_type'
 > & { customers?: { id: string; name: string } | null }
 
+// `provider` is load-bearing, not decoration: it is the ONLY field that separates
+// an invoice settled from credit (kind='payment', provider='credit', amount > 0)
+// from cash arriving. Without it neither ledgerRowType nor cashAmountOf can tell
+// them apart, and a $200 deposit exports as $400 of revenue.
 type ReportPayment = Pick<Payment,
-  'id' | 'amount' | 'method' | 'paid_at' | 'kind' | 'status' | 'invoice_id' | 'customer_id'
+  'id' | 'amount' | 'method' | 'provider' | 'paid_at' | 'kind' | 'status' | 'invoice_id' | 'customer_id'
 > & { customers?: { id: string; name: string } | null }
 
 // GST is filed quarterly OR annually in Canada — both are first-class here, not a
@@ -61,25 +70,6 @@ function inPeriod(iso: string | null | undefined, year: string, q: { from: numbe
 
 function customerNameOf(row: { customers?: { name: string } | null; customer_name?: string | null }): string {
   return row.customers?.name || row.customer_name || '—'
-}
-
-// Supabase caps a select at 1000 rows. On a list that's a slow scroll; on a tax
-// return it's a figure that is quietly, confidently wrong — the missing invoices
-// look exactly like invoices that never existed. Page until a short batch comes
-// back (the same idiom the schedule uses for its job window), ordered with a
-// stable `id` tiebreak so no row repeats or is skipped at a page boundary.
-const PAGE_ROWS = 1000
-async function fetchAllRows<T>(
-  page: (from: number, to: number) => Promise<{ data: T[] | null; error: { message: string } | null }>,
-): Promise<{ rows: T[]; error: string | null }> {
-  const rows: T[] = []
-  for (let from = 0; ; from += PAGE_ROWS) {
-    const { data, error } = await page(from, from + PAGE_ROWS - 1)
-    if (error) return { rows, error: error.message }
-    const batch = data || []
-    rows.push(...batch)
-    if (batch.length < PAGE_ROWS) return { rows, error: null }
-  }
 }
 
 export default function ReportsPage() {
@@ -113,7 +103,7 @@ export default function ReportsPage() {
         fetchAllRows<ReportPayment>(async (from, to) => {
           const { data, error } = await supabase
             .from('payments')
-            .select('id, amount, method, paid_at, kind, status, invoice_id, customer_id, customers(id, name)')
+            .select('id, amount, method, provider, paid_at, kind, status, invoice_id, customer_id, customers(id, name)')
             .eq('user_id', user.id)
             .order('paid_at', { ascending: true, nullsFirst: true })
             .order('id')
@@ -158,70 +148,64 @@ export default function ReportsPage() {
   const periodLabel = `${year} · ${q.value ? q.label : 'Full year'}`
   const fileSuffix = q.value ? `${year}-${q.value}` : year
 
-  // ── The period's figures — every one of them read through the shared engines ──
+  // ── The period's figures — ALL of them from lib/accounting/gst.ts ────────────
+  // This page used to assemble its own: filter the period, drop cancelled, drop
+  // drafts, call invoiceTotals per invoice, sum. Every one of those steps now lives
+  // in gstReturn(), because the GST page needs exactly the same steps and two
+  // implementations of "which invoices count" is two answers to what you owe the CRA.
+  //
+  // The rules it enforces are unchanged and still worth stating here:
+  //  • Cancelled invoices are void paper — out of every total.
+  //  • DRAFTS ARE OUT, and that's the point of this document. Completing a job
+  //    auto-drafts an invoice stamped with today's issued_date (lib/invoicing), so a
+  //    draft sits in the period looking exactly like billed work — but nobody was
+  //    ever charged. You do not remit GST on paper that never left the building.
+  //    They're disclosed as their own line instead of vanishing.
+  //  • Every figure comes off invoiceTotals, never `amount * 1.05` — so this page is
+  //    byte-identical to the invoice, the PDF and the charge route.
   const period = useMemo(() => {
-    // Cancelled invoices are void paper: they bill nothing and they owe nothing, so
-    // they're out of every total (the same rule the invoices list applies).
-    //
-    // DRAFTS ARE OUT TOO, and that is the whole point of this document. Completing a
-    // job auto-drafts an invoice stamped with today's issued_date (lib/invoicing), so
-    // a draft lands in the period looking exactly like billed work — but it has never
-    // been sent to anyone. This statement says "invoices issued in this period"; you
-    // do not charge a customer, and you do not remit GST, on paper that never left
-    // the building. Counting them would make the sentence false and the GST figure
-    // too high. They're surfaced as their own disclosed line instead of vanishing.
-    const inScope = invoices.filter(i => inPeriod(i.issued_date, year, q) && i.status !== 'cancelled')
-    const rows = inScope.filter(i => i.status !== 'draft')
-    const built = rows.map(inv => {
-      // THE totals engine — never `amount * 1.05`. `discountedSubtotal` is the net
-      // (post-discount) revenue; GST + total come off that same net, so this page's
-      // figures are byte-identical to the invoice, the PDF and the charge route.
-      const t = invoiceTotals(inv.amount, settings, { type: inv.discount_type, value: inv.discount_value })
-      const b = invoiceBalance(inv, settings)
-      return { inv, t, b }
-    })
-    const sum = (f: (x: typeof built[number]) => number) => Math.round(built.reduce((s, x) => s + f(x), 0) * 100) / 100
+    // The engine speaks Periods; this page speaks year + quarter. quarterRange /
+    // yearRange are the same helpers the rest of Accounting uses, so "Q3" means one
+    // thing in this app.
+    const p: AcctPeriod = q.value
+      ? quarterRange(Number(year), Number(q.value.slice(1)) as 1 | 2 | 3 | 4)
+      : yearRange(Number(year))
 
-    const gstPercent = invoiceTotals(0, settings).gstPercent // one reading of gst_percent, via the engine
+    const ret = gstReturn({ invoices: invoices as never, expenses: [], settings, period: p })
 
-    // Money collected against these invoices (the ledger's amount_paid), and what's
-    // still owed. Outstanding clamps at zero per invoice — the app's existing
-    // definition (an overpaid invoice owes nothing; the ledger resolves it to credit).
-    const rowsForPdf: RevenueGstRow[] = built.map(({ inv, t, b }) => ({
-      invoiceNumber: inv.invoice_number,
-      issuedDate: inv.issued_date,
-      customerName: customerNameOf(inv),
-      net: t.discountedSubtotal,
-      gst: t.gstAmount,
-      total: t.total,
-      paid: b.balance <= 0.01,
-      balance: b.balance,
+    const rowsForPdf: RevenueGstRow[] = ret.rows.map(r => ({
+      invoiceNumber: r.invoiceNumber ?? '',
+      issuedDate: r.issuedDate,
+      customerName: r.customerName,
+      net: r.net,
+      gst: r.gst,
+      total: r.total,
+      paid: r.paid,
+      balance: r.balance,
     }))
 
-    const report: RevenueGstReport = {
+    // `generatedAt` is deliberately NOT stamped here: this memo can be minutes old
+    // by the time anyone clicks Download, and a stamp that says when React last
+    // recomputed is worse than none. The download handler stamps the real moment.
+    const report: Omit<RevenueGstReport, 'generatedAt'> = {
       periodLabel,
-      gstPercent,
+      gstPercent: ret.gstPercent,
       rows: rowsForPdf,
       totals: {
-        net: sum(x => x.t.discountedSubtotal),
-        gst: sum(x => x.t.gstAmount),
-        total: sum(x => x.t.total),
-        paid: sum(x => x.b.paid),
-        outstanding: sum(x => Math.max(0, x.b.balance)),
-        count: built.length,
+        net: ret.sales,
+        gst: ret.taxCollected,
+        total: ret.billed,
+        paid: ret.collected,
+        outstanding: ret.outstanding,
+        count: ret.invoiceCount,
       },
+      // Carried onto the PDF: the on-screen note below doesn't travel with the file.
+      excludedDrafts: ret.excludedDrafts,
     }
 
-    // Drafts, excluded above and reported on their own so they're visible rather
-    // than silently missing — unsent work the owner may still want to bill.
-    const drafts = inScope.filter(i => i.status === 'draft')
-    const draftTotal = Math.round(
-      drafts.reduce((s, i) => s + invoiceTotals(i.amount, settings, { type: i.discount_type, value: i.discount_value }).total, 0) * 100,
-    ) / 100
+    const pays = payments.filter(p2 => p2.paid_at && inPeriod(toLocalISO(new Date(p2.paid_at)), year, q))
 
-    const pays = payments.filter(p => p.paid_at && inPeriod(toLocalISO(new Date(p.paid_at)), year, q))
-
-    return { built, report, drafts: drafts.length, draftTotal, pays }
+    return { report, ret, drafts: ret.excludedDrafts.count, draftTotal: ret.excludedDrafts.total, pays }
   }, [invoices, payments, settings, year, q, periodLabel])
 
   // Invoice # for a payment — resolved from the invoices already in memory (every
@@ -241,7 +225,8 @@ export default function ReportsPage() {
       const { renderRevenueGstBlob } = await import('@/components/reports/RevenueGstPDF')
       // settings may legitimately be null on a brand-new account; the doc renders
       // from its own fallbacks, same as renderInvoiceBlob.
-      const blob = await renderRevenueGstBlob(period.report, settings)
+      // Stamp the moment the paper is actually produced — see the memo's note.
+      const blob = await renderRevenueGstBlob({ ...period.report, generatedAt: new Date().toISOString() }, settings)
       downloadBlob(blob, `revenue-gst-${fileSuffix}.pdf`)
     } catch {
       toast.error('Could not generate the Revenue & GST PDF. Please try again.')
@@ -255,18 +240,25 @@ export default function ReportsPage() {
     try {
       // Money as plain numbers and dates as ISO — this file exists to be summed and
       // sorted in a spreadsheet, not read. formatCurrency would make every column text.
-      exportRowsToCsv(`invoices-${fileSuffix}.csv`, period.built, [
-        { label: 'Invoice #',     value: x => x.inv.invoice_number },
-        { label: 'Issued',        value: x => x.inv.issued_date ?? '' },
-        { label: 'Due',           value: x => x.inv.due_date ?? '' },
-        { label: 'Customer',      value: x => customerNameOf(x.inv) },
-        { label: 'Service',       value: x => x.inv.service_type ?? '' },
-        { label: 'Revenue (net)', value: x => x.t.discountedSubtotal },
-        { label: 'GST',           value: x => x.t.gstAmount },
-        { label: 'Total',         value: x => x.t.total },
-        { label: 'Paid',          value: x => x.b.paid },
-        { label: 'Balance',       value: x => x.b.balance },
-        { label: 'Status',        value: x => INVOICE_STATUS_LABELS[x.inv.status] },
+      // Rows come from the GST engine (one definition of which invoices count);
+      // the columns it has no business knowing about — due date, service, status —
+      // are joined back from this page's own invoices by id.
+      const byId = new Map(invoices.map(i => [i.id, i]))
+      exportRowsToCsv(`invoices-${fileSuffix}.csv`, period.ret.rows, [
+        { label: 'Invoice #',     value: r => r.invoiceNumber ?? '' },
+        { label: 'Issued',        value: r => r.issuedDate ?? '' },
+        { label: 'Due',           value: r => byId.get(r.invoiceId)?.due_date ?? '' },
+        { label: 'Customer',      value: r => r.customerName },
+        { label: 'Service',       value: r => byId.get(r.invoiceId)?.service_type ?? '' },
+        { label: 'Revenue (net)', value: r => r.net },
+        { label: 'GST',           value: r => r.gst },
+        { label: 'Total',         value: r => r.total },
+        { label: 'Paid',          value: r => r.total - r.balance },
+        { label: 'Balance',       value: r => r.balance },
+        { label: 'Status',        value: r => {
+          const s = byId.get(r.invoiceId)?.status
+          return s ? INVOICE_STATUS_LABELS[s] : ''
+        } },
       ])
     } catch {
       toast.error('Could not build the invoices CSV. Please try again.')
@@ -281,14 +273,32 @@ export default function ReportsPage() {
       // Refunds (negative) and credit movements go out exactly as the ledger holds
       // them. Dropping or abs()-ing them would hand the bookkeeper a collected total
       // that never happened.
+      //
+      // There is deliberately NO bare `Amount` column. A $200 deposit writes a cash
+      // row AND a credit row, and settling it later writes a THIRD row that is
+      // kind='payment' with a positive amount — so one summable Amount column reads
+      // $400 of revenue against $200 of cash. Every row's amount lands in exactly
+      // one of Cash/Credit instead: lossless, and no column can double-count.
+      // Cash Amount is the only column a bookkeeper should sum, and it ties to the
+      // dashboard's Collected tile by construction — both are isCashRow.
       exportRowsToCsv(`payments-${fileSuffix}.csv`, period.pays, [
-        { label: 'Date',      value: p => (p.paid_at ? toLocalISO(new Date(p.paid_at)) : '') },
-        { label: 'Customer',  value: p => customerNameOf(p) },
-        { label: 'Invoice #', value: p => (p.invoice_id ? invoiceNumberById[p.invoice_id] ?? '' : '') },
-        { label: 'Method',    value: p => paymentMethodLabel(p.method) },
-        { label: 'Kind',      value: p => p.kind },
-        { label: 'Amount',    value: p => p.amount },
-        { label: 'Status',    value: p => p.status },
+        // The unique key. Without it a re-import silently duplicates every row.
+        { label: 'Payment ID',    value: p => p.id },
+        // The LOCAL date. A .slice(0,10) on a UTC timestamp files an Alberta evening
+        // payment into the next day — and, on the 30th, into the next QUARTER.
+        { label: 'Date',          value: p => (p.paid_at ? toLocalISO(new Date(p.paid_at)) : '') },
+        { label: 'Type',          value: p => ledgerRowType(p) },
+        { label: 'Customer',      value: p => customerNameOf(p) },
+        { label: 'Invoice #',     value: p => (p.invoice_id ? invoiceNumberById[p.invoice_id] ?? '' : '') },
+        // `method || provider`: the Stripe webhook never sets `method`, so `method`
+        // alone renders every card sale as the useless label 'Payment'. Matches the
+        // fallback summarizeTransactions already groups by.
+        { label: 'Method',        value: p => paymentMethodLabel(p.method || p.provider) },
+        // Blank, not 0.00, for a non-cash row — a zero would read as "this moved no
+        // money", when the truth is "this row is not cash at all".
+        { label: 'Cash Amount',   value: p => cashAmountOf(p) || '' },
+        { label: 'Credit Amount', value: p => (p.kind === 'credit' ? Number(p.amount) || 0 : '') },
+        { label: 'Status',        value: p => p.status },
       ])
     } catch {
       toast.error('Could not build the payments CSV. Please try again.')
@@ -318,7 +328,12 @@ export default function ReportsPage() {
     <div className="max-w-5xl mx-auto space-y-6">
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }}
         title="Reports & Exports"
-        description="Pick a period, hand your bookkeeper the file." />
+        description="Pick a period, hand your bookkeeper the file."
+        action={
+          <Link href="/dashboard/reports/scheduled">
+            <Button variant="secondary" size="sm"><Mail className="w-4 h-4" />Scheduled reports</Button>
+          </Link>
+        } />
 
       {loadError && (
         <Banner tone="danger" icon={AlertTriangle}

@@ -21,6 +21,7 @@ export interface AppNotification {
   body: string | null
   href: string | null
   read: boolean
+  customer_id?: string | null
   // For one-click actions on the alert itself (e.g. quote_accepted → Schedule now).
   entity_type?: string | null
   entity_id?: string | null
@@ -64,12 +65,12 @@ export function NotificationBell() {
     // back to the legacy columns if the manage migration hasn't run yet. Both
     // selects carry entity_type/entity_id for the one-click Schedule-now action.
     const managed = await supabase.from('notifications')
-      .select('id, created_at, type, title, body, href, read, entity_type, entity_id, snoozed_until, archived_at')
+      .select('id, created_at, type, title, body, href, read, customer_id, entity_type, entity_id, snoozed_until, archived_at')
       .eq('user_id', userId).is('archived_at', null).order('created_at', { ascending: false }).limit(30)
     let data = managed.data as AppNotification[] | null
     if (managed.error && /archived_at|snoozed_until|column/i.test(managed.error.message)) {
       const legacy = await supabase.from('notifications')
-        .select('id, created_at, type, title, body, href, read, entity_type, entity_id')
+        .select('id, created_at, type, title, body, href, read, customer_id, entity_type, entity_id')
         .eq('user_id', userId).order('created_at', { ascending: false }).limit(30)
       data = legacy.data as AppNotification[] | null
     }
@@ -158,7 +159,11 @@ export function NotificationBell() {
   }
   function openItem(n: AppNotification) {
     markRead([n.id]); setOpen(false)
-    if (n.href) router.push(n.href)
+    // A message notification opens THE conversation, not the bare inbox — built
+    // from customer_id so it also fixes rows written before hrefs carried ?c=.
+    if ((n.type === 'new_message' || n.type === 'portal_request') && n.customer_id) {
+      router.push(`/dashboard/messages?c=${n.customer_id}`)
+    } else if (n.href) router.push(n.href)
   }
 
   // One-click "Schedule now" on a quote-accepted alert — THE shared quote→job

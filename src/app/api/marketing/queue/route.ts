@@ -25,7 +25,7 @@ const ANGLES = [
   'Lead with the visible result / before-and-after.',
   'Focus on reliability and showing up on schedule.',
   'Make it about the neighbourhood and being local.',
-  'Share one quick, genuinely useful lawn/yard tip.',
+  'Share one quick, genuinely useful tip from this line of work.',
   'A warm, friendly check-in with the community.',
   'Lean on social proof — happy customers and reviews.',
 ]

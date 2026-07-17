@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { aiEnabled, streamText } from '@/lib/ai/studioGateway'
+import { ndjsonResponse } from '@/lib/ai/stream'
 import { buildAssistInput, type AssistPayload, type AssistTask } from '@/lib/ai/assist'
 
 export const maxDuration = 60
@@ -40,25 +41,12 @@ export async function POST(req: NextRequest): Promise<Response> {
     return NextResponse.json({ ok: false, aiEnabled: true, error: e instanceof Error ? e.message : 'bad request' }, { status: 400 })
   }
 
-  const encoder = new TextEncoder()
-  const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      const emit = (obj: unknown) => controller.enqueue(encoder.encode(JSON.stringify(obj) + '\n'))
-      const result = await streamText(
-        { system: input.system, prompt: input.prompt, maxTokens: input.maxTokens, model: input.model },
-        delta => emit({ t: 'delta', text: delta }),
-      )
-      if (!result.ok) emit({ t: 'error', error: result.error || 'generation failed' })
-      else emit({ t: 'done', text: result.data.trim() })
-      controller.close()
-    },
-  })
-
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'application/x-ndjson; charset=utf-8',
-      'Cache-Control': 'no-cache, no-transform',
-      'X-Accel-Buffering': 'no',
-    },
+  return ndjsonResponse(async emit => {
+    const result = await streamText(
+      { system: input.system, prompt: input.prompt, maxTokens: input.maxTokens, model: input.model },
+      delta => emit({ t: 'delta', text: delta }),
+    )
+    if (!result.ok) emit({ t: 'error', error: result.error || 'generation failed' })
+    else emit({ t: 'done', text: result.data.trim() })
   })
 }

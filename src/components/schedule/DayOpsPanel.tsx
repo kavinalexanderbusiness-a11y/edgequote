@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { toast } from '@/lib/toast'
 import { confirm } from '@/lib/confirm'
 import { createClient } from '@/lib/supabase/client'
-import { Job, JobStatus, JobRecurrence, JobLineItem, RecurrenceScope, PRICE_REASONS, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
+import { Job, JobStatus, JobRecurrence, JobLineItem, RecurrenceScope, AddonTemplate, PRICE_REASONS, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
 import { Coord } from '@/lib/geo'
 import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, nearestNeighborRoute, sequenceRoute, roundTripMapsUrl, MAX_MAPS_WAYPOINTS, routeStats, directionsUrl, computeDayEtas, roughFinishEstimate, dayLoad, minutesToTime12, timeToMinutes, DEFAULT_JOB_MIN } from '@/lib/route'
 import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
@@ -62,6 +62,9 @@ interface Props {
   // The previous visit's add-ons (for the one-tap "copy previous" action).
   getPreviousAddons: (job: Job) => { description: string; amount: number; serviceKey: string }[]
   onCopyPreviousAddons: (job: Job) => Promise<void>
+  // Quick-add chips for the add-on editor, resolved from the business's trade
+  // pack by the page — passed through untouched.
+  addonTemplates: AddonTemplate[]
 }
 
 export interface QuickPatch {
@@ -76,7 +79,7 @@ export interface QuickPatch {
 export function DayOpsPanel({
   date, dateLabel, jobs, quotesById, recurrences, baseCoord,
   onOpenJob, onStartJob, onMarkDone, onMove, onSetPrice, workStartTime, capacityHours, onRainDelay, onAddJob, onQuickSave,
-  addonsByJobId, onAddLineItem, onDeleteLineItem, getPreviousAddons, onCopyPreviousAddons,
+  addonsByJobId, onAddLineItem, onDeleteLineItem, getPreviousAddons, onCopyPreviousAddons, addonTemplates,
 }: Props) {
   const supabase = createClient()
   // Guards Start/Complete against a double-tap (which would double-stamp the job
@@ -106,6 +109,18 @@ export function DayOpsPanel({
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [dragOverId, setDragOverId] = useState<string | null>(null)
 
+  // What the one-tap "On my way" promises the customer, in minutes.
+  //
+  // It is a fixed guess and cannot honestly be anything else: there is no GPS fix
+  // on the truck, and the route's leg times run from the PREVIOUS stop rather than
+  // from wherever the owner actually is. So the number stays a default — but the
+  // button that sends it now NAMES it, because the template turns this into a
+  // specific, falsifiable promise ("arrive in approximately 15 minutes") that the
+  // owner otherwise never saw and never chose. Label and payload both read from
+  // here, so the button can never drift from what the customer is told. A
+  // different ETA goes through Message, which has an input for it.
+  const ONE_TAP_ETA_MIN = '15'
+
   // One-tap "On my way" — no composer, no typing. Sends the owner's on_my_way
   // template with the default ETA through the SAME pipeline as the editable
   // composer (/api/comms/send: opt-in-gated, logged, threaded, and it stamps
@@ -121,7 +136,7 @@ export function DayOpsPanel({
         body: JSON.stringify({
           customerId: job.customer_id, template: 'on_my_way', jobId: job.id,
           channels: ['sms', 'email'],
-          vars: { eta: '15', address: job.properties?.address ?? undefined },
+          vars: { eta: ONE_TAP_ETA_MIN, address: job.properties?.address ?? undefined },
         }),
       })
       const data = (await res.json().catch(() => ({}))) as { results?: Record<string, { sent?: boolean; reason?: string }> }
@@ -231,7 +246,11 @@ export function DayOpsPanel({
     }
     return out
   })()
-  const totalMin = active.reduce((s, j) => s + (j.duration_minutes || 0), 0)
+  // Same coalesce as laborTotalMin below (and dayLoad, and the ETA chain): unknown
+  // duration = DEFAULT_JOB_MIN, not 0. These two totals describe the same day, so
+  // they must not disagree — with `|| 0` the work chip vanished on exactly the days
+  // dayLoad still counted as 45 min of work apiece.
+  const totalMin = active.reduce((s, j) => s + (j.duration_minutes || DEFAULT_JOB_MIN), 0)
   const totalRevenue = active.reduce((s, j) => s + jobTotal(j), 0)
   const revenueCompleted = completed.reduce((s, j) => s + jobTotal(j), 0)
   const revenueRemaining = remaining.reduce((s, j) => s + jobTotal(j), 0)
@@ -800,6 +819,27 @@ export function DayOpsPanel({
                         {job.status === 'scheduled' && etaByJob[job.id] && (
                           <span className="font-semibold text-accent-text shrink-0">ETA {etaByJob[job.id]}</span>
                         )}
+                        {/* The route orders stops by GEOGRAPHY — it never reads a job's
+                            committed start_time — so a visit you promised for 10:00 can be
+                            routed last and land hours later. Both numbers were already on
+                            this card, side by side, with nothing saying they disagreed.
+                            Flag it only once the route misses the window we'd actually TEXT
+                            the customer (windowByJob = start → +2h), so this fires when a
+                            promise breaks, not when a minute slips. Presentation only: the
+                            route is not re-ordered and no engine is consulted. */}
+                        {(() => {
+                          if (job.status !== 'scheduled' || !job.start_time) return null
+                          const arrive = arrivalMinByJob[job.id]
+                          if (arrive == null) return null
+                          const promised = timeToMinutes(job.start_time)
+                          if (arrive <= promised + 120) return null
+                          return (
+                            <span className="shrink-0 text-[10px] font-semibold text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5 flex items-center gap-1"
+                              title={`You'd tell this customer ${windowByJob[job.id]}, but the route has you arriving ${minutesToTime12(arrive)}. Reorder the stop, or move it.`}>
+                              <AlertTriangle className="w-3 h-3" /> misses {windowByJob[job.id]}
+                            </span>
+                          )
+                        })()}
                         {job.status === 'in_progress' && job.started_at && (
                           <span className="font-semibold text-sky-300 shrink-0">▶ {tsTo12(job.started_at)} · {elapsedMin(job.started_at)}m</span>
                         )}
@@ -850,7 +890,8 @@ export function DayOpsPanel({
                         {/* Stage primary. on_my_way_at stamps when the text sends, so the
                             primary advances On my way → Start on its own. */}
                         {job.status === 'scheduled' && !job.on_my_way_at && (
-                          <ActionBtn disabled={sendingEta !== null} onClick={() => sendOnMyWay(job)} icon={Send} label={sendingEta === job.id ? 'Sending…' : 'On my way'} tone="primary" />
+                          <ActionBtn disabled={sendingEta !== null} onClick={() => sendOnMyWay(job)} icon={Send} label={sendingEta === job.id ? 'Sending…' : `On my way · ${ONE_TAP_ETA_MIN}m`}
+                            title={`Texts ${job.customers?.name || 'the customer'} that you'll arrive in about ${ONE_TAP_ETA_MIN} minutes. Use Message to send a different ETA.`} tone="primary" />
                         )}
                         {job.status === 'scheduled' && (
                           <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onStartJob(job) } finally { setActing(null) } }} icon={Play} label="Start" tone={job.on_my_way_at ? 'primary' : undefined} />
@@ -867,7 +908,8 @@ export function DayOpsPanel({
                         </a>
                         <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setAddonsId(null); setMessageId(messageId === job.id ? null : job.id) }} icon={MessageSquare} label="Message" />
                         {job.status === 'scheduled' && job.on_my_way_at && (
-                          <ActionBtn disabled={sendingEta !== null} onClick={() => sendOnMyWay(job)} icon={Send} label={sendingEta === job.id ? 'Sending…' : 'On my way'} />
+                          <ActionBtn disabled={sendingEta !== null} onClick={() => sendOnMyWay(job)} icon={Send} label={sendingEta === job.id ? 'Sending…' : `On my way · ${ONE_TAP_ETA_MIN}m`}
+                            title={`Texts ${job.customers?.name || 'the customer'} that you'll arrive in about ${ONE_TAP_ETA_MIN} minutes. Use Message to send a different ETA.`} />
                         )}
                         {/* Complete a scheduled visit without a check-in (no time tracked);
                             completeJob handles the missing started_at and offers Undo. */}
@@ -934,6 +976,7 @@ export function DayOpsPanel({
                             onDelete={onDeleteLineItem}
                             previousAddons={getPreviousAddons(job)}
                             onCopyPrevious={() => onCopyPreviousAddons(job)}
+                            addonTemplates={addonTemplates}
                           />
                         </div>
                       )}
@@ -1001,11 +1044,12 @@ function Metric({ icon: Icon, label, value, tone }: { icon: typeof DollarSign; l
 // `tap-target` lifts that 40px to the 44px minimum on a coarse pointer — the last
 // 4px matter with a glove on — while `sm:h-8` keeps the mouse density identical.
 // 'primary' = THE next action for the stage; 'complete' = the finish action.
-function ActionBtn({ onClick, icon: Icon, label, tone, disabled }: { onClick: () => void; icon: typeof Pencil; label: string; tone?: 'emerald' | 'sky' | 'primary' | 'complete'; disabled?: boolean }) {
+function ActionBtn({ onClick, icon: Icon, label, tone, disabled, title }: { onClick: () => void; icon: typeof Pencil; label: string; tone?: 'emerald' | 'sky' | 'primary' | 'complete'; disabled?: boolean; title?: string }) {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
+      title={title}
       className={cn(
         'tap-target h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border text-xs font-medium flex items-center justify-center gap-1 active:scale-95 transition-transform disabled:opacity-50 disabled:pointer-events-none',
         tone === 'primary'

@@ -4,15 +4,18 @@ import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency, localTodayISO } from '@/lib/utils'
-import { needsFollowUp } from '@/lib/followup'
+import { needsFollowUp, canChaseCustomer } from '@/lib/followup'
+import type { ReachCustomer } from '@/lib/comms/reach'
 import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
+import { settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
+import { ranOut, cadenceDays, isSeasonallyDormant } from '@/lib/signals'
 import { invoiceBalance } from '@/lib/payments/ledger'
 import type { Quote } from '@/types'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
 import {
   ListChecks, CheckCircle2, ArrowRight,
-  DollarSign, FileText, Bell, CalendarPlus, AlertTriangle, MessageSquare, Repeat,
+  DollarSign, FileText, Bell, CalendarPlus, AlertTriangle, MessageSquare, Repeat, PhoneOff,
 } from 'lucide-react'
 
 // ONE ranked queue of the highest-value things to do right now, distilled from the
@@ -31,7 +34,9 @@ interface Priority {
   score: number           // urgency × value — higher sorts first
 }
 
-interface JobLite { quote_id: string | null; customer_id: string | null; status: string; scheduled_date: string; recurrence_id: string | null; price: number | null }
+// `service_type` is carried so the ran-out signal can season-gate (a snow plan in
+// July is dormant, not lost) — see lib/signals/lifecycle.
+interface JobLite { quote_id: string | null; customer_id: string | null; status: string; scheduled_date: string; service_type: string | null; recurrence_id: string | null; price: number | null }
 interface InvoiceLite { amount: number; status: string; amount_paid?: number; discount_type: 'amount' | 'percent' | null; discount_value: number | null }
 
 export function TodaysPriorities() {
@@ -48,17 +53,22 @@ export function TodaysPriorities() {
       if (!user) { setLoading(false); return }
       const today = localTodayISO()
 
-      const [qRes, iRes, jRes, rRes, cRes, sRes] = await Promise.all([
+      const [qRes, iRes, jRes, rRes, cRes, sRes, custRes] = await Promise.all([
         // Quotes drive follow-ups + accepted-not-scheduled (reuse those exact signals).
         supabase.from('quotes').select('*').eq('user_id', user.id),
         supabase.from('invoices').select('amount, status, amount_paid, discount_type, discount_value').eq('user_id', user.id),
-        supabase.from('jobs').select('quote_id, customer_id, status, scheduled_date, recurrence_id, price').eq('user_id', user.id),
+        supabase.from('jobs').select('quote_id, customer_id, status, scheduled_date, service_type, recurrence_id, price').eq('user_id', user.id),
         supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user.id),
         // Unread conversations — same source as the Messages inbox.
         supabase.from('conversations').select('unread').eq('user_id', user.id).is('archived_at', null).gt('unread', 0),
         // GST — so the owed figure below agrees with the Invoices page and the
-        // Outstanding stat (both are ledger-derived, GST-inclusive).
-        supabase.from('business_settings').select('gst_percent').eq('user_id', user.id).maybeSingle(),
+        // Outstanding stat (both are ledger-derived, GST-inclusive). Seasons ride
+        // along on the same row: the ran-out signal is season-gated.
+        supabase.from('business_settings').select('gst_percent, service_seasons').eq('user_id', user.id).maybeSingle(),
+        // Exactly the fields lib/comms/reach needs to answer "would a message to
+        // this person actually go out" — so the follow-up row can tell the owner
+        // which chases are real. Rides along in the batch that was already going out.
+        supabase.from('customers').select('id, phone, email, sms_opt_in, email_opt_in, message_prefs').eq('user_id', user.id),
       ])
 
       const quotes = (qRes.data as Quote[]) || []
@@ -71,7 +81,10 @@ export function TodaysPriorities() {
       const quotesById: Record<string, Record<string, unknown>> = {}
       for (const q of quotes) quotesById[q.id] = q as unknown as Record<string, unknown>
       const conversations = (cRes.data as { unread: number }[]) || []
-      const feeSettings = sRes.data as { gst_percent: number | null } | null
+      const custById: Record<string, ReachCustomer> = {}
+      for (const c of (custRes.data as (ReachCustomer & { id: string })[]) || []) custById[c.id] = c
+      const feeSettings = sRes.data as { gst_percent: number | null; service_seasons: unknown } | null
+      const seasons: ServiceSeasons = settingsToSeasons(feeSettings?.service_seasons)
 
       const next: Priority[] = []
 
@@ -127,42 +140,83 @@ export function TodaysPriorities() {
 
       // 5) Quotes needing follow-up — gone quiet, most recoverable new revenue
       //    (reuse needsFollowUp so the count matches the Quotes follow-up queue exactly).
+      //
+      //    Split by whether the chase can actually HAPPEN. This queue used to offer
+      //    "9 · $1,246" as one job; on the live book only 3 of those 9 were
+      //    chaseable and the other 6 ($445) belonged to customers with no phone and
+      //    no email. Both halves are real money, but they need different verbs — one
+      //    is "send a message", the other is "find their number" — and a single row
+      //    sent the owner to the quote list to discover the difference one dead end
+      //    at a time. canChaseCustomer is the same reach engine the sender uses, so
+      //    this can't disagree with what a send would actually do.
       const followups = quotes.filter(needsFollowUp)
-      const followupTotal = followups.reduce((s, q) => s + Number(q.total || 0), 0)
-      if (followups.length > 0) {
+      const chaseable = followups.filter(q => q.customer_id && canChaseCustomer(custById[q.customer_id]))
+      const blocked = followups.filter(q => !q.customer_id || !canChaseCustomer(custById[q.customer_id]))
+      const sum = (qs: Quote[]) => qs.reduce((s, q) => s + Number(q.total || 0), 0)
+      const chaseableTotal = sum(chaseable)
+      const blockedTotal = sum(blocked)
+      if (chaseable.length > 0) {
         next.push({
           key: 'followups', icon: Bell, tone: 'text-amber-400 bg-amber-500/10 border-amber-500/20',
-          label: 'Follow up on quotes', detail: `${followups.length} · ${formatCurrency(followupTotal)}`,
-          href: '/dashboard/quotes', score: 50_000 + followupTotal,
+          label: 'Follow up on quotes', detail: `${chaseable.length} · ${formatCurrency(chaseableTotal)}`,
+          href: '/dashboard/quotes', score: 50_000 + chaseableTotal,
+        })
+      }
+      if (blocked.length > 0) {
+        next.push({
+          key: 'followups-blocked', icon: PhoneOff, tone: 'text-ink-muted bg-bg-tertiary border-border',
+          label: 'Quotes you can’t chase yet', detail: `${blocked.length} · ${formatCurrency(blockedTotal)}`,
+          // Data Quality is the surface that already lists customers with no contact
+          // on file — the fix for this row is a phone number, not a message.
+          href: '/dashboard/data-quality', score: 45_000 + blockedTotal,
         })
       }
 
       // 6) Recurring series ran out — a recurring customer with no upcoming visit
-      //    booked. Per-visit value at stake (same valuation engine as Reactivation).
-      const futureByCust = new Set(
-        jobs.filter(j => j.customer_id && j.scheduled_date >= today && (j.status === 'scheduled' || j.status === 'in_progress'))
-          .map(j => j.customer_id),
-      )
+      //    booked. THE shared ran-out detector, so this count is the same queue the
+      //    Reactivation page alarms on: season-gated (an off-season snow customer is
+      //    dormant, not adrift), only customers actually serviced, and only while the
+      //    series is plausibly still active. Per-visit value at stake.
+      const jobsByCust: Record<string, JobLite[]> = {}
+      for (const j of jobs) if (j.customer_id) (jobsByCust[j.customer_id] ||= []).push(j)
       const ranOutCusts = new Set<string>()
       let ranOutValue = 0
-      // Most-recent visit first. The rule below keeps the FIRST hit per customer,
-      // and `jobs` arrives in arbitrary DB order — so without this a customer with
-      // two series could be priced off a dead one. (Reactivation sorts for the
-      // same reason.)
-      const ranOutCandidates = [...jobs].sort((a, b) => (a.scheduled_date < b.scheduled_date ? 1 : a.scheduled_date > b.scheduled_date ? -1 : 0))
-      for (const j of ranOutCandidates) {
-        if (!j.recurrence_id || !j.customer_id) continue
-        if (futureByCust.has(j.customer_id)) continue
-        if (j.scheduled_date > today) continue // a future-dated visit means it isn't dry
-        if (ranOutCusts.has(j.customer_id)) continue // most recent past visit per customer
-        ranOutCusts.add(j.customer_id)
-        const rec = j.recurrence_id ? recById[j.recurrence_id] : null
+      // MERGE (main ← guardian-2): both sides fixed a real bug in this loop, and
+      // each was missing the other's. Neither version wins wholesale.
+      //   · guardian-2: stop re-deriving "ran out" inline — consume the ONE canonical
+      //     detector (lib/signals.ranOut). Re-deriving this condition is exactly how
+      //     six screens came to disagree about who had churned. It also honours
+      //     seasonal dormancy, which the inline rule never did.
+      //   · main (1030f52): the QUOTE carries the cadence price. Valuing the visit off
+      //     j.price alone made every quote-linked recurring visit (price IS NULL — the
+      //     normal case) worth $0, so this tile silently understated its own value.
+      // Both sides also independently fixed "DB order can pick a dead series": the
+      // sort below is guardian-2's, kept because the signal needs the newest series.
+      for (const [custId, cj] of Object.entries(jobsByCust)) {
+        // Most RECENT recurring activity — DB order can pick a dead series over the
+        // customer's current cadence.
+        const recJob = cj.filter(j => j.recurrence_id).sort((a, b) => b.scheduled_date.localeCompare(a.scheduled_date))[0]
+        const upcoming = cj.some(j => j.scheduled_date >= today && (j.status === 'scheduled' || j.status === 'in_progress'))
+        const completed = cj.filter(j => j.status === 'completed').map(j => j.scheduled_date).sort()
+        const pastReal = cj.filter(j => j.status !== 'cancelled' && j.scheduled_date <= today).map(j => j.scheduled_date).sort()
+        const lastDate = completed.length ? completed[completed.length - 1]
+          : (pastReal.length ? pastReal[pastReal.length - 1] : null)
+        const rec = recJob?.recurrence_id ? recById[recJob.recurrence_id] : null
         const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
-        // The quote carries the cadence price. Passing null here made every
-        // quote-linked recurring visit (price IS NULL — the normal case) worth
-        // $0, so this tile silently understated or hid its own value.
-        const q = j.quote_id ? quotesById[j.quote_id] : null
-        ranOutValue += Math.round(jobVisitValue(j.price, q, freq))
+        const signal = ranOut({
+          hasRecurring: !!recJob,
+          hasUpcoming: upcoming,
+          lastServiceDate: lastDate,
+          cadenceDays: cadenceDays(freq, rec),
+          seasonallyDormant: isSeasonallyDormant(recJob?.service_type ?? null, seasons, today),
+          today,
+        })
+        // Every ran-out series counts here (not just the urgent window) — this row
+        // has always tracked the whole re-book backlog.
+        if (!signal.isRanOut) continue
+        ranOutCusts.add(custId)
+        const q = recJob.quote_id ? quotesById[recJob.quote_id] : null
+        ranOutValue += Math.round(jobVisitValue(recJob.price, q, freq))
       }
       if (ranOutCusts.size > 0) {
         next.push({

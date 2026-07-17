@@ -9,11 +9,12 @@ import { SmsCost } from '@/components/comms/SmsCost'
 import { Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
 import { FilterPill } from '@/components/ui/FilterPill'
-import { AssistButton } from '@/components/ai/AssistButton'
+import { AssistButton, AiStop, AiError, AiNote, AI_CHECK_FIRST } from '@/components/ai/ui'
 import { useAiAssist } from '@/hooks/useAiAssist'
 import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
-import { MessageSquare, Mail, Send, Check, AlertTriangle } from 'lucide-react'
+import { MessageSquare, Mail, Send, Check, AlertTriangle, CalendarClock } from 'lucide-react'
+import { format } from 'date-fns'
 
 // ── THE Send Message dialog — one composer for one OR many recipients ─────────
 // Every entry point (Customer List, Customer page, Schedule Day View, Quotes,
@@ -46,6 +47,8 @@ interface Props {
   vars?: { dateLabel?: string; timeWindow?: string; address?: string; amount?: string }
   title?: string
   onSent?: () => void
+  /** Open with “Send later” pre-enabled (the Scheduled tab's entry point). */
+  defaultSendLater?: boolean
 }
 
 // The general-purpose picker set (job-timing composers add their own extras).
@@ -54,9 +57,17 @@ const DEFAULT_SET: MsgType[] = [
   'rescheduled', 'job_complete', 'review_request', 'reminder', 'thanks', 'custom',
 ]
 
+// datetime-local wants a LOCAL 'YYYY-MM-DDTHH:mm' string (no timezone) — the
+// browser interprets it in the owner's zone, so `new Date(value)` round-trips it
+// back to the right instant for storage as timestamptz.
+function toLocalInput(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
 export function SendMessageDialog({
   open, onClose, recipients, customerId, customerName, initialSelectedIds,
-  jobId, defaultTemplate, templates, vars, title, onSent,
+  jobId, defaultTemplate, templates, vars, title, onSent, defaultSendLater,
 }: Props) {
   const supabase = useMemo(() => createClient(), [])
   const all: MessageRecipient[] = useMemo(
@@ -81,6 +92,12 @@ export function SendMessageDialog({
   const [outcome, setOutcome] = useState<SendOutcome | null>(null)
   // Bulk sends cost money and reach many people — require a deliberate second click.
   const [armed, setArmed] = useState(false)
+  // ── Send later ── writes scheduled_messages rows instead of calling the send
+  // route; /api/cron/scheduled-messages delivers them through the SAME pipeline
+  // (render → dispatch → thread + log), so consent is enforced at send time.
+  const [later, setLater] = useState(!!defaultSendLater)
+  const [sendAt, setSendAt] = useState(() => toLocalInput(new Date(Date.now() + 60 * 60 * 1000)))
+  const [uid, setUid] = useState<string | null>(null)
 
   const chosen = useMemo(() => all.filter(r => selected.has(r.customerId)), [all, selected])
   const toggle = (id: string) => setSelected(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
@@ -88,6 +105,9 @@ export function SendMessageDialog({
   // AI writer — drafts/rewrites INTO the editable box; sending still goes
   // through the same consent-gated route, so the model never sends anything.
   const ai = useAiAssist()
+  // Drives the "here's what it read" note: shown once this draft came from the
+  // assistant, not on a message the owner typed themselves.
+  const [aiTouched, setAiTouched] = useState(false)
   async function aiWrite(mode: 'draft' | 'rewrite') {
     if (busy || ai.running) return
     const prior = text
@@ -100,11 +120,14 @@ export function SendMessageDialog({
       channels: (['sms', 'email'] as const).filter(c => ch[c]),
       currentText: mode === 'rewrite' ? prior : '',
       bulk,
+      jobId: jobId ?? undefined,
+      vars: { ...vars, ...(needsEta && eta ? { timeWindow: `${eta} min ETA` } : {}) },
     }, { onDelta: d => setText(prev => prev + d) })
-    if (full === null) { setText(prior); return }   // error — restore, message shows below
+    if (full === null) { setText(prior); return }   // error or stopped — restore, message shows below
     setEdited(true)
     setOutcome(null)
-    if (prior.trim()) toast.undo('Replaced your message.', () => { setText(prior); setEdited(true) })
+    setAiTouched(true)
+    if (prior.trim()) toast.undo('Replaced your message.', () => { setText(prior); setEdited(true); setAiTouched(false) })
   }
 
   const offered = useMemo(() => {
@@ -121,6 +144,7 @@ export function SendMessageDialog({
       const { data: { session } } = await supabase.auth.getSession()
       const uid = session?.user?.id
       if (!uid) return
+      setUid(uid)
       const { data } = await supabase.from('business_settings')
         .select('company_name, phone, review_url, message_templates').eq('user_id', uid).maybeSingle()
       const d = data as { company_name: string | null; phone: string | null; review_url: string | null; message_templates: Partial<Record<MsgType, string>> | null } | null
@@ -159,9 +183,9 @@ export function SendMessageDialog({
     return (sendIds.current[customerId] ||= newClientMessageId())
   }
 
-  // Any change to the message, channels, or recipients disarms a pending bulk
-  // confirm — and starts a new send run, so the keys are reissued with it.
-  useEffect(() => { setArmed(false); sendIds.current = {} }, [text, ch.sms, ch.email, selected, active, eta])
+  // Any change to the message, channels, recipients, or the when disarms a pending
+  // bulk confirm — and starts a new send run, so the keys are reissued with it.
+  useEffect(() => { setArmed(false); sendIds.current = {} }, [text, ch.sms, ch.email, selected, active, eta, later, sendAt])
 
   function compose(type: MsgType, opts?: { eta?: string }): string {
     // Only the server knows each customer's portal token — the composer shows a
@@ -193,6 +217,35 @@ export function SendMessageDialog({
 
   const needsEta = active === 'on_my_way' || active === 'running_late'
 
+  // "Send later": one scheduled_messages row per recipient. An untouched template
+  // stores body:null → the cron renders it per customer at send time (fresh name +
+  // real portal link, same as an untouched immediate send); edited text is stored
+  // as written and its {{tokens}} still interpolate per customer.
+  async function schedule() {
+    const channels = (['sms', 'email'] as const).filter(c => ch[c])
+    if (!channels.length) { setOutcome({ ok: false, text: 'Pick at least one channel.' }); return }
+    if (!chosen.length) { setOutcome({ ok: false, text: 'Select at least one recipient.' }); return }
+    if (!text.trim()) { setOutcome({ ok: false, text: 'Write a message first.' }); return }
+    const at = sendAt ? new Date(sendAt) : null
+    if (!at || isNaN(at.getTime()) || at.getTime() < Date.now() + 60_000) { setOutcome({ ok: false, text: 'Pick a time in the future.' }); return }
+    if (!uid) { setOutcome({ ok: false, text: 'Could not confirm your session — try again.' }); return }
+    setBusy(true); setOutcome(null)
+    const { error } = await supabase.from('scheduled_messages').insert(chosen.map(r => ({
+      user_id: uid, customer_id: r.customerId, job_id: jobId ?? null,
+      template: active, channels,
+      body: edited ? fromDisplayBody(text) : null,
+      vars: { eta, dateLabel: vars?.dateLabel, timeWindow: vars?.timeWindow, address: vars?.address, amount: vars?.amount },
+      send_at: at.toISOString(),
+    })))
+    setBusy(false)
+    if (error) {
+      setOutcome({ ok: false, text: error.code === '42P01' ? 'Scheduling isn’t set up yet — run the scheduled-messages migration first.' : `Could not schedule: ${error.message}` })
+      return
+    }
+    setOutcome({ ok: true, text: `Scheduled for ${format(at, 'EEE, MMM d · h:mm a')}${bulk ? ` — ${chosen.length} customers` : ''}. It appears under Messages → Scheduled until it sends.` })
+    onSent?.()
+  }
+
   async function send() {
     const channels = (['sms', 'email'] as const).filter(c => ch[c])
     if (!channels.length) { setOutcome({ ok: false, text: 'Pick at least one channel.' }); return }
@@ -205,26 +258,36 @@ export function SendMessageDialog({
     const sendBodyOverride = edited
     let sent = 0, skipped = 0
     let single: SendOutcome | null = null
-    for (let i = 0; i < chosen.length; i++) {
-      try {
-        const res = await fetch('/api/comms/send', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            customerId: chosen[i].customerId, template: active, jobId: jobId ?? undefined, channels,
-            clientMessageId: idFor(chosen[i].customerId),
-            ...(sendBodyOverride ? { bodyOverride: fromDisplayBody(text) } : {}),
-            vars: { eta, dateLabel: vars?.dateLabel, timeWindow: vars?.timeWindow, address: vars?.address, amount: vars?.amount },
-          }),
-        })
-        const out = summarizeSendOutcome(await res.json())
-        if (!bulk) single = out
-        if (out.ok) sent++; else skipped++
-      } catch (e) {
-        skipped++
-        if (!bulk) single = { ok: false, text: e instanceof Error ? e.message : 'Could not send the message.' }
+    // A bounded pool instead of one-at-a-time: 150 customers at ~1.5s per send was
+    // nearly four minutes of watching a counter. Four in flight keeps well under
+    // provider rate limits (the server throttles per-send anyway) and each recipient
+    // still carries its own idempotency key, so a retry after a partial run stays
+    // exactly-once per customer.
+    let next = 0, done = 0
+    async function worker() {
+      while (next < chosen.length) {
+        const i = next++
+        try {
+          const res = await fetch('/api/comms/send', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              customerId: chosen[i].customerId, template: active, jobId: jobId ?? undefined, channels,
+              clientMessageId: idFor(chosen[i].customerId),
+              ...(sendBodyOverride ? { bodyOverride: fromDisplayBody(text) } : {}),
+              vars: { eta, dateLabel: vars?.dateLabel, timeWindow: vars?.timeWindow, address: vars?.address, amount: vars?.amount },
+            }),
+          })
+          const out = summarizeSendOutcome(await res.json())
+          if (!bulk) single = out
+          if (out.ok) sent++; else skipped++
+        } catch (e) {
+          skipped++
+          if (!bulk) single = { ok: false, text: e instanceof Error ? e.message : 'Could not send the message.' }
+        }
+        setProgress(++done)
       }
-      setProgress(i + 1)
     }
+    await Promise.all(Array.from({ length: Math.min(bulk ? 4 : 1, chosen.length) }, () => worker()))
     setBusy(false)
     const out: SendOutcome = bulk
       // Never hardcode "no opt-in" — `skipped` also counts provider errors and
@@ -239,7 +302,7 @@ export function SendMessageDialog({
 
   return (
     <Modal open={open} onClose={() => !busy && onClose()} icon={MessageSquare} size="lg"
-      onSubmit={() => { if (busy || outcome?.ok || !chosen.length || !text.trim()) return; if (bulk && !armed) setArmed(true); else send() }}
+      onSubmit={() => { if (busy || outcome?.ok || !chosen.length || !text.trim()) return; if (bulk && !armed) setArmed(true); else if (later) schedule(); else send() }}
       title={title ?? (bulk ? `Message ${all.length} customers` : `Message ${(all[0]?.name || 'customer').split(' ')[0]}`)}>
       <div className="space-y-4">
         {/* Recipients — only when there's a real choice to make */}
@@ -291,17 +354,24 @@ export function SendMessageDialog({
               : <span />}
             {ai.enabled === true && (
               <div className="flex items-center gap-1.5 shrink-0">
-                <AssistButton label={ai.running ? 'Writing…' : 'Write with AI'} onClick={() => aiWrite('draft')} busy={ai.running} disabled={busy} />
+                <AssistButton label="Write" busyLabel="Writing…" onClick={() => aiWrite('draft')} busy={ai.running} disabled={busy} title="Write this message from what we know about them" />
                 {text.trim() !== '' && !ai.running && (
                   <AssistButton label="Polish" onClick={() => aiWrite('rewrite')} disabled={busy} title="Rewrite the current draft — keeps every fact, improves the wording" />
                 )}
+                {ai.running && <AiStop onClick={ai.cancel} />}
               </div>
             )}
           </div>
           <textarea value={text} onChange={e => { setText(e.target.value); setEdited(true); setOutcome(null) }} rows={6} aria-label="Message"
             placeholder="Write your message…"
             className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink outline-none focus:border-accent resize-none" />
-          {ai.error && <p className="text-[11px] text-amber-400 mt-1" role="alert">{ai.error}</p>}
+          <AiError message={ai.error} className="mt-1" />
+          {ai.enabled === true && aiTouched && !ai.running && (
+            <AiNote className="mt-1" caution={AI_CHECK_FIRST}
+              explain={bulk
+                ? 'Written from your templates and services; names fill in per recipient at send time.'
+                : 'Written from this customer\'s history, balance and your recent messages.'} />
+          )}
           {ch.sms && <SmsCost text={text} recipients={chosen.length || 1} className="mt-1" />}
           {ch.email && custom !== null && (
             <p className="text-[11px] text-ink-muted mt-1 flex items-center gap-1.5">
@@ -333,19 +403,34 @@ export function SendMessageDialog({
             <FilterPill active={ch.email} onClick={() => setCh(c => ({ ...c, email: !c.email }))}>
               <Mail className="w-3 h-3" /> Email
             </FilterPill>
+            <FilterPill active={later} onClick={() => { setLater(l => !l); setOutcome(null) }}>
+              <CalendarClock className="w-3 h-3" /> Send later
+            </FilterPill>
             {outcome?.ok ? (
               <Button onClick={() => onClose(1)} className="ml-auto"><Check className="w-4 h-4" /> Done</Button>
             ) : (
-              <Button onClick={bulk && !armed ? () => setArmed(true) : send} loading={busy}
+              <Button onClick={bulk && !armed ? () => setArmed(true) : later ? schedule : send} loading={busy}
                 disabled={!chosen.length || !text.trim() || (!ch.sms && !ch.email)}
                 title={!chosen.length ? 'Select at least one recipient to send.' : !text.trim() ? 'Write a message to send.' : (!ch.sms && !ch.email) ? 'Pick at least one channel (SMS or email).' : undefined} className="ml-auto">
-                <Send className="w-4 h-4" /> {busy && bulk ? `Sending ${progress}/${chosen.length}…` : bulk ? (armed ? `Confirm — send to ${chosen.length}` : `Send to ${chosen.length}`) : 'Send'}
+                {later ? <CalendarClock className="w-4 h-4" /> : <Send className="w-4 h-4" />}
+                {busy && bulk && !later ? `Sending ${progress}/${chosen.length}…`
+                  : bulk ? (armed ? `Confirm — ${later ? 'schedule' : 'send'} for ${chosen.length}` : `${later ? 'Schedule' : 'Send'} for ${chosen.length}`)
+                  : later ? 'Schedule' : 'Send'}
               </Button>
             )}
           </div>
+          {later && !outcome?.ok && (
+            <label className="flex items-center gap-2 mt-2 text-[10px] uppercase tracking-wide text-ink-faint">
+              Send at
+              <input type="datetime-local" value={sendAt} min={toLocalInput(new Date())}
+                onChange={e => { setSendAt(e.target.value); setOutcome(null) }}
+                aria-label="When to send"
+                className="bg-bg-tertiary border border-border-strong rounded-lg px-2.5 py-1.5 text-sm text-ink outline-none focus:border-accent [color-scheme:dark]" />
+            </label>
+          )}
           {bulk && armed && !busy && !outcome?.ok
-            ? <p className="text-[11px] text-amber-400 mt-1.5">You’re about to message {chosen.length} customer{chosen.length !== 1 ? 's' : ''} — click “Confirm” to send.</p>
-            : <p className="text-[11px] text-ink-faint mt-1.5">{bulk ? 'Customers without consent or contact info are skipped automatically.' : 'We only send on channels this customer has opted into.'}</p>}
+            ? <p className="text-[11px] text-amber-400 mt-1.5">You’re about to {later ? 'schedule a message for' : 'message'} {chosen.length} customer{chosen.length !== 1 ? 's' : ''} — click “Confirm” to {later ? 'schedule' : 'send'}.</p>
+            : <p className="text-[11px] text-ink-faint mt-1.5">{later ? 'Goes out within ~10 minutes of the chosen time — only on channels each customer has opted into by then.' : bulk ? 'Customers without consent or contact info are skipped automatically.' : 'We only send on channels this customer has opted into.'}</p>}
         </div>
 
         {/* Bulk send progress, announced without stealing focus. */}

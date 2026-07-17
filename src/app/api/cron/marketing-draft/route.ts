@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
 import { addDays, format } from 'date-fns'
 import { prepareAutoDraft } from '@/lib/marketing/autoDraft'
 import { resolveAutomations } from '@/lib/comms/automations'
@@ -13,13 +13,10 @@ export const dynamic = 'force-dynamic'
 // CRON_SECRET + the service-role key; no-ops cleanly when either is absent. Bounded per
 // run. Idempotent via prepareAutoDraft (skips jobs that already have content pieces).
 export async function GET(req: NextRequest): Promise<NextResponse> {
-  const secret = req.headers.get('authorization')?.replace('Bearer ', '') || new URL(req.url).searchParams.get('secret') || ''
-  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
-    return NextResponse.json({ error: 'forbidden' }, { status: 403 })
-  }
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL, svc = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!url || !svc) return NextResponse.json({ ok: true, skipped: true, note: 'Set SUPABASE_SERVICE_ROLE_KEY to enable the daily marketing-draft sweep.' })
-  const supabase = createClient(url, svc) // service role → sweeps every owner
+  if (!cronSecretOk(req)) return NextResponse.json({ error: 'forbidden' }, { status: 403 })
+  const client = serviceClient() // service role → sweeps every owner
+  if (!client) return NextResponse.json({ ok: true, skipped: true, note: 'Set SUPABASE_SERVICE_ROLE_KEY to enable the daily marketing-draft sweep.' })
+  const supabase = client
 
   const sinceDate = format(addDays(new Date(), -14), 'yyyy-MM-dd')
   const { data: jobRows } = await supabase.from('jobs')

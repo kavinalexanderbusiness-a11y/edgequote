@@ -3,8 +3,7 @@
 import { useEffect, useId, useRef } from 'react'
 import { X, LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
-
-const FOCUSABLE = 'a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])'
+import { FOCUSABLE } from '@/hooks/useFocusTrap'
 
 // ── Modal ─────────────────────────────────────────────────────────────────────
 // One dialog/overlay primitive to replace the ~11 bespoke `fixed inset-0`

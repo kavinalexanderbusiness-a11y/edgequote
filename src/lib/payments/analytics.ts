@@ -11,6 +11,51 @@ import { isCashRow } from '@/lib/payments/ledger'
 
 const round2 = (n: number) => Math.round(n * 100) / 100
 
+// ── THE name for a ledger row ────────────────────────────────────────────────
+// One classifier, so an export, a table and a tile can't call the same row
+// different things. Derived strictly from what the ledger's writers actually
+// produce (see recordPayment / recordDeposit / applyCreditToInvoice /
+// overpaymentToCredit / recordRefund):
+//
+//   recordPayment        → kind=payment, provider=<method>       → cash in
+//   recordDeposit        → kind=payment, provider=<method>       → cash in
+//                        + kind=credit,  amount>0                → credit issued
+//   applyCreditToInvoice → kind=payment, provider=credit, amt>0  → NOT cash
+//                        + kind=credit,  amount<0                → credit applied
+//   overpaymentToCredit  → kind=payment, provider=credit, amt<0  → NOT cash
+//                        + kind=credit,  amount>0                → credit issued
+//   recordRefund         → kind=payment, provider=refund, amt<0  → cash out
+//
+// The trap this closes: "settled from credit" is kind='payment' with a POSITIVE
+// amount, so anything that types a row by `kind` alone (or by the sign of the
+// amount) calls it a payment and counts the customer's deposit as revenue twice.
+export type LedgerRowType =
+  | 'Payment' | 'Refund' | 'Settled from credit' | 'Overpayment to credit'
+  | 'Credit issued' | 'Credit applied'
+
+export function ledgerRowType(r: Pick<Payment, 'kind' | 'provider' | 'amount'>): LedgerRowType {
+  const amt = Number(r.amount) || 0
+  // The credit LEDGER — the liability side. Never cash.
+  if (r.kind === 'credit') return amt >= 0 ? 'Credit issued' : 'Credit applied'
+  // A payment row settled FROM credit: real settlement, but the cash arrived
+  // earlier when the credit was granted.
+  if (r.provider === 'credit') return amt >= 0 ? 'Settled from credit' : 'Overpayment to credit'
+  return amt >= 0 ? 'Payment' : 'Refund'
+}
+
+/**
+ * The signed CASH this row moved: the amount when isCashRow accepts it, else 0.
+ *
+ * This is what makes an export safe to sum. Over ANY slice of the ledger,
+ * `sum(cashAmountOf)` === `summarizeTransactions(slice).net`, exactly — because
+ * `net` is `collected − refunded` over precisely the rows isCashRow accepts. So a
+ * CSV column built from this ties to the dashboard tile by construction rather
+ * than by coincidence, and a bookkeeper who sums it cannot invent revenue.
+ */
+export function cashAmountOf(r: Pick<Payment, 'kind' | 'provider' | 'amount' | 'status'>): number {
+  return isCashRow(r) ? round2(Number(r.amount) || 0) : 0
+}
+
 export interface MethodSlice { method: string; total: number; count: number }
 
 export interface TxnSummary {

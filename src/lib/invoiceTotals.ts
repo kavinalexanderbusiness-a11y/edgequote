@@ -17,6 +17,25 @@ export interface FeeSettings {
 
 const round2 = (n: number) => Math.round(n * 100) / 100
 
+// ── GST/HST registration number ──────────────────────────────────────────────
+// The supplier's registration number is what lets the CUSTOMER claim an input tax
+// credit: the CRA's Input Tax Credit Information Regulations require it on any
+// invoice of $30+, and it's missing = ITC denied on audit. It's also mandatory on
+// a credit note (ETA s.232(3)) for the OPERATOR to reduce their own net tax.
+//
+// ONE gate for every document, because both halves must hold: only a registrant
+// charges GST, so printing a number while charging none — or an empty "GST #:"
+// label — misstates the business's tax status and is worse than omitting the line.
+// Returns null when not registered; callers render nothing on null.
+export interface GstRegistration {
+  gst_percent?: number | null
+  gst_number?: string | null
+}
+export function gstRegistrationNumber(s: GstRegistration | null | undefined): string | null {
+  const n = typeof s?.gst_number === 'string' ? s.gst_number.trim() : ''
+  return (Number(s?.gst_percent) || 0) > 0 && n ? n : null
+}
+
 // 1 + fee% when the strategy is the global price increase, else 1 (absorb /
 // etransfer_discount leave prices untouched).
 export function feeRecoveryMultiplier(s: FeeSettings | null | undefined): number {

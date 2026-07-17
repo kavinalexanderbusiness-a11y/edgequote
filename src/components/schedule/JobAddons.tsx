@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { JobLineItem, RecurrenceScope, ADDON_TEMPLATES, AddonTemplate } from '@/types'
+import { JobLineItem, RecurrenceScope, AddonTemplate } from '@/types'
 import { addonsTotal, isRecurringProgramService, normalizeServiceKey } from '@/lib/jobPricing'
 import { formatCurrency, cn } from '@/lib/utils'
 import { Button } from '@/components/ui/Button'
@@ -19,6 +19,10 @@ interface Props {
   // the scope rules (copies to this visit only; never auto-recurs).
   previousAddons?: PrevAddon[]
   onCopyPrevious?: () => Promise<void>
+  // The quick-add chips, resolved from the business's trade pack by the page
+  // (required so no consumer can silently fall back to a trade's chips). Must
+  // include the 'custom' key — it is special-cased to a free-text description.
+  addonTemplates: AddonTemplate[]
 }
 
 const SCOPES: { scope: RecurrenceScope; label: string }[] = [
@@ -27,7 +31,7 @@ const SCOPES: { scope: RecurrenceScope; label: string }[] = [
   { scope: 'all', label: 'Entire plan' },
 ]
 
-export function JobAddons({ baseValue, items, isRecurring, onAdd, onDelete, previousAddons, onCopyPrevious }: Props) {
+export function JobAddons({ baseValue, items, isRecurring, onAdd, onDelete, previousAddons, onCopyPrevious, addonTemplates }: Props) {
   const [picked, setPicked] = useState<AddonTemplate | null>(null)
   const [desc, setDesc] = useState('')      // used when Custom is picked
   const [amount, setAmount] = useState('')
@@ -110,7 +114,7 @@ export function JobAddons({ baseValue, items, isRecurring, onAdd, onDelete, prev
 
       {/* Quick-add template chips */}
       <div className="flex flex-wrap gap-1.5">
-        {ADDON_TEMPLATES.map(t => (
+        {addonTemplates.map(t => (
           <button key={t.key} type="button" onClick={() => choose(t)}
             className={cn('text-[11px] font-medium rounded-full px-2.5 py-1 border transition-colors',
               picked?.key === t.key ? 'bg-accent text-black border-accent' : 'border-border text-ink-muted hover:text-ink hover:border-border-strong')}>

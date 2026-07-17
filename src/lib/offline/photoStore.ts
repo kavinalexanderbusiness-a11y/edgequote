@@ -92,9 +92,34 @@ function tx<T>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => IDBRequ
 // some webviews), the upload still runs for this session — it just won't survive a
 // restart. Failing the upload because we couldn't write a backup would trade a rare
 // loss for a certain one.
-export async function putPending(rec: PendingPhotoRec): Promise<void> {
-  if (!hasIDB()) return
-  try { await tx('readwrite', s => s.put(rec)) } catch { /* quota / blocked — session-only */ }
+// Returns TRUE only when the bytes are genuinely committed to disk.
+//
+// This used to swallow every failure and return void, so the caller could not tell a
+// stored photo from an unstored one — and the tile said "Saved — uploads when you're
+// back" either way. On a full disk or in a locked-down webview that is the single
+// most damaging sentence in the app: it's the reason a contractor DOESN'T re-shoot,
+// and the lawn is already mown. Still best-effort (a failure never blocks the
+// in-session upload), but now it's an honest answer the UI can use.
+export async function putPending(rec: PendingPhotoRec): Promise<boolean> {
+  if (!hasIDB()) return false
+  try { await tx('readwrite', s => s.put(rec)); return true } catch { return false }
+}
+
+// Age out records that are never going to upload. Unbounded growth is itself a
+// data-loss path: a poison photo from six weeks ago (its job deleted, its user
+// re-logged-in) sits on disk forever, and the quota it holds is quota TODAY's photo
+// can't have — a silent putPending failure caused by yesterday's garbage.
+// Generous on purpose: a photo is unrecreatable, so we'd rather carry it for a month
+// than bin it early. Anything this old has had dozens of reconnects to succeed.
+const MAX_AGE_MS = 30 * 24 * 60 * 60_000
+export async function sweepPending(now: number): Promise<number> {
+  if (!hasIDB()) return 0
+  try {
+    const all = await allPending()
+    const stale = all.filter(r => now - r.createdAt > MAX_AGE_MS)
+    for (const r of stale) await dropPending(r.id)
+    return stale.length
+  } catch { return 0 }
 }
 
 export async function allPending(): Promise<PendingPhotoRec[]> {

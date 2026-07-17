@@ -7,9 +7,10 @@ import { createClient } from '@/lib/supabase/client'
 import { formatCurrency, cn, localTodayISO } from '@/lib/utils'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { Menu } from '@/components/ui/Menu'
+import { toast } from '@/lib/toast'
 import {
   ChevronDown, MapPin, Receipt, CalendarClock, DollarSign,
-  MessageSquare, Mail, Plus, Check,
+  MessageSquare, Mail, Plus, Check, X,
   FileText, CheckCircle2, Sprout, Calendar, Banknote,
 } from 'lucide-react'
 
@@ -25,7 +26,7 @@ interface Inv { id: string; invoice_number: string | null; status: string; amoun
 interface Pay { amount: number | null; paid_at: string | null }
 interface Info {
   customer: { id: string; name: string; phone: string | null; email: string | null; sms_opt_in: boolean; email_opt_in: boolean } | null
-  property: { address: string | null; city: string | null; lawn_sqft: number | null } | null
+  property: { address: string | null; city: string | null } | null
   quotes: Qte[]; jobs: Jb[]; invoices: Inv[]; payments: Pay[]
 }
 
@@ -43,6 +44,9 @@ export function ConversationInfo({ customerId }: Props) {
   const [open, setOpen] = useState(false)
   const [followDone, setFollowDone] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  // Pending "send later" messages for THIS customer — visible in context, so a
+  // scheduled follow-up can't silently overlap the conversation you're having.
+  const [scheduled, setScheduled] = useState<{ id: string; send_at: string }[]>([])
 
   useEffect(() => {
     let active = true
@@ -50,9 +54,12 @@ export function ConversationInfo({ customerId }: Props) {
       const { data: { session } } = await supabase.auth.getSession()
       const uid = session?.user?.id
       if (!uid) return
+      supabase.from('scheduled_messages').select('id, send_at').eq('customer_id', customerId)
+        .eq('status', 'pending').order('send_at').limit(3)
+        .then(({ data }) => { if (active) setScheduled((data as { id: string; send_at: string }[]) || []) })
       const [cu, pr, qu, jo, iv, pa] = await Promise.all([
         supabase.from('customers').select('id, name, phone, email, sms_opt_in, email_opt_in').eq('id', customerId).maybeSingle(),
-        supabase.from('properties').select('address, city, lawn_sqft').eq('customer_id', customerId).order('is_primary', { ascending: false }).limit(1),
+        supabase.from('properties').select('address, city').eq('customer_id', customerId).order('is_primary', { ascending: false }).limit(1),
         supabase.from('quotes').select('id, quote_number, status, total, created_at, issued_date, service_type').eq('customer_id', customerId).order('created_at', { ascending: false }),
         supabase.from('jobs').select('id, status, scheduled_date, service_type, title, completed_at').eq('customer_id', customerId).neq('status', 'cancelled').order('scheduled_date', { ascending: false }),
         supabase.from('invoices').select('id, invoice_number, status, amount, created_at, issued_date, paid_at').eq('customer_id', customerId).order('created_at', { ascending: false }),
@@ -145,6 +152,25 @@ export function ConversationInfo({ customerId }: Props) {
         {derived.lifetime > 0 && <Fact icon={DollarSign} text={`${formatCurrency(derived.lifetime)} lifetime`} />}
         {derived.nextVisit && <Fact icon={CalendarClock} text={`Next ${format(parseISO(derived.nextVisit.scheduled_date + 'T00:00:00'), 'MMM d')}`} />}
         {derived.unpaid.length > 0 && <Fact icon={Receipt} text={`${formatCurrency(derived.unpaidTotal)} owing`} tone="text-amber-400" />}
+        {scheduled.map(s => (
+          <span key={s.id} className="inline-flex items-center gap-1 text-[11px] rounded-full border border-accent/25 bg-accent/5 text-accent-text px-2 py-0.5">
+            <CalendarClock className="w-3 h-3" />
+            <Link href="/dashboard/messages/scheduled" className="hover:underline" title="View scheduled messages">
+              Scheduled {(() => { try { return format(new Date(s.send_at), 'MMM d, h:mm a') } catch { return '' } })()}
+            </Link>
+            <button type="button" aria-label="Cancel this scheduled message" title="Cancel"
+              className="text-ink-faint hover:text-red-400 -mr-0.5"
+              onClick={async () => {
+                // CAS on pending — if the cron claimed it first there's exactly one winner.
+                const { data } = await supabase.from('scheduled_messages')
+                  .update({ status: 'canceled' }).eq('id', s.id).eq('status', 'pending').select('id')
+                if ((data as unknown[] | null)?.length) setScheduled(prev => prev.filter(x => x.id !== s.id))
+                else toast.error('Too late to cancel — this message is already being sent.')
+              }}>
+              <X className="w-3 h-3" />
+            </button>
+          </span>
+        ))}
         <button onClick={() => setOpen(o => !o)} aria-expanded={open} className="ml-auto text-ink-faint hover:text-ink flex items-center gap-1">
           Info <ChevronDown className={cn('w-3.5 h-3.5 transition-transform', open && 'rotate-180')} />
         </button>
@@ -163,7 +189,8 @@ export function ConversationInfo({ customerId }: Props) {
                 <span className={cn('flex items-center gap-0.5', c?.email_opt_in ? 'text-emerald-400' : 'text-ink-faint')}><Mail className="w-3 h-3" /> Email</span>
               </span>
             </Cell>
-            <Cell label="Active quotes">{derived.activeQuotes.length ? <Link href={`/dashboard/customers/${c?.id}`} className="text-accent-text hover:underline">{derived.activeQuotes.length} open</Link> : <span className="text-ink-faint">None</span>}</Cell>
+            {/* One open quote → jump straight to it (it's almost certainly the one being discussed). */}
+            <Cell label="Active quotes">{derived.activeQuotes.length ? <Link href={derived.activeQuotes.length === 1 ? `/dashboard/quotes/${derived.activeQuotes[0].id}` : `/dashboard/customers/${c?.id}`} className="text-accent-text hover:underline">{derived.activeQuotes.length} open</Link> : <span className="text-ink-faint">None</span>}</Cell>
             <Cell label="Open jobs">{derived.openJobs ? <span className="text-ink">{derived.openJobs}</span> : <span className="text-ink-faint">None</span>}</Cell>
             <Cell label="Invoices owing">{derived.unpaid.length ? <Link href={`/dashboard/customers/${c?.id}`} className="text-amber-400 hover:underline">{formatCurrency(derived.unpaidTotal)}</Link> : <span className="text-ink-faint">Paid up</span>}</Cell>
             <Cell label="Last service">{derived.lastService ? <span className="text-ink">{derived.lastService.service_type || 'Service'} · {format(parseISO((derived.lastService.completed_at || derived.lastService.scheduled_date).slice(0, 10) + 'T00:00:00'), 'MMM d')}</span> : <span className="text-ink-faint">—</span>}</Cell>
