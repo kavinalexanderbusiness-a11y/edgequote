@@ -55,3 +55,45 @@ export function defaultValidUntil(fromISO: string, days = DEFAULT_QUOTE_VALID_DA
   d.setDate(d.getDate() + days)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
+
+// ── THE "this quote went out" patch ──────────────────────────────────────────
+// Quote V2 Phase 0. "A quote was sent" is ONE event that sets three things: the
+// status, the chase anchor (sent_at) and the expiry clock (valid_until). It was
+// written FOUR times, and each copy did something different:
+//
+//   quotes/[id] (PDF path)   status + sent_at + valid_until   ← the only complete one
+//   QuoteStatusControl:52    sent_at only
+//   QuoteList:131-132        status + sent_at, in TWO updates
+//   SendMessageDialog:736    status + sent_at
+//
+// The cost of that, measured on the live book: 0 of 55 quotes have a `valid_until`,
+// so the expiry feature shipped 2026-07-15 has never once fired — the "Expired"
+// badge, the cron's expiry stop and the portal's lapse are all unreachable. And 33
+// of 54 non-draft quotes have no `sent_at`, so the timeline shows no "Quote sent"
+// event for any of them.
+//
+// This is the species the redesign exists to kill: one concept, four
+// implementations, and the incomplete copies were the ones most paths used.
+//
+// PURE, and it OMITS rather than overwrites. `sent_at` is when it FIRST went out —
+// the chase anchor — so re-sending must not reset it (the old writers expressed this
+// as `.is('sent_at', null)`; the same rule now lives in one testable place).
+// `valid_until` likewise stands from the first send; extending it deliberately is
+// what `extendValidity` is for.
+//
+// It does NOT dispatch anything. Marking sent and actually sending are two different
+// facts, and conflating them is exactly why 11 of 14 "sent" quotes have zero
+// messages against them. This patch is the record; the sender is the sender.
+export type SentPatchInput = Pick<Quote, 'sent_at'> & { valid_until?: string | null }
+
+export function markSentPatch(
+  q: SentPatchInput,
+  todayISO: string,
+  nowISO: string = new Date().toISOString(),
+): Record<string, unknown> {
+  return {
+    status: 'sent' as const,
+    ...(q.sent_at ? {} : { sent_at: nowISO }),
+    ...(q.valid_until ? {} : { valid_until: defaultValidUntil(todayISO) }),
+  }
+}

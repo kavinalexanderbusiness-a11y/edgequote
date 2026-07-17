@@ -19,7 +19,7 @@ import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { QuoteIntelligencePanel } from '@/components/quotes/QuoteIntelligencePanel'
 import { formatCurrency, formatDate, applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
 import { nextInvoiceNumber } from '@/lib/invoicing'
-import { isQuoteExpired, isExpiringSoon, daysUntilExpiry, defaultValidUntil, DEFAULT_QUOTE_VALID_DAYS } from '@/lib/quoteStatus'
+import { isQuoteExpired, isExpiringSoon, daysUntilExpiry, defaultValidUntil, markSentPatch, DEFAULT_QUOTE_VALID_DAYS } from '@/lib/quoteStatus'
 import { toast } from '@/lib/toast'
 import { addDays, format as formatDfn, parseISO } from 'date-fns'
 import { needsFollowUp, daysSince, logFollowUpPatch, markWonPatch } from '@/lib/followup'
@@ -270,14 +270,13 @@ export default function QuoteDetailPage() {
     const delivered = await handleOpenPdf()
     if (!delivered) return   // PDF failed → never claim (or record) that it was sent
     if (quote.status === 'draft') {
-      const nowIso = new Date().toISOString()
-      // Expiry starts the moment it goes out, and only if the owner hasn't already
-      // set a date — never silently overwrite a deliberate one.
-      const validUntil = quote.valid_until ?? defaultValidUntil(localTodayISO())
-      await supabase.from('quotes').update({ status: 'sent' }).eq('id', quote.id)
-      await supabase.from('quotes').update({ sent_at: nowIso }).eq('id', quote.id).is('sent_at', null)
-      await supabase.from('quotes').update({ valid_until: validUntil }).eq('id', quote.id).is('valid_until', null)
-      setQuote({ ...quote, status: 'sent', sent_at: quote.sent_at ?? nowIso, valid_until: validUntil })
+      // ONE patch, ONE write. This was three updates — and it was the only one of the
+      // app's four "mark sent" paths that wrote all three fields, which is why the
+      // other three left 0 of 55 quotes able to expire. markSentPatch omits rather
+      // than overwrites, so a deliberately-set expiry still survives.
+      const patch = markSentPatch(quote, localTodayISO())
+      await supabase.from('quotes').update(patch).eq('id', quote.id)
+      setQuote({ ...quote, ...patch } as typeof quote)
       // Be honest about what just happened: the PDF is on YOUR device, and the
       // customer still hasn't heard from you.
       toast(`${quote.quote_number} marked as sent — the PDF is on your device. The customer hasn’t been messaged yet.`, {
@@ -632,6 +631,14 @@ export default function QuoteDetailPage() {
             key={quote.status}
             quoteId={quote.id}
             status={quote.status}
+            // Without these the shared patches can't do their job: followUpCount was
+            // missing entirely (so flipping to Accepted here recorded no follow-up
+            // attribution), and the stamps let markSentPatch leave a deliberate expiry
+            // alone instead of overwriting it.
+            followUpCount={quote.follow_up_count}
+            sentAt={quote.sent_at}
+            validUntil={quote.valid_until}
+            total={quote.total}
             onChanged={(s) => {
               setQuote(prev => prev ? { ...prev, status: s } : prev)
             }}
@@ -760,13 +767,16 @@ export default function QuoteDetailPage() {
             customerId={quote.customer_id} customerName={quote.customer_name}
             defaultTemplate="quote" vars={{ amount: formatCurrency(quote.total) }}
             onSent={async () => {
-              // Actually delivering the quote IS sending it — flip Draft → Sent and
-              // arm the follow-up clock, exactly like the PDF path does.
+              // Actually delivering the quote IS sending it — and THIS is the path that
+              // truly reaches the customer, so it must record the same three facts as
+              // every other. Its previous comment claimed it behaved "exactly like the
+              // PDF path"; it didn't — it omitted valid_until, so a quote the customer
+              // genuinely received could never expire. Now they share one patch, which
+              // is the only way that claim can stay true.
               if (quote.status === 'draft') {
-                const nowIso = new Date().toISOString()
-                await supabase.from('quotes').update({ status: 'sent' }).eq('id', quote.id)
-                await supabase.from('quotes').update({ sent_at: nowIso }).eq('id', quote.id).is('sent_at', null)
-                setQuote(prev => prev ? { ...prev, status: 'sent', sent_at: prev.sent_at ?? nowIso } : prev)
+                const patch = markSentPatch(quote, localTodayISO())
+                await supabase.from('quotes').update(patch).eq('id', quote.id)
+                setQuote(prev => prev ? { ...prev, ...patch } as typeof prev : prev)
               }
             }} />
         </Card>

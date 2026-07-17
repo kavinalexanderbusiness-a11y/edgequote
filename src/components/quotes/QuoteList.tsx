@@ -10,7 +10,7 @@ import { formatCurrency, formatDate, generateQuoteNumber, localTodayISO, maxNume
 import { needsFollowUp, daysSince, compareFollowUp, chaseBlockedReason } from '@/lib/followup'
 import type { ReachCustomer } from '@/lib/comms/reach'
 import { describeSkip } from '@/lib/comms/skipReasons'
-import { isQuoteExpired } from '@/lib/quoteStatus'
+import { isQuoteExpired, markSentPatch } from '@/lib/quoteStatus'
 import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -127,9 +127,15 @@ export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
         const d = (await res.json().catch(() => ({}))) as { results?: Record<string, { sent?: boolean }> }
         if (Object.values(d.results || {}).some(r => r?.sent)) {
           sent++
+          // ONE patch, ONE write — this was two updates that between them never wrote
+          // valid_until, which is why the expiry feature has never fired. The
+          // draft-only guard is unchanged: re-sending an already-sent quote must not
+          // re-stamp it, and the owner's no-backfill decision means legacy sent quotes
+          // keep their absent expiry.
           if (q.status === 'draft') {
-            await supabase.from('quotes').update({ status: 'sent' }).eq('id', q.id)
-            await supabase.from('quotes').update({ sent_at: new Date().toISOString() }).eq('id', q.id).is('sent_at', null)
+            await supabase.from('quotes')
+              .update(markSentPatch({ sent_at: q.sent_at, valid_until: q.valid_until }, localTodayISO()))
+              .eq('id', q.id)
           }
         } else skipped++
       } catch { skipped++ }
@@ -366,7 +372,13 @@ export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
                     </td>
                     <td className="px-3 sm:px-5 py-3.5 text-ink-muted hidden md:table-cell">{q.service_type}</td>
                     <td className="px-3 sm:px-5 py-3.5 font-semibold text-ink tabular-nums">{formatCurrency(q.total)}</td>
-                    <td className="px-3 sm:px-5 py-3.5" onClick={e => e.stopPropagation()}><QuoteStatusControl quoteId={q.id} status={q.status} followUpCount={q.follow_up_count} /></td>
+                    {/* The send/expiry stamps go with the row so the shared patch can
+                        leave an existing one alone, and the total so a status flip to
+                        Accepted snapshots what was bought rather than nothing. */}
+                    <td className="px-3 sm:px-5 py-3.5" onClick={e => e.stopPropagation()}>
+                      <QuoteStatusControl quoteId={q.id} status={q.status} followUpCount={q.follow_up_count}
+                        sentAt={q.sent_at} validUntil={q.valid_until} total={q.total} />
+                    </td>
                     <td className="px-3 sm:px-5 py-3.5 text-ink-faint hidden lg:table-cell">{formatDate(q.created_at)}</td>
                     <td className="px-3 sm:px-5 py-3.5" onClick={e => e.stopPropagation()}>
                       <div className="flex items-center gap-1 justify-end">

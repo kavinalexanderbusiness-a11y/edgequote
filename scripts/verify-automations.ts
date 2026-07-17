@@ -25,6 +25,7 @@ import { sendSms, sendEmail } from '@/lib/comms/send'
 import { runChaseCron, type ChaseItem, type ChaseTally } from '@/lib/automation/chase'
 import { SKIP_REASON, describeSkip } from '@/lib/comms/skipReasons'
 import { canChaseCustomer, chaseBlockedReason, markWonPatch } from '@/lib/followup'
+import { markSentPatch } from '@/lib/quoteStatus'
 import { cadenceDays, churnRisk, type CadenceRecLike } from '@/lib/signals'
 import {
   buildTimeline, filterTimeline, searchTimeline, timelineForProperty, timelineGroupCounts,
@@ -923,6 +924,47 @@ async function run() {
       check('quiet-hours', "➜ it passes hour: 'unknown' — the only hour it can honestly claim",
         /hour:\s*'unknown'/.test(routeSrc), true)
     }
+  }
+
+  // ── 28c. "SENT" IS ONE EVENT — status + chase anchor + expiry clock ─────────
+  // Quote V2 Phase 0. This was written FOUR times and each copy did something
+  // different; the incomplete ones were what most paths used. Live cost: 0 of 55
+  // quotes had a valid_until, so the expiry feature shipped 2026-07-15 could never
+  // fire. One seam, one patch.
+  H('28c. Mark-sent — one event, three facts')
+  {
+    const TODAY = '2026-07-16'
+    const NOW = '2026-07-16T12:00:00.000Z'
+    const fresh = markSentPatch({ sent_at: null, valid_until: null }, TODAY, NOW)
+
+    check('sent', 'a first send sets the status', fresh.status, 'sent')
+    check('sent', '➜ arms the chase anchor', fresh.sent_at, NOW)
+    check('sent', '➜ and starts the expiry clock (30d) — the half every other copy dropped',
+      fresh.valid_until, '2026-08-15')
+
+    // OMIT, never overwrite. sent_at is when it FIRST went out — it is the follow-up
+    // anchor, and re-sending must not reset the clock. The old writers said this with
+    // `.is('sent_at', null)`; the rule now lives in one testable place.
+    const resent = markSentPatch({ sent_at: '2026-07-01T09:00:00.000Z', valid_until: null }, TODAY, NOW)
+    check('sent', 'a re-send does NOT re-stamp sent_at',
+      Object.prototype.hasOwnProperty.call(resent, 'sent_at'), false)
+    check('sent', '➜ but still repairs a missing expiry', resent.valid_until, '2026-08-15')
+
+    // A deliberately-set expiry is the owner's decision and outranks the default.
+    const deliberate = markSentPatch({ sent_at: null, valid_until: '2026-07-20' }, TODAY, NOW)
+    check('sent', 'a deliberate expiry is never overwritten',
+      Object.prototype.hasOwnProperty.call(deliberate, 'valid_until'), false)
+    check('sent', '➜ and the send is still recorded', deliberate.sent_at, NOW)
+
+    // Fully-stamped → status only. Nothing to repair, nothing to clobber.
+    const already = markSentPatch({ sent_at: NOW, valid_until: '2026-08-15' }, TODAY, NOW)
+    check('sent', 'an already-stamped quote patches status alone', Object.keys(already).join(','), 'status')
+
+    // The expiry the patch writes must be the one the overlay reads back — if these
+    // two disagreed, a quote would expire on a date nothing displayed.
+    check('sent', 'the written expiry is the one displayQuoteStatus honours',
+      isQuoteExpired({ status: 'sent', valid_until: String(fresh.valid_until) }, '2026-08-16'), true)
+    check('sent', '➜ and it is still live the day before', isQuoteExpired({ status: 'sent', valid_until: String(fresh.valid_until) }, '2026-08-14'), false)
   }
 
   // ── 29a. THE ACCEPT SNAPSHOT — record what was bought, or record nothing ─────
