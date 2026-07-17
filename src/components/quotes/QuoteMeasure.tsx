@@ -39,6 +39,14 @@ export interface MeasureApplyPayload {
   monthly: number
   totalSqft: number
   suggested: number   // one-time + travel (pricing-analysis provenance)
+  // ADR-002 · the derived state that priced these numbers. THIS BOUNDARY WAS THE LEAK:
+  // gradedProspectPricing ALWAYS prices with the grade, then the payload dropped it, so
+  // the builder received a grade-curved price with no way to know a grade was involved
+  // — and no column to record it in. Carrying it without persisting it would be worse
+  // than useless (it would fix the first render and silently re-break on reload), which
+  // is why it lands on the quote row in the same change.
+  valueGrade: string | null
+  nearbyCount: number
 }
 
 interface Props {
@@ -453,6 +461,11 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
       monthly: pkg.options[2].price,
       totalSqft,
       suggested: pkg.oneTime + Number(travelFee || 0),
+      // The grade that actually priced these numbers. `assessment` is null when there
+      // is no prospect context, and then `pkg` came from the NEUTRAL curve — so null
+      // here is the truthful record of "no grade was applied", not a missing value.
+      valueGrade: assessment?.score ?? null,
+      nearbyCount: nearby,
     })
   }
 

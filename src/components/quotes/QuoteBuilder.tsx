@@ -87,6 +87,10 @@ export function QuoteBuilder({
         monthly_price: 0,
         measured_sqft: 0,
         suggested_price: 0,
+        // ADR-002: null until an engine recommendation is applied. Never a default
+        // grade — "nobody computed one" and "grade F" are different facts.
+        value_grade: null,
+        nearby_count: null,
         overgrowth_multiplier: 1,
         distance_km: 0,
         // Hours has NO default. It used to be 2 — a number nobody entered, about a
@@ -1328,6 +1332,12 @@ export function QuoteBuilder({
               if (sel.cadence === 'monthly') setIncludeMonthly(true)
             }
             setValue('suggested_price', sel.suggested)
+            // ADR-002: record the derived state that PRICED these numbers, alongside
+            // the numbers themselves. Set here rather than above the early return on
+            // purpose — for a non-lawn service the prices are never applied, so no
+            // grade priced anything and recording one would be a fabrication.
+            setValue('value_grade', sel.valueGrade)
+            setValue('nearby_count', sel.nearbyCount)
             setPriceOrigin('applied')   // they tapped a tier in the modal
             setShowMeasure(false)
           }}

@@ -18,6 +18,7 @@ import { applyFeeRecovery } from '@/lib/invoiceTotals'
 import { sumServiceLines } from '@/lib/quoteServices'
 import { LeadPrefillPayload, LEAD_PREFILL_KEY } from '@/lib/leads'
 import { toast } from '@/lib/toast'
+import { ensureCurrentPricingConfigVersion } from '@/lib/pricingConfig'
 
 interface MeasurementPayload {
   customerId: string | null
@@ -39,6 +40,12 @@ interface MeasurementPayload {
   ratePer1000?: number
   overgrowth?: number
   confidence?: PricingConfidence
+  // ADR-002 · derived state carried from the standalone Measurement Tool, so BOTH
+  // measure paths record the same provenance. Optional because a payload written by an
+  // older tab (this travels through sessionStorage) simply won't have them — and
+  // absent must read as "not recorded", never as a grade.
+  valueGrade?: string | null
+  nearbyCount?: number | null
 }
 
 export default function NewQuotePage() {
@@ -153,8 +160,33 @@ export default function NewQuotePage() {
     const extrasNet = sumServiceLines(extraLines).net
     const initialWithExtras = (recoveredPrimary ?? 0) + extrasNet
 
+    // ADR-002 · state which configuration priced this quote, or don't write it.
+    //
+    // FAIL-CLOSED, and this is the whole point. A quote whose config we cannot name is
+    // exactly the row this ADR exists to stop creating — 55 of them already exist and
+    // can never be reproduced or learned from. The DB refuses it too
+    // (quotes_engine_price_needs_config), so a soft fallback here would only turn a
+    // clear message into a constraint violation. Stopping BEFORE the insert also keeps
+    // the builder's form state intact, exactly as the customer-link guard above does:
+    // a lost draft is recoverable in ten seconds; a quote with no provenance is not.
+    const ver = await ensureCurrentPricingConfigVersion(supabase, user!.id)
+    if (!ver.ok) {
+      toast.error('Could not record which pricing settings this quote used — nothing was saved. Check your connection and press Save again.')
+      return
+    }
+
     const { data, error } = await supabase.from('quotes').insert({
       quote_number,
+      // ADR-002 provenance. `price_source: 'engine'` is truthful for every quote this
+      // form writes — even one the owner priced by hand, because `suggested_price` was
+      // still computed by the engine under this config and the learner reads the pair.
+      // (`initial_price !== suggested_price` is the app's own record of an override.)
+      price_source: 'engine',
+      pricing_config_version_id: ver.versionId,
+      // Derived state. null = no grade was computed, which is a fact worth recording
+      // honestly rather than defaulting.
+      value_grade: values.value_grade ?? measurement?.valueGrade ?? null,
+      nearby_count: values.nearby_count ?? measurement?.nearbyCount ?? null,
       customer_id: customerId,
       customer_name: customerName,
       address: values.address,
