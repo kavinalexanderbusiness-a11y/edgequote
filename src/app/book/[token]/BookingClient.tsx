@@ -31,7 +31,9 @@ interface Plan { key: 'one_time' | 'weekly' | 'biweekly' | 'monthly'; label: str
 // One row of the owner's catalog, as public_services returns it. Only the name is used here.
 interface Svc { id: string; name: string }
 
-const M2_TO_SQFT = 10.7639
+// THE conversion now lives in lib/measure — this file had its own copy, as did
+// three others, and four constants can drift apart silently.
+import { M2_TO_SQFT } from '@/lib/measure'
 const HEAR_OPTIONS = ['Website', 'Google Business Profile', 'QR code', 'Facebook', 'Nextdoor', 'Referral from a friend', 'Drove by / yard sign', 'Other']
 
 export function BookingClient({ token, initialBiz }: { token: string; initialBiz: Biz | null }) {

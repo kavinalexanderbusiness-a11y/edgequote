@@ -16,7 +16,9 @@ import { DEFAULT_CREW_COST, crewCostPerHour as resolveCrewCost } from '@/lib/eco
 import { Button } from '@/components/ui/Button'
 import { X, Undo2, Trash2, Plus, Ruler, Loader2 } from 'lucide-react'
 
-const M2_TO_SQFT = 10.7639
+// THE conversion now lives in lib/measure — this file had its own copy, as did
+// three others, and four constants can drift apart silently.
+import { M2_TO_SQFT } from '@/lib/measure'
 const SNAP_PX = 24 // "click near the starting point to finish" threshold (generous for touch)
 
 // A serialized in-progress trace, persisted per property so an accidental

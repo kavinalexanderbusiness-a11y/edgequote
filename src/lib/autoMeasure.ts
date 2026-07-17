@@ -10,7 +10,8 @@ import { neighborhoodKey } from '@/lib/profitability'
 // a precise provider simply returns `lawnSqft` directly (confidence 'high').
 
 export type MeasureConfidence = 'high' | 'medium' | 'low'
-const M2_TO_SQFT = 10.7639
+// THE conversion now lives in lib/measure (one definition, verified by execution).
+import { M2_TO_SQFT } from '@/lib/measure'
 const SQFT_TO_M2 = 1 / M2_TO_SQFT
 const EARTH_R = 6378137 // metres
 

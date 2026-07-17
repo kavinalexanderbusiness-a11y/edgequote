@@ -19,7 +19,9 @@ import { Button } from '@/components/ui/Button'
 import { Banner } from '@/components/ui/Banner'
 import { Undo2, Trash2, Check, Ruler, ZoomIn, ZoomOut, RotateCcw, FileText, Car, ShieldCheck, History, Move, Loader2 } from 'lucide-react'
 
-const M2_TO_SQFT = 10.7639
+// THE conversion now lives in lib/measure — this file had its own copy, as did
+// three others, and four constants can drift apart silently.
+import { M2_TO_SQFT } from '@/lib/measure'
 const SNAP_PX = 24 // closing snap threshold in screen pixels (generous for touch)
 
 // Subtle haptic confirmation on phones — a tap should FEEL registered.
