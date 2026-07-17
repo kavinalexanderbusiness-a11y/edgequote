@@ -1227,6 +1227,24 @@ export interface CrmCampaignPreset {
   schedule: CampaignSchedule
 }
 
+// A saved campaign configuration the owner can spin up again. Same shape as a
+// campaign minus the runtime fields (enabled/last_run_at) — deliberately a
+// separate table so a preset can never be mistaken for a live, sending campaign.
+export interface CrmCampaignPreset {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  name: string
+  kind: CampaignKind
+  channels: string[]
+  template_key: string | null
+  custom_body: string | null
+  subject: string | null
+  audience: CampaignAudience
+  schedule: CampaignSchedule
+}
+
 export const ACQUISITION_SOURCES = [
   'Referral',
   'Google',

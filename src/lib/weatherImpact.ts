@@ -189,20 +189,39 @@ export function computeWeatherImpact(
   }
 }
 
-export async function loadWeatherImpact(supabase: SupabaseClient): Promise<WeatherImpactReport> {
+/**
+ * Rows a caller has already loaded. Every field is optional — pass what you have
+ * and the rest is still fetched. The dashboard reads all of these for its own
+ * bands, so without this the weather engine re-read four of the same tables on
+ * every morning load (and read them UNPAGED, so a truncated `quotes` would have
+ * quietly mispriced the revenue-at-risk figure).
+ */
+export interface WeatherPreloaded {
+  settings?: { base_lat?: number | null; base_lng?: number | null; base_address?: string | null; daily_capacity_hours?: number | null; preferred_work_days?: number[] | null } | null
+  /** Must cover today → +8d and include the joined properties(lawn_sqft). */
+  jobs?: unknown[]
+  quotes?: { id: string }[]
+  recurrences?: { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null }[]
+}
+
+export async function loadWeatherImpact(supabase: SupabaseClient, pre?: WeatherPreloaded): Promise<WeatherImpactReport> {
   const empty: WeatherImpactReport = { hasBase: false, forecast: [], today: null, tomorrow: null, atRiskDays: [], headline: '', locationLabel: DEFAULT_LOCATION.label, usingDefaultLocation: true, blockedDays: [], totals: { jobs: 0, laborHours: 0, revenue: 0, customers: 0, days: 0 } }
-  const { data: { user } } = await supabase.auth.getUser()
+  // getSession is a local cookie read; getUser round-trips the Auth server. This
+  // sits on the critical path AHEAD of its own queries, so the round trip was
+  // pure latency (matches the repo's getSession-on-hot-loaders convention).
+  const { data: { session } } = await supabase.auth.getSession()
+  const user = session?.user
   if (!user) return empty
   const uid = user.id
   const today = localTodayISO()
   const horizon = (() => { const d = new Date(today + 'T00:00:00'); d.setDate(d.getDate() + 8); return d.toISOString().slice(0, 10) })()
 
   const [sRes, jRes, qRes, pRes, rRes, oRes, dRes] = await Promise.all([
-    supabase.from('business_settings').select('base_lat, base_lng, base_address, daily_capacity_hours, preferred_work_days').eq('user_id', uid).maybeSingle(),
-    supabase.from('jobs').select('id, scheduled_date, status, service_type, crew_size, property_id, quote_id, recurrence_id, price, is_initial_visit, customer_id, properties(lawn_sqft)').eq('user_id', uid).gte('scheduled_date', today).lte('scheduled_date', horizon),
-    supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', uid),
+    pre?.settings !== undefined ? { data: pre.settings } : supabase.from('business_settings').select('base_lat, base_lng, base_address, daily_capacity_hours, preferred_work_days').eq('user_id', uid).maybeSingle(),
+    pre?.jobs ? { data: pre.jobs } : supabase.from('jobs').select('id, scheduled_date, status, service_type, crew_size, property_id, quote_id, recurrence_id, price, is_initial_visit, customer_id, properties(lawn_sqft)').eq('user_id', uid).gte('scheduled_date', today).lte('scheduled_date', horizon),
+    pre?.quotes ? { data: pre.quotes } : supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', uid),
     supabase.from('properties').select('id, lawn_sqft').eq('user_id', uid),
-    supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', uid),
+    pre?.recurrences ? { data: pre.recurrences } : supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', uid),
     supabase.from('labor_observations').select('job_id, property_id, service_date, sqft, service_type, crew_size, frequency, is_initial_visit, overgrowth, estimated_minutes, actual_minutes').eq('user_id', uid),
     supabase.from('day_statuses').select(DAY_STATUS_SELECT).eq('user_id', uid),
   ])
