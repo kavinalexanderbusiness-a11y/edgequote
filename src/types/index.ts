@@ -271,8 +271,223 @@ export interface Job {
   is_initial_visit: boolean
   // Manual day-route sequence (drag-and-drop). null/absent = automatic (optimizer).
   route_order?: number | null
+  // Which crew runs this visit (RUN-2026-07-15-dispatch-crews). null = unassigned —
+  // the single-crew status quo. Orthogonal to crew_size, which stays headcount.
+  crew_id?: string | null
   customers?: Pick<Customer, 'id' | 'name' | 'phone' | 'preferred_days' | 'avoid_days' | 'pref_time_start' | 'pref_time_end'>
   properties?: Pick<Property, 'id' | 'address' | 'lat' | 'lng' | 'neighborhood' | 'preferred_days' | 'avoid_days' | 'pref_time_start' | 'pref_time_end'>
+}
+
+// ── Dispatch & Crew Management (RUN-2026-07-15-dispatch-crews) ────────────────
+// A crew is an IDENTITY (who runs the route), not a headcount. Jobs point at a
+// crew via jobs.crew_id; the dispatch board partitions a day by crew and feeds
+// each subset to the SAME route/ETA/capacity engines the schedule already uses.
+
+export interface Crew {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  name: string
+  // Palette key (lib/crews CREW_PALETTE) — board chip + map pin hue, not a hex.
+  color: string
+  day_start: string | null       // HH:mm[:ss]; null = business work_start_time
+  day_end: string | null
+  capacity_minutes: number | null // explicit daily capacity; null = derive from window
+  is_active: boolean
+  sort_order: number
+}
+
+export type TechnicianStatus = 'available' | 'en_route' | 'on_job' | 'break' | 'off'
+
+export const TECHNICIAN_STATUS_LABELS: Record<TechnicianStatus, string> = {
+  available: 'Available',
+  en_route: 'En route',
+  on_job: 'On job',
+  break: 'On break',
+  off: 'Off today',
+}
+
+// THE employee record. Employees do NOT log in — every row is owned by the
+// owner's auth user (same tenancy as customers). `role` is a descriptive job
+// title, NOT access control; there is no permissions system to hang it on.
+// Never add a rival `employees` table — this is it.
+export interface Technician {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  crew_id: string | null
+  name: string
+  phone: string | null
+  email: string | null
+  role: string | null
+  status: TechnicianStatus
+  status_changed_at: string
+  is_active: boolean
+  /** Default pay rate for the NEXT clock-in. Past shifts keep their own
+   *  snapshot (TimeEntry.hourly_rate) — raising this never rewrites history. */
+  hourly_wage: number | null
+  hired_on: string | null
+  ended_on: string | null
+  /** Annual PTO allowance in hours. null = no allowance configured, so usage is
+   *  tracked but no balance is claimed — never guess someone's entitlement. */
+  pto_annual_hours: number | null
+}
+
+// ── Paid time ────────────────────────────────────────────────────────────────
+// THE paid-time ledger — one row per shift. Distinct from TechnicianStatus:
+// `status` is where someone is RIGHT NOW (dispatch), a TimeEntry is what they
+// get PAID for. A tech can be 'off' with an open shift (forgot to clock out),
+// so hours must never be derived from status.
+export interface TimeEntry {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  technician_id: string
+  /** Job-linked (costable) or null for general time — yard, travel, shop. */
+  job_id: string | null
+  clock_in: string
+  /** null = still on the clock. At most one open entry per tech (DB-enforced). */
+  clock_out: string | null
+  break_minutes: number
+  /** Pay rate SNAPSHOT stamped at clock-in — the reason payroll history is stable. */
+  hourly_rate: number | null
+  notes: string | null
+  /** DB-generated (clock_out - clock_in - break). null while the shift is open. */
+  minutes_worked: number | null
+}
+
+// ── Paid time NOT worked ─────────────────────────────────────────────────────
+// PTO is a SEPARATE ledger from TimeEntry on purpose. Vacation/holiday hours are
+// not "hours worked", so they must never reach an overtime threshold: 40h worked
+// + 8h vacation is 40h for OT, not 48h. Storing these as TimeEntry rows would
+// make lib/payroll invent overtime on every week containing a day off.
+export type PtoKind = 'vacation' | 'sick' | 'holiday' | 'personal' | 'bereavement'
+
+export const PTO_KIND_LABELS: Record<PtoKind, string> = {
+  vacation: 'Vacation',
+  sick: 'Sick',
+  holiday: 'Holiday',
+  personal: 'Personal',
+  bereavement: 'Bereavement',
+}
+
+export interface PtoEntry {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  technician_id: string
+  /** 'YYYY-MM-DD' — a day off is a calendar day, not an instant. */
+  date: string
+  hours: number
+  kind: PtoKind
+  /** Unpaid leave is still tracked: it's absence, just not money. */
+  is_paid: boolean
+  /** Rate SNAPSHOT, same rule as TimeEntry.hourly_rate — a raise never
+   *  re-values vacation already taken. null = no wage set → hours, no money. */
+  hourly_rate: number | null
+  /** Set when this row was generated from the holiday calendar. */
+  holiday_id: string | null
+  notes: string | null
+}
+
+/** THE holiday calendar for the business. Payroll reads it; nothing guesses it. */
+export interface Holiday {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  date: string
+  name: string
+  is_paid: boolean
+  default_hours: number
+}
+
+/** Append-only audit trail, written by a DB trigger. NEVER a pricing source —
+ *  past shifts carry their own snapshot rate (see TimeEntry.hourly_rate). */
+export interface WageHistoryEntry {
+  id: string
+  created_at: string
+  user_id: string
+  technician_id: string
+  old_wage: number | null
+  new_wage: number | null
+  note: string | null
+  /** Monotonic. Order by this — created_at can tie. */
+  seq: number
+}
+
+// ── Pay runs: what you ACTUALLY paid, frozen ─────────────────────────────────
+// A finalized run snapshots the totals AND the OT rules used to reach them, so
+// editing an old shift (or changing the OT rules) can never restate a cheque you
+// already cut. Same reasoning as TimeEntry.hourly_rate, one level up.
+export interface PayRun {
+  id: string
+  created_at: string
+  user_id: string
+  period_start: string
+  period_end: string
+  period_kind: PayPeriodKind
+  finalized_at: string
+  note: string | null
+  ot_daily_hours: number | null
+  ot_weekly_hours: number | null
+  ot_multiplier: number
+  pay_week_starts_on: number
+  regular_minutes: number
+  ot_minutes: number
+  worked_pay: number
+  pto_hours: number
+  pto_pay: number
+  gross_pay: number
+  employee_count: number
+}
+
+/** One line per employee — THE pay stub. `technician_name` is snapshot so the
+ *  stub survives the employee being deleted (their time entries do not). */
+export interface PayRunLine {
+  id: string
+  created_at: string
+  user_id: string
+  pay_run_id: string
+  technician_id: string | null
+  technician_name: string
+  technician_role: string | null
+  regular_minutes: number
+  ot_minutes: number
+  blended_rate: number
+  regular_pay: number
+  ot_pay: number
+  pto_hours: number
+  pto_pay: number
+  gross_pay: number
+  shifts: number
+  unrated_minutes: number
+}
+
+// How often the owner runs payroll. Drives the payroll summary window only —
+// it never changes what a shift is worth.
+export type PayPeriodKind = 'weekly' | 'biweekly' | 'semimonthly' | 'monthly'
+
+export const PAY_PERIOD_LABELS: Record<PayPeriodKind, string> = {
+  weekly: 'Weekly',
+  biweekly: 'Every 2 weeks',
+  semimonthly: 'Twice a month',
+  monthly: 'Monthly',
+}
+
+// One note per (date, crew); crew_id null = the day-level note.
+export interface DispatchNote {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  date: string
+  crew_id: string | null
+  body: string
 }
 
 // Apple-style edit scope for recurring jobs.
@@ -371,28 +586,28 @@ export interface JobPriceChange {
 export type PriceReason = 'Upsell' | 'Larger than expected' | 'Extra work' | 'Travel surcharge' | 'Custom'
 export const PRICE_REASONS: PriceReason[] = ['Upsell', 'Larger than expected', 'Extra work', 'Travel surcharge', 'Custom']
 
-// Quick-add add-on templates for fast field entry. `recurringByDefault` flips the
+// Quick-add add-on chips for fast field entry. `recurringByDefault` flips the
 // scope chooser to a recurring suggestion (program services). Keys are stable for BI.
+// The LISTS live in the trade packs (lib/trades — lawn keeps the founding list
+// verbatim, other trades fall back to the neutral pack's); the hardcoded
+// ADDON_TEMPLATES that showed every business lawn chips was deleted 2026-07-16.
 export interface AddonTemplate { key: string; label: string; recurringByDefault?: boolean }
-export const ADDON_TEMPLATES: AddonTemplate[] = [
-  { key: 'fertilizer', label: 'Fertilizer', recurringByDefault: true },
-  { key: 'weed_control', label: 'Weed Control', recurringByDefault: true },
-  { key: 'mulch', label: 'Mulch' },
-  { key: 'spring_cleanup', label: 'Spring Cleanup' },
-  { key: 'fall_cleanup', label: 'Fall Cleanup' },
-  { key: 'shrub_trimming', label: 'Shrub Trimming' },
-  { key: 'aeration', label: 'Aeration' },
-  { key: 'overseeding', label: 'Overseeding' },
-  { key: 'hauling', label: 'Hauling' },
-  { key: 'custom', label: 'Custom' },
-]
 
 // One snapshotted row of an invoice's breakdown (stored in invoices.line_items).
 export type InvoiceLineKind = 'service' | 'addon' | 'travel'
 export interface InvoiceLineItem {
   description: string
+  // The line total, and the ONLY figure any total/balance/PDF math reads. qty and
+  // unit_price below are the manual breakdown that produced it — they never
+  // re-derive a total, so engine-priced lines (which have no qty) are unaffected.
   amount: number
   kind: InvoiceLineKind
+  // Optional, manual-invoice only: how the owner arrived at `amount`
+  // (qty x unit_price). Absent on job/quote-generated lines, and the PDF only
+  // grows Qty/Unit columns when a line actually carries them — so a generated
+  // invoice renders byte-identically to before.
+  qty?: number | null
+  unit_price?: number | null
 }
 
 // Stored statuses. partial/overpaid are derived by the recompute_invoice_paid DB
@@ -420,7 +635,13 @@ export interface Invoice {
   status: InvoiceStatus
   issued_date: string | null
   due_date: string | null
+  // The CUSTOMER's note — InvoicePDF renders this in a Notes box. Never put
+  // system text or internal reasoning here.
   notes: string | null
+  // The OWNER's note — never rendered on a PDF or in the portal. Home for
+  // auto-draft provenance and the AutoPay hold flag (see AUTOPAY_HOLD_FLAG), so
+  // editing the customer-facing note can't break hold detection.
+  internal_notes: string | null
   // Snapshot breakdown for the customer (base service + add-ons + travel). Null
   // on legacy invoices → render the single (service_type, amount) row.
   line_items: InvoiceLineItem[] | null
@@ -507,6 +728,273 @@ export function paymentMethodLabel(method: string | null | undefined): string {
   return method.charAt(0).toUpperCase() + method.slice(1)
 }
 
+// ── Money OUT: expenses, vendors, expense categories ─────────────────────────
+// The counterpart to Payment above. `payments` is the single source of truth for
+// money RECEIVED; these three are money SPENT. They are separate tables (an
+// expense has no invoice, and trg_recompute_invoice_paid derives invoice state
+// from payment rows) and ONE engine — lib/accounting — reads both.
+
+export interface Vendor {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  name: string
+  contact_name: string | null
+  phone: string | null
+  email: string | null
+  website: string | null
+  /** The owner's account number with this vendor. */
+  account_number: string | null
+  notes: string | null
+  archived_at: string | null
+}
+
+export interface ExpenseCategory {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  name: string
+  /**
+   * Can the CRA claim be made for this? A parking fine is NOT deductible and is
+   * still a real cost. This axis answers "can you claim it", NOT "is it a cost" —
+   * that's `kind`.
+   */
+  tax_deductible: boolean
+  /**
+   * `operating` = a real business cost → in the P&L.
+   * `owner_draw` = a distribution of profit, NOT a cost of earning it → excluded
+   * from the P&L, still cash out in cash flow, and a reduction of equity on the
+   * balance sheet. Counting a draw as cost turns a profitable month into a fake
+   * loss and hits equity twice.
+   */
+  kind: ExpenseCategoryKind
+  /** The QBO/Xero account this maps to — the seam the export layer fills in later. */
+  external_account: string | null
+  sort_order: number
+  archived_at: string | null
+}
+
+export type ExpenseCategoryKind = 'operating' | 'owner_draw'
+
+export const EXPENSE_CATEGORY_KINDS: { value: ExpenseCategoryKind; label: string }[] = [
+  { value: 'operating', label: 'Business cost' },
+  { value: 'owner_draw', label: 'Owner draw (not a cost)' },
+]
+
+export interface Expense {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  vendor_id: string | null
+  category_id: string | null
+  /** Optional job link — job costing falls out of this row, with no second table. */
+  job_id: string | null
+  /**
+   * GROSS — the total paid, exactly as the receipt reads. NEVER net.
+   * Cash flow sums this; the P&L sums `amount - tax_amount`. See lib/accounting.
+   */
+  amount: number
+  /** Tax INCLUDED in `amount` (GST paid → an ITC). DB guards tax_amount <= amount. */
+  tax_amount: number
+  /** When the cost was INCURRED (the accrual date). Always set. */
+  bill_date: string
+  /**
+   * When the CASH LEFT. **NULL = unpaid = accounts payable.**
+   *
+   * Nullable on purpose, mirroring `payments.paid_at`: both halves of the ledger
+   * say "no date = the cash hasn't moved" the same way. Cash-basis reports filter
+   * on this, so an unpaid bill is correctly not a cost yet — it's a liability on
+   * the balance sheet instead.
+   */
+  spent_at: string | null
+  description: string | null
+  payment_method: string | null
+  /** Receipt or invoice number from the vendor. */
+  reference: string | null
+  /** Object path in the private expense-receipts bucket. Read via signed URL only. */
+  receipt_path: string | null
+  /**
+   * This cash bought an ASSET, not an operating cost.
+   *
+   * Buying a $5,000 mower is $5,000 of cash becoming $5,000 of asset — not a
+   * $5,000 cost. Excluded from P&L cost; still real cash out in cash flow; the
+   * asset itself lives in `fixed_assets`. Without this the balance sheet fails by
+   * exactly the purchase price.
+   */
+  is_capital: boolean
+  notes: string | null
+  archived_at: string | null
+}
+
+/** An expense with its lookups resolved — what every list and report actually reads. */
+export interface ExpenseWithRelations extends Expense {
+  vendors?: Pick<Vendor, 'id' | 'name'> | null
+  // `external_account` is here for the accountant export, which keys on it. Omitting
+  // it from the join types would let the export compile and emit a blank code column
+  // for every row — a file that looks complete and maps to nothing.
+  expense_categories?: Pick<ExpenseCategory, 'id' | 'name' | 'tax_deductible' | 'kind' | 'external_account'> | null
+  jobs?: { id: string; title: string | null; scheduled_date: string | null } | null
+}
+
+// Money fields are STRINGS here for the same reason service costs are: Number('')
+// is 0, so a numeric field cannot tell "blank" from "zero". On an expense that
+// distinction is the difference between "no tax on this receipt" and "I haven't
+// entered the tax yet" — both are real, and only the owner knows which.
+// Mapped '' → null / 0 explicitly on submit, never by coercion.
+export interface ExpenseFormValues {
+  vendor_id: string
+  category_id: string
+  job_id: string
+  amount: string
+  tax_amount: string
+  /** When it was incurred. Required. */
+  bill_date: string
+  /**
+   * `false` = an unpaid bill (A/P): `spent_at` goes NULL and no cash has moved.
+   * A separate flag rather than "is spent_at blank", because blank is also what an
+   * unfinished form looks like — and the difference is a liability.
+   */
+  paid: boolean
+  /** When the cash left. Ignored unless `paid`. */
+  spent_at: string
+  /** This cash bought an asset — see Expense.is_capital. */
+  is_capital: boolean
+  description: string
+  payment_method: string
+  reference: string
+  notes: string
+}
+
+// ── Balance sheet: fixed assets ──────────────────────────────────────────────
+// A mower isn't an expense the day you buy it — it's an asset that wears out over
+// years. Expensing it all in month one understates that month and overstates every
+// month after, and leaves the balance sheet claiming the business owns nothing.
+
+export type DepreciationMethod = 'straight_line' | 'declining_balance' | 'none'
+
+// Deliberately NOT labelled "CCA": real CRA capital cost allowance has asset
+// classes, the half-year rule and recapture, none of which this computes. These are
+// BOOK figures for a balance sheet. Calling them CCA would invite filing on a
+// number that isn't one.
+export const DEPRECIATION_METHODS: { value: DepreciationMethod; label: string }[] = [
+  { value: 'straight_line', label: 'Straight line (same amount each year)' },
+  { value: 'declining_balance', label: 'Declining balance (a % of what\'s left)' },
+  { value: 'none', label: "Don't depreciate (e.g. land)" },
+]
+
+export interface FixedAsset {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  name: string
+  /** Same physical thing as an equipment row, seen from the money side. */
+  equipment_id: string | null
+  vendor_id: string | null
+  /** GROSS cost — same convention as expenses.amount. */
+  cost: number
+  tax_amount: number
+  in_service_date: string
+  method: DepreciationMethod
+  /** Required by the DB when method is straight_line. */
+  useful_life_years: number | null
+  salvage_value: number
+  /** Percent per year, e.g. 20 = 20%. Required by the DB when declining_balance. */
+  declining_rate: number | null
+  disposed_at: string | null
+  disposal_proceeds: number | null
+  notes: string | null
+  archived_at: string | null
+}
+
+export interface FixedAssetWithRelations extends FixedAsset {
+  vendors?: Pick<Vendor, 'id' | 'name'> | null
+}
+
+export interface FixedAssetFormValues {
+  name: string
+  vendor_id: string
+  cost: string
+  tax_amount: string
+  in_service_date: string
+  method: DepreciationMethod
+  useful_life_years: string
+  salvage_value: string
+  declining_rate: string
+  disposed_at: string
+  disposal_proceeds: string
+  notes: string
+}
+
+// ── Balance sheet: liabilities ───────────────────────────────────────────────
+// Owner-maintained SNAPSHOTS, not derived: there's no bank feed, so a computed
+// loan balance would be fiction that looks like arithmetic. `as_of_date` is
+// required so the balance sheet can say how stale it is.
+
+export type LiabilityKind = 'loan' | 'credit_card' | 'line_of_credit' | 'other'
+
+export const LIABILITY_KINDS: { value: LiabilityKind; label: string }[] = [
+  { value: 'loan', label: 'Loan' },
+  { value: 'credit_card', label: 'Credit card' },
+  { value: 'line_of_credit', label: 'Line of credit' },
+  { value: 'other', label: 'Other' },
+]
+
+export interface Liability {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  name: string
+  kind: LiabilityKind
+  current_balance: number
+  as_of_date: string
+  interest_rate: number | null
+  notes: string | null
+  archived_at: string | null
+}
+
+export interface LiabilityFormValues {
+  name: string
+  kind: LiabilityKind
+  current_balance: string
+  as_of_date: string
+  interest_rate: string
+  notes: string
+}
+
+export interface VendorFormValues {
+  name: string
+  contact_name: string
+  phone: string
+  email: string
+  website: string
+  account_number: string
+  notes: string
+}
+
+// How the money left the business. Deliberately NOT PAYMENT_METHODS: that list is
+// how customers pay the owner (and carries 'credit', which cannot buy fuel).
+// Money out has its own vocabulary — cheque and debit are alive here even though
+// they were retired on the money-in side.
+export const EXPENSE_PAYMENT_METHODS: { value: string; label: string }[] = [
+  { value: 'card', label: 'Card' },
+  { value: 'debit', label: 'Debit' },
+  { value: 'cash', label: 'Cash' },
+  { value: 'etransfer', label: 'E-transfer' },
+  { value: 'cheque', label: 'Cheque' },
+  { value: 'other', label: 'Other' },
+]
+
+export function expensePaymentMethodLabel(method: string | null | undefined): string {
+  if (!method) return '—'
+  const hit = EXPENSE_PAYMENT_METHODS.find(m => m.value === method)
+  return hit ? hit.label : method.charAt(0).toUpperCase() + method.slice(1)
+}
+
 export interface Quote {
   id: string
   created_at: string
@@ -546,6 +1034,10 @@ export interface Quote {
   status: QuoteStatus
   // Follow-up / missed-quote recovery
   sent_at: string | null
+  // Calendar date the quote stops standing. Null = never expires (every quote
+  // sent before expiry existed). 'expired' is DERIVED by lib/quoteStatus and is
+  // never stored in `status` — see the invoice 'overdue' overlay it mirrors.
+  valid_until: string | null
   last_followed_up_at: string | null
   follow_up_count: number
   // Captured at acceptance so recovery impact can be measured later
@@ -711,6 +1203,28 @@ export interface CrmCampaign {
   audience: CampaignAudience
   schedule: CampaignSchedule
   last_run_at: string | null
+  // Soft delete. A hard DELETE cascades crm_campaign_log, which is BOTH the audit
+  // trail (who we messaged, when) and the per-period dedupe ledger — so an undo
+  // would restore a live campaign with an empty ledger and message everyone again.
+  archived_at: string | null
+}
+
+// A saved campaign configuration the owner can spin up again. Same shape as a
+// campaign minus the runtime fields (enabled/last_run_at) — deliberately a
+// separate table so a preset can never be mistaken for a live, sending campaign.
+export interface CrmCampaignPreset {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  name: string
+  kind: CampaignKind
+  channels: string[]
+  template_key: string | null
+  custom_body: string | null
+  subject: string | null
+  audience: CampaignAudience
+  schedule: CampaignSchedule
 }
 
 // A saved campaign configuration the owner can spin up again. Same shape as a
@@ -760,6 +1274,10 @@ export interface BusinessSettings {
   id: string
   created_at: string
   updated_at: string
+  // Trade/vertical key (registry: src/lib/trades). Selects seed data and default
+  // copy ONLY — engines never branch on it. Optional because rows predate the
+  // column in older local snapshots; the DB default is 'lawn_landscaping'.
+  business_type?: string
   company_name: string
   owner_name: string | null
   phone: string | null
@@ -793,6 +1311,21 @@ export interface BusinessSettings {
   work_start_time: string | null
   // Soft daily cap (drive + on-site hours) for overload / room-for-more signals.
   daily_capacity_hours: number | null
+  // ── Payroll: overtime rules + pay period ───────────────────────────────────
+  // Consumed ONLY by lib/payroll (the one payroll engine). Overtime law is
+  // jurisdictional, so both thresholds default to null = "that rule doesn't
+  // apply" — EdgeQuote never guesses a threshold and silently inflates pay.
+  /** Hours in a DAY after which OT applies. null = no daily rule (e.g. Ontario). */
+  ot_daily_hours: number | null
+  /** Hours in a WORK WEEK after which OT applies. null = no weekly rule. */
+  ot_weekly_hours: number | null
+  /** OT pay multiplier (1.5 = time-and-a-half). Never below 1. */
+  ot_multiplier: number
+  pay_period: PayPeriodKind
+  /** Any known period start; biweekly needs it to know WHICH two weeks. */
+  pay_period_anchor: string | null
+  /** 0=Sun…6=Sat — the OT work-week boundary. Explicit, never assumed. */
+  pay_week_starts_on: number
   // Uploaded-logo display scale in percent (100 = default size).
   logo_scale: number | null
   // DEAD — the old home-dashboard shell's layout. That shell was removed in
@@ -818,6 +1351,22 @@ export interface BusinessSettings {
   // Where customers send e-transfers — shown in the portal's Ways-to-pay panel.
   etransfer_email?: string | null
   gst_percent: number | null                 // GST shown/charged only when > 0 (Alberta = 5 when registered)
+  // The CRA requires the supplier's GST/HST registration number on any invoice of
+  // $30+ for the CUSTOMER to claim an input tax credit — missing = ITC denied on
+  // audit. Also mandatory on a credit note (ETA s.232(3)). null = not registered.
+  gst_number?: string | null
+  // ── Balance sheet opening position ──
+  // Cash is not derivable from a payment ledger alone: it knows every movement
+  // since it started, but not what was in the bank the day before. Without these,
+  // "cash" is a movement, not a position — so the owner states it once.
+  opening_bank_balance?: number | null
+  opening_balance_date?: string | null
+  /**
+   * Owner capital already in the business at the opening date.
+   * NULL = unknown, and it stays unknown: the balance sheet reports an unexplained
+   * difference rather than plugging this to force Assets = Liabilities + Equity.
+   */
+  opening_equity?: number | null
   // ── Recurring AutoPay ── business-wide default charge mode (a customer may
   // override). 'auto' = charge a saved card the moment a recurring visit completes;
   // 'manual_review' = always draft the invoice and wait for the owner to charge.
@@ -875,6 +1424,12 @@ export interface ServiceTemplate {
   is_active: boolean
   sort_order: number
   user_id: string
+  // What this service COSTS to deliver, per unit. Both nullable, and null means
+  // "never told us" — NOT zero. lib/margin.ts turns them into a margin only when
+  // known, so a service with no cost shows no margin instead of claiming 100%.
+  unit_cost: number | null      // labour / subcontract
+  material_cost: number | null  // materials consumed
+  is_favorite: boolean
 }
 
 export interface ServiceTemplateFormValues {
@@ -885,6 +1440,13 @@ export interface ServiceTemplateFormValues {
   default_description: string
   notes: string
   is_active: boolean
+  // STRINGS on purpose, unlike default_rate. A number-typed field cannot express
+  // the difference between "0" and "left blank", and `Number('')` is 0 — which
+  // would silently record every untouched service as costing nothing, i.e. 100%
+  // margin. Held as text here and mapped '' → null on submit.
+  unit_cost: string
+  material_cost: string
+  is_favorite: boolean
 }
 
 export interface BusinessSettingsFormValues {
@@ -909,6 +1471,7 @@ export interface BusinessSettingsFormValues {
   etransfer_discount_percent: number
   etransfer_email: string
   gst_percent: number
+  gst_number: string
   autopay_charge_mode: 'auto' | 'manual_review'
   autopay_variance_pct: number
 }
@@ -922,25 +1485,14 @@ export const SERVICE_CATEGORIES = [
   'General',
 ] as const
 
-export const OVERGROWTH_LEVELS = [
-  { label: 'Normal Lawn', multiplier: 1.0, description: 'Standard condition — base price' },
-  { label: '6–12 inches', multiplier: 1.5, description: 'Moderate overgrowth' },
-  { label: '1–2 feet', multiplier: 2.0, description: 'Heavy overgrowth' },
-  { label: 'Over 2 feet', multiplier: 0, description: 'Custom quote required' },
-] as const
+// OVERGROWTH_LEVELS and SERVICE_TYPES were deleted here (2026-07-15). Both were
+// dead — zero references anywhere in src/, no type alias, no importer — and both
+// hardcoded a lawn trade: a fixed 10-service menu and a grass-height multiplier.
+// The live equivalents are owner-owned data, not constants: service_templates IS
+// the service catalogue, and overgrowth is quotes.overgrowth_multiplier, set from
+// the measure tool. Keeping dead lawn lists around is how the next reader
+// concludes the platform has a home industry.
 
-export const SERVICE_TYPES = [
-  'Lawn Mowing',
-  'Yard Cleanup',
-  'Snow Removal',
-  'Landscaping',
-  'Pressure Washing',
-  'Window Cleaning',
-  'Junk Removal',
-  'Fencing',
-  'Painting',
-  'Other',
-] as const
 
 export const STATUS_LABELS: Record<QuoteStatus, string> = {
   draft: 'Draft',
@@ -960,4 +1512,98 @@ export const STATUS_COLORS: Record<QuoteStatus, string> = {
   completed: 'bg-teal-500/10 text-teal-400 border-teal-500/20',
   paid:      'bg-emerald-500/15 text-emerald-400 border-emerald-500/25',
   declined:  'bg-red-500/10 text-red-400 border-red-500/20',
+}
+
+// ── Integrations platform (api_keys / webhook_* / inbound_*) ────────────────
+// Rows for the 2026-07-15 integrations migration. API keys never carry the
+// plaintext key (hash + display prefix only); endpoint secrets and inbound
+// tokens ARE owner-readable — they're the owner's own credentials.
+
+export type ApiScopeName = 'read' | 'write'
+
+export interface ApiKeyRow {
+  id: string
+  created_at: string
+  user_id: string
+  name: string
+  prefix: string
+  scopes: ApiScopeName[]
+  last_used_at: string | null
+  usage_count: number
+  revoked_at: string | null
+}
+
+export type WebhookSource = 'manual' | 'api' | 'zapier' | 'make'
+
+export interface WebhookEndpointRow {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  url: string
+  description: string | null
+  secret: string
+  events: string[] // ['*'] or exact event keys
+  source: WebhookSource
+  active: boolean
+  disabled_reason: string | null
+  consecutive_failures: number
+  last_success_at: string | null
+  last_failure_at: string | null
+}
+
+export type WebhookDeliveryStatus = 'pending' | 'processing' | 'success' | 'dead'
+
+export interface WebhookDeliveryRow {
+  id: string
+  created_at: string
+  user_id: string
+  endpoint_id: string
+  event_id: string | null
+  event: string
+  payload: Record<string, unknown>
+  status: WebhookDeliveryStatus
+  attempts: number
+  next_attempt_at: string
+  last_attempt_at: string | null
+  delivered_at: string | null
+  response_status: number | null
+  response_body: string | null
+  duration_ms: number | null
+  last_error: string | null
+}
+
+export type InboundAction = 'lead' | 'customer'
+
+export interface InboundWebhookRow {
+  id: string
+  created_at: string
+  user_id: string
+  name: string
+  token: string
+  action: InboundAction
+  active: boolean
+  received_count: number
+  last_received_at: string | null
+}
+
+export interface InboundEventRow {
+  id: string
+  created_at: string
+  user_id: string
+  hook_id: string
+  ok: boolean
+  summary: string | null
+  entity_id: string | null
+  payload: Record<string, unknown>
+}
+
+export interface IntegrationEventRow {
+  id: string
+  created_at: string
+  user_id: string
+  event: string
+  entity_type: string
+  entity_id: string | null
+  payload: Record<string, unknown>
 }

@@ -1,0 +1,192 @@
+name: CI
+
+# WHY THIS EXISTS
+# Until now this repo had no CI at all. The only gate on main was a human
+# remembering to run `tsc` and `next build` before pushing — and several sessions
+# push to main every day. One forgotten check ships a main that doesn't compile,
+# and the next person to branch inherits it.
+#
+# This runs the exact two commands that were being run by hand, plus lint, on
+# every push and every PR. Nothing clever; the point is that it is not optional.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # So a red main can be re-checked after a fix without an empty commit.
+  workflow_dispatch:
+
+# A newer push to the same branch makes the older run pointless — cancel it
+# rather than queue behind it. Never cancel main: its runs are the record of
+# whether the deployed commit was green.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  verify:
+    name: typecheck · lint · build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      # PLACEHOLDERS, not secrets. Every page in this app is server-rendered on
+      # demand (`ƒ` in the build output) and the Supabase clients read env inside
+      # functions rather than at module scope — so nothing contacts Supabase during
+      # `next build`. NEXT_PUBLIC_* are inlined at build time, so they must merely
+      # EXIST for the bundle to be well-formed; these values are never deployed and
+      # never reach a network.
+      #
+      # If a future page starts fetching at build time, this job will fail loudly
+      # against these fake values. That is the correct outcome — a build that
+      # silently depends on production credentials is the thing worth catching.
+      NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key-for-build-only
+      NEXT_PUBLIC_APP_URL: https://example.invalid
+      # Next telemetry adds latency and noise to every CI run.
+      NEXT_TELEMETRY_DISABLED: '1'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # `npm ci` not `npm install`: it installs exactly the lockfile and fails if
+      # package.json and package-lock.json disagree. That disagreement is itself a
+      # bug worth failing on — it means someone hand-edited a dependency.
+      - name: Install
+        run: npm ci
+
+      # Typecheck FIRST. It is the fastest of the three and catches the most, so a
+      # broken branch fails in ~30s instead of after a full build.
+      - name: Typecheck
+        run: npm run typecheck
+
+      # The automation engine's safety story is "a promotion from suggest to auto must
+      # be deliberate". Until this step existed, the 244 checks enforcing that were
+      # wired to NOTHING — no script, no CI, no runner; the file could not even
+      # execute. A guard rail nobody runs is not a guard rail.
+      #
+      # It runs here rather than inside `npm run build` so an accidental promotion
+      # fails the PR instead of every developer's local build. Second-fastest step
+      # after typecheck (pure functions, no I/O, no network), so it fails early.
+      #
+      # What it pins that a human review would not catch: the engine's import closure
+      # is asserted EXACTLY, so nobody can give it a send path — including by adding a
+      # lib/automation/index.ts barrel, which would hand it chase.ts's senders without
+      # touching the engine at all.
+      - name: Verify automations
+        run: npm run verify:automations
+
+      # The business-shape derivation decides whether a lawn field renders at all.
+      # Its failure mode is silent and asymmetric: too much evidence only shows a
+      # plumber a field he ignores, but too little HIDES the measure tool from a lawn
+      # company — the core market — and nothing on screen would say why. There is no
+      # industry setting to check against, because the whole point is that nobody is
+      # asked; the four backwards-compatibility cases in that script are the only
+      # place the intended behaviour is written down executably.
+      #
+      # Kept separate from `verify:automations` so its PASS count stays the
+      # automation engine's own signal — see the header of verify-business-shape.ts.
+      - name: Verify business shape
+        run: npm run verify:business-shape
+
+      # The vertical foundation's two promises, as build failures rather than
+      # comments: (1) GOLDEN — the lawn trade pack is behaviour-identical to the
+      # engine constants it copies (seasons, hints, campaign presets are
+      # deep-equalled against lib/seasons.ts and lib/crm/campaigns.ts), so
+      # existing lawn businesses cannot drift; (2) CLOSURE — lib/trades imports
+      # nothing, and nothing imports lib/trades outside an explicit allowlist
+      # that engine paths are hard-blocked from ever joining. business_type
+      # selects seed data and copy; the day an engine branches on it, this fails.
+      - name: Verify trade packs
+        run: npm run verify:trades
+
+      # Seeding's one promise — it only ever fills EMPTINESS — is a pure function
+      # (seedPlan), so an existing business coming through setup byte-identical is
+      # provable without a database. This drives every gate through production's
+      # real shape (27 templates, stored seasons) and the adversarial ones. If a
+      # future edit ever lets seeding write over owner data, this is what stops it.
+      - name: Verify onboarding
+        run: npm run verify:onboarding
+
+      # ── Pricing ────────────────────────────────────────────────────────────
+      # These three existed and were never wired here, which made their promises
+      # honour-system. verify-pricing.ts opens by saying it pins the lawn engine so
+      # "anyone who changes lawn pricing has to break this file to do it" — that is
+      # only true if it RUNS. A wrong price is a wrong VALUE, not a type error:
+      # tsc and next build both pass while the number on the owner's screen is
+      # wrong, so these are the only gate that can catch it.
+      #   pricing    — margins never read unknown cost as $0; the lawn cadence
+      #                engine is byte-identical; one unit vocabulary.
+      #   guardrails — the guardrail agrees with the engine it guards. It shipped
+      #                holding a private copy of the engine's cadence multipliers,
+      #                so for graded customers it warned about the app's own
+      #                recommendation. Nothing but execution catches that.
+      #   labor      — the estimator never blends an invented constant into a
+      #                property's real timed history, and never counts a job twice.
+      - name: Verify pricing
+        run: npm run verify:pricing
+
+      - name: Verify price guardrails
+        run: npm run verify:guardrails
+
+      - name: Verify labour estimator
+        run: npm run verify:labor
+
+      #   density  — route density counts NEIGHBOURING PROPERTIES, not a property's
+      #              own visits. It was fed one row per JOB and neither deduped nor
+      #              excluded the target, so live counts averaged 38.1 against 2.0
+      #              real neighbours and 15 of 16 properties had travel fully waived
+      #              — including 3 with no neighbours at all. The thresholds were
+      #              never wrong; the denominator was.
+      #   learning — confidence measures whether the evidence AGREES, not how much
+      #              of it there is, and a model pinned against its clamp says so
+      #              instead of reporting the clamp as a confident answer.
+      - name: Verify route density
+        run: npm run verify:density
+
+      - name: Verify pricing learning
+        run: npm run verify:learning
+
+      # This step is why the first 17 CI runs were red, and it's worth writing down.
+      # ESLint had never been configured in this repo — no .eslintrc anywhere — so
+      # `next lint` dropped into an INTERACTIVE setup prompt, which cannot be
+      # answered on a runner. It wasn't finding real problems; it couldn't start.
+      # Fixed by adding .eslintrc.json (eslint + eslint-config-next were already
+      # installed, and 67 files carry eslint-disable comments — only the config
+      # was missing).
+      #
+      # Two rules are warnings rather than errors there, deliberately:
+      # react/no-unescaped-entities (9 hits — all curly apostrophes in JSX text,
+      # pure typography that renders identically) and react-hooks/exhaustive-deps.
+      # The gate should fail for things that break production, not for a quote mark.
+      # Both still print in the output; they just don't block a deploy.
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      # Prompt regressions are SILENT: a bad prompt still returns fluent text, so
+      # typecheck and build both pass while the AI quietly writes about lawns for a
+      # plumber. This renders the real prompt for a lawn business and a non-lawn
+      # business and asserts the difference. No API key, no network, deterministic.
+      - name: Verify AI business context
+        run: npm run verify:ai-context
+
+      # The module system decides what every business SEES. Registry integrity,
+      # dependency math, install/uninstall guards, update badges and the
+      # licensing hook are all wrong-VALUE bugs, invisible to tsc and build.
+      - name: Verify module engine
+        run: npm run verify:modules
+
+      # The integrations platform's contracts are wrong-VALUE bugs too: a
+      # signature that verifies its own tampering, a backoff that never dies,
+      # docs promising an event the catalog dropped, or API serializers
+      # drifting from webhook payload field sets. Pure functions, no network.
+      - name: Verify integrations platform
+        run: npm run verify:integrations

@@ -14,11 +14,17 @@ export type MsgType =
   | 'estimate_reminder' | 'payment_reminder' | 'estimate_followup'
   // Payment receipt — auto-sent after a successful (AutoPay) payment.
   | 'receipt'
+  // Booking confirmation — auto-sent to the CUSTOMER the moment they book online.
+  // Transactional (it confirms a request they just made), not marketing.
+  | 'booking_received'
   // CRM growth campaigns (lib/crm/campaigns — driven by /api/cron/campaigns).
   | 'birthday' | 'anniversary' | 'win_back' | 'marketing'
   // Asks a happy customer to refer a neighbour, and a seasonal service offer.
   // Both are CEMs — see msgCategory(), which files them under marketing/seasonal.
   | 'referral_request' | 'seasonal_offer'
+  // The BULK review chase (the `review` campaign kind). Same words as
+  // review_request, different consent meaning — see msgCategory().
+  | 'review_chase'
   // Standard business announcement — introduction / new phone number.
   | 'introduction'
   // Free-form one-off message (the shared Send Message dialog's blank slate).
@@ -43,12 +49,14 @@ export const MSG_LABELS: Record<MsgType, string> = {
   payment_reminder: 'Payment reminder',
   estimate_followup: 'Estimate follow-up',
   receipt: 'Payment receipt',
+  booking_received: 'Booking confirmation',
   birthday: 'Birthday greeting',
   anniversary: 'Anniversary greeting',
   win_back: 'Win-back / re-engagement',
   marketing: 'Marketing check-in',
   referral_request: 'Referral request',
   seasonal_offer: 'Seasonal offer',
+  review_chase: 'Review chase (campaign)',
   introduction: 'Introduction / new number',
   custom: 'Custom message',
 }
@@ -67,6 +75,7 @@ export const MSG_VARIABLES: { key: string; hint: string }[] = [
   { key: 'quote_link', hint: 'link to the quote (portal)' },
   { key: 'invoice_link', hint: 'link to the invoice (portal)' },
   { key: 'amount', hint: 'invoice amount' },
+  { key: 'confirmation_number', hint: 'their booking reference (booking confirmation)' },
   { key: 'direct_phone', hint: 'your business phone (Settings → Business Information)' },
 ]
 
@@ -192,6 +201,20 @@ Your feedback helps our small business grow and helps other homeowners choose a 
 
 Thank you again—we truly appreciate your support!`,
 
+  // The BULK chase (the `review` campaign). Deliberately NOT tied to a recent
+  // visit — it sweeps up customers who never reviewed — which is exactly why
+  // msgCategory files it as 'marketing' while review_request stays a service
+  // message. Worded for someone whose last visit may be months ago.
+  review_chase: `Hi {{first_name}},
+
+We hope you've been happy with the work we've done on your property.
+
+If you have a moment, a quick review would mean a lot — it's how most people find us, and it genuinely helps a small local business.
+
+{{review_link}}
+
+No worries at all if you'd rather not. Thank you either way!`,
+
   quote: `Hi {{first_name}},
 
 Your quote from {{business_name}} is ready.
@@ -204,7 +227,7 @@ If you have any questions about the quote, simply reply to this message and we'l
 
   invoice: `Hi {{first_name}},
 
-Your invoice from {{business_name}}{{amount}} is ready.
+Your invoice from {{business_name}} for {{amount}} is ready.
 
 You can securely view and pay it anytime using the link below:
 
@@ -242,6 +265,24 @@ Whenever you're ready, you can view and accept your quote here:
 
 Thank you for considering {{business_name}}.`,
 
+  // Sent to the CUSTOMER the instant they book online. Until this existed the booking
+  // funnel's only send went to the OWNER's inbox, so a homeowner who closed the tab was
+  // left with nothing — no reference, no name, no number — after handing over their
+  // address and photos. That is the shape of being ghosted, and it was thirty seconds
+  // after the happiest moment in the funnel. Deliberately does NOT promise a price: the
+  // booking captures an estimate, and the owner confirms the real number.
+  booking_received: `Hi {{first_name}},
+
+Thanks for booking with **{{business_name}}** — this is just so you have it in writing.
+
+We've got your request for **{{address}}**, and your confirmation number is **{{confirmation_number}}**.
+
+A real person here will review it and get in touch to confirm your price and pick a day that suits you — usually within one business day. Nothing is charged until you say yes.
+
+Need us sooner, or want to change something? Call or text {{direct_phone}} and quote your confirmation number.
+
+— {{business_name}}`,
+
   // NOTE: this template is sent by sendPaymentReceipt(), which knows the amount but NOT
   // the remaining balance — so it must not assert one. It used to say "paid in full"
   // unconditionally; if that's ever wrong it's the worst kind of wrong, because the
@@ -249,7 +290,7 @@ Thank you for considering {{business_name}}.`,
   // they didn't owe. receiptMessageBody() below takes balanceRemaining and CAN say it.
   receipt: `Hi {{first_name}},
 
-Thank you — we've received your payment{{amount}}.
+Thank you — we've received your payment of {{amount}}.
 
 Your receipt and up-to-date balance are always here:
 
@@ -326,8 +367,10 @@ const SUBJECTS: Record<MsgType, string> = {
   early_arrival: 'We can come earlier today', confirm: 'Confirming your service',
   estimate_reminder: 'Your upcoming estimate', payment_reminder: 'Invoice reminder', estimate_followup: 'Following up on your quote',
   receipt: 'Payment received — thank you',
+  booking_received: 'We’ve got your request',
   birthday: 'Happy birthday!', anniversary: 'Thank you', win_back: 'We’d love to see you again', marketing: 'A quick hello',
   referral_request: 'A small favour?', seasonal_offer: 'Booking now for the season',
+  review_chase: 'Would you leave us a review?',
   introduction: 'Our new number — please save it',
   custom: '', // falsy → renderMessage falls back to "A message from {business}"
 }
@@ -346,9 +389,15 @@ export interface MsgVars {
   oldDateLabel?: string
   address?: string
   directPhone?: string
+  // The booking/quote reference a customer can quote back at us on the phone.
+  confirmationNumber?: string
   // Email-shell branding — straight from Business Settings (logo_url / website).
   logoUrl?: string
   website?: string
+  // CASL: a commercial message must identify the sender with a physical mailing
+  // address and carry a working unsubscribe. Both are rendered by the email shell
+  // for marketing/seasonal templates only — see renderBody.
+  mailingAddress?: string
 }
 
 export interface RenderedMessage { sms: string; subject: string; html: string; text: string }
@@ -366,7 +415,13 @@ function interpolate(tpl: string, v: MsgVars): string {
     old_date: v.oldDateLabel || 'your original date',
     time_window: v.timeWindow || 'your scheduled window',
     address: v.address || 'your property',
-    amount: v.amount ? ` for ${v.amount}` : '',
+    // The VALUE, not a phrase. This token used to expand to " for $180" so that
+    // `payment{{amount}}` degraded to `payment` when unset — but a fragment can
+    // only be written into one sentence shape. Anywhere else ("your balance is
+    // {{amount}}") it produced "your balance is  for $180". The connective now
+    // lives in the template, where it is visible to whoever writes the sentence.
+    amount: v.amount || '',
+    confirmation_number: v.confirmationNumber || '',
     // Graceful when no business phone is set: "call or text us at this number".
     direct_phone: (v.directPhone || '').trim() || 'this number',
   }
@@ -378,7 +433,7 @@ function interpolate(tpl: string, v: MsgVars): string {
 // copy) into the per-channel shapes. Interpolation, **bold** handling and the
 // email wrapper are identical to renderMessage, so manual and automated sends
 // look the same in the customer's thread/inbox.
-export function renderBody(rawBody: string, vars: MsgVars, subject: string): RenderedMessage {
+export function renderBody(rawBody: string, vars: MsgVars, subject: string, template?: MsgType): RenderedMessage {
   const raw = interpolate(rawBody, vars)
   // SMS/plain: strip the **bold** markers. Email: render them as <strong>.
   const sms = raw.replace(/\*\*(.+?)\*\*/g, '$1')
@@ -402,8 +457,25 @@ export function renderBody(rawBody: string, vars: MsgVars, subject: string): Ren
     (vars.directPhone || '').trim(),
     site ? `<a href="${siteHref}" style="color:#5B6672;text-decoration:underline">${site.replace(/^https?:\/\//, '')}</a>` : '',
   ].filter(Boolean).join(' &nbsp;·&nbsp; ')
+  // ── CASL: commercial messages carry identification + an unsubscribe ─────────
+  // A message is commercial if msgCategory() says so — the SAME function the
+  // consent gate (prefAllows → reach.ts) uses to decide whether it may be sent at
+  // all. Driving both off one definition means a template can never be gated as
+  // marketing while shipping without an unsubscribe, or vice versa.
+  // The portal's Message preferences card IS the unsubscribe mechanism; the
+  // senders mint the token (cron/campaigns does this for every CEM), so the link
+  // stays valid well past the 60 days CASL s.6(2)(c) requires.
+  const cat = template ? msgCategory(template) : null
+  const isCem = cat === 'marketing' || cat === 'seasonal'
+  const portal = (vars.portalLink || '').trim()
+  const mailing = (vars.mailingAddress || '').trim()
+  const casl = !isCem ? '' : `
+    <p style="margin:10px 0 0;padding:0 6px;font-size:11px;line-height:1.5;color:#8A94A0">
+      You're receiving this because you're a customer of ${business}.${mailing ? ` ${mailing}` : ''}
+      ${portal ? `<br><a href="${portal}" style="color:#5B6672;text-decoration:underline">Unsubscribe or choose which messages you get</a>` : ''}
+    </p>`
   const footer = `${contactBits ? `<p style="margin:12px 0 0;padding:0 6px;font-size:12px;line-height:1.5;color:#8A94A0">${business} &nbsp;·&nbsp; ${contactBits}</p>` : ''}
-    <p style="margin:${contactBits ? '4px' : '12px'} 0 0;padding:0 6px;font-size:12px;line-height:1.5;color:#8A94A0">Reply directly to this email if you have any questions.</p>`
+    <p style="margin:${contactBits ? '4px' : '12px'} 0 0;padding:0 6px;font-size:12px;line-height:1.5;color:#8A94A0">Reply directly to this email if you have any questions.</p>${casl}`
   const html = `<div style="background:#F4F6F5;padding:24px 12px;font-family:system-ui,'Segoe UI',Arial,sans-serif">
   <div style="max-width:560px;margin:0 auto">
     <div style="padding:0 6px">${header}</div>
@@ -428,7 +500,15 @@ export function renderMessage(
   const subject = subjectOverride?.trim()
     || SUBJECTS[type]
     || `A message from ${vars.businessName || 'your service provider'}`
-  return renderBody(tpl, vars, subject)
+  return renderBody(tpl, vars, subject, type)
+}
+
+// Does this template legally require an unsubscribe + sender identification?
+// Exported so a SENDER can guarantee it supplies the portal link a CEM's footer
+// needs, rather than discovering at render time that it can't be built.
+export function isCommercialMessage(type: MsgType): boolean {
+  const cat = msgCategory(type)
+  return cat === 'marketing' || cat === 'seasonal'
 }
 
 // A payment-receipt body with the REAL numbers (invoice #, receipt #, method,
@@ -481,9 +561,20 @@ export function msgCategory(t: MsgType): MsgCategory | null {
   switch (t) {
     case 'invoice': case 'payment_reminder': case 'receipt': return 'invoices'
     case 'quote': case 'estimate_reminder': case 'estimate_followup': return 'estimates'
-    case 'marketing': case 'introduction': case 'win_back': case 'referral_request': return 'marketing'
+    // review_chase is the BULK campaign sweep — a list-segmented solicitation
+    // asking customers to publicly promote the business, sent with no visit
+    // attached. That is a CEM, so it rides the marketing preference. Its twin
+    // review_request stays 'reminders' below: that one follows a visit the
+    // customer booked, which is what makes it a service message. Same words,
+    // different consent — which is precisely why they're separate MsgTypes.
+    case 'marketing': case 'introduction': case 'win_back': case 'referral_request':
+    case 'review_chase':
+      return 'marketing'
     case 'birthday': case 'anniversary': case 'seasonal_offer': return 'seasonal'
     case 'custom': return null // owner-composed one-offs are always deliverable
+    // Transactional: it confirms a request the customer just made of us, so it isn't a
+    // marketing category they can be opted out of. Channel opt-in still gates the SMS.
+    case 'booking_received': return null
     // Service-timing messages: tied to a visit the customer booked, so they ride
     // the channel opt-in rather than the marketing preference.
     case 'on_my_way': case 'running_late': case 'arrived': case 'job_complete':

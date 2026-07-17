@@ -28,6 +28,8 @@ export interface Biz {
 
 type Step = 'address' | 'measure' | 'plan' | 'contact' | 'done'
 interface Plan { key: 'one_time' | 'weekly' | 'biweekly' | 'monthly'; label: string; price: number; annual?: number; recommended?: boolean }
+// One row of the owner's catalog, as public_services returns it. Only the name is used here.
+interface Svc { id: string; name: string }
 
 const M2_TO_SQFT = 10.7639
 const HEAR_OPTIONS = ['Website', 'Google Business Profile', 'QR code', 'Facebook', 'Nextdoor', 'Referral from a friend', 'Drove by / yard sign', 'Other']
@@ -39,6 +41,9 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
   const [biz, setBiz] = useState<Biz | null>(initialBiz)
   const [loading, setLoading] = useState(initialBiz == null)
   const [step, setStep] = useState<Step>('address')
+  // The owner's catalog — active service templates in the order they arranged them.
+  // Names the service this booking creates (see bookedService). Never gates rendering.
+  const [services, setServices] = useState<Svc[]>([])
 
   const [addressText, setAddressText] = useState('')
   const [parsed, setParsed] = useState<ParsedAddress | null>(null)
@@ -74,6 +79,25 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
     }
     run()
   }, [token, supabase, initialBiz])
+
+  // The owner's service catalog, keyed on the SAME booking token. Its own fetch on
+  // purpose — get_booking_business returns a flat business object this file destructures,
+  // so the services can't ride along with it. This effect is NOT gated on initialBiz: the
+  // server seeds the business, never the catalog. Strictly best-effort — an error, a bad
+  // token or an empty catalog just leaves `services` empty, and nothing here touches
+  // `loading`, so the funnel can never be blocked or delayed by it.
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const { data } = await supabase.rpc('public_services', { p_token: token })
+        if (cancelled) return
+        const list = (data as { services?: Svc[] } | null)?.services
+        setServices(Array.isArray(list) ? list : [])
+      } catch { /* catalog is best-effort — the booking still goes through */ }
+    })()
+    return () => { cancelled = true }
+  }, [token, supabase])
 
   // Capture attribution from the link: ?ref=CODE and ?utm_source/medium/campaign/term/content.
   useEffect(() => {
@@ -198,6 +222,12 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
     return () => { cancelled = true }
   }, [step, parsed, showTracer, measuring])
 
+  // The funnel measures an area and sells cadence plans; the SERVICE it books is
+  // the owner's primary offering — their first active service template, in the
+  // order they arranged. For this business that is "Lawn Mowing", so behaviour is
+  // unchanged; a different trade now books THEIR service instead of ours.
+  const bookedService = services[0]?.name ?? null
+
   async function submit() {
     if (!parsed || !plan || !name.trim() || !(email.trim() || phone.trim())) return
     setSubmitting(true); setError(null)
@@ -208,7 +238,11 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
     const { data, error: rpcErr } = await supabase.rpc('submit_booking', {
       p_token: token, p_name: name.trim(), p_email: email.trim(), p_phone: phone.trim(),
       p_address: parsed.address || parsed.formatted, p_city: parsed.city, p_province: parsed.province, p_postal: parsed.postal,
-      p_lat: parsed.lat, p_lng: parsed.lng, p_sqft: sqft, p_service_type: 'Lawn Mowing',
+      // Neutral literal, NOT null, when the catalog is empty: submit_booking itself does
+      // coalesce(nullif(p_service_type, ''), 'Lawn Mowing'), so passing null or '' would let
+      // the database re-impose the very default we're removing. Without changing the RPC,
+      // an explicit label is the only way to say "they sell something, we don't know what".
+      p_lat: parsed.lat, p_lng: parsed.lng, p_sqft: sqft, p_service_type: bookedService ?? 'Service',
       p_initial: applyFeeRecovery(pkg.oneTime, fee) ?? 0,
       p_weekly: applyFeeRecovery(opt('weekly'), fee) ?? 0,
       p_biweekly: applyFeeRecovery(opt('biweekly'), fee) ?? 0,
@@ -241,8 +275,21 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
       p_neighborhood: neighborhoodOf(parsed.postal, parsed.city, null),
       p_auto: autoResult?.sqft ?? null, p_accepted: sqft, p_building: autoResult?.buildingSqft ?? null, p_confidence: autoResult?.confidence ?? null,
     }).then(() => {}, () => {})
-    // Best-effort owner alert (no-op if email isn't configured).
-    fetch('/api/booking/notify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, name: name.trim(), address: parsed.formatted, service: 'Lawn Mowing', cadence: plan.label, quoteNumber: res.quote_number }) }).catch(() => {})
+    // Best-effort owner alert AND the customer's confirmation (no-op if comms aren't
+    // configured). The customer's contact details go with it so they get something in
+    // writing — closing the tab must not leave them with nothing to prove they booked.
+    fetch('/api/booking/notify', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token, name: name.trim(), address: parsed.formatted, service: bookedService ?? 'Service',
+        cadence: plan.label, quoteNumber: res.quote_number,
+        // The confirmation is sent to the customer submit_booking just created,
+        // resolved server-side from this quote. Contact details and a consent
+        // flag are deliberately NOT sent — the server must never take either
+        // from the request body (this endpoint is public). See the route.
+        quoteId: res.quote_id,
+      }),
+    }).catch(() => {})
     setStep('done')
   }
 
@@ -504,11 +551,16 @@ export function BookingClient({ token, initialBiz }: { token: string; initialBiz
               {sqft > 0 && <SummaryRow label="Lawn size" value={`~${sqft.toLocaleString()} sq ft`} />}
               {quoteNumber && <SummaryRow label="Confirmation #" value={quoteNumber} />}
             </div>
-            {/* Nothing is emailed to the customer at this stage (the only send in the
-                booking path goes to the OWNER's inbox — api/booking/notify), so "keep this
-                for your records" quietly put the burden on them without saying why. Tell
-                them what it's actually for; the request is safe either way. */}
-            {quoteNumber && <p className="text-[11px] text-ink-faint text-center -mt-2">That&rsquo;s your reference if you call or email us — your request is saved either way.</p>}
+            {/* A confirmation now really goes out (api/booking/notify sends the customer
+                the booking_received template, not just the owner alert), so this can
+                finally promise it. Email is the durable copy; SMS only with consent. */}
+            {quoteNumber && (
+              <p className="text-[11px] text-ink-faint text-center -mt-2">
+                {email.trim()
+                  ? <>We&rsquo;ve emailed this confirmation to <span className="text-ink-muted font-medium">{email.trim()}</span> so you have it in writing.</>
+                  : <>That&rsquo;s your reference if you call or text us — your request is saved either way.</>}
+              </p>
+            )}
 
             {/* What happens next — the #1 anxiety point, answered with a concrete SLA. */}
             <div className="rounded-card border border-accent/25 bg-accent/[0.06] px-4 py-3.5">

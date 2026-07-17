@@ -3,7 +3,7 @@ import { cn } from '@/lib/utils'
 import type { Priority, PriorityKind } from '@/lib/dashboard/priorities'
 import {
   ListChecks, CheckCircle2, ArrowRight,
-  DollarSign, FileText, Bell, CalendarPlus, AlertTriangle, MessageSquare, Repeat, UserPlus, HeartPulse,
+  DollarSign, FileText, Bell, CalendarPlus, AlertTriangle, MessageSquare, Repeat, UserPlus, HeartPulse, PhoneOff,
 } from 'lucide-react'
 
 // ONE ranked queue of the highest-value things to do right now. The ranking and
@@ -19,6 +19,9 @@ const META: Record<PriorityKind, { icon: typeof DollarSign; tone: string }> = {
   missed:       { icon: AlertTriangle, tone: 'text-red-400 bg-red-500/10 border-red-500/20' },
   drafts:       { icon: FileText,      tone: 'text-sky-400 bg-sky-500/10 border-sky-500/20' },
   followups:    { icon: Bell,          tone: 'text-amber-400 bg-amber-500/10 border-amber-500/20' },
+  // Muted on purpose: it's real money, but nothing can be DONE about it until a
+  // contact detail exists, so it must not compete with the rows you can act on.
+  followups_blocked: { icon: PhoneOff, tone: 'text-ink-muted bg-bg-tertiary border-border' },
   reactivation: { icon: Repeat,        tone: 'text-accent-text bg-accent/10 border-accent/20' },
   lapsed:       { icon: HeartPulse,    tone: 'text-violet-400 bg-violet-500/10 border-violet-500/20' },
   messages:     { icon: MessageSquare, tone: 'text-sky-400 bg-sky-500/10 border-sky-500/20' },

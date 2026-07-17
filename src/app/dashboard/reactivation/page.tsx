@@ -3,20 +3,60 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
+import { Customer } from '@/types'
+import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
+import { settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
+// seasonForService/isWithinSeason are reached through signals' isSeasonallyDormant —
+// the ONE dormancy rule, so this page and the dashboard can't disagree about a snow
+// customer in July.
 import {
-  loadReactivation, VIP_THRESHOLD,
-  type RiskCustomer, type RanOutCustomer, type Bucket,
-} from '@/lib/reactivation'
-import { formatCurrency, formatDate } from '@/lib/utils'
+  VIP_LTV, LAPSE_BUCKET_DAYS, cadenceDays, lifetimeValue, visitValue,
+  isSeasonallyDormant, ranOut as ranOutSignal, daysBetween,
+} from '@/lib/signals'
+import { formatCurrency, formatDate, localTodayISO } from '@/lib/utils'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { StatTile } from '@/components/ui/StatTile'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { Skeleton, SkeletonTiles } from '@/components/ui/Skeleton'
+import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { Phone, MessageSquare, FileText, CalendarPlus, HeartPulse, DollarSign, Percent, TrendingUp, AlertTriangle, Repeat } from 'lucide-react'
 
-// Types, thresholds and the at-risk math all live in lib/reactivation — THE one
-// engine, so this page, Today's Priorities and the dashboard never disagree.
+// No `is_initial_visit` — this page prices a first visit at the recurring rate
+// (its long-standing behaviour). See the note in revenueIntelligence: aligning
+// that with customerHealth is a pending product decision, not a silent change.
+interface JobLite { customer_id: string | null; scheduled_date: string; status: string; service_type: string | null; quote_id: string | null; recurrence_id: string | null; price: number | null }
+interface QuoteLite { id: string; customer_id: string | null; status: string; total: number | null; service_type: string; created_at: string; initial_price: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null }
+
+type Bucket = '12+' | '6+' | '3+'
+
+interface RiskCustomer {
+  customer: Customer
+  lastServiceDate: string
+  daysSince: number
+  jobsCompleted: number
+  lifetimeRevenue: number
+  lastQuoteAmount: number
+  lastServiceType: string
+  potentialRecovery: number
+  bucket: Bucket
+  isVip: boolean
+}
+
+// A recurring customer whose visit series has run dry (no future visit booked).
+// Distinct from the 90-day buckets: a weekly customer is overdue at 7 days, not 90.
+interface RanOutCustomer {
+  customer: Customer
+  lastServiceDate: string
+  daysSince: number
+  cadence: string
+  perVisit: number
+  lifetimeRevenue: number
+  isVip: boolean
+}
+
+// localTodayISO comes from lib/utils and daysBetween from lib/signals — both were
+// local copies here; neither needs to be.
 
 const BUCKETS: { key: Bucket; label: string; sub: string; tone: string }[] = [
   { key: '12+', label: '12+ months', sub: 'Top priority — long lapsed', tone: 'text-red-400' },
@@ -33,14 +73,155 @@ export default function ReactivationPage() {
 
   useEffect(() => {
     async function load() {
-      const r = await loadReactivation(supabase)
-      setRisk(r.risks)
-      setRanOut(r.ranOuts)
-      setMetrics({ atRisk: r.atRisk, potential: r.potential, reactivationRate: r.reactivationRate, revenueRecovered: r.revenueRecovered })
+      // Local session read — no auth round-trip before the data batch below.
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
+      const [cRes, jRes, qRes, rRes, sRes] = await Promise.all([
+        supabase.from('customers').select('*').eq('user_id', user!.id).is('archived_at', null), // don't suggest re-engaging deliberately-archived customers
+        supabase.from('jobs').select('customer_id, scheduled_date, status, service_type, quote_id, recurrence_id, price').eq('user_id', user!.id),
+        supabase.from('quotes').select('id, customer_id, status, total, service_type, created_at, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
+        supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user!.id),
+        supabase.from('business_settings').select('service_seasons').eq('user_id', user!.id).maybeSingle(),
+      ])
+      const seasons: ServiceSeasons = settingsToSeasons((sRes.data as { service_seasons: unknown } | null)?.service_seasons)
+      const customers = (cRes.data as Customer[]) || []
+      const jobs = (jRes.data as JobLite[]) || []
+      const quotes = (qRes.data as QuoteLite[]) || []
+      const recById: Record<string, { freq: string | null; interval_unit: string | null; interval_count: number | null }> = {}
+      for (const r of (rRes.data as { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null }[]) || []) recById[r.id] = r
+      const quotesById: Record<string, QuoteLite> = {}
+      for (const q of quotes) quotesById[q.id] = q
+
+      const today = localTodayISO()
+      const jobsByCust: Record<string, JobLite[]> = {}
+      for (const j of jobs) if (j.customer_id) (jobsByCust[j.customer_id] ||= []).push(j)
+      const quotesByCust: Record<string, QuoteLite[]> = {}
+      for (const q of quotes) if (q.customer_id) (quotesByCust[q.customer_id] ||= []).push(q)
+
+      // Reuse the ONE valuation engine for "what is this visit worth" — the same
+      // one lifetimeValue uses, so an initial visit is never valued two ways on
+      // the same screen.
+      const jobValue = (j: JobLite): number => visitValue(j, quotesById, recById)
+
+      const risks: RiskCustomer[] = []
+      const ranOuts: RanOutCustomer[] = []
+      let reactivated = 0
+      let revenueRecovered = 0
+
+      for (const c of customers) {
+        const cj = jobsByCust[c.id] || []
+        const completed = cj.filter(j => j.status === 'completed').sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date))
+        const upcoming = cj.some(j => j.scheduled_date >= today && (j.status === 'scheduled' || j.status === 'in_progress'))
+        // Most RECENT recurring activity — find() returns arbitrary DB order and
+        // can pick a dead 2024 series over the customer's current cadence.
+        const recJob = cj.filter(j => j.recurrence_id).sort((a, b) => b.scheduled_date.localeCompare(a.scheduled_date))[0]
+        const lifetimeRevenue = lifetimeValue(completed, quotesById, recById)
+        const isVip = lifetimeRevenue >= VIP_LTV
+
+        // "Comeback" history: a gap >= 90 days then another completed job = a
+        // reactivation. Runs for EVERY customer with history — including recurring
+        // ran-outs below — so the Recovered metric never drops their win-backs.
+        let hadComeback = false
+        for (let i = 1; i < completed.length; i++) {
+          if (daysBetween(completed[i - 1].scheduled_date, completed[i].scheduled_date) >= 90) {
+            hadComeback = true
+            if (daysBetween(completed[i].scheduled_date, today) <= 365) revenueRecovered += jobValue(completed[i])
+          }
+        }
+        if (hadComeback) reactivated++
+
+        // Last date they were ACTUALLY serviced: a completed visit, else any
+        // non-cancelled, non-future one. A series cancelled before any service
+        // isn't a re-book.
+        const pastReal = cj
+          .filter(j => j.status !== 'cancelled' && j.scheduled_date <= today)
+          .map(j => j.scheduled_date).sort()
+        const lastDate = completed.length ? completed[completed.length - 1].scheduled_date
+          : (pastReal.length ? pastReal[pastReal.length - 1] : null)
+        const recService = recJob?.service_type ?? completed[completed.length - 1]?.service_type ?? null
+        const rec = recJob?.recurrence_id ? recById[recJob.recurrence_id] : null
+        const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
+
+        // THE ran-out detector — one rule, shared with the dashboard and the weekly
+        // review, so the same customer can't read as adrift on one screen and
+        // dormant on another.
+        const signal = ranOutSignal({
+          hasRecurring: !!recJob,
+          hasUpcoming: upcoming,
+          lastServiceDate: lastDate,
+          cadenceDays: cadenceDays(freq, rec),
+          seasonallyDormant: isSeasonallyDormant(recService, seasons, today),
+          today,
+        })
+
+        // SEASONAL DORMANCY: a recurring lawn/snow customer whose series ended
+        // because the SEASON ended is not lost — they're dormant until next
+        // season. Suppress them from every at-risk list while we're OUT of their
+        // service season. They only resurface once their season has arrived again
+        // and they STILL have no schedule (handled because `upcoming` is false and
+        // the season gate stops firing, so the signal turns back into a ran-out).
+        if (signal.reason === 'seasonally_dormant') continue
+        if (signal.reason === 'never_serviced') continue
+
+        // RAN-OUT (urgent): a recurring customer with no future visit booked. Caught
+        // regardless of days-since, so it can't slip through the 90-day buckets. Past
+        // ~3 cadences the series isn't plausibly active — those fall through to the
+        // normal buckets instead of sitting in the red queue forever.
+        if (signal.isRanOut && signal.isUrgent && lastDate) {
+          // Per-visit at stake = the CURRENT quote cadence price (source of truth),
+          // never an arbitrary visit's frozen historical override.
+          const q = recJob.quote_id ? quotesById[recJob.quote_id] : null
+          const perVisit = q
+            ? Math.round(jobVisitValue(null, q as unknown as Record<string, unknown>, freq))
+            : Math.round(jobValue(recJob))
+          ranOuts.push({
+            customer: c, lastServiceDate: lastDate, daysSince: signal.daysSince ?? 0,
+            cadence: freq || 'recurring', perVisit, lifetimeRevenue, isVip,
+          })
+          continue
+        }
+
+        if (completed.length === 0) continue // only customers with real service history
+        const lastServiceDate = completed[completed.length - 1].scheduled_date
+        const days = daysBetween(lastServiceDate, today)
+
+        if (!upcoming && days >= LAPSE_BUCKET_DAYS['3+']) {
+          // A DECLINED quote is not recoverable revenue — don't let a rejected
+          // $4,000 hedge job inflate "Potential recovery".
+          const cq = (quotesByCust[c.id] || []).filter(q => q.status !== 'declined').sort((a, b) => b.created_at.localeCompare(a.created_at))
+          const lastQuoteAmount = cq.length ? Number(cq[0].total) || 0 : 0
+          const avgValue = completed.length ? lifetimeRevenue / completed.length : 0
+          risks.push({
+            customer: c,
+            lastServiceDate,
+            daysSince: days,
+            jobsCompleted: completed.length,
+            lifetimeRevenue,
+            lastQuoteAmount,
+            lastServiceType: completed[completed.length - 1].service_type || cq[0]?.service_type || 'their usual service',
+            potentialRecovery: lastQuoteAmount || Math.round(avgValue),
+            bucket: days >= LAPSE_BUCKET_DAYS['12+'] ? '12+' : days >= LAPSE_BUCKET_DAYS['6+'] ? '6+' : '3+',
+            isVip,
+          })
+        }
+      }
+
+      const order: Record<Bucket, number> = { '12+': 0, '6+': 1, '3+': 2 }
+      // VIPs first within each bucket, then most-lapsed.
+      risks.sort((a, b) => order[a.bucket] - order[b.bucket] || Number(b.isVip) - Number(a.isVip) || b.daysSince - a.daysSince)
+      ranOuts.sort((a, b) => Number(b.isVip) - Number(a.isVip) || b.perVisit - a.perVisit || b.daysSince - a.daysSince)
+      // Headline metrics include the urgent ran-out queue — 5 ran-dry recurring
+      // customers with "At risk: 0" above them reads as a broken page.
+      const potential = risks.reduce((s, r) => s + r.potentialRecovery, 0) + ranOuts.reduce((s, r) => s + r.perVisit, 0)
+      const atRiskCount = risks.length + ranOuts.length
+      const reactivationRate = (reactivated + atRiskCount) > 0 ? Math.round((reactivated / (reactivated + atRiskCount)) * 100) : 0
+
+      setRisk(risks)
+      setRanOut(ranOuts)
+      setMetrics({ atRisk: atRiskCount, potential, reactivationRate, revenueRecovered })
       setLoading(false)
     }
     load()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   if (loading) {
@@ -104,6 +285,7 @@ export default function ReactivationPage() {
 
 
 function RiskCard({ r }: { r: RiskCustomer }) {
+  const [msg, setMsg] = useState(false)
   const c = r.customer
   const phone = c.phone || null
   const months = Math.floor(r.daysSince / 30)
@@ -138,10 +320,13 @@ function RiskCard({ r }: { r: RiskCustomer }) {
             className={`h-10 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border transition-colors ${phone ? 'bg-accent/10 border-accent/20 text-accent-text hover:bg-accent/20' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}>
             <Phone className="w-4 h-4" /> Call
           </a>
-          <a href={phone ? `sms:${phone}` : undefined} aria-disabled={!phone}
-            className={`h-10 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border transition-colors ${phone ? 'bg-surface border-border text-ink hover:border-border-strong' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}>
-            <MessageSquare className="w-4 h-4" /> Text
-          </a>
+          {/* Through THE composer (not a raw sms: link) — so the win-back text is
+              consent-gated, threaded into the conversation, and in the send ledger. */}
+          <button type="button" onClick={() => setMsg(true)}
+            className="h-10 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border bg-surface border-border text-ink hover:border-border-strong transition-colors">
+            <MessageSquare className="w-4 h-4" /> Message
+          </button>
+          {msg && <SendMessageDialog open customerId={c.id} customerName={c.name} onClose={() => setMsg(false)} />}
           <Link href={`/dashboard/quotes/new?customer=${c.id}`}
             className="h-10 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border border-border bg-surface text-ink hover:border-border-strong transition-colors">
             <FileText className="w-4 h-4" /> Quote
@@ -174,6 +359,7 @@ function VipChip() {
 }
 
 function RanOutCard({ r }: { r: RanOutCustomer }) {
+  const [msg, setMsg] = useState(false)
   const c = r.customer
   const phone = c.phone || null
   const cadence = r.cadence === 'weekly' ? 'Weekly' : r.cadence === 'biweekly' ? 'Bi-weekly' : r.cadence === 'monthly' ? 'Monthly' : 'Recurring'
@@ -204,10 +390,11 @@ function RanOutCard({ r }: { r: RanOutCustomer }) {
             className={`h-10 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border transition-colors ${phone ? 'bg-accent/10 border-accent/20 text-accent-text hover:bg-accent/20' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}>
             <Phone className="w-4 h-4" /> Call
           </a>
-          <a href={phone ? `sms:${phone}` : undefined} aria-disabled={!phone}
-            className={`h-10 rounded-xl items-center justify-center gap-1.5 text-xs font-medium border transition-colors hidden sm:flex ${phone ? 'bg-surface border-border text-ink hover:border-border-strong' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}>
-            <MessageSquare className="w-4 h-4" /> Text
-          </a>
+          <button type="button" onClick={() => setMsg(true)}
+            className="h-10 rounded-xl items-center justify-center gap-1.5 text-xs font-medium border bg-surface border-border text-ink hover:border-border-strong transition-colors hidden sm:flex">
+            <MessageSquare className="w-4 h-4" /> Message
+          </button>
+          {msg && <SendMessageDialog open customerId={c.id} customerName={c.name} onClose={() => setMsg(false)} />}
         </div>
       </CardBody>
     </Card>

@@ -35,6 +35,13 @@ export interface PortalPdfBusiness {
   email_secondary: string | null; website: string | null; logo_url: string | null
   logo_scale: number | null; base_address: string | null; terms_text: string | null
   gst_percent?: number | null
+  // get_portal_data's `business` projection selects this as of
+  // RUN-2026-07-15-portal-gst-number.sql, so the customer's OWN copy of an invoice
+  // — the one they hand their accountant — carries the registration number too.
+  // Fixing only the owner-sent copy would have left the ITC hole on the path that
+  // actually gets filed. Optional: an older cached payload simply resolves to null,
+  // and the PDFs already print nothing unless registered.
+  gst_number?: string | null
 }
 
 function num(v: unknown, fallback = 0): number { const n = Number(v); return Number.isFinite(n) ? n : fallback }
@@ -95,6 +102,7 @@ function portalBusinessToSettings(b: PortalPdfBusiness | null): BusinessSettings
     base_address: b.base_address,
     terms_text: b.terms_text,
     gst_percent: b.gst_percent ?? 0,
+    gst_number: b.gst_number ?? null,
   } as unknown as BusinessSettings
 }
 

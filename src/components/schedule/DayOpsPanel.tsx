@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { toast } from '@/lib/toast'
 import { confirm } from '@/lib/confirm'
 import { createClient } from '@/lib/supabase/client'
-import { Job, JobStatus, JobRecurrence, JobLineItem, RecurrenceScope, PRICE_REASONS, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
+import { Job, JobStatus, JobRecurrence, JobLineItem, RecurrenceScope, AddonTemplate, PRICE_REASONS, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
 import { Coord } from '@/lib/geo'
 import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, nearestNeighborRoute, sequenceRoute, roundTripMapsUrl, MAX_MAPS_WAYPOINTS, routeStats, directionsUrl, computeDayEtas, roughFinishEstimate, dayLoad, minutesToTime12, timeToMinutes, DEFAULT_JOB_MIN } from '@/lib/route'
 import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
@@ -12,6 +12,7 @@ import { buildRoadDistance } from '@/lib/distance'
 import { jobVisitValue, effectiveFreq, quoteVisitAmount } from '@/lib/invoicing'
 import { addonsTotal } from '@/lib/jobPricing'
 import { formatCurrency, cn, localTodayISO } from '@/lib/utils'
+import { scrollBehavior } from '@/lib/motion'
 import { Button } from '@/components/ui/Button'
 import { Menu } from '@/components/ui/Menu'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -61,6 +62,9 @@ interface Props {
   // The previous visit's add-ons (for the one-tap "copy previous" action).
   getPreviousAddons: (job: Job) => { description: string; amount: number; serviceKey: string }[]
   onCopyPreviousAddons: (job: Job) => Promise<void>
+  // Quick-add chips for the add-on editor, resolved from the business's trade
+  // pack by the page — passed through untouched.
+  addonTemplates: AddonTemplate[]
 }
 
 export interface QuickPatch {
@@ -75,7 +79,7 @@ export interface QuickPatch {
 export function DayOpsPanel({
   date, dateLabel, jobs, quotesById, recurrences, baseCoord,
   onOpenJob, onStartJob, onMarkDone, onMove, onSetPrice, workStartTime, capacityHours, onRainDelay, onAddJob, onQuickSave,
-  addonsByJobId, onAddLineItem, onDeleteLineItem, getPreviousAddons, onCopyPreviousAddons,
+  addonsByJobId, onAddLineItem, onDeleteLineItem, getPreviousAddons, onCopyPreviousAddons, addonTemplates,
 }: Props) {
   const supabase = createClient()
   // Guards Start/Complete against a double-tap (which would double-stamp the job
@@ -105,6 +109,18 @@ export function DayOpsPanel({
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [dragOverId, setDragOverId] = useState<string | null>(null)
 
+  // What the one-tap "On my way" promises the customer, in minutes.
+  //
+  // It is a fixed guess and cannot honestly be anything else: there is no GPS fix
+  // on the truck, and the route's leg times run from the PREVIOUS stop rather than
+  // from wherever the owner actually is. So the number stays a default — but the
+  // button that sends it now NAMES it, because the template turns this into a
+  // specific, falsifiable promise ("arrive in approximately 15 minutes") that the
+  // owner otherwise never saw and never chose. Label and payload both read from
+  // here, so the button can never drift from what the customer is told. A
+  // different ETA goes through Message, which has an input for it.
+  const ONE_TAP_ETA_MIN = '15'
+
   // One-tap "On my way" — no composer, no typing. Sends the owner's on_my_way
   // template with the default ETA through the SAME pipeline as the editable
   // composer (/api/comms/send: opt-in-gated, logged, threaded, and it stamps
@@ -120,7 +136,7 @@ export function DayOpsPanel({
         body: JSON.stringify({
           customerId: job.customer_id, template: 'on_my_way', jobId: job.id,
           channels: ['sms', 'email'],
-          vars: { eta: '15', address: job.properties?.address ?? undefined },
+          vars: { eta: ONE_TAP_ETA_MIN, address: job.properties?.address ?? undefined },
         }),
       })
       const data = (await res.json().catch(() => ({}))) as { results?: Record<string, { sent?: boolean; reason?: string }> }
@@ -230,7 +246,11 @@ export function DayOpsPanel({
     }
     return out
   })()
-  const totalMin = active.reduce((s, j) => s + (j.duration_minutes || 0), 0)
+  // Same coalesce as laborTotalMin below (and dayLoad, and the ETA chain): unknown
+  // duration = DEFAULT_JOB_MIN, not 0. These two totals describe the same day, so
+  // they must not disagree — with `|| 0` the work chip vanished on exactly the days
+  // dayLoad still counted as 45 min of work apiece.
+  const totalMin = active.reduce((s, j) => s + (j.duration_minutes || DEFAULT_JOB_MIN), 0)
   const totalRevenue = active.reduce((s, j) => s + jobTotal(j), 0)
   const revenueCompleted = completed.reduce((s, j) => s + jobTotal(j), 0)
   const revenueRemaining = remaining.reduce((s, j) => s + jobTotal(j), 0)
@@ -464,6 +484,13 @@ export function DayOpsPanel({
     : []
   const capacityEndMin = (etas?.startMin ?? timeToMinutes(workStartTime)) + Math.round((capacityHours > 0 ? capacityHours : 8) * 60)
 
+  // Tapping a block on the timeline brings its card into view — the timeline is a
+  // map of the day, so it should navigate the day. scrollBehavior() honours the
+  // reduced-motion preference (a JS-requested 'smooth' overrides the stylesheet).
+  function jumpToStop(jobId: string) {
+    document.getElementById(`stop-${jobId}`)?.scrollIntoView({ behavior: scrollBehavior(), block: 'center' })
+  }
+
   // ── Live day tracking (check-in/check-out data) ──
   const isToday = date === localTodayISO()
   const inProgress = active.find(j => j.status === 'in_progress') ?? null
@@ -473,13 +500,15 @@ export function DayOpsPanel({
   const workedMin = completed.reduce((s, j) => s + (j.actual_minutes || 0), 0)
     + (inProgress?.started_at ? elapsedMin(inProgress.started_at) : 0)
   const live = isToday && (!!inProgress || (!!firstStart && completed.length > 0))
-  // Re-render each minute while a job is running so elapsed/finish stay current.
+  // Re-render each minute on TODAY so elapsed, finish and the timeline's "now"
+  // line stay current — the now line has to keep moving before the first
+  // check-in, which is exactly when you're deciding whether you're already late.
   const [, setTick] = useState(0)
   useEffect(() => {
-    if (!isToday || !inProgress) return
+    if (!isToday) return
     const t = setInterval(() => setTick(x => x + 1), 60000)
     return () => clearInterval(t)
-  }, [isToday, inProgress])
+  }, [isToday])
   // Finish estimate: live (now + what's left) once the day is underway, else the
   // planned route ETAs from work start.
   let estFinish: string
@@ -520,15 +549,21 @@ export function DayOpsPanel({
             </span>
           )}
         </div>
+        {/* On a phone the two SECONDARY actions collapse to their icons (the same
+            pattern the message thread header uses) — three full labels here are
+            ~330px on a 360px screen, which squeezed the date out of its own
+            header. The primary action keeps its label. */}
         <div className="flex items-center gap-2 shrink-0">
           {dayRecipients.length > 0 && (
-            <Button size="sm" variant="secondary" onClick={() => setShowDayMsg(true)} title="Message everyone scheduled today">
-              <MessageSquare className="w-4 h-4" /> Message all
+            <Button size="sm" variant="secondary" onClick={() => setShowDayMsg(true)}
+              title="Message everyone scheduled today" aria-label="Message everyone scheduled today">
+              <MessageSquare className="w-4 h-4" /> <span className="hidden sm:inline">Message all</span>
             </Button>
           )}
           {remaining.length > 0 && (
-            <Button size="sm" variant="secondary" onClick={onRainDelay} title="Bump all remaining jobs to your next work day">
-              <CloudRain className="w-4 h-4" /> Delay remaining
+            <Button size="sm" variant="secondary" onClick={onRainDelay}
+              title="Bump all remaining jobs to your next work day" aria-label="Delay remaining jobs to the next work day">
+              <CloudRain className="w-4 h-4" /> <span className="hidden sm:inline">Delay remaining</span>
             </Button>
           )}
           <Button size="sm" onClick={onAddJob}><Plus className="w-4 h-4" /> Add job</Button>
@@ -621,6 +656,9 @@ export function DayOpsPanel({
               finishMin={etas.finishMin}
               capacityEndMin={capacityEndMin}
               stops={timelineStops}
+              nowMin={isToday ? new Date().getHours() * 60 + new Date().getMinutes() : undefined}
+              onSelectStop={jumpToStop}
+              omitted={active.length - timelineStops.length}
             />
           )}
 
@@ -636,13 +674,14 @@ export function DayOpsPanel({
               const idx = sortedJobs.findIndex(j => j.id === job.id)
               return (
                 <div key={job.id}
+                  id={`stop-${job.id}`}
                   draggable={sortedJobs.length > 1}
                   onDragStart={() => { dragId.current = job.id; setDraggingId(job.id) }}
                   onDragEnd={() => { setDraggingId(null); setDragOverId(null) }}
                   onDragOver={e => { e.preventDefault(); if (dragOverId !== job.id) setDragOverId(job.id) }}
                   onDragLeave={() => { if (dragOverId === job.id) setDragOverId(null) }}
                   onDrop={() => { dropOn(job.id); setDraggingId(null); setDragOverId(null) }}
-                  className={cn('rounded-xl border px-3 py-2.5 transition-colors',
+                  className={cn('rounded-xl border px-3 py-2.5 transition-colors scroll-mt-4',
                     // Done cards RECEDE (neutral + faded); the live stop is sky end-to-end
                     // (badge, timer, live bar and card all agree); scheduled keeps the token.
                     done ? 'border-border bg-bg-tertiary/60 text-ink-muted opacity-60'
@@ -686,12 +725,12 @@ export function DayOpsPanel({
                           {total > 0
                             ? <button onClick={e => { e.stopPropagation(); priceId === job.id ? setPriceId(null) : openPrice(job) }}
                                 title={addons.length ? `Base ${formatCurrency(value)} + add-ons ${formatCurrency(addonsTotal(addons))} · tap to edit base price` : 'Edit price'}
-                                className="flex items-center gap-1 text-sm font-bold text-ink rounded-md px-1.5 py-0.5 hover:bg-black/10 transition-colors">
+                                className="tap-target-y flex items-center gap-1 text-sm font-bold text-ink rounded-md px-1.5 py-0.5 hover:bg-black/10 transition-colors">
                                 {formatCurrency(total)}<Pencil className="w-3 h-3 opacity-40" />
                               </button>
                             : <button onClick={e => { e.stopPropagation(); priceId === job.id ? setPriceId(null) : openPrice(job) }}
                                 title="Set price"
-                                className="text-[10px] font-semibold uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5 flex items-center gap-1 hover:bg-amber-500/20">
+                                className="tap-target-y text-[10px] font-semibold uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5 flex items-center gap-1 hover:bg-amber-500/20">
                                 <AlertTriangle className="w-3 h-3" /> Set price
                               </button>}
                           {/* Delete lives in the job form (Open → trash) — a 28px
@@ -780,6 +819,27 @@ export function DayOpsPanel({
                         {job.status === 'scheduled' && etaByJob[job.id] && (
                           <span className="font-semibold text-accent-text shrink-0">ETA {etaByJob[job.id]}</span>
                         )}
+                        {/* The route orders stops by GEOGRAPHY — it never reads a job's
+                            committed start_time — so a visit you promised for 10:00 can be
+                            routed last and land hours later. Both numbers were already on
+                            this card, side by side, with nothing saying they disagreed.
+                            Flag it only once the route misses the window we'd actually TEXT
+                            the customer (windowByJob = start → +2h), so this fires when a
+                            promise breaks, not when a minute slips. Presentation only: the
+                            route is not re-ordered and no engine is consulted. */}
+                        {(() => {
+                          if (job.status !== 'scheduled' || !job.start_time) return null
+                          const arrive = arrivalMinByJob[job.id]
+                          if (arrive == null) return null
+                          const promised = timeToMinutes(job.start_time)
+                          if (arrive <= promised + 120) return null
+                          return (
+                            <span className="shrink-0 text-[10px] font-semibold text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1.5 py-0.5 flex items-center gap-1"
+                              title={`You'd tell this customer ${windowByJob[job.id]}, but the route has you arriving ${minutesToTime12(arrive)}. Reorder the stop, or move it.`}>
+                              <AlertTriangle className="w-3 h-3" /> misses {windowByJob[job.id]}
+                            </span>
+                          )
+                        })()}
                         {job.status === 'in_progress' && job.started_at && (
                           <span className="font-semibold text-sky-300 shrink-0">▶ {tsTo12(job.started_at)} · {elapsedMin(job.started_at)}m</span>
                         )}
@@ -810,8 +870,16 @@ export function DayOpsPanel({
                           cards collapse to the three that still matter. */}
                       {done ? (
                         <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                          {/* Get paid before you drive away. Lands on this job's invoice
+                              with the record-payment form open (`?pay=1`) — cash or
+                              e-transfer goes down while you're still standing there,
+                              which is the only moment the customer is in front of you. */}
+                          <a href={`/dashboard/invoices?job=${job.id}&pay=1`}
+                            className="tap-target h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg bg-emerald-500 border border-emerald-500 text-black text-xs font-semibold flex items-center justify-center gap-1 hover:opacity-90 active:scale-95 transition-transform">
+                            <Wallet className="w-3.5 h-3.5" /> Get paid
+                          </a>
                           <a href={`/dashboard/invoices?job=${job.id}`}
-                            className="h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border border-current/30 text-xs font-medium flex items-center gap-1 hover:bg-black/10">
+                            className="tap-target h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border border-current/30 text-xs font-medium flex items-center justify-center gap-1 hover:bg-black/10">
                             <Receipt className="w-3.5 h-3.5" /> Invoice
                           </a>
                           <ActionBtn onClick={() => onOpenJob(job)} icon={Pencil} label="Edit" />
@@ -822,7 +890,8 @@ export function DayOpsPanel({
                         {/* Stage primary. on_my_way_at stamps when the text sends, so the
                             primary advances On my way → Start on its own. */}
                         {job.status === 'scheduled' && !job.on_my_way_at && (
-                          <ActionBtn disabled={sendingEta !== null} onClick={() => sendOnMyWay(job)} icon={Send} label={sendingEta === job.id ? 'Sending…' : 'On my way'} tone="primary" />
+                          <ActionBtn disabled={sendingEta !== null} onClick={() => sendOnMyWay(job)} icon={Send} label={sendingEta === job.id ? 'Sending…' : `On my way · ${ONE_TAP_ETA_MIN}m`}
+                            title={`Texts ${job.customers?.name || 'the customer'} that you'll arrive in about ${ONE_TAP_ETA_MIN} minutes. Use Message to send a different ETA.`} tone="primary" />
                         )}
                         {job.status === 'scheduled' && (
                           <ActionBtn disabled={acting !== null} onClick={async () => { if (acting) return; setActing(job.id); try { await onStartJob(job) } finally { setActing(null) } }} icon={Play} label="Start" tone={job.on_my_way_at ? 'primary' : undefined} />
@@ -833,13 +902,14 @@ export function DayOpsPanel({
                         <a
                           href={directionsUrl({ lat: job.properties?.lat ?? null, lng: job.properties?.lng ?? null, address: job.properties?.address }, baseCoord)}
                           target="_blank" rel="noopener noreferrer"
-                          className="h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border border-current/30 text-xs font-medium flex items-center gap-1 hover:bg-black/10"
+                          className="tap-target h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border border-current/30 text-xs font-medium flex items-center justify-center gap-1 hover:bg-black/10"
                         >
                           <Navigation className="w-3.5 h-3.5" /> Route to
                         </a>
                         <ActionBtn onClick={() => { setQuickId(null); setMoveId(null); setPriceId(null); setPhotoId(null); setAddonsId(null); setMessageId(messageId === job.id ? null : job.id) }} icon={MessageSquare} label="Message" />
                         {job.status === 'scheduled' && job.on_my_way_at && (
-                          <ActionBtn disabled={sendingEta !== null} onClick={() => sendOnMyWay(job)} icon={Send} label={sendingEta === job.id ? 'Sending…' : 'On my way'} />
+                          <ActionBtn disabled={sendingEta !== null} onClick={() => sendOnMyWay(job)} icon={Send} label={sendingEta === job.id ? 'Sending…' : `On my way · ${ONE_TAP_ETA_MIN}m`}
+                            title={`Texts ${job.customers?.name || 'the customer'} that you'll arrive in about ${ONE_TAP_ETA_MIN} minutes. Use Message to send a different ETA.`} />
                         )}
                         {/* Complete a scheduled visit without a check-in (no time tracked);
                             completeJob handles the missing started_at and offers Undo. */}
@@ -906,6 +976,7 @@ export function DayOpsPanel({
                             onDelete={onDeleteLineItem}
                             previousAddons={getPreviousAddons(job)}
                             onCopyPrevious={() => onCopyPreviousAddons(job)}
+                            addonTemplates={addonTemplates}
                           />
                         </div>
                       )}
@@ -970,14 +1041,17 @@ function Metric({ icon: Icon, label, value, tone }: { icon: typeof DollarSign; l
 }
 
 // h-10 on touch screens (one-thumb, in a driveway), compact h-8 on desktop.
+// `tap-target` lifts that 40px to the 44px minimum on a coarse pointer — the last
+// 4px matter with a glove on — while `sm:h-8` keeps the mouse density identical.
 // 'primary' = THE next action for the stage; 'complete' = the finish action.
-function ActionBtn({ onClick, icon: Icon, label, tone, disabled }: { onClick: () => void; icon: typeof Pencil; label: string; tone?: 'emerald' | 'sky' | 'primary' | 'complete'; disabled?: boolean }) {
+function ActionBtn({ onClick, icon: Icon, label, tone, disabled, title }: { onClick: () => void; icon: typeof Pencil; label: string; tone?: 'emerald' | 'sky' | 'primary' | 'complete'; disabled?: boolean; title?: string }) {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
+      title={title}
       className={cn(
-        'h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border text-xs font-medium flex items-center gap-1 active:scale-95 transition-transform disabled:opacity-50 disabled:pointer-events-none',
+        'tap-target h-10 sm:h-8 px-3 sm:px-2.5 rounded-lg border text-xs font-medium flex items-center justify-center gap-1 active:scale-95 transition-transform disabled:opacity-50 disabled:pointer-events-none',
         tone === 'primary'
           ? 'bg-accent border-accent text-black font-semibold hover:opacity-90'
           : tone === 'complete'

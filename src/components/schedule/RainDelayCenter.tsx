@@ -5,7 +5,7 @@ import { addDays, format, parseISO } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { Job, JobRecurrence } from '@/types'
 import { Coord } from '@/lib/geo'
-import { planRainDelay, OptJob } from '@/lib/optimizer'
+import { planRainDelay, buildCapMinFor, OptJob } from '@/lib/optimizer'
 import type { DayStatusMap } from '@/lib/dayStatus'
 import { DEFAULT_JOB_MIN } from '@/lib/route'
 import {
@@ -38,7 +38,12 @@ interface Props {
 }
 
 interface Move { jobId: string; customerId: string | null; customerName: string; from: string; to: string; value: number; recurring: boolean; hasSetTime: boolean }
-interface TargetImpact { date: string; beforeHours: number; afterHours: number; added: number; overCapacity: boolean; utilizationPct: number }
+// utilizationPct is null when the destination day has NO capacity to measure against
+// (blocked, or a Day Settings override that zeroes it). A percentage of zero capacity
+// isn't a big number, it's an undefined one — so this screen declines to print one
+// rather than invent 999% or ∞. `overCapacity` still carries the signal: the engine
+// flags any work on a zero-capacity day as over.
+interface TargetImpact { date: string; beforeHours: number; afterHours: number; added: number; overCapacity: boolean; utilizationPct: number | null }
 interface Recipient { customerId: string; name: string; from: string; to: string; jobId: string }
 
 // 🌧 Weather Operations hub (also handles equipment / absence / holiday / emergency
@@ -78,7 +83,9 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
   // post-apply confirmation + notification view.
   const [result, setResult] = useState<{ moved: number; recipients: Recipient[] } | null>(null)
   const [custom, setCustom] = useState<Partial<Record<MsgType, string>> | null>(null)
-  const [company, setCompany] = useState('Edge Property Services')
+  // Empty until settings load — templates.ts owns the "your service provider"
+  // fallback, so no screen needs to guess a company name (least of all a real one).
+  const [company, setCompany] = useState('')
 
   useEffect(() => {
     let active = true
@@ -129,7 +136,25 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
   }, [selectedDay, movable.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const durMin = (j: Job) => j.duration_minutes || DEFAULT_JOB_MIN
-  const capMin = (capacityHours > 0 ? capacityHours : 8) * 60
+  // Per-date capacity from THE optimizer's own rule — the same function planRainDelay
+  // scores `overCapacity` with. A flat `capMin` used to sit here, so this screen took
+  // the ✕/✓ from the engine (per-day, override-aware) and the % from a number that had
+  // never heard of Day Settings: one rendered line could say "62% · over". Without any
+  // override capacityForDate is undefined and this returns the flat business capacity,
+  // exactly as before.
+  const capMinFor = useMemo(
+    () => buildCapMinFor({ capacityForDate, capacityHours }),
+    [capacityForDate, capacityHours],
+  )
+  // Utilization against the day's OWN capacity; null when there is none to divide by.
+  const utilPct = (afterMin: number, dateISO: string): number | null => {
+    const cap = capMinFor(dateISO)
+    return cap > 0 ? Math.round((afterMin / cap) * 100) : null
+  }
+  // Owner-blocked days (Rain / Vacation / Holiday …) straight from the ONE dayStatus
+  // seam — same Set the optimizer and the schedule page's walker read. "Next work day"
+  // must not bump jobs onto a day the owner already marked unavailable.
+  const blockedDates = dayStatusMap?.blockedDates
 
   // The next few candidate affected days (today → +3) with their load.
   const dayChips = useMemo(() => [0, 1, 2, 3].map(n => {
@@ -161,11 +186,11 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
       for (const m of moves) movedByDay[m.to] = (movedByDay[m.to] || 0) + 1
       targets = rp.targets.filter(t => movedByDay[t.date]).map(t => ({
         date: t.date, beforeHours: round1(t.beforeMin / 60), afterHours: round1(t.afterMin / 60),
-        added: movedByDay[t.date], overCapacity: t.overCapacity, utilizationPct: Math.round((t.afterMin / capMin) * 100),
+        added: movedByDay[t.date], overCapacity: t.overCapacity, utilizationPct: utilPct(t.afterMin, t.date),
       }))
       for (const u of rp.unmovable) if (!billed.some(b => b.id === u.jobId)) unmovable.push({ jobId: u.jobId, customerName: u.customerName, reason: u.reason })
     } else {
-      const to = resolveDestination(strategy, selectedDay, { preferredDays: preferredWorkDays, specificDate })
+      const to = resolveDestination(strategy, selectedDay, { preferredDays: preferredWorkDays, specificDate, blockedDates })
       if (to) {
         moves = selMovable.filter(j => j.scheduled_date !== to).map(j => ({
           jobId: j.id, customerId: j.customer_id, customerName: j.customers?.name || j.title,
@@ -174,9 +199,12 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
         const existing = jobs.filter(j => j.scheduled_date === to && j.status !== 'cancelled' && j.status !== 'completed')
         const beforeMin = existing.reduce((s, j) => s + durMin(j), 0)
         const addedMin = moves.reduce((s, m) => s + (jobs.find(j => j.id === m.jobId) ? durMin(jobs.find(j => j.id === m.jobId)!) : DEFAULT_JOB_MIN), 0)
+        // Manual strategies don't run the search, but they must still judge the day by
+        // the SAME capacity the engine would: against a flat capMin a half-crew day read
+        // roomy and a blocked day (capacity 0) could never read over.
         targets = moves.length ? [{
           date: to, beforeHours: round1(beforeMin / 60), afterHours: round1((beforeMin + addedMin) / 60),
-          added: moves.length, overCapacity: beforeMin + addedMin > capMin, utilizationPct: Math.round(((beforeMin + addedMin) / capMin) * 100),
+          added: moves.length, overCapacity: beforeMin + addedMin > capMinFor(to), utilizationPct: utilPct(beforeMin + addedMin, to),
         }] : []
       }
     }
@@ -187,7 +215,7 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
     const affectedHours = round1(dayJobs.reduce((s, j) => s + durMin(j), 0) / 60)
     const customersAffected = new Set(moves.map(m => m.customerId).filter(Boolean)).size
     return { moves, targets, unmovable, movedValue, stuckValue, affectedRevenue, affectedHours, customersAffected }
-  }, [invoicedIds, movable, selectedJobIds, strategy, specificDate, optJobs, selectedDay, baseCoord, preferredWorkDays, capacityHours, recs, billed, jobs, valueByJobId, dayJobs, capMin]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [invoicedIds, movable, selectedJobIds, strategy, specificDate, optJobs, selectedDay, baseCoord, preferredWorkDays, capacityHours, recs, billed, jobs, valueByJobId, dayJobs, capMinFor, dayStatusMap, capacityForDate, blockedDates]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Recipients = one per affected customer (their soonest move's dates).
   const recipients = useMemo<Recipient[]>(() => {
@@ -266,7 +294,7 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
 
   const strategyTargetLabel = strategy === 'auto_optimize'
     ? 'best work days (capacity-aware)'
-    : (() => { const to = resolveDestination(strategy, selectedDay, { preferredDays: preferredWorkDays, specificDate }); return to ? fmtDay(to) : 'pick a date' })()
+    : (() => { const to = resolveDestination(strategy, selectedDay, { preferredDays: preferredWorkDays, specificDate, blockedDates }); return to ? fmtDay(to) : 'pick a date' })()
 
   return (
     <div className="fixed inset-0 z-overlay overflow-y-auto bg-black/50" onClick={onClose}>
@@ -437,12 +465,12 @@ export function RainDelayCenter({ jobs, recurrences, valueByJobId, baseCoord, pr
                           <ArrowRight className="w-3 h-3 text-accent-text shrink-0" />
                           <span className={cn('font-semibold', t.overCapacity ? 'text-amber-400' : 'text-ink')}>{t.afterHours}h · +{t.added} job{t.added !== 1 ? 's' : ''}</span>
                           <span className={cn('ml-auto text-[10px] font-semibold uppercase', t.overCapacity ? 'text-amber-400' : 'text-emerald-400')}>
-                            {t.utilizationPct}% {t.overCapacity ? '· over' : ''}
+                            {t.utilizationPct != null ? `${t.utilizationPct}%` : 'no capacity'}{t.overCapacity ? ' · over' : ''}
                           </span>
                         </div>
                       ))}
                     </div>
-                    <p className="px-3 py-1.5 text-[10px] text-ink-faint border-t border-border">Capacity {capacityHours}h/day · utilization vs your daily limit.</p>
+                    <p className="px-3 py-1.5 text-[10px] text-ink-faint border-t border-border">Utilization is measured against each day&apos;s own capacity — Day Settings crew/hours overrides included. Default {capacityHours}h/day.</p>
                   </div>
                 )}
 

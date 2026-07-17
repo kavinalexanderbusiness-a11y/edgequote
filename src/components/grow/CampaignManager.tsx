@@ -13,18 +13,31 @@ import { FilterPill } from '@/components/ui/FilterPill'
 import { InlineEmpty } from '@/components/ui/EmptyState'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { CrmCampaign, CampaignKind, CampaignAudience, CampaignSchedule, CrmCampaignPreset } from '@/types'
-import { DEFAULT_TEMPLATES, MsgType } from '@/lib/comms/templates'
+import { DEFAULT_TEMPLATES, MSG_VARIABLES, MsgType } from '@/lib/comms/templates'
 import {
-  CAMPAIGN_KINDS, CAMPAIGN_PRESETS, AUDIENCE_LABELS, SEASONAL_TEMPLATES,
-  describeSchedule, type CampaignPreset,
+  CAMPAIGN_KINDS, CAMPAIGN_PRESETS, AUDIENCE_LABELS,
+  describeSchedule, describeNextRun, type CampaignPreset,
 } from '@/lib/crm/campaigns'
+// Trade packs feed UI DEFAULTS only (which seasonal presets this menu offers) —
+// lib/crm stays pack-free; the cron reads crm_campaigns rows and never sees this.
+import { tradePack, NEUTRAL_PACK } from '@/lib/trades'
 import { loadCampaignStats, summarizeStats, EMPTY_STATS, type CampaignStats } from '@/lib/crm/campaignStats'
+import { previewAudience } from '@/lib/crm/audience'
+import { applyCanAskForReview } from '@/lib/crm/reviews'
+import { confirm as confirmDialog } from '@/lib/confirm'
 import { CampaignHistory } from './CampaignHistory'
+import { CampaignPreview } from './CampaignPreview'
 import { cn } from '@/lib/utils'
 import {
   Megaphone, Cake, PartyPopper, Coffee, Repeat, Plus, Trash2, ChevronDown,
-  Leaf, Users, Star, Bookmark,
+  Leaf, Users, Star, Bookmark, Copy, Send,
 } from 'lucide-react'
+
+// The variables a campaign body can actually use. The full MSG_VARIABLES list is
+// for job/quote/invoice messages — a campaign has no visit or amount attached, so
+// offering {{eta}} or {{amount}} would render an empty string and quietly produce
+// a broken sentence. These four are the ones the cron can genuinely fill.
+const CAMPAIGN_VARS = new Set(['first_name', 'business_name', 'review_link', 'portal_link'])
 
 const NUM_INPUT = 'bg-bg-tertiary border border-border-strong rounded-xl px-3 py-2 text-base sm:text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20'
 
@@ -56,6 +69,7 @@ export function CampaignManager() {
   const [statsById, setStatsById] = useState<Record<string, CampaignStats>>({})
   const [loading, setLoading] = useState(true)
   const [counts, setCounts] = useState({ total: 0, birthday: 0, anniversary: 0, notReviewed: 0, happy: 0 })
+  const [biz, setBiz] = useState({ name: '', reviewUrl: null as string | null, businessType: null as string | null })
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [saving, setSaving] = useState(false)
@@ -67,17 +81,22 @@ export function CampaignManager() {
     setUid(user?.id || null)
     if (!user) { setLoading(false); return }
     const head = { count: 'exact' as const, head: true }
-    const [campRes, presetRes, totalRes, bdayRes, annivRes, notRevRes, happyRes] = await Promise.all([
-      supabase.from('crm_campaigns').select('*').eq('user_id', user.id).order('created_at', { ascending: true }),
+    const [campRes, presetRes, totalRes, bdayRes, annivRes, notRevRes, happyRes, bizRes] = await Promise.all([
+      supabase.from('crm_campaigns').select('*').eq('user_id', user.id).is('archived_at', null).order('created_at', { ascending: true }),
       supabase.from('crm_campaign_presets').select('*').eq('user_id', user.id).order('name'),
       supabase.from('customers').select('id', head).eq('user_id', user.id).is('archived_at', null),
       supabase.from('customers').select('id', head).eq('user_id', user.id).is('archived_at', null).not('birthday', 'is', null),
       supabase.from('customers').select('id', head).eq('user_id', user.id).is('archived_at', null).not('anniversary', 'is', null),
-      supabase.from('customers').select('id', head).eq('user_id', user.id).is('archived_at', null).is('reviewed_at', null).is('review_declined_at', null),
+      // THE review rule, shared with the cron and the campaign audience — a
+      // hand-rolled copy here would drift from what the sender actually does.
+      applyCanAskForReview(supabase.from('customers').select('id', head).eq('user_id', user.id).is('archived_at', null)),
       supabase.from('customers').select('id', head).eq('user_id', user.id).is('archived_at', null).not('reviewed_at', 'is', null).gte('review_rating', 4),
+      supabase.from('business_settings').select('company_name, review_url, business_type').eq('user_id', user.id).maybeSingle(),
     ])
     const camps = (campRes.data as CrmCampaign[]) || []
     setCampaigns(camps)
+    const b = bizRes.data as { company_name: string | null; review_url: string | null; business_type: string | null } | null
+    setBiz({ name: b?.company_name || '', reviewUrl: b?.review_url ?? null, businessType: b?.business_type ?? null })
     // Presets are additive — a missing table (migration not yet run) must not
     // blank the whole manager.
     setPresets((presetRes.data as CrmCampaignPreset[]) || [])
@@ -157,8 +176,35 @@ export function CampaignManager() {
   }
 
   async function toggleEnabled(c: CrmCampaign) {
-    // This switch controls whether real customer messages send — a swallowed error
-    // that leaves the UI "on" while the save failed is dangerous. Revert + tell them.
+    // Turning a campaign ON starts sending real messages to real customers on the
+    // next run, and there is no unsend. Confirm with the actual number, resolved
+    // by the same audience engine the cron sends with — not a guess. Turning OFF
+    // is safe and instant, so it isn't gated.
+    if (!c.enabled && uid) {
+      const template = (c.template_key || CAMPAIGN_KINDS[c.kind].defaultTemplate) as MsgType
+      const channels = c.channels?.length ? c.channels : CAMPAIGN_KINDS[c.kind].defaultChannels
+      let detail = ''
+      try {
+        const p = await previewAudience(supabase, {
+          userId: uid, kind: c.kind, schedule: c.schedule || {}, audience: c.audience || {}, today: new Date(),
+        }, channels, template)
+        detail = p.reachable === 0
+          ? 'No customers can be reached with the current filters and consent, so nothing will send yet.'
+          : `${p.reachable} customer${p.reachable === 1 ? '' : 's'} can be reached. ${describeNextRun(c, new Date())}.`
+      } catch {
+        // Never block enabling on a failed preview — just don't claim a number.
+        detail = describeNextRun(c, new Date()) + '.'
+      }
+      const go = await confirmDialog({
+        title: `Turn on “${c.name}”?`,
+        message: `${detail} Each customer receives it at most once per period.`,
+        confirmLabel: 'Turn it on',
+        icon: Send,
+      })
+      if (!go) return
+    }
+    // A swallowed error that leaves the UI "on" while the save failed is
+    // dangerous. Revert + tell them.
     setCampaigns(prev => prev.map(x => x.id === c.id ? { ...x, enabled: !x.enabled } : x))
     const { error } = await supabase.from('crm_campaigns').update({ enabled: !c.enabled }).eq('id', c.id)
     if (error) {
@@ -166,12 +212,36 @@ export function CampaignManager() {
       toast.error('Could not update that automation. Please try again.')
     }
   }
+
+  // Duplicate an existing campaign — always disabled, so a copy can never start
+  // sending on creation.
+  async function duplicate(c: CrmCampaign) {
+    if (!uid) return
+    const { data, error } = await supabase.from('crm_campaigns').insert({
+      user_id: uid, name: `${c.name} (copy)`, kind: c.kind, enabled: false,
+      channels: c.channels, template_key: c.template_key, custom_body: c.custom_body,
+      subject: c.subject, audience: c.audience, schedule: c.schedule,
+    }).select().single()
+    if (error || !data) { toast.error('Could not duplicate: ' + error?.message); return }
+    await load()
+    startEdit(data as CrmCampaign)
+  }
+  // Archive, never DELETE. crm_campaign_log.campaign_id cascades, so a hard delete
+  // destroyed the campaign's whole send history — which is simultaneously the CASL
+  // audit trail AND the per-period dedupe ledger. The Undo then re-inserted the row
+  // enabled, with an empty ledger, so the next run happily messaged every customer a
+  // second time. Archiving keeps the log, so Undo is just a flag flip.
   async function del(c: CrmCampaign) {
-    const { data: row } = await supabase.from('crm_campaigns').select('*').eq('id', c.id).maybeSingle()
-    await supabase.from('crm_campaigns').delete().eq('id', c.id)
+    const wasEnabled = c.enabled
+    const { error } = await supabase.from('crm_campaigns')
+      .update({ archived_at: new Date().toISOString(), enabled: false }).eq('id', c.id)
+    if (error) { toast.error('Could not delete: ' + error.message); return }
     if (editingId === c.id) { setEditingId(null); setDraft(null) }
     load()
-    if (row) toast.undo(`Deleted "${c.name}"`, async () => { await supabase.from('crm_campaigns').insert(row); load() })
+    toast.undo(`Deleted "${c.name}"`, async () => {
+      await supabase.from('crm_campaigns').update({ archived_at: null, enabled: wasEnabled }).eq('id', c.id)
+      load()
+    })
   }
   async function delPreset(p: CrmCampaignPreset) {
     await supabase.from('crm_campaign_presets').delete().eq('id', p.id)
@@ -201,19 +271,37 @@ export function CampaignManager() {
     if (c.kind === 'birthday') return `${counts.birthday} of ${counts.total} customers have a birthday set`
     if (c.kind === 'anniversary') return `${counts.anniversary} of ${counts.total} customers have an anniversary set`
     if (c.kind === 'win_back') return 'Quiet customers, when they pass the window'
-    if (c.kind === 'review' && d.audience.not_reviewed) return `${counts.notReviewed} of ${counts.total} customers haven’t reviewed yet`
+    if (c.kind === 'review' && d.audience.not_reviewed) return `${counts.notReviewed} of ${counts.total} customers haven’t been asked yet`
     if (c.kind === 'referral' && d.audience.happy_only) return `${counts.happy} of ${counts.total} customers reviewed you 4★ or better`
     return `Up to ${counts.total} customers${d.audience.recurring_only ? ' (recurring only)' : ''}`
   }
 
   const enabledCount = campaigns.filter(c => c.enabled).length
 
+  // Built-in presets: the non-seasonal six are universal; the SEASONAL ones come
+  // from THIS business's trade pack, so a plumber is offered "Season opener"
+  // instead of "Fall cleanup & aeration". A lawn business sees the exact list it
+  // always has — the lawn pack's campaigns are deep-equalled against
+  // SEASONAL_TEMPLATES in CI (verify:trades), so this swap is provably a no-op
+  // for them. Packs with no seasonal campaigns fall back to the neutral pack's.
+  const packCampaigns = (() => {
+    const p = tradePack(biz.businessType)
+    return p.seasonalCampaigns.length ? p.seasonalCampaigns : NEUTRAL_PACK.seasonalCampaigns
+  })()
+  const builtinPresets: CampaignPreset[] = [
+    ...CAMPAIGN_PRESETS.filter(p => p.kind !== 'seasonal'),
+    ...packCampaigns.map((s): CampaignPreset => ({
+      kind: 'seasonal', name: s.label, channels: s.channels,
+      schedule: { month: s.month, day: s.day }, audience: {},
+      custom_body: s.body, subject: s.subject, seasonalKey: s.key,
+    })),
+  ]
   const menuItems = [
-    ...CAMPAIGN_PRESETS.map((p, i) => ({
+    ...builtinPresets.map((p, i) => ({
       key: `builtin-${i}`,
       label: p.name,
       description: p.seasonalKey
-        ? SEASONAL_TEMPLATES.find(s => s.key === p.seasonalKey)?.blurb ?? CAMPAIGN_KINDS[p.kind].blurb
+        ? packCampaigns.find(s => s.key === p.seasonalKey)?.blurb ?? CAMPAIGN_KINDS[p.kind].blurb
         : CAMPAIGN_KINDS[p.kind].blurb,
       icon: KIND_ICON[p.kind],
       onSelect: () => createFrom(p),
@@ -278,7 +366,12 @@ export function CampaignManager() {
                   <button type="button" onClick={() => (isEditing ? setEditingId(null) : startEdit(c))} aria-expanded={isEditing} className="min-w-0 flex-1 text-left rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                     <p className="text-sm font-semibold text-ink truncate flex items-center gap-1.5">{c.name} <ChevronDown className={cn('w-3.5 h-3.5 text-ink-faint transition-transform', isEditing && 'rotate-180')} /></p>
                     <p className="text-xs text-ink-muted truncate">{describeSchedule(c)} · {(c.channels || []).map(x => x === 'sms' ? 'SMS' : 'Email').join(' + ') || '—'}</p>
-                    <p className="text-[11px] text-ink-faint truncate tabular-nums">{summarizeStats(stats)}{c.last_run_at ? ` · last ran ${new Date(c.last_run_at).toLocaleDateString()}` : ''}</p>
+                    {/* The rule above says WHEN it can fire; this says when it
+                        next actually will — and only for a campaign that's on,
+                        because a disabled one isn't going to send at all. */}
+                    <p className="text-[11px] text-ink-faint truncate tabular-nums">
+                      {c.enabled ? describeNextRun(c, new Date()) : 'Off'} · {summarizeStats(stats)}
+                    </p>
                   </button>
                   <div className="shrink-0"><Toggle checked={c.enabled} onChange={() => toggleEnabled(c)} ariaLabel={`${c.enabled ? 'Disable' : 'Enable'} ${c.name}`} /></div>
                 </div>
@@ -375,13 +468,45 @@ export function CampaignManager() {
                     {/* Message */}
                     <div className="flex flex-col gap-1.5">
                       <Textarea label="Message" value={draft.custom_body} onChange={e => setDraft({ ...draft, custom_body: e.target.value })} rows={5} placeholder={DEFAULT_TEMPLATES[templateKey]} />
-                      <p className="text-[11px] text-ink-faint">Leave blank to use the default above. Use <code className="text-ink-muted">{'{{first_name}}'}</code> and <code className="text-ink-muted">{'{{business_name}}'}</code>.</p>
+                      <p className="text-[11px] text-ink-faint">Leave blank to use the default above.</p>
+                      {/* The same variable affordance the Settings template editor
+                          offers, narrowed to the tokens a campaign can actually
+                          fill — offering {{amount}} here would render nothing. */}
+                      <div className="flex flex-wrap gap-1">
+                        {MSG_VARIABLES.filter(v => CAMPAIGN_VARS.has(v.key)).map(v => (
+                          <code key={v.key} title={v.hint}
+                            className="text-[10px] rounded-md border border-border bg-surface px-1.5 py-0.5 text-ink-muted">
+                            {`{{${v.key}}}`}
+                          </code>
+                        ))}
+                      </div>
                     </div>
+
+                    {/* Who + what, resolved by the same engines that send. */}
+                    {uid && (
+                      <div className="pt-1 border-t border-border">
+                        <div className="pt-3">
+                          <CampaignPreview
+                            userId={uid}
+                            kind={c.kind}
+                            schedule={draft.schedule}
+                            audience={draft.audience}
+                            channels={draft.channels}
+                            template={templateKey}
+                            customBody={draft.custom_body}
+                            subject={draft.subject}
+                            businessName={biz.name}
+                            reviewUrl={biz.reviewUrl}
+                          />
+                        </div>
+                      </div>
+                    )}
 
                     <div className="flex flex-wrap items-center gap-2 pt-1">
                       <Button size="sm" onClick={() => saveDraft(c)} loading={saving}>Save</Button>
                       <Button size="sm" variant="ghost" onClick={() => { setEditingId(null); setDraft(null) }}>Cancel</Button>
                       <Button size="sm" variant="secondary" onClick={() => saveAsPreset(c)}><Bookmark className="w-3.5 h-3.5" /> Save as preset</Button>
+                      <Button size="sm" variant="ghost" onClick={() => duplicate(c)} aria-label="Duplicate automation" title="Duplicate"><Copy className="w-4 h-4" /></Button>
                       <Button size="sm" variant="ghost" className="ml-auto text-red-400/70 hover:text-red-400" onClick={() => del(c)} aria-label="Delete automation" title="Delete"><Trash2 className="w-4 h-4" /></Button>
                     </div>
 

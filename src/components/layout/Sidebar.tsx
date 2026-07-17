@@ -3,25 +3,17 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
-import { LayoutDashboard, Users, FileText, Settings, LogOut, Zap, LayoutTemplate, Home, CalendarDays, Receipt, Menu, X, Sprout, MessageSquare, Search } from 'lucide-react'
+import { Settings, LogOut, Zap, LayoutTemplate, Menu, X, Search, LifeBuoy, MessageSquare } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { useFocusTrap } from '@/hooks/useFocusTrap'
+import { useModules } from '@/hooks/useModules'
 import { NotificationBell } from '@/components/notifications/NotificationBell'
 
 // Everyday work up top; the analytics pages live behind one "Grow" hub
 // (/dashboard/grow) so the sidebar stays short — fewer navigation decisions.
-// (Measurement Accuracy moved into the Grow hub with the other analytics.)
-const navMain = [
-  { label: 'Dashboard',  href: '/dashboard',            icon: LayoutDashboard },
-  { label: 'Schedule',   href: '/dashboard/schedule',   icon: CalendarDays },
-  { label: 'Customers',  href: '/dashboard/customers',  icon: Users },
-  { label: 'Properties', href: '/dashboard/properties', icon: Home },
-  { label: 'Quotes',     href: '/dashboard/quotes',     icon: FileText },
-  { label: 'Invoices',   href: '/dashboard/invoices',   icon: Receipt },
-  { label: 'Messages',   href: '/dashboard/messages',   icon: MessageSquare },
-  { label: 'Grow',       href: '/dashboard/grow',       icon: Sprout },
-]
+// The item list itself comes from THE feature-module registry (lib/modules) —
+// filtered per business by business_settings.enabled_modules (null = all).
 
 // Pages that live outside their hub's path still light up their parent nav item,
 // so the sidebar always answers "where am I" — even on Grow's analytics leaves
@@ -36,6 +28,8 @@ const sectionOf: Record<string, string> = {
   '/dashboard/reactivation': '/dashboard/grow',
   '/dashboard/review': '/dashboard/grow',
   '/dashboard/data-quality': '/dashboard/grow',
+  '/dashboard/reports': '/dashboard/grow',
+  '/dashboard/reports/scheduled': '/dashboard/grow',
   '/dashboard/routes': '/dashboard/grow',
   '/dashboard/measurements': '/dashboard/grow',
   '/dashboard/weather': '/dashboard/schedule',
@@ -48,8 +42,11 @@ export function Sidebar() {
   // The mobile drawer is a modal overlay — trap focus, move focus in on open,
   // Escape to close, and restore focus to the hamburger on close.
   const drawerRef = useFocusTrap<HTMLElement>(open, () => setOpen(false))
-  const [brand, setBrand] = useState<{ url: string | null; scale: number }>({ url: null, scale: 100 })
+  const [brand, setBrand] = useState<{ url: string | null; scale: number; name: string | null }>({ url: null, scale: 100, name: null })
   const [unread, setUnread] = useState(0)
+  // Per-business module composition — ONE loader (useModules) shared with the
+  // command palette and the Modules settings surface; live-updates on change.
+  const { visible: navMain } = useModules()
 
   // Uploaded logo + size from Branding settings (cached for the login screen).
   useEffect(() => {
@@ -57,7 +54,7 @@ export function Sidebar() {
     async function load() {
       try {
         const cached = window.localStorage.getItem('eq-logo')
-        if (cached) { const c = JSON.parse(cached); if (active && c?.url) setBrand({ url: c.url, scale: c.scale || 100 }) }
+        if (cached) { const c = JSON.parse(cached); if (active && (c?.url || c?.name)) setBrand({ url: c.url ?? null, scale: c.scale || 100, name: c.name ?? null }) }
       } catch { /* ignore */ }
       const supabase = createClient()
       // Local session read — the sidebar mounts on every page; no auth round-trip
@@ -65,10 +62,10 @@ export function Sidebar() {
       const { data: { session } } = await supabase.auth.getSession()
       const user = session?.user
       if (!user) return
-      const { data } = await supabase.from('business_settings').select('logo_url, logo_scale').eq('user_id', user.id).maybeSingle()
-      const s = data as { logo_url: string | null; logo_scale: number | null } | null
+      const { data } = await supabase.from('business_settings').select('logo_url, logo_scale, company_name').eq('user_id', user.id).maybeSingle()
+      const s = data as { logo_url: string | null; logo_scale: number | null; company_name: string | null } | null
       if (!active) return
-      const next = { url: s?.logo_url ?? null, scale: s?.logo_scale && s.logo_scale >= 50 ? s.logo_scale : 100 }
+      const next = { url: s?.logo_url ?? null, scale: s?.logo_scale && s.logo_scale >= 50 ? s.logo_scale : 100, name: s?.company_name?.trim() || null }
       setBrand(next)
       try { window.localStorage.setItem('eq-logo', JSON.stringify(next)) } catch { /* ignore */ }
     }
@@ -79,12 +76,14 @@ export function Sidebar() {
   // Unread Messages badge — live. The sum of conversations.unread, kept in sync
   // through the SAME Realtime stream as the inbox, so the count updates app-wide
   // (on any page) without a refresh or navigation. RLS scopes the stream to us.
+  // Muted conversations are excluded — mute means "stop counting this at me";
+  // the row's own badge still shows inside the inbox.
   useEffect(() => {
     const supabase = createClient()
     let channel: ReturnType<typeof supabase.channel> | null = null
     let active = true
     async function refresh(userId: string) {
-      const { data } = await supabase.from('conversations').select('unread').eq('user_id', userId).gt('unread', 0)
+      const { data } = await supabase.from('conversations').select('unread').eq('user_id', userId).gt('unread', 0).eq('muted', false)
       if (active) setUnread((data as { unread: number }[] | null)?.reduce((s, c) => s + (c.unread || 0), 0) || 0)
     }
     ;(async () => {
@@ -99,6 +98,16 @@ export function Sidebar() {
     })()
     return () => { active = false; if (channel) supabase.removeChannel(channel) }
   }, [])
+
+  // Tab-title badge: "(3) EdgeQuote …" while messages wait — the one attention cue
+  // that works with the app open in a background tab, no permission needed.
+  // Best-effort: a route change re-renders the title without the prefix, and the
+  // next unread change re-applies it.
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const bare = document.title.replace(/^\(\d+\+?\)\s/, '')
+    document.title = unread > 0 ? `(${unread > 9 ? '9+' : unread}) ${bare}` : bare
+  }, [unread])
 
   async function handleSignOut() {
     const supabase = createClient()
@@ -146,6 +155,14 @@ export function Sidebar() {
           })}
         </nav>
         <div className="px-3 py-4 border-t border-border flex flex-col gap-0.5">
+          {/* Help sits with Settings, not in the work nav above — it's a place you go
+              when something is confusing, not part of the daily loop. */}
+          <Link href="/dashboard/help" onClick={onNavigate}
+            aria-current={pathname === '/dashboard/help' ? 'page' : undefined}
+            className={linkClass(pathname === '/dashboard/help')}>
+            <LifeBuoy className="w-4 h-4" aria-hidden="true" />
+            Help
+          </Link>
           <Link href="/dashboard/settings" onClick={onNavigate}
             aria-current={pathname === '/dashboard/settings' ? 'page' : undefined}
             className={linkClass(pathname === '/dashboard/settings')}>
@@ -185,7 +202,9 @@ export function Sidebar() {
       )}
       <div className="min-w-0">
         <p className="text-sm font-bold text-ink leading-none truncate">EdgeQuote</p>
-        <p className="text-[10px] text-ink-faint leading-none mt-0.5 truncate">Edge Property Services</p>
+        {/* The OWNER's business name (Settings → Branding) — the platform never
+            assumes whose business this is. Hidden until a name is set. */}
+        {brand.name && <p className="text-[10px] text-ink-faint leading-none mt-0.5 truncate">{brand.name}</p>}
       </div>
     </div>
   )
@@ -199,6 +218,17 @@ export function Sidebar() {
           <button onClick={openCommand} className="text-ink-muted hover:text-ink p-2" aria-label="Search">
             <Search className="w-5 h-5" />
           </button>
+          {/* Messages, one tap from anywhere on mobile — the unread count was
+              previously invisible until the drawer was opened. */}
+          <Link href="/dashboard/messages" aria-label={unread > 0 ? `Messages, ${unread} unread` : 'Messages'}
+            className="relative text-ink-muted hover:text-ink p-2">
+            <MessageSquare className="w-5 h-5" />
+            {unread > 0 && (
+              <span className="absolute top-0.5 right-0.5 min-w-[16px] h-4 px-0.5 rounded-full bg-accent text-black text-[9px] font-bold tabular-nums flex items-center justify-center">
+                {unread > 9 ? '9+' : unread}
+              </span>
+            )}
+          </Link>
           <NotificationBell />
           <button onClick={() => setOpen(true)} className="text-ink p-2 -mr-2" aria-label="Open menu">
             <Menu className="w-5 h-5" />

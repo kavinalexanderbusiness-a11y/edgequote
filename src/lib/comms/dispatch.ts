@@ -1,8 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { sendSms, sendEmail } from './send'
 import { getOrCreateConversation } from './conversation'
-import { SKIP_REASON } from './skipReasons'
-import { prefAllows, type MessagePrefs } from './templates'
+import { reachCheck } from './reach'
+import { type MessagePrefs } from './templates'
 
 // ── Shared customer dispatch ─────────────────────────────────────────────────
 // Sends an already-rendered message to ONE customer over the requested channels,
@@ -34,12 +34,29 @@ export interface DispatchInput {
   template: string          // for messages.meta + notification_log.template
   meta?: Record<string, unknown>
   thread?: boolean          // record an outbound bubble (default true)
+  // A receipt/confirmation for something the customer just did — email skips the
+  // email_opt_in check (CASL s.6(6)(b)). SMS opt-in and the category preference
+  // still apply. See lib/comms/reach.
+  transactional?: boolean
 }
 
 // `provider`/`providerId` are the provider's own handle on the message (Twilio
 // MessageSid / Resend id). They're what the delivery webhooks match on later to
 // turn 'sent' (provider accepted) into 'delivered'/'bounced' — so callers must
 // persist them alongside the status. Null when nothing was sent.
+//
+// `retryable` carries the send layer's verdict on a FAILURE (see lib/comms/send):
+// would this exact message plausibly go through later? Automated callers spend a
+// finite attempt budget, so they need to tell "the provider is down" apart from
+// "the provider says no". Always false for a skip — a skip isn't a failure, it's
+// the consent gate working, and there is nothing to retry.
+//
+// It is PURELY carried, never consulted here: nothing in this file, and nothing on
+// the interactive send paths, branches on it. lib/comms/send already computes the
+// verdict (429/5xx and timeouts are retryable; a 4xx rejection is not) — dispatch
+// merely stops discarding it on the way to lib/automation/chase, which spends the
+// budget. Adding the field changes no send decision, no consent check and no
+// message; it only makes an answer that already existed reachable.
 export interface DispatchAttempt {
   channel: string
   status: string
@@ -47,6 +64,7 @@ export interface DispatchAttempt {
   sent: boolean
   provider: string | null
   providerId: string | null
+  retryable: boolean
 }
 export interface DispatchResult { attempts: DispatchAttempt[]; messageId: string | null; sentChannels: string[] }
 
@@ -56,30 +74,38 @@ export async function dispatchToCustomer(sb: SupabaseClient, inp: DispatchInput)
   const c = inp.customer
   const attempts: DispatchAttempt[] = []
 
-  // Granular consent: the customer declined this CATEGORY of message (e.g. opted
-  // into invoices but out of marketing). One check, every sender inherits it.
   const skip = (channel: string, detail: string): DispatchAttempt =>
-    ({ channel, status: 'skipped', detail, sent: false, provider: null, providerId: null })
+    ({ channel, status: 'skipped', detail, sent: false, provider: null, providerId: null, retryable: false })
 
-  if (!prefAllows(c.message_prefs, inp.template)) {
-    for (const ch of inp.channels) attempts.push(skip(ch, SKIP_REASON.UNSUBSCRIBED))
+  // Granular consent + channel opt-in + contact-on-file, resolved by the ONE
+  // shared predicate (lib/comms/reach) so the campaign audience preview can
+  // predict this exact outcome without re-deriving the rules.
+  const gate = reachCheck(c, inp.channels, inp.template, { transactional: inp.transactional })
+  const blocked = new Map(gate.map(g => [g.channel, g.blocked]))
+
+  // The customer declined this CATEGORY of message — nothing goes out at all.
+  // Reported per requested channel, in the caller's order.
+  if (gate.length && gate.every(g => g.blocked === 'unsubscribed')) {
+    for (const g of gate) attempts.push(skip(g.channel, g.blocked!))
     return { attempts, messageId: null, sentChannels: [] }
   }
 
   if (inp.channels.includes('sms')) {
-    if (!c.sms_opt_in) attempts.push(skip('sms', SKIP_REASON.NO_OPT_IN))
-    else if (!c.phone) attempts.push(skip('sms', SKIP_REASON.NO_PHONE))
+    const b = blocked.get('sms')
+    if (b) attempts.push(skip('sms', b))
     else {
-      const r = await sendSms(c.phone, inp.smsText)
-      attempts.push({ channel: 'sms', status: r.reason, detail: r.error ?? null, sent: r.sent, provider: r.sent ? PROVIDER.sms : null, providerId: r.id ?? null })
+      const r = await sendSms(c.phone!, inp.smsText)
+      // `?? false` — SendResult.retryable is optional, and absent means "hasn't
+      // thought about it", which must not license a retry.
+      attempts.push({ channel: 'sms', status: r.reason, detail: r.error ?? null, sent: r.sent, provider: r.sent ? PROVIDER.sms : null, providerId: r.id ?? null, retryable: r.retryable ?? false })
     }
   }
   if (inp.channels.includes('email')) {
-    if (!c.email_opt_in) attempts.push(skip('email', SKIP_REASON.NO_OPT_IN))
-    else if (!c.email) attempts.push(skip('email', SKIP_REASON.NO_EMAIL))
+    const b = blocked.get('email')
+    if (b) attempts.push(skip('email', b))
     else {
-      const r = await sendEmail(c.email, inp.emailSubject, inp.emailHtml, inp.emailText)
-      attempts.push({ channel: 'email', status: r.reason, detail: r.error ?? null, sent: r.sent, provider: r.sent ? PROVIDER.email : null, providerId: r.id ?? null })
+      const r = await sendEmail(c.email!, inp.emailSubject, inp.emailHtml, inp.emailText)
+      attempts.push({ channel: 'email', status: r.reason, detail: r.error ?? null, sent: r.sent, provider: r.sent ? PROVIDER.email : null, providerId: r.id ?? null, retryable: r.retryable ?? false })
     }
   }
 

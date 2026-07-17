@@ -4,6 +4,7 @@ import { confirm as confirmDialog } from '@/lib/confirm'
 
 import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { queueOrRun } from '@/lib/offline/outbox'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { Customer, CustomerFormValues } from '@/types'
@@ -151,27 +152,50 @@ export default function CustomersPage() {
     }
   }
 
+  // Editing a customer queues offline, through the SAME customer.update handler the
+  // profile's notes/prefs editors already use — a gate code or a corrected phone
+  // number gets fixed standing at the door, not remembered until there's signal.
+  // Both writes go in ONE op so the replay is the whole mutation, never half of it.
   async function handleEdit(values: CustomerFormValues) {
     if (!editing) return
-    const { error } = await supabase.from('customers').update(normalize(values)).eq('id', editing.id)
-    if (error) { toast.error('Could not save the customer: ' + error.message); return }   // keep the form open to retry
-
-    // If address changed, update the primary property address too
-    if (values.address) {
-      await supabase
-        .from('properties')
-        .update({
+    const id = editing.id
+    const patch = normalize(values)
+    // Address lives on the customer AND on their primary property (what the schedule
+    // and routing read). Only sent when there's an address to move.
+    const primaryProperty = values.address
+      ? {
           address: values.address,
           city: values.city || null,
           province: values.province || 'AB',
           postal_code: values.postal_code || null,
-        })
-        .eq('customer_id', editing.id)
-        .eq('is_primary', true)
-    }
+        }
+      : undefined
 
-    await fetchCustomers()
+    let outcome: 'ran' | 'queued'
+    try {
+      outcome = await queueOrRun(
+        { kind: 'customer.update', payload: { id, patch, primaryProperty, baseUpdatedAt: editing.updated_at }, label: `Edit · ${editing.name}` },
+        async () => {
+          const { error } = await supabase.from('customers').update(patch).eq('id', id)
+          if (error) throw new Error(error.message)
+          if (primaryProperty) {
+            // Was unchecked: a failed property update left the customer's address
+            // updated and the crew still routing to the old one, silently.
+            const { error: propErr } = await supabase.from('properties')
+              .update(primaryProperty).eq('customer_id', id).eq('is_primary', true)
+            if (propErr) throw new Error(propErr.message)
+          }
+        },
+      )
+    } catch (e) {
+      toast.error('Could not save the customer: ' + (e instanceof Error ? e.message : 'please try again.'))
+      return   // keep the form open to retry
+    }
+    // Paint the edit immediately either way — queued work is real work.
+    setCustomers(prev => prev.map(c => (c.id === id ? { ...c, ...(patch as Partial<Customer>) } : c)))
     setEditing(null)
+    if (outcome === 'queued') toast('Saved offline — it’ll sync when you’re back in signal.')
+    else await fetchCustomers()
   }
 
   // Delete from the active list ALWAYS archives (one rule, no branches): everything

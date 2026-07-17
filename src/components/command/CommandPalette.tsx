@@ -9,25 +9,28 @@ import {
   Search, CornerDownLeft, ArrowUp, ArrowDown, Loader2,
   Users, FileText, Receipt, CalendarDays, MessageSquare, Navigation, Sprout,
   Settings, LayoutDashboard, UserPlus, FilePlus2, ReceiptText, Send,
-  Home, Image as ImageIcon, CreditCard, Eye, Phone, CalendarPlus, Sparkles,
+  Home, Image as ImageIcon, CreditCard, Eye, Phone, CalendarPlus, Sparkles, LifeBuoy, Store, BookOpen,
 } from 'lucide-react'
+import { searchHelp, helpHref } from '@/lib/help/content'
+import { useModules } from '@/hooks/useModules'
+import { receiptNumberFor } from '@/lib/payments/ledger'
+import { getPageCommands, subscribePageCommands, PageCommand } from '@/components/command/pageCommands'
+import { phoneSearchDigits } from '@/lib/customers'
 
 type Icon = typeof Users
 interface Item { id: string; label: string; sub?: string; icon: Icon; run: () => void }
 interface Section { title: string; items: Item[] }
 
 // Jump-to navigation (also filtered by the query).
-const NAV: { label: string; href: string; icon: Icon }[] = [
-  { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-  { label: 'Schedule', href: '/dashboard/schedule', icon: CalendarDays },
-  { label: 'Customers', href: '/dashboard/customers', icon: Users },
-  { label: 'Properties', href: '/dashboard/properties', icon: Home },
-  { label: 'Quotes', href: '/dashboard/quotes', icon: FileText },
-  { label: 'Invoices', href: '/dashboard/invoices', icon: Receipt },
-  { label: 'Messages', href: '/dashboard/messages', icon: MessageSquare },
+// Module destinations come from THE feature-module registry (lib/modules) —
+// same source and same per-business filtering as the sidebar, so the palette
+// never disagrees with navigation. Only non-module destinations live here.
+const EXTRA_NAV: { label: string; href: string; icon: Icon }[] = [
+  { label: 'Marketplace', href: '/dashboard/marketplace', icon: Store },
+  { label: 'API Docs', href: '/dashboard/integrations/docs', icon: BookOpen },
   { label: 'Routes', href: '/dashboard/routes', icon: Navigation },
-  { label: 'Grow', href: '/dashboard/grow', icon: Sprout },
   { label: 'Measurement Accuracy', href: '/dashboard/measurements', icon: Eye },
+  { label: 'Help', href: '/dashboard/help', icon: LifeBuoy },
   { label: 'Settings', href: '/dashboard/settings', icon: Settings },
 ]
 
@@ -42,6 +45,11 @@ const VERB_RE = /^(call|phone|text|message|msg|sms|schedule|book)\b\s*(.*)$/i
 export function CommandPalette() {
   const supabase = useMemo(() => createClient(), [])
   const router = useRouter()
+  const { visible: moduleNav } = useModules()
+  const NAV = useMemo(
+    () => [...moduleNav.map(m => ({ label: m.label, href: m.href, icon: m.icon as Icon })), ...EXTRA_NAV],
+    [moduleNav],
+  )
   const [open, setOpen] = useState(false)
   const [mounted, setMounted] = useState(false)
   const [q, setQ] = useState('')
@@ -74,6 +82,19 @@ export function CommandPalette() {
   const go = useCallback((href: string) => { close(); router.push(href) }, [close, router])
   const tel = useCallback((phone: string) => { close(); window.location.href = `tel:${phone.replace(/[^\d+]/g, '')}` }, [close])
 
+  // Commands the CURRENT page registered (usePageCommands) — the palette grows
+  // a "This page" section while such a page is mounted. Running one closes the
+  // palette first, exactly like every other item.
+  const [pageCmds, setPageCmds] = useState<PageCommand[]>(() => getPageCommands())
+  useEffect(() => subscribePageCommands(() => setPageCmds(getPageCommands())), [])
+  const pageSection = useCallback((query?: string): Section | null => {
+    const ql = (query ?? '').toLowerCase()
+    const items = pageCmds
+      .filter(c => !ql || c.label.toLowerCase().includes(ql) || (c.keywords ?? '').toLowerCase().includes(ql))
+      .map(c => ({ id: `pg-${c.id}`, label: c.label, sub: c.sub, icon: c.icon as Icon, run: () => { close(); c.run() } }))
+    return items.length ? { title: 'This page', items } : null
+  }, [pageCmds, close])
+
   // Quick actions + navigation when the box is empty.
   const baseSections = useMemo<Section[]>(() => [
     {
@@ -82,13 +103,17 @@ export function CommandPalette() {
         { id: 'a-quote', label: 'New Quote', sub: 'Start a fresh quote', icon: FilePlus2, run: () => go('/dashboard/quotes/new') },
         { id: 'a-customer', label: 'New Customer', sub: 'Add a customer', icon: UserPlus, run: () => go('/dashboard/customers?new=1') },
         { id: 'a-job', label: 'Schedule a Job', sub: 'Open the calendar', icon: CalendarPlus, run: () => go('/dashboard/schedule') },
-        { id: 'a-invoice', label: 'New Invoice', sub: 'Open invoices', icon: ReceiptText, run: () => go('/dashboard/invoices') },
+        { id: 'a-invoice', label: 'New Invoice', sub: 'Bill a customer directly', icon: ReceiptText, run: () => go('/dashboard/invoices?new=1') },
         { id: 'a-message', label: 'New Message', sub: 'Open the inbox', icon: Send, run: () => go('/dashboard/messages') },
         { id: 'a-studio', label: 'Marketing Studio', sub: 'AI posts from finished jobs', icon: Sparkles, run: () => go('/dashboard/grow/studio') },
       ],
     },
     { title: 'Go to', items: NAV.map(n => ({ id: `n-${n.href}`, label: n.label, icon: n.icon, run: () => go(n.href) })) },
-  ], [go])
+  ], [go, NAV])
+  const emptySections = useMemo<Section[]>(() => {
+    const ps = pageSection()
+    return ps ? [ps, ...baseSections] : baseSections
+  }, [pageSection, baseSections])
 
   // Debounced universal search + command verbs.
   useEffect(() => {
@@ -113,8 +138,12 @@ export function CommandPalette() {
         const term = verb[2].replace(/[,()*%]/g, ' ').trim()
         const isCall = kind === 'call' || kind === 'phone'
         if (!term) { if (myReq === reqRef.current) { setResults([]); setLoading(false) }; return }
+        // "call 4038521443" has to find a number stored as 403-852-1443 — match the
+        // canonical digits column, never the raw one (see phoneSearchDigits).
+        const verbDigits = phoneSearchDigits(term)
+        const verbOr = [`name.ilike.%${term}%`, verbDigits ? `phone_digits.ilike.%${verbDigits}%` : `phone.ilike.%${term}%`].join(',')
         const { data } = await supabase.from('customers').select('id, name, phone').eq('user_id', uid).is('archived_at', null)
-          .or(`name.ilike.%${term}%,phone.ilike.%${term}%`).limit(8)
+          .or(verbOr).limit(8)
         if (myReq !== reqRef.current) return
         const rows = ((data as { id: string; name: string | null; phone: string | null }[]) || []).filter(r => !isCall || r.phone)
         setResults(rows.length ? [{
@@ -134,9 +163,20 @@ export function CommandPalette() {
       const like = `%${safe}%`
       const amt = Number(safe.replace(/[^\d.]/g, ''))
       const payAmt = Number.isFinite(amt) && amt > 0 ? `,amount.eq.${amt}` : ''
+      // An unknown number rings and the owner types it in whatever shape their
+      // handset showed it. `phone.ilike` compares two arbitrary formats and loses;
+      // phone_digits is the canonical form both sides reduce to. Keep the raw
+      // `phone` clause too — a query the digits rule rejects (a name) must still
+      // search phone the way it always did.
+      const digits = phoneSearchDigits(safe)
+      const custOr = [
+        `name.ilike.${like}`, `email.ilike.${like}`,
+        digits ? `phone_digits.ilike.%${digits}%` : `phone.ilike.${like}`,
+        `address.ilike.${like}`, `city.ilike.${like}`, `notes.ilike.${like}`,
+      ].join(',')
       const [cust, prop, quo, inv, job, msg, pay, photo, vision] = await Promise.all([
         supabase.from('customers').select('id, name, phone, city, email').eq('user_id', uid).is('archived_at', null)
-          .or(`name.ilike.${like},email.ilike.${like},phone.ilike.${like},address.ilike.${like},city.ilike.${like},notes.ilike.${like}`).limit(6),
+          .or(custOr).limit(6),
         supabase.from('properties').select('id, address, city, neighborhood, customer_id').eq('user_id', uid)
           .or(`address.ilike.${like},city.ilike.${like},neighborhood.ilike.${like},postal_code.ilike.${like},notes.ilike.${like}`).limit(5),
         supabase.from('quotes').select('id, quote_number, customer_name, service_type, total, status').eq('user_id', uid)
@@ -155,6 +195,8 @@ export function CommandPalette() {
       if (myReq !== reqRef.current) return  // a newer keystroke superseded this one
 
       const sections: Section[] = []
+      const ps = pageSection(safe)
+      if (ps) sections.push(ps)
       const ql = safe.toLowerCase()
       const nav = NAV.filter(n => n.label.toLowerCase().includes(ql))
         .map(n => ({ id: `n-${n.href}`, label: n.label, icon: n.icon as Icon, run: () => go(n.href) }))
@@ -183,7 +225,15 @@ export function CommandPalette() {
       if (iRows.length) sections.push({ title: 'Invoices', items: iRows.map(ii => ({
         id: `i-${ii.id}`, label: `${ii.invoice_number || 'Invoice'} · ${ii.customer_name || 'Customer'}`,
         sub: [ii.amount != null ? formatCurrency(Number(ii.amount)) : null, ii.status].filter(Boolean).join(' · ') || undefined,
-        icon: Receipt, run: () => go('/dashboard/invoices'),
+        // Land on the invoice, the same way Payments does above. Finding INV-0042 and
+        // then being dropped on the unfiltered list — which has no search box — meant
+        // the palette could find a record and then lose it again. The `?invoice=` focus
+        // seam already existed (invoices/page.tsx reads it and shows a "Showing…" banner);
+        // only this link never used it.
+        icon: Receipt,
+        run: () => go(ii.invoice_number
+          ? `/dashboard/invoices?invoice=${encodeURIComponent(ii.invoice_number)}`
+          : '/dashboard/invoices'),
       })) })
 
       const jRows = (job.data as { id: string; title: string | null; service_type: string | null; scheduled_date: string | null; status: string }[]) || []
@@ -197,7 +247,11 @@ export function CommandPalette() {
       if (payRows.length) sections.push({ title: 'Payments', items: payRows.map(p => ({
         id: `pay-${p.id}`, label: `${p.amount != null ? formatCurrency(Number(p.amount)) : 'Payment'}${p.status ? ` · ${p.status}` : ''}`,
         sub: [p.method, p.notes].filter(Boolean).join(' · ') || undefined,
-        icon: CreditCard, run: () => go(p.customer_id ? `/dashboard/customers/${p.customer_id}` : '/dashboard/invoices'),
+        // Land on the payment itself. This used to dump you on the customer page or,
+        // worse, the unfiltered invoice list — the palette could FIND a payment but had
+        // nowhere to send you, so finding it didn't help. The receipt number is derived
+        // from the row id, so it identifies exactly this one.
+        icon: CreditCard, run: () => go(`/dashboard/payments?q=${encodeURIComponent(receiptNumberFor(p.id))}`),
       })) })
 
       const phRows = (photo.data as { id: string; caption: string | null; kind: string | null; customer_id: string | null }[]) || []
@@ -225,12 +279,26 @@ export function CommandPalette() {
         }
       }) })
 
+      // ── Help ──
+      // Last, and capped at 3: someone typing a customer's name wants the customer,
+      // not an article that happens to mention "quote". But someone typing "why
+      // didn't it send" has no record to find — only an answer — and this is the
+      // one search box they'll try. Pure client-side (lib/help/content), so it costs
+      // nothing and can't fail.
+      const help = searchHelp(safe).slice(0, 3)
+      if (help.length) sections.push({
+        title: 'Help', items: help.map(a => ({
+          id: `h-${a.id}`, label: a.title, sub: a.summary, icon: LifeBuoy,
+          run: () => go(helpHref(a.id)),
+        })),
+      })
+
       setResults(sections); setSel(0); setLoading(false)
     }, 180)
     return () => clearTimeout(handle)
-  }, [q, supabase, go, tel])
+  }, [q, supabase, go, tel, pageSection])
 
-  const sections = q.trim() ? results : baseSections
+  const sections = q.trim() ? results : emptySections
   const flat = useMemo(() => sections.flatMap(s => s.items), [sections])
 
   // Reset the highlight whenever the query changes so it never points past the

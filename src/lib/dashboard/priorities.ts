@@ -10,7 +10,8 @@
 // customer goes cold fastest.
 
 import { formatCurrency } from '@/lib/utils'
-import { needsFollowUp } from '@/lib/followup'
+import { needsFollowUp, canChaseCustomer } from '@/lib/followup'
+import type { ReachCustomer } from '@/lib/comms/reach'
 import { invoiceBalance } from '@/lib/payments/ledger'
 import { computeReactivation, type RJob, type RQuote, type RRecurrence } from '@/lib/reactivation'
 import type { LeadResponseReport } from '@/lib/leadResponse'
@@ -20,7 +21,10 @@ import type { Quote } from '@/types'
 
 export type PriorityKind =
   | 'leads' | 'unpaid' | 'unscheduled' | 'missed'
-  | 'drafts' | 'followups' | 'reactivation' | 'lapsed' | 'messages'
+  // followups_blocked = real money that CANNOT be chased (no phone, no email).
+  // Separate from `followups` because the verb is different: find a number, not
+  // send a message.
+  | 'drafts' | 'followups' | 'followups_blocked' | 'reactivation' | 'lapsed' | 'messages'
 
 export interface Priority {
   kind: PriorityKind
@@ -42,7 +46,11 @@ export interface PrioritiesInput {
   invoices: PriorityInvoice[]
   jobs: RJob[]
   recById: Record<string, RRecurrence>
-  customers: { id: string }[]
+  // id is all the reactivation engine needs (it's generic over `{id:string}`), but
+  // the follow-up split also asks "could a message to this person actually go out",
+  // which is the reach engine's question — so the row carries the fields
+  // canChaseCustomer reads. They ride along in a query that was already going out.
+  customers: (ReachCustomer & { id: string })[]
   conversations: { unread: number; customer_id?: string | null }[]
   leads: LeadResponseReport
   seasons: ServiceSeasons
@@ -134,13 +142,37 @@ export function computePriorities(i: PrioritiesInput): Priority[] {
 
   // 6) Quotes needing follow-up — reuse needsFollowUp so the count matches the
   //    Quotes follow-up queue exactly.
+  //
+  //    Split by whether the chase can actually HAPPEN. This queue used to offer
+  //    "9 · $1,246" as one job; on the live book only 3 of those 9 were chaseable
+  //    and the other 6 ($445) belonged to customers with no phone and no email.
+  //    Both halves are real money, but they need different verbs — one is "send a
+  //    message", the other is "find their number" — and a single row sent the owner
+  //    to the quote list to discover the difference one dead end at a time.
+  //    canChaseCustomer is the same reach engine the sender uses, so this can't
+  //    disagree with what a send would actually do.
+  const custById: Record<string, ReachCustomer> = {}
+  for (const c of customers) custById[c.id] = c
   const followups = quotes.filter(needsFollowUp)
-  const followupTotal = followups.reduce((s, q) => s + Number(q.total || 0), 0)
-  if (followups.length > 0) {
+  const sumTotals = (qs: Quote[]) => qs.reduce((s, q) => s + Number(q.total || 0), 0)
+  const chaseable = followups.filter(q => q.customer_id && canChaseCustomer(custById[q.customer_id]))
+  const blocked = followups.filter(q => !q.customer_id || !canChaseCustomer(custById[q.customer_id]))
+  const chaseableTotal = sumTotals(chaseable)
+  const blockedTotal = sumTotals(blocked)
+  if (chaseable.length > 0) {
     next.push({
       kind: 'followups', label: 'Follow up on quotes',
-      detail: `${followups.length} · ${formatCurrency(followupTotal)}`,
-      href: '/dashboard/quotes', score: 50_000 + adder(followupTotal),
+      detail: `${chaseable.length} · ${formatCurrency(chaseableTotal)}`,
+      href: '/dashboard/quotes', score: 50_000 + adder(chaseableTotal),
+    })
+  }
+  if (blocked.length > 0) {
+    next.push({
+      kind: 'followups_blocked', label: 'Quotes you can’t chase yet',
+      detail: `${blocked.length} · ${formatCurrency(blockedTotal)}`,
+      // Data-quality, not the quote list: the job here is to find a phone number,
+      // not to write a message.
+      href: '/dashboard/data-quality', score: 45_000 + adder(blockedTotal),
     })
   }
 

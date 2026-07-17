@@ -14,6 +14,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Invoice, Quote } from '@/types'
 import { invoiceBalance, displayInvoiceStatus, collectedBetween, dayBoundsIso } from '@/lib/payments/ledger'
+import type { ReachCustomer } from '@/lib/comms/reach'
 import { computeLeadsNeedingResponse, type LeadConvRow, type LeadQuoteRow } from '@/lib/leadResponse'
 import { loadWeatherImpact, type WeatherImpactReport } from '@/lib/weatherImpact'
 import { settingsToSeasons } from '@/lib/seasons'
@@ -109,7 +110,11 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
     sb.from('conversations')
       .select('id, customer_id, unread, lead_status, last_direction, last_message_at, created_at, customers(name)')
       .eq('user_id', userId).is('archived_at', null),
-    sb.from('customers').select('id').eq('user_id', userId).is('archived_at', null),
+    // Exactly the fields lib/comms/reach needs to answer "would a message to this
+    // person actually go out" — so the follow-up row can tell the owner which
+    // chases are real. Rides along in the batch that was already going out; the
+    // reactivation engine only reads `id` and ignores the rest.
+    sb.from('customers').select('id, phone, email, sms_opt_in, email_opt_in, message_prefs').eq('user_id', userId).is('archived_at', null),
     // Widened with base_* so the weather engine doesn't re-read this same row.
     sb.from('business_settings').select('gst_percent, service_seasons, preferred_work_days, work_start_time, daily_capacity_hours, base_lat, base_lng, base_address').eq('user_id', userId).maybeSingle(),
     collectedBetween(sb, { userId, startIso: dayB.start, endIso: dayB.end }),
@@ -173,7 +178,7 @@ export async function loadDashboard(sb: SupabaseClient, userId: string): Promise
   // ── Priorities (THE queue engine) ──
   const priorities = computePriorities({
     quotes, invoices, jobs, recById,
-    customers: (custRes.data as { id: string }[]) || [],
+    customers: (custRes.data as (ReachCustomer & { id: string })[]) || [],
     // Only the unread ones are a "reply to messages" job. customer_id must
     // survive — the messages row uses it to exclude people leads already counted.
     conversations: conversations.filter(c => Number(c.unread || 0) > 0),

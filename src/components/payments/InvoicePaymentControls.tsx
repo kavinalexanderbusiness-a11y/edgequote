@@ -20,16 +20,24 @@ function todayISO(): string {
 // Record-Payment (multiple payments per invoice), the overpayment resolver
 // (credit / refund / raise total), and one-tap apply-credit. All movements go
 // through the shared ledger so dashboard, portal and reports update automatically.
-export function InvoicePaymentControls({ invoice, settings, uid, credit, payments = [], onChanged }: {
+export function InvoicePaymentControls({ invoice, settings, uid, credit, payments = [], onChanged, onIssueDraft, defaultOpen }: {
   invoice: Invoice
   settings: BusinessSettings | null
   uid: string
   credit: number              // the customer's available credit
   payments?: Payment[]        // this invoice's ledger rows (permanent receipts + revert)
   onChanged: () => void
+  // Taking money on a draft ISSUES it — the customer just paid, so it plainly isn't
+  // a draft any more. The page owns that policy (it's the same markSent the Send
+  // action uses); we only guarantee the ORDER. It has to run BEFORE recordPayment:
+  // the invoice's paid/partial status is derived by a DB trigger off the ledger, so
+  // issuing afterwards would stamp 'sent' back over a trigger-derived 'paid'.
+  onIssueDraft?: () => Promise<void>
+  /** Open the record-payment form on mount — the field "Get paid" deep link. */
+  defaultOpen?: boolean
 }) {
   const supabase = useState(() => createClient())[0]
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(!!defaultOpen)
   const [busy, setBusy] = useState(false)
   const { total, paid, balance, overpaid } = invoiceBalance(invoice, settings)
 
@@ -94,6 +102,11 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
 
   async function save() {
     setBusy(true)
+    // Issue first, then record — see onIssueDraft. If issuing fails we stop rather
+    // than book money against a draft the rest of the app treats as not-yet-real.
+    if (onIssueDraft && invoice.status === 'draft') {
+      try { await onIssueDraft() } catch { setBusy(false); toast.error('Could not issue the invoice — payment not recorded.'); return }
+    }
     const res = await recordPayment(supabase, { userId: uid, invoice, amount: Number(amount), method, date, notes })
     setBusy(false)
     if (res.error) { toast.error('Could not record payment: ' + res.error); return }

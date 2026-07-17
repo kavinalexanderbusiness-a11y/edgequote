@@ -1,13 +1,16 @@
 'use client'
 
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useListShortcuts } from '@/hooks/useListShortcuts'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { hoverIntent } from '@/lib/prefetch'
 import { Quote, QuoteStatus } from '@/types'
 import { formatCurrency, formatDate, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
-import { needsFollowUp, daysSince, compareFollowUp } from '@/lib/followup'
+import { needsFollowUp, daysSince, compareFollowUp, chaseBlockedReason } from '@/lib/followup'
+import type { ReachCustomer } from '@/lib/comms/reach'
+import { describeSkip } from '@/lib/comms/skipReasons'
+import { isQuoteExpired } from '@/lib/quoteStatus'
 import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -25,6 +28,11 @@ import { Trash2, Bell, Send, FileText, Copy, Download } from 'lucide-react'
 interface QuoteListProps {
   quotes: Quote[]
   onDelete: (id: string) => Promise<void>
+  /** Reach fields per customer id, so the follow-up queue can tell "chase this"
+   *  apart from "you have no way to chase this". Optional: absent (or a customer
+   *  missing from it) means the row behaves exactly as it did before — the queue
+   *  must never invent a block it isn't sure about. */
+  reachById?: Record<string, ReachCustomer>
 }
 
 const STATUS_FILTERS: { value: '' | QuoteStatus; label: string }[] = [
@@ -38,7 +46,7 @@ const STATUS_FILTERS: { value: '' | QuoteStatus; label: string }[] = [
   { value: 'declined', label: 'Declined' },
 ]
 
-export function QuoteList({ quotes, onDelete }: QuoteListProps) {
+export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
   const router = useRouter()
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'' | QuoteStatus>('')
@@ -48,8 +56,20 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
   // '/' focuses search, 'n' starts a new quote — the shared list idiom.
   useListShortcuts({ search: searchRef, onNew: () => router.push('/dashboard/quotes/new') })
 
+  // Why a quote's follow-up can't go out — null when it can, or when we simply
+  // don't know the customer (never invent a block). Same engine the sender uses.
+  const blockedFor = useCallback((q: Quote) => {
+    const c = q.customer_id ? reachById?.[q.customer_id] : undefined
+    return c ? chaseBlockedReason(c) : null
+  }, [reachById])
+
   // Date math over every quote — memoized so it doesn't re-run on each search keystroke.
-  const followUpCount = useMemo(() => quotes.filter(needsFollowUp).length, [quotes])
+  // Counts only the follow-ups the owner can actually DO, so the pill agrees with the
+  // dashboard queue rather than promising work that has no channel to happen on.
+  const followUpCount = useMemo(
+    () => quotes.filter(q => needsFollowUp(q) && !blockedFor(q)).length,
+    [quotes, blockedFor],
+  )
 
   // Deep-link from the Weekly Review (and elsewhere): ?followup=1 opens straight to
   // the follow-up queue, ?status=sent to a status — one tap, no re-filtering. Read
@@ -301,8 +321,22 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
                         shown as "Sent Xd ago · follow up" under the customer name. */}
                     <td className="px-3 sm:px-5 py-3.5 font-mono text-xs text-ink-muted hidden sm:table-cell">
                       <span className="flex items-center gap-1.5">
-                        {needsFollowUp(q) && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" title="Needs follow-up" />}
+                        {/* An expired quote is NOT a follow-up: the automatic chaser
+                            has stopped on it, so the dot would promise work the app
+                            has already abandoned. Show why instead. */}
+                        {/* The dot means "there is work here for you". A quote whose
+                            customer can't be messaged fails that test the same way an
+                            expired one does — the chaser has no way to act on it — so
+                            it goes grey and says why rather than amber and beckoning. */}
+                        {needsFollowUp(q) && !isQuoteExpired(q, localTodayISO()) && (
+                          blockedFor(q)
+                            ? <span className="w-1.5 h-1.5 rounded-full bg-ink-faint/50 shrink-0" title={describeSkip(blockedFor(q)).label} />
+                            : <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" title="Needs follow-up" />
+                        )}
                         {q.quote_number}
+                        {isQuoteExpired(q, localTodayISO()) && (
+                          <span className="text-[9px] font-semibold uppercase tracking-wide text-amber-400 border border-amber-500/30 bg-amber-500/10 rounded px-1 py-0.5 shrink-0" title={`Expired ${formatDate(q.valid_until!)}`}>Expired</span>
+                        )}
                       </span>
                     </td>
                     <td className="px-3 sm:px-5 py-3.5 font-medium text-ink">
@@ -312,9 +346,23 @@ export function QuoteList({ quotes, onDelete }: QuoteListProps) {
                         className="rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 hover:text-accent-text transition-colors">
                         {q.customer_name}
                       </Link>
-                      {needsFollowUp(q) && q.sent_at && (
-                        <span className="block text-[10px] font-semibold text-amber-400 mt-0.5">Sent {daysSince(q.sent_at)}d ago · follow up</span>
-                      )}
+                      {/* "Sent 12d ago · follow up" is a promise the app can only keep
+                          if a message can actually go out. When it can't, say so and
+                          point at the fix instead — chasing a customer with no phone
+                          and no email is not work the owner can do, and on the live
+                          book that was 6 of 9 rows in this very queue. */}
+                      {needsFollowUp(q) && q.sent_at && (() => {
+                        const blocked = blockedFor(q)
+                        if (!blocked) return (
+                          <span className="block text-[10px] font-semibold text-amber-400 mt-0.5">Sent {daysSince(q.sent_at)}d ago · follow up</span>
+                        )
+                        return (
+                          <Link href={`/dashboard/customers/${q.customer_id}`} onClick={e => e.stopPropagation()}
+                            className="block text-[10px] font-semibold text-ink-muted hover:text-ink mt-0.5 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                            Sent {daysSince(q.sent_at)}d ago · {describeSkip(blocked).label} →
+                          </Link>
+                        )
+                      })()}
                     </td>
                     <td className="px-3 sm:px-5 py-3.5 text-ink-muted hidden md:table-cell">{q.service_type}</td>
                     <td className="px-3 sm:px-5 py-3.5 font-semibold text-ink tabular-nums">{formatCurrency(q.total)}</td>

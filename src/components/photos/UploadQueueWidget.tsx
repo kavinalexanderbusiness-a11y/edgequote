@@ -3,7 +3,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import {
   subscribeUploads, getUploadItems, getUploadServerSnapshot,
-  retryUpload, retryAllFailed, dismissUpload, clearDone, type QueueItem,
+  retryUpload, retryAllFailed, dismissUpload, clearDone, rehydrateUploads, type QueueItem,
 } from '@/lib/uploadQueue'
 import { cn } from '@/lib/utils'
 import { UploadCloud, Loader2, Check, AlertTriangle, RotateCw, X, ChevronDown, ChevronUp, WifiOff } from 'lucide-react'
@@ -23,6 +23,12 @@ export function UploadQueueWidget() {
     window.addEventListener('online', on); window.addEventListener('offline', off)
     return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off) }
   }, [])
+
+  // Photos that outlived the app go back in the queue. This tray is mounted once in
+  // the dashboard layout and is client-only, so it's the natural (and SSR-safe)
+  // trigger; rehydrateUploads guards itself against running twice. The tray renders
+  // nothing until there are items, so recovery is what makes it reappear.
+  useEffect(() => { void rehydrateUploads() }, [])
 
   if (!items.length) return null
   const done = items.filter(i => i.status === 'done').length

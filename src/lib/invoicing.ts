@@ -73,6 +73,17 @@ function serviceLineLabel(serviceType: string | null | undefined, freq: string |
 // value (job price > quote) plus every add-on, plus a separate travel charge
 // when the quote bills travel separately. Used by the draft + the sync so the
 // breakdown and the amount can never disagree.
+// THE invoice number generator. Sequential INV-#### from the highest EXISTING
+// number — a row count would reissue a number after any delete and two invoices
+// would share it (duplicate customer-facing documents). Every path that mints an
+// invoice — the completed-job auto-draft, converting a quote, and manual creation
+// — calls this, so the sequence can't fork.
+export async function nextInvoiceNumber(supabase: Supa, userId: string): Promise<string> {
+  const { data } = await supabase.from('invoices').select('invoice_number').eq('user_id', userId)
+  const next = maxNumericSuffix(((data as { invoice_number: string }[]) || []).map(n => n.invoice_number)) + 1
+  return `INV-${String(next).padStart(4, '0')}`
+}
+
 export function buildInvoiceLineItems(opts: {
   serviceType: string | null
   baseAmount: number
@@ -229,10 +240,7 @@ export async function createDraftInvoiceForCompletedJob(supabase: Supa, job: Job
   if (!customerName && quote) customerName = String(quote.customer_name || '')
   if (!address && quote) address = (quote.address as string) ?? null
 
-  // Sequential INV-#### from the highest EXISTING number — a row count would
-  // reissue a number after any delete and two invoices would share it.
-  const { data: nums } = await supabase.from('invoices').select('invoice_number').eq('user_id', user.id)
-  const invoiceNumber = `INV-${String(maxNumericSuffix(((nums as { invoice_number: string }[]) || []).map(n => n.invoice_number)) + 1).padStart(4, '0')}`
+  const invoiceNumber = await nextInvoiceNumber(supabase, user.id)
 
   // Local dates — evening completions must not stamp tomorrow (UTC) as issued.
   const today = localTodayISO()
@@ -253,7 +261,11 @@ export async function createDraftInvoiceForCompletedJob(supabase: Supa, job: Job
     status: 'draft',
     issued_date: today,
     due_date: dueISO,
-    notes: `Auto-generated from completed ${job.recurrence_id ? `${freq || 'recurring'} visit` : 'job'} on ${job.scheduled_date}.`,
+    // Provenance is for the OWNER, not the customer. This used to go in `notes`,
+    // which InvoicePDF prints — so every auto-drafted invoice told the customer
+    // "Auto-generated from completed weekly visit on 2026-07-10". `notes` is left
+    // empty for the owner to write something the customer should actually read.
+    internal_notes: `Auto-generated from completed ${job.recurrence_id ? `${freq || 'recurring'} visit` : 'job'} on ${job.scheduled_date}.`,
   }).select('id').single()
 
   if (error || !created) {

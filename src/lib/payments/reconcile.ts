@@ -54,14 +54,37 @@ export async function reconcileStripe(
   const stripe = await listSucceededPaymentIntents({ sinceIso: p.sinceIso, maxPages: p.maxPages })
   if (!stripe.ok) return { ...base, error: 'Could not read payments from Stripe — check the API key and try again.' }
 
-  // Our side of the join, in one read: every PaymentIntent this owner has recorded.
-  const { data, error } = await sb.from('payments')
-    .select('stripe_payment_intent')
-    .eq('user_id', p.userId)
-    .not('stripe_payment_intent', 'is', null)
-    .gte('paid_at', p.sinceIso)
-  if (error) return { ...base, error: 'Could not read your payment ledger — try again.' }
-  const recorded = new Set(((data as { stripe_payment_intent: string | null }[]) || []).map(r => r.stripe_payment_intent))
+  // Our side of the join. Asked as "which of THESE specific intents are recorded?"
+  // rather than "give me every intent I've recorded", for two reasons that both end
+  // in the owner double-recording money:
+  //
+  //  • NOT filtered by paid_at — that's the date the OWNER TYPED for a manual row
+  //    (dateToIso), so a back-dated payment falls outside a date window while its
+  //    PaymentIntent sits inside it, and a recorded payment reports as unrecorded.
+  //  • NOT an unbounded select either — PostgREST silently caps rows (the same cap
+  //    that once made future work vanish from the calendar). Past that many payments
+  //    the tail drops out of the set and, again, recorded payments report as
+  //    unrecorded. A cap that shows up only after N rows, on a report whose whole
+  //    promise is that it's safe to act on, is the worst kind of quiet.
+  //
+  // Keying on the ids Stripe just handed us bounds the query by construction and
+  // answers exactly the question asked. Chunked because a few hundred ids in one
+  // .in() overflows the request URI.
+  const wanted = stripe.charges.map(c => c.paymentIntentId)
+  const recorded = new Set<string>()
+  const CHUNK = 100
+  for (let i = 0; i < wanted.length; i += CHUNK) {
+    const { data, error } = await sb.from('payments')
+      .select('stripe_payment_intent')
+      .eq('user_id', p.userId)
+      .in('stripe_payment_intent', wanted.slice(i, i + CHUNK))
+    // A failed read must not read as "nothing recorded" — that would report every
+    // charge in the chunk as stranded money.
+    if (error) return { ...base, error: 'Could not read your payment ledger — try again.' }
+    for (const r of ((data as { stripe_payment_intent: string | null }[]) || [])) {
+      if (r.stripe_payment_intent) recorded.add(r.stripe_payment_intent)
+    }
+  }
 
   const missing = stripe.charges.filter(c => !recorded.has(c.paymentIntentId))
   if (missing.length === 0) {

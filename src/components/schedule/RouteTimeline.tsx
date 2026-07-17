@@ -10,6 +10,10 @@ export interface TimelineStop {
   arrivalMin: number    // from the route engine's ETA chain
   durMin: number
   status: JobStatus
+  /** Optional promised appointment time (minutes since midnight). Draws a pin
+   *  on the bar and flags the stop red when the ETA misses it — callers that
+   *  don't pass it get the exact timeline they always had. */
+  promisedMin?: number | null
 }
 
 // ── Route Timeline ────────────────────────────────────────────────────────────
@@ -22,11 +26,22 @@ export interface TimelineStop {
 //
 // It answers, at a glance, what the metric strip could only state: where the day
 // actually goes, how much of it is driving, and whether it runs past capacity.
-export function RouteTimeline({ startMin, finishMin, capacityEndMin, stops, className }: {
+export function RouteTimeline({ startMin, finishMin, capacityEndMin, stops, nowMin, onSelectStop, omitted, className }: {
   startMin: number
   finishMin: number
   capacityEndMin: number
   stops: TimelineStop[]
+  /** Minutes-since-midnight right now — passed only for TODAY. Draws the "now"
+   *  line, which is what turns a plan into a live read on whether you're behind. */
+  nowMin?: number
+  /** Jump to a stop's card. Without this the timeline is a picture you can only
+   *  interrogate by hovering — and `title` tooltips never fire on touch, so on a
+   *  phone the stop names and arrival times were simply unreadable. */
+  onSelectStop?: (jobId: string) => void
+  /** Visits on this day that the route couldn't place (no address to geocode).
+   *  They're absent from the ETA chain, so they're absent here AND from the
+   *  finish time — say so rather than draw a day that quietly leaves work out. */
+  omitted?: number
   className?: string
 }) {
   if (!stops.length) return null
@@ -36,6 +51,7 @@ export function RouteTimeline({ startMin, finishMin, capacityEndMin, stops, clas
   const pct = (min: number) => ((min - startMin) / span) * 100
   const over = finishMin > capacityEndMin
   const overMin = Math.round(finishMin - capacityEndMin)
+  const showNow = nowMin != null && nowMin >= startMin && nowMin <= endMin
 
   // Lay the day out: drive → work → drive → work … from the engine's arrivals.
   type Seg =
@@ -92,24 +108,56 @@ export function RouteTimeline({ startMin, finishMin, capacityEndMin, stops, clas
           }
           const done = s.stop.status === 'completed'
           const running = s.stop.status === 'in_progress'
-          return (
-            <div
+          // A promised time the ETA chain misses turns the block red — the bar
+          // should show the broken promise where it happens, not in a footnote.
+          const late = s.stop.promisedMin != null && s.stop.arrivalMin > s.stop.promisedMin + 15
+          const label = `Stop ${s.idx + 1}: ${s.stop.name} — arrives ${minutesToTime12(s.stop.arrivalMin)}, ${s.stop.durMin} min` +
+            `${s.stop.promisedMin != null ? `, promised ${minutesToTime12(s.stop.promisedMin)}${late ? ' (late)' : ''}` : ''}` +
+            `${done ? ', done' : running ? ', in progress' : ''}`
+          const cls = cn(
+            'absolute inset-y-1 rounded-md border flex items-center justify-center overflow-hidden',
+            done
+              ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+              : running
+                ? 'bg-sky-400/25 border-sky-400/50 text-sky-200'
+                : late
+                  ? 'bg-red-500/20 border-red-500/50 text-red-300'
+                  : 'bg-accent/20 border-accent/45 text-accent',
+            onSelectStop && 'cursor-pointer hover:brightness-125 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:z-20',
+          )
+          const style = { left: `${left}%`, width: `${width}%` }
+          const num = <span className="text-[9px] font-bold tabular-nums leading-none px-0.5 truncate">{s.idx + 1}</span>
+          // A real button when it can act: the block is then reachable by keyboard
+          // and readable by a screen reader, and a tap jumps to the stop's card —
+          // which is where the detail lives on a phone, tooltips being hover-only.
+          return onSelectStop ? (
+            <button
               key={s.stop.jobId}
-              className={cn(
-                'absolute inset-y-1 rounded-md border flex items-center justify-center overflow-hidden',
-                done
-                  ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
-                  : running
-                    ? 'bg-sky-400/25 border-sky-400/50 text-sky-200'
-                    : 'bg-accent/20 border-accent/45 text-accent',
-              )}
-              style={{ left: `${left}%`, width: `${width}%` }}
-              title={`${s.idx + 1}. ${s.stop.name} · ${minutesToTime12(s.stop.arrivalMin)}–${minutesToTime12(s.stop.arrivalMin + s.stop.durMin)} (${s.stop.durMin} min)`}
+              type="button"
+              onClick={() => onSelectStop(s.stop.jobId)}
+              className={cls}
+              style={style}
+              title={label}
+              aria-label={label}
             >
-              <span className="text-[9px] font-bold tabular-nums leading-none px-0.5 truncate">{s.idx + 1}</span>
-            </div>
+              {num}
+            </button>
+          ) : (
+            <div key={s.stop.jobId} className={cls} style={style} title={label} aria-label={label}>{num}</div>
           )
         })}
+
+        {/* Promised-time pins — where an appointment was committed. Together
+            with the (red) block that misses it, the gap IS the lateness. */}
+        {stops.filter(s => s.promisedMin != null && s.promisedMin >= startMin && s.promisedMin <= endMin).map(s => (
+          <div
+            key={`p-${s.jobId}`}
+            className="absolute top-0 h-2.5 w-0.5 bg-amber-300 z-[5]"
+            style={{ left: `${pct(s.promisedMin!)}%` }}
+            title={`Promised ${minutesToTime12(s.promisedMin!)} — ${s.name}`}
+            aria-hidden
+          />
+        ))}
 
         {/* Capacity line — where the day is supposed to end. */}
         {pct(capacityEndMin) <= 100 && (
@@ -120,14 +168,29 @@ export function RouteTimeline({ startMin, finishMin, capacityEndMin, stops, clas
             aria-hidden
           />
         )}
+
+        {/* Now — the line that turns the plan into a live read. Against the
+            completed/live blocks, being left of your current stop means ahead
+            and right of it means behind, with no arithmetic. */}
+        {showNow && (
+          <div
+            className="absolute inset-y-0 w-0.5 bg-ink shadow-[0_0_0_1px_rgba(0,0,0,0.35)] z-10"
+            style={{ left: `${pct(nowMin!)}%` }}
+            title={`Now — ${minutesToTime12(nowMin!)}`}
+          />
+        )}
       </div>
 
-      {/* Hour ruler */}
+      {/* Hour ruler. Labels collide on a phone, so show every second hour there
+          and the full set once there's room. */}
       <div className="relative h-3.5 mt-1" aria-hidden>
-        {ticks.map(m => (
+        {ticks.map((m, i) => (
           <span
             key={m}
-            className="absolute top-0 text-[9px] text-ink-faint tabular-nums -translate-x-1/2 whitespace-nowrap"
+            className={cn(
+              'absolute top-0 text-[9px] text-ink-faint tabular-nums -translate-x-1/2 whitespace-nowrap',
+              i % 2 === 1 && 'hidden sm:inline',
+            )}
             style={{ left: `${pct(m)}%` }}
           >
             {minutesToTime12(m).replace(':00', '')}
@@ -138,6 +201,16 @@ export function RouteTimeline({ startMin, finishMin, capacityEndMin, stops, clas
       {over && (
         <p className="text-[11px] text-red-400 mt-1">
           Runs ~{Math.round(overMin / 6) / 10}h past your day — optimize the route, or move a stop.
+        </p>
+      )}
+
+      {/* The route can only place stops it can geocode, so an address-less visit is
+          missing from the ETA chain — and therefore from this bar and the finish
+          time above it. Better to admit the gap than to draw a shorter day than
+          the one you actually have. */}
+      {!!omitted && omitted > 0 && (
+        <p className="text-[11px] text-amber-400 mt-1">
+          {omitted} {omitted === 1 ? 'visit has' : 'visits have'} no address — not shown here, and not counted in the finish time.
         </p>
       )}
     </div>
