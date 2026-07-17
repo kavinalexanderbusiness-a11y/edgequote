@@ -32,6 +32,9 @@ import {
 import { depreciate, assetRegister, depreciationBetween } from '../src/lib/accounting/depreciation'
 import { balanceSheet, accountsPayable } from '../src/lib/accounting/balanceSheet'
 import { gstReturn } from '../src/lib/accounting/gst'
+import {
+  profitAndLossLines, balanceSheetLines, journalRows, EXPENSE_COLUMNS, STATEMENT_COLUMNS,
+} from '../src/lib/accounting/exports'
 import { costJob, costJobs, rollupJobCosting } from '../src/lib/accounting/jobCosting'
 import { resolvePeriod, monthRange, quarterRange, monthsBetween, inPeriod, daysInMonth } from '../src/lib/accounting/period'
 import { DEFAULT_EXPENSE_CATEGORIES } from '../src/lib/accounting/categories'
@@ -76,7 +79,7 @@ const REGISTERED = { gst_percent: 5 } as unknown as BusinessSettings
 // `kind` defaults to 'operating' — a category is a business cost unless it says
 // otherwise, which is the same default the DB column carries.
 const CAT = (name: string, deductible: boolean, kind: 'operating' | 'owner_draw' = 'operating') =>
-  ({ id: `c-${name}`, name, tax_deductible: deductible, kind })
+  ({ id: `c-${name}`, name, tax_deductible: deductible, kind, external_account: null })
 const DRAW = (name = 'Owner draw') => CAT(name, false, 'owner_draw')
 const ALL = resolvePeriod('all', '2026-07-15')
 
@@ -645,6 +648,52 @@ console.log('\nGST return — ACCRUAL (owed when invoiced), which is not the P&L
   eq('...claims no ITCs', nr.inputTaxCredits, 0)
   eq('...owes nothing', nr.netTax, 0)
   eq('...but still sees the sales', nr.sales, 1000)
+}
+
+// ── 18. EXPORTS read the engine — they never re-derive ───────────────────────
+// The CSV is the artifact that reaches the accountant. An export that did its own
+// arithmetic could disagree with the screen it came from, and the file is what gets
+// filed.
+console.log('\nExports mirror the engine exactly (the CSV is what the accountant sees):')
+{
+  const rows = [
+    exp({ amount: 105, tax_amount: 5, spent_at: '2026-07-02', category_id: 'c-Fuel',
+      expense_categories: { ...CAT('Fuel', true), external_account: '5400' } }),
+    exp({ amount: 400, bill_date: '2026-07-03', spent_at: null }),
+  ]
+  const P = monthRange(2026, 7)
+  const pl = profitAndLoss({ payments: [pay({ amount: 1000 })], expenses: rows, settings: NOT_REGISTERED, period: P })
+
+  const lines = profitAndLossLines(pl)
+  const revenueLine = lines.find(l => l.item === 'REVENUE')
+  const profitLine = lines.find(l => l.item === 'PROFIT')
+  eq('exported revenue === engine revenue', revenueLine?.amount, pl.revenue)
+  eq('exported profit === engine profit', profitLine?.amount, pl.profit)
+
+  // The accountant export's whole reason to exist: the account code must survive.
+  const j = journalRows(rows)
+  eq('the account code reaches the journal', j[0].accountCode, '5400')
+  eq('...debit is net of tax', j[0].debit, 100)
+  eq('...tax rides its own column', j[0].taxAmount, 5)
+  eq('journal is dated by BILL date (an accrual ledger)', j[1].date, '2026-07-03')
+  eq('an unpaid bill IS in the journal', j.length, 2)
+  eq('...and is flagged as unpaid', j[1].unpaid, true)
+
+  // Unpaid rows export an EMPTY paid date, never the bill date dressed up as one.
+  const paidCol = EXPENSE_COLUMNS.find(c => c.label === 'Paid date')!
+  eq('unpaid exports a blank paid-date', paidCol.value(rows[1]), '')
+  eq('paid exports its real date', paidCol.value(rows[0]), '2026-07-02')
+
+  // A statement's unknown must stay '—' in the file, never a confident 0.
+  const bs = balanceSheet({
+    asOf: '2026-12-31', todayISO: '2026-12-31',
+    settings: NOT_REGISTERED, payments: [], expenses: [], fixedAssets: [],
+    liabilities: [], invoices: [], inventoryValue: 0,
+  })
+  const bsLines = balanceSheetLines(bs)
+  const amountCol = STATEMENT_COLUMNS.find(c => c.label === 'Amount')!
+  const totalAssetsLine = bsLines.find(l => l.item === 'TOTAL ASSETS')!
+  eq('an unknown total exports as "—", NOT 0', amountCol.value(totalAssetsLine), '—')
 }
 
 console.log(

@@ -2,10 +2,12 @@
 
 import { useMemo, useState } from 'react'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { ExpenseCategory, ExpenseWithRelations } from '@/types'
+import type { ExpenseCategory, ExpenseWithRelations, ExpenseCategoryKind } from '@/types'
+import { EXPENSE_CATEGORY_KINDS } from '@/types'
 import { Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
+import { Select } from '@/components/ui/Select'
 import { Card } from '@/components/ui/Card'
 import { Badge } from '@/components/ui/Badge'
 import { Banner } from '@/components/ui/Banner'
@@ -35,8 +37,8 @@ interface Props {
   onChanged: () => void | Promise<void>
 }
 
-interface Values { name: string; tax_deductible: boolean; external_account: string }
-const blank = (): Values => ({ name: '', tax_deductible: true, external_account: '' })
+interface Values { name: string; tax_deductible: boolean; kind: ExpenseCategoryKind; external_account: string }
+const blank = (): Values => ({ name: '', tax_deductible: true, kind: 'operating', external_account: '' })
 
 export function CategoryManager({ sb, userId, categories, expenses, onChanged }: Props) {
   const [open, setOpen] = useState(false)
@@ -59,7 +61,12 @@ export function CategoryManager({ sb, userId, categories, expenses, onChanged }:
   function openNew() { setEditing(null); setValues(blank()); setOpen(true) }
   function openEdit(c: ExpenseCategory) {
     setEditing(c)
-    setValues({ name: c.name, tax_deductible: c.tax_deductible, external_account: c.external_account || '' })
+    setValues({
+      name: c.name,
+      tax_deductible: c.tax_deductible,
+      kind: c.kind ?? 'operating',
+      external_account: c.external_account || '',
+    })
     setOpen(true)
   }
 
@@ -69,7 +76,7 @@ export function CategoryManager({ sb, userId, categories, expenses, onChanged }:
     const res = editing
       ? await updateCategory(sb, editing.id, values)
       : await createCategory(sb, {
-          userId, name: values.name, tax_deductible: values.tax_deductible,
+          userId, name: values.name, tax_deductible: values.tax_deductible, kind: values.kind,
           external_account: values.external_account, sort_order: categories.length,
         })
     setSaving(false)
@@ -126,8 +133,9 @@ export function CategoryManager({ sb, userId, categories, expenses, onChanged }:
                 return (
                   <tr key={c.id} className={tableRowHover}>
                     <Td>
-                      <span className="flex items-center gap-2">
+                      <span className="flex items-center gap-2 flex-wrap">
                         <span className="text-ink font-medium">{c.name}</span>
+                        {c.kind === 'owner_draw' && <Badge tone="warn">not a cost</Badge>}
                         {!c.tax_deductible && <Badge tone="neutral">not deductible</Badge>}
                       </span>
                     </Td>
@@ -185,10 +193,28 @@ export function CategoryManager({ sb, userId, categories, expenses, onChanged }:
             autoFocus
             placeholder="Fuel"
           />
+          {/* TWO axes, deliberately separate. They were one field, and conflating
+              them made both wrong: a parking fine is non-deductible AND a real cost,
+              while an owner draw is not a cost at all. */}
+          <Select
+            label="What is this?"
+            options={EXPENSE_CATEGORY_KINDS}
+            value={values.kind}
+            onChange={e => setValues(p => ({ ...p, kind: e.target.value as ExpenseCategoryKind }))}
+            hint={
+              values.kind === 'owner_draw'
+                ? "Money you take out. It leaves the bank, so it's in Cash Flow, but it isn't a cost of earning anything — so it stays out of the P&L and reduces your equity instead."
+                : 'A real cost of running the business. Counts against profit.'
+            }
+          />
+
           <div className="flex items-start justify-between gap-4 p-3 rounded-xl border border-line">
             <div>
               <p className="text-sm font-medium text-ink">Tax deductible</p>
-              <p className="text-xs text-ink-muted">Off for owner draws and personal spend — money out, but not a business cost.</p>
+              <p className="text-xs text-ink-muted">
+                Can you claim it? Separate from the question above — a parking fine is a real cost
+                you can&apos;t claim.
+              </p>
             </div>
             <Toggle
               checked={values.tax_deductible}

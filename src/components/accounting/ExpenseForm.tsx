@@ -11,6 +11,7 @@ import { Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
+import { Toggle } from '@/components/ui/Toggle'
 import { Textarea } from '@/components/ui/Textarea'
 import { toast } from '@/lib/toast'
 import { formatCurrency } from '@/lib/utils'
@@ -223,13 +224,53 @@ export function ExpenseForm({
             hint={net != null ? <>Net {formatCurrency(net)}</> : 'Leave blank if none'}
           />
           <Input
-            label="Date"
+            label={values.paid ? 'Date' : 'Bill date'}
+            type="date"
+            value={values.bill_date}
+            onChange={e => {
+              // Paid at the till is one date and no thought: keep the cash date in
+              // step until the owner says otherwise. Editing the pair separately is
+              // for the A/P case, which the toggle below opts into explicitly.
+              const v = e.target.value
+              setValues(prev => ({
+                ...prev,
+                bill_date: v,
+                spent_at: prev.paid && prev.spent_at === prev.bill_date ? v : prev.spent_at,
+              }))
+            }}
+            error={errors.bill_date}
+          />
+        </div>
+
+        {/* ── A/P: incurred vs paid ─────────────────────────────────────────
+            Off = an unpaid bill: spent_at goes NULL, so it stays out of every
+            cash-basis report and lands on the balance sheet as a liability. */}
+        <div className="flex items-start justify-between gap-4 p-3 rounded-xl border border-line">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-ink">Already paid</p>
+            <p className="text-xs text-ink-muted">
+              {values.paid
+                ? 'Turn this off if the bill has arrived but you haven\'t paid it yet.'
+                : 'It\'ll show as money you owe — not as a cost, until you actually pay it.'}
+            </p>
+          </div>
+          <Toggle
+            checked={values.paid}
+            onChange={v => setValues(prev => ({ ...prev, paid: v, spent_at: v ? (prev.spent_at || prev.bill_date) : prev.spent_at }))}
+            ariaLabel="Already paid"
+          />
+        </div>
+
+        {values.paid && (
+          <Input
+            label="Paid on"
             type="date"
             value={values.spent_at}
             onChange={e => set('spent_at', e.target.value)}
             error={errors.spent_at}
+            hint="Usually the same day. Change it if you paid a bill later."
           />
-        </div>
+        )}
 
         <Input
           label="What was it?"
@@ -281,6 +322,25 @@ export function ExpenseForm({
             placeholder="Receipt or invoice #"
             value={values.reference}
             onChange={e => set('reference', e.target.value)}
+          />
+        </div>
+
+        {/* ── Capital ───────────────────────────────────────────────────────
+            The flag that keeps the balance sheet honest. A $5,000 mower is cash
+            becoming an asset, not a $5,000 cost — without this the month reports a
+            fake loss and the balance sheet fails by exactly the purchase price. */}
+        <div className="flex items-start justify-between gap-4 p-3 rounded-xl border border-line">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-ink">This bought equipment</p>
+            <p className="text-xs text-ink-muted">
+              For gear that lasts years — a mower, a trailer. It won&apos;t count as a cost this
+              month; it becomes an asset that wears out over time. Add it to Assets to say how.
+            </p>
+          </div>
+          <Toggle
+            checked={values.is_capital}
+            onChange={v => setValues(prev => ({ ...prev, is_capital: v }))}
+            ariaLabel="This bought equipment"
           />
         </div>
 

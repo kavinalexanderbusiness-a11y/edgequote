@@ -685,7 +685,10 @@ export interface Expense {
 /** An expense with its lookups resolved — what every list and report actually reads. */
 export interface ExpenseWithRelations extends Expense {
   vendors?: Pick<Vendor, 'id' | 'name'> | null
-  expense_categories?: Pick<ExpenseCategory, 'id' | 'name' | 'tax_deductible' | 'kind'> | null
+  // `external_account` is here for the accountant export, which keys on it. Omitting
+  // it from the join types would let the export compile and emit a blank code column
+  // for every row — a file that looks complete and maps to nothing.
+  expense_categories?: Pick<ExpenseCategory, 'id' | 'name' | 'tax_deductible' | 'kind' | 'external_account'> | null
   jobs?: { id: string; title: string | null; scheduled_date: string | null } | null
 }
 
@@ -710,6 +713,8 @@ export interface ExpenseFormValues {
   paid: boolean
   /** When the cash left. Ignored unless `paid`. */
   spent_at: string
+  /** This cash bought an asset — see Expense.is_capital. */
+  is_capital: boolean
   description: string
   payment_method: string
   reference: string
