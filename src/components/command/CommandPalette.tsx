@@ -14,6 +14,7 @@ import {
 import { searchHelp, helpHref } from '@/lib/help/content'
 import { useModules } from '@/hooks/useModules'
 import { receiptNumberFor } from '@/lib/payments/ledger'
+import { getPageCommands, subscribePageCommands, PageCommand } from '@/components/command/pageCommands'
 import { phoneSearchDigits } from '@/lib/customers'
 
 type Icon = typeof Users
@@ -81,6 +82,19 @@ export function CommandPalette() {
   const go = useCallback((href: string) => { close(); router.push(href) }, [close, router])
   const tel = useCallback((phone: string) => { close(); window.location.href = `tel:${phone.replace(/[^\d+]/g, '')}` }, [close])
 
+  // Commands the CURRENT page registered (usePageCommands) — the palette grows
+  // a "This page" section while such a page is mounted. Running one closes the
+  // palette first, exactly like every other item.
+  const [pageCmds, setPageCmds] = useState<PageCommand[]>(() => getPageCommands())
+  useEffect(() => subscribePageCommands(() => setPageCmds(getPageCommands())), [])
+  const pageSection = useCallback((query?: string): Section | null => {
+    const ql = (query ?? '').toLowerCase()
+    const items = pageCmds
+      .filter(c => !ql || c.label.toLowerCase().includes(ql) || (c.keywords ?? '').toLowerCase().includes(ql))
+      .map(c => ({ id: `pg-${c.id}`, label: c.label, sub: c.sub, icon: c.icon as Icon, run: () => { close(); c.run() } }))
+    return items.length ? { title: 'This page', items } : null
+  }, [pageCmds, close])
+
   // Quick actions + navigation when the box is empty.
   const baseSections = useMemo<Section[]>(() => [
     {
@@ -96,6 +110,10 @@ export function CommandPalette() {
     },
     { title: 'Go to', items: NAV.map(n => ({ id: `n-${n.href}`, label: n.label, icon: n.icon, run: () => go(n.href) })) },
   ], [go, NAV])
+  const emptySections = useMemo<Section[]>(() => {
+    const ps = pageSection()
+    return ps ? [ps, ...baseSections] : baseSections
+  }, [pageSection, baseSections])
 
   // Debounced universal search + command verbs.
   useEffect(() => {
@@ -177,6 +195,8 @@ export function CommandPalette() {
       if (myReq !== reqRef.current) return  // a newer keystroke superseded this one
 
       const sections: Section[] = []
+      const ps = pageSection(safe)
+      if (ps) sections.push(ps)
       const ql = safe.toLowerCase()
       const nav = NAV.filter(n => n.label.toLowerCase().includes(ql))
         .map(n => ({ id: `n-${n.href}`, label: n.label, icon: n.icon as Icon, run: () => go(n.href) }))
@@ -276,9 +296,9 @@ export function CommandPalette() {
       setResults(sections); setSel(0); setLoading(false)
     }, 180)
     return () => clearTimeout(handle)
-  }, [q, supabase, go, tel])
+  }, [q, supabase, go, tel, pageSection])
 
-  const sections = q.trim() ? results : baseSections
+  const sections = q.trim() ? results : emptySections
   const flat = useMemo(() => sections.flatMap(s => s.items), [sections])
 
   // Reset the highlight whenever the query changes so it never points past the

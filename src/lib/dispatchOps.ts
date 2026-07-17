@@ -14,7 +14,10 @@
 
 import { CsvColumn } from '@/lib/csv'
 import { laneLoad } from '@/lib/crews'
-import { minutesToTime12, timeToMinutes, nearestNeighborRoute, RouteStop } from '@/lib/route'
+import {
+  minutesToTime12, timeToMinutes, nearestNeighborRoute, sequenceRoute, computeDayEtas, RouteStop,
+} from '@/lib/route'
+import { Coord } from '@/lib/geo'
 
 // ── Lane statistics ──────────────────────────────────────────────────────────
 // All four numbers fall out of the ETA chain the timeline already draws:
@@ -104,6 +107,7 @@ export interface ConflictStopInput {
   startTime: string | null   // explicit appointment (HH:mm) or null
   durMin: number
   arrivalMin: number | null  // from computeDayEtas; null if not in the chain
+  status: string
 }
 
 export interface ConflictLaneInput {
@@ -224,6 +228,165 @@ export function laneConflictSummary(conflicts: DispatchConflict[], laneId: strin
   const mine = conflicts.filter(c => c.laneId === laneId)
   if (mine.length === 0) return null
   return { count: mine.length, severity: mine.reduce((worst, c) => (SEVERITY_ORDER[c.severity] < SEVERITY_ORDER[worst] ? c.severity : worst), 'info' as ConflictSeverity) }
+}
+
+// ── Day KPIs ─────────────────────────────────────────────────────────────────
+// The whole operation's day in five numbers, every one an aggregate of what the
+// lanes already computed — nothing here re-times a route. All inputs are the
+// SAME ConflictLaneInput rows conflict detection reads, so the tiles, the
+// conflicts and the lane meters can never tell three different stories.
+export interface DayKpis {
+  total: number
+  done: number
+  running: number
+  behindLanes: number          // today only (0 when nowMin is absent)
+  utilizationPct: number | null   // Σ(start→wrap) vs Σcapacity, crew lanes with work
+  driveSharePct: number | null    // Σdrive vs Σ(start→wrap)
+  latestFinishMin: number | null
+}
+
+export function dayKpis(lanes: ConflictLaneInput[], nowMin?: number): DayKpis {
+  let total = 0, done = 0, running = 0, behind = 0
+  let busySum = 0, capSum = 0, driveSum = 0
+  let latest: number | null = null
+  for (const lane of lanes) {
+    total += lane.stops.length
+    for (const s of lane.stops) {
+      if (s.status === 'completed') done++
+      else if (s.status === 'in_progress') running++
+    }
+    if (lane.stops.length === 0) continue
+    if (!lane.isUnassigned) {
+      const stats = laneStats(lane.startMin, lane.finishMin, lane.workMin, lane.capacityMin)
+      busySum += stats.busyMin
+      capSum += lane.capacityMin
+      driveSum += stats.driveMin
+      if (nowMin != null && laneProgress(nowMin, lane.stops).behindMin >= 10) behind++
+    }
+    latest = latest == null ? lane.finishMin : Math.max(latest, lane.finishMin)
+  }
+  return {
+    total, done, running, behindLanes: behind,
+    utilizationPct: capSum > 0 ? Math.round((busySum / capSum) * 100) : null,
+    driveSharePct: busySum > 0 ? Math.round((driveSum / busySum) * 100) : null,
+    latestFinishMin: latest,
+  }
+}
+
+// ── Promise-order suggestion ─────────────────────────────────────────────────
+// When a promised time is being missed, try the cheapest honest candidate:
+// keep every SLOT of the current route where it is, but let the timed visits
+// swap among their own slots into promise order (the 9 AM appointment stops
+// queuing behind the 1 PM one). The candidate is then judged by the SAME
+// engines (sequenceRoute → computeDayEtas); it is only suggested when it
+// strictly reduces the number of late promises.
+export interface PromiseOrderSuggestion {
+  ids: string[]
+  lateBefore: number
+  lateAfter: number
+}
+
+const PROMISE_GRACE_MIN = 15
+
+function countLate(
+  base: Coord | null,
+  stops: RouteStop[],
+  ids: string[],
+  startHHmm: string,
+  durations: Record<string, number>,
+  promises: Record<string, number>,
+): number {
+  const ordered = base
+    ? sequenceRoute(base, stops, ids).ordered
+    : ids.map((id, i) => ({ ...(stops.find(s => s.jobId === id) as RouteStop), order: i + 1, legKm: null }))
+  const etas = computeDayEtas(startHHmm, ordered, durations)
+  let late = 0
+  for (const s of etas.stops) {
+    const promise = promises[s.jobId]
+    if (promise != null && s.arrivalMin > promise + PROMISE_GRACE_MIN) late++
+  }
+  return late
+}
+
+export function suggestPromiseOrder(
+  base: Coord | null,
+  stops: RouteStop[],
+  currentIds: string[],
+  startHHmm: string,
+  durations: Record<string, number>,
+  promises: Record<string, number>,   // jobId → promised minutes-since-midnight
+): PromiseOrderSuggestion | null {
+  const timedSlots = currentIds.map((id, i) => ({ id, i })).filter(x => promises[x.id] != null)
+  if (timedSlots.length < 2) return null
+  const byPromise = [...timedSlots].sort((a, b) => promises[a.id] - promises[b.id])
+  const ids = [...currentIds]
+  timedSlots.forEach((slot, k) => { ids[slot.i] = byPromise[k].id })
+  if (ids.join() === currentIds.join()) return null
+  const lateBefore = countLate(base, stops, currentIds, startHHmm, durations, promises)
+  const lateAfter = countLate(base, stops, ids, startHHmm, durations, promises)
+  return lateAfter < lateBefore ? { ids, lateBefore, lateAfter } : null
+}
+
+// ── Activity feed ────────────────────────────────────────────────────────────
+// Today's movement, derived from timestamps the day's rows already carry
+// (started_at / completed_at / on_my_way_at, technician status_changed_at,
+// note updated_at). No event table, no polling — the board's own realtime
+// refresh keeps it live.
+export interface ActivityItem {
+  atISO: string
+  kind: 'completed' | 'started' | 'on_my_way' | 'tech_status' | 'note'
+  text: string
+  jobId?: string
+  laneId?: string
+}
+
+export function buildActivityFeed(
+  jobs: {
+    id: string; title: string; customerName: string | null; laneId: string
+    started_at: string | null; completed_at: string | null; on_my_way_at?: string | null
+  }[],
+  techs: { name: string; statusLabel: string; status_changed_at: string | null; laneId: string | null }[],
+  notes: { crewName: string | null; updated_at: string; created_at: string; laneId: string | null }[],
+  limit = 50,
+): ActivityItem[] {
+  const out: ActivityItem[] = []
+  for (const j of jobs) {
+    const who = j.customerName || j.title
+    if (j.completed_at) out.push({ atISO: j.completed_at, kind: 'completed', text: `${who} completed`, jobId: j.id, laneId: j.laneId })
+    if (j.started_at) out.push({ atISO: j.started_at, kind: 'started', text: `${who} started`, jobId: j.id, laneId: j.laneId })
+    if (j.on_my_way_at) out.push({ atISO: j.on_my_way_at, kind: 'on_my_way', text: `On-my-way sent for ${who}`, jobId: j.id, laneId: j.laneId })
+  }
+  for (const t of techs) {
+    if (t.status_changed_at) out.push({ atISO: t.status_changed_at, kind: 'tech_status', text: `${t.name} → ${t.statusLabel}`, laneId: t.laneId ?? undefined })
+  }
+  for (const n of notes) {
+    out.push({
+      atISO: n.updated_at, kind: 'note',
+      text: n.updated_at === n.created_at
+        ? `Note added${n.crewName ? ` for ${n.crewName}` : ''}`
+        : `Note updated${n.crewName ? ` for ${n.crewName}` : ''}`,
+      laneId: n.laneId ?? undefined,
+    })
+  }
+  return out.sort((a, b) => b.atISO.localeCompare(a.atISO)).slice(0, limit)
+}
+
+// ── Itinerary text ───────────────────────────────────────────────────────────
+// One crew's route as paste-anywhere plain text (SMS to the crew lead, a note,
+// a group chat). Reads the SAME SheetLane rows print and CSV use.
+export function itineraryText(lane: SheetLane, dateLabel: string): string {
+  const lines: string[] = [
+    `${lane.name} — ${dateLabel}`,
+    `Start ${lane.startLabel}${lane.finishLabel ? ` · wraps ~${lane.finishLabel}` : ''}${lane.driveMin > 0 ? ` · ~${lane.driveMin}m driving` : ''}`,
+  ]
+  for (const s of lane.stops) {
+    lines.push(
+      `${s.order}. ${s.eta ?? '—'} — ${s.customer}${s.address ? ` — ${s.address}` : ''}` +
+      `${s.promised ? ` (promised ${s.promised})` : ''}${s.phone ? ` — ${s.phone}` : ''}`,
+    )
+  }
+  if (lane.note) lines.push(`Note: ${lane.note}`)
+  return lines.join('\n')
 }
 
 // ── The daily dispatch sheet ─────────────────────────────────────────────────

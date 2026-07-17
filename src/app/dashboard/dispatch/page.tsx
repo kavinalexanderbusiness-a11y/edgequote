@@ -20,10 +20,14 @@ import {
 } from '@/lib/route'
 import { DayStatusRow, DAY_STATUS_SELECT, dayStatusLabel } from '@/lib/dayStatus'
 import {
-  laneStats, LaneStats, detectDayConflicts, DispatchConflict, laneConflictSummary,
-  laneProgress, bestOrderSavingsKm,
+  laneStats, LaneStats, detectDayConflicts, DispatchConflict, ConflictLaneInput, laneConflictSummary,
+  laneProgress, bestOrderSavingsKm, dayKpis, buildActivityFeed, ActivityItem,
+  itineraryText, suggestPromiseOrder, PromiseOrderSuggestion,
   DispatchSheet, SheetLane, sheetCsvRows, SHEET_CSV_COLUMNS, openPrintSheet,
 } from '@/lib/dispatchOps'
+import { startVisit, completeVisit, revertVisit } from '@/lib/jobStatus'
+import { resolveAutomations, Automations } from '@/lib/comms/automations'
+import { usePageCommands, PageCommand } from '@/components/command/pageCommands'
 import { exportRowsToCsv } from '@/lib/csv'
 import { notifyRescheduleBatch } from '@/lib/reschedule'
 import { DisruptionReason } from '@/lib/disruption'
@@ -51,6 +55,7 @@ import {
   Radio, Users, UserMinus, MapIcon, LayoutGrid, ChevronLeft, ChevronRight, Scale, GripVertical,
   ChevronUp, ChevronDown, Wand2, ExternalLink, Truck, StickyNote, HardHat, Navigation,
   Printer, FileDown, CalendarDays, AlertTriangle, Keyboard, Phone, MessageSquare, Check,
+  Play, Copy, History, Activity, CheckCircle2, PlayCircle, Send, Loader2,
 } from 'lucide-react'
 
 function todayISO(): string {
@@ -115,11 +120,19 @@ export default function DispatchPage() {
   const [kbGrab, setKbGrab] = useState<KbGrab | null>(null)
   const [announce, setAnnounce] = useState('')
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  const [activityOpen, setActivityOpen] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [historyRows, setHistoryRows] = useState<{ date: string; total: number; done: number; cancelled: number }[] | null>(null)
+  const [automations, setAutomations] = useState<Automations>(() => resolveAutomations(null))
+  const [statusBusy, setStatusBusy] = useState<Set<string>>(new Set())
   // Ticks once a minute while viewing today, so the "now" line, ETAs-vs-clock
   // and behind-schedule chips stay honest without anyone touching the page.
   const [nowTick, setNowTick] = useState(0)
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const geocodedFor = useRef<string | null>(null)
+  // Roving-focus API for the j/k/x/s keys — assigned fresh each render, read
+  // by the one document-level key handler.
+  const kbApiRef = useRef<{ ids: string[]; toggle: (id: string, shift?: boolean) => void; advance: (id: string) => void }>({ ids: [], toggle: () => {}, advance: () => {} })
   // Serialized route_order writes — a second reorder waits for the first, so
   // two quick moves can't interleave their day-wide sequence writes.
   const orderWrite = useRef<Promise<unknown>>(Promise.resolve())
@@ -138,7 +151,7 @@ export default function DispatchPage() {
         loadTechnicians(supabase, user.id),
         supabase.from('equipment').select('id, name, category, crew_id').eq('user_id', user.id).eq('status', 'active').order('name'),
         supabase.from('day_statuses').select(DAY_STATUS_SELECT).eq('user_id', user.id).eq('date', date).maybeSingle(),
-        supabase.from('business_settings').select('base_lat, base_lng, work_start_time, daily_capacity_hours').eq('user_id', user.id).maybeSingle(),
+        supabase.from('business_settings').select('base_lat, base_lng, work_start_time, daily_capacity_hours, automations').eq('user_id', user.id).maybeSingle(),
         loadDispatchNotes(supabase, user.id, date),
       ])
       if (jRes.error) { setLoadError('Could not load the day: ' + jRes.error.message); return }
@@ -148,7 +161,8 @@ export default function DispatchPage() {
       setTechnicians(tRes)
       setEquipment((eRes.data as AssignableEquipment[] | null) || [])
       setDayRow((dRes.data as DayStatusRow | null) ?? null)
-      const s = sRes.data as { base_lat: number | null; base_lng: number | null; work_start_time: string | null; daily_capacity_hours: number | null } | null
+      const s = sRes.data as { base_lat: number | null; base_lng: number | null; work_start_time: string | null; daily_capacity_hours: number | null; automations: unknown } | null
+      setAutomations(resolveAutomations(s?.automations))
       setSettings({
         base: s?.base_lat != null && s?.base_lng != null ? { lat: Number(s.base_lat), lng: Number(s.base_lng) } : null,
         workStart: s?.work_start_time || DEFAULT_WORK_START,
@@ -284,33 +298,40 @@ export default function DispatchPage() {
     return out
   }, [lanes, laneRoutes, settings.base])
 
-  // ── Conflicts (facts about the FULL day — filters never hide a problem) ──
+  // ── One derivation, three consumers ──────────────────────────────────────
+  // These rows feed conflict detection, the KPI tiles AND the behind-schedule
+  // reads, so the panel, the tiles and the lane meters can never disagree.
+  // Facts about the FULL day — filters never hide a problem.
+  const laneInputs: ConflictLaneInput[] = useMemo(() => lanes.map(lane => {
+    const route = laneRoutes[lane.laneId]
+    const etaByJob = new Map((route?.etas.stops ?? []).map(s => [s.jobId, s.arrivalMin]))
+    const laneTechs = technicians.filter(t => t.is_active && (lane.crew ? t.crew_id === lane.crew.id : false))
+    return {
+      laneId: lane.laneId,
+      laneName: lane.crew?.name ?? 'Unassigned',
+      isUnassigned: lane.laneId === UNASSIGNED_ID,
+      startMin: route?.etas.startMin ?? 0,
+      finishMin: route?.etas.finishMin ?? 0,
+      capacityMin: route?.capacityMin ?? 0,
+      workMin: route?.workMin ?? 0,
+      stops: (route?.seq ?? []).map(j => ({
+        jobId: j.id,
+        title: j.customers?.name || j.title,
+        startTime: j.start_time,
+        durMin: j.duration_minutes || DEFAULT_JOB_MIN,
+        arrivalMin: etaByJob.get(j.id) ?? null,
+        status: j.status,
+      })),
+      availableTechs: laneTechs.filter(t => t.status !== 'off').length,
+      rosteredTechs: laneTechs.length,
+    }
+  }), [lanes, laneRoutes, technicians])
+
   const conflicts: DispatchConflict[] = useMemo(() => detectDayConflicts(
-    lanes.map(lane => {
-      const route = laneRoutes[lane.laneId]
-      const etaByJob = new Map((route?.etas.stops ?? []).map(s => [s.jobId, s.arrivalMin]))
-      const laneTechs = technicians.filter(t => t.is_active && (lane.crew ? t.crew_id === lane.crew.id : false))
-      return {
-        laneId: lane.laneId,
-        laneName: lane.crew?.name ?? 'Unassigned',
-        isUnassigned: lane.laneId === UNASSIGNED_ID,
-        startMin: route?.etas.startMin ?? 0,
-        finishMin: route?.etas.finishMin ?? 0,
-        capacityMin: route?.capacityMin ?? 0,
-        workMin: route?.workMin ?? 0,
-        stops: (route?.seq ?? []).map(j => ({
-          jobId: j.id,
-          title: j.customers?.name || j.title,
-          startTime: j.start_time,
-          durMin: j.duration_minutes || DEFAULT_JOB_MIN,
-          arrivalMin: etaByJob.get(j.id) ?? null,
-        })),
-        availableTechs: laneTechs.filter(t => t.status !== 'off').length,
-        rosteredTechs: laneTechs.length,
-      }
-    }),
-    { dayBlocked: !!dayRow?.blocks, activeCrewCount },
-  ), [lanes, laneRoutes, technicians, dayRow, activeCrewCount])
+    laneInputs, { dayBlocked: !!dayRow?.blocks, activeCrewCount },
+  ), [laneInputs, dayRow, activeCrewCount])
+
+  const kpis = useMemo(() => dayKpis(laneInputs, nowMin), [laneInputs, nowMin])
 
   const laneBadges = useMemo(() => {
     const out: Record<string, { count: number; severity: 'error' | 'warn' | 'info' } | null> = {}
@@ -831,6 +852,11 @@ export default function DispatchPage() {
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return
       if (document.querySelector('[role="dialog"]')) return
       if (kbBusyRef.current || dragRef.current) return   // a grabbed/dragged visit owns the keys
+      // Which stop's grip currently holds focus (the roving cursor for x/s).
+      const gripId = (): string | null => {
+        const a = document.activeElement as HTMLElement | null
+        return a?.id?.startsWith('dispatch-grip-') ? a.id.slice('dispatch-grip-'.length) : null
+      }
       switch (e.key) {
         case '[': setDate(d => format(addDays(parseISO(d + 'T00:00:00'), -1), 'yyyy-MM-dd')); break
         case ']': setDate(d => format(addDays(parseISO(d + 'T00:00:00'), 1), 'yyyy-MM-dd')); break
@@ -839,6 +865,29 @@ export default function DispatchPage() {
         case 'm': case 'M': setView('map'); break
         case 'p': case 'P': printDayRef.current(); break
         case '?': setShortcutsOpen(true); break
+        case 'j': case 'J': case 'k': case 'K': {
+          const ids = kbApiRef.current.ids
+          if (ids.length === 0) return
+          const cur = gripId() ? ids.indexOf(gripId()!) : -1
+          const down = e.key === 'j' || e.key === 'J'
+          const next = cur === -1 ? 0 : Math.max(0, Math.min(ids.length - 1, cur + (down ? 1 : -1)))
+          const el = document.getElementById(`dispatch-grip-${ids[next]}`)
+          el?.focus()
+          el?.scrollIntoView({ block: 'nearest' })
+          break
+        }
+        case 'x': case 'X': {
+          const id = gripId()
+          if (!id) return
+          kbApiRef.current.toggle(id, e.shiftKey)
+          break
+        }
+        case 's': case 'S': {
+          const id = gripId()
+          if (!id) return
+          kbApiRef.current.advance(id)
+          break
+        }
         default: return
       }
       e.preventDefault()
@@ -871,22 +920,225 @@ export default function DispatchPage() {
     if (err) notify.error('Could not save the note: ' + err); else fetchAll()
   }, [uid, supabase, date, fetchAll])
 
+  // ── One-tap visit status (▶ start / ✓ complete) through THE shared seam ──
+  // lib/jobStatus composes the same op kinds the offline queue replays, so a
+  // tap here means exactly what it means on the calendar: complete = patch +
+  // draft invoice + (opt-in, deduped) customer message.
+  const setJobBusy = useCallback((id: string, on: boolean) => {
+    setStatusBusy(prev => {
+      const n = new Set(prev)
+      if (on) n.add(id); else n.delete(id)
+      return n
+    })
+  }, [])
+
+  const quickStart = useCallback(async (job: Job) => {
+    setJobBusy(job.id, true)
+    const res = await startVisit(supabase, job)
+    setJobBusy(job.id, false)
+    if (!res.ok) { notify.error('Could not start the visit: ' + res.error); return }
+    setJobs(cur => cur.map(j => j.id === job.id ? { ...j, ...res.patch } : j))
+    if (res.outcome === 'ran') fetchAll()
+    notify(`${job.customers?.name || job.title} started${res.outcome === 'queued' ? ' — will sync' : ''}`, {
+      undo: async () => {
+        setJobs(cur => cur.map(j => j.id === job.id ? { ...j, ...res.prev } : j))
+        await revertVisit(supabase, job.id, res.prev, `Undo start ${job.title || 'job'}`)
+        fetchAll()
+      },
+    })
+  }, [supabase, fetchAll, setJobBusy])
+
+  const quickComplete = useCallback(async (job: Job) => {
+    setJobBusy(job.id, true)
+    const res = await completeVisit(supabase, job, { notify: automations.job_complete })
+    setJobBusy(job.id, false)
+    if (!res.ok) { notify.error('Could not complete the visit: ' + res.error); return }
+    setJobs(cur => cur.map(j => j.id === job.id ? { ...j, ...res.patch } : j))
+    if (res.outcome === 'ran') fetchAll()
+    if (res.outcome === 'queued') notify('Completed offline — it’ll sync and draft the invoice when you’re back in signal.')
+    else if (res.invoice?.created) notify.success(`${job.customers?.name || job.title} done — draft invoice ${res.invoice.invoiceNumber} created.`)
+    else if (res.invoice?.reason === 'no-amount') notify('Done — no invoice drafted because this visit has no price.')
+    else if (res.invoice?.reason === 'error') notify.error('Completed, but the draft invoice failed — invoice it manually from the job.')
+    else notify.success(`${job.customers?.name || job.title} done.`)
+  }, [supabase, fetchAll, setJobBusy, automations.job_complete])
+
+  // Bulk complete — the end-of-day sweep. Sequential on purpose: each visit
+  // runs the FULL completion (invoice + message), same as tapping them one by
+  // one, and the invoice/comms seams de-dupe so a retry can't double anything.
+  const bulkComplete = useCallback(async () => {
+    const targets = bulk.selectedItems.filter(j => j.status === 'scheduled' || j.status === 'in_progress')
+    if (targets.length === 0) return
+    setBulkBusy('complete')
+    let doneN = 0, invoices = 0, failed = 0
+    const reverts: { id: string; prev: Partial<Job> }[] = []
+    for (const job of targets) {
+      const res = await completeVisit(supabase, job, { notify: automations.job_complete })
+      if (!res.ok) { failed++; continue }
+      doneN++
+      if (res.invoice?.created) invoices++
+      reverts.push({ id: job.id, prev: res.prev })
+      setJobs(cur => cur.map(j => j.id === job.id ? { ...j, ...res.patch } : j))
+    }
+    setBulkBusy(null)
+    bulk.clear()
+    fetchAll()
+    if (failed > 0) notify.error(`${failed} visit${failed !== 1 ? 's' : ''} could not be completed.`)
+    if (doneN > 0) notify(`${doneN} visit${doneN !== 1 ? 's' : ''} completed${invoices > 0 ? ` · ${invoices} draft invoice${invoices !== 1 ? 's' : ''}` : ''}`, {
+      undo: async () => {
+        for (const r of reverts) await revertVisit(supabase, r.id, r.prev, 'Undo bulk complete')
+        fetchAll()
+        if (invoices > 0) notify('Statuses restored — the draft invoices stay (they de-dupe if you complete again).')
+      },
+    })
+  }, [bulk, supabase, fetchAll, automations.job_complete])
+
+  // ── Smarter conflict remedies, computed by the engines that own them ──
+  // Overloaded lane → the FIRST move the balance planner would make out of it.
+  const overloadMoves = useMemo(() => {
+    if (!conflicts.some(c => c.kind === 'overloaded')) return {} as Record<string, BalancePlan['moves'][number]>
+    const plan = balanceDay(lanes.map(l => ({ laneId: l.laneId, jobs: l.jobs, capacityMin: laneRoutes[l.laneId]?.capacityMin ?? 0 })))
+    const byLane: Record<string, BalancePlan['moves'][number]> = {}
+    for (const m of plan.moves) if (!byLane[m.fromLaneId]) byLane[m.fromLaneId] = m
+    return byLane
+  }, [conflicts, lanes, laneRoutes])
+
+  // Late promise → the timed visits swapped into promise order within their
+  // current slots, accepted only if the ETA chain says it actually helps.
+  const promiseFixes = useMemo(() => {
+    const out: Record<string, PromiseOrderSuggestion> = {}
+    for (const laneId of new Set(conflicts.filter(c => c.kind === 'late_arrival').map(c => c.laneId))) {
+      const route = laneRoutes[laneId]
+      if (!route) continue
+      const promises: Record<string, number> = {}
+      for (const j of route.seq) if (j.start_time) promises[j.id] = timeToMinutes(j.start_time)
+      const durations = Object.fromEntries(route.seq.map(j => [j.id, j.duration_minutes || DEFAULT_JOB_MIN]))
+      const fix = suggestPromiseOrder(settings.base, route.seq.map(jobStop), route.seq.map(j => j.id), route.startHHmm, durations, promises)
+      if (fix) out[laneId] = fix
+    }
+    return out
+  }, [conflicts, laneRoutes, settings.base])
+
   // The one-tap remedy for each conflict kind — every fix is an EXISTING
-  // handler; the panel never grows its own logic.
+  // engine's answer; the panel never grows its own logic.
   const conflictFix = useCallback((c: DispatchConflict): { label: string; run: () => void } | null => {
     switch (c.kind) {
-      case 'overloaded':
+      case 'overloaded': {
+        const m = overloadMoves[c.laneId]
+        if (m) {
+          const toName = m.toLaneId === UNASSIGNED_ID ? 'Unassigned' : crews.find(x => x.id === m.toLaneId)?.name ?? 'crew'
+          return { label: `Move ${m.title} → ${toName}`, run: () => moveJob(m.jobId, m.toLaneId === UNASSIGNED_ID ? null : m.toLaneId) }
+        }
+        return { label: 'Balance day', run: openBalance }
+      }
       case 'unassigned_work':
         return { label: 'Balance day', run: openBalance }
+      case 'late_arrival': {
+        const fix = promiseFixes[c.laneId]
+        if (fix) {
+          return {
+            label: `Fix order — ${fix.lateBefore} late → ${fix.lateAfter}`,
+            run: () => { applyLaneOrder(fix.ids); notify.success(`Timed visits re-slotted by promise — ${fix.lateBefore} late became ${fix.lateAfter}.`) },
+          }
+        }
+        return settings.base ? { label: 'Optimize route', run: () => bestOrderLane(c.laneId) } : null
+      }
       case 'overrun':
-      case 'late_arrival':
         return settings.base ? { label: 'Optimize route', run: () => bestOrderLane(c.laneId) } : null
       case 'no_roster':
         return { label: 'Open roster', run: () => setManagerOpen(true) }
       default:
         return null
     }
-  }, [openBalance, bestOrderLane, settings.base])
+  }, [openBalance, bestOrderLane, settings.base, overloadMoves, promiseFixes, crews, moveJob, applyLaneOrder])
+
+  // ── Per-crew sheet actions (same buildSheet, scoped to one lane) ──
+  const printLane = useCallback((laneId: string) => {
+    const ids = new Set((laneRoutesRef.current[laneId]?.seq ?? []).map(j => j.id))
+    if (ids.size === 0) { notify('Nothing to print for this crew.'); return }
+    if (!openPrintSheet(buildSheet(ids))) notify.error('The print window was blocked — allow pop-ups for this site.')
+  }, [buildSheet])
+
+  const copyItinerary = useCallback(async (laneId: string) => {
+    const ids = new Set((laneRoutesRef.current[laneId]?.seq ?? []).map(j => j.id))
+    const sheet = buildSheet(ids)
+    const lane = sheet.lanes[0]
+    if (!lane) { notify('Nothing to copy for this crew.'); return }
+    try {
+      await navigator.clipboard.writeText(itineraryText(lane, sheet.dateLabel))
+      notify.success(`${lane.name}'s itinerary copied — paste it anywhere.`)
+    } catch {
+      notify.error('Could not reach the clipboard.')
+    }
+  }, [buildSheet])
+
+  // ── Activity feed (derived from timestamps the day already carries) ──
+  const laneIdOf = useCallback((j: Job) =>
+    j.crew_id && crews.some(c => c.id === j.crew_id && c.is_active) ? j.crew_id : UNASSIGNED_ID, [crews])
+
+  const feed: ActivityItem[] = useMemo(() => buildActivityFeed(
+    jobs.map(j => ({
+      id: j.id, title: j.title, customerName: j.customers?.name ?? null, laneId: laneIdOf(j),
+      started_at: j.started_at, completed_at: j.completed_at, on_my_way_at: j.on_my_way_at,
+    })),
+    // Technician status is a NOW fact — it belongs on today's feed only.
+    isToday ? technicians.filter(t => t.is_active).map(t => ({
+      name: t.name, statusLabel: TECHNICIAN_STATUS_LABELS[t.status], status_changed_at: t.status_changed_at, laneId: t.crew_id,
+    })) : [],
+    notes.map(n => ({
+      crewName: n.crew_id ? crews.find(c => c.id === n.crew_id)?.name ?? null : null,
+      updated_at: n.updated_at, created_at: n.created_at, laneId: n.crew_id,
+    })),
+  ), [jobs, technicians, notes, crews, isToday, laneIdOf])
+
+  // ── Recent days (loaded when the panel opens — one grouped query) ──
+  const loadHistory = useCallback(async () => {
+    if (!uid) return
+    setHistoryRows(null)
+    const from = format(addDays(parseISO(date + 'T00:00:00'), -13), 'yyyy-MM-dd')
+    const { data } = await supabase.from('jobs').select('scheduled_date, status')
+      .eq('user_id', uid).gte('scheduled_date', from).lte('scheduled_date', date)
+    const byDate = new Map<string, { total: number; done: number; cancelled: number }>()
+    for (const r of (data as { scheduled_date: string; status: string }[] | null) ?? []) {
+      const row = byDate.get(r.scheduled_date) ?? { total: 0, done: 0, cancelled: 0 }
+      if (r.status === 'cancelled') row.cancelled++
+      else { row.total++; if (r.status === 'completed') row.done++ }
+      byDate.set(r.scheduled_date, row)
+    }
+    setHistoryRows([...byDate.entries()].map(([d, v]) => ({ date: d, ...v })).sort((a, b) => b.date.localeCompare(a.date)))
+  }, [uid, supabase, date])
+
+  const openHistory = useCallback(() => { setHistoryOpen(true); loadHistory() }, [loadHistory])
+
+  // ── The ONE command palette learns this page's verbs (Cmd/Ctrl+K) ──
+  const pageCommands = useMemo<PageCommand[]>(() => [
+    { id: 'today', label: 'Dispatch: Go to today', icon: CalendarDays, keywords: 'date now', run: () => setDate(todayISO()) },
+    { id: 'board', label: 'Dispatch: Board view', icon: LayoutGrid, keywords: 'lanes', run: () => setView('board') },
+    { id: 'map', label: 'Dispatch: Map view', icon: MapIcon, keywords: 'pins routes', run: () => setView('map') },
+    { id: 'balance', label: 'Dispatch: Balance the day', icon: Scale, keywords: 'even workload', run: openBalance },
+    { id: 'print', label: 'Dispatch: Print day sheet', icon: Printer, keywords: 'paper pdf', run: () => printDayRef.current() },
+    { id: 'csv', label: 'Dispatch: Export day CSV', icon: FileDown, keywords: 'spreadsheet excel', run: () => exportDayCsv() },
+    { id: 'activity', label: 'Dispatch: Activity feed', icon: Activity, keywords: 'log events history', run: () => setActivityOpen(true) },
+    { id: 'history', label: 'Dispatch: Recent days', icon: History, keywords: 'past yesterday', run: openHistory },
+    { id: 'roster', label: 'Dispatch: Crews & roster', icon: Users, keywords: 'technicians team', run: () => setManagerOpen(true) },
+    { id: 'shortcuts', label: 'Dispatch: Keyboard shortcuts', icon: Keyboard, keywords: 'keys help', run: () => setShortcutsOpen(true) },
+    ...crews.filter(c => c.is_active).map((c): PageCommand => ({
+      id: `optimize-${c.id}`, label: `Dispatch: Optimize ${c.name}`, icon: Wand2, keywords: 'best order route',
+      run: () => bestOrderLane(c.id),
+    })),
+  ], [crews, openBalance, exportDayCsv, bestOrderLane, openHistory])
+  usePageCommands(pageCommands)
+
+  // Feed the roving-focus keys their current world.
+  kbApiRef.current = {
+    ids: selectableJobs.map(j => j.id),
+    toggle: bulk.toggle,
+    advance: (id: string) => {
+      const j = jobs.find(x => x.id === id)
+      if (!j || statusBusy.has(id)) return
+      if (j.status === 'scheduled') quickStart(j)
+      else if (j.status === 'in_progress') quickComplete(j)
+    },
+  }
 
   // ── Render ──
   const dateLabel = format(parseISO(date + 'T00:00:00'), 'EEEE, MMM d')
@@ -895,6 +1147,7 @@ export default function DispatchPage() {
   const bulkActions: BulkAction[] = [
     { key: 'assign', label: 'Assign to crew…', icon: Users, onClick: () => setAssignPickOpen(true), tone: 'primary', hidden: activeCrewCount === 0 },
     { key: 'unassign', label: 'Unassign', icon: UserMinus, onClick: () => bulkAssign(null), hidden: activeCrewCount === 0 || !bulk.selectedItems.some(j => j.crew_id) },
+    { key: 'complete', label: 'Mark done', icon: CheckCircle2, onClick: bulkComplete, hidden: !bulk.selectedItems.some(j => j.status === 'scheduled' || j.status === 'in_progress') },
     { key: 'optimize', label: 'Optimize routes', icon: Wand2, onClick: bulkOptimize, disabled: !settings.base },
     { key: 'reschedule', label: 'Reschedule…', icon: CalendarDays, onClick: () => setReschedOpen(true), disabled: reschedulable.length === 0 },
     { key: 'export', label: 'Export CSV', icon: FileDown, onClick: () => exportDayCsv(bulk.selected) },
@@ -960,6 +1213,12 @@ export default function DispatchPage() {
         <div className="ml-auto flex items-center gap-1.5">
           <FilterPill active={view === 'board'} onClick={() => setView('board')}><LayoutGrid className="w-3.5 h-3.5" /> Board</FilterPill>
           <FilterPill active={view === 'map'} onClick={() => setView('map')}><MapIcon className="w-3.5 h-3.5" /> Map</FilterPill>
+          <Button variant="ghost" size="sm" onClick={() => setActivityOpen(true)} aria-label="Today's activity" title="Today's activity">
+            <Activity className="w-4 h-4" />
+          </Button>
+          <Button variant="ghost" size="sm" onClick={openHistory} aria-label="Recent days" title="Recent days">
+            <History className="w-4 h-4" />
+          </Button>
           <Menu width={210} ariaLabel="Dispatch sheet" items={[
             { key: 'print', label: 'Print day sheet', icon: Printer, onSelect: printDay },
             { key: 'csv', label: 'Export day CSV', icon: FileDown, onSelect: () => exportDayCsv() },
@@ -978,14 +1237,22 @@ export default function DispatchPage() {
         </div>
       </div>
 
-      {/* Day pulse */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 animate-rise">
-        <StatTile label="Visits" value={activeJobs.length} icon={Radio} />
+      {/* Day pulse — every number an aggregate of what the lanes already computed */}
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 animate-rise">
+        <StatTile label="Visits" value={kpis.total} icon={Radio}
+          sub={kpis.done > 0 || kpis.running > 0
+            ? `${kpis.done} done${kpis.running > 0 ? ` · ${kpis.running} running` : ''}`
+            : kpis.total > 0 ? 'none started yet' : undefined} />
         <StatTile label="Assigned" value={activeCrewCount ? `${assignedCount}/${activeJobs.length}` : '—'}
           sub={activeCrewCount ? (assignedCount < activeJobs.length ? 'Balance can place the rest' : 'Everything has a crew') : 'Create crews to assign work'} />
-        <StatTile label="Day finish" value={latestFinish != null ? minutesToTime12(latestFinish) : '—'} sub={latestFinish != null ? 'latest crew, est.' : undefined} />
+        <StatTile label="Day finish" value={latestFinish != null ? minutesToTime12(latestFinish) : '—'}
+          sub={kpis.behindLanes > 0 ? `${kpis.behindLanes} crew${kpis.behindLanes !== 1 ? 's' : ''} running behind` : latestFinish != null ? 'latest crew, est.' : undefined} />
+        <StatTile label="Day used" value={kpis.utilizationPct != null ? `${kpis.utilizationPct}%` : '—'}
+          sub={kpis.utilizationPct != null ? 'of crew capacity, work + drive' : 'no crew work yet'} />
         <StatTile label="Drive" value={settings.base ? `~${totalKm} km` : '—'}
-          sub={settings.base ? 'all crews, straight-line est.' : 'Set a base address in Settings'} />
+          sub={settings.base
+            ? (kpis.driveSharePct != null ? `${kpis.driveSharePct}% of the day · straight-line est.` : 'all crews, straight-line est.')
+            : 'Set a base address in Settings'} />
       </div>
 
       {activeCrewCount === 0 && activeJobs.length > 0 && (
@@ -1083,6 +1350,11 @@ export default function DispatchPage() {
                 optimizing={optimizingLane === lane.laneId}
                 onSetTechStatus={setTechStatusStable}
                 onSaveNote={saveLaneNote}
+                statusBusy={statusBusy}
+                onQuickStart={quickStart}
+                onQuickComplete={quickComplete}
+                onPrintLane={printLane}
+                onCopyItinerary={copyItinerary}
               />
             ))}
           </div>
@@ -1115,6 +1387,81 @@ export default function DispatchPage() {
         </div>
       </div>
 
+      {/* Today's activity — derived from the day's own timestamps, live via realtime */}
+      {activityOpen && (
+        <Modal open onClose={() => setActivityOpen(false)} title="Today's activity" icon={Activity} size="sm">
+          {feed.length === 0 ? (
+            <InlineEmpty icon={Activity}>Nothing yet — the day hasn&apos;t moved.</InlineEmpty>
+          ) : (
+            <div className="space-y-1 max-h-[60vh] overflow-y-auto pr-1">
+              {feed.map((item, i) => {
+                const Icon = item.kind === 'completed' ? CheckCircle2
+                  : item.kind === 'started' ? PlayCircle
+                  : item.kind === 'on_my_way' ? Send
+                  : item.kind === 'tech_status' ? HardHat : StickyNote
+                const tone = item.kind === 'completed' ? 'text-emerald-400'
+                  : item.kind === 'started' ? 'text-sky-400'
+                  : 'text-ink-faint'
+                const t = new Date(item.atISO)
+                const inner = (
+                  <>
+                    <Icon className={cn('w-3.5 h-3.5 shrink-0', tone)} aria-hidden />
+                    <span className="min-w-0 flex-1 truncate text-ink-muted">{item.text}</span>
+                    <span className="shrink-0 text-[11px] text-ink-faint tabular-nums">
+                      {format(t, 'h:mm a')}
+                    </span>
+                  </>
+                )
+                return item.jobId ? (
+                  <button key={`${item.kind}-${item.atISO}-${i}`} type="button"
+                    onClick={() => { setActivityOpen(false); jumpTo(item.laneId ?? UNASSIGNED_ID, item.jobId) }}
+                    className="w-full flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-left text-xs hover:border-border-strong transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                    {inner}
+                  </button>
+                ) : (
+                  <div key={`${item.kind}-${item.atISO}-${i}`} className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2 text-xs">
+                    {inner}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </Modal>
+      )}
+
+      {/* Recent days — summaries only; clicking one IS the history view (the
+          board is date-driven, so any past day renders in full). */}
+      {historyOpen && (
+        <Modal open onClose={() => setHistoryOpen(false)} title="Recent days" icon={History} size="sm">
+          {historyRows === null ? (
+            <div className="flex items-center gap-2 py-6 justify-center text-sm text-ink-muted">
+              <Loader2 className="w-4 h-4 animate-spin" aria-hidden /> Loading…
+            </div>
+          ) : historyRows.length === 0 ? (
+            <InlineEmpty icon={History}>No visits in the last two weeks.</InlineEmpty>
+          ) : (
+            <div className="space-y-1">
+              {historyRows.map(row => (
+                <button key={row.date} type="button"
+                  onClick={() => { setHistoryOpen(false); setDate(row.date) }}
+                  className={cn('w-full flex items-center gap-3 rounded-lg border px-3 py-2 text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                    row.date === date ? 'border-accent/50 bg-accent/5' : 'border-border bg-surface hover:border-border-strong')}>
+                  <span className="w-24 shrink-0 font-semibold text-ink">{format(parseISO(row.date + 'T00:00:00'), 'EEE, MMM d')}</span>
+                  <span className="flex-1 min-w-0">
+                    <span className="block h-1 rounded-full bg-border overflow-hidden">
+                      <span className="block h-full bg-emerald-400/80" style={{ width: `${row.total > 0 ? Math.round((row.done / row.total) * 100) : 0}%` }} />
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-ink-muted tabular-nums">
+                    {row.done}/{row.total} done{row.cancelled > 0 ? ` · ${row.cancelled} cancelled` : ''}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </Modal>
+      )}
+
       {/* Keyboard shortcuts */}
       {shortcutsOpen && (
         <Modal open onClose={() => setShortcutsOpen(false)} title="Keyboard shortcuts" icon={Keyboard} size="sm">
@@ -1122,7 +1469,7 @@ export default function DispatchPage() {
             {([
               ['Day', [['[', 'Previous day'], [']', 'Next day'], ['T', 'Today']]],
               ['View', [['B', 'Board'], ['M', 'Map'], ['P', 'Print day sheet'], ['?', 'This help']]],
-              ['Visits', [['Enter', 'Grab / drop the focused visit'], ['↑ ↓', 'Reorder a grabbed visit'], ['← →', 'Move a grabbed visit between crews'], ['Esc', 'Put a grabbed visit back · cancel a drag · clear selection'], ['Shift+click', 'Select a range']]],
+              ['Visits', [['J / K', 'Walk down / up the stops'], ['X', 'Select the focused stop'], ['S', 'Start / complete the focused stop'], ['Enter', 'Grab / drop the focused visit'], ['↑ ↓', 'Reorder a grabbed visit'], ['← →', 'Move a grabbed visit between crews'], ['Esc', 'Put a grabbed visit back · cancel a drag · clear selection'], ['Shift+click', 'Select a range']]],
             ] as [string, [string, string][]][]).map(([group, keys]) => (
               <div key={group}>
                 <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-1.5">{group}</p>
@@ -1206,6 +1553,7 @@ const CrewLaneCard = memo(function CrewLaneCard({
   lane, route, technicians, vehicles, note, crews, nowMin, base, index, conflictBadge, savingsKm, statusVisible,
   isDropTarget, dropOverload, dropAnchor, dragging, kbGrabbedId, flashJobId, selectedSet, onToggleSelect,
   onDragHandleDown, onGripKeyDown, onNudge, onMoveTo, onBestOrder, optimizing, onSetTechStatus, onSaveNote,
+  statusBusy, onQuickStart, onQuickComplete, onPrintLane, onCopyItinerary,
 }: {
   lane: CrewLaneData
   route: LaneRoute | undefined
@@ -1235,6 +1583,11 @@ const CrewLaneCard = memo(function CrewLaneCard({
   optimizing: boolean
   onSetTechStatus: (t: Technician, s: TechnicianStatus) => void
   onSaveNote: (laneId: string, body: string) => void
+  statusBusy: Set<string>
+  onQuickStart: (j: Job) => void
+  onQuickComplete: (j: Job) => void
+  onPrintLane: (laneId: string) => void
+  onCopyItinerary: (laneId: string) => void
 }) {
   const seq = route?.seq ?? []
   const visibleSeq = seq.filter(statusVisible)
@@ -1244,8 +1597,11 @@ const CrewLaneCard = memo(function CrewLaneCard({
     ? laneStats(route.etas.startMin, route.etas.finishMin, route.workMin, route.capacityMin)
     : null
   const doneCount = seq.filter(j => j.status === 'completed').length
+  const hasRunning = seq.some(j => j.status === 'in_progress')
   const etaByJob = new Map((route?.etas.stops ?? []).map(s => [s.jobId, s]))
   const legKmByJob = new Map((route?.ordered ?? []).map(o => [o.jobId, o.legKm]))
+  // O(1) stop-number lookups — indexOf per row was quadratic on big days.
+  const orderIdx = new Map(seq.map((j, i) => [j.id, i]))
   const isUnassigned = lane.laneId === UNASSIGNED_ID
   const cancelledCount = lane.jobs.filter(j => j.status === 'cancelled').length
   // Reorders glide instead of teleporting (FLIP; inert under reduced motion).
@@ -1272,6 +1628,7 @@ const CrewLaneCard = memo(function CrewLaneCard({
     arrivalMin: etaByJob.get(j.id)?.arrivalMin ?? 0,
     durMin: j.duration_minutes || DEFAULT_JOB_MIN,
     status: j.status,
+    promisedMin: j.start_time ? timeToMinutes(j.start_time) : null,
   }))
 
   // Skip an empty unassigned lane UNLESS a drag is looking for a drop target.
@@ -1297,6 +1654,9 @@ const CrewLaneCard = memo(function CrewLaneCard({
       <div className="flex items-center gap-2 min-w-0">
         <span className={cn('w-2.5 h-2.5 rounded-full shrink-0', lane.palette.dot)} aria-hidden />
         <h2 className="text-sm font-bold tracking-tight text-ink truncate">{lane.crew?.name ?? 'Unassigned'}</h2>
+        {hasRunning && (
+          <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse shrink-0" title="On a job right now" aria-label="On a job right now" />
+        )}
         <span className="text-[11px] text-ink-faint tabular-nums shrink-0">{seq.length} stop{seq.length !== 1 ? 's' : ''}</span>
         {conflictBadge && (
           <span
@@ -1417,8 +1777,9 @@ const CrewLaneCard = memo(function CrewLaneCard({
       ) : (
         <div ref={flipRef} className="space-y-1.5">
           {visibleSeq.map((job, vi) => {
-            const i = seq.indexOf(job)
+            const i = orderIdx.get(job.id) ?? 0
             const eta = etaByJob.get(job.id)
+            const busy = statusBusy.has(job.id)
             const grabbed = kbGrabbedId === job.id
             const promisedMin = job.start_time ? timeToMinutes(job.start_time) : null
             const late = promisedMin != null && eta != null && eta.arrivalMin > promisedMin + 15
@@ -1426,6 +1787,9 @@ const CrewLaneCard = memo(function CrewLaneCard({
             const legKm = showLegs ? legKmByJob.get(job.id) ?? null : null
             const legMin = legKm != null ? legMinutes(legKm) : null
             const menuItems: MenuItem[] = [
+              ...(job.status === 'scheduled' ? [{
+                key: 'done', label: 'Mark done (skip check-in)', icon: CheckCircle2, onSelect: () => onQuickComplete(job),
+              } as MenuItem] : []),
               ...crews.filter(c => c.is_active && c.id !== job.crew_id).map((c): MenuItem => ({
                 key: c.id, label: `Move to ${c.name}`, icon: Users, onSelect: () => onMoveTo(job.id, c.id),
               })),
@@ -1436,7 +1800,9 @@ const CrewLaneCard = memo(function CrewLaneCard({
               } as MenuItem] : []),
             ]
             return (
-              <div key={job.id} data-flip-id={job.id}>
+              // content-visibility keeps a 300-stop day scrolling smoothly:
+              // offscreen rows skip layout/paint until they approach the viewport.
+              <div key={job.id} data-flip-id={job.id} className="[content-visibility:auto] [contain-intrinsic-size:auto_56px]">
                 {legMin != null && legMin >= 5 && (
                   <p className="pl-12 pb-1 text-[10px] leading-none text-ink-faint tabular-nums" aria-hidden>
                     ↓ ~{legMin}m {vi === 0 ? 'from base' : 'drive'}
@@ -1490,6 +1856,29 @@ const CrewLaneCard = memo(function CrewLaneCard({
                   </div>
                   {job.status !== 'scheduled' && (
                     <Badge tone={jobStatusTone[job.status]} className="shrink-0 !text-[9px]">{JOB_STATUS_LABELS[job.status]}</Badge>
+                  )}
+                  {/* One-tap status: ▶ check in, then ✓ complete (invoice + message
+                      ride along through the shared seam). */}
+                  {(job.status === 'scheduled' || job.status === 'in_progress') && (
+                    <button
+                      type="button"
+                      onClick={() => (job.status === 'scheduled' ? onQuickStart(job) : onQuickComplete(job))}
+                      disabled={busy}
+                      title={job.status === 'scheduled' ? 'Start this visit (check in)' : 'Complete this visit — drafts the invoice'}
+                      aria-label={job.status === 'scheduled'
+                        ? `Start ${job.customers?.name || job.title}`
+                        : `Complete ${job.customers?.name || job.title}`}
+                      className={cn('shrink-0 rounded-md border p-1 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-40',
+                        job.status === 'scheduled'
+                          ? 'border-border text-ink-faint hover:text-sky-300 hover:border-sky-400/50'
+                          : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20')}
+                    >
+                      {busy
+                        ? <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden />
+                        : job.status === 'scheduled'
+                          ? <Play className="w-3.5 h-3.5" aria-hidden />
+                          : <Check className="w-3.5 h-3.5" aria-hidden />}
+                    </button>
                   )}
                   <div className="flex flex-col shrink-0">
                     <button type="button" onClick={() => onNudge(lane.laneId, job.id, -1)} disabled={i === 0}
@@ -1546,6 +1935,22 @@ const CrewLaneCard = memo(function CrewLaneCard({
               className="inline-flex items-center gap-1.5 text-sm text-ink-muted hover:text-ink px-2 py-1 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
               <ExternalLink className="w-3.5 h-3.5" /> Maps
             </a>
+          )}
+          {seq.length > 0 && (
+            <>
+              <button type="button" onClick={() => onCopyItinerary(lane.laneId)}
+                title="Copy this crew's itinerary as text — paste it into a message"
+                aria-label={`Copy ${lane.crew?.name ?? 'crew'} itinerary`}
+                className="inline-flex items-center text-ink-faint hover:text-ink px-1.5 py-1 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                <Copy className="w-3.5 h-3.5" />
+              </button>
+              <button type="button" onClick={() => onPrintLane(lane.laneId)}
+                title="Print this crew's sheet only"
+                aria-label={`Print ${lane.crew?.name ?? 'crew'} sheet`}
+                className="inline-flex items-center text-ink-faint hover:text-ink px-1.5 py-1 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                <Printer className="w-3.5 h-3.5" />
+              </button>
+            </>
           )}
           {route && route.totalKm > 0 && (
             <span className="ml-auto text-[11px] text-ink-faint tabular-nums">~{route.totalKm} km</span>
