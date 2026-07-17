@@ -775,9 +775,13 @@ export default function QuoteDetailPage() {
               <MessageSquare className="w-4 h-4" /> {quote.status === 'draft' || quote.status === 'sent' ? 'Send quote' : 'Resend quote'}
             </Button>
           </CardBody>
+          {/* vars.address is the quote's OWN address — the same string QuotePDF prints,
+              so the message and the document it links to name the same place. Deliberately
+              NOT the customer's primary property: borrowing that is what made six of a
+              landlord's quotes indistinguishable in the portal. */}
           <SendMessageDialog open={showMessage} onClose={() => setShowMessage(false)}
             customerId={quote.customer_id} customerName={quote.customer_name}
-            defaultTemplate="quote" vars={{ amount: formatCurrency(quote.total) }}
+            defaultTemplate="quote" vars={{ amount: formatCurrency(quote.total), address: quote.address || undefined }}
             onSent={async () => {
               // Actually delivering the quote IS sending it — and THIS is the path that
               // truly reaches the customer, so it must record the same three facts as

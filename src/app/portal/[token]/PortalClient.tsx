@@ -1124,10 +1124,33 @@ type DocKind = 'quote' | 'invoice'
 // Accept button disappear on its own: `canAccept` already tests for 'sent', so there is
 // no second expiry check anywhere in the render path to forget or contradict.
 // `expiredOn` is the date it lapsed, shown so the customer knows this isn't a glitch.
-interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; expiredOn?: string; validUntil?: string | null; dueDate?: string | null; amount: number; amountNote?: string; balance: number; filename: string; getBlob: () => Promise<Blob>; lines?: { label: string; amount: number }[]; explain?: string[] }
+// `propertyId` is the row's OWN link, stored raw (unresolved) — the grouping memo is the
+// single place that decides whether it names a property this payload actually carried.
+// `address` is what that resolves to for a human: see resolveDocAddress.
+interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; expiredOn?: string; validUntil?: string | null; dueDate?: string | null; amount: number; amountNote?: string; balance: number; filename: string; getBlob: () => Promise<Blob>; lines?: { label: string; amount: number }[]; explain?: string[]; propertyId?: string | null; address?: string | null }
 const KIND_META: Record<DocKind, { label: string; icon: typeof FileText; tone: string }> = {
   quote: { label: 'Quote', icon: FileText, tone: 'text-accent-text border-accent/25 bg-accent/10' },
   invoice: { label: 'Invoice', icon: Receipt, tone: 'text-sky-400 border-sky-500/25 bg-sky-500/10' },
+}
+// The bucket for a document that doesn't name a property we know. A UUID can never
+// collide with it, so it can share the group map's key space.
+const NO_PROPERTY = 'no-property'
+
+// THE address resolver for this tab — the one answer to "which address identifies this
+// document", asked identically by quotes and invoices so the fallback chain exists once.
+//
+// The canonical properties.address WINS whenever property_id resolves. A quote/invoice
+// carries its own `address` TEXT, copied at creation and never re-synced: most of those
+// copies differ from the property they belong to only in formatting ("SW" vs
+// "Southwest", a doubled ", AB"), but some name a different street outright. Grouping on
+// a stale copy would split one property into two headings, and printing it under a
+// heading claiming to name the property would be a quiet lie. So the copy is a FALLBACK,
+// not a second opinion: it answers only when property_id is null (a legacy row) or
+// points at a property this payload didn't carry.
+function resolveDocAddress(propsById: Map<string, PortalProperty>, propertyId: string | null | undefined, ownAddress: string | null | undefined): string | null {
+  const canonical = (propertyId ? propsById.get(propertyId) : null)?.address?.trim()
+  if (canonical) return canonical
+  return ownAddress?.trim() || null
 }
 
 
@@ -1229,6 +1252,12 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, propert
         amount: Number(qq.total) || 0,
         amountNote: gstPct > 0 ? `+ GST (${gstPct}%) — added on your invoice` : undefined, balance: 0,
         filename: `${qq.quote_number}.pdf`, getBlob: () => renderPortalQuoteBlob(qq, customerName, business), lines,
+        // Identity, not decoration: the address is what tells a landlord which of their
+        // six quotes this is. It never becomes the row's `title` — `service_type` is a
+        // real disambiguator, and 5 of the 7 multi-quote customers have every quote on
+        // ONE property, where the address would say nothing and the service/date/status
+        // say everything.
+        propertyId: qq.property_id ?? null, address: resolveDocAddress(propsById, qq.property_id, qq.address),
         // Don't justify a price that no longer stands — explaining it would invite the
         // customer to act on a number we're about to tell them we can't honour.
         explain: !expired && explainBits.length > 1 ? explainBits : undefined,
@@ -1258,6 +1287,10 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, propert
         // it made the row look like they'd paid nothing.
         amountNote: Number(ii.amount_paid) > 0 && balance > 0 ? `${formatCurrency(Number(ii.amount_paid))} already paid` : undefined,
         filename: `${ii.invoice_number}.pdf`, getBlob: () => { onInvoiceOpen?.(ii.id); return renderPortalInvoiceBlob(ii, customerName, fallbackAddress, business) },
+        // Same resolver as the quote above. An invoice that spans several properties
+        // answers null on purpose (see PortalInvoice) — it lands in the neutral bucket
+        // rather than being filed under whichever address happened to be copied onto it.
+        propertyId: ii.property_id ?? null, address: resolveDocAddress(propsById, ii.property_id, ii.address),
       }
     })
     return [...q, ...inv]
@@ -1273,9 +1306,38 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, propert
     let list = cat === 'all' ? docs : docs.filter(d => d.kind === cat)
     if (ql) list = list.filter(d =>
       d.number.toLowerCase().includes(ql) || d.title.toLowerCase().includes(ql) ||
-      d.status.toLowerCase().includes(ql) || KIND_META[d.kind].label.toLowerCase().includes(ql))
+      d.status.toLowerCase().includes(ql) || KIND_META[d.kind].label.toLowerCase().includes(ql) ||
+      // A landlord searches the way they think: "Elm St", not "Q-1043". The RESOLVED
+      // address, so what they type matches what the heading shows them.
+      (d.address || '').toLowerCase().includes(ql))
     return [...list].sort((a, b) => sort === 'newest' ? b.date.localeCompare(a.date) : a.date.localeCompare(b.date))
   }, [docs, cat, query, sort])
+
+  // Address as an anchor only earns its space when there's a choice to make. One property
+  // (40 of 47 customers) means every heading would repeat the address they gave us —
+  // so they keep today's flat list, unchanged. Two or more, and the list groups.
+  const grouped = properties.length > 1
+  // Built FROM `filtered`, so cat/query/sort are applied once and grouping composes with
+  // them instead of forking them. Group order follows `properties` (primary first — the
+  // RPC's own ordering), with the unknown bucket trailing; a group with nothing left in
+  // it after filtering doesn't render a heading over empty space.
+  const groups = useMemo(() => {
+    if (!grouped) return null
+    const byKey = new Map<string, DocItem[]>()
+    for (const d of filtered) {
+      const key = d.propertyId && propsById.has(d.propertyId) ? d.propertyId : NO_PROPERTY
+      const bucket = byKey.get(key)
+      if (bucket) bucket.push(d); else byKey.set(key, [d])
+    }
+    const out = properties.filter(p => byKey.has(p.id)).map(p => ({
+      key: p.id, label: p.address?.trim() || 'Property', isPrimary: !!p.is_primary, items: byKey.get(p.id)!,
+    }))
+    const rest = byKey.get(NO_PROPERTY)
+    // Neutral and LAST: these documents are unfiled, not misfiled. Naming them after an
+    // address we couldn't confirm is the one thing this whole change exists to stop.
+    if (rest) out.push({ key: NO_PROPERTY, label: 'Other documents', isPrimary: false, items: rest })
+    return out
+  }, [grouped, filtered, properties, propsById])
 
   const CATS: { key: 'all' | DocKind; label: string; n: number }[] = [
     { key: 'all', label: 'All', n: counts.all },
@@ -1315,6 +1377,28 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, propert
       {/* List */}
       {filtered.length === 0 ? (
         <Empty icon={docs.length === 0 ? FolderOpen : Search} text={docs.length === 0 ? 'No documents yet — your quotes and invoices will appear here.' : 'No documents match your search.'} />
+      ) : groups ? (
+        <div className="space-y-5">
+          {groups.map(g => (
+            <div key={g.key} className="space-y-3">
+              {/* The heading carries the address; the rows keep saying what they always
+                  said. Service + date + status stay the disambiguators, because a
+                  customer can hold two quotes on one property that differ by nothing
+                  else — address alone would render them as identical twins. */}
+              <div className="flex items-center gap-1.5 px-0.5">
+                <MapPin className="w-3.5 h-3.5 text-ink-faint shrink-0" />
+                <p className="text-xs font-semibold text-ink tracking-tight truncate">{g.label}</p>
+                {g.isPrimary && (
+                  <span className="text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border border-border text-ink-faint shrink-0">
+                    Primary
+                  </span>
+                )}
+                <span className="text-xs text-ink-faint tabular-nums ml-auto shrink-0">{g.items.length}</span>
+              </div>
+              {g.items.map(d => <DocRow key={d.id} d={d} paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} accept={accept} accepting={accepting} />)}
+            </div>
+          ))}
+        </div>
       ) : (
         <div className="space-y-3">{filtered.map(d => <DocRow key={d.id} d={d} paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} accept={accept} accepting={accepting} />)}</div>
       )}

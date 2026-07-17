@@ -215,9 +215,16 @@ If you have a moment, a quick review would mean a lot — it's how most people f
 
 No worries at all if you'd rather not. Thank you either way!`,
 
+  // "for {{address}}" mirrors the invoice template's "for {{amount}}" below — the same
+  // idiom, and it is what tells six quotes apart. A landlord with six properties got six
+  // byte-identical "Your quote is ready" messages and had to open every link to find the
+  // one they cared about. `address` was already a registered variable and already
+  // threaded through SendMessageDialog and the scheduled-message cron; only the quote
+  // template never asked for it. Degrades to "your property" when unset (templates.ts's
+  // resolver), which reads correctly rather than leaving a dangling "for ".
   quote: `Hi {{first_name}},
 
-Your quote from {{business_name}} is ready.
+Your quote from {{business_name}} for {{address}} is ready.
 
 You can view and approve it anytime using the secure link below:
 
