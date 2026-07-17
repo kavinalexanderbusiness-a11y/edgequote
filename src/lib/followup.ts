@@ -149,11 +149,37 @@ export function logFollowUpPatch(q: Quote) {
   }
 }
 
-// DB patch when a quote is won — captures whether follow-ups drove the win.
-export function markWonPatch(followUpCount: number) {
+/** What the customer actually agreed to. See RUN-2026-07-16c. */
+export interface WonSnapshot {
+  /** The price on the document at the moment they said yes. A COPY, never a
+   *  reference to `total` — editing the quote afterwards must not rewrite what was
+   *  agreed. */
+  acceptedPrice: number | null
+  /** The cadence they bought. `null` when nobody said so — see below. */
+  selectedCadence: 'one_time' | 'weekly' | 'biweekly' | 'monthly' | null
+}
+
+// DB patch when a quote is won — captures whether follow-ups drove the win, and
+// SNAPSHOTS what was bought.
+//
+// Pricing v2 Phase 0 (sensor). Until now nothing recorded the sale, so the learner
+// reconstructed it by guessing weekly-first off whichever price columns happened to
+// be filled: a paid $489.25 seeding job with a leftover weekly_price of 56.65 was
+// learned as "$56.65 weekly". This is the one place a quote becomes won, so it is
+// the one place the truth can be written down.
+//
+// `selectedCadence` is OMITTED, not defaulted, when the caller doesn't know. That is
+// the whole point: an absent cadence is a fact ("nobody said"), and Phase 5 can skip
+// it honestly. Inferring one from a populated price column is precisely the bug these
+// columns exist to kill — do not "improve" this by adding a fallback.
+export function markWonPatch(followUpCount: number, snap?: WonSnapshot) {
   return {
     status: 'accepted' as const,
     accepted_after_followup: (followUpCount ?? 0) > 0,
     follow_up_count_at_acceptance: followUpCount ?? 0,
+    // `?? null` on the price is safe — a quote going draft/sent → accepted has no
+    // prior snapshot to clobber, and a null price is honestly "we didn't capture it".
+    accepted_price: snap?.acceptedPrice ?? null,
+    ...(snap?.selectedCadence ? { selected_cadence: snap.selectedCadence } : {}),
   }
 }

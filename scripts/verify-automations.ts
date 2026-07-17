@@ -24,7 +24,7 @@ import { logSend, logDispatch } from '@/lib/comms/log'
 import { sendSms, sendEmail } from '@/lib/comms/send'
 import { runChaseCron, type ChaseItem, type ChaseTally } from '@/lib/automation/chase'
 import { SKIP_REASON, describeSkip } from '@/lib/comms/skipReasons'
-import { canChaseCustomer, chaseBlockedReason } from '@/lib/followup'
+import { canChaseCustomer, chaseBlockedReason, markWonPatch } from '@/lib/followup'
 import { cadenceDays, churnRisk, type CadenceRecLike } from '@/lib/signals'
 import {
   buildTimeline, filterTimeline, searchTimeline, timelineForProperty, timelineGroupCounts,
@@ -923,6 +923,34 @@ async function run() {
       check('quiet-hours', "➜ it passes hour: 'unknown' — the only hour it can honestly claim",
         /hour:\s*'unknown'/.test(routeSrc), true)
     }
+  }
+
+  // ── 29a. THE ACCEPT SNAPSHOT — record what was bought, or record nothing ─────
+  // Pricing v2 Phase 0 (sensor). Nothing recorded the sale, so the learner
+  // reconstructed it by guessing weekly-first: a paid $489.25 seeding job carrying a
+  // leftover weekly_price of 56.65 was learned as "$56.65 weekly". These pin the two
+  // properties that make the record trustworthy — it snapshots, and it never guesses.
+  H('29a. Accept snapshot — the sensor records truth or nothing')
+  {
+    const won = (n: number, snap?: Parameters<typeof markWonPatch>[1]) => markWonPatch(n, snap) as Record<string, unknown>
+
+    check('accept', 'a won quote still records the follow-up facts', won(2).accepted_after_followup, true)
+    check('accept', 'the agreed price is snapshotted', won(0, { acceptedPrice: 489.25, selectedCadence: null }).accepted_price, 489.25)
+    // THE rule this whole migration exists for: an unknown cadence is a FACT, not a
+    // gap to fill. Inferring one from a populated price column is the bug.
+    check('accept', '➜ an unknown cadence is OMITTED, never guessed',
+      Object.prototype.hasOwnProperty.call(won(0, { acceptedPrice: 489.25, selectedCadence: null }), 'selected_cadence'), false)
+    check('accept', '➜ a known cadence IS recorded',
+      won(0, { acceptedPrice: 55, selectedCadence: 'weekly' }).selected_cadence, 'weekly')
+    // A caller with no snapshot at all must not fabricate a price.
+    check('accept', '➜ no snapshot → no price, and no cadence key', won(1).accepted_price, null)
+    check('accept', '➜ ➜ and still no invented cadence',
+      Object.prototype.hasOwnProperty.call(won(1), 'selected_cadence'), false)
+    // The cadence vocabulary must match the DB CHECK constraint exactly — a fifth
+    // value would be rejected by Postgres at write time.
+    check('accept', 'the cadence vocabulary matches the DB constraint',
+      (['one_time', 'weekly', 'biweekly', 'monthly'] as const).every(c =>
+        won(0, { acceptedPrice: 1, selectedCadence: c }).selected_cadence === c), true)
   }
 
   // ── 29b. CHASEABILITY — "gone quiet" and "can be chased" are different ───────

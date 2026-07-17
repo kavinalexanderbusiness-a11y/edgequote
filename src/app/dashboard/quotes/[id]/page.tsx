@@ -487,7 +487,16 @@ export default function QuoteDetailPage() {
     if (!quote || actionBusy) return
     setActionBusy(true)
     try {
-      const patch = markWonPatch(quote.follow_up_count)
+      // Snapshot what was bought (Pricing v2 Phase 0). `total` is the number on the
+      // document the customer said yes to — copying it here is what makes it
+      // survivable when the quote is later edited. The cadence is deliberately NOT
+      // passed: this button says "they said yes", not "they said yes to weekly", and
+      // the app must not invent a distinction the owner never made. It becomes known
+      // when the job is scheduled against a recurrence.
+      const patch = markWonPatch(quote.follow_up_count, {
+        acceptedPrice: Number(quote.total) || null,
+        selectedCadence: null,
+      })
       await supabase.from('quotes').update(patch).eq('id', quote.id)
       setQuote({ ...quote, ...patch })   // status → accepted; the persistent banner shows automatically
       toast.success('Marked as won — schedule the job to lock it in.')
