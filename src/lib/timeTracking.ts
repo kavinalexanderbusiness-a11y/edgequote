@@ -161,6 +161,20 @@ export interface TimeEntryPatch {
   clock_out?: string | null
   break_minutes?: number
   notes?: string | null
+  /**
+   * Correct the rate stamped on THIS shift. Deliberately editable, and
+   * deliberately per-shift.
+   *
+   * The rate is snapshot at clock-in so a raise can't rewrite history — but that
+   * left hours clocked before a wage was ever set permanently worth $0, with no
+   * way to fix them. (Payroll even instructed owners to "set a wage on the roster
+   * then edit those shifts", which was impossible: the roster wage only applies
+   * to the NEXT clock-in, and this patch had no rate field.)
+   *
+   * Editing here changes ONE shift and nothing else — it is not a back door to
+   * bulk-repricing history, which is exactly what the snapshot exists to prevent.
+   */
+  hourly_rate?: number | null
 }
 
 /**
@@ -181,6 +195,9 @@ export async function updateTimeEntry(
   if (patch.clock_out !== undefined) row.clock_out = patch.clock_out
   if (patch.break_minutes !== undefined) row.break_minutes = Math.max(0, Math.round(patch.break_minutes))
   if (patch.notes !== undefined) row.notes = patch.notes
+  if (patch.hourly_rate !== undefined) {
+    row.hourly_rate = patch.hourly_rate == null ? null : Math.max(0, patch.hourly_rate)
+  }
   if (!Object.keys(row).length) return { ok: false, error: 'Nothing to save.' }
 
   const { data, error } = await supabase.from('time_entries').update(row).eq('id', entryId).select().maybeSingle()

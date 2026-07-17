@@ -48,6 +48,7 @@ export function TimeEntryEditor({ open, entry, technicianName, supabase, onClose
   const [clockOut, setClockOut] = useState(() => (entry.clock_out ? toLocalInput(entry.clock_out) : ''))
   const [breakMin, setBreakMin] = useState(String(entry.break_minutes ?? 0))
   const [notes, setNotes] = useState(entry.notes ?? '')
+  const [rate, setRate] = useState(entry.hourly_rate == null ? '' : String(Number(entry.hourly_rate)))
   const [saving, setSaving] = useState(false)
 
   // Same shape as the generated column: greatest(0, span - break).
@@ -62,20 +63,24 @@ export function TimeEntryEditor({ open, entry, technicianName, supabase, onClose
     return { error: null, minutes: Math.max(0, Math.floor((outMs - inMs) / 60_000) - brk) }
   }, [clockIn, clockOut, breakMin])
 
-  const cost = preview.minutes != null && entry.hourly_rate != null
-    ? Math.round((preview.minutes / 60) * Number(entry.hourly_rate) * 100) / 100
+  const rateNum = rate.trim() === '' ? null : Number(rate)
+  const rateInvalid = rate.trim() !== '' && (!Number.isFinite(rateNum) || (rateNum as number) < 0)
+  const cost = preview.minutes != null && rateNum != null && !rateInvalid
+    ? Math.round((preview.minutes / 60) * rateNum * 100) / 100
     : null
 
   const reopening = !!entry.clock_out && !clockOut
+  const rateChanged = (entry.hourly_rate == null ? null : Number(entry.hourly_rate)) !== rateNum
 
   async function save() {
-    if (preview.error) return
+    if (preview.error || rateInvalid) return
     setSaving(true)
     const res = await updateTimeEntry(supabase, entry.id, {
       clock_in: fromLocalInput(clockIn) ?? entry.clock_in,
       clock_out: fromLocalInput(clockOut),
       break_minutes: Math.max(0, Number(breakMin) || 0),
       notes: notes.trim() || null,
+      hourly_rate: rateNum,
     })
     setSaving(false)
     if (!res.ok) { notify.error(res.error); return }
@@ -93,7 +98,7 @@ export function TimeEntryEditor({ open, entry, technicianName, supabase, onClose
       footer={
         <div className="flex items-center justify-end gap-2">
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button onClick={save} loading={saving} disabled={!!preview.error}>
+          <Button onClick={save} loading={saving} disabled={!!preview.error || rateInvalid}>
             <Check className="w-3.5 h-3.5" /> Save shift
           </Button>
         </div>
@@ -104,8 +109,16 @@ export function TimeEntryEditor({ open, entry, technicianName, supabase, onClose
           <Input label="Clock out" type="datetime-local" value={clockOut} onChange={e => setClockOut(e.target.value)}
             hint="Leave empty to put them back on the clock" />
         </div>
-        <Input label="Break (minutes)" type="number" min="0" step="5" value={breakMin}
-          onChange={e => setBreakMin(e.target.value)} hint="Unpaid — subtracted from the shift" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Input label="Break (minutes)" type="number" min="0" step="5" value={breakMin}
+            onChange={e => setBreakMin(e.target.value)} hint="Unpaid — subtracted from the shift" />
+          {/* Editable so hours clocked before a wage was set can actually be paid.
+              Changes THIS shift only — never re-prices anyone else's history. */}
+          <Input label="Rate $/hr" type="number" min="0" step="0.25" value={rate}
+            onChange={e => setRate(e.target.value)} placeholder="—"
+            error={rateInvalid ? 'Rate must be 0 or more' : undefined}
+            hint={entry.hourly_rate == null ? 'No rate was stamped — set one to pay these hours' : 'This shift only'} />
+        </div>
         <Textarea label="Notes" rows={2} value={notes} onChange={e => setNotes(e.target.value)}
           placeholder="Optional — what this time was for" />
 
@@ -129,9 +142,11 @@ export function TimeEntryEditor({ open, entry, technicianName, supabase, onClose
         )}
 
         <p className="text-[11px] text-ink-faint">
-          {entry.hourly_rate == null
-            ? 'No wage was stamped on this shift, so it records hours only.'
-            : `Paid at the ${formatCurrency(Number(entry.hourly_rate))}/hr rate stamped when they clocked in — editing times never changes the rate.`}
+          {rateChanged && entry.hourly_rate != null
+            ? `Changing the rate re-values this one shift. Every other shift keeps the rate it was clocked in at.`
+            : entry.hourly_rate == null
+              ? 'This shift has no rate, so it records hours but pays $0. Set one above to pay it.'
+              : `Stamped at ${formatCurrency(Number(entry.hourly_rate))}/hr when they clocked in. Editing the times never changes the rate on its own.`}
         </p>
       </div>
     </Modal>

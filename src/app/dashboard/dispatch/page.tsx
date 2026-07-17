@@ -81,7 +81,14 @@ export default function DispatchPage() {
   const [dayRow, setDayRow] = useState<DayStatusRow | null>(null)
   const [settings, setSettings] = useState<{ base: Coord | null; workStart: string; dailyHours: number }>({ base: null, workStart: DEFAULT_WORK_START, dailyHours: 8 })
   const [view, setView] = useState<'board' | 'map'>('board')
-  const [managerOpen, setManagerOpen] = useState(false)
+  // `?roster=1` opens the roster straight away. Every "add your people" empty
+  // state across Workforce/Payroll/Timesheet links here — previously they told
+  // the owner to "add people under Crews & roster on the dispatch board" and left
+  // them to find it, which is a dead end on the first screen a new owner sees.
+  const [managerOpen, setManagerOpen] = useState(() => {
+    if (typeof window === 'undefined') return false
+    return new URLSearchParams(window.location.search).get('roster') === '1'
+  })
   const [balancePlan, setBalancePlan] = useState<BalancePlan | null>(null)
   const [applyingBalance, setApplyingBalance] = useState(false)
   const [optimizingLane, setOptimizingLane] = useState<string | null>(null)

@@ -7,12 +7,12 @@ import { addDays, format } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import type { BusinessSettings, PtoEntry, Technician, TimeEntry } from '@/types'
-import { PAY_PERIOD_LABELS } from '@/types'
+import { PAY_PERIOD_LABELS, PTO_KIND_LABELS } from '@/types'
 import { loadTechnicians } from '@/lib/crews'
 import { loadTimeEntries, formatDuration, decimalHours } from '@/lib/timeTracking'
 import {
-  payrollRules, payPeriodFor, shiftPayPeriod, payrollSummary, overtimeOff, inPeriod,
-  type PayPeriod, type PayrollSummary,
+  payrollRules, payPeriodFor, shiftPayPeriod, overtimeOff, inPeriod, periodSplitsWeeks,
+  type PayPeriod,
 } from '@/lib/payroll'
 import { entryMinutes } from '@/lib/timeTracking'
 import { buildDraftPayRun } from '@/lib/payRun'
@@ -97,13 +97,14 @@ export default function PayrollPage() {
   useEffect(() => { fetchAll() }, [fetchAll])
   useRealtimeRefresh('time_entries', uid ? `user_id=eq.${uid}` : null, fetchAll)
 
-  const sum: PayrollSummary | null = useMemo(
-    () => (period ? payrollSummary(entries, techs, rules, period) : null),
-    [entries, techs, rules, period],
-  )
-
-  // The same draft the Finalize dialog would freeze — built here so the on-screen
-  // gross (worked + time off) is exactly what gets written, never a near-miss.
+  // ONE source of truth for this whole page. The tile, the table, the CSV, the
+  // printed timesheet and Finalize all read THIS object.
+  //
+  // They used to not. `payrollSummary` (worked time only) fed the table/CSV/print
+  // while the draft (worked + PTO) fed the tile and Finalize — so a period with
+  // one vacation day printed a timesheet, exported a CSV, and froze a pay run
+  // with three different totals. Two engines on one screen is how that happens;
+  // the fix is to have one.
   const draft = useMemo(
     () => (period ? buildDraftPayRun({ entries, ptoEntries, technicians: techs, rules, period }) : null),
     [entries, ptoEntries, techs, rules, period],
@@ -125,36 +126,54 @@ export default function PayrollPage() {
     return m
   }, [entries, period])
 
-  // Payroll export — the summary as it is on screen. Hours are emitted as decimal
-  // numbers (not "7h 30m") because every payroll system and spreadsheet wants a
-  // number it can sum; 7.5 sums, "7h 30m" does not.
+  // Time off per person, for the printed timesheet's own time-off table.
+  const ptoByTech = useMemo(() => {
+    const m = new Map<string, PtoEntry[]>()
+    for (const p of ptoEntries) {
+      const list = m.get(p.technician_id)
+      if (list) list.push(p); else m.set(p.technician_id, [p])
+    }
+    for (const list of m.values()) list.sort((a, b) => a.date.localeCompare(b.date))
+    return m
+  }, [ptoEntries])
+
+  // Payroll export — the same draft the screen shows and Finalize freezes. Hours
+  // are emitted as decimal numbers (not "7h 30m") because every payroll system and
+  // spreadsheet wants a number it can sum; 7.5 sums, "7h 30m" does not.
   function exportCsv() {
-    if (!sum || !sum.rows.length) { notify.error('Nothing to export for this pay period.'); return }
-    exportRowsToCsv(`payroll-${format(sum.period.start, 'yyyy-MM-dd')}-to-${format(sum.period.end, 'yyyy-MM-dd')}`, sum.rows, [
-      { label: 'Employee', value: r => r.name },
-      { label: 'Period start', value: () => format(sum.period.start, 'yyyy-MM-dd') },
-      { label: 'Period end', value: () => format(sum.period.end, 'yyyy-MM-dd') },
-      { label: 'Regular hours', value: r => decimalHours(r.regularMinutes) },
-      { label: 'Overtime hours', value: r => decimalHours(r.otMinutes) },
-      { label: 'Total hours', value: r => decimalHours(r.totalMinutes) },
-      { label: 'Rate (blended $/hr)', value: r => r.blendedRate },
+    if (!draft || !draft.lines.length) { notify.error('Nothing to export for this pay period.'); return }
+    exportRowsToCsv(`payroll-${format(draft.period.start, 'yyyy-MM-dd')}-to-${format(draft.period.end, 'yyyy-MM-dd')}`, draft.lines, [
+      { label: 'Employee', value: l => l.technicianName },
+      { label: 'Role', value: l => l.technicianRole ?? '' },
+      { label: 'Period start', value: () => format(draft.period.start, 'yyyy-MM-dd') },
+      { label: 'Period end', value: () => format(draft.period.end, 'yyyy-MM-dd') },
+      { label: 'Regular hours', value: l => decimalHours(l.regularMinutes) },
+      { label: 'Overtime hours', value: l => decimalHours(l.otMinutes) },
+      { label: 'Hours worked', value: l => decimalHours(l.totalMinutes) },
+      // Blended = weighted average of the rates actually worked. Named in full so
+      // nobody reconciles it against an offer letter and finds it "wrong".
+      { label: 'Rate (blended avg $/hr)', value: l => l.blendedRate },
       { label: 'OT multiplier', value: () => rules.multiplier },
-      { label: 'Regular pay', value: r => r.regularPay },
-      { label: 'Overtime pay', value: r => r.otPay },
-      { label: 'Gross pay', value: r => r.totalPay },
-      { label: 'Shifts', value: r => r.shifts },
+      { label: 'Regular pay', value: l => l.regularPay },
+      { label: 'Overtime pay', value: l => l.otPay },
+      // PTO is its own earning line — it was missing here entirely, so exported
+      // gross didn't match the finalized pay run.
+      { label: 'Paid time off hours', value: l => l.ptoHours },
+      { label: 'Paid time off pay', value: l => l.ptoPay },
+      { label: 'Gross pay', value: l => l.grossPay },
+      { label: 'Shifts', value: l => l.shifts },
       // Exported so a bookkeeper can see WHY a total looks light, instead of
       // finding out on payday.
-      { label: 'Open shifts (unpaid)', value: r => r.openShifts },
-      { label: 'Hours with no wage set', value: r => decimalHours(r.unratedMinutes) },
+      { label: 'Open shifts (unpaid)', value: l => l.openShifts },
+      { label: 'Hours with no wage set', value: l => decimalHours(l.unratedMinutes) },
     ])
-    notify.success(`Exported ${sum.rows.length} employee${sum.rows.length !== 1 ? 's' : ''} to CSV.`)
+    notify.success(`Exported ${draft.lines.length} employee${draft.lines.length !== 1 ? 's' : ''} to CSV.`)
   }
 
-  if (loading || !period || !sum) {
+  if (loading || !period || !draft) {
     return (
       <div className="max-w-5xl space-y-5">
-        <PageHeader crumb={{ label: 'Timesheet', href: '/dashboard/dispatch/time' }} title="Payroll"
+        <PageHeader crumb={{ label: 'Workforce', href: '/dashboard/workforce' }} title="Payroll"
           description="What each person earned this pay period." />
         <SkeletonTiles count={4} />
         <SkeletonRows count={4} />
@@ -167,7 +186,7 @@ export default function PayrollPage() {
   return (
     <div className="max-w-5xl space-y-5">
       <PageHeader
-        crumb={{ label: 'Timesheet', href: '/dashboard/dispatch/time' }}
+        crumb={{ label: 'Workforce', href: '/dashboard/workforce' }}
         title="Payroll"
         description={`${PAY_PERIOD_LABELS[rules.kind]} · what each person earned, regular and overtime.`}
         action={
@@ -175,10 +194,10 @@ export default function PayrollPage() {
             <Button size="sm" onClick={() => setFinalizeOpen(true)} disabled={!draft?.lines.length}>
               <Lock className="w-3.5 h-3.5" /> Finalize
             </Button>
-            <Button variant="secondary" size="sm" onClick={exportCsv} disabled={!sum.rows.length}>
+            <Button variant="secondary" size="sm" onClick={exportCsv} disabled={!draft.lines.length}>
               <Download className="w-3.5 h-3.5" /> CSV
             </Button>
-            <Button variant="secondary" size="sm" onClick={() => window.print()} disabled={!sum.rows.length}>
+            <Button variant="secondary" size="sm" onClick={() => window.print()} disabled={!draft.lines.length}>
               <Printer className="w-3.5 h-3.5" /> Print
             </Button>
             <Link href="/dashboard/dispatch/payroll/history">
@@ -223,15 +242,15 @@ export default function PayrollPage() {
 
       {/* ── Totals ── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <StatTile label="Regular hours" icon={Clock} value={formatDuration(sum.regularMinutes)}
-          sub={`${decimalHours(sum.regularMinutes)} h`} />
-        <StatTile label="Overtime hours" icon={Timer} value={formatDuration(sum.otMinutes)}
-          sub={otOff ? 'No OT rule set' : `${decimalHours(sum.otMinutes)} h at ${rules.multiplier}x`}
-          tone={sum.otMinutes > 0 ? 'warn' : undefined} tonedSurface={sum.otMinutes > 0} />
-        <StatTile label="Paid time off" icon={Palmtree} value={`${draft?.ptoHours ?? 0} h`}
-          sub={draft && draft.ptoPay > 0 ? formatCurrency(draft.ptoPay) : 'Not hours worked'}
+        <StatTile label="Regular hours" icon={Clock} value={formatDuration(draft.regularMinutes)}
+          sub={`${decimalHours(draft.regularMinutes)} h`} />
+        <StatTile label="Overtime hours" icon={Timer} value={formatDuration(draft.otMinutes)}
+          sub={otOff ? 'No OT rule set' : `${decimalHours(draft.otMinutes)} h at ${rules.multiplier}x`}
+          tone={draft.otMinutes > 0 ? 'warn' : undefined} tonedSurface={draft.otMinutes > 0} />
+        <StatTile label="Paid time off" icon={Palmtree} value={`${draft.ptoHours} h`}
+          sub={draft.ptoPay > 0 ? formatCurrency(draft.ptoPay) : 'Not hours worked'}
           onClick={() => router.push('/dashboard/dispatch/time-off')} />
-        <StatTile label="Total pay" icon={Wallet} value={formatCurrency(draft?.grossPay ?? sum.totalPay)}
+        <StatTile label="Total pay" icon={Wallet} value={formatCurrency(draft.grossPay)}
           sub="Worked + time off, before deductions" accent />
       </div>
 
@@ -244,20 +263,22 @@ export default function PayrollPage() {
           threshold — overtime law differs by province (Alberta 8/day &amp; 44/week, Ontario 44/week).
         </Banner>
       )}
-      {sum.openShifts > 0 && (
+      {draft.openShifts > 0 && (
         <Banner tone="warn" icon={AlertTriangle}
           action={<Link href="/dashboard/dispatch/time" className="shrink-0 text-xs font-semibold underline">Timesheet</Link>}>
-          {sum.openShifts} shift{sum.openShifts !== 1 ? 's are' : ' is'} still open and {sum.openShifts !== 1 ? 'are' : 'is'} not
-          included — an unfinished shift has no hours yet. Clock {sum.openShifts !== 1 ? 'them' : 'it'} out to pay {sum.openShifts !== 1 ? 'them' : 'it'}.
+          {draft.openShifts} shift{draft.openShifts !== 1 ? 's are' : ' is'} still open and {draft.openShifts !== 1 ? 'are' : 'is'} not
+          included — an unfinished shift has no hours yet. Clock {draft.openShifts !== 1 ? 'them' : 'it'} out to pay {draft.openShifts !== 1 ? 'them' : 'it'}.
         </Banner>
       )}
-      {sum.unratedMinutes > 0 && (
-        <Banner tone="warn" icon={AlertTriangle}>
-          {formatDuration(sum.unratedMinutes)} was worked with no wage set, so it counts as hours but
-          pays $0. Set a wage on the roster, then edit those shifts.
+      {draft.unratedMinutes > 0 && (
+        <Banner tone="warn" icon={AlertTriangle}
+          action={<Link href="/dashboard/dispatch/time" className="shrink-0 text-xs font-semibold underline">Fix rates</Link>}>
+          {formatDuration(draft.unratedMinutes)} was worked with no wage set, so it counts as hours but
+          pays $0. Open the shift on the timesheet and set its rate — the wage on the roster only
+          applies to future clock-ins.
         </Banner>
       )}
-      {sum.approximate && (
+      {periodSplitsWeeks(rules) && (
         <Banner tone="info" icon={AlertTriangle}>
           {PAY_PERIOD_LABELS[rules.kind]} periods don’t line up with work weeks, so overtime is judged on
           the part of each week inside this period. Weekly or every-2-weeks periods are exact.
@@ -270,14 +291,16 @@ export default function PayrollPage() {
           <div className="px-5 py-3 border-b border-border flex items-center justify-between">
             <h2 className="text-sm font-semibold text-ink">By person</h2>
             <span className="text-[11px] text-ink-faint tabular-nums">
-              {formatDuration(sum.totalMinutes)} · {decimalHours(sum.totalMinutes)} h
+              {formatDuration(draft.regularMinutes + draft.otMinutes)} worked
+              {draft.ptoHours > 0 && ` · ${draft.ptoHours} h off`}
             </span>
           </div>
 
-          {sum.rows.length === 0 ? (
+          {draft.lines.length === 0 ? (
             techs.length === 0 ? (
               <EmptyState icon={HardHat} className="py-12" title="No one on the roster yet"
-                description="Add your people under Crews & roster on the dispatch board, then clock them in." />
+                description="Add your people to the roster, then clock them in — their hours and pay show up here."
+                action={{ label: 'Open the roster', href: '/dashboard/dispatch?roster=1' }} />
             ) : (
               <InlineEmpty icon={Clock}>No hours in this pay period.</InlineEmpty>
             )
@@ -289,15 +312,18 @@ export default function PayrollPage() {
                     <th className="text-left px-5 py-2.5 text-[10px] font-semibold text-ink-faint uppercase tracking-wide">Person</th>
                     <th className="text-right px-3 py-2.5 text-[10px] font-semibold text-ink-faint uppercase tracking-wide">Regular</th>
                     <th className="text-right px-3 py-2.5 text-[10px] font-semibold text-ink-faint uppercase tracking-wide">Overtime</th>
-                    <th className="text-right px-3 py-2.5 text-[10px] font-semibold text-ink-faint uppercase tracking-wide hidden sm:table-cell">Rate</th>
-                    <th className="text-right px-5 py-2.5 text-[10px] font-semibold text-ink-faint uppercase tracking-wide">Pay</th>
+                    {/* PTO was missing entirely — the Pay column silently excluded
+                        it while the tile above included it. */}
+                    <th className="text-right px-3 py-2.5 text-[10px] font-semibold text-ink-faint uppercase tracking-wide">Time off</th>
+                    <th className="text-right px-3 py-2.5 text-[10px] font-semibold text-ink-faint uppercase tracking-wide hidden sm:table-cell">Avg rate</th>
+                    <th className="text-right px-5 py-2.5 text-[10px] font-semibold text-ink-faint uppercase tracking-wide">Gross</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {sum.rows.map(r => (
+                  {draft.lines.map(r => (
                     <tr key={r.technicianId} className="hover:bg-surface-raised transition-colors">
                       <td className="px-5 py-3">
-                        <p className="font-medium text-ink truncate">{r.name}</p>
+                        <p className="font-medium text-ink truncate">{r.technicianName}</p>
                         <p className="text-[11px] text-ink-faint tabular-nums">
                           {r.shifts} shift{r.shifts !== 1 ? 's' : ''}
                           {r.openShifts > 0 && <span className="text-amber-400"> · {r.openShifts} open</span>}
@@ -314,10 +340,16 @@ export default function PayrollPage() {
                         </span>
                         {r.otMinutes > 0 && <span className="block text-[11px] text-ink-faint">{formatCurrency(r.otPay)}</span>}
                       </td>
+                      <td className="px-3 py-3 text-right tabular-nums">
+                        <span className={r.ptoHours > 0 ? 'text-ink' : 'text-ink-faint'}>
+                          {r.ptoHours > 0 ? `${r.ptoHours} h` : '—'}
+                        </span>
+                        {r.ptoPay > 0 && <span className="block text-[11px] text-ink-faint">{formatCurrency(r.ptoPay)}</span>}
+                      </td>
                       <td className="px-3 py-3 text-right tabular-nums text-ink-muted hidden sm:table-cell">
                         {r.blendedRate > 0 ? `${formatCurrency(r.blendedRate)}/hr` : '—'}
                       </td>
-                      <td className="px-5 py-3 text-right font-bold text-ink tabular-nums">{formatCurrency(r.totalPay)}</td>
+                      <td className="px-5 py-3 text-right font-bold text-ink tabular-nums">{formatCurrency(r.grossPay)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -348,12 +380,13 @@ export default function PayrollPage() {
           person: their shifts, their totals, and a signature line — the thing an
           owner hands over or files. Same numbers as above, from the same engine. */}
       <div className="print-sheet hidden print:block text-[11px]">
-        {sum.rows.map((r, i) => {
+        {draft.lines.map((r, i) => {
           const shifts = shiftsByTech.get(r.technicianId) ?? []
+          const pto = ptoByTech.get(r.technicianId) ?? []
           return (
-            <section key={r.technicianId} className={cn('print-keep', i < sum.rows.length - 1 && 'print-break')}>
+            <section key={r.technicianId} className={cn('print-keep', i < draft.lines.length - 1 && 'print-break')}>
               <header className="mb-3">
-                <h1 className="text-base font-bold">{r.name} — Timesheet</h1>
+                <h1 className="text-base font-bold">{r.technicianName} — Timesheet</h1>
                 <p>
                   {settings?.company_name ? `${settings.company_name} · ` : ''}
                   {format(period.start, 'MMM d, yyyy')} – {format(period.end, 'MMM d, yyyy')}
@@ -391,14 +424,37 @@ export default function PayrollPage() {
                 </tbody>
               </table>
 
+              {/* Time off is listed before the totals so the gross below is
+                  self-evidently the sum of what's on the page. It used to be
+                  omitted entirely, and the signed gross was short by its value. */}
+              {pto.length > 0 && (
+                <>
+                  <p className="font-bold mb-1">Time off</p>
+                  <table className="w-full border-collapse mb-3">
+                    <tbody>
+                      {pto.map(p => (
+                        <tr key={p.id} data-print-rule className="border-b border-black/20">
+                          <td className="py-0.5">{format(new Date(`${p.date.slice(0, 10)}T00:00:00`), 'EEE MMM d')}</td>
+                          <td className="py-0.5">{PTO_KIND_LABELS[p.kind]}{!p.is_paid && ' (unpaid)'}</td>
+                          <td className="py-0.5 text-right">{Number(p.hours)} h</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )}
+
               <table className="w-full border-collapse mb-4">
                 <tbody>
                   <tr><td className="py-0.5">Regular hours</td><td className="py-0.5 text-right">{decimalHours(r.regularMinutes)}</td></tr>
                   <tr><td className="py-0.5">Overtime hours{!otOff && ` (at ${rules.multiplier}×)`}</td><td className="py-0.5 text-right">{decimalHours(r.otMinutes)}</td></tr>
-                  <tr data-print-rule className="border-t border-black"><td className="py-1 font-bold">Total hours</td><td className="py-1 text-right font-bold">{decimalHours(r.totalMinutes)}</td></tr>
+                  <tr data-print-rule className="border-t border-black"><td className="py-1 font-bold">Hours worked</td><td className="py-1 text-right font-bold">{decimalHours(r.totalMinutes)}</td></tr>
                   <tr><td className="py-0.5">Regular pay</td><td className="py-0.5 text-right">{formatCurrency(r.regularPay)}</td></tr>
                   <tr><td className="py-0.5">Overtime pay</td><td className="py-0.5 text-right">{formatCurrency(r.otPay)}</td></tr>
-                  <tr data-print-rule className="border-t border-black"><td className="py-1 font-bold">Gross pay</td><td className="py-1 text-right font-bold">{formatCurrency(r.totalPay)}</td></tr>
+                  {r.ptoHours > 0 && (
+                    <tr><td className="py-0.5">Paid time off ({r.ptoHours} h)</td><td className="py-0.5 text-right">{formatCurrency(r.ptoPay)}</td></tr>
+                  )}
+                  <tr data-print-rule className="border-t border-black"><td className="py-1 font-bold">Gross pay</td><td className="py-1 text-right font-bold">{formatCurrency(r.grossPay)}</td></tr>
                 </tbody>
               </table>
 

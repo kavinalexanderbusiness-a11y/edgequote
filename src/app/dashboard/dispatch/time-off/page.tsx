@@ -147,7 +147,7 @@ export default function TimeOffPage() {
   if (loading) {
     return (
       <div className="max-w-5xl space-y-5">
-        <PageHeader crumb={{ label: 'Dispatch', href: '/dashboard/dispatch' }} title="Time off"
+        <PageHeader crumb={{ label: 'Workforce', href: '/dashboard/workforce' }} title="Time off"
           description="Vacation, sick days and holidays — and what they cost." />
         <SkeletonTiles count={3} />
         <SkeletonRows count={4} />
@@ -158,7 +158,7 @@ export default function TimeOffPage() {
   return (
     <div className="max-w-5xl space-y-5">
       <PageHeader
-        crumb={{ label: 'Dispatch', href: '/dashboard/dispatch' }}
+        crumb={{ label: 'Workforce', href: '/dashboard/workforce' }}
         title="Time off"
         description="Vacation, sick days and holidays — and what they cost."
         action={
@@ -183,7 +183,8 @@ export default function TimeOffPage() {
       {active.length === 0 ? (
         <Card>
           <EmptyState icon={HardHat} className="py-12" title="No one on the roster yet"
-            description="Add your people under Crews & roster on the dispatch board, then you can book their time off here." />
+            description="Add the people who work for you, then you can book their time off here."
+            action={{ label: 'Add your people', href: '/dashboard/dispatch?roster=1' }} />
         </Card>
       ) : (
         <>

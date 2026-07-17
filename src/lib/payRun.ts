@@ -57,6 +57,8 @@ export interface DraftPayRunLine {
   technicianRole: string | null
   regularMinutes: number
   otMinutes: number
+  /** regular + OT. Worked time only — PTO is hours NOT worked. */
+  totalMinutes: number
   blendedRate: number
   regularPay: number
   otPay: number
@@ -64,6 +66,9 @@ export interface DraftPayRunLine {
   ptoPay: number
   grossPay: number
   shifts: number
+  /** Open shifts in the period — counted, never paid. Per line so the payroll
+   *  table can say WHOSE hours are missing, not just that some are. */
+  openShifts: number
   unratedMinutes: number
 }
 
@@ -110,6 +115,7 @@ export function buildDraftPayRun(args: {
       technicianRole: t?.role ?? null,
       regularMinutes: w?.regularMinutes ?? 0,
       otMinutes: w?.otMinutes ?? 0,
+      totalMinutes: w?.totalMinutes ?? 0,
       blendedRate: w?.blendedRate ?? 0,
       regularPay,
       otPay,
@@ -119,6 +125,7 @@ export function buildDraftPayRun(args: {
       ptoPay: pto.pay,
       grossPay: round2(regularPay + otPay + pto.pay),
       shifts: w?.shifts ?? 0,
+      openShifts: w?.openShifts ?? 0,
       unratedMinutes: w?.unratedMinutes ?? 0,
     })
   }

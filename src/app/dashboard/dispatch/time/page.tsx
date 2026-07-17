@@ -138,7 +138,7 @@ export default function TimesheetPage() {
   if (loading) {
     return (
       <div className="max-w-5xl space-y-5">
-        <PageHeader crumb={{ label: 'Dispatch', href: '/dashboard/dispatch' }} title="Timesheet"
+        <PageHeader crumb={{ label: 'Workforce', href: '/dashboard/workforce' }} title="Timesheet"
           description="Clock your people in and out, and see what the hours cost." />
         <SkeletonTiles count={3} className="grid-cols-3 lg:grid-cols-3" />
         <SkeletonRows count={4} />
@@ -149,7 +149,7 @@ export default function TimesheetPage() {
   return (
     <div className="max-w-5xl space-y-5">
       <PageHeader
-        crumb={{ label: 'Dispatch', href: '/dashboard/dispatch' }}
+        crumb={{ label: 'Workforce', href: '/dashboard/workforce' }}
         title="Timesheet"
         description="Clock your people in and out, and see what the hours cost."
         action={
@@ -192,7 +192,8 @@ export default function TimesheetPage() {
       {active.length === 0 ? (
         <Card>
           <EmptyState icon={HardHat} title="No one on the roster yet"
-            description="Add your people under Crews & roster on the dispatch board, then clock them in here." />
+            description="Add the people who work for you, then you can clock them in here."
+            action={{ label: 'Add your people', href: '/dashboard/dispatch?roster=1' }} />
         </Card>
       ) : (
         <div className="space-y-2">

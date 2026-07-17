@@ -208,7 +208,7 @@ export default function LaborPage() {
   if (loading) {
     return (
       <div className="max-w-5xl space-y-5">
-        <PageHeader crumb={{ label: 'Timesheet', href: '/dashboard/dispatch/time' }} title="Labour"
+        <PageHeader crumb={{ label: 'Workforce', href: '/dashboard/workforce' }} title="Labour"
           description="What the clock actually cost, and how much of it reached a job." />
         <SkeletonTiles count={4} />
         <SkeletonRows count={5} />
@@ -219,7 +219,7 @@ export default function LaborPage() {
   return (
     <div className="max-w-5xl space-y-5">
       <PageHeader
-        crumb={{ label: 'Timesheet', href: '/dashboard/dispatch/time' }}
+        crumb={{ label: 'Workforce', href: '/dashboard/workforce' }}
         title="Labour"
         description="What the clock actually cost, and how much of it reached a job."
         action={
@@ -454,7 +454,8 @@ export default function LaborPage() {
           {buckets.length === 0 ? (
             techs.length === 0 ? (
               <EmptyState icon={HardHat} className="py-12" title="No one on the roster yet"
-                description="Add your people under Crews & roster on the dispatch board, then clock them in." />
+                description="Add the people who work for you, then clock them in — their cost shows up here."
+                action={{ label: 'Add your people', href: '/dashboard/dispatch?roster=1' }} />
             ) : (
               <EmptyState icon={BarChart3} className="py-12" title="No labour yet"
                 description="Clock someone in on the timesheet — once shifts are closed, their cost shows up here." />

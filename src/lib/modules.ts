@@ -1,6 +1,6 @@
 import type { LucideIcon } from 'lucide-react'
 import {
-  LayoutDashboard, CalendarDays, Users, Home, FileText, Receipt, Wallet, MessageSquare, Wrench, Bot, Sprout, Radio,
+  LayoutDashboard, CalendarDays, Users, Home, FileText, Receipt, Wallet, MessageSquare, Wrench, Bot, Sprout, Radio, HardHat,
 } from 'lucide-react'
 
 // ── Feature-module registry ───────────────────────────────────────────────────
@@ -68,6 +68,16 @@ export const FEATURE_MODULES: FeatureModule[] = [
     category: 'operations', version: 1, requires: ['schedule'],
     description: 'Crews, technicians and the day\'s routes on one board.',
     permissions: ['jobs:read', 'jobs:write', 'crews:read', 'crews:write', 'equipment:read', 'equipment:write'] },
+  // Payroll lived three-to-five clicks deep inside Dispatch and appeared in NO
+  // navigation and NO command palette — typing "payroll" into ⌘K returned nothing.
+  // The thing that pays people has to be findable on payday. Registering it here
+  // (rather than special-casing the sidebar) is what makes the sidebar, ⌘K and the
+  // Modules manager all agree — they every one read this registry.
+  { key: 'workforce',  label: 'Workforce',  href: '/dashboard/workforce',  icon: HardHat,
+    category: 'operations', version: 1, requires: ['dispatch'],
+    description: 'Your people: hours, pay, time off and what the crew costs.',
+    whatsNew: 'Payroll, timesheets and time off now have a home of their own.',
+    permissions: ['crews:read', 'crews:write', 'payroll:read', 'payroll:write'] },
   { key: 'customers',  label: 'Customers',  href: '/dashboard/customers',  icon: Users,
     category: 'customers', version: 1,
     description: 'Every customer, their history, and the conversation.',
