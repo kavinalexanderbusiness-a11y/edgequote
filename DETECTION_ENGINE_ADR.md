@@ -1,38 +1,43 @@
 # ADR: one detection engine — `lib/signals/*` is canonical
 
-**Status:** ACCEPTED (owner, 2026-07-16). **Design only — nothing implemented.**
-**Blocked on:** one owner decision (cadence precedence, §Stage 0). *Not* on the
-CEO-dashboard hold — see below.
+**Status:** **ACCEPTED AS COMPLETE** (owner, 2026-07-17). **Design only — nothing
+implemented.** Every open question is closed; the cadence-precedence rule is
+decided (§Stage 0). **Not blocked — scheduled.** Implementation begins when the
+owner schedules it, under the acceptance criteria below. Until then this document
+is final: no further design work on it.
 
 > Owner: *"lib/signals/* becomes the canonical detection engine. lib/reactivation.ts
 > survives only as a consumer/report built on top of signals. I do not want two
 > competing detection systems long-term."*
 
-## ⛔ ACCEPTANCE CRITERIA — the owner's four conditions on implementation
+## ⛔ ACCEPTANCE CRITERIA — the owner's five conditions on implementation
 
-Re-ratified 2026-07-17 when this ADR was accepted. **These are the gate, not
-advice.** They are not new — each one already has a home below — but they are the
-terms the work is accepted on, so a change that misses any of them is not "a first
-pass", it is not done.
+Final as of 2026-07-17, when the ADR was accepted as complete. **These are the gate,
+not advice.** Each already has a home below; they are restated here because they are
+the terms the work is accepted on. A change that misses any of them is not "a first
+pass" — it is not done.
 
 | # | Condition | Where it lives | What "met" looks like |
 |---|---|---|---|
 | 1 | **Preserve backwards compatibility** | §3 | `computeReactivation` / `loadReactivation` / every exported type keep their exact signatures. Both consumers (`dashboard/data.ts`, `dashboard/priorities.ts`) need **zero edits**. signals' 9 consumers are untouched. No DB change. |
 | 2 | **Use differential testing** | §5a | Old vs new run over the **live book**, deep-equalled. Both engines are pure → no DB, no mocks. The old implementation stays until the harness is green; that is what makes Stage 1 revertible. |
-| 3 | **Maintain identical outputs** | §3, §5a | Not "close" — **identical**: same `ranOuts` (membership, order, `daysSince`, `perVisit`, `cadence`, `isVip`), same lapse buckets, same `potentialRecovery` / `atRisk` / `reactivated`. **Any diff is a bug in the refactor, never an improvement to the report.** Production's two recurrence shapes are ones both engines already agree on, so a correct migration changes nothing an owner can see. |
-| 4 | **Eliminate duplicated thresholds** | Stage 2, §4 | The one that actually kills the second engine — Stage 1 alone leaves it dormant. `VIP_THRESHOLD` and `reactivation.daysBetween` deleted; **zero** lifecycle constants and zero cadence maths left in `reactivation.ts`; enforced mechanically by the §4 import-shape assertion, not by a comment. |
+| 3 | **Identical behaviour on all production-valid data** | §3, §5a | Not "close" — **identical**: same `ranOuts` (membership, order, `daysSince`, `perVisit`, `cadence`, `isVip`), same lapse buckets, same `potentialRecovery` / `atRisk` / `reactivated`. **Any diff is a bug in the refactor, never an improvement to the report.** "Production-valid" is the precise scope, and it is not a loophole — it is bounded by #5: the only permitted difference is an invalid config (named cadence contradicting its recurrence row), of which there are **zero** today. On every row that exists, a correct migration changes nothing an owner can see. |
+| 4 | **Eliminate duplicated thresholds — via alias → deprecate → delete** | Stage 2, §4 | The one that actually kills the second engine — Stage 1 alone leaves it dormant. The path is mandated, not optional: `VIP_THRESHOLD` becomes an alias of `VIP_LTV` in Stage 1, is marked deprecated, and is deleted in Stage 2 once no caller names it. Same for `reactivation.daysBetween`. End state: **zero** lifecycle constants and zero cadence maths in `reactivation.ts`, enforced by the §4 import-shape assertion, not by a comment. |
+| 5 | **Document the intentional cadence change for invalid configs** | §Stage 0, §5d | #3 is "identical on production-valid data" — **not** "identical always", and the difference must be written down rather than discovered. A row whose named cadence contradicts its recurrence interval is an **invalid/mismatched config**; under the canonical rule its answer changes (`weekly`+`month/1`: 30 → **7**). Zero such rows exist today. Required: the change is stated in the migration's commit message and in `reactivation.ts`, and §5d asserts the rule in **both** directions so a future row cannot silently flip it. An intentional behaviour change that nobody wrote down is indistinguishable from a bug six months later. |
 
 ⚠️ **1 and 4 pull against each other, deliberately.** #1 says don't break callers;
 #4 says delete the public `VIP_THRESHOLD`. The reconciliation is the alias →
 deprecate → delete sequence in §3 — not a reason to skip #4. Nothing outside
 `reactivation.ts` imports it today, so the cost is zero and the alias is a formality.
 
-⚠️ **#3 has one honest exception, and it must be decided BEFORE Stage 1, not
-discovered inside it:** the cadence-precedence inversion (§Risks #2). Adopting
-signals' rule *will* change the answer for a `weekly`+`month/1` series — 7 days
-instead of 30. No such row exists in production today, so #3 holds on live data;
-the harness must assert the chosen rule explicitly (§5d) rather than let a future
-row silently flip it.
+⚠️ **#3 has exactly one exception, and #5 is what keeps it honest.** The
+cadence-precedence inversion (§Risks #2) is **decided, not open** — signals' rule
+is canonical (§Stage 0). Adopting it *will* change the answer for a
+`weekly`+`month/1` series: 7 days instead of 30. **No such row exists in
+production**, which is why #3 ("all production-valid data") holds without
+qualification on every row that exists. #5 bounds the exception rather than
+excusing it: the change is written down, and §5d asserts the rule in both
+directions so a future mismatched row gets an intentional answer, not a silent one.
 
 ---
 
@@ -130,20 +135,27 @@ show?"* it belongs in a report.
 
 Four stages. Each is independently verifiable and independently revertible.
 
-### Stage 0 — decide (not code)
+### Stage 0 — ✅ DECIDED (2026-07-17). No work remains here.
 
-The CEO-dashboard hold **no longer blocks this**: PR #33 put `reactivation.ts` on
+The CEO-dashboard hold no longer blocks this: PR #33 put `reactivation.ts` on
 `main`, so Stage 1 refactors shipped code on a normal branch rather than rewriting
 held work.
 
-**One decision remains, and it is semantics, not code: cadence precedence**
-(§Risks #2). The two engines disagree in three measured cases and Stage 1 must
-adopt one rule. **Recommendation: signals' — the named cadence wins.** The name is
-the semantic answer ("this is a weekly customer"); the recurrence row is the
-mechanism that materialises visits, and the likelier of the two to be stale.
+**THE CANONICAL CADENCE RULE — signals' precedence.** Owner, 2026-07-17:
 
-Decide it here, deliberately, rather than discover it in a differential diff — the
-whole point of §5's harness is that it should report *no* diffs.
+> *"The named service cadence is the semantic source of truth. The recurrence row is
+> the scheduling mechanism."*
+
+That is the whole rule, and it decides §Risks #2's three divergent cases in signals'
+favour: `weekly`+`month/1` → **7**, not 30. It is not a tie-break — it is a
+statement about what the two fields *mean*. A cadence names the deal the customer
+agreed to; a recurrence row is the machinery that materialises visits from it. When
+they disagree, the machinery is what drifted — so the name wins, and the row is the
+thing to go fix.
+
+**This rule is now load-bearing beyond this ADR.** Any future code answering "how
+often does this customer get served?" reads `cadenceDays(cadence, rec)` and inherits
+it. A second answer is a second engine.
 
 ### Stage 1 — reactivation consumes signals (behaviour-preserving)
 
@@ -285,15 +297,19 @@ hurry.
    urgent). `reactivation` **conflates** them: its `ranOuts` are only the urgent
    ones, and the rest deliberately fall through to lapse buckets. Miss the
    `.isUrgent` filter and every long-dead series floods the red queue. Pinned by 5c.
-2. **⚠️ Cadence precedence is INVERTED — proven, latent.** signals checks the named
-   cadence first, then the recurrence row; reactivation checks the row first.
-   Measured: 3 of 13 cases diverge — `weekly`+`month/1` → **7 vs 30**;
-   `monthly`+`week/1` → **30 vs 7**; `biweekly`+`day/3` → **14 vs 3**. **Not live
-   today**: production has 15 recurrences in two shapes with **zero** mismatches,
-   and `freq` is derived from the row via `effectiveFreq`, so they normally cannot
-   disagree. It fires the day a custom series exists whose name and interval
-   disagree — and it silently moves the urgent window, changing who is in the red
-   queue. **Must be decided in Stage 0, not discovered in Stage 1.**
+2. **✅ Cadence precedence — DECIDED (2026-07-17); the risk is now managed, not
+   open.** signals checks the named cadence first, then the recurrence row;
+   reactivation checked the row first. Measured: 3 of 13 cases diverge —
+   `weekly`+`month/1` → **7 vs 30**; `monthly`+`week/1` → **30 vs 7**;
+   `biweekly`+`day/3` → **14 vs 3**. **Not live**: production has 15 recurrences in
+   two shapes with **zero** mismatches, and `freq` is derived from the row via
+   `effectiveFreq`, so they normally cannot disagree.
+   **Resolution: signals' rule is canonical** (§Stage 0) — the name is the deal, the
+   row is the machinery. The residual risk is no longer "which is right?" but "does
+   anyone notice when it fires?", and that is what criterion #5 exists for: the
+   change is documented and §5d asserts the rule in both directions, so the day a
+   mismatched config appears its answer is intentional and traceable rather than a
+   silent shift in who sits in the red queue.
 3. **~~The hold~~ — RESOLVED, and it inverts.** This ADR was drafted while
    `reactivation.ts` lived only on held work. PR #33 (`b67840d`) merged that branch,
    so the file is now on `main`. Stage 1 is unblocked — **and the duplication is now
