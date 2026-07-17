@@ -419,12 +419,21 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
     ?? (totalSqft > 0 ? pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount: nearby, neighborhoodName: hoodName }) : null)
 
   // Record auto vs accepted so the estimate self-calibrates (best-effort).
+  //
+  // propertyId/customerId are forwarded because a measurement is a fact about an
+  // ADDRESS, not about a quote. They were already props, already destructured and
+  // already used a few lines above (draftKey) — they just weren't passed here, so
+  // every measurement taken inside the quote builder wrote property_id = null.
+  // Measured: 30 of 31 rows. It stayed invisible because recordMeasurement's
+  // propertyId is optional and defaults to null, so tsc had nothing to object to.
+  // This is what made "Property measured" almost absent from property timelines.
   function recordMeasure() {
     ;(async () => {
       const { data: { user } } = await supabase.auth.getUser()
       if (user) recordMeasurement(supabase, {
         userId: user.id, context: 'quote', lat: center?.lat ?? null, lng: center?.lng ?? null,
         neighborhood: neighborhoodOf(null, null, hoodName), auto: autoRef.current, acceptedSqft: totalSqft,
+        propertyId: propertyId ?? null, customerId: customerId ?? null,
       }).catch(() => {})
     })()
   }
