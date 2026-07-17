@@ -3,7 +3,9 @@ import { summarizeTransactions, cashAmountOf } from '@/lib/payments/analytics'
 import { isCashRow } from '@/lib/payments/ledger'
 import { invoiceTotals } from '@/lib/invoiceTotals'
 import { marginPct } from '@/lib/margin'
-import { sumExpenses, expenseNet } from '@/lib/accounting/expenses'
+import {
+  sumExpenses, expenseNet, isOperatingCost, isOwnerDraw, isCapital, isUnpaid,
+} from '@/lib/accounting/expenses'
 import { inPeriod, monthKey, monthsBetween, clampPeriodToData, type Period } from '@/lib/accounting/period'
 
 // ── THE accounting report engine ─────────────────────────────────────────────
@@ -105,10 +107,22 @@ export interface ProfitAndLoss {
   salesTaxCollected: number
   /** cashCollected − salesTaxCollected. THE top line. */
   revenue: number
-  /** Total cost as the P&L counts it: net of reclaimable tax for a registrant, gross otherwise. */
+  /**
+   * OPERATING cost as the P&L counts it: net of reclaimable tax for a registrant,
+   * gross otherwise.
+   *
+   * Excludes three kinds of money that leave the bank but are not costs — unpaid
+   * bills (no cash yet), capital purchases (cash became an asset), and owner draws
+   * (a distribution of profit, not a cost of earning it). Each exclusion is why
+   * this number and `spendGross` are allowed to differ.
+   */
   cost: number
-  /** Gross spend — what left the bank. Cash flow uses this. */
+  /** ALL gross spend, every kind — what left the bank. Cash flow uses this. */
   spendGross: number
+  /** Cash that bought assets. Real money out, never a cost. */
+  capitalSpend: number
+  /** Profit taken out by the owner. Real money out, never a cost. */
+  ownerDraws: number
   /** Tax paid on spend. An input tax credit for a registrant; already inside `cost` otherwise. */
   taxPaid: number
   /** Cost in DEDUCTIBLE categories only — excludes owner draws and personal spend. */
@@ -182,8 +196,21 @@ export function paymentsInPeriod(payments: Payment[], period: Period): Payment[]
   return payments.filter(p => inPeriod(p.paid_at, period))
 }
 
+/**
+ * Expenses whose CASH moved in the period.
+ *
+ * `inPeriod` is false for a null `spent_at`, so unpaid bills fall out here — which
+ * is exactly right for a cash-basis report and is why A/P never leaks into cost.
+ * (Do NOT hand-roll `e.spent_at >= from` instead: JS compares `null` numerically,
+ * so both bounds go false and an unpaid bill silently lands in EVERY period.)
+ */
 export function expensesInPeriod(expenses: ExpenseWithRelations[], period: Period): ExpenseWithRelations[] {
   return expenses.filter(e => inPeriod(e.spent_at, period))
+}
+
+/** Bills INCURRED in the period, paid or not — the accrual view, for A/P surfaces. */
+export function expensesBilledInPeriod(expenses: ExpenseWithRelations[], period: Period): ExpenseWithRelations[] {
+  return expenses.filter(e => inPeriod(e.bill_date, period))
 }
 
 /** THE P&L. Pure over rows the caller already fetched — no queries, trivially checkable. */
@@ -201,14 +228,24 @@ export function profitAndLoss(input: AccountingInput): ProfitAndLoss {
   const salesTaxCollected = salesTaxWithin(cashCollected, gstPercent)
   const revenue = round2(cashCollected - salesTaxCollected)
 
-  // Money OUT.
-  const totals = sumExpenses(exps)
+  // Money OUT — PARTITIONED before it's summed. Not every dollar that leaves the
+  // bank is a cost, and the three that aren't each break a different statement:
+  //   capital → cash became an asset (counting it fails the balance sheet by the
+  //             purchase price and reports a fake loss the month you buy a mower)
+  //   draw    → a distribution of profit (counting it hits equity twice)
+  //   unpaid  → already excluded by expensesInPeriod (no cash date), but named here
+  //             so the partition is exhaustive and provable rather than implied.
+  const operating = exps.filter(isOperatingCost)
+  const totals = sumExpenses(operating)
+  const allTotals = sumExpenses(exps)          // every kind — cash flow's figure
+
   const cost = registrant ? totals.net : totals.gross
   // deductibleNet is net-based; a non-registrant's deductible cost is gross, so
-  // recompute over the same rule rather than mixing bases.
+  // recompute over the same rule rather than mixing bases. Over OPERATING rows only:
+  // a draw is not a deduction, and neither is a mower (its depreciation is).
   const deductibleCost = registrant
     ? totals.deductibleNet
-    : round2(exps.reduce((s, e) => s + (e.expense_categories?.tax_deductible !== false ? Number(e.amount) || 0 : 0), 0))
+    : round2(operating.reduce((s, e) => s + (e.expense_categories?.tax_deductible !== false ? Number(e.amount) || 0 : 0), 0))
 
   const profit = round2(revenue - cost)
 
@@ -219,7 +256,12 @@ export function profitAndLoss(input: AccountingInput): ProfitAndLoss {
     salesTaxCollected,
     revenue,
     cost,
-    spendGross: totals.gross,
+    // Every kind of spend: what the bank actually saw.
+    spendGross: allTotals.gross,
+    capitalSpend: round2(exps.filter(isCapital).reduce((s, e) => s + (Number(e.amount) || 0), 0)),
+    ownerDraws: round2(exps.filter(isOwnerDraw).reduce((s, e) => s + (Number(e.amount) || 0), 0)),
+    // Tax paid on OPERATING spend — the input tax credit the P&L is net of. Tax
+    // inside a capital purchase belongs to the asset's cost basis, not here.
     taxPaid: totals.tax,
     deductibleCost,
     profit,
@@ -232,10 +274,14 @@ export function profitAndLoss(input: AccountingInput): ProfitAndLoss {
     gstPercent,
     expenseCount: exps.length,
     paymentCount: txn.count,
-    byCategory: sliceByCategory(exps, registrant),
-    byVendor: sliceByVendor(exps, registrant),
-    byMonth: sliceByMonth(pays, exps, period, registrant, gstPercent),
-    uncategorisedCount: exps.filter(e => !e.category_id).length,
+    // Slices are over OPERATING rows so a breakdown sums to the total it breaks
+    // down. A "where the money goes" list that silently included draws would not
+    // add up to `cost`, and a breakdown that doesn't reconcile to its own total is
+    // worse than no breakdown — it looks checkable and isn't.
+    byCategory: sliceByCategory(operating, registrant),
+    byVendor: sliceByVendor(operating, registrant),
+    byMonth: sliceByMonth(pays, operating, period, registrant, gstPercent),
+    uncategorisedCount: operating.filter(e => !e.category_id).length,
     // Measured over ALL payments given, not the period-filtered ones — undated cash
     // is by definition outside every period, so period-filtering it first would
     // guarantee the answer is always 0 and hide the very thing this reports.
@@ -255,14 +301,17 @@ export function cashFlow(input: AccountingInput): CashFlow {
   const inflow = summarizeTransactions(pays).net
   const outflow = sumExpenses(exps).gross
 
+  // `exps` came through expensesInPeriod, so every row here HAS a cash date — an
+  // unpaid bill never reaches a cash-flow chart. The guards are belt-and-braces so a
+  // future caller passing raw rows gets nothing rather than a NaN month.
   const months = chartMonths(period, [
     ...pays.map(p => (p.paid_at || '').slice(0, 10)),
-    ...exps.map(e => e.spent_at),
+    ...exps.map(e => e.spent_at || ''),
   ])
 
   const byMonth = months.map(key => {
     const i = summarizeTransactions(pays.filter(p => p.paid_at && monthKey(p.paid_at) === key)).net
-    const o = sumExpenses(exps.filter(e => monthKey(e.spent_at) === key)).gross
+    const o = sumExpenses(exps.filter(e => e.spent_at && monthKey(e.spent_at) === key)).gross
     return { key, inflow: i, outflow: o, net: round2(i - o) }
   })
 
@@ -343,11 +392,11 @@ function sliceByMonth(
 ): MonthSlice[] {
   return chartMonths(period, [
     ...pays.map(p => (p.paid_at || '').slice(0, 10)),
-    ...exps.map(e => e.spent_at),
+    ...exps.map(e => e.spent_at || ''),
   ]).map(key => {
     const cash = summarizeTransactions(pays.filter(p => p.paid_at && monthKey(p.paid_at) === key)).net
     const revenue = round2(cash - salesTaxWithin(cash, gstPercent))
-    const monthExps = exps.filter(e => monthKey(e.spent_at) === key)
+    const monthExps = exps.filter(e => e.spent_at && monthKey(e.spent_at) === key)
     const t = sumExpenses(monthExps)
     const cost = registrant ? t.net : t.gross
     return { key, revenue, cost, profit: round2(revenue - cost) }

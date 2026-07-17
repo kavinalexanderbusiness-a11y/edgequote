@@ -11,7 +11,7 @@ import { listExpenses, archiveExpense, restoreExpense } from '@/lib/accounting/e
 import { listVendors } from '@/lib/accounting/vendors'
 import { listCategories, seedDefaultCategories } from '@/lib/accounting/categories'
 import { profitAndLoss, cashFlow } from '@/lib/accounting/report'
-import { resolvePeriod, PERIOD_OPTIONS, type PeriodKey } from '@/lib/accounting/period'
+import { resolvePeriod, PERIOD_OPTIONS, inPeriod, type PeriodKey } from '@/lib/accounting/period'
 import { formatPct } from '@/lib/margin'
 import { ExpenseForm } from '@/components/accounting/ExpenseForm'
 import { VendorManager } from '@/components/accounting/VendorManager'
@@ -143,7 +143,11 @@ export default function AccountingPage() {
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase()
     return expenses.filter(e => {
-      if (e.spent_at < period.from || e.spent_at > period.to) return false
+      // inPeriod(), NOT a hand-rolled `e.spent_at >= from` comparison. An unpaid
+      // bill has spent_at = null, and JS compares null numerically against a date
+      // string: BOTH bounds come out false, so the row passes and an unpaid bill
+      // lands in every period at once. inPeriod treats null as "no period".
+      if (!inPeriod(e.spent_at, period)) return false
       if (categoryId && e.category_id !== categoryId) return false
       if (vendorId && e.vendor_id !== vendorId) return false
       if (method && e.payment_method !== method) return false
@@ -404,7 +408,14 @@ export default function AccountingPage() {
                       <tbody>
                         {filtered.map(e => (
                           <tr key={e.id} className={tableRowHover}>
-                            <Td className="whitespace-nowrap text-ink-muted">{formatDate(e.spent_at)}</Td>
+                            <Td className="whitespace-nowrap text-ink-muted">
+                              {e.spent_at
+                                ? formatDate(e.spent_at)
+                                // An unpaid bill has no cash date. Show when it was
+                                // billed and say it's owed — never a blank cell, and
+                                // never the bill date dressed as a payment date.
+                                : <span className="text-warn">Owed · billed {formatDate(e.bill_date)}</span>}
+                            </Td>
                             <Td>
                               <span className="flex items-center gap-2">
                                 <span className="text-ink">{e.description || '—'}</span>

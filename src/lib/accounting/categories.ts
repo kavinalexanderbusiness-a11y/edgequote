@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { ExpenseCategory } from '@/types'
+import type { ExpenseCategory, ExpenseCategoryKind } from '@/types'
 
 // ── Expense categories ───────────────────────────────────────────────────────
 // Categories are the spine of every report: the P&L groups by them, the tax
@@ -19,32 +19,34 @@ import type { ExpenseCategory } from '@/types'
 
 export interface DefaultCategory {
   name: string
+  /** Can it be CLAIMED? A parking fine is not deductible and is still a real cost. */
   tax_deductible: boolean
+  /** Is it a cost AT ALL? An owner draw isn't. See ExpenseCategory.kind. */
+  kind: ExpenseCategoryKind
 }
 
 // Ordered as a small operator thinks about spend: what the trucks burn, what the
 // work consumes, who helps, then the cost of being a business at all.
 export const DEFAULT_EXPENSE_CATEGORIES: DefaultCategory[] = [
-  { name: 'Fuel', tax_deductible: true },
-  { name: 'Vehicle', tax_deductible: true },
-  { name: 'Equipment', tax_deductible: true },
-  { name: 'Materials', tax_deductible: true },
-  { name: 'Subcontractor', tax_deductible: true },
-  { name: 'Wages', tax_deductible: true },
-  { name: 'Insurance', tax_deductible: true },
-  { name: 'Licences & fees', tax_deductible: true },
-  { name: 'Marketing', tax_deductible: true },
-  { name: 'Office & admin', tax_deductible: true },
-  { name: 'Software', tax_deductible: true },
-  { name: 'Bank & merchant fees', tax_deductible: true },
-  { name: 'Meals & entertainment', tax_deductible: true },
-  // The two that are NOT deductible, and the reason `tax_deductible` is a column
-  // rather than an assumption. Money genuinely leaves the business here — it
-  // belongs in cash flow — but it is not an expense the owner can claim, and a
-  // P&L that treats an owner draw as a cost understates profit and overstates
-  // nothing the CRA will agree with.
-  { name: 'Owner draw', tax_deductible: false },
-  { name: 'Personal / non-business', tax_deductible: false },
+  { name: 'Fuel', tax_deductible: true, kind: 'operating' },
+  { name: 'Vehicle', tax_deductible: true, kind: 'operating' },
+  { name: 'Equipment', tax_deductible: true, kind: 'operating' },
+  { name: 'Materials', tax_deductible: true, kind: 'operating' },
+  { name: 'Subcontractor', tax_deductible: true, kind: 'operating' },
+  { name: 'Wages', tax_deductible: true, kind: 'operating' },
+  { name: 'Insurance', tax_deductible: true, kind: 'operating' },
+  { name: 'Licences & fees', tax_deductible: true, kind: 'operating' },
+  { name: 'Marketing', tax_deductible: true, kind: 'operating' },
+  { name: 'Office & admin', tax_deductible: true, kind: 'operating' },
+  { name: 'Software', tax_deductible: true, kind: 'operating' },
+  { name: 'Bank & merchant fees', tax_deductible: true, kind: 'operating' },
+  { name: 'Meals & entertainment', tax_deductible: true, kind: 'operating' },
+  // The two that are NOT costs at all, and the reason `kind` exists alongside
+  // `tax_deductible`. Money genuinely leaves the business here — it belongs in cash
+  // flow, and it reduces equity — but it is not a cost of EARNING anything. A P&L
+  // that counts an owner draw as cost turns a profitable month into a fake loss.
+  { name: 'Owner draw', tax_deductible: false, kind: 'owner_draw' },
+  { name: 'Personal / non-business', tax_deductible: false, kind: 'owner_draw' },
 ]
 
 export async function listCategories(sb: SupabaseClient, userId: string): Promise<ExpenseCategory[]> {
@@ -86,6 +88,10 @@ export async function seedDefaultCategories(sb: SupabaseClient, userId: string):
       user_id: userId,
       name: c.name,
       tax_deductible: c.tax_deductible,
+      // Written explicitly, never left to the column default: the default is
+      // 'operating', so a silently-dropped `kind` would seed "Owner draw" as a
+      // business cost and put every draw straight into the P&L.
+      kind: c.kind,
       sort_order: i,
     })),
   )
@@ -94,7 +100,7 @@ export async function seedDefaultCategories(sb: SupabaseClient, userId: string):
 
 export async function createCategory(
   sb: SupabaseClient,
-  p: { userId: string; name: string; tax_deductible: boolean; external_account?: string | null; sort_order?: number },
+  p: { userId: string; name: string; tax_deductible: boolean; kind?: ExpenseCategoryKind; external_account?: string | null; sort_order?: number },
 ): Promise<{ category?: ExpenseCategory; error?: string }> {
   const name = p.name.trim()
   if (!name) return { error: 'Give the category a name.' }
@@ -104,6 +110,7 @@ export async function createCategory(
       user_id: p.userId,
       name,
       tax_deductible: p.tax_deductible,
+      kind: p.kind ?? 'operating',
       external_account: p.external_account?.trim() || null,
       sort_order: p.sort_order ?? 999,
     })
@@ -116,7 +123,7 @@ export async function createCategory(
 export async function updateCategory(
   sb: SupabaseClient,
   id: string,
-  patch: Partial<Pick<ExpenseCategory, 'name' | 'tax_deductible' | 'external_account' | 'sort_order'>>,
+  patch: Partial<Pick<ExpenseCategory, 'name' | 'tax_deductible' | 'kind' | 'external_account' | 'sort_order'>>,
 ): Promise<{ error?: string }> {
   const clean = { ...patch }
   if (typeof clean.name === 'string') clean.name = clean.name.trim()

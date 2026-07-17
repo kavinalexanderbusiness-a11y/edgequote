@@ -609,13 +609,32 @@ export interface ExpenseCategory {
   updated_at: string
   user_id: string
   name: string
-  /** Not every dollar out is deductible (owner draws, personal). The P&L reads this. */
+  /**
+   * Can the CRA claim be made for this? A parking fine is NOT deductible and is
+   * still a real cost. This axis answers "can you claim it", NOT "is it a cost" —
+   * that's `kind`.
+   */
   tax_deductible: boolean
+  /**
+   * `operating` = a real business cost → in the P&L.
+   * `owner_draw` = a distribution of profit, NOT a cost of earning it → excluded
+   * from the P&L, still cash out in cash flow, and a reduction of equity on the
+   * balance sheet. Counting a draw as cost turns a profitable month into a fake
+   * loss and hits equity twice.
+   */
+  kind: ExpenseCategoryKind
   /** The QBO/Xero account this maps to — the seam the export layer fills in later. */
   external_account: string | null
   sort_order: number
   archived_at: string | null
 }
+
+export type ExpenseCategoryKind = 'operating' | 'owner_draw'
+
+export const EXPENSE_CATEGORY_KINDS: { value: ExpenseCategoryKind; label: string }[] = [
+  { value: 'operating', label: 'Business cost' },
+  { value: 'owner_draw', label: 'Owner draw (not a cost)' },
+]
 
 export interface Expense {
   id: string
@@ -633,13 +652,32 @@ export interface Expense {
   amount: number
   /** Tax INCLUDED in `amount` (GST paid → an ITC). DB guards tax_amount <= amount. */
   tax_amount: number
-  spent_at: string
+  /** When the cost was INCURRED (the accrual date). Always set. */
+  bill_date: string
+  /**
+   * When the CASH LEFT. **NULL = unpaid = accounts payable.**
+   *
+   * Nullable on purpose, mirroring `payments.paid_at`: both halves of the ledger
+   * say "no date = the cash hasn't moved" the same way. Cash-basis reports filter
+   * on this, so an unpaid bill is correctly not a cost yet — it's a liability on
+   * the balance sheet instead.
+   */
+  spent_at: string | null
   description: string | null
   payment_method: string | null
   /** Receipt or invoice number from the vendor. */
   reference: string | null
   /** Object path in the private expense-receipts bucket. Read via signed URL only. */
   receipt_path: string | null
+  /**
+   * This cash bought an ASSET, not an operating cost.
+   *
+   * Buying a $5,000 mower is $5,000 of cash becoming $5,000 of asset — not a
+   * $5,000 cost. Excluded from P&L cost; still real cash out in cash flow; the
+   * asset itself lives in `fixed_assets`. Without this the balance sheet fails by
+   * exactly the purchase price.
+   */
+  is_capital: boolean
   notes: string | null
   archived_at: string | null
 }
@@ -647,7 +685,7 @@ export interface Expense {
 /** An expense with its lookups resolved — what every list and report actually reads. */
 export interface ExpenseWithRelations extends Expense {
   vendors?: Pick<Vendor, 'id' | 'name'> | null
-  expense_categories?: Pick<ExpenseCategory, 'id' | 'name' | 'tax_deductible'> | null
+  expense_categories?: Pick<ExpenseCategory, 'id' | 'name' | 'tax_deductible' | 'kind'> | null
   jobs?: { id: string; title: string | null; scheduled_date: string | null } | null
 }
 
@@ -662,10 +700,117 @@ export interface ExpenseFormValues {
   job_id: string
   amount: string
   tax_amount: string
+  /** When it was incurred. Required. */
+  bill_date: string
+  /**
+   * `false` = an unpaid bill (A/P): `spent_at` goes NULL and no cash has moved.
+   * A separate flag rather than "is spent_at blank", because blank is also what an
+   * unfinished form looks like — and the difference is a liability.
+   */
+  paid: boolean
+  /** When the cash left. Ignored unless `paid`. */
   spent_at: string
   description: string
   payment_method: string
   reference: string
+  notes: string
+}
+
+// ── Balance sheet: fixed assets ──────────────────────────────────────────────
+// A mower isn't an expense the day you buy it — it's an asset that wears out over
+// years. Expensing it all in month one understates that month and overstates every
+// month after, and leaves the balance sheet claiming the business owns nothing.
+
+export type DepreciationMethod = 'straight_line' | 'declining_balance' | 'none'
+
+// Deliberately NOT labelled "CCA": real CRA capital cost allowance has asset
+// classes, the half-year rule and recapture, none of which this computes. These are
+// BOOK figures for a balance sheet. Calling them CCA would invite filing on a
+// number that isn't one.
+export const DEPRECIATION_METHODS: { value: DepreciationMethod; label: string }[] = [
+  { value: 'straight_line', label: 'Straight line (same amount each year)' },
+  { value: 'declining_balance', label: 'Declining balance (a % of what\'s left)' },
+  { value: 'none', label: "Don't depreciate (e.g. land)" },
+]
+
+export interface FixedAsset {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  name: string
+  /** Same physical thing as an equipment row, seen from the money side. */
+  equipment_id: string | null
+  vendor_id: string | null
+  /** GROSS cost — same convention as expenses.amount. */
+  cost: number
+  tax_amount: number
+  in_service_date: string
+  method: DepreciationMethod
+  /** Required by the DB when method is straight_line. */
+  useful_life_years: number | null
+  salvage_value: number
+  /** Percent per year, e.g. 20 = 20%. Required by the DB when declining_balance. */
+  declining_rate: number | null
+  disposed_at: string | null
+  disposal_proceeds: number | null
+  notes: string | null
+  archived_at: string | null
+}
+
+export interface FixedAssetWithRelations extends FixedAsset {
+  vendors?: Pick<Vendor, 'id' | 'name'> | null
+}
+
+export interface FixedAssetFormValues {
+  name: string
+  vendor_id: string
+  cost: string
+  tax_amount: string
+  in_service_date: string
+  method: DepreciationMethod
+  useful_life_years: string
+  salvage_value: string
+  declining_rate: string
+  disposed_at: string
+  disposal_proceeds: string
+  notes: string
+}
+
+// ── Balance sheet: liabilities ───────────────────────────────────────────────
+// Owner-maintained SNAPSHOTS, not derived: there's no bank feed, so a computed
+// loan balance would be fiction that looks like arithmetic. `as_of_date` is
+// required so the balance sheet can say how stale it is.
+
+export type LiabilityKind = 'loan' | 'credit_card' | 'line_of_credit' | 'other'
+
+export const LIABILITY_KINDS: { value: LiabilityKind; label: string }[] = [
+  { value: 'loan', label: 'Loan' },
+  { value: 'credit_card', label: 'Credit card' },
+  { value: 'line_of_credit', label: 'Line of credit' },
+  { value: 'other', label: 'Other' },
+]
+
+export interface Liability {
+  id: string
+  created_at: string
+  updated_at: string
+  user_id: string
+  name: string
+  kind: LiabilityKind
+  current_balance: number
+  as_of_date: string
+  interest_rate: number | null
+  notes: string | null
+  archived_at: string | null
+}
+
+export interface LiabilityFormValues {
+  name: string
+  kind: LiabilityKind
+  current_balance: string
+  as_of_date: string
+  interest_rate: string
   notes: string
 }
 
@@ -1025,6 +1170,18 @@ export interface BusinessSettings {
   // $30+ for the CUSTOMER to claim an input tax credit — missing = ITC denied on
   // audit. Also mandatory on a credit note (ETA s.232(3)). null = not registered.
   gst_number?: string | null
+  // ── Balance sheet opening position ──
+  // Cash is not derivable from a payment ledger alone: it knows every movement
+  // since it started, but not what was in the bank the day before. Without these,
+  // "cash" is a movement, not a position — so the owner states it once.
+  opening_bank_balance?: number | null
+  opening_balance_date?: string | null
+  /**
+   * Owner capital already in the business at the opening date.
+   * NULL = unknown, and it stays unknown: the balance sheet reports an unexplained
+   * difference rather than plugging this to force Assets = Liabilities + Equity.
+   */
+  opening_equity?: number | null
   // ── Recurring AutoPay ── business-wide default charge mode (a customer may
   // override). 'auto' = charge a saved card the moment a recurring visit completes;
   // 'manual_review' = always draft the invoice and wait for the owner to charge.
