@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
 import { processDueJobs } from '@/lib/marketing/publishQueue'
 
 export const dynamic = 'force-dynamic'
@@ -11,14 +11,10 @@ export const dynamic = 'force-dynamic'
 // vercel.json) so a post still goes out even if the owner never logs in. Guarded by
 // CRON_SECRET + the service-role key; no-ops cleanly when either is absent.
 export async function GET(req: NextRequest): Promise<NextResponse> {
-  const secret = req.headers.get('authorization')?.replace('Bearer ', '') || new URL(req.url).searchParams.get('secret') || ''
-  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
-    return NextResponse.json({ error: 'forbidden' }, { status: 403 })
-  }
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL, svc = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!url || !svc) return NextResponse.json({ ok: true, skipped: true, note: 'Optional — set SUPABASE_SERVICE_ROLE_KEY to enable the daily sweep.' })
+  if (!cronSecretOk(req)) return NextResponse.json({ error: 'forbidden' }, { status: 403 })
+  const supabase = serviceClient() // service role → sweeps every owner
+  if (!supabase) return NextResponse.json({ ok: true, skipped: true, note: 'Optional — set SUPABASE_SERVICE_ROLE_KEY to enable the daily sweep.' })
 
-  const supabase = createClient(url, svc) // service role → sweeps every owner
   const result = await processDueJobs(supabase)
   return NextResponse.json({ ok: true, ...result })
 }

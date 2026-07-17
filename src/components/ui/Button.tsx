@@ -18,9 +18,22 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       danger:    'bg-red-500/10 border border-red-500/20 text-red-400 hover:bg-red-500/20 active:scale-[0.98]',
     }
 
-  const sizes = {
-      sm: 'px-3.5 py-2 text-sm',
-      md: 'px-4 py-2.5 text-sm',
+    // 44px on a phone, unchanged on a desktop.
+    //
+    // This app is used one-handed, in a truck, with gloves on — and sm (36px) and md
+    // (40px) both sat under the 44px minimum, while `lg` (48px) was too heavy for
+    // dense rows. Every surface that needed a real touch target therefore hand-rolled
+    // its way around the primitive, and they each picked a different answer: the
+    // customer profile's quick actions ended up at 44, the property page's actions at
+    // 24, timeline chips at 20, "Show more" at 16. Six heights, one intent.
+    //
+    // Padding rather than min-height, deliberately: `min-h-[44px]` would beat an
+    // explicit `h-7 w-7` on an icon button (min-height wins over height) and render it
+    // 44 tall by 28 wide. Padding leaves those overrides behaving exactly as they do
+    // today. text-sm's line box is 20px, so py-3 → 20 + 24 = 44.
+    const sizes = {
+      sm: 'px-3.5 py-3 text-sm sm:py-2',
+      md: 'px-4 py-3 text-sm sm:py-2.5',
       lg: 'px-5 py-3 text-base',
     }
 

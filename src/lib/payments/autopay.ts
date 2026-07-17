@@ -26,6 +26,18 @@ import { invoiceBalance } from '@/lib/payments/ledger'
 // invoice left unpaid). NEVER throws on a no-op.
 
 export type AutoPayResultCode = 'charged' | 'held' | 'skipped' | 'declined'
+// THE hold marker. It was a bare string literal in three places, and they didn't
+// even agree — the engine wrote/checked 'AutoPay held for review' while the
+// invoices page matched the shorter 'AutoPay held'. One constant, so a wording
+// change can't silently strand a held invoice with no banner and no confirm.
+export const AUTOPAY_HOLD_FLAG = 'AutoPay held for review'
+
+// Does this invoice carry the hold? Reads internal_notes (never the customer's
+// `notes`), so the flag can't be edited away by fixing a customer-facing typo.
+export function isAutoPayHeld(inv: { internal_notes?: string | null }): boolean {
+  return (inv.internal_notes || '').includes(AUTOPAY_HOLD_FLAG)
+}
+
 export interface AutoPayChargeResult {
   result: AutoPayResultCode
   reason?: string
@@ -37,7 +49,7 @@ export interface AutoPayChargeResult {
 interface InvoiceRow {
   id: string; amount: number; amount_paid: number | null; status: string; job_id: string | null; customer_id: string | null
   discount_type: 'amount' | 'percent' | null; discount_value: number | null
-  invoice_number: string; service_type: string | null; notes: string | null
+  invoice_number: string; service_type: string | null; internal_notes: string | null
 }
 
 // `sb` MUST be a service-role client. The caller is responsible for verifying that
@@ -57,7 +69,7 @@ export async function attemptAutoPayCharge(
   // amount_paid/discount are selected because the charge is the BALANCE, not the
   // total — a partly-paid invoice must never be charged twice for the paid part.
   const { data: invRow } = await sb.from('invoices')
-    .select('id, amount, amount_paid, discount_type, discount_value, status, job_id, customer_id, invoice_number, service_type, notes')
+    .select('id, amount, amount_paid, discount_type, discount_value, status, job_id, customer_id, invoice_number, service_type, internal_notes')
     .eq('id', invoiceId).eq('user_id', userId).maybeSingle()
   const invoice = invRow as InvoiceRow | null
   if (!invoice) return { result: 'skipped', reason: 'no-invoice' }
@@ -173,12 +185,17 @@ async function usualRecurringAmount(
 
 async function holdForReview(
   sb: SupabaseClient, userId: string,
-  invoice: { id: string; amount: number; customer_id: string | null; invoice_number: string; notes: string | null }, baseline: number,
+  invoice: { id: string; amount: number; customer_id: string | null; invoice_number: string; internal_notes: string | null }, baseline: number,
 ): Promise<void> {
   const fmt = (n: number) => new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' }).format(n)
-  const note = `AutoPay held for review — ${fmt(Number(invoice.amount))} differs from the usual ~${fmt(baseline)}.`
-  if (!(invoice.notes || '').includes('AutoPay held for review')) {
-    await sb.from('invoices').update({ notes: `${invoice.notes ? invoice.notes + ' · ' : ''}${note}` }).eq('id', invoice.id).eq('user_id', userId)
+  const note = `${AUTOPAY_HOLD_FLAG} — ${fmt(Number(invoice.amount))} differs from the usual ~${fmt(baseline)}.`
+  // Both the flag and its reason live in internal_notes now. This used to write to
+  // `notes`, which meant the customer's invoice printed the owner's own pricing
+  // baseline ("$450 differs from the usual ~$120") — and, since invoices became
+  // editable after approval, the owner retyping that note would silently un-hold
+  // the charge, because the flag WAS the customer-facing string.
+  if (!(invoice.internal_notes || '').includes(AUTOPAY_HOLD_FLAG)) {
+    await sb.from('invoices').update({ internal_notes: `${invoice.internal_notes ? invoice.internal_notes + ' · ' : ''}${note}` }).eq('id', invoice.id).eq('user_id', userId)
   }
   const { data: dup } = await sb.from('notifications').select('id')
     .eq('user_id', userId).eq('type', 'autopay_review').eq('entity_id', invoice.id).limit(1)

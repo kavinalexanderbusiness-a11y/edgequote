@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createInvoiceCheckoutSession, stripeEnabled } from '@/lib/stripe/config'
+import { ensureStripeCustomerId, type CardCustomer } from '@/lib/payments/cards'
 import { invoiceTotals } from '@/lib/invoiceTotals'
 
 export const dynamic = 'force-dynamic'
@@ -36,12 +37,28 @@ export async function POST(req: NextRequest) {
   const balance = Math.round((total - (Number(invoice.amount_paid) || 0)) * 100) / 100
   if (balance <= 0) return NextResponse.json({ error: 'This invoice is already paid.' }, { status: 409 })
 
+  // A card can only be offered for saving if Stripe has a Customer to attach it
+  // to. Best-effort: if this fails the invoice must still be payable, so we fall
+  // back to the old email-only session (pay now, no save offered).
+  let stripeCustomerId: string | null = null
+  if (invoice.customer_id) {
+    const { data: cRow } = await supabase.from('customers')
+      .select('id, name, email, stripe_customer_id').eq('id', invoice.customer_id).eq('user_id', user.id).maybeSingle()
+    if (cRow) {
+      const ensured = await ensureStripeCustomerId(supabase, cRow as CardCustomer, { userId: user.id })
+      stripeCustomerId = ensured.id ?? null
+    }
+  }
+
   const base = (process.env.NEXT_PUBLIC_APP_URL || '').replace(/\/$/, '')
   const result = await createInvoiceCheckoutSession(invoice, {
     successUrl: `${base}/dashboard/invoices?paid=1`,
     cancelUrl: `${base}/dashboard/invoices`,
     customerEmail: invoice.customers?.email ?? null,
     chargeCents: Math.round(balance * 100),
+    stripeCustomerId,
+    // Only offer the save when we know who to save it against.
+    offerSaveCard: !!stripeCustomerId,
   })
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: 502 })
   return NextResponse.json({ url: result.url })

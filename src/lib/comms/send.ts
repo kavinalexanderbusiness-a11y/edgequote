@@ -5,7 +5,24 @@
 // of the app (manual buttons, the cron) can be wired now and "just work" the
 // moment the keys are added. Server-only — never import into a client component.
 
-export interface SendResult { sent: boolean; reason: 'sent' | 'disabled' | 'error'; id?: string; error?: string }
+// `retryable` answers ONE question, and only for a failure: would sending this
+// exact message again, later, plausibly work? It is NOT "did it fail" — it's the
+// difference between the provider being down and the provider refusing. The chase
+// loop (lib/automation/chase) spends a limited attempt budget on this answer: a
+// retryable failure gives the attempt back, a non-retryable one keeps it spent.
+// Absent/false = don't retry, which is the safe default for anything that hasn't
+// thought about it.
+export interface SendResult { sent: boolean; reason: 'sent' | 'disabled' | 'error'; id?: string; error?: string; retryable?: boolean }
+
+// Which HTTP failures are worth trying again.
+//   429 → the provider is telling us to slow down, not that the message is bad.
+//   5xx → their side broke; ours is fine.
+//   other 4xx → the provider is rejecting THIS message (invalid number, bad
+//     address, bad credentials). A retry re-sends identical bytes to an identical
+//     rejection, so treating it as retryable would chase a typo'd number forever.
+function httpRetryable(status: number): boolean {
+  return status === 429 || status >= 500
+}
 
 // Which channels are live (i.e. credentials configured). `push` is the forward-
 // looking third channel — wired through the whole pipeline (UI chips, the send
@@ -38,9 +55,14 @@ async function fetchWithTimeout(url: string, init: RequestInit): Promise<Respons
 }
 // A failed send's error string — names a provider timeout distinctly so logs/usage
 // stats can tell a hung connection apart from a provider rejection.
+//
+// Everything that lands here threw out of fetch: an abort (our timeout), DNS
+// failure, a dropped connection. None of them are a verdict on the message, so all
+// of them are retryable. A timeout is the most important of the set — the provider
+// may even have accepted it, and we simply never heard back.
 function sendError(provider: string, e: unknown): SendResult {
   const aborted = e instanceof Error && e.name === 'AbortError'
-  return { sent: false, reason: 'error', error: aborted ? `${provider} request timed out after ${COMMS_TIMEOUT_MS / 1000}s` : (e instanceof Error ? e.message : `${provider.toLowerCase()} failed`) }
+  return { sent: false, reason: 'error', retryable: true, error: aborted ? `${provider} request timed out after ${COMMS_TIMEOUT_MS / 1000}s` : (e instanceof Error ? e.message : `${provider.toLowerCase()} failed`) }
 }
 
 // Where Twilio should report delivery. Twilio only calls the status webhook if
@@ -56,7 +78,9 @@ function smsStatusCallbackUrl(): string | null {
 
 export async function sendSms(to: string, body: string): Promise<SendResult> {
   if (!commsEnabled().sms) return { sent: false, reason: 'disabled' }
-  if (!to) return { sent: false, reason: 'error', error: 'no recipient' }
+  // No number on file is a fact about the customer, not a provider hiccup — it
+  // cannot fix itself on a retry.
+  if (!to) return { sent: false, reason: 'error', retryable: false, error: 'no recipient' }
   try {
     const sid = process.env.TWILIO_ACCOUNT_SID!
     const auth = Buffer.from(`${sid}:${process.env.TWILIO_AUTH_TOKEN!}`).toString('base64')
@@ -73,7 +97,7 @@ export async function sendSms(to: string, body: string): Promise<SendResult> {
       const detail = await res.text().catch(() => '')
       let msg = `Twilio ${res.status}`
       try { const j = JSON.parse(detail); if (j?.message) msg = `Twilio ${res.status} (code ${j.code ?? '?'}): ${j.message}` } catch { if (detail) msg += `: ${detail.slice(0, 300)}` }
-      return { sent: false, reason: 'error', error: msg }
+      return { sent: false, reason: 'error', retryable: httpRetryable(res.status), error: msg }
     }
     const data = await res.json()
     return { sent: true, reason: 'sent', id: data.sid }
@@ -84,7 +108,8 @@ export async function sendSms(to: string, body: string): Promise<SendResult> {
 
 export async function sendEmail(to: string, subject: string, html: string, text: string): Promise<SendResult> {
   if (!commsEnabled().email) return { sent: false, reason: 'disabled' }
-  if (!to) return { sent: false, reason: 'error', error: 'no recipient' }
+  // As with SMS: no address on file will not become an address on a retry.
+  if (!to) return { sent: false, reason: 'error', retryable: false, error: 'no recipient' }
   try {
     const res = await fetchWithTimeout('https://api.resend.com/emails', {
       method: 'POST',
@@ -95,7 +120,7 @@ export async function sendEmail(to: string, subject: string, html: string, text:
       const detail = await res.text().catch(() => '')
       let msg = `Resend ${res.status}`
       try { const j = JSON.parse(detail); if (j?.message) msg = `Resend ${res.status}: ${j.message}` } catch { if (detail) msg += `: ${detail.slice(0, 300)}` }
-      return { sent: false, reason: 'error', error: msg }
+      return { sent: false, reason: 'error', retryable: httpRetryable(res.status), error: msg }
     }
     const data = await res.json()
     return { sent: true, reason: 'sent', id: data.id }

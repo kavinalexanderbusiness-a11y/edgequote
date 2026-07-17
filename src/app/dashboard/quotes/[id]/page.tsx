@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Quote, Customer, QuoteFormValues, QuoteService, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS } from '@/types'
+import { Quote, Customer, QuoteFormValues, QuoteService, ServiceTemplate, TravelFeeTier, BusinessSettings, CONFIDENCE_LABELS, STATUS_LABELS } from '@/types'
 import { sumServiceLines, serviceLineTotals, splitServices } from '@/lib/quoteServices'
 import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
 import { JobPhotos } from '@/components/photos/JobPhotos'
@@ -509,6 +509,13 @@ export default function QuoteDetailPage() {
   const customerPhone = customers.find(c => c.id === quote.customer_id)?.phone || null
   const canInvoice = quote.status === 'accepted' || quote.status === 'scheduled' || quote.status === 'completed'
 
+  // Surface the quote's state in the header itself — a sent quote reads "Sent 3
+  // days ago" (the follow-up clock), everything else the plain status label.
+  const sentDays = quote.sent_at ? daysSince(quote.sent_at) : null
+  const statusPhrase = quote.status === 'sent' && sentDays != null
+    ? `Sent ${sentDays} day${sentDays !== 1 ? 's' : ''} ago`
+    : STATUS_LABELS[quote.status]
+
   // Measurement provenance + pricing analysis (suggested vs. actual).
   const measSections = [
     { label: 'Front Lawn', v: quote.front_lawn_sqft },
@@ -579,12 +586,13 @@ export default function QuoteDetailPage() {
   )
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
+    // Match the edit view's width so toggling Edit never reflows the page.
+    <div className="max-w-5xl mx-auto space-y-6">
       {/* THE shared DetailHeader — back + truncating title + action toolbar,
           the same anatomy as every other detail page. */}
       <DetailHeader
         title={quote.quote_number}
-        description={`Created ${formatDate(quote.created_at)}`}
+        description={`${statusPhrase} · Created ${formatDate(quote.created_at)}`}
         action={
         <div className="flex flex-wrap items-center gap-2 lg:justify-end">
           {/* Owner-side PDF action. Honest label: this downloads the PDF to YOUR
@@ -592,7 +600,7 @@ export default function QuoteDetailPage() {
               Send card below does that, and is the primary action for drafts). */}
           {quote.status === 'draft' ? (
             <Button onClick={handleSendQuote} size="sm" variant={quote.customer_id ? 'secondary' : 'primary'} loading={pdfLoading}>
-              <FileDown className="w-3.5 h-3.5" /> Download PDF + mark sent
+              <FileDown className="w-3.5 h-3.5" /> Download PDF
             </Button>
           ) : (
             <Button onClick={handleOpenPdf} variant="secondary" size="sm" loading={pdfLoading}>
@@ -624,7 +632,7 @@ export default function QuoteDetailPage() {
           <Button onClick={() => setEditing(true)} variant="ghost" size="sm">
             <Edit2 className="w-3.5 h-3.5" /> Edit
           </Button>
-          <Button onClick={handleDuplicate} variant="secondary" size="sm" loading={duplicating} aria-label="Duplicate quote" title="Duplicate quote">
+          <Button onClick={handleDuplicate} variant="ghost" size="sm" loading={duplicating} aria-label="Duplicate quote" title="Duplicate quote">
             <Copy className="w-4 h-4" />
           </Button>
         </div>
@@ -798,10 +806,12 @@ export default function QuoteDetailPage() {
               >
                 <Check className="w-4 h-4" /> Won
               </button>
+              {/* Lost is the discouraging path — kept quieter (ghost) so the eye
+                  lands on Won first. Handler unchanged. */}
               <button
                 onClick={markLost}
                 disabled={actionBusy}
-                className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border border-red-500/25 bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors col-span-2 sm:col-span-1 disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                className="h-11 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border border-border bg-surface text-ink-muted hover:border-border-strong hover:text-ink transition-colors col-span-2 sm:col-span-1 disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
               >
                 <X className="w-4 h-4" /> Lost
               </button>
@@ -859,19 +869,23 @@ export default function QuoteDetailPage() {
             {quote.custom_travel_required && (
               <div className="flex items-center gap-2 text-xs text-amber-400 mb-1">Custom travel fee applied (beyond standard tiers)</div>
             )}
+            {/* Section label — same treatment as "Measurements" / "Ongoing
+                maintenance options" so the breakdown reads as a peer section. */}
+            <p className="text-[10px] font-semibold text-ink-muted uppercase tracking-wide">Services</p>
             {services.length > 0 ? (
               // Multi-service breakdown — one row per line (rows are the source of
-              // truth; quotes.initial_price is their summed net).
-              <div className="space-y-1.5">
+              // truth; quotes.initial_price is their summed net). Service NAME
+              // carries the weight; quantity/discount/notes read as muted sub-notes.
+              <div className="space-y-2.5">
                 {services.map(s => {
                   const t = serviceLineTotals(s)
                   return (
                     <div key={s.id} className="flex justify-between gap-3 text-sm">
-                      <span className="text-ink-muted min-w-0">
-                        {s.service_type}
+                      <span className="min-w-0">
+                        <span className="text-ink font-medium">{s.service_type}</span>
                         {Number(s.quantity) > 1 && <span className="text-ink-faint"> × {s.quantity}</span>}
                         {t.discountAmount > 0 && <span className="text-emerald-400 text-xs"> (−{formatCurrency(t.discountAmount)})</span>}
-                        {s.notes && <span className="block text-xs text-ink-faint truncate">{s.notes}</span>}
+                        {s.notes && <span className="block text-xs text-ink-muted truncate">{s.notes}</span>}
                       </span>
                       <span className="text-ink font-medium shrink-0 tabular-nums">{formatCurrency(t.net)}</span>
                     </div>
@@ -880,7 +894,7 @@ export default function QuoteDetailPage() {
               </div>
             ) : (
               <div className="flex justify-between text-sm">
-                <span className="text-ink-muted">First visit</span>
+                <span className="text-ink font-medium">First visit</span>
                 <span className="text-ink font-medium tabular-nums">{formatCurrency(quote.initial_price ?? quote.subtotal)}</span>
               </div>
             )}
@@ -894,6 +908,17 @@ export default function QuoteDetailPage() {
               <span className="text-sm font-semibold text-ink">{(quote.weekly_price || quote.biweekly_price || quote.monthly_price) ? 'First Visit Total' : 'Quote Total'}</span>
               <span className="text-3xl font-bold text-accent-text tabular-nums">{formatCurrency(quote.total)}</span>
             </div>
+            {/* Echo the estimate-confidence chip (same treatment as the pricing
+                analysis card) so the headline number carries its own credibility
+                cue. Absent confidence → nothing. */}
+            {quote.pricing_confidence && CONFIDENCE_LABELS[quote.pricing_confidence] && (
+              <div className="flex justify-end">
+                <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-ink-muted">
+                  <span className={`w-1.5 h-1.5 rounded-full ${quote.pricing_confidence === 'high' ? 'bg-emerald-400' : quote.pricing_confidence === 'medium' ? 'bg-amber-400' : 'bg-ink-faint'}`} />
+                  {CONFIDENCE_LABELS[quote.pricing_confidence]}
+                </span>
+              </div>
+            )}
             {(quote.weekly_price || quote.biweekly_price || quote.monthly_price) ? (
               <div className="pt-3 border-t border-border space-y-1.5">
                 <p className="text-[10px] font-semibold text-ink-muted uppercase tracking-wide">Ongoing maintenance options</p>

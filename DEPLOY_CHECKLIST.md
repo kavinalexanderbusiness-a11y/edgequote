@@ -177,6 +177,19 @@ vercel --prod
 Vercel reads `vercel.json` (crons) and your env vars automatically.
 
 ## Verify (smoke, immediately after deploy)
+- **`GET https://<app>/api/health`** → `200` and `"status":"ok"`. This is the fastest
+  answer to "did the deploy work?" — it reports the commit it's running, proves the
+  database is actually reachable (not just configured), and lists which capabilities
+  (payments, email, SMS, cron, maps) are switched on.
+  - `"status":"degraded"` → still `200`. The app works, but something is half-set —
+    read `checks.config` and `capabilities` to see what. Notably it flags
+    `STRIPE_SECRET_KEY` set **without** `STRIPE_WEBHOOK_SECRET`, which silently stops
+    AutoPay from charging.
+  - `503` → the database is unreachable. That is a real outage; nothing else in this
+    list will pass either.
+  - Point your uptime monitor at this path and alert on the **status code** — `ok` and
+    `degraded` both return `200` on purpose, so a missing Twilio key never pages anyone
+    at 3am. It answers in ~0.5s and gives up on the database after 3s.
 - App loads, you can sign in, every dashboard page renders.
 - `GET https://<app>/api/payments/status` → `{ "enabled": true, "webhook": true }`.
 - Send a test Stripe webhook from the dashboard → 200, no 500s in Vercel logs.

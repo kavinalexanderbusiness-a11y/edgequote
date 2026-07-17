@@ -10,10 +10,14 @@ import { recordPriceChange, isRecurringProgramService, normalizeServiceKey } fro
 import { PricingConfig, recommendedJobPrice, estimateVisitMinutes, SEASON_VISITS } from '@/lib/pricing'
 import { visitEconomics } from '@/lib/economics'
 import { learnDurations, learnedDurationFor, DurationModel } from '@/lib/duration'
-import { ProfitJob, ProfitContext, neighborhoodProfitability, neighborhoodKey, jobValue } from '@/lib/profitability'
+import { ProfitJob, ProfitContext, neighborhoodProfitability, neighborhoodKey } from '@/lib/profitability'
 import { OptJob, OptOptions, OptimizeScope, OptimizeMode, analyzeSchedule, optimizeSchedule } from '@/lib/optimizer'
 import { dayProfitability } from '@/lib/profitability'
-import { FOLLOW_UP_DAYS } from '@/lib/followup'
+import {
+  CHURN_RATIO_HIGH, cadenceDays, churnRisk, isSeasonallyDormant, isVip,
+  lifetimeValue, ranOut,
+} from '@/lib/signals'
+import { FOLLOW_UP_DAYS, quoteIsQuiet, startOfDayMs } from '@/lib/followup'
 import { generateOccurrences, dayDelta } from '@/lib/recurrence'
 import { ServiceSeasons, serviceCategory, seasonForService, seasonEndDateFor, isWithinSeason } from '@/lib/seasons'
 import { addDays, parseISO, format, getDay } from 'date-fns'
@@ -161,18 +165,6 @@ function seriesVisitsPerYear(s: Series): number {
 }
 function cadenceField(cadence: string | null): PriceApplyPayload['cadenceField'] {
   return cadence === 'weekly' ? 'weekly_price' : cadence === 'biweekly' ? 'biweekly_price' : cadence === 'monthly' ? 'monthly_price' : null
-}
-// Days between visits for a series — the standard cadence when known, else derived
-// from the recurrence interval. Used by predictive churn (how overdue is "overdue").
-function cadenceIntervalDays(s: Series): number {
-  if (s.cadence === 'weekly') return 7
-  if (s.cadence === 'biweekly') return 14
-  if (s.cadence === 'monthly') return 30
-  const count = Math.max(1, s.rec.interval_count ?? 1)
-  return s.rec.interval_unit === 'day' ? count
-    : s.rec.interval_unit === 'week' ? 7 * count
-    : s.rec.interval_unit === 'month' ? 30 * count
-    : 14
 }
 function round5(n: number): number { return Math.round(n / 5) * 5 }
 
@@ -334,19 +326,17 @@ function profitJobsAndCtx(ctx: SuggestionContext): { jobs: ProfitJob[]; pctx: Pr
   return result
 }
 
-// Lifetime value per customer = sum of completed-visit value (the ONE valuation
-// engine via jobValue). Memoized — used by referral ranking and VIP churn.
+// Lifetime value per customer = sum of completed-visit value (signals/value — the
+// ONE valuation engine). Memoized — used by referral ranking and VIP churn.
 const _ltvCache = new WeakMap<SuggestionContext, Record<string, number>>()
 function getLifetimeValues(ctx: SuggestionContext): Record<string, number> {
   let m = _ltvCache.get(ctx)
   if (m) return m
-  const { jobs, pctx } = profitJobsAndCtx(ctx)
+  const qById = quoteById(ctx)
   m = {}
-  for (const j of jobs) {
-    if (j.status !== 'completed' || !j.customer_id) continue
-    m[j.customer_id] = (m[j.customer_id] || 0) + jobValue(j, pctx)
+  for (const [cid, done] of Object.entries(getJobIndex(ctx).completedByCustomer)) {
+    m[cid] = lifetimeValue(done, qById, ctx.recurrences)
   }
-  for (const k of Object.keys(m)) m[k] = Math.round(m[k])
   _ltvCache.set(ctx, m)
   return m
 }
@@ -361,9 +351,6 @@ function getDurationModel(ctx: SuggestionContext): DurationModel {
   _durationCache.set(ctx, m)
   return m
 }
-
-// Lifetime-value threshold for a "VIP" customer — mirrors the reactivation page.
-const VIP_THRESHOLD = 1500
 
 // ── season-date helpers (cross-sell + renewal timing) ──────────────────────────
 function pad2(n: number): string { return String(n).padStart(2, '0') }
@@ -759,7 +746,7 @@ function problems(ctx: SuggestionContext): Suggestion[] {
     const sqft = sqftFor(s.property)
     const actuals = s.customerId ? actualByCust[s.customerId] : undefined
     const onSite = actuals?.length ? Math.round(actuals.reduce((a, b) => a + b, 0) / actuals.length)
-      : sqft > 0 ? estimateVisitMinutes(sqft) : ONSITE_DEFAULT
+      : (estimateVisitMinutes(sqft) ?? ONSITE_DEFAULT)
     const hasGeo = s.property?.lat != null && s.property?.lng != null
     // Only flag when there's a real signal (geo or timed visits) — never on pure guesses.
     if (!hasGeo && !(actuals?.length ?? 0)) continue
@@ -960,36 +947,42 @@ function retention(ctx: SuggestionContext): Suggestion[] {
     if (!lastDone) continue
     const completedCount = s.jobs.filter(j => j.status === 'completed').length
     if (completedCount < 2) continue                              // need an established rhythm
-    const season = seasonForService(s.rep.service_type, ctx.seasons)
-    if (season && !isWithinSeason(ctx.today, season)) continue    // off-season dormant, not churning
-    const interval = cadenceIntervalDays(s)
+    const interval = cadenceDays(s.cadence, s.rec)
     const daysSince = dayDelta(lastDone.scheduled_date, ctx.today)
-    if (daysSince <= interval * 1.6) continue                     // still roughly on cadence
+    // Off-season reads as ratio 0 — dormant, not churning. `high` begins AT the
+    // ratio; this card has always required drifting strictly past it.
+    const risk = churnRisk({
+      hasActiveRecurring: true,
+      daysSinceLastService: daysSince,
+      cadenceDays: interval,
+      seasonallyDormant: isSeasonallyDormant(s.rep.service_type, ctx.seasons, ctx.today),
+    })
+    if (risk.ratio <= CHURN_RATIO_HIGH) continue                  // still roughly on cadence
     const nextFuture = s.futureOpen[0]?.scheduled_date || null
     if (nextFuture && dayDelta(ctx.today, nextFuture) <= interval * 1.5) continue // booked soon → fine
     const annualValue = Math.round(s.perVisit * seriesVisitsPerYear(s))
     if (annualValue < 300) continue                               // focus on accounts worth saving
-    const ratio = daysSince / interval
+    const ratio = risk.ratio
     const churnProb = ratio >= 2.5 ? 0.6 : 0.4
     // LTV-WEIGHTED: the most EXPENSIVE customer to lose ranks first, not just the
     // one with the highest per-visit price. A proven high-lifetime account gets a
     // heavier weight (and VIP framing) so reach-out minutes go where they matter.
     const custLtv = s.customerId ? (ltv[s.customerId] || 0) : 0
-    const isVip = custLtv >= VIP_THRESHOLD
-    const ltvWeight = isVip ? 1.5 : custLtv >= 800 ? 1.2 : 1.0
+    const vip = isVip(custLtv)
+    const ltvWeight = vip ? 1.5 : custLtv >= 800 ? 1.2 : 1.0
     const impact = Math.round(annualValue * churnProb * ltvWeight)
     const svcLabel = serviceCategory(s.rep.service_type) === 'lawn' ? 'mowing' : (s.rep.service_type || 'service')
     if (s.customerId) churnedCustomers.add(s.customerId)
-    const confidence: Confidence = isVip || completedCount >= 4 ? 'high' : 'medium'
+    const confidence: Confidence = vip || completedCount >= 4 ? 'high' : 'medium'
     churnCards.push({
       id: `churn-${s.recurrenceId}`,
       category: 'retention',
-      title: isVip ? `⭐ VIP at risk — reach out to ${s.customerName}` : `Reach out to ${s.customerName} — slipping away`,
+      title: vip ? `⭐ VIP at risk — reach out to ${s.customerName}` : `Reach out to ${s.customerName} — slipping away`,
       subtitle: `${svcLabel}: last visit ${daysSince}d ago, no follow-up booked`,
       impact, oneTime: false, revenueImpact: annualValue,
       confidence, confidenceScore: CONF_SCORE[confidence],
       why: [
-        custLtv > 0 ? `Lifetime value $${custLtv.toLocaleString()}${isVip ? ' — a top customer' : ''}` : 'Established recurring customer',
+        custLtv > 0 ? `Lifetime value $${custLtv.toLocaleString()}${vip ? ' — a top customer' : ''}` : 'Established recurring customer',
         `Last ${svcLabel} visit was ${daysSince} days ago — overdue for a ~${interval}-day cadence`,
         nextFuture ? `Next visit not until ${format(parseISO(nextFuture + 'T00:00:00'), 'MMM d')}` : 'Nothing booked ahead',
         `$${annualValue}/yr of recurring revenue at risk`,
@@ -1008,13 +1001,18 @@ function retention(ctx: SuggestionContext): Suggestion[] {
   // A series with NO future visit, customer fully unscheduled, season active = lapsed.
   let lapsedCount = 0, lapsedAnnual = 0
   for (const s of series) {
-    if (s.futureOpen.length > 0) continue
-    if (s.customerId && custWithFuture.has(s.customerId)) continue // booked for something else
     if (s.customerId && churnedCustomers.has(s.customerId)) continue // already a named churn card
     const lastDone = [...s.jobs].reverse().find(j => j.status === 'completed')
-    if (!lastDone) continue
-    const season = seasonForService(s.rep.service_type, ctx.seasons)
-    if (season && !isWithinSeason(ctx.today, season)) continue // off-season dormant, not lapsed
+    const ro = ranOut({
+      hasRecurring: true,
+      // Booked for something else (any service) → not lapsed.
+      hasUpcoming: s.futureOpen.length > 0 || !!(s.customerId && custWithFuture.has(s.customerId)),
+      lastServiceDate: lastDone?.scheduled_date ?? null,
+      cadenceDays: cadenceDays(s.cadence, s.rec),
+      seasonallyDormant: isSeasonallyDormant(s.rep.service_type, ctx.seasons, ctx.today),
+      today: ctx.today,
+    })
+    if (!ro.isRanOut) continue
     lapsedCount++
     lapsedAnnual += s.perVisit * seriesVisitsPerYear(s)
   }
@@ -1035,14 +1033,10 @@ function retention(ctx: SuggestionContext): Suggestion[] {
       action: { kind: 'navigate', label: 'Win them back', href: '/dashboard/reactivation' },
     })
   }
-  // Sent quotes gone quiet ≥ the follow-up window. Computed against ctx.today
-  // (local midnight) rather than needsFollowUp's Date.now(), so a feed built in
-  // the morning is still correct at night / across midnight.
-  const daysToToday = (dateStr: string | null): number => {
-    if (!dateStr) return Infinity // sent but never timestamped → surface it
-    return Math.floor((new Date(ctx.today + 'T00:00:00').getTime() - new Date(dateStr).getTime()) / 86_400_000)
-  }
-  const toChase = ctx.quotes.filter(q => q.status === 'sent' && daysToToday(q.last_followed_up_at || q.sent_at) >= FOLLOW_UP_DAYS)
+  // Sent quotes gone quiet ≥ the follow-up window — THE shared staleness rule,
+  // measured against the start of ctx.today so a feed built in the morning is
+  // still correct at night.
+  const toChase = ctx.quotes.filter(q => quoteIsQuiet(q, FOLLOW_UP_DAYS, startOfDayMs(ctx.today)))
   if (toChase.length) {
     const atRisk = toChase.reduce((s, q) => s + Number(q.total || 0), 0)
     out.push({
@@ -1053,7 +1047,7 @@ function retention(ctx: SuggestionContext): Suggestion[] {
       impact: Math.round(atRisk * 0.15), oneTime: true, revenueImpact: Math.round(atRisk),
       confidence: 'medium', confidenceScore: CONF_SCORE.medium,
       why: [
-        `${toChase.length} sent quote${toChase.length !== 1 ? 's' : ''} past the ${3}-day follow-up mark`,
+        `${toChase.length} sent quote${toChase.length !== 1 ? 's' : ''} past the ${FOLLOW_UP_DAYS}-day follow-up mark`,
         `$${Math.round(atRisk)} in pending work`,
         'A nudge converts ~15% of quiet quotes',
       ],
@@ -1089,11 +1083,16 @@ function routeGapFinder(ctx: SuggestionContext): Suggestion[] {
   const futureCust = new Set(getJobIndex(ctx).futureScheduled.map(j => j.customer_id).filter(Boolean) as string[])
   let lapsed = 0
   for (const s of getSeries(ctx)) {
-    if (s.futureOpen.length || (s.customerId && futureCust.has(s.customerId))) continue
-    if (!s.jobs.some(j => j.status === 'completed')) continue
-    const season = seasonForService(s.rep.service_type, ctx.seasons)
-    if (season && !isWithinSeason(ctx.today, season)) continue
-    lapsed++
+    const lastDone = [...s.jobs].reverse().find(j => j.status === 'completed')
+    const ro = ranOut({
+      hasRecurring: true,
+      hasUpcoming: s.futureOpen.length > 0 || !!(s.customerId && futureCust.has(s.customerId)),
+      lastServiceDate: lastDone?.scheduled_date ?? null,
+      cadenceDays: cadenceDays(s.cadence, s.rec),
+      seasonallyDormant: isSeasonallyDormant(s.rep.service_type, ctx.seasons, ctx.today),
+      today: ctx.today,
+    })
+    if (ro.isRanOut) lapsed++
   }
   if (openLeads + lapsed === 0) return out                                // nothing to fill it with → stay quiet
 
@@ -1374,7 +1373,7 @@ function referralAsks(ctx: SuggestionContext): Suggestion[] {
     const tenureLabel = x.tenureDays >= 730 ? `${Math.floor(x.tenureDays / 365)} yrs with you`
       : x.tenureDays >= 365 ? '1+ yr with you'
         : x.tenureDays >= 60 ? `${Math.round(x.tenureDays / 30)} months with you` : 'a happy customer'
-    const confidence: Confidence = x.given > 0 || x.value >= VIP_THRESHOLD ? 'high' : 'medium'
+    const confidence: Confidence = x.given > 0 || isVip(x.value) ? 'high' : 'medium'
     out.push({
       id: `referral-${c.id}`,
       category: 'growth',

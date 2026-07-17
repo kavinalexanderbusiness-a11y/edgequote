@@ -123,6 +123,54 @@ export async function restorePayment(sb: Supa, payment: import('@/types').Paymen
   return error ? { error: error.message } : {}
 }
 
+// ── THE definition of "this row is cash arriving" ────────────────────────────
+// Every figure that claims to be money RECEIVED must ask this, so a report, a tile
+// and a dashboard can't quietly mean different things by "collected".
+//
+// Two exclusions, both of which would otherwise double-count the same dollar:
+//  • kind='credit' rows are the credit LEDGER — the liability side. They always pair
+//    with a kind='payment' leg; counting both counts the money twice.
+//  • provider='credit' payment rows are an invoice being settled FROM credit the
+//    customer already handed over earlier. Real, but the cash arrived back when the
+//    credit was granted; counting it again on settlement invents revenue.
+export function isCashRow(r: { kind?: string | null; provider?: string | null; status?: string | null }): boolean {
+  return r.kind === 'payment' && r.status === 'paid' && r.provider !== 'credit'
+}
+
+// Take a deposit BEFORE any invoice exists — money in advance, which the credit
+// ledger already models, so this needs no new `kind` and no constraint change.
+//
+// Written as double entry, deliberately TWO rows, because one row can't be honest:
+//  • the kind='payment' leg is the cash, and it is what makes the deposit show up in
+//    "collected" on the day it actually arrived. A credit-only deposit would leave
+//    real money invisible to every cash figure FOREVER — the later settlement leg is
+//    provider='credit' and excluded by design, so the dollar would never be counted.
+//  • the kind='credit' leg is the liability: what the business now owes the customer.
+//    availableCredit sums it, applyCreditToInvoice spends it, and the portal already
+//    shows it — so a deposit is visible to the customer the moment it's taken, with
+//    no new plumbing.
+// invoice_id is null on both: a deposit predates the invoice. recompute_invoice_paid
+// returns early on a null invoice_id, so neither leg can disturb an invoice.
+export async function recordDeposit(sb: Supa, p: {
+  userId: string; customerId: string; amount: number; method: string; notes?: string
+}): Promise<{ error?: string }> {
+  const amt = round2(p.amount)
+  if (!(amt > 0)) return { error: 'Enter a deposit amount.' }
+  if (!p.customerId) return { error: 'Choose which customer this deposit is from.' }
+  const at = new Date().toISOString()
+  const base = { user_id: p.userId, customer_id: p.customerId, invoice_id: null, currency: 'cad', status: 'paid', paid_at: at }
+  const note = p.notes?.trim() || 'Deposit'
+  // Sign convention, and it is easy to get backwards: GRANTING credit is a POSITIVE
+  // kind='credit' row (see overpaymentToCredit); SPENDING it is negative (see
+  // applyCreditToInvoice). availableCredit sums them, so a flipped sign here would
+  // drive a customer's balance negative instead of giving them their deposit.
+  const { error } = await sb.from('payments').insert([
+    { ...base, amount: amt, kind: 'payment', provider: p.method, method: p.method, notes: note },
+    { ...base, amount: amt, kind: 'credit', provider: 'credit', method: 'credit', notes: `${note} — held as credit` },
+  ])
+  return error ? { error: error.message } : {}
+}
+
 // Sum of the customer's credit ledger = currently available credit.
 export async function availableCredit(sb: Supa, customerId: string): Promise<number> {
   const { data } = await sb.from('payments').select('amount').eq('customer_id', customerId).eq('kind', 'credit')

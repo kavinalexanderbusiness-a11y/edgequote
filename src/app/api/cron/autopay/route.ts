@@ -1,5 +1,6 @@
+import * as Sentry from '@sentry/nextjs'
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { cronSecretOk, serviceClient } from '@/lib/cron/guard'
 import { stripeEnabled, webhookConfigured } from '@/lib/stripe/config'
 import { attemptAutoPayCharge } from '@/lib/payments/autopay'
 
@@ -16,16 +17,12 @@ const LOOKBACK_DAYS = 14   // only recent auto-drafts (older ones the owner is h
 const MAX_PER_RUN = 500
 
 export async function GET(req: NextRequest) {
-  const secret = req.headers.get('authorization')?.replace('Bearer ', '') || new URL(req.url).searchParams.get('secret') || ''
-  if (!process.env.CRON_SECRET || secret !== process.env.CRON_SECRET) {
-    return NextResponse.json({ error: 'forbidden' }, { status: 403 })
-  }
+  if (!cronSecretOk(req)) return NextResponse.json({ error: 'forbidden' }, { status: 403 })
   if (!stripeEnabled() || !webhookConfigured()) {
     return NextResponse.json({ ok: true, skipped: true, note: 'Stripe/webhook not configured — AutoPay sweep is a no-op.' })
   }
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL, svc = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!url || !svc) return NextResponse.json({ ok: true, skipped: true, note: 'Set SUPABASE_SERVICE_ROLE_KEY.' })
-  const sb = createClient(url, svc)
+  const sb = serviceClient()
+  if (!sb) return NextResponse.json({ ok: true, skipped: true, note: 'Set SUPABASE_SERVICE_ROLE_KEY.' })
 
   // Eligible customers = AutoPay enabled AND has a saved card (intersection).
   const [{ data: apRows }, { data: pmRows }] = await Promise.all([
@@ -65,6 +62,18 @@ export async function GET(req: NextRequest) {
       tally[r.result] = (tally[r.result] || 0) + 1
     } catch (e) {
       console.error(`[cron/autopay] charge threw for invoice ${inv.id}:`, e)
+      // Report, don't rethrow. Swallowing here is CORRECT — one bad invoice must
+      // not abort the batch — but it also made a failed charge invisible: it
+      // reached a console line in Vercel's logs that nobody reads at 02:00, and
+      // the customer simply never got billed. Automatic instrumentation can't see
+      // a caught error, so this is exactly where an explicit capture earns its
+      // keep. Behaviour is untouched: still caught, still tallied, still continues.
+      Sentry.captureException(e, {
+        level: 'error',
+        tags: { job: 'cron/autopay', impact: 'money' },
+        // ids only — no amounts, no customer identity (see lib/observability/scrub)
+        extra: { invoiceId: inv.id, userId: inv.user_id },
+      })
       tally.error = (tally.error || 0) + 1
     }
   }

@@ -8,6 +8,7 @@ import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { Invoice, InvoiceStatus, InvoiceDisplayStatus, INVOICE_STATUS_LABELS, INVOICE_STATUS_COLORS, BusinessSettings, Payment, paymentMethodLabel } from '@/types'
 import { InvoicePaymentControls } from '@/components/payments/InvoicePaymentControls'
 import { invoiceBalance, displayInvoiceStatus, cancelInvoice, reactivateInvoice, assertCurrent } from '@/lib/payments/ledger'
+import { isAutoPayHeld } from '@/lib/payments/autopay'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { SkeletonRows } from '@/components/ui/Skeleton'
@@ -246,9 +247,25 @@ export default function InvoicesPage() {
   // Never downgrades an already-sent/partly-paid/paid invoice.
   async function markSent(inv: Invoice) {
     if (inv.status !== 'draft' && inv.status !== 'unpaid') return
-    setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: 'sent' as InvoiceStatus } : i))
-    const { error } = await supabase.from('invoices').update({ status: 'sent' }).eq('id', inv.id)
-    if (error) { setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: inv.status } : i)); notify.error('Could not mark sent: ' + error.message) }
+    // Sending a DRAFT is the moment it is issued, so stamp the date it was issued.
+    //
+    // Completing a job auto-drafts an invoice stamped with THAT day's issued_date.
+    // Send it in a later quarter and it fell through every report: the tax summary
+    // excludes drafts (correctly — nobody had been asked to pay), so it was out of
+    // Q1 at filing time; and its issued_date still said Q1, so `inPeriod` kept it
+    // out of Q2 as well. The invoice existed in NO period and its GST was never
+    // remitted. The comment above already says sending IS issuing — this makes the
+    // stored date agree with it.
+    //
+    // ONLY from 'draft'. An 'unpaid' invoice is already inside the reports (they
+    // exclude drafts and cancelled, nothing else), so re-dating it on send would
+    // yank it out of a quarter that may already be filed — trading this defect for
+    // a worse one. A draft is in no report by definition, so stamping it is free.
+    const patch: { status: InvoiceStatus; issued_date?: string } = { status: 'sent' }
+    if (inv.status === 'draft') patch.issued_date = todayISO()
+    setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, ...patch, status: 'sent' as InvoiceStatus } : i))
+    const { error } = await supabase.from('invoices').update(patch).eq('id', inv.id)
+    if (error) { setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: inv.status, issued_date: inv.issued_date } : i)); notify.error('Could not mark sent: ' + error.message) }
   }
 
   // ── Undo — the ONE shared toast system (lib/toast), same as the rest of the app ──
@@ -478,7 +495,15 @@ export default function InvoicesPage() {
                       // locked (partial/paid/overpaid belong to the payments ledger).
                       const clickable = inv.status === 'draft' || inv.status === 'unpaid' || inv.status === 'sent' || inv.status === 'cancelled'
                       const setStatus = async (status: InvoiceStatus, msg: string) => {
-                        const { error } = await supabase.from('invoices').update({ status }).eq('id', inv.id)
+                        // Same rule as markSent: a draft becoming 'sent' is being ISSUED
+                        // today, and its creation-day stamp would otherwise leave it in
+                        // no reporting period at all. Only from 'draft' — an 'unpaid'
+                        // invoice is already counted in a period that may be filed.
+                        const patch: { status: InvoiceStatus; issued_date?: string } =
+                          status === 'sent' && inv.status === 'draft'
+                            ? { status, issued_date: todayISO() }
+                            : { status }
+                        const { error } = await supabase.from('invoices').update(patch).eq('id', inv.id)
                         if (error) { notify.error('Could not update the status: ' + error.message); return }
                         fetchInvoices()
                         notify.success(msg)
@@ -547,8 +572,8 @@ export default function InvoicesPage() {
                       )
                     })()}
                     {/* AutoPay held this invoice for review (amount differs from usual). */}
-                    {inv.status === 'draft' && (inv.notes || '').includes('AutoPay held') && (
-                      <span title={inv.notes || undefined} className="text-[10px] px-2 py-1 rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-400 font-semibold flex items-center gap-1">
+                    {inv.status === 'draft' && isAutoPayHeld(inv) && (
+                      <span title={inv.internal_notes || undefined} className="text-[10px] px-2 py-1 rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-400 font-semibold flex items-center gap-1">
                         <AlertTriangle className="w-3 h-3" /> Review
                       </span>
                     )}
@@ -593,11 +618,11 @@ export default function InvoicesPage() {
                             notify.error(`${inv.invoice_number} is $0 — add a line item with a price before sending it.`)
                             return
                           }
-                          const held = inv.status === 'draft' && (inv.notes || '').includes('AutoPay held')
+                          const held = inv.status === 'draft' && isAutoPayHeld(inv)
                           if (held) {
                             const ok = await confirmDialog({
                               title: 'Send an invoice that was held for review?',
-                              message: `${inv.invoice_number} was held because the amount looks unusual for this customer${inv.notes ? ` — ${inv.notes}` : ''}. Send it as-is?`,
+                              message: `${inv.invoice_number} was held because the amount looks unusual for this customer${inv.internal_notes ? ` — ${inv.internal_notes}` : ''}. Send it as-is?`,
                               confirmLabel: 'Send it anyway',
                             })
                             if (!ok) return
@@ -730,6 +755,7 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
   const [service, setService] = useState(inv.service_type || '')
   const [due, setDue] = useState(inv.due_date || '')
   const [notes, setNotes] = useState(inv.notes || '')
+  const [internalNotes, setInternalNotes] = useState(inv.internal_notes || '')
   const [base, setBase] = useState(String(Math.round(itemized ? liSum : initial.subtotal)))
   const [dType, setDType] = useState<'' | DiscountType>(inv.discount_type ?? '')
   const [dValue, setDValue] = useState(inv.discount_value != null ? String(inv.discount_value) : '')
@@ -790,6 +816,8 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
       service_type: service.trim() || null,
       due_date: due || null,
       notes: notes.trim() || null,
+      // Non-financial → stays editable even on a settled invoice.
+      internal_notes: internalNotes.trim() || null,
     }
     // The money half — omitted entirely once the invoice is settled, so a locked
     // invoice cannot have its figures rewritten even if state went stale.
@@ -929,7 +957,12 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
         </div>
       </div>
 
-      <Textarea label="Notes" value={notes} onChange={e => setNotes(e.target.value)} rows={2} placeholder="Optional note shown on the invoice" />
+      {/* Two notes, and the labels have to make the difference obvious — the whole
+          point is that one of these is printed and the other never is. */}
+      <Textarea label="Notes (the customer sees this)" value={notes} onChange={e => setNotes(e.target.value)} rows={2}
+        placeholder="Shown on the invoice PDF — e.g. “Thanks for your business!”" />
+      <Textarea label="Internal note (private — never on the PDF)" value={internalNotes} onChange={e => setInternalNotes(e.target.value)} rows={2}
+        placeholder="Only you see this. The app also records here why a draft exists, and why AutoPay held a charge." />
 
       {/* Live breakdown — exactly what the customer, PDF and Stripe charge will show */}
       <div className="rounded-xl border border-border bg-bg-tertiary px-3.5 py-2.5 space-y-1 text-sm">

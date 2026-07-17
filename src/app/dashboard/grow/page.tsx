@@ -7,7 +7,7 @@ import { SuggestionsCenter } from '@/components/grow/SuggestionsCenter'
 import { CustomerHealthPanel } from '@/components/grow/CustomerHealthPanel'
 import { WinLossPanel } from '@/components/grow/WinLossPanel'
 import {
-  BarChart3, Gauge, HeartPulse, Map as MapIcon, Target, ShieldCheck, CalendarCheck, ArrowRight, TrendingUp, CloudRain, Images, Sparkles, Ruler,
+  BarChart3, Gauge, HeartPulse, Map as MapIcon, Target, ShieldCheck, CalendarCheck, ArrowRight, TrendingUp, CloudRain, Images, Sparkles, Ruler, FileText,
 } from 'lucide-react'
 
 // ── Grow hub ──────────────────────────────────────────────────────────────────
@@ -52,6 +52,7 @@ const GROUPS: { title: string; tools: Tool[] }[] = [
       { label: 'Weekly Review', href: '/dashboard/review', icon: CalendarCheck, blurb: 'Last week’s results and this week’s moves at a glance.' },
       { label: 'Weather', href: '/dashboard/weather', icon: CloudRain, blurb: 'Spot rain-threatened work and reschedule it — jobs, hours & revenue at stake.' },
       { label: 'Data Quality', href: '/dashboard/data-quality', icon: ShieldCheck, blurb: 'Missing customers, prices and locations to clean up.' },
+      { label: 'Reports & Exports', href: '/dashboard/reports', icon: FileText, blurb: 'Revenue & GST for any quarter — the PDF and spreadsheets your bookkeeper asks for.' },
       { label: 'Measurement Accuracy', href: '/dashboard/measurements', icon: Ruler, blurb: 'How close auto-measure runs to what you accept — calibration over time.' },
     ],
   },

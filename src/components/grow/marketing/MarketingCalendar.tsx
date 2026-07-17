@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/Button'
+import { AssistButton } from '@/components/ai/ui'
 import { Banner } from '@/components/ui/Banner'
 import { Card } from '@/components/ui/Card'
 import { FilterPill } from '@/components/ui/FilterPill'
@@ -470,7 +471,11 @@ function PlanPanel({ aiEnabled, onClose, onDone, defaultStart }: { aiEnabled: bo
           <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
             className="mt-1 block bg-bg-tertiary border border-border rounded-lg px-2 py-1.5 text-sm font-normal normal-case text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
         </label>
-        <Button type="submit" loading={busy} disabled={!aiEnabled} title={!aiEnabled ? "Add your Anthropic API key to enable AI generation" : undefined}><Sparkles className="w-4 h-4" /> Generate &amp; schedule</Button>
+        {/* The form's submit handler only ever calls run() with the same guards,
+            so the assistant's button calls it directly. */}
+        <AssistButton size="md" label="Write & schedule" busyLabel="Writing…"
+          onClick={() => { if (aiEnabled && !busy) run() }}
+          busy={busy} disabled={!aiEnabled} title={!aiEnabled ? 'Add your Anthropic API key to enable AI generation' : undefined} />
       </form>
       {!aiEnabled && <p className="text-[11px] text-ink-faint">Add your Anthropic key to enable generation.</p>}
       {msg && <Banner tone="info" onDismiss={() => setMsg(null)}>{msg}</Banner>}

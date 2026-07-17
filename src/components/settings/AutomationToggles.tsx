@@ -10,6 +10,7 @@ import { resolveAutomations, Automations, AUTOMATION_LABELS } from '@/lib/comms/
 import { resolveFollowUpPolicy, type FollowUpPolicy } from '@/lib/followup'
 import { resolveReminderPolicy } from '@/lib/payments/dunning'
 import { Zap } from 'lucide-react'
+import { HelpLink } from '@/components/help/HelpLink'
 
 const KEYS: (keyof Automations)[] = ['reminder', 'job_complete', 'review', 'marketing_draft', 'quote_followup', 'invoice_reminder']
 
@@ -106,7 +107,10 @@ export function AutomationToggles() {
   return (
     <Card>
       <CardHeader>
-        <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Zap className="w-4 h-4 text-accent-text" /> Automated messages</h2>
+        <h2 className="text-sm font-semibold text-ink flex items-center gap-2">
+          <Zap className="w-4 h-4 text-accent-text" /> Automated messages
+          <HelpLink id="what-sends-itself" />
+        </h2>
         <p className="text-xs text-ink-faint mt-0.5">Which messages send on their own. Per-customer SMS/email opt-in still applies — nothing sends to a customer who hasn’t consented.</p>
       </CardHeader>
       <CardBody>

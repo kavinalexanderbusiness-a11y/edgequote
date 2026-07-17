@@ -64,7 +64,9 @@ export function DayBulkMessage({ date, jobs, onClose }: { date: string; jobs: Jo
   const [oldDate, setOldDate] = useState(date)
   const [custom, setCustom] = useState('')
   const [ch, setCh] = useState({ sms: true, email: true })
-  const [company, setCompany] = useState('Edge Property Services')
+  // Empty until settings load — templates.ts owns the "your service provider"
+  // fallback, so no screen needs to guess a company name (least of all a real one).
+  const [company, setCompany] = useState('')
   const [reviewUrl, setReviewUrl] = useState('')
   const [customTpls, setCustomTpls] = useState<Partial<Record<MsgType, string>> | null>(null)
   const [busy, setBusy] = useState(false)

@@ -1,5 +1,6 @@
 import { WeekendOutlook } from '@/components/dashboard/WeekendOutlook'
 import { TodaysPriorities } from '@/components/dashboard/TodaysPriorities'
+import { SetupProgress } from '@/components/dashboard/SetupProgress'
 import { DashboardKpis } from '@/components/dashboard/DashboardKpis'
 import { createClient } from '@/lib/supabase/server'
 import { invoiceBalance } from '@/lib/payments/ledger'
@@ -65,6 +66,11 @@ export default async function DashboardPage() {
           </Link>
         }
       />
+      {/* Renders only while setup is incomplete, and disappears for good at 100% —
+          a finished checklist is a vanity stat. Client component: it decides its
+          own visibility, so a fully-configured business pays one query and sees
+          nothing move. */}
+      <div className="animate-rise"><SetupProgress /></div>
       <div className="animate-rise"><TodaysPriorities /></div>
       <div className="animate-rise stagger-2"><WeekendOutlook /></div>
       <div className="animate-rise stagger-3"><DashboardKpis collected={collected} outstanding={outstanding} jobsThisMonth={jobsThisMonth} conversionRate={conversionRate} /></div>

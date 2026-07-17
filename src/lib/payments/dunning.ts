@@ -1,5 +1,6 @@
 import type { Invoice } from '@/types'
 import type { FeeSettings } from '@/lib/invoiceTotals'
+import { type ChasePolicy, resolveChasePolicy } from '@/lib/automation/policy'
 import { parseLocalDate } from '@/lib/utils'
 import { displayInvoiceStatus } from './ledger'
 
@@ -20,23 +21,15 @@ export const REMINDER_DELAY_DAYS = 3
 // Three nudges on money already owed, then stop and leave it to the owner.
 export const REMINDER_MAX = 3
 
-export interface ReminderPolicy {
-  delayDays: number   // quiet days before chasing again
-  maxCount: number    // total automatic reminders per invoice
-}
+// Same shape every chaser uses — the parse + clamps live in automation/policy.
+export type ReminderPolicy = ChasePolicy
 
 export const DEFAULT_REMINDER_POLICY: ReminderPolicy = { delayDays: REMINDER_DELAY_DAYS, maxCount: REMINDER_MAX }
 
-// Tolerant + clamped: a garbage/absent value can never turn the chaser into a
-// same-day spammer (min 1 day) or an endless one (max 10 sends).
+// Which jsonb keys this chaser reads is the only thing that's genuinely its own;
+// the tolerance and the clamps are shared with the quote chaser.
 export function resolveReminderPolicy(raw: unknown): ReminderPolicy {
-  const a = (raw && typeof raw === 'object') ? raw as Record<string, unknown> : {}
-  const d = Math.floor(Number(a.invoice_reminder_delay_days))
-  const m = Math.floor(Number(a.invoice_reminder_max))
-  return {
-    delayDays: Number.isFinite(d) && d >= 1 ? Math.min(d, 60) : REMINDER_DELAY_DAYS,
-    maxCount: Number.isFinite(m) && m >= 0 ? Math.min(m, 10) : REMINDER_MAX,
-  }
+  return resolveChasePolicy(raw, { delayKey: 'invoice_reminder_delay_days', maxKey: 'invoice_reminder_max' }, DEFAULT_REMINDER_POLICY)
 }
 
 export type RemindableInvoice = Pick<Invoice,

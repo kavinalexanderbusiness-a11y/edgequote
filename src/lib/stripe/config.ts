@@ -34,7 +34,19 @@ export interface CheckoutResult { ok: boolean; url?: string; error?: string }
 // what lets us mark exactly the right invoice paid for the right owner.
 export async function createInvoiceCheckoutSession(
   invoice: CheckoutInvoice,
-  opts: { successUrl: string; cancelUrl: string; customerEmail?: string | null; chargeCents?: number },
+  opts: {
+    successUrl: string; cancelUrl: string; customerEmail?: string | null; chargeCents?: number
+    // Attaching the Stripe Customer is what makes a card SAVEABLE at all — without
+    // it Stripe has nobody to attach the payment method to, which is why paying an
+    // invoice used to throw the card away every single time.
+    stripeCustomerId?: string | null
+    // Offer to keep the card for future invoices. Stripe renders its own consent
+    // CHECKBOX and only sets setup_future_usage when the customer ticks it — so
+    // consent is explicit, the wording is Stripe's compliant copy, and leaving it
+    // unticked IS the opt-out. We never set setup_future_usage ourselves; doing so
+    // would save the card silently, which is the thing we're refusing to do.
+    offerSaveCard?: boolean
+  },
 ): Promise<CheckoutResult> {
   if (!stripeEnabled()) return { ok: false, error: 'Payments are not set up yet.' }
   // chargeCents (the GST-inclusive total) wins when the caller computes it;
@@ -52,7 +64,18 @@ export async function createInvoiceCheckoutSession(
   form.set('line_items[0][price_data][unit_amount]', String(cents))
   form.set('line_items[0][price_data][product_data][name]', `Invoice ${invoice.invoice_number}`)
   if (invoice.service_type) form.set('line_items[0][price_data][product_data][description]', invoice.service_type.slice(0, 200))
-  if (opts.customerEmail) form.set('customer_email', opts.customerEmail)
+  // `customer` and `customer_email` are mutually exclusive — sending both is a
+  // Stripe 400. Prefer the Customer: it's the only shape a card can be saved to,
+  // and Stripe shows the address/email it already knows.
+  if (opts.stripeCustomerId) {
+    form.set('customer', opts.stripeCustomerId)
+    // Stripe owns the checkbox and its wording; it sets setup_future_usage on the
+    // PaymentIntent only if the customer ticks it. The webhook reads that flag back
+    // as the record of consent, so an untick saves nothing anywhere.
+    if (opts.offerSaveCard) form.set('saved_payment_method_options[payment_method_save]', 'enabled')
+  } else if (opts.customerEmail) {
+    form.set('customer_email', opts.customerEmail)
+  }
   // The webhook reads this metadata to mark the invoice paid for the right owner.
   form.set('metadata[invoice_id]', invoice.id)
   form.set('metadata[user_id]', invoice.user_id)
@@ -259,6 +282,31 @@ export async function fetchSetupIntentCard(
     ok: true,
     paymentMethodId: pm?.id || (typeof si.payment_method === 'string' ? si.payment_method : undefined),
     stripeCustomerId: typeof si.customer === 'string' ? si.customer : undefined,
+    brand: pm?.card?.brand, last4: pm?.card?.last4, expMonth: pm?.card?.exp_month, expYear: pm?.card?.exp_year,
+  }
+}
+
+// The mode=payment twin of fetchSetupIntentCard. `setupFutureUsage` is the whole
+// point: Stripe sets it ONLY when the customer ticked "save my card", so it is the
+// durable record of consent. The webhook saves nothing without it — an untick
+// leaves a PaymentIntent that paid the invoice and kept no card, which is exactly
+// what the customer asked for.
+export async function fetchPaymentIntentCard(
+  paymentIntentId: string,
+): Promise<{ ok: boolean; consented: boolean; paymentMethodId?: string; stripeCustomerId?: string; brand?: string; last4?: string; expMonth?: number; expYear?: number }> {
+  const r = await stripeGet(`payment_intents/${paymentIntentId}?expand[]=payment_method`)
+  if (!r.ok || !r.data) return { ok: false, consented: false }
+  const pi = r.data as {
+    customer?: string | null
+    setup_future_usage?: string | null
+    payment_method?: { id?: string; card?: { brand?: string; last4?: string; exp_month?: number; exp_year?: number } } | string | null
+  }
+  const pm = typeof pi.payment_method === 'object' && pi.payment_method ? pi.payment_method : undefined
+  return {
+    ok: true,
+    consented: !!pi.setup_future_usage,
+    paymentMethodId: pm?.id || (typeof pi.payment_method === 'string' ? pi.payment_method : undefined),
+    stripeCustomerId: typeof pi.customer === 'string' ? pi.customer : undefined,
     brand: pm?.card?.brand, last4: pm?.card?.last4, expMonth: pm?.card?.exp_month, expYear: pm?.card?.exp_year,
   }
 }

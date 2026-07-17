@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/Button'
+import { AssistButton } from '@/components/ai/ui'
 import { Card } from '@/components/ui/Card'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { channel as channelDef } from '@/lib/marketing/channels'
@@ -108,9 +109,8 @@ export function IdeasClient({ ideas, pieces }: { ideas: MarketingIdea[]; pieces:
                     done.has(s.id) ? (
                       <span className="self-start text-xs font-semibold text-emerald-400 inline-flex items-center gap-1"><Check className="w-3.5 h-3.5" /> Created — in Posts</span>
                     ) : (
-                      <Button size="sm" variant="secondary" className="self-start" loading={busyId === s.id} onClick={() => actOnReuse(s)}>
-                        {s.kind === 'cross_post' ? <><Repeat2 className="w-3.5 h-3.5" /> Create it</> : <><Scissors className="w-3.5 h-3.5" /> Make short version</>}
-                      </Button>
+                      <AssistButton className="self-start" busy={busyId === s.id} onClick={() => actOnReuse(s)}
+                        label={s.kind === 'cross_post' ? 'Write it' : 'Write a short version'} busyLabel="Writing…" />
                     )
                   ) : (
                     // Navigate-only reuse → a text link, matching the Suggestions above.

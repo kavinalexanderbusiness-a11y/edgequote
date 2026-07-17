@@ -1,4 +1,4 @@
-import { PricingConfig, recommendedJobPrice, estimateVisitMinutes, SEASON_VISITS } from '@/lib/pricing'
+import { PricingConfig, recommendedJobPrice, estimateVisitMinutes, SEASON_VISITS, cadenceMultipliers, roundToStep } from '@/lib/pricing'
 import { DensityTier } from '@/lib/routeDensity'
 
 // ── Smart Price Guardrails — live, NEVER-BLOCK pricing warnings ─────────────────
@@ -12,9 +12,14 @@ import { DensityTier } from '@/lib/routeDensity'
 
 export type Cadence = 'one_time' | 'weekly' | 'biweekly' | 'monthly'
 
-// Cadence price vs the one-time base (mirrors lib/pricing CADENCE_MULT): weekly
-// earns a loyalty discount, monthly costs more per visit.
-const CADENCE_MULT: Record<Exclude<Cadence, 'one_time'>, number> = { weekly: 0.75, biweekly: 0.85, monthly: 1.1 }
+// A private `CADENCE_MULT = {weekly:0.75, biweekly:0.85, monthly:1.1}` used to sit
+// here, commented "mirrors lib/pricing CADENCE_MULT". "Mirrors" was the admission:
+// it was a hand-copy, under a header promising "no new pricing math", and it
+// mirrored only the NEUTRAL half of the engine. pricingPackage() swaps to the
+// value-graded curve whenever a customer has a grade, so for every graded customer
+// this file judged prices against a curve the engine had not used — see the
+// evaluatePrice() note below. The multipliers now come from the engine's own
+// cadenceMultipliers() seam; this file holds no pricing constants at all.
 
 export interface PriceGuardrail {
   level: 'ok' | 'warn'
@@ -27,13 +32,29 @@ export interface PriceGuardrail {
 
 export function cadenceLabel(c: Cadence): string { return c === 'one_time' ? 'one-time' : c }
 
-// The recommended price for THIS cadence — base recommendation × the cadence
-// multiplier, $5-rounded. 0 when there's no measurement to trust.
-export function recommendedForCadence(sqft: number, cadence: Cadence, cfg: PricingConfig): number {
+// The recommended price for THIS cadence — the engine's own recommendation ×
+// the engine's own cadence multiplier, $5-rounded. 0 when there's no measurement.
+//
+// `ctx` must carry the SAME context the price on screen was built with:
+//   valueGrade  — pricingPackage() prices a graded customer on the value curve.
+//                 Judging that price on the neutral curve is what made the app
+//                 warn about its own recommendation.
+//   overgrowth  — recommendedJobPrice() multiplies the base by it. Omitting it
+//                 made the guardrail bless a heavily-overgrown job at ~half the
+//                 engine's price, silently, on exactly the visits where
+//                 underpricing costs the most.
+// Both are optional and default to the neutral/×1 case, so existing callers keep
+// their exact behaviour — but a caller that HAS this context must pass it.
+export function recommendedForCadence(
+  sqft: number,
+  cadence: Cadence,
+  cfg: PricingConfig,
+  ctx?: { valueGrade?: string | null; overgrowth?: number },
+): number {
   if (sqft <= 0) return 0
-  const base = recommendedJobPrice(sqft, cfg)
-  const mult = cadence === 'one_time' ? 1 : CADENCE_MULT[cadence]
-  return Math.round((base * mult) / 5) * 5
+  const base = recommendedJobPrice(sqft, cfg, ctx?.overgrowth ?? 1)
+  const mult = cadence === 'one_time' ? 1 : cadenceMultipliers(ctx?.valueGrade)[cadence]
+  return roundToStep(base * mult)
 }
 
 export function evaluatePrice(input: {
@@ -44,14 +65,36 @@ export function evaluatePrice(input: {
   crewCost: number
   densityTier?: DensityTier | null
   driveMin?: number            // attributed one-way drive, when known (for rev/hr)
+  /** The customer's strategic grade, when known. MUST match what priced the
+   *  quote — pricingPackage() prices a graded customer on the value curve, and a
+   *  guardrail judging that price on the neutral curve warns about the engine's
+   *  own recommendation. */
+  valueGrade?: string | null
+  /** Condition multiplier, when known. MUST match what priced the quote — the
+   *  engine folds it into the base, so omitting it here judges an overgrown job
+   *  against a normal-condition price. */
+  overgrowth?: number
 }): PriceGuardrail {
   const { cadence, price, sqft, cfg, crewCost } = input
-  const recommended = recommendedForCadence(sqft, cadence, cfg)
+  const recommended = recommendedForCadence(sqft, cadence, cfg, {
+    valueGrade: input.valueGrade ?? null,
+    overgrowth: input.overgrowth ?? 1,
+  })
   const reasons: string[] = []
 
-  const onSite = sqft > 0 ? estimateVisitMinutes(sqft) : 0
+  // No measurement → no on-site estimate → NO $/hr. Substituting 0 minutes here
+  // used to collapse `hours` to drive time alone and report a wildly flattering
+  // rate: a $150 stop with a 15-minute drive read $600/hr. Worse than wrong, it
+  // muted check (3) below — an inflated rate never trips the crew-cost floor, so
+  // the one guardrail that would have caught it was switched off by the very
+  // number it was meant to judge.
+  // Where on-site time IS known, it scales with the work — overgrowth belongs
+  // here too: a ×2 cut is twice the visit, and charging the same $/hr for it is
+  // the point.
+  const onSiteBase = estimateVisitMinutes(sqft)
+  const onSite = onSiteBase != null ? onSiteBase * (input.overgrowth ?? 1) : null
   const driveMin = input.driveMin ?? 0
-  const hours = (onSite + driveMin) / 60
+  const hours = onSite != null ? (onSite + driveMin) / 60 : 0
   const revPerHour = hours > 0 && price > 0 ? Math.round(price / hours) : null
 
   let warn = false

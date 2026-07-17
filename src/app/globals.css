@@ -258,3 +258,46 @@ button, a, [role="button"], [role="switch"], [role="menuitem"], label, select, s
   letter-spacing: 0.01em;
   white-space: nowrap;
 }
+
+/* ── Printing ────────────────────────────────────────────────────────────────
+   A page opts in by rendering ONE element with `.print-sheet` (kept off-screen
+   with Tailwind's `hidden print:block`). Everything else — sidebar, buttons,
+   toasts — is chrome and is suppressed.
+
+   Scoped with :has() ON PURPOSE. Without the scope, `* { visibility: hidden }`
+   would blank EVERY print in the app (an invoice, a quote) — a page that never
+   opts in must keep printing exactly as it does today. If a browser lacks :has()
+   the whole block simply doesn't match and printing falls back to the normal
+   page: degraded, never blank.
+
+   visibility (not display) because the sheet's ancestors must stay in flow for it
+   to be lifted to the page origin; display:none on a parent would take the sheet
+   with it. */
+@media print {
+  @page { margin: 14mm; }
+
+  body:has(.print-sheet) * { visibility: hidden !important; }
+  body:has(.print-sheet) .print-sheet,
+  body:has(.print-sheet) .print-sheet * { visibility: visible !important; }
+
+  body:has(.print-sheet) .print-sheet {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    /* Ink on paper: the app's dark surfaces would burn a cartridge and read badly. */
+    color: #000 !important;
+    background: #fff !important;
+  }
+  body:has(.print-sheet) .print-sheet * {
+    color: #000 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+  body:has(.print-sheet) .print-sheet [data-print-rule] {
+    border-color: #999 !important;
+  }
+  /* Never split a person's timesheet across two pages. */
+  .print-break { break-after: page; page-break-after: always; }
+  .print-keep { break-inside: avoid; page-break-inside: avoid; }
+}

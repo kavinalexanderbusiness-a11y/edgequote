@@ -10,6 +10,10 @@ export interface TimelineStop {
   arrivalMin: number    // from the route engine's ETA chain
   durMin: number
   status: JobStatus
+  /** Optional promised appointment time (minutes since midnight). Draws a pin
+   *  on the bar and flags the stop red when the ETA misses it — callers that
+   *  don't pass it get the exact timeline they always had. */
+  promisedMin?: number | null
 }
 
 // ── Route Timeline ────────────────────────────────────────────────────────────
@@ -104,14 +108,21 @@ export function RouteTimeline({ startMin, finishMin, capacityEndMin, stops, nowM
           }
           const done = s.stop.status === 'completed'
           const running = s.stop.status === 'in_progress'
-          const label = `Stop ${s.idx + 1}: ${s.stop.name} — arrives ${minutesToTime12(s.stop.arrivalMin)}, ${s.stop.durMin} min${done ? ', done' : running ? ', in progress' : ''}`
+          // A promised time the ETA chain misses turns the block red — the bar
+          // should show the broken promise where it happens, not in a footnote.
+          const late = s.stop.promisedMin != null && s.stop.arrivalMin > s.stop.promisedMin + 15
+          const label = `Stop ${s.idx + 1}: ${s.stop.name} — arrives ${minutesToTime12(s.stop.arrivalMin)}, ${s.stop.durMin} min` +
+            `${s.stop.promisedMin != null ? `, promised ${minutesToTime12(s.stop.promisedMin)}${late ? ' (late)' : ''}` : ''}` +
+            `${done ? ', done' : running ? ', in progress' : ''}`
           const cls = cn(
             'absolute inset-y-1 rounded-md border flex items-center justify-center overflow-hidden',
             done
               ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
               : running
                 ? 'bg-sky-400/25 border-sky-400/50 text-sky-200'
-                : 'bg-accent/20 border-accent/45 text-accent',
+                : late
+                  ? 'bg-red-500/20 border-red-500/50 text-red-300'
+                  : 'bg-accent/20 border-accent/45 text-accent',
             onSelectStop && 'cursor-pointer hover:brightness-125 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:z-20',
           )
           const style = { left: `${left}%`, width: `${width}%` }
@@ -135,6 +146,18 @@ export function RouteTimeline({ startMin, finishMin, capacityEndMin, stops, nowM
             <div key={s.stop.jobId} className={cls} style={style} title={label} aria-label={label}>{num}</div>
           )
         })}
+
+        {/* Promised-time pins — where an appointment was committed. Together
+            with the (red) block that misses it, the gap IS the lateness. */}
+        {stops.filter(s => s.promisedMin != null && s.promisedMin >= startMin && s.promisedMin <= endMin).map(s => (
+          <div
+            key={`p-${s.jobId}`}
+            className="absolute top-0 h-2.5 w-0.5 bg-amber-300 z-[5]"
+            style={{ left: `${pct(s.promisedMin!)}%` }}
+            title={`Promised ${minutesToTime12(s.promisedMin!)} — ${s.name}`}
+            aria-hidden
+          />
+        ))}
 
         {/* Capacity line — where the day is supposed to end. */}
         {pct(capacityEndMin) <= 100 && (

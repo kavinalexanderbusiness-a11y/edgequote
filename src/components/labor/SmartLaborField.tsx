@@ -28,9 +28,15 @@ const CONF_LABEL: Record<Confidence, string> = { high: 'High confidence', medium
 //  • The moment you type a duration it becomes an override: auto-fill stops until
 //    you explicitly Recalculate.
 // Service-specific throughout (lib/labor serviceKey): mowing learns only from mowing.
-// Never touches pricing.
+//
+// It never SETS a price. On the quote builder (`affectsPrice`) the duration it
+// fills is multiplied out into a suggested price — so the copy there says that
+// plainly instead of the old "never changes your price", which stopped being true
+// the moment this was wired to the Hours field that drives the suggestion. On the
+// job form it genuinely only feeds scheduling. Same engine, different consequence,
+// and the widget must not claim the wrong one.
 export function SmartLaborField({
-  sqft, serviceType, crewSize, propertyId, isInitialVisit, overgrowth, cadence, price, value, onApply, readOnly,
+  sqft, serviceType, crewSize, propertyId, isInitialVisit, overgrowth, cadence, price, value, onApply, readOnly, affectsPrice,
 }: {
   sqft: number
   serviceType: string | null
@@ -42,7 +48,10 @@ export function SmartLaborField({
   price?: number          // per-visit value, for the profit layer (read-only; never changes price)
   value: number | null    // the form's current duration (minutes)
   onApply: (minutes: number) => void
-  readOnly?: boolean       // informational only (e.g. on quotes) — no auto-fill, no apply button
+  readOnly?: boolean       // informational only — no auto-fill, no apply button
+  /** The consumer's field feeds a price (quote builder). Changes the copy only —
+   *  this widget still never writes a price itself. */
+  affectsPrice?: boolean
 }) {
   const supabase = useMemo(() => createClient(), [])
   const [model, setModel] = useState<LaborModel | null>(null)
@@ -151,7 +160,9 @@ export function SmartLaborField({
       {showWhy && (
         <ul className="space-y-0.5 border-t border-border pt-2">
           {est.reasons.map((r, i) => <li key={i} className="text-[11px] text-ink-muted flex gap-1.5"><span className="text-accent-text/60 shrink-0">•</span><span>{r}</span></li>)}
-          <li className="text-[10px] text-ink-faint flex gap-1.5 pt-0.5"><Gauge className="w-3 h-3 shrink-0 mt-0.5" /><span>Estimate feeds scheduling &amp; capacity only — it never changes your price. Edit the field to override.</span></li>
+          <li className="text-[10px] text-ink-faint flex gap-1.5 pt-0.5"><Gauge className="w-3 h-3 shrink-0 mt-0.5" /><span>{affectsPrice
+            ? 'Estimate fills the hours your suggested price is built from — it never sets the price itself, and the suggestion still needs your Accept. Edit the field to override.'
+            : 'Estimate feeds scheduling & capacity only — it never changes your price. Edit the field to override.'}</span></li>
         </ul>
       )}
     </div>

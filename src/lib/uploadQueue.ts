@@ -4,7 +4,7 @@ import type { PhotoKind } from '@/types'
 import { ensurePair, type JobRow } from '@/lib/beforeafter/autopair'
 import { visualHash } from '@/lib/dedup'
 import { toast } from '@/lib/toast'
-import { putPending, allPending, dropPending, bumpPendingAttempts } from '@/lib/offline/photoStore'
+import { putPending, allPending, dropPending, bumpPendingAttempts, sweepPending } from '@/lib/offline/photoStore'
 
 // ── Background upload queue — ONE engine for "uploads that keep going" ────────────
 // A module-level external store (subscribe/emit, mirrors lib/toast) consumed by a
@@ -49,6 +49,10 @@ export interface QueueItem {
   rowId?: string
   takenAt: string | null
   contentHash: string | null   // visual hash (lib/dedup) — durable dedup, stored on the row
+  /** Are this photo's bytes actually on disk? undefined = persistence still in flight.
+   *  There was previously NO answer to this question anywhere, which is why the tile
+   *  could assert "Saved" over a photo that had no backup at all. */
+  durable?: boolean
 }
 
 const MAX_CONCURRENT = 3
@@ -213,6 +217,16 @@ export function enqueueUploads(group: EnqueueGroup): string {
 const persisted = new Set<string>()
 const persistDone = new Map<string, Promise<void>>()
 
+// One warning per session, not per photo: a full disk fails all six shots of a stop
+// and six identical toasts would bury the point. Long, and error-toned, because this
+// is the one message that should stop a contractor from driving away.
+let warnedNotDurable = false
+function warnNotDurable(): void {
+  if (warnedNotDurable) return
+  warnedNotDurable = true
+  toast('Storage is full — photos can’t be saved for later. Keep the app open until they upload.', { tone: 'error', duration: 12000 })
+}
+
 async function persist(list: QueueItem[]): Promise<void> {
   for (const it of list) {
     const p = (async () => {
@@ -225,14 +239,19 @@ async function persist(list: QueueItem[]): Promise<void> {
         // third, and lengthening the very window where the photo isn't yet on disk.
         // The "one encode total" claim only ever held on the rehydrated path.
         patch(it.id, { file: new File([blob], it.file.name, { type: blob.type || it.file.type }) })
-        await putPending({
+        const ok = await putPending({
           id: it.id, sig: it.sig, blob, name: it.file.name, kind: it.kind, ctx: it.ctx,
           groupId: it.groupId, label: it.label, pairJob: it.pairJob,
           takenAt: it.takenAt ?? null, contentHash: it.contentHash ?? null, attempts: it.attempts,
           createdAt: Date.now(),
         })
-        persisted.add(it.id)
-      } catch { /* best-effort — the in-memory upload still runs this session */ }
+        if (ok) persisted.add(it.id)
+        // Record the honest answer so the UI can stop saying "Saved". Best-effort
+        // still: a photo we couldn't back up must STILL upload this session — that's
+        // now its only chance, which is exactly why the contractor has to be told.
+        patch(it.id, { durable: ok })
+        if (!ok) warnNotDurable()
+      } catch { patch(it.id, { durable: false }); warnNotDurable() }
     })()
     persistDone.set(it.id, p)
     await p
@@ -259,6 +278,9 @@ let rehydrated = false
 export async function rehydrateUploads(): Promise<number> {
   if (rehydrated || typeof window === 'undefined') return 0
   rehydrated = true
+  // Bin what's provably dead BEFORE restoring, so a month of poison records can't
+  // hold the quota that today's photos need. Runs once per launch, off the hot path.
+  await sweepPending(Date.now())
   const recs = await allPending()
   if (!recs.length) return 0
   const restored: QueueItem[] = []
@@ -273,6 +295,8 @@ export async function rehydrateUploads(): Promise<number> {
       ctx: r.ctx, groupId: r.groupId, label: r.label, pairJob: r.pairJob,
       // Attempts reset: the last run died with the app, not on the merits. A photo
       // that has genuinely been rejected MAX_ATTEMPTS times is already off the disk.
+      // It came OFF the disk, so it is by definition still on it.
+      durable: true,
       status: 'queued', attempts: 0, error: undefined,
       takenAt: r.takenAt, contentHash: r.contentHash,
     })

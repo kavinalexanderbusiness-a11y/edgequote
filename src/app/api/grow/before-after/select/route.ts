@@ -116,7 +116,7 @@ export async function POST(req: NextRequest) {
       type: 'text',
       cache: true,
       text:
-        `You are picking the single strongest BEFORE/AFTER pair for a lawn & property care business to post on social media. ` +
+        `You are picking the single strongest BEFORE/AFTER pair for a local property-services business to post on social media. ` +
         `There are ${candidates.length} candidate pairs, indexed from 0. For each, the BEFORE photo comes first, then the AFTER. ` +
         `Judge by: how dramatic and obvious the transformation is, clean framing that roughly matches between the two shots, good lighting, ` +
         `and whether it would make a scroller stop. Penalize pairs where before and after look unrelated, are blurry, or show little change. ` +
