@@ -12,6 +12,7 @@
 // runInboundAction takes the service-role client from the route.
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { ensurePropertyForCustomer } from '@/lib/customers'
 
 export interface InboundLeadInput {
   name: string | null
@@ -19,6 +20,8 @@ export interface InboundLeadInput {
   phone: string | null
   address: string | null
   city: string | null
+  province: string | null
+  postal_code: string | null
   message: string | null
   source: string | null
 }
@@ -40,6 +43,8 @@ export function normalizeInboundPayload(payload: Record<string, unknown>): Inbou
     phone: pick(payload, ['phone', 'phone_number', 'phoneNumber', 'tel', 'mobile', 'Phone']),
     address: pick(payload, ['address', 'street', 'street_address', 'address1', 'Address']),
     city: pick(payload, ['city', 'City']),
+    province: pick(payload, ['province', 'state', 'Province']),
+    postal_code: pick(payload, ['postal_code', 'postalCode', 'zip', 'zip_code', 'postcode']),
     message: pick(payload, ['message', 'notes', 'comments', 'description', 'details', 'Message']),
     source: pick(payload, ['source', 'utm_source']),
   }
@@ -50,41 +55,63 @@ export interface InboundResult {
   status: number
   summary: string
   customerId?: string
+  propertyId?: string | null
   requestId?: string
   deduped?: boolean
 }
 
 /**
  * Find-or-create a customer with intake's dedup semantics (phone last-10 →
- * exact email). Shared by inbound webhooks and POST /api/v1/customers.
+ * exact email), then guarantee the property linkage — every app-side creation
+ * path runs ensureCustomerAndProperty now (multi-property, c260380), and the
+ * integration doors must not be the one place a customer can exist without a
+ * property. Shared by inbound webhooks and POST /api/v1/customers.
  */
 export async function findOrCreateCustomer(
   sb: SupabaseClient,
   userId: string,
-  input: Partial<InboundLeadInput> & { province?: string | null; postal_code?: string | null; notes?: string | null },
-): Promise<{ id: string; deduped: boolean } | { error: string }> {
+  input: Partial<InboundLeadInput> & { notes?: string | null },
+): Promise<{ id: string; propertyId: string | null; deduped: boolean } | { error: string }> {
+  let customerId: string | null = null
+  let deduped = false
+
+  // Suffix match on the generated customers.phone_digits column (trigram-
+  // indexed) — the same canonical digits the rest of the app searches on.
   const phoneDigits = (input.phone ?? '').replace(/\D/g, '').slice(-10)
   if (phoneDigits.length === 10) {
-    const { data } = await sb.from('customers').select('id, phone').eq('user_id', userId).not('phone', 'is', null).limit(2000)
-    const hit = (data ?? []).find((c) => ((c.phone as string) ?? '').replace(/\D/g, '').slice(-10) === phoneDigits)
-    if (hit) return { id: hit.id, deduped: true }
+    const { data } = await sb.from('customers').select('id')
+      .eq('user_id', userId).like('phone_digits', `%${phoneDigits}`)
+      .order('created_at', { ascending: false }).limit(1)
+    if (data?.[0]) { customerId = data[0].id; deduped = true }
   }
-  if (input.email) {
+  if (!customerId && input.email) {
     const { data } = await sb.from('customers').select('id').eq('user_id', userId).ilike('email', input.email).limit(1)
-    if (data?.[0]) return { id: data[0].id, deduped: true }
+    if (data?.[0]) { customerId = data[0].id; deduped = true }
   }
-  const { data, error } = await sb.from('customers').insert({
-    user_id: userId,
-    name: input.name ?? input.email ?? input.phone ?? 'New lead',
-    email: input.email ?? null, phone: input.phone ?? null,
-    address: input.address ?? null, city: input.city ?? null,
-    ...(input.province ? { province: input.province } : {}),
-    ...(input.postal_code ? { postal_code: input.postal_code } : {}),
-    ...(input.notes ? { notes: input.notes } : {}),
-    acquisition_source: input.source ?? 'webhook',
-  }).select('id').single()
-  if (error || !data) return { error: error?.message ?? 'unknown insert failure' }
-  return { id: data.id, deduped: false }
+  if (!customerId) {
+    const { data, error } = await sb.from('customers').insert({
+      user_id: userId,
+      name: input.name ?? input.email ?? input.phone ?? 'New lead',
+      email: input.email ?? null, phone: input.phone ?? null,
+      address: input.address ?? null, city: input.city ?? null,
+      province: input.province ?? 'AB',
+      postal_code: input.postal_code ?? null,
+      ...(input.notes ? { notes: input.notes } : {}),
+      acquisition_source: input.source ?? 'webhook',
+    }).select('id').single()
+    if (error || !data) return { error: error?.message ?? 'unknown insert failure' }
+    customerId = data.id as string
+  }
+  if (!customerId) return { error: 'could not resolve a customer' }
+
+  // THE app engine for property find-or-create (address canonicalization,
+  // is_primary on first) — never a second matching implementation. Without a
+  // usable address it just resolves the primary property; no writes.
+  const { propertyId } = await ensurePropertyForCustomer(
+    sb as Parameters<typeof ensurePropertyForCustomer>[0], userId, customerId,
+    { address: input.address, city: input.city, province: input.province, postal_code: input.postal_code },
+  )
+  return { id: customerId, propertyId, deduped }
 }
 
 export async function runInboundAction(
@@ -105,7 +132,7 @@ export async function runInboundAction(
 
   if (action === 'customer') {
     return {
-      ok: true, status: 200, customerId, deduped,
+      ok: true, status: 200, customerId, propertyId: found.propertyId, deduped,
       summary: `${deduped ? 'Matched existing' : 'Created'} customer${input.name ? ` "${input.name}"` : ''}.`,
     }
   }
@@ -118,7 +145,7 @@ export async function runInboundAction(
   if (reqErr || !reqRow) return { ok: false, status: 500, summary: `Customer saved but request failed: ${reqErr?.message ?? 'unknown'}` }
 
   return {
-    ok: true, status: 200, customerId, requestId: reqRow.id, deduped,
+    ok: true, status: 200, customerId, propertyId: found.propertyId, requestId: reqRow.id, deduped,
     summary: `${deduped ? 'Matched existing' : 'Created'} customer${input.name ? ` "${input.name}"` : ''} and raised a service request.`,
   }
 }
