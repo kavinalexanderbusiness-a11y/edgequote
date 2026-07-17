@@ -38,8 +38,14 @@ interface PortalQuoteService { service_type: string; quantity: number; unit: str
 // quote sent before expiry stamping began). Expiry is DERIVED from it via
 // lib/quoteStatus — never stored on status — so the portal reads the same field and
 // reaches the same answer as the owner's screens, with no second rule to drift.
-interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; valid_until: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null }
-interface PortalInvoice { id: string; invoice_number: string; service_type: string | null; amount: number; status: string; issued_date: string | null; due_date: string | null; notes: string | null; address: string | null; line_items: { description: string; amount: number; kind: string }[] | null; job_id: string | null; created_at: string; discount_type?: 'amount' | 'percent' | null; discount_value?: number | null; amount_paid?: number | null }
+// `property_id` is the canonical FK to the property this quote is actually FOR. It is
+// optional because 4 of 62 live rows predate property linking — a legacy quote answers
+// `null`, and callers must degrade to the quote's own `address` text rather than
+// borrowing another property's facts.
+interface PortalQuote { id: string; quote_number: string; service_type: string; address: string; property_id?: string | null; total: number; initial_price: number | null; subtotal: number | null; weekly_price: number | null; biweekly_price: number | null; monthly_price: number | null; notes: string | null; status: string; created_at: string; issued_date: string | null; valid_until: string | null; crew_size: number | null; hours: number | null; travel_fee: number | null; services?: PortalQuoteService[] | null }
+// `property_id` null is the HONEST answer for an invoice spanning several properties —
+// never infer one, or a combined invoice prints one address as if it were the whole bill.
+interface PortalInvoice { id: string; invoice_number: string; service_type: string | null; amount: number; status: string; issued_date: string | null; due_date: string | null; notes: string | null; address: string | null; property_id?: string | null; line_items: { description: string; amount: number; kind: string }[] | null; job_id: string | null; created_at: string; discount_type?: 'amount' | 'percent' | null; discount_value?: number | null; amount_paid?: number | null }
 // property_id/quote_id/price/is_initial_visit exist so buildServicePlans + jobVisitValue
 // (the SAME engines the owner's customer page runs) can be fed real data here.
 interface PortalJob { id: string; recurrence_id: string | null; property_id: string | null; quote_id: string | null; price: number | null; is_initial_visit: boolean | null; service_type: string | null; title: string; scheduled_date: string; status: string; on_my_way_at: string | null; started_at: string | null; completed_at: string | null; notes: string | null }
@@ -52,6 +58,11 @@ interface PortalCard { brand: string | null; last4: string | null; exp_month: nu
 // customers are offered pool visits, a window cleaner's are offered window
 // cleaning. Optional so a portal served by an older RPC still renders.
 interface PortalService { name: string; category: string | null; default_rate: number | null; pricing_display_type: string | null; default_description: string | null }
+// One of the customer's properties, from the canonical properties table. `id` is what a
+// quote/invoice row's property_id points at — this array is the ONLY way a card can name
+// its own address or area. `lawn_sqft` is a historical column NAME holding a measured
+// AREA of any kind (a driveway, a roof); never surface the word "lawn" from it.
+interface PortalProperty { id: string; address: string | null; city: string | null; province: string | null; postal_code: string | null; lawn_sqft: number | null; fence_length: number | null; neighborhood: string | null; is_primary: boolean | null }
 // One row of the customer's conversation with the business — the SAME messages
 // table the owner's Messages hub reads, fetched lazily by the Messages tab via a
 // token-scoped RPC (portal_get_messages) so get_portal_data stays untouched.
@@ -63,7 +74,15 @@ interface PortalData {
   // long as the tab.
   customer: { id: string; name: string; email: string | null; phone: string | null; address: string | null; city: string | null; sms_opt_in?: boolean | null; email_opt_in?: boolean | null; reviewed_at?: string | null; review_declined_at?: string | null; autopay_enabled?: boolean | null }
   business: { company_name: string | null; owner_name: string | null; phone: string | null; email_primary: string | null; email_secondary: string | null; website: string | null; logo_url: string | null; logo_scale: number | null; base_address: string | null; terms_text: string | null; review_url?: string | null; etransfer_email?: string | null; gst_percent?: number | null; service_seasons?: unknown } | null
+  // `property` (singular) is the PRIMARY property and stays exactly as it was — Home's
+  // "Your property" card, the Property tab and the invoice/receipt PDF fallbacks all
+  // read it. It is the right answer to "where does this customer mainly live", and the
+  // WRONG answer to "what is this quote for" — that is what `properties` + a row's own
+  // property_id are for. Keeping both means this change cannot regress the old readers.
   property: { address: string | null; city: string | null; province: string | null; lawn_sqft: number | null; fence_length: number | null; neighborhood: string | null; notes: string | null } | null
+  // Every property, primary first (same ordering as `property`, so properties[0] is it).
+  // Optional: a portal served by an older RPC has no such key and must still render.
+  properties?: PortalProperty[] | null
   quotes: PortalQuote[]; invoices: PortalInvoice[]; jobs: PortalJob[]; recurrences: PortalRec[]; photos: PortalPhoto[]; payments: PortalPayment[]
   payment_method?: PortalCard | null
   // Optional: a portal whose RPC predates the services key still works — the
@@ -121,6 +140,14 @@ function normalizePortal(d: unknown): PortalData | null {
     customer: raw.customer ?? { id: '', name: 'Customer', email: null, phone: null, address: null, city: null },
     business: raw.business ?? null,
     property: raw.property ?? null,
+    properties: Array.isArray(raw.properties) ? raw.properties : [],
+    // `services` was in the RPC but NOT in this literal, so data.services was always
+    // undefined and the Request tab's presets — the owner's own catalogue, the thing
+    // that makes this portal fit a pool company — never rendered once since the RPC
+    // shipped them. Same failure mode this function invites for every key: rebuilding
+    // the object by hand means a key the server sends is dropped silently, and tsc
+    // can't catch it because every field it feeds is optional.
+    services: Array.isArray(raw.services) ? raw.services : [],
     quotes: Array.isArray(raw.quotes) ? raw.quotes : [],
     invoices: Array.isArray(raw.invoices) ? raw.invoices : [],
     jobs: Array.isArray(raw.jobs) ? raw.jobs : [],
@@ -521,7 +548,7 @@ export function PortalClient({ token, initialData }: { token: string; initialDat
           {tab === 'property' && <PropertyTab property={data.property} />}
           {tab === 'payments' && <PaymentsTab customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} business={biz} payments={data.payments} invoices={data.invoices} outstanding={derived.outstanding}
             token={token} paymentsEnabled={paymentsEnabled} card={data.payment_method ?? null} autopayEnabled={!!data.customer.autopay_enabled} onChanged={load} />}
-          {tab === 'documents' && <DocumentsTab quotes={data.quotes} invoices={data.invoices} customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} lawnSqft={Number(data.property?.lawn_sqft) || null} business={biz} onInvoiceOpen={markInvoiceViewed}
+          {tab === 'documents' && <DocumentsTab quotes={data.quotes} invoices={data.invoices} customerName={data.customer.name} fallbackAddress={data.property?.address || data.customer.address || null} properties={data.properties ?? []} business={biz} onInvoiceOpen={markInvoiceViewed}
             paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} accept={accept} accepting={accepting} initialCat={docsCat} />}
           {tab === 'messages' && <MessagesTab token={token} businessName={biz?.company_name || null} />}
           {tab === 'request' && (
@@ -1097,16 +1124,44 @@ type DocKind = 'quote' | 'invoice'
 // Accept button disappear on its own: `canAccept` already tests for 'sent', so there is
 // no second expiry check anywhere in the render path to forget or contradict.
 // `expiredOn` is the date it lapsed, shown so the customer knows this isn't a glitch.
-interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; expiredOn?: string; validUntil?: string | null; dueDate?: string | null; amount: number; amountNote?: string; balance: number; filename: string; getBlob: () => Promise<Blob>; lines?: { label: string; amount: number }[]; explain?: string[] }
+// `propertyId` is the row's OWN link, stored raw (unresolved) — the grouping memo is the
+// single place that decides whether it names a property this payload actually carried.
+// `address` is what that resolves to for a human: see resolveDocAddress.
+interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; expiredOn?: string; validUntil?: string | null; dueDate?: string | null; amount: number; amountNote?: string; balance: number; filename: string; getBlob: () => Promise<Blob>; lines?: { label: string; amount: number }[]; explain?: string[]; propertyId?: string | null; address?: string | null }
 const KIND_META: Record<DocKind, { label: string; icon: typeof FileText; tone: string }> = {
   quote: { label: 'Quote', icon: FileText, tone: 'text-accent-text border-accent/25 bg-accent/10' },
   invoice: { label: 'Invoice', icon: Receipt, tone: 'text-sky-400 border-sky-500/25 bg-sky-500/10' },
 }
+// The bucket for a document that doesn't name a property we know. A UUID can never
+// collide with it, so it can share the group map's key space.
+const NO_PROPERTY = 'no-property'
+
+// THE address resolver for this tab — the one answer to "which address identifies this
+// document", asked identically by quotes and invoices so the fallback chain exists once.
+//
+// The canonical properties.address WINS whenever property_id resolves. A quote/invoice
+// carries its own `address` TEXT, copied at creation and never re-synced: most of those
+// copies differ from the property they belong to only in formatting ("SW" vs
+// "Southwest", a doubled ", AB"), but some name a different street outright. Grouping on
+// a stale copy would split one property into two headings, and printing it under a
+// heading claiming to name the property would be a quiet lie. So the copy is a FALLBACK,
+// not a second opinion: it answers only when property_id is null (a legacy row) or
+// points at a property this payload didn't carry.
+function resolveDocAddress(propsById: Map<string, PortalProperty>, propertyId: string | null | undefined, ownAddress: string | null | undefined): string | null {
+  const canonical = (propertyId ? propsById.get(propertyId) : null)?.address?.trim()
+  if (canonical) return canonical
+  return ownAddress?.trim() || null
+}
 
 
-function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, lawnSqft, business, onInvoiceOpen, paymentsEnabled, pay, payingId, accept, accepting, initialCat }: {
+function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, properties, business, onInvoiceOpen, paymentsEnabled, pay, payingId, accept, accepting, initialCat }: {
   quotes: PortalQuote[]; invoices: PortalInvoice[]; customerName: string; fallbackAddress: string | null
-  lawnSqft: number | null; business: PortalData['business']
+  // The customer's properties — NOT a single measured area. This used to be
+  // `lawnSqft: number | null`, lifted off the PRIMARY property and then applied to
+  // every quote in the map below, which is how a $40 quote for a 407 sq ft lawn came
+  // to claim it was "priced for your measured 10,369 sq ft". A per-row fact has to be
+  // resolved per row, so the row's own property_id is the only thing that may answer.
+  properties: PortalProperty[]; business: PortalData['business']
   onInvoiceOpen?: (invoiceId: string) => void
   paymentsEnabled: boolean; pay: (invoiceId: string) => void; payingId: string | null
   accept: (quoteId: string) => void; accepting: string | null
@@ -1120,8 +1175,16 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, lawnSqf
 
   const gstPct = Number(business?.gst_percent) || 0
   const today = localTodayISO()
+  // THE property lookup for this tab. A row names its own property or it names none —
+  // there is no "close enough" here, because the nearest wrong answer (the primary) is
+  // exactly the bug being fixed.
+  const propsById = useMemo(() => new Map(properties.map(p => [p.id, p])), [properties])
   const docs = useMemo<DocItem[]>(() => {
     const q: DocItem[] = quotes.map(qq => {
+      // The property THIS quote is for. Null for a legacy quote with no property_id —
+      // in which case every property-derived fact below stays silent.
+      const qProp = qq.property_id ? propsById.get(qq.property_id) ?? null : null
+      const qSqft = Number(qProp?.lawn_sqft) || 0
       // Multi-service quotes get a per-service breakdown on the row (same
       // serviceLineTotals math as the builder/PDF), so the customer sees what
       // makes up the total instead of a lump sum under one service name.
@@ -1158,7 +1221,15 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, lawnSqf
       const explainBits = [
         // The measured area, not "your lawn" — the same number explains a
         // driveway to a pressure washer's customer or a deck to a stainer's.
-        lawnSqft && lawnSqft > 0 ? `Priced for your measured ${lawnSqft.toLocaleString()} sq ft — measured, not guessed.` : null,
+        //
+        // It is THIS quote's property's area, resolved through this quote's own
+        // property_id. It used to be the primary property's area applied to every
+        // quote, which under the heading "What's behind this price" vouched for a
+        // number that wasn't the customer's — a $40 quote for 407 sq ft told them it
+        // was priced for 10,369. When the property is unknown (a legacy quote) the
+        // claim is DROPPED, not defaulted: we can be silent about the area, but we
+        // cannot be wrong about it while claiming to explain their price.
+        qSqft > 0 ? `Priced for your measured ${qSqft.toLocaleString()} sq ft — measured, not guessed.` : null,
         manHours > 0
           ? `About ${fmtHrs(manHours)} of work${Number(qq.crew_size) > 1 ? `, with a crew of ${Number(qq.crew_size)}` : ''}.`
           : null,
@@ -1181,6 +1252,12 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, lawnSqf
         amount: Number(qq.total) || 0,
         amountNote: gstPct > 0 ? `+ GST (${gstPct}%) — added on your invoice` : undefined, balance: 0,
         filename: `${qq.quote_number}.pdf`, getBlob: () => renderPortalQuoteBlob(qq, customerName, business), lines,
+        // Identity, not decoration: the address is what tells a landlord which of their
+        // six quotes this is. It never becomes the row's `title` — `service_type` is a
+        // real disambiguator, and 5 of the 7 multi-quote customers have every quote on
+        // ONE property, where the address would say nothing and the service/date/status
+        // say everything.
+        propertyId: qq.property_id ?? null, address: resolveDocAddress(propsById, qq.property_id, qq.address),
         // Don't justify a price that no longer stands — explaining it would invite the
         // customer to act on a number we're about to tell them we can't honour.
         explain: !expired && explainBits.length > 1 ? explainBits : undefined,
@@ -1210,10 +1287,17 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, lawnSqf
         // it made the row look like they'd paid nothing.
         amountNote: Number(ii.amount_paid) > 0 && balance > 0 ? `${formatCurrency(Number(ii.amount_paid))} already paid` : undefined,
         filename: `${ii.invoice_number}.pdf`, getBlob: () => { onInvoiceOpen?.(ii.id); return renderPortalInvoiceBlob(ii, customerName, fallbackAddress, business) },
+        // Same resolver as the quote above. An invoice that spans several properties
+        // answers null on purpose (see PortalInvoice) — it lands in the neutral bucket
+        // rather than being filed under whichever address happened to be copied onto it.
+        propertyId: ii.property_id ?? null, address: resolveDocAddress(propsById, ii.property_id, ii.address),
       }
     })
     return [...q, ...inv]
-  }, [quotes, invoices, customerName, fallbackAddress, business, onInvoiceOpen, gstPct])
+    // propsById is a dep: the payload arrives from a server prefetch AND a client
+    // revalidation, so a customer's properties can land after first paint. Omitting it
+    // would leave the rows explaining the price with whatever was known then.
+  }, [quotes, invoices, customerName, fallbackAddress, business, onInvoiceOpen, gstPct, propsById])
 
   const counts = { all: docs.length, quote: docs.filter(d => d.kind === 'quote').length, invoice: docs.filter(d => d.kind === 'invoice').length }
 
@@ -1222,9 +1306,38 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, lawnSqf
     let list = cat === 'all' ? docs : docs.filter(d => d.kind === cat)
     if (ql) list = list.filter(d =>
       d.number.toLowerCase().includes(ql) || d.title.toLowerCase().includes(ql) ||
-      d.status.toLowerCase().includes(ql) || KIND_META[d.kind].label.toLowerCase().includes(ql))
+      d.status.toLowerCase().includes(ql) || KIND_META[d.kind].label.toLowerCase().includes(ql) ||
+      // A landlord searches the way they think: "Elm St", not "Q-1043". The RESOLVED
+      // address, so what they type matches what the heading shows them.
+      (d.address || '').toLowerCase().includes(ql))
     return [...list].sort((a, b) => sort === 'newest' ? b.date.localeCompare(a.date) : a.date.localeCompare(b.date))
   }, [docs, cat, query, sort])
+
+  // Address as an anchor only earns its space when there's a choice to make. One property
+  // (40 of 47 customers) means every heading would repeat the address they gave us —
+  // so they keep today's flat list, unchanged. Two or more, and the list groups.
+  const grouped = properties.length > 1
+  // Built FROM `filtered`, so cat/query/sort are applied once and grouping composes with
+  // them instead of forking them. Group order follows `properties` (primary first — the
+  // RPC's own ordering), with the unknown bucket trailing; a group with nothing left in
+  // it after filtering doesn't render a heading over empty space.
+  const groups = useMemo(() => {
+    if (!grouped) return null
+    const byKey = new Map<string, DocItem[]>()
+    for (const d of filtered) {
+      const key = d.propertyId && propsById.has(d.propertyId) ? d.propertyId : NO_PROPERTY
+      const bucket = byKey.get(key)
+      if (bucket) bucket.push(d); else byKey.set(key, [d])
+    }
+    const out = properties.filter(p => byKey.has(p.id)).map(p => ({
+      key: p.id, label: p.address?.trim() || 'Property', isPrimary: !!p.is_primary, items: byKey.get(p.id)!,
+    }))
+    const rest = byKey.get(NO_PROPERTY)
+    // Neutral and LAST: these documents are unfiled, not misfiled. Naming them after an
+    // address we couldn't confirm is the one thing this whole change exists to stop.
+    if (rest) out.push({ key: NO_PROPERTY, label: 'Other documents', isPrimary: false, items: rest })
+    return out
+  }, [grouped, filtered, properties, propsById])
 
   const CATS: { key: 'all' | DocKind; label: string; n: number }[] = [
     { key: 'all', label: 'All', n: counts.all },
@@ -1264,6 +1377,28 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, lawnSqf
       {/* List */}
       {filtered.length === 0 ? (
         <Empty icon={docs.length === 0 ? FolderOpen : Search} text={docs.length === 0 ? 'No documents yet — your quotes and invoices will appear here.' : 'No documents match your search.'} />
+      ) : groups ? (
+        <div className="space-y-5">
+          {groups.map(g => (
+            <div key={g.key} className="space-y-3">
+              {/* The heading carries the address; the rows keep saying what they always
+                  said. Service + date + status stay the disambiguators, because a
+                  customer can hold two quotes on one property that differ by nothing
+                  else — address alone would render them as identical twins. */}
+              <div className="flex items-center gap-1.5 px-0.5">
+                <MapPin className="w-3.5 h-3.5 text-ink-faint shrink-0" />
+                <p className="text-xs font-semibold text-ink tracking-tight truncate">{g.label}</p>
+                {g.isPrimary && (
+                  <span className="text-[10px] font-semibold uppercase tracking-wide rounded-full px-2 py-0.5 border border-border text-ink-faint shrink-0">
+                    Primary
+                  </span>
+                )}
+                <span className="text-xs text-ink-faint tabular-nums ml-auto shrink-0">{g.items.length}</span>
+              </div>
+              {g.items.map(d => <DocRow key={d.id} d={d} paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} accept={accept} accepting={accepting} />)}
+            </div>
+          ))}
+        </div>
       ) : (
         <div className="space-y-3">{filtered.map(d => <DocRow key={d.id} d={d} paymentsEnabled={paymentsEnabled} pay={pay} payingId={payingId} accept={accept} accepting={accepting} />)}</div>
       )}
