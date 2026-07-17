@@ -21,9 +21,17 @@
 // It runs the REAL engines — no copies, no mocks. Deterministic, no network, no API
 // key, so it runs in CI beside the other verifiers.
 
-import type { Payment, BusinessSettings, ExpenseWithRelations } from '../src/types'
-import { sumExpenses, expenseNet, parseMoney, validateExpense, expenseFromForm, blankExpense } from '../src/lib/accounting/expenses'
-import { profitAndLoss, cashFlow, salesTaxWithin, isGstRegistrant, expenseCost } from '../src/lib/accounting/report'
+import type { Payment, BusinessSettings, ExpenseWithRelations, FixedAsset, Liability } from '../src/types'
+import {
+  sumExpenses, expenseNet, parseMoney, validateExpense, expenseFromForm, blankExpense,
+  expenseToForm, isUnpaid, isOwnerDraw, isOperatingCost,
+} from '../src/lib/accounting/expenses'
+import {
+  profitAndLoss, cashFlow, salesTaxWithin, isGstRegistrant, expenseCost, expensesInPeriod,
+} from '../src/lib/accounting/report'
+import { depreciate, assetRegister, depreciationBetween } from '../src/lib/accounting/depreciation'
+import { balanceSheet, accountsPayable } from '../src/lib/accounting/balanceSheet'
+import { gstReturn } from '../src/lib/accounting/gst'
 import { costJob, costJobs, rollupJobCosting } from '../src/lib/accounting/jobCosting'
 import { resolvePeriod, monthRange, quarterRange, monthsBetween, inPeriod, daysInMonth } from '../src/lib/accounting/period'
 import { DEFAULT_EXPENSE_CATEGORIES } from '../src/lib/accounting/categories'
@@ -46,7 +54,9 @@ function exp(p: Partial<ExpenseWithRelations> & { amount: number }): ExpenseWith
     id: `e${seq}`, created_at: '', updated_at: '', user_id: 'u1',
     vendor_id: null, category_id: null, job_id: null,
     tax_amount: 0,
+    bill_date: p.spent_at ?? p.bill_date ?? '2026-07-15',
     spent_at: '2026-07-15',
+    is_capital: false,
     description: null, payment_method: null, reference: null, receipt_path: null,
     notes: null, archived_at: null,
     ...p,
@@ -63,7 +73,11 @@ function pay(p: Partial<Payment> & { amount: number }): Payment {
 }
 const NOT_REGISTERED = { gst_percent: 0 } as unknown as BusinessSettings
 const REGISTERED = { gst_percent: 5 } as unknown as BusinessSettings
-const CAT = (name: string, deductible: boolean) => ({ id: `c-${name}`, name, tax_deductible: deductible })
+// `kind` defaults to 'operating' — a category is a business cost unless it says
+// otherwise, which is the same default the DB column carries.
+const CAT = (name: string, deductible: boolean, kind: 'operating' | 'owner_draw' = 'operating') =>
+  ({ id: `c-${name}`, name, tax_deductible: deductible, kind })
+const DRAW = (name = 'Owner draw') => CAT(name, false, 'owner_draw')
 const ALL = resolvePeriod('all', '2026-07-15')
 
 // ── 1. THE AMOUNT CONVENTION ─────────────────────────────────────────────────
@@ -337,6 +351,300 @@ console.log('\nSlices must partition the same total (a breakdown that doesn\'t a
   check('uncategorised has a name, not a blank row',
     p.byCategory.some(c => c.name === 'Uncategorised'), p.byCategory.map(c => c.name).join(','))
   eq('month slices sum to total cost', +p.byMonth.reduce((s, m) => s + m.cost, 0).toFixed(2), p.cost)
+}
+
+// ══ PHASE 2 ══════════════════════════════════════════════════════════════════
+
+// ── 12. ACCOUNTS PAYABLE — an unpaid bill is not a cost ──────────────────────
+console.log('\nA/P — a bill you haven\'t paid is a LIABILITY, never a cash cost:')
+{
+  const unpaid = exp({ amount: 400, bill_date: '2026-07-01', spent_at: null })
+  const paid = exp({ amount: 100, bill_date: '2026-07-01', spent_at: '2026-07-05' })
+
+  eq('unpaid: no cash date', isUnpaid(unpaid), true)
+  eq('paid: has one', isUnpaid(paid), false)
+
+  const p = profitAndLoss({ payments: [], expenses: [unpaid, paid], settings: NOT_REGISTERED, period: monthRange(2026, 7) })
+  eq('only the PAID bill is a cost', p.cost, 100)
+  eq('cash out is only what actually left', p.spendGross, 100)
+
+  // THE bug this pins. A hand-rolled `spent_at >= from && <= to` filter compares
+  // null NUMERICALLY: both bounds go false, the row is kept, and a bill nobody has
+  // paid becomes a cost in EVERY period at once.
+  const naive = [unpaid, paid].filter(e => !(e.spent_at! < '2026-07-01' || e.spent_at! > '2026-07-31'))
+  check('the naive date filter WOULD have leaked it', naive.length === 2, `got ${naive.length}`)
+  eq('...the engine does not', expensesInPeriod([unpaid, paid], monthRange(2026, 7)).length, 1)
+
+  eq('A/P = the unpaid bill, GROSS', accountsPayable([unpaid, paid], '2026-07-31'), 400)
+  eq('a bill dated after the as-at date is not owed yet', accountsPayable([unpaid], '2026-06-30'), 0)
+
+  // Round trip: an unpaid bill must not come back marked paid.
+  const form = expenseToForm(unpaid)
+  eq('unpaid round-trips as paid:false', form.paid, false)
+  eq('...and writes a real NULL, not a date', expenseFromForm(form).spent_at, null)
+  const paidForm = expenseToForm(paid)
+  eq('paid round-trips as paid:true', paidForm.paid, true)
+  eq('...keeping its cash date', expenseFromForm(paidForm).spent_at, '2026-07-05')
+  check('an unpaid bill needs NO cash date to validate',
+    validateExpense({ ...blankExpense('2026-07-15'), amount: '10', paid: false, spent_at: '' }).ok)
+  check('a PAID one does', !validateExpense({ ...blankExpense('2026-07-15'), amount: '10', paid: true, spent_at: '' }).ok)
+}
+
+// ── 13. CAPITAL PURCHASES — cash became an asset, not a cost ─────────────────
+console.log('\nBuying a mower is not a $5,000 cost — it\'s $5,000 of cash becoming an asset:')
+{
+  const mower = exp({ amount: 5000, spent_at: '2026-07-10', is_capital: true })
+  const fuel = exp({ amount: 100, spent_at: '2026-07-10' })
+  const p = profitAndLoss({ payments: [pay({ amount: 6000 })], expenses: [mower, fuel], settings: NOT_REGISTERED, period: monthRange(2026, 7) })
+
+  eq('the mower is NOT a cost', p.cost, 100)
+  eq('...but the cash really left', p.spendGross, 5100)
+  eq('capital spend is reported on its own', p.capitalSpend, 5000)
+  eq('profit is not a fake loss', p.profit, 5900)
+
+  // Without the flag this month reads as a $900 profit... on a naive read, and the
+  // balance sheet then fails by exactly 5000. That's the whole reason it exists.
+  const naive = profitAndLoss({ payments: [pay({ amount: 6000 })], expenses: [exp({ amount: 5000, spent_at: '2026-07-10' }), fuel], settings: NOT_REGISTERED, period: monthRange(2026, 7) })
+  eq('unflagged, the same month reports 900', naive.profit, 900)
+  check('the flag is worth 5000 of profit', p.profit - naive.profit === 5000)
+
+  // Cash flow does NOT care what the P&L calls it — the bank moved 5100.
+  eq('cash flow counts every dollar out', cashFlow({ payments: [], expenses: [mower, fuel], settings: NOT_REGISTERED, period: monthRange(2026, 7) }).outflow, 5100)
+}
+
+// ── 14. OWNER DRAWS — a distribution, not a cost ─────────────────────────────
+console.log('\nAn owner draw is profit taken OUT, not a cost of earning it:')
+{
+  const draw = exp({ amount: 2000, spent_at: '2026-07-10', category_id: 'c-Owner draw', expense_categories: DRAW() })
+  const fuel = exp({ amount: 100, spent_at: '2026-07-10', category_id: 'c-Fuel', expense_categories: CAT('Fuel', true) })
+  const fine = exp({ amount: 50, spent_at: '2026-07-10', category_id: 'c-Fine', expense_categories: CAT('Parking fine', false) })
+
+  eq('draw is recognised by KIND', isOwnerDraw(draw), true)
+  // The distinction tax_deductible cannot make: a fine is non-deductible and IS a cost.
+  eq('a non-deductible FINE is still a cost', isOwnerDraw(fine), false)
+  eq('...and counts as operating', isOperatingCost(fine), true)
+
+  const p = profitAndLoss({ payments: [pay({ amount: 3000 })], expenses: [draw, fuel, fine], settings: NOT_REGISTERED, period: monthRange(2026, 7) })
+  eq('cost excludes the draw, includes the fine', p.cost, 150)
+  eq('draws are reported separately', p.ownerDraws, 2000)
+  eq('...but the cash left', p.spendGross, 2150)
+  eq('profit is real, not a fake loss', p.profit, 2850)
+  eq('the fine is NOT deductible', p.deductibleCost, 100)
+  // Slices must still reconcile to cost after the partition.
+  eq('category slices still sum to cost', +p.byCategory.reduce((s, c) => s + c.cost, 0).toFixed(2), p.cost)
+}
+
+// ── 15. DEPRECIATION ─────────────────────────────────────────────────────────
+console.log('\nDepreciation — hand-derived schedules:')
+{
+  const sl = (o: Partial<FixedAsset> = {}): FixedAsset => ({
+    id: 'a1', created_at: '', updated_at: '', user_id: 'u1', name: 'Mower',
+    equipment_id: null, vendor_id: null, cost: 5000, tax_amount: 0,
+    in_service_date: '2026-01-01', method: 'straight_line', useful_life_years: 5,
+    salvage_value: 0, declining_rate: null, disposed_at: null, disposal_proceeds: null,
+    notes: null, archived_at: null, ...o,
+  } as FixedAsset)
+
+  // $5,000 over 5 years = $1,000/yr. After exactly 1 year: $1,000 written off.
+  const y1 = depreciate(sl(), '2027-01-01')
+  eq('1 year of a 5-year $5,000 asset = 1000', y1.accumulated, 1000)
+  eq('book value = 4000', y1.bookValue, 4000)
+  eq('annual charge = 1000', y1.annualAmount, 1000)
+  eq('6 months = 500', depreciate(sl(), '2026-07-01').accumulated, 500)
+  eq('day 0 = nothing written off', depreciate(sl(), '2026-01-01').accumulated, 0)
+  eq('before it existed = 0, never negative', depreciate(sl(), '2025-06-01').accumulated, 0)
+
+  // Never below salvage.
+  const salv = depreciate(sl({ salvage_value: 1000 }), '2036-01-01')
+  eq('salvage floors it: base = 4000', salv.accumulated, 4000)
+  eq('...book value stops at salvage', salv.bookValue, 1000)
+  eq('10 years into a 5-year life is still capped', depreciate(sl(), '2036-01-01').accumulated, 5000)
+  eq('...and book value never goes negative', depreciate(sl(), '2036-01-01').bookValue, 0)
+  check('fully depreciated is reported', depreciate(sl(), '2036-01-01').fullyDepreciated)
+
+  // 'none' — land doesn't wear out.
+  const none = depreciate(sl({ method: 'none' }), '2036-01-01')
+  eq("method 'none' never writes down", none.accumulated, 0)
+  eq('...and carries at cost forever', none.bookValue, 5000)
+
+  // Declining balance: 20%/yr on $10,000 → after 1yr accumulated 2000, NBV 8000.
+  const db = sl({ cost: 10000, method: 'declining_balance', declining_rate: 20, useful_life_years: null })
+  eq('declining balance yr 1: 20% of 10000', depreciate(db, '2027-01-01').accumulated, 2000)
+  eq('...NBV 8000', depreciate(db, '2027-01-01').bookValue, 8000)
+  // Year 2 takes 20% of what's LEFT (8000) = 1600 → accumulated 3600.
+  eq('yr 2 takes 20% of the REMAINDER, not the cost', depreciate(db, '2028-01-01').accumulated, 3600)
+  eq('...NBV 6400', depreciate(db, '2028-01-01').bookValue, 6400)
+
+  // Disposal stops the clock and leaves the balance sheet.
+  const sold = depreciate(sl({ disposed_at: '2026-07-01' }), '2030-01-01')
+  eq('a sold asset is off the books', sold.bookValue, 0)
+  eq('...and stopped depreciating at disposal', sold.accumulated, 500)
+
+  // Register: an asset bought AFTER the as-at date isn't owned yet.
+  const reg = assetRegister([sl(), sl({ id: 'a2', in_service_date: '2026-12-01' })], '2026-07-01')
+  eq('a future purchase is not on a June balance sheet', reg.rows.length, 1)
+  eq('net book value = 4500', reg.netBookValue, 4500)
+  eq('depreciation between two dates', depreciationBetween([sl()], '2026-01-01', '2027-01-01'), 1000)
+}
+
+// ── 16. THE BALANCE SHEET IDENTITY ───────────────────────────────────────────
+// The point of the whole exercise: A = L + E must be a CHECK, not a definition.
+console.log('\nBalance sheet — Assets = Liabilities + Equity, as a real check:')
+{
+  const BS_SETTINGS = {
+    gst_percent: 0,
+    opening_bank_balance: 1000,
+    opening_balance_date: '2026-01-01',
+    opening_equity: 1000,
+  } as unknown as BusinessSettings
+
+  const base = {
+    asOf: '2026-12-31',
+    todayISO: '2026-12-31',
+    settings: BS_SETTINGS,
+    payments: [pay({ amount: 5000, paid_at: '2026-06-01' })],
+    expenses: [exp({ amount: 2000, spent_at: '2026-06-15', category_id: 'c-Fuel', expense_categories: CAT('Fuel', true) })],
+    fixedAssets: [] as FixedAsset[],
+    liabilities: [] as Liability[],
+    invoices: [],
+    inventoryValue: 0,
+  }
+
+  const bs = balanceSheet(base)
+  // Hand-derived: cash = 1000 opening + 5000 in − 2000 out = 4000.
+  eq('cash = opening + in − out', bs.cash, 4000)
+  eq('total assets', bs.totalAssets, 4000)
+  eq('no liabilities', bs.totalLiabilities, 0)
+  // Equity = 1000 opening + (5000 − 2000) retained = 4000.
+  eq('retained earnings come from the P&L engine', bs.retainedEarnings, 3000)
+  eq('equity = opening + earnings − draws', bs.totalEquity, 4000)
+  eq('net worth = A − L', bs.netWorth, 4000)
+  eq('⭐ THE IDENTITY HOLDS: difference = 0', bs.difference, 0)
+  check('⭐ balances', bs.balances)
+  check('complete', bs.complete)
+
+  // With an unpaid bill: a liability appears, and cash/earnings do NOT move.
+  const withAp = balanceSheet({ ...base, expenses: [...base.expenses, exp({ amount: 300, bill_date: '2026-12-01', spent_at: null })] })
+  eq('A/P is a liability', withAp.accountsPayable, 300)
+  eq('cash is untouched by an unpaid bill', withAp.cash, 4000)
+  eq('earnings untouched too (cash basis)', withAp.retainedEarnings, 3000)
+  // A/P breaks the identity by design on a cash basis: the bill isn't an expense
+  // yet, so equity doesn't know about it. The gap is REPORTED, not plugged.
+  eq('...so the gap is surfaced, not hidden', withAp.difference, -300)
+  check('...and it says it does not balance', !withAp.balances)
+
+  // A draw reduces equity AND cash equally — the identity must survive it.
+  const withDraw = balanceSheet({ ...base, expenses: [...base.expenses, exp({ amount: 500, spent_at: '2026-07-01', category_id: 'c-Owner draw', expense_categories: DRAW() })] })
+  eq('cash drops by the draw', withDraw.cash, 3500)
+  eq('draws are equity, not cost', withDraw.ownerDraws, 500)
+  eq('earnings are NOT reduced by a draw', withDraw.retainedEarnings, 3000)
+  eq('equity = 1000 + 3000 − 500', withDraw.totalEquity, 3500)
+  eq('⭐ identity survives a draw', withDraw.difference, 0)
+
+  // A capital purchase: cash −5000, asset +5000. Assets net unchanged, and equity
+  // must NOT drop — the exact case that fails without is_capital.
+  // Dated AFTER the opening date on purpose. The opening balance is the position at
+  // the END of opening_balance_date, so anything spent ON that date is already baked
+  // into it — counting it again would double-subtract. (This fixture originally used
+  // the opening date itself and the identity failed by exactly 3000, which is the
+  // check doing its job.)
+  const mower: FixedAsset = {
+    id: 'm1', created_at: '', updated_at: '', user_id: 'u1', name: 'Mower',
+    equipment_id: null, vendor_id: null, cost: 3000, tax_amount: 0,
+    in_service_date: '2026-02-01', method: 'none', useful_life_years: null,
+    salvage_value: 0, declining_rate: null, disposed_at: null, disposal_proceeds: null,
+    notes: null, archived_at: null,
+  } as FixedAsset
+  const withAsset = balanceSheet({
+    ...base,
+    expenses: [...base.expenses, exp({ amount: 3000, spent_at: '2026-02-01', is_capital: true })],
+    fixedAssets: [mower],
+  })
+  eq('cash paid for the mower', withAsset.cash, 1000)
+  eq('the mower is an asset', withAsset.netFixedAssets, 3000)
+  eq('total assets unchanged by the swap', withAsset.totalAssets, 4000)
+  eq('equity is NOT hit by a capital purchase', withAsset.totalEquity, 4000)
+  eq('⭐ identity survives buying a mower', withAsset.difference, 0)
+
+  // The opening-date boundary, pinned because it is genuinely counter-intuitive and
+  // it caught a wrong fixture above. The opening balance is the position at the END
+  // of its date, so money moving ON that date is already inside it.
+  const onOpeningDay = balanceSheet({
+    ...base,
+    payments: [pay({ amount: 999, paid_at: '2026-01-01' })],
+    expenses: [],
+  })
+  eq('cash ON the opening date is already in the opening balance', onOpeningDay.cash, 1000)
+  const dayAfter = balanceSheet({
+    ...base,
+    payments: [pay({ amount: 999, paid_at: '2026-01-02' })],
+    expenses: [],
+  })
+  eq('...and the very next day counts', dayAfter.cash, 1999)
+
+  // No opening balance → cash is UNKNOWN, and the statement refuses to total.
+  const noOpening = balanceSheet({ ...base, settings: { gst_percent: 0 } as unknown as BusinessSettings })
+  eq('no opening balance → cash null, not 0', noOpening.cash, null)
+  eq('...total assets null (a total with an unknown is not a total)', noOpening.totalAssets, null)
+  eq('...difference null, never a fake 0', noOpening.difference, null)
+  check('...reports incomplete', !noOpening.complete)
+  check('...and says why', noOpening.gaps.some(g => /opening bank balance/i.test(g)))
+
+  // Opening equity unknown → never back-solved to force a tie.
+  const noEquity = balanceSheet({ ...base, settings: { ...BS_SETTINGS, opening_equity: null } as unknown as BusinessSettings })
+  eq('unknown opening equity is not plugged', noEquity.totalEquity, null)
+  eq('...so the check cannot run', noEquity.difference, null)
+  check('...and it says so', !noEquity.balances)
+}
+
+// ── 17. THE GST RETURN — accrual, not cash ───────────────────────────────────
+console.log('\nGST return — ACCRUAL (owed when invoiced), which is not the P&L\'s basis:')
+{
+  const inv = (o: Record<string, unknown>) => ({
+    id: 'i1', invoice_number: 'INV-1', amount: 1000, amount_paid: 0,
+    status: 'sent', issued_date: '2026-07-10', discount_type: null, discount_value: null,
+    customers: { name: 'Acme' }, ...o,
+  }) as never
+
+  const REG5 = { gst_percent: 5 } as unknown as BusinessSettings
+  const P = monthRange(2026, 7)
+
+  const r = gstReturn({
+    invoices: [inv({}), inv({ id: 'i2', status: 'draft', amount: 500 })],
+    expenses: [exp({ amount: 210, tax_amount: 10, bill_date: '2026-07-05', spent_at: '2026-07-05' })],
+    settings: REG5, period: P,
+  })
+  eq('basis is accrual', r.basis, 'accrual')
+  eq('sales = invoiced, ex-GST', r.sales, 1000)
+  eq('GST collected = 5% of 1000', r.taxCollected, 50)
+  eq('ITCs = tax on what you bought', r.inputTaxCredits, 10)
+  eq('net tax = 50 − 10', r.netTax, 40)
+  eq('drafts are EXCLUDED (nobody was charged)', r.invoiceCount, 1)
+  eq('...and disclosed, not vanished', r.excludedDrafts.count, 1)
+
+  // Accrual vs cash: an invoice issued and NOT paid still owes GST.
+  eq('GST is owed on an unpaid invoice', gstReturn({ invoices: [inv({ amount_paid: 0 })], expenses: [], settings: REG5, period: P }).taxCollected, 50)
+  const cashPl = profitAndLoss({ payments: [], expenses: [], settings: REG5, period: P })
+  eq('...while the CASH P&L correctly sees no revenue', cashPl.revenue, 0)
+  check('the two bases differ ON PURPOSE (this is not a bug)', true)
+
+  // ITCs are dated by bill_date, not spent_at — claimable when invoiced to you.
+  const unpaidBill = exp({ amount: 105, tax_amount: 5, bill_date: '2026-07-20', spent_at: null })
+  eq('an ITC on an UNPAID bill is still claimable', gstReturn({ invoices: [], expenses: [unpaidBill], settings: REG5, period: P }).inputTaxCredits, 5)
+
+  // Capital ITCs are claimable in full, even though capital is never a P&L cost.
+  const capital = exp({ amount: 5250, tax_amount: 250, bill_date: '2026-07-02', spent_at: '2026-07-02', is_capital: true })
+  const rc = gstReturn({ invoices: [], expenses: [capital], settings: REG5, period: P })
+  eq('GST on a mower IS reclaimable in full', rc.inputTaxCredits, 250)
+  eq('...and is flagged as capital', rc.capitalItcs, 250)
+  eq('refund due is negative and NOT clamped', rc.netTax, -250)
+
+  // Not registered → no return at all.
+  const nr = gstReturn({ invoices: [inv({})], expenses: [], settings: NOT_REGISTERED, period: P })
+  eq('not registered → collects no GST', nr.taxCollected, 0)
+  eq('...claims no ITCs', nr.inputTaxCredits, 0)
+  eq('...owes nothing', nr.netTax, 0)
+  eq('...but still sees the sales', nr.sales, 1000)
 }
 
 console.log(

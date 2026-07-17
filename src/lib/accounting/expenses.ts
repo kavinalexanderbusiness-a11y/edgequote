@@ -23,6 +23,46 @@ import { fetchAllRows } from '@/lib/fetchAll'
 
 const round2 = (n: number) => Math.round(n * 100) / 100
 
+// ── What KIND of row is this? ────────────────────────────────────────────────
+// THE four questions every downstream report asks about an expense row. They live
+// here, once, because each one is a place a report can silently go wrong:
+//
+//   unpaid    → no cash left yet. Not a cash cost; a LIABILITY (accounts payable).
+//   capital   → cash became an ASSET. Not a cost; the balance sheet carries it.
+//   ownerDraw → a distribution of profit. Not a cost of earning it.
+//   operating → everything else. THIS is what a P&L means by "cost".
+//
+// Every one of these excludes a row from `cost` while leaving it in `cash out` —
+// which is exactly why cash flow and the P&L are allowed to disagree, and why both
+// have to read the same four answers.
+
+/** No cash has left yet → this is accounts payable, not a cost. */
+export function isUnpaid(e: Pick<Expense, 'spent_at'>): boolean {
+  return !e.spent_at
+}
+
+/** This cash bought an asset. Real money out, but not an operating cost. */
+export function isCapital(e: Pick<Expense, 'is_capital'>): boolean {
+  return e.is_capital === true
+}
+
+/**
+ * A distribution of profit, not a cost of earning it.
+ *
+ * Reads the category's `kind`, NOT `tax_deductible` — a parking fine is
+ * non-deductible and is still very much a cost. An uncategorised row is treated as
+ * operating: it's spend the owner hasn't filed yet, and guessing "draw" would quietly
+ * lift profit.
+ */
+export function isOwnerDraw(e: ExpenseWithRelations): boolean {
+  return e.expense_categories?.kind === 'owner_draw'
+}
+
+/** What a P&L means by "cost": paid, not capital, not a draw. */
+export function isOperatingCost(e: ExpenseWithRelations): boolean {
+  return !isUnpaid(e) && !isCapital(e) && !isOwnerDraw(e)
+}
+
 // ── Pure amount maths ────────────────────────────────────────────────────────
 
 /** What this expense actually COST the business: gross less the tax it can reclaim. */
@@ -76,6 +116,9 @@ export function blankExpense(todayISO: string): ExpenseFormValues {
   return {
     vendor_id: '', category_id: '', job_id: '',
     amount: '', tax_amount: '',
+    // Most spend is paid at the till, so the common case is one date and no thought.
+    bill_date: todayISO,
+    paid: true,
     spent_at: todayISO,
     description: '', payment_method: '', reference: '', notes: '',
   }
@@ -91,7 +134,12 @@ export function expenseToForm(e: Expense): ExpenseFormValues {
     // fact the owner entered, and reopening the form must not downgrade it to
     // "unknown". This is the whole reason the form holds strings.
     tax_amount: e.tax_amount == null ? '' : String(e.tax_amount),
-    spent_at: e.spent_at,
+    bill_date: e.bill_date,
+    // A null cash date is the ROW saying "still owed" — not a missing value to
+    // paper over. It round-trips as paid:false, so reopening an unpaid bill and
+    // saving can't silently mark it paid.
+    paid: e.spent_at != null,
+    spent_at: e.spent_at || e.bill_date,
     description: e.description || '',
     payment_method: e.payment_method || '',
     reference: e.reference || '',
@@ -127,7 +175,12 @@ export function validateExpense(v: ExpenseFormValues): ExpenseValidation {
     }
   }
 
-  if (!v.spent_at) errors.spent_at = 'When was it spent?'
+  if (!v.bill_date) errors.bill_date = 'When was this bill dated?'
+  // Only demanded when the owner says it's paid. An unpaid bill has no cash date
+  // BY DEFINITION — requiring one would make accounts payable impossible to record.
+  if (v.paid && !v.spent_at) errors.spent_at = 'When did you pay it?'
+  // Paying before you were billed isn't a date-entry slip, it's a prepayment — rare
+  // but real, so it's allowed. What's NOT allowed is silence about it.
   return { ok: Object.keys(errors).length === 0, errors }
 }
 
@@ -147,7 +200,12 @@ export function expenseFromForm(v: ExpenseFormValues) {
     job_id: v.job_id || null,
     amount: parseMoney(v.amount) ?? 0,
     tax_amount: v.tax_amount.trim() === '' ? 0 : (parseMoney(v.tax_amount) ?? 0),
-    spent_at: v.spent_at,
+    bill_date: v.bill_date,
+    // THE A/P write. `paid: false` → a real NULL, which is the row saying "still
+    // owed": it keeps this out of every cash-basis report and puts it on the balance
+    // sheet as a liability. Writing '' or the bill date instead would silently mark
+    // an unpaid bill paid — money the business never spent, in the P&L.
+    spent_at: v.paid ? v.spent_at : null,
     description: v.description.trim() || null,
     payment_method: v.payment_method || null,
     reference: v.reference.trim() || null,
@@ -170,8 +228,11 @@ export function parseMoney(s: string): number | null {
 
 // ── Reads ────────────────────────────────────────────────────────────────────
 
+// `kind` is NOT optional here. isOwnerDraw() reads it, and a join that omits it
+// returns undefined — which reads as "not a draw", quietly putting every owner draw
+// back into the P&L as a cost. The one thing this column exists to prevent.
 const EXPENSE_SELECT =
-  '*, vendors(id, name), expense_categories(id, name, tax_deductible), jobs(id, title, scheduled_date)'
+  '*, vendors(id, name), expense_categories(id, name, tax_deductible, kind), jobs(id, title, scheduled_date)'
 
 export interface ExpenseFilters {
   /** Inclusive 'YYYY-MM-DD' bounds on spent_at. */
@@ -204,7 +265,11 @@ export async function listExpenses(
       .select(EXPENSE_SELECT)
       .eq('user_id', userId)
       .is('archived_at', null)
-      .order('spent_at', { ascending: false })
+      // bill_date, not spent_at: it's NOT NULL, so every row sorts — including
+      // unpaid bills, which have no cash date and would otherwise clump wherever
+      // Postgres puts NULLs. A total order also keeps pagination stable, and an
+      // unstable sort across .range() calls silently drops and duplicates rows.
+      .order('bill_date', { ascending: false })
       .order('id', { ascending: true })
       .range(from, to)
 
