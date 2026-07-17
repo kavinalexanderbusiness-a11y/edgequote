@@ -65,6 +65,8 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
   // owner pick). Lets "Send introduction" / "Review request" be one-tap entries into
   // THE same dialog instead of separate UIs.
   const [msgTemplate, setMsgTemplate] = useState<'choose' | MsgType | null>(null)
+  // Per-row "Message" — texting ONE customer used to require checkbox + bulk bar.
+  const [msgOne, setMsgOne] = useState<Customer | null>(null)
   const [busyKey, setBusyKey] = useState<string | null>(null)
 
   function matchesConsent(c: Customer): boolean {
@@ -300,6 +302,7 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
                   <FileText className="w-4 h-4" /> Quote
                 </Button>
                 <Menu align="end" width={220} items={[
+                  { key: 'message', label: 'Send a message', icon: MessageSquare, onSelect: () => setMsgOne(c) },
                   { key: 'portal', label: 'Copy portal link', icon: Link2, onSelect: () => copyPortal(c.id) },
                   { key: 'edit', label: 'Edit customer', icon: Edit2, onSelect: () => onEdit(c) },
                   // Archive, not delete — reversible (the undo toast restores it).
@@ -343,6 +346,9 @@ export function CustomerList({ customers, onEdit, onDelete, onRefresh, onAdd }: 
           defaultTemplate={msgTemplate === 'choose' ? undefined : msgTemplate}
           onClose={sent => { setMsgTemplate(null); if (sent) sel.clear() }}
         />
+      )}
+      {msgOne && (
+        <SendMessageDialog open customerId={msgOne.id} customerName={msgOne.name} onClose={() => setMsgOne(null)} />
       )}
     </div>
   )

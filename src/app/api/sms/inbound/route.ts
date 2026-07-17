@@ -65,9 +65,23 @@ export async function POST(req: NextRequest) {
     const convoId = (convo as { id: string } | null)?.id ?? null
     if (!convoId) { console.error('[sms/inbound] conversation upsert failed:', convoErr?.message); return twiml() }
 
+    // MMS media: Twilio posts NumMedia + MediaUrl0..N-1 (+ content types). The
+    // provider URLs are stored on the bubble's meta — Twilio keeps the files, we
+    // keep nothing — and the thread renders them through the session-authed
+    // /api/messages/media proxy (fetching Twilio media requires account
+    // credentials, so a raw <img src> could never load them).
+    const numMedia = Math.min(parseInt(params.NumMedia || '0', 10) || 0, 10)
+    const media: { url: string; type: string }[] = []
+    for (let i = 0; i < numMedia; i++) {
+      const u = params[`MediaUrl${i}`]
+      if (u) media.push({ url: u, type: params[`MediaContentType${i}`] || '' })
+    }
+
     const { error: msgErr } = await sb.from('messages').insert({
       user_id: c.user_id, conversation_id: convoId, customer_id: c.id,
-      direction: 'inbound', channel: 'sms', body: rawBody || '(empty)', twilio_sid: sid, status: 'received',
+      direction: 'inbound', channel: 'sms', body: rawBody || (media.length ? 'Photo attachment' : '(empty)'),
+      twilio_sid: sid, status: 'received',
+      ...(media.length ? { meta: { media } } : {}),
     })
     // 23505 = the messages_twilio_sid_key unique index rejected a re-delivered SID:
     // a Twilio retry of a message we already stored. Silently idempotent (no dup, no

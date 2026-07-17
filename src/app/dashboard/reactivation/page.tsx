@@ -19,6 +19,7 @@ import { Card, CardBody } from '@/components/ui/Card'
 import { StatTile } from '@/components/ui/StatTile'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { Skeleton, SkeletonTiles } from '@/components/ui/Skeleton'
+import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { Phone, MessageSquare, FileText, CalendarPlus, HeartPulse, DollarSign, Percent, TrendingUp, AlertTriangle, Repeat } from 'lucide-react'
 
 // No `is_initial_visit` — this page prices a first visit at the recurring rate
@@ -284,6 +285,7 @@ export default function ReactivationPage() {
 
 
 function RiskCard({ r }: { r: RiskCustomer }) {
+  const [msg, setMsg] = useState(false)
   const c = r.customer
   const phone = c.phone || null
   const months = Math.floor(r.daysSince / 30)
@@ -318,10 +320,13 @@ function RiskCard({ r }: { r: RiskCustomer }) {
             className={`h-10 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border transition-colors ${phone ? 'bg-accent/10 border-accent/20 text-accent-text hover:bg-accent/20' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}>
             <Phone className="w-4 h-4" /> Call
           </a>
-          <a href={phone ? `sms:${phone}` : undefined} aria-disabled={!phone}
-            className={`h-10 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border transition-colors ${phone ? 'bg-surface border-border text-ink hover:border-border-strong' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}>
-            <MessageSquare className="w-4 h-4" /> Text
-          </a>
+          {/* Through THE composer (not a raw sms: link) — so the win-back text is
+              consent-gated, threaded into the conversation, and in the send ledger. */}
+          <button type="button" onClick={() => setMsg(true)}
+            className="h-10 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border bg-surface border-border text-ink hover:border-border-strong transition-colors">
+            <MessageSquare className="w-4 h-4" /> Message
+          </button>
+          {msg && <SendMessageDialog open customerId={c.id} customerName={c.name} onClose={() => setMsg(false)} />}
           <Link href={`/dashboard/quotes/new?customer=${c.id}`}
             className="h-10 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border border-border bg-surface text-ink hover:border-border-strong transition-colors">
             <FileText className="w-4 h-4" /> Quote
@@ -354,6 +359,7 @@ function VipChip() {
 }
 
 function RanOutCard({ r }: { r: RanOutCustomer }) {
+  const [msg, setMsg] = useState(false)
   const c = r.customer
   const phone = c.phone || null
   const cadence = r.cadence === 'weekly' ? 'Weekly' : r.cadence === 'biweekly' ? 'Bi-weekly' : r.cadence === 'monthly' ? 'Monthly' : 'Recurring'
@@ -384,10 +390,11 @@ function RanOutCard({ r }: { r: RanOutCustomer }) {
             className={`h-10 rounded-xl flex items-center justify-center gap-1.5 text-xs font-medium border transition-colors ${phone ? 'bg-accent/10 border-accent/20 text-accent-text hover:bg-accent/20' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}>
             <Phone className="w-4 h-4" /> Call
           </a>
-          <a href={phone ? `sms:${phone}` : undefined} aria-disabled={!phone}
-            className={`h-10 rounded-xl items-center justify-center gap-1.5 text-xs font-medium border transition-colors hidden sm:flex ${phone ? 'bg-surface border-border text-ink hover:border-border-strong' : 'border-border text-ink-faint pointer-events-none opacity-40'}`}>
-            <MessageSquare className="w-4 h-4" /> Text
-          </a>
+          <button type="button" onClick={() => setMsg(true)}
+            className="h-10 rounded-xl items-center justify-center gap-1.5 text-xs font-medium border bg-surface border-border text-ink hover:border-border-strong transition-colors hidden sm:flex">
+            <MessageSquare className="w-4 h-4" /> Message
+          </button>
+          {msg && <SendMessageDialog open customerId={c.id} customerName={c.name} onClose={() => setMsg(false)} />}
         </div>
       </CardBody>
     </Card>
