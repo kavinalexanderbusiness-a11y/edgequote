@@ -21,10 +21,11 @@ import { getPropertyContext, type PropertyIntelligence } from '@/lib/ai/property
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { AssistButton } from '@/components/ai/ui'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { scrollBehavior } from '@/lib/motion'
 import {
-  Download, Images, Loader2, Wand2, Tag, BadgeCheck, AlertTriangle,
+  Download, Images, Loader2, Tag, BadgeCheck, AlertTriangle,
   SlidersHorizontal, RefreshCw, Layers, ShieldCheck, ChevronDown, ChevronUp, Camera,
   Brain, BookMarked, Crown, CalendarDays, Check,
 } from 'lucide-react'
@@ -657,11 +658,10 @@ export function BeforeAfterStudio() {
           ? `${pairs.length} ready-to-post pair${pairs.length !== 1 ? 's' : ''}`
           : 'Snap a before & after on a completed job to start'}
       action={!loading && pairs.length && !aiDisabled ? (
-        <Button variant="secondary" onClick={() => pickStrongest(unscored === 0)} loading={aiBusy}
-          title={unscored === 0 ? 'Re-run the AI on every pair' : 'Score the pairs the AI hasn’t scored yet'}>
-          {unscored === 0 ? <RefreshCw className="w-4 h-4" /> : <Wand2 className="w-4 h-4" />}
-          {unscored === 0 ? 'Re-score' : aiUsed ? 'Score more with AI' : 'Pick strongest with AI'}
-        </Button>
+        <AssistButton size="md" onClick={() => pickStrongest(unscored === 0)} busy={aiBusy}
+          title={unscored === 0 ? 'Re-run the AI on every pair' : 'Score the pairs the AI hasn’t scored yet'}
+          label={unscored === 0 ? 'Score again' : aiUsed ? 'Score more' : 'Pick the strongest'}
+          busyLabel="Scoring…" />
       ) : undefined}
     />
   )

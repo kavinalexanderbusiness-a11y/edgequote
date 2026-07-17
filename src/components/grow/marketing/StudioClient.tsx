@@ -9,6 +9,7 @@ import { Banner } from '@/components/ui/Banner'
 import { Card } from '@/components/ui/Card'
 import { Tabs, type TabItem } from '@/components/ui/Tabs'
 import { Button } from '@/components/ui/Button'
+import { AssistButton } from '@/components/ai/ui'
 import { Collapsible } from '@/components/ui/Collapsible'
 import { AssetCard } from './AssetCard'
 import { ContentComposer } from './ContentComposer'
@@ -17,7 +18,7 @@ import { CHANNELS } from '@/lib/marketing/channels'
 import { WRITING_STYLES } from '@/lib/marketing/styles'
 import { thumbUrl } from '@/lib/photos'
 import { formatDate } from '@/lib/utils'
-import { Images, Sparkles, Lightbulb, Wand2, SlidersHorizontal } from 'lucide-react'
+import { Images, Sparkles, Lightbulb, SlidersHorizontal } from 'lucide-react'
 import { DEFAULT_POST_OPTIONS, type ContentPiece, type GenerateAllResponse, type MarketingCandidate, type MarketingChannel, type PostOptions } from '@/lib/marketing/types'
 
 const CHANNEL_TABS: TabItem[] = CHANNELS.map(c => ({ key: c.key, label: c.label, icon: c.icon }))
@@ -215,9 +216,9 @@ export function StudioClient({ candidates, aiEnabled, businessName, logoUrl, use
             <Card className="p-4 space-y-3">
               <div className="flex items-center justify-between gap-3 flex-wrap">
                 <p className="text-sm font-semibold text-ink">Create posts</p>
-                <Button onClick={generateAll} loading={genAll} disabled={!aiEnabled} title={!aiEnabled ? "Add your Anthropic API key to enable AI generation" : undefined} className="shrink-0">
-                  <Wand2 className="w-4 h-4" /> Generate all platforms
-                </Button>
+                <AssistButton size="md" label="Write all platforms" busyLabel="Writing…" onClick={generateAll}
+                  busy={genAll} disabled={!aiEnabled}
+                  title={!aiEnabled ? 'Add your Anthropic API key to enable AI generation' : undefined} className="shrink-0" />
               </div>
               <Collapsible
                 title="Voice & length"

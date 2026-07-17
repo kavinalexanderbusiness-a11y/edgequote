@@ -9,7 +9,7 @@ import { SmsCost } from '@/components/comms/SmsCost'
 import { Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
 import { FilterPill } from '@/components/ui/FilterPill'
-import { AssistButton } from '@/components/ai/AssistButton'
+import { AssistButton, AiStop, AiError, AiNote, AI_CHECK_FIRST } from '@/components/ai/ui'
 import { useAiAssist } from '@/hooks/useAiAssist'
 import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
@@ -88,6 +88,9 @@ export function SendMessageDialog({
   // AI writer — drafts/rewrites INTO the editable box; sending still goes
   // through the same consent-gated route, so the model never sends anything.
   const ai = useAiAssist()
+  // Drives the "here's what it read" note: shown once this draft came from the
+  // assistant, not on a message the owner typed themselves.
+  const [aiTouched, setAiTouched] = useState(false)
   async function aiWrite(mode: 'draft' | 'rewrite') {
     if (busy || ai.running) return
     const prior = text
@@ -103,10 +106,11 @@ export function SendMessageDialog({
       jobId: jobId ?? undefined,
       vars: { ...vars, ...(needsEta && eta ? { timeWindow: `${eta} min ETA` } : {}) },
     }, { onDelta: d => setText(prev => prev + d) })
-    if (full === null) { setText(prior); return }   // error — restore, message shows below
+    if (full === null) { setText(prior); return }   // error or stopped — restore, message shows below
     setEdited(true)
     setOutcome(null)
-    if (prior.trim()) toast.undo('Replaced your message.', () => { setText(prior); setEdited(true) })
+    setAiTouched(true)
+    if (prior.trim()) toast.undo('Replaced your message.', () => { setText(prior); setEdited(true); setAiTouched(false) })
   }
 
   const offered = useMemo(() => {
@@ -293,17 +297,24 @@ export function SendMessageDialog({
               : <span />}
             {ai.enabled === true && (
               <div className="flex items-center gap-1.5 shrink-0">
-                <AssistButton label={ai.running ? 'Writing…' : 'Write with AI'} onClick={() => aiWrite('draft')} busy={ai.running} disabled={busy} />
+                <AssistButton label="Write" busyLabel="Writing…" onClick={() => aiWrite('draft')} busy={ai.running} disabled={busy} title="Write this message from what we know about them" />
                 {text.trim() !== '' && !ai.running && (
                   <AssistButton label="Polish" onClick={() => aiWrite('rewrite')} disabled={busy} title="Rewrite the current draft — keeps every fact, improves the wording" />
                 )}
+                {ai.running && <AiStop onClick={ai.cancel} />}
               </div>
             )}
           </div>
           <textarea value={text} onChange={e => { setText(e.target.value); setEdited(true); setOutcome(null) }} rows={6} aria-label="Message"
             placeholder="Write your message…"
             className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3.5 py-3 text-base sm:text-sm text-ink outline-none focus:border-accent resize-none" />
-          {ai.error && <p className="text-[11px] text-amber-400 mt-1" role="alert">{ai.error}</p>}
+          <AiError message={ai.error} className="mt-1" />
+          {ai.enabled === true && aiTouched && !ai.running && (
+            <AiNote className="mt-1" caution={AI_CHECK_FIRST}
+              explain={bulk
+                ? 'Written from your templates and services; names fill in per recipient at send time.'
+                : 'Written from this customer\'s history, balance and your recent messages.'} />
+          )}
           {ch.sms && <SmsCost text={text} recipients={chosen.length || 1} className="mt-1" />}
           {ch.email && custom !== null && (
             <p className="text-[11px] text-ink-muted mt-1 flex items-center gap-1.5">

@@ -1,9 +1,11 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/Button'
 import { Banner } from '@/components/ui/Banner'
+import { AssistButton, AiStop, AiError } from '@/components/ai/ui'
+import { readNdjson, isNdjson } from '@/lib/ai/stream'
 import { ChannelPreview } from './ChannelPreview'
 import { RewriteToolbar } from './RewriteToolbar'
 import { PublishPanel } from './PublishPanel'
@@ -13,7 +15,7 @@ import { lengthChars } from '@/lib/marketing/prompt'
 import { parseHashtags } from '@/lib/marketing/publishQueue'
 import { toast } from '@/lib/toast'
 import { cn } from '@/lib/utils'
-import { Sparkles, RefreshCw, ImageOff, Lock, Loader2, Gauge, Pencil, Eye } from 'lucide-react'
+import { Sparkles, ImageOff, Lock, Loader2, Gauge, Pencil, Eye } from 'lucide-react'
 import { DEFAULT_POST_OPTIONS, type ContentPiece, type MarketingCandidate, type MarketingChannel, type PostOptions, type PostText, type QualityScore, type RewriteAction, type RewriteResponse } from '@/lib/marketing/types'
 
 // The deterministic quality score lives on the saved piece's meta.
@@ -45,6 +47,10 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
   // The on-screen char target tracks the chosen length + this platform.
   const charTarget = lengthChars(ch, options.length)
   const showHashtagField = def.usesHashtags && options.hashtags
+
+  const abortRef = useRef<AbortController | null>(null)
+  // Never leave a generation running against an unmounted composer.
+  useEffect(() => () => abortRef.current?.abort(), [])
 
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
@@ -100,13 +106,19 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
     const prior = body.trim() ? { title, body, hashtagsText } : null
     setGenError(null); setStreaming(true); setPolishing(false)
     setTitle(''); setBody(''); setHashtagsText('')
+    // Stopping a generation you can already see is going wrong is the one thing
+    // every AI surface in the app was missing. Same control, same word, as the
+    // assist surfaces.
+    const controller = new AbortController()
+    abortRef.current = controller
+    let stopped = false
     try {
       const res = await fetch('/api/marketing/generate/stream', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ jobId: candidate.jobId, channel: ch, options }),
+        signal: controller.signal,
       })
-      const ct = res.headers.get('content-type') || ''
-      if (!res.ok || !ct.includes('ndjson') || !res.body) {
+      if (!isNdjson(res)) {
         // Disabled / error came back as plain JSON — surface it, then try the fallback.
         let msg = 'Could not generate that post.'
         try { const j = await res.json(); if (j?.error) msg = j.error } catch { /* ignore */ }
@@ -114,35 +126,29 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
         if (!ok) setGenError(msg)
         return
       }
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buf = ''
       let sawDelta = false
       let finished = false
-      while (!finished) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buf += decoder.decode(value, { stream: true })
-        let nl: number
-        while ((nl = buf.indexOf('\n')) !== -1) {
-          const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1)
-          if (!line) continue
-          let evt: { t: string; text?: string; piece?: ContentPiece; error?: string }
-          try { evt = JSON.parse(line) } catch { continue }
-          if (evt.t === 'delta' && evt.text) { sawDelta = true; setBody(prev => prev + evt.text) }
-          else if (evt.t === 'polishing') { setPolishing(true) }
-          else if (evt.t === 'done' && evt.piece) { applyPiece(evt.piece); onDraftChange?.(evt.piece); finished = true }
-          else if (evt.t === 'error') {
-            if (!sawDelta && await fallbackGenerate()) { finished = true; break }
-            setGenError(evt.error || 'Generation failed.'); finished = true
-          }
+      await readNdjson(res, async evt => {
+        if (finished) return
+        const piece = evt.piece as ContentPiece | undefined
+        if (evt.t === 'delta' && evt.text) { sawDelta = true; setBody(prev => prev + evt.text) }
+        else if (evt.t === 'polishing') { setPolishing(true) }
+        else if (evt.t === 'done' && piece) { applyPiece(piece); onDraftChange?.(piece); finished = true }
+        else if (evt.t === 'error') {
+          if (!sawDelta && await fallbackGenerate()) { finished = true; return }
+          setGenError(evt.error || 'Generation failed.'); finished = true
         }
-      }
-    } catch {
-      if (!await fallbackGenerate()) setGenError('Could not reach the generator. Try again.')
+      })
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        // Stopped on purpose: put back exactly what was there, say nothing.
+        stopped = true
+        setTitle(prior?.title ?? ''); setBody(prior?.body ?? ''); setHashtagsText(prior?.hashtagsText ?? '')
+      } else if (!await fallbackGenerate()) setGenError('Could not reach the generator. Try again.')
     } finally {
+      abortRef.current = null
       setStreaming(false); setPolishing(false)
-      if (prior) toast.undo('Replaced your caption.', () => {
+      if (prior && !stopped) toast.undo('Replaced your caption.', () => {
         setTitle(prior.title); setBody(prior.body); setHashtagsText(prior.hashtagsText)
         persist({ title: prior.title.trim() || null, body: prior.body.trim(), hashtags: parseHashtags(prior.hashtagsText) })
       })
@@ -185,11 +191,13 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
         <p className="text-sm text-ink-muted max-w-xs mx-auto">
           Draft a {def.label} post for this job in your brand voice — ready to review and post.
         </p>
-        <Button variant="secondary" onClick={runGenerate} disabled={!aiEnabled}>
-          <Sparkles className="w-4 h-4" /> Generate {def.label} post
-        </Button>
+        <div className="flex items-center justify-center gap-1.5">
+          <AssistButton size="md" label={`Write ${def.label} post`} busyLabel="Writing…"
+            onClick={runGenerate} busy={streaming} disabled={!aiEnabled} />
+          {streaming && <AiStop onClick={() => abortRef.current?.abort()} />}
+        </div>
         {!aiEnabled && <p className="text-[11px] text-ink-faint">Add your Anthropic key to turn on generation.</p>}
-        {genError && <p className="text-xs text-red-400">{genError}</p>}
+        <AiError message={genError} className="text-center" />
       </div>
     )
   }
@@ -253,10 +261,12 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
           />
         )}
         <div className="flex items-center gap-3 flex-wrap">
-          <Button variant="secondary" size="sm" onClick={runGenerate} loading={streaming} disabled={!aiEnabled} title={!aiEnabled ? "Add your Anthropic API key to enable AI generation" : undefined}>
-            <RefreshCw className="w-3.5 h-3.5" /> Regenerate
-          </Button>
+          <AssistButton label="Try again" busyLabel="Writing…" onClick={runGenerate} busy={streaming}
+            disabled={!aiEnabled} title={!aiEnabled ? 'Add your Anthropic API key to enable AI generation' : undefined} />
+          {(streaming || rewriting) && <AiStop onClick={() => abortRef.current?.abort()} />}
           <span className="text-[11px] text-ink-faint inline-flex items-center gap-1.5">
+            {/* "Polishing" is a real, distinct state — the generator silently
+                rewrites a weak draft — so it keeps its own words. */}
             {polishing ? <><Sparkles className="w-3 h-3 text-accent-text animate-pulse" /> Polishing for quality…</>
               : streaming ? <><Loader2 className="w-3 h-3 animate-spin" /> Writing…</>
               : rewriting ? <><Loader2 className="w-3 h-3 animate-spin" /> Rewriting…</>
@@ -312,7 +322,7 @@ export function ContentComposer({ candidate, ch, draft, aiEnabled, businessName,
         />
       </div>
 
-      {genError && <Banner tone="danger" onDismiss={() => setGenError(null)}>{genError}</Banner>}
+      <AiError message={genError} />
 
       {/* Photo consent gate */}
       {imageUrl && !candidate.photoConsent && (

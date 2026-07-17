@@ -18,7 +18,7 @@ import { StickyActionBar } from '@/components/ui/StickyActionBar'
 import { Banner } from '@/components/ui/Banner'
 import { Collapsible } from '@/components/ui/Collapsible'
 import { Modal } from '@/components/ui/Modal'
-import { AssistButton } from '@/components/ai/AssistButton'
+import { AssistButton, AiStop, AiUndo, AiError, AiNote, AI_CHECK_FIRST } from '@/components/ai/ui'
 import { useAiAssist } from '@/hooks/useAiAssist'
 import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
 import { sumServiceLines, serviceLineTotals, emptyServiceLine, SERVICE_UNITS } from '@/lib/quoteServices'
@@ -178,6 +178,9 @@ export function QuoteBuilder({
   const notes = watch('notes')
   // AI scope writer for the Notes field — words only; pricing never comes from it.
   const aiScope = useAiAssist()
+  // What the field held before the assistant replaced it — powers Undo, and
+  // doubles as "this text came from the assistant" for the explanation note.
+  const [aiScopePrior, setAiScopePrior] = useState<string | null>(null)
   const measuredSqft = Number(watch('measured_sqft')) || 0
 
   // Smart Price Guardrails — per-cadence, never-block warnings (measured lawn +
@@ -1037,9 +1040,11 @@ export function QuoteBuilder({
             <Textarea label="Notes" placeholder="Job-specific details, access instructions, gate codes…"
               {...register('notes')} />
             {aiScope.enabled === true && (
-              <div className="flex items-center gap-2 mt-2">
+              <div className="mt-2 space-y-1.5">
+              <div className="flex items-center gap-1.5">
                 <AssistButton
-                  label={aiScope.running ? 'Writing…' : notes && String(notes).trim() ? 'Polish into scope notes' : 'Write scope notes'}
+                  label={notes && String(notes).trim() ? 'Polish' : 'Write'}
+                  busyLabel="Writing…"
                   busy={aiScope.running}
                   title="Turns the services on this quote (and your rough notes) into customer-ready scope-of-work text — never touches pricing"
                   onClick={async () => {
@@ -1058,9 +1063,22 @@ export function QuoteBuilder({
                       address: address || undefined,
                       draft: prior,
                     }, { onDelta: d => setValue('notes', String(watch('notes') || '') + d) })
-                    if (full === null) setValue('notes', prior)
+                    if (full === null) { setValue('notes', prior); return }
+                    setAiScopePrior(prior)
+                    // This field's replace is destructive and had no way back —
+                    // the composer had undo, the two Notes fields did not.
+                    if (prior.trim()) toast.undo('Replaced your notes.', () => { setValue('notes', prior); setAiScopePrior(null) })
                   }} />
-                {aiScope.error && <p className="text-xs text-amber-400" role="alert">{aiScope.error}</p>}
+                {aiScope.running && <AiStop onClick={aiScope.cancel} />}
+                {!aiScope.running && aiScopePrior !== null && (
+                  <AiUndo onClick={() => { setValue('notes', aiScopePrior); setAiScopePrior(null) }} />
+                )}
+              </div>
+              <AiError message={aiScope.error} />
+              {!aiScope.running && aiScopePrior !== null && (
+                <AiNote caution={AI_CHECK_FIRST}
+                  explain="Written from this quote's line items and your notes on them, plus what you've done for this customer before. It never sees or states a price." />
+              )}
               </div>
             )}
           </Collapsible>
