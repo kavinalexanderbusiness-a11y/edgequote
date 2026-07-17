@@ -243,7 +243,11 @@ export function DayOpsPanel({
     }
     return out
   })()
-  const totalMin = active.reduce((s, j) => s + (j.duration_minutes || 0), 0)
+  // Same coalesce as laborTotalMin below (and dayLoad, and the ETA chain): unknown
+  // duration = DEFAULT_JOB_MIN, not 0. These two totals describe the same day, so
+  // they must not disagree — with `|| 0` the work chip vanished on exactly the days
+  // dayLoad still counted as 45 min of work apiece.
+  const totalMin = active.reduce((s, j) => s + (j.duration_minutes || DEFAULT_JOB_MIN), 0)
   const totalRevenue = active.reduce((s, j) => s + jobTotal(j), 0)
   const revenueCompleted = completed.reduce((s, j) => s + jobTotal(j), 0)
   const revenueRemaining = remaining.reduce((s, j) => s + jobTotal(j), 0)
