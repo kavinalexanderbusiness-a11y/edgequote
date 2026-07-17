@@ -42,11 +42,11 @@
     },
     {
       "path": "/api/cron/scheduled-messages",
-      "schedule": "*/10 * * * *"
+      "schedule": "0 15 * * *"
     },
     {
       "path": "/api/cron/integrations",
-      "schedule": "*/10 * * * *"
+      "schedule": "30 15 * * *"
     }
   ]
 }
