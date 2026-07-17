@@ -19,7 +19,7 @@ import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { QuoteIntelligencePanel } from '@/components/quotes/QuoteIntelligencePanel'
 import { formatCurrency, formatDate, applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
 import { nextInvoiceNumber } from '@/lib/invoicing'
-import { isQuoteExpired, isExpiringSoon, daysUntilExpiry, defaultValidUntil, markSentPatch, DEFAULT_QUOTE_VALID_DAYS } from '@/lib/quoteStatus'
+import { isQuoteExpired, isExpiringSoon, daysUntilExpiry, defaultValidUntil, markSentPatch, sendBlockedReason, sendBlockedLabel, DEFAULT_QUOTE_VALID_DAYS } from '@/lib/quoteStatus'
 import { toast } from '@/lib/toast'
 import { addDays, format as formatDfn, parseISO } from 'date-fns'
 import { needsFollowUp, daysSince, logFollowUpPatch, markWonPatch } from '@/lib/followup'
@@ -267,6 +267,18 @@ export default function QuoteDetailPage() {
   // (stamping sent_at arms the follow-up clock) — instead of two separate steps.
   async function handleSendQuote() {
     if (!quote) return
+    // A document with no price is broken whoever receives it — and until
+    // RUN-2026-07-16e the DB hid that by inventing hours × crew_size × rate. Blocked
+    // BEFORE the PDF renders: a $0.00 quote on your phone is one tap from a customer.
+    //
+    // Only the price blocks here, deliberately. This hands the PDF to YOUR device, so
+    // a quote with no customer linked is a real thing to do — a walk-up you price at
+    // the door. Delivery is where a customer becomes mandatory, and that's guarded at
+    // the composer below.
+    if (sendBlockedReason(quote) === 'no_price') {
+      toast.error(sendBlockedLabel('no_price'))
+      return
+    }
     const delivered = await handleOpenPdf()
     if (!delivered) return   // PDF failed → never claim (or record) that it was sent
     if (quote.status === 'draft') {

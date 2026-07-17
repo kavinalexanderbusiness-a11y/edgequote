@@ -97,3 +97,44 @@ export function markSentPatch(
     ...(q.valid_until ? {} : { valid_until: defaultValidUntil(todayISO) }),
   }
 }
+
+// ── Can this quote go to a customer at all? ──────────────────────────────────
+// Quote V2 Phase 0. A quote with no price could be saved AND sent: `hours` defaults
+// to 0 (meaning "not estimated"), `initial_price` has no `required`, and the only
+// `total > 0` check in the app lived at INVOICING — long after the customer had seen
+// the document. The generated column used to paper over it by inventing
+// hours × crew_size × rate; now that it can't (RUN-2026-07-16e), an unpriced quote
+// has no total, and this is what stops that reaching anyone.
+//
+// SEND, not SAVE. A draft without a price is legitimate work-in-progress — the whole
+// point of a draft. A quote in a customer's hands without a price is not a quote.
+// The line belongs at the door, not at the desk.
+//
+// Pure and reason-bearing, the shape lib/comms/reach.ts established: it owns the
+// REASON, so every surface can explain the refusal identically instead of each
+// inventing its own message.
+export type SendableQuote = { total?: number | null; customer_id?: string | null }
+
+export type SendBlock = 'no_price' | 'no_customer'
+
+/** Why this quote cannot be sent — null when it can. */
+export function sendBlockedReason(q: SendableQuote): SendBlock | null {
+  // A customerless quote can't be delivered, chased or shown in a portal. Four such
+  // rows exist live, one with work already scheduled.
+  if (!q.customer_id) return 'no_customer'
+  // `null` (no price) and `0` are both blocked, and deliberately share a branch: to a
+  // customer receiving it, "$0.00" and "no price" are the same broken document.
+  if (q.total == null || Number(q.total) <= 0) return 'no_price'
+  return null
+}
+
+export function canSendQuote(q: SendableQuote): boolean {
+  return sendBlockedReason(q) === null
+}
+
+/** Plain words for the block — what to DO, not what went wrong. */
+export function sendBlockedLabel(r: SendBlock): string {
+  return r === 'no_price'
+    ? 'This quote has no price yet — add one before sending it.'
+    : 'This quote has no customer linked — add one so it can be sent and followed up.'
+}

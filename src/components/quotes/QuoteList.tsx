@@ -10,7 +10,7 @@ import { formatCurrency, formatDate, generateQuoteNumber, localTodayISO, maxNume
 import { needsFollowUp, daysSince, compareFollowUp, chaseBlockedReason } from '@/lib/followup'
 import type { ReachCustomer } from '@/lib/comms/reach'
 import { describeSkip } from '@/lib/comms/skipReasons'
-import { isQuoteExpired, markSentPatch } from '@/lib/quoteStatus'
+import { isQuoteExpired, markSentPatch, canSendQuote, sendBlockedReason, sendBlockedLabel } from '@/lib/quoteStatus'
 import { QuoteStatusControl } from '@/components/quotes/QuoteStatusControl'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -114,8 +114,18 @@ export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
   // pipeline) and arms the follow-up clock (draft → sent + sent_at).
   async function bulkSend() {
     const supabase = createClient()
-    const targets = sel.selectedItems.filter(q => q.customer_id)
-    if (!targets.length) { toast.error('None of the selected quotes have a linked customer.'); return }
+    // THE shared gate (lib/quoteStatus) rather than a local `.filter(q => q.customer_id)`
+    // — it also catches the priceless ones, which this used to send happily. Now that
+    // the DB no longer fabricates a total (RUN-2026-07-16e), an unpriced quote reads
+    // $0.00, and $0.00 is not a document you send to a customer.
+    const targets = sel.selectedItems.filter(canSendQuote)
+    const blocked = sel.selectedItems.length - targets.length
+    if (!targets.length) {
+      toast.error(sel.selectedItems.length === 1
+        ? sendBlockedLabel(sendBlockedReason(sel.selectedItems[0])!)
+        : 'None of the selected quotes can be sent — they need a price and a linked customer.')
+      return
+    }
     setBusyKey('send')
     let sent = 0, skipped = 0
     for (const q of targets) {
@@ -141,7 +151,13 @@ export function QuoteList({ quotes, onDelete, reachById }: QuoteListProps) {
       } catch { skipped++ }
     }
     setBusyKey(null); sel.clear(); router.refresh()
-    toast.success(`Quote sent to ${sent} customer${sent !== 1 ? 's' : ''}${skipped ? ` · ${skipped} skipped (no opt-in/contact)` : ''}.`)
+    // Report what happened to ALL of them, including the ones the gate refused — a
+    // count that quietly omits the blocked ones reads as success.
+    const parts = [
+      skipped ? `${skipped} skipped (no opt-in/contact)` : '',
+      blocked ? `${blocked} not sendable (no price or customer)` : '',
+    ].filter(Boolean)
+    toast.success(`Quote sent to ${sent} customer${sent !== 1 ? 's' : ''}${parts.length ? ` · ${parts.join(' · ')}` : ''}.`)
   }
 
   // Convert to invoice: eligible (accepted/scheduled/completed) + not already

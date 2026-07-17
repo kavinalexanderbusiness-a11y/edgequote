@@ -25,7 +25,7 @@ import { sendSms, sendEmail } from '@/lib/comms/send'
 import { runChaseCron, type ChaseItem, type ChaseTally } from '@/lib/automation/chase'
 import { SKIP_REASON, describeSkip } from '@/lib/comms/skipReasons'
 import { canChaseCustomer, chaseBlockedReason, markWonPatch } from '@/lib/followup'
-import { markSentPatch } from '@/lib/quoteStatus'
+import { markSentPatch, canSendQuote, sendBlockedReason, sendBlockedLabel } from '@/lib/quoteStatus'
 import { cadenceDays, churnRisk, type CadenceRecLike } from '@/lib/signals'
 import {
   buildTimeline, filterTimeline, searchTimeline, timelineForProperty, timelineGroupCounts,
@@ -965,6 +965,28 @@ async function run() {
     check('sent', 'the written expiry is the one displayQuoteStatus honours',
       isQuoteExpired({ status: 'sent', valid_until: String(fresh.valid_until) }, '2026-08-16'), true)
     check('sent', '➜ and it is still live the day before', isQuoteExpired({ status: 'sent', valid_until: String(fresh.valid_until) }, '2026-08-14'), false)
+  }
+
+  // ── 28d. THE SEND GATE — a priceless document never reaches a customer ──────
+  // Quote V2 Phase 0. `hours` defaults to 0, `initial_price` has no `required`, and
+  // the app's only `total > 0` check lived at INVOICING — long after the customer saw
+  // the document. The generated column papered over it by inventing
+  // hours × crew_size × rate; now that it can't, this is what stops $0.00 going out.
+  H('28d. Send gate — no price, no customer, no send')
+  {
+    check('send', 'a priced quote with a customer can be sent', canSendQuote({ total: 65, customer_id: 'c1' }), true)
+    // null and 0 share a branch deliberately: to the customer receiving it, "$0.00"
+    // and "no price" are the same broken document.
+    check('send', 'a null total is blocked', sendBlockedReason({ total: null, customer_id: 'c1' }), 'no_price')
+    check('send', '➜ and so is $0 — same document to the person reading it', sendBlockedReason({ total: 0, customer_id: 'c1' }), 'no_price')
+    check('send', '➜ and a negative', sendBlockedReason({ total: -5, customer_id: 'c1' }), 'no_price')
+    // A customerless quote can't be delivered, chased, or shown in a portal. Four such
+    // rows exist live, one with work already scheduled.
+    check('send', 'a customerless quote is blocked', sendBlockedReason({ total: 65, customer_id: null }), 'no_customer')
+    check('send', 'a good quote reports no reason', sendBlockedReason({ total: 65, customer_id: 'c1' }), null)
+    // The blocks must say what to DO — a refusal the owner can't act on is a wall.
+    check('send', 'the price block names the fix', sendBlockedLabel('no_price').includes('add one'), true)
+    check('send', 'the customer block names the fix', sendBlockedLabel('no_customer').includes('add one'), true)
   }
 
   // ── 29a. THE ACCEPT SNAPSHOT — record what was bought, or record nothing ─────

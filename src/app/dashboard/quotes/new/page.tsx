@@ -121,8 +121,22 @@ export default function NewQuotePage() {
       createdCustomer = ensured.createdCustomer
       matchedBy = ensured.matchedBy
     } catch {
-      const c = customers.find(c => c.id === values.customer_id)
-      if (c) customerName = c.name
+      // This catch used to swallow the failure: it recovered the display NAME, left
+      // customerId null, and let the insert proceed — manufacturing a quote that can
+      // never reach anyone. An orphan can't be sent (the Send card is gated on
+      // customer_id), can't be chased (the cron filters on it), and has no portal. The
+      // comment four lines up promises "no orphans"; this is what broke that promise.
+      //
+      // FOUR live rows came from here, one ("Danika bray", $66.95) with work already
+      // scheduled against a quote that has no customer — and one whose customer NAME is
+      // a phone number, which is what a half-recovered save looks like from the outside.
+      //
+      // So: stop. Returning leaves the builder's own form state intact with everything
+      // the owner typed — the same choice handleSaveEdit makes on a failed write —
+      // because a lost draft is recoverable in ten seconds and a silent orphan is not
+      // recoverable at all.
+      toast.error('Could not link this quote to a customer — nothing was saved. Check your connection and press Save again.')
+      return
     }
 
     const mult = Number(values.overgrowth_multiplier) || 1
