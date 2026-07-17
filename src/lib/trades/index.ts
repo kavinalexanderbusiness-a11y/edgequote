@@ -14,12 +14,20 @@ import { CATALOG_PACKS } from './catalog'
 // Order here is picker order: the founding trade first, then the named trades
 // alphabetically, "General field service" last as the catch-all.
 
-export type { TradePack, TradeService, TradeSeason, TradeSeasonalCampaign, TradePricingDisplay } from './types'
+export type { TradePack, TradeService, TradeSeason, TradeSeasonalCampaign, TradeAddon, TradePricingDisplay } from './types'
 export { LAWN_PACK } from './lawn'
 export { NEUTRAL_PACK } from './neutral'
 
-/** What business_settings.business_type defaults to — the founding trade. */
-export const DEFAULT_BUSINESS_TYPE = 'lawn_landscaping'
+/** What business_settings.business_type defaults to when a row is created
+ *  WITHOUT an explicit choice. Was 'lawn_landscaping' until 2026-07-16: the
+ *  founding-trade default was right for the migration backfill (every row that
+ *  existed then WAS the founding lawn business — those rows keep their stored
+ *  value), but as an ongoing default it silently branded any row minted by a
+ *  side path (booking-token upsert, a settings save racing the first-run gate)
+ *  as a lawn company. The default is now the fail-safe: neutral, like every
+ *  other unknown in this registry. /setup always writes the type explicitly —
+ *  this default should never be what a real business ends up with. */
+export const DEFAULT_BUSINESS_TYPE = 'general'
 
 export const TRADE_PACKS: TradePack[] = [
   LAWN_PACK,

@@ -50,6 +50,15 @@ export interface TradeSeason {
   endDay: number
 }
 
+/** A quick-add add-on chip for the field add-on editor (JobAddons). Structurally
+ *  identical to AddonTemplate in types/index.ts — mirrored, not imported, so this
+ *  module stays import-free. Keys are stable BI identifiers: never rename one. */
+export interface TradeAddon {
+  key: string
+  label: string
+  recurringByDefault?: boolean
+}
+
 /** A ready-made yearly campaign → offered as a preset in the campaign studio.
  *  Structurally identical to lib/crm/campaigns.ts' SeasonalTemplate. */
 export interface TradeSeasonalCampaign {
@@ -78,6 +87,11 @@ export interface TradePack {
   seasons: Record<string, TradeSeason>
   /** Campaign-studio presets. Empty = fall back to the neutral pack's. */
   seasonalCampaigns: TradeSeasonalCampaign[]
+  /** Quick-add chips for the field add-on editor. Same fallback contract as
+   *  seasonalCampaigns: empty = the consumer uses the neutral pack's chips.
+   *  These are UI defaults only — the owner types anything via 'custom', and
+   *  every list must include the 'custom' key (the editor special-cases it). */
+  addons: TradeAddon[]
   /** Suggested business_settings.enabled_modules (registry: lib/modules.ts).
    *  Undefined = suggest nothing → the business sees every module, today's
    *  behaviour. Deliberately unpopulated in Phase 2 — the seam exists, the

@@ -97,10 +97,39 @@ H('2. GOLDEN — the lawn pack IS today\'s seasonal campaign presets')
 check('five presets, byte-identical to SEASONAL_TEMPLATES (keys, dates, copy, channels)',
   LAWN_PACK.seasonalCampaigns, SEASONAL_TEMPLATES)
 
+// The founding add-on chips, pinned as literals (they were types/index.ts'
+// ADDON_TEMPLATES until 2026-07-16): a lawn business's add-on editor must not
+// change, and these keys are stable BI identifiers.
+check('lawn add-on chips are the founding list verbatim',
+  LAWN_PACK.addons, [
+    { key: 'fertilizer', label: 'Fertilizer', recurringByDefault: true },
+    { key: 'weed_control', label: 'Weed Control', recurringByDefault: true },
+    { key: 'mulch', label: 'Mulch' },
+    { key: 'spring_cleanup', label: 'Spring Cleanup' },
+    { key: 'fall_cleanup', label: 'Fall Cleanup' },
+    { key: 'shrub_trimming', label: 'Shrub Trimming' },
+    { key: 'aeration', label: 'Aeration' },
+    { key: 'overseeding', label: 'Overseeding' },
+    { key: 'hauling', label: 'Hauling' },
+    { key: 'custom', label: 'Custom' },
+  ])
+// Every pack either brings its own chips or falls back to neutral's — and any
+// list that exists must carry 'custom' (the editor's free-text escape hatch).
+check('neutral add-on chips exist (the fallback can never be an empty strip)',
+  NEUTRAL_PACK.addons.length > 0, true)
+check('every non-empty chip list includes the custom escape hatch',
+  TRADE_PACKS.filter(p => p.addons.length > 0 && !p.addons.some(a => a.key === 'custom')).map(p => p.key), [])
+check('chip keys are unique within each pack',
+  TRADE_PACKS.filter(p => new Set(p.addons.map(a => a.key)).size !== p.addons.length).map(p => p.key), [])
+
 // ═══════════════════════════════════════════════════════════════════════════
 H('3. REGISTRY — lookup fails safe, keys fit the DB constraint')
-check('DEFAULT_BUSINESS_TYPE is the founding trade', DEFAULT_BUSINESS_TYPE, 'lawn_landscaping')
-check('the default resolves to the lawn pack', tradePack(DEFAULT_BUSINESS_TYPE) === LAWN_PACK, true)
+// The default is the FAIL-SAFE, not the founding trade (changed 2026-07-16): a
+// row created without an explicit choice must land neutral, never lawn-branded.
+// Existing rows are untouched — the backfill stored 'lawn_landscaping' physically.
+check('DEFAULT_BUSINESS_TYPE is the neutral fail-safe', DEFAULT_BUSINESS_TYPE, 'general')
+check('the default resolves to the neutral pack', tradePack(DEFAULT_BUSINESS_TYPE) === NEUTRAL_PACK, true)
+check('the founding key still resolves to the lawn pack (every backfilled row)', tradePack('lawn_landscaping') === LAWN_PACK, true)
 check('unknown key → neutral pack, never a crash, never lawn copy', tradePack('cryptozoology') === NEUTRAL_PACK, true)
 check('null → neutral', tradePack(null) === NEUTRAL_PACK, true)
 check('undefined → neutral', tradePack(undefined) === NEUTRAL_PACK, true)
@@ -185,6 +214,7 @@ const ALLOWED_IMPORTERS: string[] = [
   'lib/onboarding/seed.ts',              // THE seeding path — fills emptiness only
   'app/setup/page.tsx',                  // first-run wizard + safe-reseed surface
   'components/grow/CampaignManager.tsx', // seasonal preset MENU comes from the pack
+  'app/dashboard/schedule/page.tsx',     // add-on quick-CHIPS come from the pack (UI defaults only)
 ]
 // Paths that may NEVER import lib/trades, whatever the allowlist claims.
 // This is the "no engine branches on trade" rule as code.

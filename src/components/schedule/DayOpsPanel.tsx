@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { toast } from '@/lib/toast'
 import { confirm } from '@/lib/confirm'
 import { createClient } from '@/lib/supabase/client'
-import { Job, JobStatus, JobRecurrence, JobLineItem, RecurrenceScope, PRICE_REASONS, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
+import { Job, JobStatus, JobRecurrence, JobLineItem, RecurrenceScope, AddonTemplate, PRICE_REASONS, JOB_STATUS_LABELS, JOB_STATUS_COLORS } from '@/types'
 import { Coord } from '@/lib/geo'
 import { RouteStop, OrderedRouteStop, geocodeMissingStops, optimizeRoute, nearestNeighborRoute, sequenceRoute, roundTripMapsUrl, MAX_MAPS_WAYPOINTS, routeStats, directionsUrl, computeDayEtas, roughFinishEstimate, dayLoad, minutesToTime12, timeToMinutes, DEFAULT_JOB_MIN } from '@/lib/route'
 import { loadTravelModel, DEFAULT_TRAVEL_MODEL, type TravelModel } from '@/lib/travelLearning'
@@ -62,6 +62,9 @@ interface Props {
   // The previous visit's add-ons (for the one-tap "copy previous" action).
   getPreviousAddons: (job: Job) => { description: string; amount: number; serviceKey: string }[]
   onCopyPreviousAddons: (job: Job) => Promise<void>
+  // Quick-add chips for the add-on editor, resolved from the business's trade
+  // pack by the page — passed through untouched.
+  addonTemplates: AddonTemplate[]
 }
 
 export interface QuickPatch {
@@ -76,7 +79,7 @@ export interface QuickPatch {
 export function DayOpsPanel({
   date, dateLabel, jobs, quotesById, recurrences, baseCoord,
   onOpenJob, onStartJob, onMarkDone, onMove, onSetPrice, workStartTime, capacityHours, onRainDelay, onAddJob, onQuickSave,
-  addonsByJobId, onAddLineItem, onDeleteLineItem, getPreviousAddons, onCopyPreviousAddons,
+  addonsByJobId, onAddLineItem, onDeleteLineItem, getPreviousAddons, onCopyPreviousAddons, addonTemplates,
 }: Props) {
   const supabase = createClient()
   // Guards Start/Complete against a double-tap (which would double-stamp the job
@@ -969,6 +972,7 @@ export function DayOpsPanel({
                             onDelete={onDeleteLineItem}
                             previousAddons={getPreviousAddons(job)}
                             onCopyPrevious={() => onCopyPreviousAddons(job)}
+                            addonTemplates={addonTemplates}
                           />
                         </div>
                       )}

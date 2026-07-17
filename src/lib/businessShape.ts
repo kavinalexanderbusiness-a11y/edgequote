@@ -6,12 +6,15 @@ import { serviceCategory } from '@/lib/seasons'
 // HVAC tech, a cleaner, a roofer. Those trades have no lawn, and a plumber
 // should not be asked for a lawn size.
 //
-// Nobody is ever ASKED which trade they are. There is no business_type column,
-// no enum, no picker, and nothing here is written to the database — this module
-// is pure derivation from rows the account already has. That is deliberate: an
-// industry someone typed once is a fact that rots, while a catalogue and a job
-// list are what the business is actually doing this week. A stored type would
-// also be a lie the day a lawn company adds snow removal.
+// A business_type column DOES exist (multi-industry foundation: /setup asks it
+// once) — but it is a SEED-TIME hint only: it selects which trade pack seeds the
+// starter catalogue and which preset menus a page offers. RUNTIME behaviour never
+// reads it, and this module is the reason it doesn't have to: everything here is
+// pure derivation from rows the account already has, and nothing is written to
+// the database. That split is deliberate: an industry someone picked once is a
+// fact that rots, while a catalogue and a job list are what the business is
+// actually doing this week. A stored type consulted at runtime would also be a
+// lie the day a lawn company adds snow removal — the evidence here wouldn't.
 //
 // The classification of a service NAME is not done here. It is done by
 // serviceCategory() in lib/seasons.ts — the one matcher that already exists.

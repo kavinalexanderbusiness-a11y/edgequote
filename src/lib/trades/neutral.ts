@@ -64,4 +64,15 @@ Wishing you and your family a wonderful holiday.
 — {{business_name}}`,
     },
   ],
+
+  // Quick-add chips that fit any trade — surcharges and extras, not lawn work.
+  // Every pack with `addons: []` falls back to this list. 'hauling' reuses the
+  // founding key (same concept, BI continuity); 'custom' is required by the editor.
+  addons: [
+    { key: 'extra_work', label: 'Extra work' },
+    { key: 'materials', label: 'Materials' },
+    { key: 'hauling', label: 'Haul-away' },
+    { key: 'travel_surcharge', label: 'Travel surcharge' },
+    { key: 'custom', label: 'Custom' },
+  ],
 }

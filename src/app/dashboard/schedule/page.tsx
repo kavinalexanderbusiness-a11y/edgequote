@@ -3,7 +3,10 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Customer, Job, JobFormValues, JobLineItem, Quote, RecurrenceScope, RecurUnit } from '@/types'
+import { AddonTemplate, Customer, Job, JobFormValues, JobLineItem, Quote, RecurrenceScope, RecurUnit } from '@/types'
+// UI defaults only (add-on quick-chips) — engines never import lib/trades; this
+// page is on verify:trades' reviewed allowlist for exactly this consumption.
+import { tradePack, NEUTRAL_PACK } from '@/lib/trades'
 import { listLineItemsByJob, addLineItems, deleteLineItem, recordPriceChange, addonsTotal, normalizeServiceKey } from '@/lib/jobPricing'
 import { Calendar, CalendarView } from '@/components/schedule/Calendar'
 import { DayOpsPanel, QuoteLite, QuickPatch } from '@/components/schedule/DayOpsPanel'
@@ -161,6 +164,8 @@ export default function SchedulePage() {
   const [preferredWorkDays, setPreferredWorkDays] = useState<number[]>([5, 6, 0])
   const [workStartTime, setWorkStartTime] = useState('08:00')
   const [capacityHours, setCapacityHours] = useState(8)
+  // Neutral until the settings read lands — never a trade's chips by default.
+  const [addonTemplates, setAddonTemplates] = useState<AddonTemplate[]>(NEUTRAL_PACK.addons)
   const [defaultCrew, setDefaultCrew] = useState(1)
   // Defaults come from the resolver, not a hand-copied literal — otherwise every
   // new automation has to be remembered here too (and this is loaded from
@@ -527,7 +532,7 @@ export default function SchedulePage() {
       supabase.from('customers').select('*').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — can't schedule an archived customer without restoring
       supabase.from('job_recurrences').select('*').eq('user_id', user!.id),
       supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
-      supabase.from('business_settings').select('base_lat, base_lng, base_address, preferred_work_days, work_start_time, daily_capacity_hours, automations').eq('user_id', user!.id).maybeSingle(),
+      supabase.from('business_settings').select('base_lat, base_lng, base_address, preferred_work_days, work_start_time, daily_capacity_hours, automations, business_type').eq('user_id', user!.id).maybeSingle(),
       supabase.from('invoices').select('job_id').eq('user_id', user!.id).not('job_id', 'is', null),
       supabase.from('schedule_health_ignored').select('issue_key').eq('user_id', user!.id),
       supabase.from('day_statuses').select(DAY_STATUS_SELECT).eq('user_id', user!.id),
@@ -604,7 +609,12 @@ export default function SchedulePage() {
     }
 
     // Base coordinate for route optimization (geocode the address once if needed).
-    const s = sRes.data as { base_lat: number | null; base_lng: number | null; base_address: string | null; preferred_work_days: number[] | null; work_start_time: string | null; daily_capacity_hours: number | null; automations: unknown } | null
+    const s = sRes.data as { base_lat: number | null; base_lng: number | null; base_address: string | null; preferred_work_days: number[] | null; work_start_time: string | null; daily_capacity_hours: number | null; automations: unknown; business_type: string | null } | null
+    // Add-on quick-chips come from the trade pack (UI defaults only — same
+    // contract as the campaign preset menu). A pack with no list falls back to
+    // the neutral chips; a failed read resolves to the neutral pack too.
+    const packForChips = tradePack(s?.business_type)
+    setAddonTemplates(packForChips.addons.length ? packForChips.addons : NEUTRAL_PACK.addons)
     setAutomations(resolveAutomations(s?.automations))
     setPreferredWorkDays(s?.preferred_work_days?.length ? s.preferred_work_days : [5, 6, 0])
     setWorkStartTime(s?.work_start_time || '08:00')
@@ -2138,6 +2148,7 @@ export default function SchedulePage() {
           onDeleteLineItem={removeLineItem}
           getPreviousAddons={getPreviousAddons}
           onCopyPreviousAddons={copyPreviousAddons}
+          addonTemplates={addonTemplates}
           workStartTime={dayView.start}
           capacityHours={dayView.laborHours}
           onRainDelay={() => rainDelayDay(format(cursor, 'yyyy-MM-dd'))}

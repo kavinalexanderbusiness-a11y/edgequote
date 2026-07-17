@@ -586,21 +586,12 @@ export interface JobPriceChange {
 export type PriceReason = 'Upsell' | 'Larger than expected' | 'Extra work' | 'Travel surcharge' | 'Custom'
 export const PRICE_REASONS: PriceReason[] = ['Upsell', 'Larger than expected', 'Extra work', 'Travel surcharge', 'Custom']
 
-// Quick-add add-on templates for fast field entry. `recurringByDefault` flips the
+// Quick-add add-on chips for fast field entry. `recurringByDefault` flips the
 // scope chooser to a recurring suggestion (program services). Keys are stable for BI.
+// The LISTS live in the trade packs (lib/trades — lawn keeps the founding list
+// verbatim, other trades fall back to the neutral pack's); the hardcoded
+// ADDON_TEMPLATES that showed every business lawn chips was deleted 2026-07-16.
 export interface AddonTemplate { key: string; label: string; recurringByDefault?: boolean }
-export const ADDON_TEMPLATES: AddonTemplate[] = [
-  { key: 'fertilizer', label: 'Fertilizer', recurringByDefault: true },
-  { key: 'weed_control', label: 'Weed Control', recurringByDefault: true },
-  { key: 'mulch', label: 'Mulch' },
-  { key: 'spring_cleanup', label: 'Spring Cleanup' },
-  { key: 'fall_cleanup', label: 'Fall Cleanup' },
-  { key: 'shrub_trimming', label: 'Shrub Trimming' },
-  { key: 'aeration', label: 'Aeration' },
-  { key: 'overseeding', label: 'Overseeding' },
-  { key: 'hauling', label: 'Hauling' },
-  { key: 'custom', label: 'Custom' },
-]
 
 // One snapshotted row of an invoice's breakdown (stored in invoices.line_items).
 export type InvoiceLineKind = 'service' | 'addon' | 'travel'
