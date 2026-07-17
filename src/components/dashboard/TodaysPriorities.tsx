@@ -4,7 +4,8 @@ import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { formatCurrency, localTodayISO } from '@/lib/utils'
-import { needsFollowUp } from '@/lib/followup'
+import { needsFollowUp, canChaseCustomer } from '@/lib/followup'
+import type { ReachCustomer } from '@/lib/comms/reach'
 import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
 import { settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
 import { ranOut, cadenceDays, isSeasonallyDormant } from '@/lib/signals'
@@ -14,7 +15,7 @@ import { SkeletonRows } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
 import {
   ListChecks, CheckCircle2, ArrowRight,
-  DollarSign, FileText, Bell, CalendarPlus, AlertTriangle, MessageSquare, Repeat,
+  DollarSign, FileText, Bell, CalendarPlus, AlertTriangle, MessageSquare, Repeat, PhoneOff,
 } from 'lucide-react'
 
 // ONE ranked queue of the highest-value things to do right now, distilled from the
@@ -52,7 +53,7 @@ export function TodaysPriorities() {
       if (!user) { setLoading(false); return }
       const today = localTodayISO()
 
-      const [qRes, iRes, jRes, rRes, cRes, sRes] = await Promise.all([
+      const [qRes, iRes, jRes, rRes, cRes, sRes, custRes] = await Promise.all([
         // Quotes drive follow-ups + accepted-not-scheduled (reuse those exact signals).
         supabase.from('quotes').select('*').eq('user_id', user.id),
         supabase.from('invoices').select('amount, status, amount_paid, discount_type, discount_value').eq('user_id', user.id),
@@ -64,6 +65,10 @@ export function TodaysPriorities() {
         // Outstanding stat (both are ledger-derived, GST-inclusive). Seasons ride
         // along on the same row: the ran-out signal is season-gated.
         supabase.from('business_settings').select('gst_percent, service_seasons').eq('user_id', user.id).maybeSingle(),
+        // Exactly the fields lib/comms/reach needs to answer "would a message to
+        // this person actually go out" — so the follow-up row can tell the owner
+        // which chases are real. Rides along in the batch that was already going out.
+        supabase.from('customers').select('id, phone, email, sms_opt_in, email_opt_in, message_prefs').eq('user_id', user.id),
       ])
 
       const quotes = (qRes.data as Quote[]) || []
@@ -76,6 +81,8 @@ export function TodaysPriorities() {
       const quotesById: Record<string, Record<string, unknown>> = {}
       for (const q of quotes) quotesById[q.id] = q as unknown as Record<string, unknown>
       const conversations = (cRes.data as { unread: number }[]) || []
+      const custById: Record<string, ReachCustomer> = {}
+      for (const c of (custRes.data as (ReachCustomer & { id: string })[]) || []) custById[c.id] = c
       const feeSettings = sRes.data as { gst_percent: number | null; service_seasons: unknown } | null
       const seasons: ServiceSeasons = settingsToSeasons(feeSettings?.service_seasons)
 
@@ -133,13 +140,35 @@ export function TodaysPriorities() {
 
       // 5) Quotes needing follow-up — gone quiet, most recoverable new revenue
       //    (reuse needsFollowUp so the count matches the Quotes follow-up queue exactly).
+      //
+      //    Split by whether the chase can actually HAPPEN. This queue used to offer
+      //    "9 · $1,246" as one job; on the live book only 3 of those 9 were
+      //    chaseable and the other 6 ($445) belonged to customers with no phone and
+      //    no email. Both halves are real money, but they need different verbs — one
+      //    is "send a message", the other is "find their number" — and a single row
+      //    sent the owner to the quote list to discover the difference one dead end
+      //    at a time. canChaseCustomer is the same reach engine the sender uses, so
+      //    this can't disagree with what a send would actually do.
       const followups = quotes.filter(needsFollowUp)
-      const followupTotal = followups.reduce((s, q) => s + Number(q.total || 0), 0)
-      if (followups.length > 0) {
+      const chaseable = followups.filter(q => q.customer_id && canChaseCustomer(custById[q.customer_id]))
+      const blocked = followups.filter(q => !q.customer_id || !canChaseCustomer(custById[q.customer_id]))
+      const sum = (qs: Quote[]) => qs.reduce((s, q) => s + Number(q.total || 0), 0)
+      const chaseableTotal = sum(chaseable)
+      const blockedTotal = sum(blocked)
+      if (chaseable.length > 0) {
         next.push({
           key: 'followups', icon: Bell, tone: 'text-amber-400 bg-amber-500/10 border-amber-500/20',
-          label: 'Follow up on quotes', detail: `${followups.length} · ${formatCurrency(followupTotal)}`,
-          href: '/dashboard/quotes', score: 50_000 + followupTotal,
+          label: 'Follow up on quotes', detail: `${chaseable.length} · ${formatCurrency(chaseableTotal)}`,
+          href: '/dashboard/quotes', score: 50_000 + chaseableTotal,
+        })
+      }
+      if (blocked.length > 0) {
+        next.push({
+          key: 'followups-blocked', icon: PhoneOff, tone: 'text-ink-muted bg-bg-tertiary border-border',
+          label: 'Quotes you can’t chase yet', detail: `${blocked.length} · ${formatCurrency(blockedTotal)}`,
+          // Data Quality is the surface that already lists customers with no contact
+          // on file — the fix for this row is a phone number, not a message.
+          href: '/dashboard/data-quality', score: 45_000 + blockedTotal,
         })
       }
 

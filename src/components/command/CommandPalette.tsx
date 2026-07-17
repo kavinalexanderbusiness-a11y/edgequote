@@ -15,6 +15,7 @@ import { searchHelp, helpHref } from '@/lib/help/content'
 import { useModules } from '@/hooks/useModules'
 import { receiptNumberFor } from '@/lib/payments/ledger'
 import { getPageCommands, subscribePageCommands, PageCommand } from '@/components/command/pageCommands'
+import { phoneSearchDigits } from '@/lib/customers'
 
 type Icon = typeof Users
 interface Item { id: string; label: string; sub?: string; icon: Icon; run: () => void }
@@ -137,8 +138,12 @@ export function CommandPalette() {
         const term = verb[2].replace(/[,()*%]/g, ' ').trim()
         const isCall = kind === 'call' || kind === 'phone'
         if (!term) { if (myReq === reqRef.current) { setResults([]); setLoading(false) }; return }
+        // "call 4038521443" has to find a number stored as 403-852-1443 — match the
+        // canonical digits column, never the raw one (see phoneSearchDigits).
+        const verbDigits = phoneSearchDigits(term)
+        const verbOr = [`name.ilike.%${term}%`, verbDigits ? `phone_digits.ilike.%${verbDigits}%` : `phone.ilike.%${term}%`].join(',')
         const { data } = await supabase.from('customers').select('id, name, phone').eq('user_id', uid).is('archived_at', null)
-          .or(`name.ilike.%${term}%,phone.ilike.%${term}%`).limit(8)
+          .or(verbOr).limit(8)
         if (myReq !== reqRef.current) return
         const rows = ((data as { id: string; name: string | null; phone: string | null }[]) || []).filter(r => !isCall || r.phone)
         setResults(rows.length ? [{
@@ -158,9 +163,20 @@ export function CommandPalette() {
       const like = `%${safe}%`
       const amt = Number(safe.replace(/[^\d.]/g, ''))
       const payAmt = Number.isFinite(amt) && amt > 0 ? `,amount.eq.${amt}` : ''
+      // An unknown number rings and the owner types it in whatever shape their
+      // handset showed it. `phone.ilike` compares two arbitrary formats and loses;
+      // phone_digits is the canonical form both sides reduce to. Keep the raw
+      // `phone` clause too — a query the digits rule rejects (a name) must still
+      // search phone the way it always did.
+      const digits = phoneSearchDigits(safe)
+      const custOr = [
+        `name.ilike.${like}`, `email.ilike.${like}`,
+        digits ? `phone_digits.ilike.%${digits}%` : `phone.ilike.${like}`,
+        `address.ilike.${like}`, `city.ilike.${like}`, `notes.ilike.${like}`,
+      ].join(',')
       const [cust, prop, quo, inv, job, msg, pay, photo, vision] = await Promise.all([
         supabase.from('customers').select('id, name, phone, city, email').eq('user_id', uid).is('archived_at', null)
-          .or(`name.ilike.${like},email.ilike.${like},phone.ilike.${like},address.ilike.${like},city.ilike.${like},notes.ilike.${like}`).limit(6),
+          .or(custOr).limit(6),
         supabase.from('properties').select('id, address, city, neighborhood, customer_id').eq('user_id', uid)
           .or(`address.ilike.${like},city.ilike.${like},neighborhood.ilike.${like},postal_code.ilike.${like},notes.ilike.${like}`).limit(5),
         supabase.from('quotes').select('id, quote_number, customer_name, service_type, total, status').eq('user_id', uid)
@@ -209,7 +225,15 @@ export function CommandPalette() {
       if (iRows.length) sections.push({ title: 'Invoices', items: iRows.map(ii => ({
         id: `i-${ii.id}`, label: `${ii.invoice_number || 'Invoice'} · ${ii.customer_name || 'Customer'}`,
         sub: [ii.amount != null ? formatCurrency(Number(ii.amount)) : null, ii.status].filter(Boolean).join(' · ') || undefined,
-        icon: Receipt, run: () => go('/dashboard/invoices'),
+        // Land on the invoice, the same way Payments does above. Finding INV-0042 and
+        // then being dropped on the unfiltered list — which has no search box — meant
+        // the palette could find a record and then lose it again. The `?invoice=` focus
+        // seam already existed (invoices/page.tsx reads it and shows a "Showing…" banner);
+        // only this link never used it.
+        icon: Receipt,
+        run: () => go(ii.invoice_number
+          ? `/dashboard/invoices?invoice=${encodeURIComponent(ii.invoice_number)}`
+          : '/dashboard/invoices'),
       })) })
 
       const jRows = (job.data as { id: string; title: string | null; service_type: string | null; scheduled_date: string | null; status: string }[]) || []
