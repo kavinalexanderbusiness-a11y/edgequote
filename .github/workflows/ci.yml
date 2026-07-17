@@ -113,6 +113,13 @@ jobs:
       - name: Verify onboarding
         run: npm run verify:onboarding
 
+      # Customer → Property (Customer V2): pins the ONE display-address resolver's
+      # precedence, that the customer form carries no address (the guided property
+      # step owns it), that CSV import lands addresses on properties, and that
+      # job_recurrences never grows a property_id (plans derive through jobs).
+      - name: Verify customer v2
+        run: npm run verify:customer-v2
+
       # ── Pricing ────────────────────────────────────────────────────────────
       # These three existed and were never wired here, which made their promises
       # honour-system. verify-pricing.ts opens by saying it pins the lawn engine so

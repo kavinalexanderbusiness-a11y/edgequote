@@ -94,7 +94,7 @@ export default function ScheduledMessagesPage() {
   async function openPick() {
     setPickOpen(true)
     if (pickCustomers.length === 0) {
-      const { data } = await supabase.from('customers').select('*').is('archived_at', null).order('name')
+      const { data } = await supabase.from('customers').select('*, properties(address, city, is_primary)').is('archived_at', null).order('name')
       setPickCustomers((data as Customer[]) || [])
     }
   }

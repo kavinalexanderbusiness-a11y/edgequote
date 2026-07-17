@@ -15,7 +15,7 @@ import { WebsiteLead } from '@/lib/leads'
 import { LeadSummary } from '@/components/leads/LeadSummary'
 import { JobPhotos } from '@/components/photos/JobPhotos'
 import { bookingPhotosFromQuotes } from '@/lib/bookingPhotos'
-import { ensurePropertyForCustomer } from '@/lib/customers'
+import { normalizeTags } from '@/lib/customers'
 import { PropertySelect } from '@/components/ui/PropertySelect'
 import { buildTimeline } from '@/lib/timeline'
 import {
@@ -54,7 +54,7 @@ import {
   Phone, MessageSquare, FilePlus, CalendarPlus, Mail, MapPin, Repeat,
   FileText, Send, RotateCw, Receipt, DollarSign, Sparkles, Users,
   Edit2, ExternalLink, Ruler, AlertTriangle, StickyNote, Wallet, Timer, CalendarClock,
-  Link2, Check, Cake, PartyPopper, Camera, History, Globe, Plus, Home,
+  Link2, Check, Cake, PartyPopper, Camera, History, Globe, Plus, Home, Tag,
 } from 'lucide-react'
 
 const WON = new Set(['accepted', 'scheduled', 'completed', 'paid'])
@@ -142,57 +142,28 @@ export default function CustomerDetailPage() {
     setEditing(true)
   }
 
-  // Mirrors the list's edit: update the customer, and keep the primary property's
-  // address in sync when it changes. reload() re-runs the page's own load().
+  // Customer V2: this form edits the RELATIONSHIP only. The two-table address
+  // sync that used to live here (and once half-applied, sending a crew to the
+  // wrong house) is gone with its cause — addresses are edited on the property
+  // itself, in its own section below, one table, one write.
   async function handleSaveEdit(values: CustomerFormValues) {
-    // Strip consent from the raw update — it's audited through the shared engine
-    // and owned by the profile's Communication card. Editing a name must never
-    // silently flip SMS/email opt-in. (The form hides these in edit mode anyway.)
-    const rest = { ...values }
-    delete rest.sms_opt_in
-    delete rest.email_opt_in
+    // Explicit WHITELIST (found in review): reset() keeps unregistered keys, so a
+    // pre-V2 autosave draft can still carry address fields — a spread would write
+    // them back invisibly. Consent stays out too: it's audited through the shared
+    // engine and owned by the profile's Communication card.
     const patch = {
-      ...rest,
+      name: values.name,
+      email: values.email,
+      phone: values.phone,
+      notes: values.notes,
       acquisition_source: values.acquisition_source || null,
       referred_by_customer_id: values.referred_by_customer_id || null,
       birthday: values.birthday || null,
       anniversary: values.anniversary || null,
+      tags: normalizeTags(values.tags || []),
     }
     const { error } = await supabase.from('customers').update(patch).eq('id', id)
     if (error) { toast.error('Could not save the customer: ' + error.message); return }   // keep the form open to retry
-    if (values.address) {
-      // The address half was unchecked: contact details saved, the address silently
-      // didn't, the modal closed as if all was well, and reload() snapped the old
-      // address back. Address drives routing/travel/measurement — a silent revert
-      // sends a crew to the wrong house.
-      //
-      // The error guard alone wasn't enough. `.update().eq('is_primary', true)`
-      // matching ZERO rows is not an error in PostgREST, so a customer with no
-      // primary property (created without an address, or via a path that never made
-      // one) saved `customers.address`, reported success, and never got a property —
-      // which meant no routing, no measurement, no pricing, and no way to fix it from
-      // their own profile. Verified live: 1 customer sitting in exactly that state.
-      //
-      // ensurePropertyForCustomer is THE find-or-create seam the quote-save path
-      // already uses: it matches the address against their existing properties and
-      // creates one only when nothing matches, so this can't mint a duplicate house.
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) { toast.error('You’re signed out — sign in and try again.'); return }
-      const primary = properties.find(p => p.is_primary)
-      if (primary) {
-        const { error: addrErr } = await supabase.from('properties').update({
-          address: values.address, city: values.city || null,
-          province: values.province || 'AB', postal_code: values.postal_code || null,
-        }).eq('id', primary.id)
-        if (addrErr) { toast.error('Saved the contact details, but the address couldn’t be updated — please try again.'); return }
-      } else {
-        const { propertyId } = await ensurePropertyForCustomer(supabase, user.id, id, {
-          address: values.address, city: values.city || null,
-          province: values.province || 'AB', postal_code: values.postal_code || null,
-        })
-        if (!propertyId) { toast.error('Saved the contact details, but the address couldn’t be saved — please try again.'); return }
-      }
-    }
     setEditing(false)
     reload()
   }
@@ -610,7 +581,7 @@ export default function CustomerDetailPage() {
             <div className="min-w-0 flex-1">
               {/* Name lives in the DetailHeader above — here we lead with status +
                   contact so the same name isn't stacked twice. */}
-              {(isHighValue || recurringStatus) && (
+              {(isHighValue || recurringStatus || (customer.tags?.length ?? 0) > 0) && (
                 <div className="flex items-center gap-2 flex-wrap">
                   {isHighValue && (
                     <span className="text-[10px] uppercase tracking-wide text-accent-text border border-accent/30 bg-accent/10 rounded px-1.5 py-0.5 font-semibold flex items-center gap-1">
@@ -622,6 +593,14 @@ export default function CustomerDetailPage() {
                       <Repeat className="w-3 h-3" /> {recurringStatus}
                     </span>
                   )}
+                  {/* Owner-defined tags — edited via the customer form. Derived
+                      badges above keep their colours; tags stay neutral so the
+                      two vocabularies never blur. */}
+                  {(customer.tags || []).map(t => (
+                    <span key={t} className="text-[10px] uppercase tracking-wide text-ink-muted border border-border-strong bg-bg-tertiary rounded px-1.5 py-0.5 font-semibold flex items-center gap-1">
+                      <Tag className="w-3 h-3" /> {t}
+                    </span>
+                  ))}
                 </div>
               )}
               <div className="flex items-center gap-x-4 gap-y-1 mt-1 flex-wrap text-sm">
@@ -1132,15 +1111,12 @@ export default function CustomerDetailPage() {
             name: customer.name || '',
             email: customer.email || '',
             phone: customer.phone || '',
-            address: customer.address || '',
-            city: customer.city || '',
-            province: customer.province || '',
-            postal_code: customer.postal_code || '',
             notes: customer.notes || '',
             acquisition_source: customer.acquisition_source || '',
             referred_by_customer_id: customer.referred_by_customer_id || '',
             birthday: customer.birthday || '',
             anniversary: customer.anniversary || '',
+            tags: customer.tags || [],
           }}
           onSubmit={handleSaveEdit}
           onCancel={() => setEditing(false)}

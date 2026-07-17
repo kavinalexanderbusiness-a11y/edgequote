@@ -76,12 +76,23 @@ export function PropertySelect({
     setQuery(selected ? selected.address : '')
   }, [value, open, properties]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Escape is CAPTURED while the dropdown is open (found in review): inside a
+  // Modal, the bubble-phase handler raced the Modal's own Escape listener, so
+  // dismissing a wrong suggestion closed the whole dialog and threw away the
+  // half-typed address. Capture runs first; stopPropagation keeps the keypress
+  // ours only when the dropdown is actually open — a closed dropdown lets the
+  // Modal handle Escape exactly as before.
+  const openRef = useRef(open); openRef.current = open
   useEffect(() => {
     function onDoc(e: MouseEvent) { if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false) }
-    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') setOpen(false) }
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== 'Escape' || !openRef.current) return
+      e.stopPropagation()
+      setOpen(false)
+    }
     document.addEventListener('mousedown', onDoc)
-    document.addEventListener('keydown', onKey)
-    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey) }
+    document.addEventListener('keydown', onKey, { capture: true })
+    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey, { capture: true }) }
   }, [])
 
   const matches = useMemo(() => {

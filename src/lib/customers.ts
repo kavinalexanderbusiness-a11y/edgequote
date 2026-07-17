@@ -82,6 +82,41 @@ export function addressMatches(a?: string | null, b?: string | null): boolean {
   return x === y || x.startsWith(y) || y.startsWith(x)
 }
 
+// ── Customer V2 dual-read: where a customer's display address comes from ─────
+// The address of record is the PRIMARY PROPERTY. customers.address is the
+// legacy copy (still written by the intake paths for back-compat, dropped at
+// migration M4) and is read here only as a FALLBACK — so customers created
+// after the form stopped writing it, and customers created before, both
+// display correctly from the same call. One resolver, so no list/picker/search
+// invents its own precedence.
+export interface AddressCarrier {
+  address?: string | null
+  city?: string | null
+  properties?: { address: string | null; city: string | null; is_primary: boolean | null }[] | null
+}
+export function displayAddress(c: AddressCarrier): { address: string; city: string } {
+  const props = c.properties || []
+  const best = props.find(p => p.is_primary) || props[0]
+  if (best?.address) return { address: best.address, city: best.city || '' }
+  return { address: c.address || '', city: c.city || '' }
+}
+
+/** Tags as stored: trimmed, deduped case-insensitively (first spelling wins),
+ *  empty strings dropped. Pure — the form and any importer share it. */
+export function normalizeTags(raw: Array<string | null | undefined>): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const t of raw) {
+    const v = (t || '').trim()
+    if (!v) continue
+    const k = v.toLowerCase()
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(v)
+  }
+  return out
+}
+
 export interface MatchInput {
   name?: string | null
   phone?: string | null

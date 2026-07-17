@@ -1,22 +1,21 @@
 'use client'
 
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useForm, Controller } from 'react-hook-form'
 import { Input } from '@/components/ui/Input'
 import { Textarea } from '@/components/ui/Textarea'
 import { Select } from '@/components/ui/Select'
 import { Button } from '@/components/ui/Button'
-import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
 import { Toggle } from '@/components/ui/Toggle'
 import { useAutosave } from '@/hooks/useAutosave'
 import { AutosaveStatus, DraftRestoreBanner } from '@/components/ui/Autosave'
 import { Banner } from '@/components/ui/Banner'
-import { findCustomerMatch } from '@/lib/customers'
+import { findCustomerMatch, normalizeTags } from '@/lib/customers'
 import { SMS_CONSENT_WARNING } from '@/lib/consent'
 import { cn } from '@/lib/utils'
 import { Customer, CustomerFormValues, ACQUISITION_SOURCES } from '@/types'
-import { Users, MessageSquare, Mail, ShieldCheck, Info } from 'lucide-react'
+import { Users, MessageSquare, Mail, ShieldCheck, Info, Tag, X } from 'lucide-react'
 
 interface CustomerFormProps {
   defaultValues?: Partial<CustomerFormValues>
@@ -28,16 +27,56 @@ interface CustomerFormProps {
   autosaveKey?: string
 }
 
-const PROVINCES = ['AB','BC','MB','NB','NL','NS','NT','NU','ON','PE','QC','SK','YT']
+// Chip input for customer tags. Enter or comma commits the draft; Backspace on an
+// empty draft removes the last chip; duplicates are dropped case-insensitively by
+// the shared normalizeTags — the same rule the save path applies, so what you see
+// is what stores.
+function TagsInput({ value, onChange }: { value: string[]; onChange: (tags: string[]) => void }) {
+  const [draft, setDraft] = useState('')
+  function commit() {
+    const next = normalizeTags([...value, draft])
+    if (next.length !== value.length) onChange(next)
+    setDraft('')
+  }
+  return (
+    <div>
+      <label className="block text-xs font-medium text-ink-muted mb-1.5">Tags</label>
+      <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-border-strong bg-bg-tertiary px-2.5 py-2 focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/20 transition-all">
+        <Tag className="w-3.5 h-3.5 text-ink-faint shrink-0" aria-hidden="true" />
+        {value.map(t => (
+          <span key={t.toLowerCase()} className="inline-flex items-center gap-1 rounded-lg bg-accent/10 border border-accent/25 text-accent-text text-xs font-medium pl-2 pr-1 py-0.5">
+            {t}
+            <button type="button" aria-label={`Remove tag ${t}`} onClick={() => onChange(value.filter(x => x !== t))}
+              className="rounded p-0.5 hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent/60">
+              <X className="w-3 h-3" />
+            </button>
+          </span>
+        ))}
+        <input
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); commit() }
+            else if (e.key === 'Backspace' && !draft && value.length) onChange(value.slice(0, -1))
+          }}
+          onBlur={() => { if (draft.trim()) commit() }}
+          placeholder={value.length ? '' : 'VIP, landlord, net-30…'}
+          className="flex-1 min-w-[120px] bg-transparent text-sm text-ink placeholder:text-ink-faint outline-none py-0.5"
+          aria-label="Add a tag"
+        />
+      </div>
+    </div>
+  )
+}
 
 export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel, isEdit, autosaveKey }: CustomerFormProps) {
   const { register, handleSubmit, control, watch, setValue, reset, formState: { errors, isSubmitting } } = useForm<CustomerFormValues>({
     defaultValues: {
-      province: 'AB',
       acquisition_source: '',
       referred_by_customer_id: '',
       birthday: '',
       anniversary: '',
+      tags: [],
       // Consent defaults OFF — compliant opt-in is an explicit owner choice, never
       // pre-checked. The profile's Communication card owns consent after creation.
       sms_opt_in: false,
@@ -51,18 +90,19 @@ export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel
   const autosave = useAutosave<CustomerFormValues>({
     key: autosaveKey || `customer:${isEdit ? 'edit' : 'new'}`,
     value: formValues,
-    isEmpty: v => !v.name?.trim() && !v.email?.trim() && !v.phone?.trim() && !v.address?.trim(),
+    isEmpty: v => !v.name?.trim() && !v.email?.trim() && !v.phone?.trim(),
   })
   const submit = handleSubmit(async v => { await onSubmit(v); autosave.clear() })
 
-  // Live duplicate detection — reuses the ONE matching engine (phone/email/address
+  // Live duplicate detection — reuses the ONE matching engine (phone/email
   // confident, name not). Only when creating, so we never warn a customer about
-  // themselves. Surfaces the existing record instead of creating a duplicate.
-  const name = watch('name'); const email = watch('email'); const phone = watch('phone'); const addr = watch('address')
+  // themselves. Address matching moved to the property step with the address
+  // itself — phone and email were always the confident signals here.
+  const name = watch('name'); const email = watch('email'); const phone = watch('phone')
   const smsOptIn = watch('sms_opt_in'); const emailOptIn = watch('email_opt_in')
   const dupMatch = useMemo(
-    () => (isEdit ? null : findCustomerMatch(customers, { name, phone, email, address: addr })),
-    [isEdit, customers, name, phone, email, addr],
+    () => (isEdit ? null : findCustomerMatch(customers, { name, phone, email })),
+    [isEdit, customers, name, phone, email],
   )
 
   // "Guide, don't silently create" — when a contact method is entered but its
@@ -183,43 +223,11 @@ export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel
         </Banner>
       )}
 
-      <Controller
-        name="address"
-        control={control}
-        render={({ field }) => (
-          <AddressAutocomplete
-            label="Street Address"
-            placeholder="123 Main Street"
-            value={field.value || ''}
-            onChange={field.onChange}
-            onSelect={(p) => {
-              field.onChange(p.address)
-              if (p.city) setValue('city', p.city)
-              if (p.province) setValue('province', p.province)
-              if (p.postal) setValue('postal_code', p.postal)
-            }}
-          />
-        )}
-      />
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="col-span-2">
-          <Input
-            label="City"
-            placeholder="Calgary"
-            {...register('city')}
-          />
-        </div>
-        <Select
-          label="Province"
-          options={PROVINCES.map(p => ({ value: p, label: p }))}
-          {...register('province')}
-        />
-      </div>
-      <Input
-        label="Postal Code"
-        placeholder="T2P 1G1"
-        {...register('postal_code')}
-      />
+      {/* Customer V2: no address here, on purpose. A customer is a RELATIONSHIP;
+          addresses are properties, added right after creation by the guided
+          first-property step (PropertySelect → ensurePropertyForCustomer, the
+          same find-or-create every quote uses — so there is exactly one way an
+          address becomes a property). */}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <Controller
@@ -257,9 +265,17 @@ export function CustomerForm({ defaultValues, customers = [], onSubmit, onCancel
         />
       </div>
 
+      {/* Tags — free-form relationship labels ("VIP", "landlord", "net-30").
+          Stored as text[]; normalizeTags dedupes case-insensitively on save. */}
+      <Controller
+        name="tags"
+        control={control}
+        render={({ field }) => <TagsInput value={field.value || []} onChange={field.onChange} />}
+      />
+
       <Textarea
         label="Notes"
-        placeholder="Property details, gate codes, preferred contact times..."
+        placeholder="Gate codes, preferred contact times, billing notes..."
         {...register('notes')}
       />
       <div className="flex items-center justify-end gap-3 pt-2">

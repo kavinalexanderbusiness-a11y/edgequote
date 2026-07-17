@@ -1131,18 +1131,19 @@ export interface QuoteFormValues {
 }
 
 export interface CustomerFormValues {
+  // Customer V2: the form carries the RELATIONSHIP only — contact,
+  // communication, marketing, notes, tags. Addresses live on properties
+  // (PropertySelect's find-or-create is THE way one is added); the guided
+  // first-property step after creation replaces the old inline address block.
   name: string
   email: string
   phone: string
-  address: string
-  city: string
-  province: string
-  postal_code: string
   notes: string
   acquisition_source: string
   referred_by_customer_id: string
   birthday: string
   anniversary: string
+  tags: string[]
   // Contact consent captured at creation (persisted via the shared consent
   // engine so the audit trail is written). Optional — absent on the edit form,
   // where the profile's Communication card is the canonical consent manager.

@@ -529,7 +529,7 @@ export default function SchedulePage() {
     if (!user) { setLoading(false); return }
     const [jRes, cRes, rRes, qRes, sRes, iRes, hRes, dRes] = await Promise.all([
       fetchAllJobs(user!.id),
-      supabase.from('customers').select('*').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — can't schedule an archived customer without restoring
+      supabase.from('customers').select('*, properties(address, city, is_primary)').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — can't schedule an archived customer without restoring
       supabase.from('job_recurrences').select('*').eq('user_id', user!.id),
       supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
       supabase.from('business_settings').select('base_lat, base_lng, base_address, preferred_work_days, work_start_time, daily_capacity_hours, automations, business_type').eq('user_id', user!.id).maybeSingle(),

@@ -2,7 +2,7 @@
 import { toast } from '@/lib/toast'
 import { confirm as confirmDialog } from '@/lib/confirm'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { queueOrRun } from '@/lib/offline/outbox'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
@@ -10,6 +10,9 @@ import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { Customer, CustomerFormValues } from '@/types'
 import { CustomerList } from '@/components/customers/CustomerList'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
+import { PropertySelect } from '@/components/ui/PropertySelect'
+import { Modal } from '@/components/ui/Modal'
+import { normalizeTags } from '@/lib/customers'
 import { applyConsent } from '@/lib/consent'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { CustomerForm } from '@/components/customers/CustomerForm'
@@ -18,7 +21,7 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import Link from 'next/link'
 import { Button } from '@/components/ui/Button'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
-import { Plus, X, Upload, Archive, RotateCcw, Trash2 } from 'lucide-react'
+import { Plus, X, Upload, Archive, RotateCcw, Trash2, Home } from 'lucide-react'
 import { scrollBehavior } from '@/lib/motion'
 
 // Bound the archived DOM too — a long-lived company can accumulate hundreds of
@@ -36,6 +39,11 @@ export default function CustomersPage() {
   // Just-created customer with contact info → offer the introduction right away
   // (THE shared Send-Message dialog, preselected — one tap to send or cancel).
   const [introFor, setIntroFor] = useState<Customer | null>(null)
+  // The guided first-property step, opened right after creation (Customer V2).
+  const [propertyStepFor, setPropertyStepFor] = useState<{ customer: Customer; wantSms: boolean; wantEmail: boolean } | null>(null)
+  // Which customer's create-flow has already been finished — finishCreate's
+  // idempotency key (state alone can't dedupe two calls in one tick).
+  const createFinishedRef = useRef<string | null>(null)
 
   const supabase = useMemo(() => createClient(), [])
 
@@ -46,9 +54,12 @@ export default function CustomersPage() {
     if (!user) { setLoading(false); return }
     setUid(user.id)
     // Active (non-archived) customers only — archived ones are preserved but hidden.
+    // The properties join feeds displayAddress: the address of record is the
+    // primary PROPERTY; customers.address is only the legacy fallback (dual-read
+    // until migration M4 drops it).
     const [activeRes, archRes] = await Promise.all([
-      supabase.from('customers').select('*').eq('user_id', user.id).is('archived_at', null).order('name'),
-      supabase.from('customers').select('*').eq('user_id', user.id).not('archived_at', 'is', null).order('name'),
+      supabase.from('customers').select('*, properties(address, city, is_primary)').eq('user_id', user.id).is('archived_at', null).order('name'),
+      supabase.from('customers').select('*, properties(address, city, is_primary)').eq('user_id', user.id).not('archived_at', 'is', null).order('name'),
     ])
     setCustomers(activeRes.data || [])
     setArchived(archRes.data || [])
@@ -78,18 +89,22 @@ export default function CustomersPage() {
   useRealtimeRefresh('customers', uid ? `user_id=eq.${uid}` : null, fetchCustomers)
 
   function normalize(values: CustomerFormValues) {
-    // Consent is applied AFTER insert through the shared consent engine (which
-    // writes the audit row) — keep it OUT of the raw insert so nothing bypasses
-    // that trail. The customer is born with consent off (DB default).
-    const rest = { ...values }
-    delete rest.sms_opt_in
-    delete rest.email_opt_in
+    // An explicit WHITELIST, not a spread (found in review): react-hook-form's
+    // reset() keeps unregistered keys, so a pre-V2 autosave draft still carries
+    // address/city/province/postal_code — a spread would silently write those
+    // legacy columns back onto a "V2" customer, with no form field to see it.
+    // Consent is likewise applied AFTER insert through the shared consent engine
+    // (which writes the audit row); the customer is born with consent off.
     return {
-      ...rest,
+      name: values.name,
+      email: values.email,
+      phone: values.phone,
+      notes: values.notes,
       acquisition_source: values.acquisition_source || null,
       referred_by_customer_id: values.referred_by_customer_id || null,
       birthday: values.birthday || null,
       anniversary: values.anniversary || null,
+      tags: normalizeTags(values.tags || []),
     }
   }
 
@@ -109,23 +124,6 @@ export default function CustomersPage() {
     }
     const c = newCustomer as Customer
 
-    // Auto-create a primary property from the customer's address
-    if (values.address) {
-      // The customer is already saved, so this can't abort — but it can't be silent
-      // either: the primary property is what maps, routes and prices this customer, and
-      // an unchecked failure surfaced only much later as a Data Quality gap.
-      const { error: propErr } = await supabase.from('properties').insert({
-        customer_id: c.id,
-        user_id: user!.id,
-        address: values.address,
-        city: values.city || null,
-        province: values.province || 'AB',
-        postal_code: values.postal_code || null,
-        is_primary: true,
-      })
-      if (propErr) toast.error(`${c.name.split(' ')[0] || 'The customer'} was added, but their address couldn’t be saved — add it from their profile so they can be scheduled and priced.`)
-    }
-
     // Persist the consent captured on the form through the shared engine (writes
     // the audit trail) — only for a channel that actually has a contact method.
     const wantSms = !!values.sms_opt_in && !!c.phone
@@ -140,8 +138,25 @@ export default function CustomersPage() {
     await fetchCustomers()
     setShowForm(false)
 
-    // Guide, never silently create: only offer the introduction when we can
-    // actually reach them; otherwise say exactly how to enable messaging.
+    // Customer V2: the relationship is saved — now guide straight into the FIRST
+    // PROPERTY, because a customer without one can't be quoted, routed or priced.
+    // The step is skippable (billing-only customers are real), and it goes through
+    // PropertySelect → ensurePropertyForCustomer, the same find-or-create the
+    // quote path uses — one way an address becomes a property. The introduction
+    // message offer waits until this step closes so the owner isn't juggling
+    // two dialogs.
+    setPropertyStepFor({ customer: c, wantSms, wantEmail })
+  }
+
+  // The post-property half of creation: offer the introduction only when we can
+  // actually reach them; otherwise say exactly how to enable messaging.
+  // IDEMPOTENT by ref (found in review): an in-flight property save resolving
+  // after Skip/Escape would call this a second time — re-opening the intro
+  // dialog the owner may have already dismissed, or double-toasting.
+  function finishCreate(c: Customer, wantSms: boolean, wantEmail: boolean) {
+    if (createFinishedRef.current === c.id) return
+    createFinishedRef.current = c.id
+    setPropertyStepFor(null)
     const first = c.name.split(' ')[0] || 'Customer'
     if (wantSms || wantEmail) {
       setIntroFor({ ...c, sms_opt_in: wantSms, email_opt_in: wantEmail })
@@ -160,31 +175,16 @@ export default function CustomersPage() {
     if (!editing) return
     const id = editing.id
     const patch = normalize(values)
-    // Address lives on the customer AND on their primary property (what the schedule
-    // and routing read). Only sent when there's an address to move.
-    const primaryProperty = values.address
-      ? {
-          address: values.address,
-          city: values.city || null,
-          province: values.province || 'AB',
-          postal_code: values.postal_code || null,
-        }
-      : undefined
-
+    // Customer V2: this form edits the RELATIONSHIP only. Addresses are edited on
+    // the property itself (customer profile → property row, or the property page),
+    // so an address change can never half-apply across two tables again.
     let outcome: 'ran' | 'queued'
     try {
       outcome = await queueOrRun(
-        { kind: 'customer.update', payload: { id, patch, primaryProperty, baseUpdatedAt: editing.updated_at }, label: `Edit · ${editing.name}` },
+        { kind: 'customer.update', payload: { id, patch, baseUpdatedAt: editing.updated_at }, label: `Edit · ${editing.name}` },
         async () => {
           const { error } = await supabase.from('customers').update(patch).eq('id', id)
           if (error) throw new Error(error.message)
-          if (primaryProperty) {
-            // Was unchecked: a failed property update left the customer's address
-            // updated and the crew still routing to the old one, silently.
-            const { error: propErr } = await supabase.from('properties')
-              .update(primaryProperty).eq('customer_id', id).eq('is_primary', true)
-            if (propErr) throw new Error(propErr.message)
-          }
         },
       )
     } catch (e) {
@@ -282,15 +282,12 @@ export default function CustomersPage() {
                 name: editing.name || '',
                 email: editing.email || '',
                 phone: editing.phone || '',
-                address: editing.address || '',
-                city: editing.city || '',
-                province: editing.province || '',
-                postal_code: editing.postal_code || '',
                 notes: editing.notes || '',
                 acquisition_source: editing.acquisition_source || '',
                 referred_by_customer_id: editing.referred_by_customer_id || '',
                 birthday: editing.birthday || '',
                 anniversary: editing.anniversary || '',
+                tags: editing.tags || [],
               } : undefined}
               onSubmit={editing ? handleEdit : handleAdd}
               onCancel={() => { setShowForm(false); setEditing(null) }}
@@ -342,6 +339,43 @@ export default function CustomersPage() {
             </div>
           )}
         </div>
+      )}
+
+      {/* The guided first-property step (Customer V2): the relationship is saved,
+          now capture WHERE the work happens. Skippable — a billing-only customer
+          is legitimate — and every close path funnels through finishCreate so the
+          introduction offer is never lost behind this dialog. */}
+      {propertyStepFor && (
+        <Modal
+          open
+          onClose={() => finishCreate(propertyStepFor.customer, propertyStepFor.wantSms, propertyStepFor.wantEmail)}
+          title={`Where do we work for ${propertyStepFor.customer.name.split(' ')[0]}?`}
+          icon={Home}
+          footer={
+            <Button variant="ghost" type="button"
+              onClick={() => finishCreate(propertyStepFor.customer, propertyStepFor.wantSms, propertyStepFor.wantEmail)}>
+              Skip for now
+            </Button>
+          }
+        >
+          <p className="text-sm text-ink-muted mb-3">
+            Add their first property — it&rsquo;s what quotes, visits and routing attach to. You can add more (or none) any time.
+          </p>
+          <PropertySelect
+            properties={[]}
+            value=""
+            onChange={() => {}}
+            customerId={propertyStepFor.customer.id}
+            onCreated={p => {
+              toast.success(`${p.address} added.`)
+              fetchCustomers()
+              finishCreate(propertyStepFor.customer, propertyStepFor.wantSms, propertyStepFor.wantEmail)
+            }}
+            label="Property address"
+            hint="Type the address — it’s created as their primary property."
+            autoFocus
+          />
+        </Modal>
       )}
 
       {/* Just added a reachable customer → one-tap introduction. The composer shows

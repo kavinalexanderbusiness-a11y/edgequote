@@ -55,7 +55,7 @@ export function NewInvoiceDialog({ open, onClose, onCreated }: {
       const { data: { session } } = await supabase.auth.getSession()
       const uid = session?.user?.id
       if (!uid) return
-      const { data } = await supabase.from('customers').select('*').eq('user_id', uid).is('archived_at', null).order('name')
+      const { data } = await supabase.from('customers').select('*, properties(address, city, is_primary)').eq('user_id', uid).is('archived_at', null).order('name')
       setCustomers((data as Customer[]) || [])
     })()
   }, [open, supabase])

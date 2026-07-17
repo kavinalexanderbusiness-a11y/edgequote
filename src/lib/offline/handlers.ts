@@ -97,11 +97,11 @@ export function registerOfflineHandlers(): void {
     }
     const supabase = createClient()
     await guardedPatch(supabase, 'customers', p.id, p.patch, p.baseUpdatedAt)
-    // The address lives in two places: on the customer AND on their primary property
-    // (which is what the schedule, routing and measurements actually read). The edit
-    // form writes both, so a replay that only patched the customer would leave the
-    // crew driving to the OLD address — a patch that arrives without its follow-up
-    // isn't the same mutation, just a piece of one. Same rule as job.complete.
+    // LEGACY branch (Customer V2): the edit form no longer carries an address, so
+    // new ops never include primaryProperty — but an op QUEUED OFFLINE before the
+    // upgrade still might, and a queued mutation must replay whole or not at all
+    // (same rule as job.complete). Keep honouring it until the queue can't
+    // possibly hold pre-V2 ops; it costs nothing when absent.
     if (p.primaryProperty) {
       const { error: propErr } = await supabase.from('properties')
         .update(p.primaryProperty).eq('customer_id', p.id).eq('is_primary', true)

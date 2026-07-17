@@ -43,12 +43,19 @@ export function Modal({ open, onClose, title, icon: Icon, children, footer, size
   const restoreRef = useRef<HTMLElement | null>(null)
   const titleId = useId()
 
+  // Callbacks live in refs so the effect's deps are only [open, dismissable]:
+  // parents pass fresh arrow functions every render, and re-running this effect
+  // mid-dialog (a realtime refresh re-rendering the parent) would re-steal focus
+  // from whatever the user was typing in — cleanup refocuses the opener, setup
+  // refocuses the panel, and the keystroke in between lands nowhere.
+  const onCloseRef = useRef(onClose); onCloseRef.current = onClose
+  const onSubmitRef = useRef(onSubmit); onSubmitRef.current = onSubmit
   useEffect(() => {
     if (!open) return
     restoreRef.current = document.activeElement as HTMLElement | null
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape' && dismissable) onClose()
-      else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && onSubmit) { e.preventDefault(); onSubmit() }
+      if (e.key === 'Escape' && dismissable) onCloseRef.current()
+      else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && onSubmitRef.current) { e.preventDefault(); onSubmitRef.current() }
       else if (e.key === 'Tab') {
         // Focus trap: Tab/Shift+Tab wrap within the dialog so focus can never
         // land on the obscured background page behind the backdrop.
@@ -72,7 +79,7 @@ export function Modal({ open, onClose, title, icon: Icon, children, footer, size
       // Return focus to whatever opened the dialog (no-op if it's since gone).
       restoreRef.current?.focus?.()
     }
-  }, [open, dismissable, onClose, onSubmit])
+  }, [open, dismissable])
 
   if (!open) return null
 

@@ -13,7 +13,12 @@ import { PageHeader } from '@/components/layout/PageHeader'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { Button } from '@/components/ui/Button'
-import { Home, Ruler, FileText, User, MapPin } from 'lucide-react'
+import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { Textarea } from '@/components/ui/Textarea'
+import { AddressAutocomplete } from '@/components/ui/AddressAutocomplete'
+import { getPropertyContext, type PropertyIntelligence } from '@/lib/ai/propertyContext'
+import { toast } from '@/lib/toast'
+import { Home, Ruler, FileText, User, MapPin, Edit2, StickyNote, Sparkles } from 'lucide-react'
 
 // The history of ONE address. The properties list already shows what a property IS
 // (health, plan, performance, pricing, latest measurement) — this shows what
@@ -33,6 +38,16 @@ export default function PropertyDetailPage() {
   const [events, setEvents] = useState<ReturnType<typeof buildTimeline>>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // Latest ACTIVE AI analysis of this property, through THE one read seam
+  // (lib/ai/propertyContext) — never re-run, only surfaced. Null = no card.
+  const [insight, setInsight] = useState<PropertyIntelligence | null>(null)
+  // Customer V2: the property owns its address — edited HERE, one table, one write.
+  const [editingAddress, setEditingAddress] = useState(false)
+  const [addrDraft, setAddrDraft] = useState({ address: '', city: '', province: '', postal: '' })
+  const [savingAddress, setSavingAddress] = useState(false)
+  const [editingNotes, setEditingNotes] = useState(false)
+  const [notesDraft, setNotesDraft] = useState('')
+  const [savingNotes, setSavingNotes] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -57,10 +72,12 @@ export default function PropertyDetailPage() {
       const cust = Array.isArray(prop.customers) ? prop.customers[0] ?? null : prop.customers ?? null
       if (active) { setLoadError(null); setProperty(prop); setCustomer(cust) }
 
-      const [sources, setRes] = await Promise.all([
+      const [sources, setRes, ctx] = await Promise.all([
         loadPropertyTimelineSources(supabase, user.id, id),
         supabase.from('business_settings').select('gst_percent').eq('user_id', user.id).maybeSingle(),
+        getPropertyContext(supabase, id),
       ])
+      if (active) setInsight(ctx)
       const all = buildTimeline({
         ...sources,
         gstPercent: Number((setRes.data as { gst_percent?: number | null } | null)?.gst_percent) || 0,
@@ -84,6 +101,36 @@ export default function PropertyDetailPage() {
   useRealtimeRefresh('jobs', propFilter, reload)
   useRealtimeRefresh('invoices', propFilter, reload)
   useRealtimeRefresh('properties', id ? `id=eq.${id}` : null, reload)
+
+  async function saveAddress() {
+    if (!property || !addrDraft.address.trim()) return
+    setSavingAddress(true)
+    // lat/lng/neighborhood are DERIVED from the address — a changed address must
+    // reset them or routing keeps driving to the old coordinates. The next page
+    // that needs a location re-geocodes lazily (the settings form's own pattern).
+    const { error } = await supabase.from('properties').update({
+      address: addrDraft.address.trim(),
+      city: addrDraft.city.trim() || null,
+      province: addrDraft.province.trim() || null,
+      postal_code: addrDraft.postal.trim() || null,
+      lat: null, lng: null, neighborhood: null,
+    }).eq('id', property.id)
+    setSavingAddress(false)
+    if (error) { toast.error('Could not save the address: ' + error.message); return }
+    setEditingAddress(false)
+    toast.success('Address updated — it re-locates on the next route or measurement.')
+    reload()
+  }
+
+  async function saveNotes() {
+    if (!property) return
+    setSavingNotes(true)
+    const { error } = await supabase.from('properties').update({ notes: notesDraft.trim() || null }).eq('id', property.id)
+    setSavingNotes(false)
+    if (error) { toast.error('Could not save the notes: ' + error.message); return }
+    setEditingNotes(false)
+    reload()
+  }
 
   if (loading) return <div className="max-w-3xl mx-auto space-y-6"><SkeletonRows count={5} /></div>
 
@@ -127,7 +174,97 @@ export default function PropertyDetailPage() {
         {property.lat && property.lng ? (
           <span className="inline-flex items-center gap-1.5 text-accent-text"><MapPin className="w-3.5 h-3.5" /> Located</span>
         ) : null}
+        <button type="button"
+          onClick={() => {
+            setAddrDraft({ address: property.address || '', city: property.city || '', province: property.province || '', postal: property.postal_code || '' })
+            setEditingAddress(v => !v)
+          }}
+          className="inline-flex items-center gap-1 text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded">
+          <Edit2 className="w-3 h-3" /> Edit address
+        </button>
       </div>
+
+      {/* Customer V2: THE address editor — the property owns its address, so a
+          correction happens here, on one table, and can never half-apply across
+          a customer row again. */}
+      {editingAddress && (
+        <Card>
+          <CardBody className="space-y-3">
+            <AddressAutocomplete
+              label="Property address"
+              placeholder="123 Main Street"
+              value={addrDraft.address}
+              onChange={v => setAddrDraft(d => ({ ...d, address: v }))}
+              onSelect={p => setAddrDraft({ address: p.address, city: p.city || '', province: p.province || '', postal: p.postal || '' })}
+            />
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <input value={addrDraft.city} onChange={e => setAddrDraft(d => ({ ...d, city: e.target.value }))} placeholder="City"
+                className="rounded-xl border border-border-strong bg-bg-tertiary px-3 py-2 text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" aria-label="City" />
+              <input value={addrDraft.province} onChange={e => setAddrDraft(d => ({ ...d, province: e.target.value }))} placeholder="Province"
+                className="rounded-xl border border-border-strong bg-bg-tertiary px-3 py-2 text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" aria-label="Province" />
+              <input value={addrDraft.postal} onChange={e => setAddrDraft(d => ({ ...d, postal: e.target.value }))} placeholder="Postal code"
+                className="rounded-xl border border-border-strong bg-bg-tertiary px-3 py-2 text-sm text-ink placeholder:text-ink-faint outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-all" aria-label="Postal code" />
+            </div>
+            <div className="flex items-center justify-end gap-2">
+              <Button size="sm" variant="ghost" type="button" onClick={() => setEditingAddress(false)}>Cancel</Button>
+              <Button size="sm" type="button" loading={savingAddress} disabled={!addrDraft.address.trim()} onClick={saveAddress}>Save address</Button>
+            </div>
+          </CardBody>
+        </Card>
+      )}
+
+      {/* Latest AI analysis — read through THE propertyContext seam, shown only
+          when one exists. Reused, never re-run (the BeforeAfterStudio pattern). */}
+      {insight && (insight.summary || (insight.detections?.length ?? 0) > 0) && (
+        <Card>
+          <CardHeader>
+            <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Sparkles className="w-4 h-4 text-accent-text" /> AI property insight</h2>
+          </CardHeader>
+          <CardBody className="space-y-2">
+            {insight.summary && <p className="text-sm text-ink-muted">{insight.summary}</p>}
+            {(insight.detections?.length ?? 0) > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {insight.detections!.slice(0, 8).map(d => (
+                  <span key={d} className="text-[11px] text-ink-muted border border-border rounded-lg px-2 py-0.5 bg-bg-tertiary">{d}</span>
+                ))}
+              </div>
+            )}
+            <p className="text-[11px] text-ink-faint">From a prior AI analysis — reused here, not re-run.</p>
+          </CardBody>
+        </Card>
+      )}
+
+      {/* Property notes — CUSTOMER-FACING: the portal renders these under "Notes
+          from your provider". Say so, so nobody parks a gate code here (that's
+          the customer's private notes field on their profile). */}
+      <Card>
+        <CardHeader className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><StickyNote className="w-4 h-4 text-accent-text" /> Property notes</h2>
+          {!editingNotes && (
+            <button type="button" onClick={() => { setNotesDraft(property.notes || ''); setEditingNotes(true) }}
+              className="text-xs text-ink-muted hover:text-ink transition-colors inline-flex items-center gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded">
+              <Edit2 className="w-3 h-3" /> Edit
+            </button>
+          )}
+        </CardHeader>
+        <CardBody>
+          {editingNotes ? (
+            <div className="space-y-3">
+              <Textarea value={notesDraft} onChange={e => setNotesDraft(e.target.value)} rows={3} autoFocus
+                placeholder="Anything worth knowing about this property…" />
+              <p className="text-[11px] text-ink-faint">Visible to the customer on their portal (“Notes from your provider”). Private notes belong on the customer’s profile.</p>
+              <div className="flex items-center justify-end gap-2">
+                <Button size="sm" variant="ghost" type="button" onClick={() => setEditingNotes(false)}>Cancel</Button>
+                <Button size="sm" type="button" loading={savingNotes} onClick={saveNotes}>Save notes</Button>
+              </div>
+            </div>
+          ) : property.notes ? (
+            <p className="text-sm text-ink-muted whitespace-pre-wrap">{property.notes}</p>
+          ) : (
+            <p className="text-sm text-ink-faint">No notes yet — anything you write here also shows on the customer’s portal.</p>
+          )}
+        </CardBody>
+      </Card>
 
       {/* Quick actions live in the timeline header — the two things you reach for
           from a property's history, using the same links as the properties list. */}

@@ -60,14 +60,23 @@ export function AddressAutocomplete({
     return () => { cancelled = true }
   }, [])
 
+  // Escape is CAPTURED while suggestions are open — same fix as PropertySelect:
+  // inside a Modal, the bubble-phase Escape raced the Modal's listener, so
+  // dismissing a suggestion closed the whole dialog. Capture + stopPropagation
+  // only while open; a closed dropdown leaves Escape to the Modal.
+  const openRef = useRef(open); openRef.current = open
   useEffect(() => {
     function onDoc(e: MouseEvent) {
       if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false)
     }
-    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') setOpen(false) }
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== 'Escape' || !openRef.current) return
+      e.stopPropagation()
+      setOpen(false)
+    }
     document.addEventListener('mousedown', onDoc)
-    document.addEventListener('keydown', onKey)
-    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey) }
+    document.addEventListener('keydown', onKey, { capture: true })
+    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey, { capture: true }) }
   }, [])
 
   function handleInput(v: string) {

@@ -429,7 +429,7 @@ export default function MessagesPage() {
   async function openCompose() {
     setComposeOpen(true)
     if (composeCustomers.length === 0) {
-      const { data } = await supabase.from('customers').select('*').is('archived_at', null).order('name')
+      const { data } = await supabase.from('customers').select('*, properties(address, city, is_primary)').is('archived_at', null).order('name')
       setComposeCustomers((data as Customer[]) || [])
     }
   }

@@ -42,11 +42,17 @@ create table public.customers (
   name        text not null,
   email       text,
   phone       text,
+  -- LEGACY (Customer V2): the address of record lives on the customer's primary
+  -- PROPERTY; these columns survive as a read-fallback for pre-V2 rows and are
+  -- dropped at migration M4. Nothing owner-facing writes them any more.
   address     text,
   city        text,
   province    text default 'AB',
   postal_code text,
   notes       text,
+  -- Free-form relationship labels ("VIP", "landlord"). Existed in production
+  -- before it was recorded here — see RUN-2026-07-16-customer-v2-m1.sql.
+  tags        text[] not null default '{}',
 
   -- owner — ties rows to the authenticated user
   user_id     uuid not null references auth.users(id) on delete cascade
