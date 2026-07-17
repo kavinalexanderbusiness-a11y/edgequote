@@ -22,6 +22,8 @@ import { Undo2, Trash2, Check, Ruler, ZoomIn, ZoomOut, RotateCcw, FileText, Car,
 // THE conversion now lives in lib/measure — this file had its own copy, as did
 // three others, and four constants can drift apart silently.
 import { M2_TO_SQFT } from '@/lib/measure'
+import { saveManual } from '@/lib/measure/data'
+import { toast } from '@/lib/toast'
 const SNAP_PX = 24 // closing snap threshold in screen pixels (generous for touch)
 
 // Subtle haptic confirmation on phones — a tap should FEEL registered.
@@ -596,15 +598,24 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
     const appended = [...historyRef.current, snapshot]
     const nextHistory = appended.length > 21 ? [appended[0], ...appended.slice(-20)] : appended
     historyRef.current = nextHistory
+    // MEAS-1: lawn AREA is owned by the typed ledger (property_measurements). The
+    // mirror derives properties.lawn_sqft and a DB guard rejects a direct lawn_sqft
+    // write, so the area goes through the ONE seam. measurement_history (the rec
+    // cache) and the traced boundary are NOT lawn_sqft, so they're written directly.
+    // One getUser, reused for the ledger save and the accuracy record.
+    const { data: { user } } = await supabase.auth.getUser()
+    if (user) {
+      const saved = await saveManual(supabase, { userId: user.id, propertyId: property.id, kind: 'lawn', value: total })
+      if (!saved.ok) toast.error(`Measurement saved, but the size didn’t sync: ${saved.error}`)
+    }
     // Update the CURRENT boundary only when this save actually traced one, so an
     // auto/manual re-save never wipes a previously-saved shape.
-    const propUpdate: Record<string, unknown> = { lawn_sqft: total, measurement_history: nextHistory }
+    const propUpdate: Record<string, unknown> = { measurement_history: nextHistory }
     if (polygon.length > 0) propUpdate.lawn_polygon = polygon
     await supabase.from('properties').update(propUpdate).eq('id', property.id)
     setHistory(nextHistory)
     setSavedSqft(total)
     // Record auto vs accepted so the estimate self-calibrates per neighborhood.
-    const { data: { user } } = await supabase.auth.getUser()
     if (user) recordMeasurement(supabase, {
       userId: user.id, context, propertyId: property.id,
       lat: targetCoord.current?.lat ?? null, lng: targetCoord.current?.lng ?? null,

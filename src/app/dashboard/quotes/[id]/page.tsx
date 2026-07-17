@@ -25,6 +25,8 @@ import { addDays, format as formatDfn, parseISO } from 'date-fns'
 import { needsFollowUp, daysSince, logFollowUpPatch, markWonPatch } from '@/lib/followup'
 import { scheduleQuoteAsJob } from '@/lib/scheduleQuote'
 import { ensureCustomerAndProperty } from '@/lib/customers'
+import { servicePricingKind } from '@/lib/servicePricing'
+import { saveManual } from '@/lib/measure/data'
 import { Edit2, FileDown, CalendarPlus, FileText, Copy, Bell, Phone, MessageSquare, RotateCw, Check, X, Send, Camera, Globe, CalendarClock } from 'lucide-react'
 
 export default function QuoteDetailPage() {
@@ -200,17 +202,22 @@ export default function QuoteDetailPage() {
       // Keep the lawn size on the property in sync (it's a core attribute, not just
       // quote data). New/unchanged → silent; a CHANGED size replaces it non-blockingly
       // with a quick Undo (no up-front confirm).
+      // MEAS-1: only a LAWN service syncs the lawn area, and it goes through the ONE
+      // seam (lib/measure → property_measurements → mirror), never a direct lawn_sqft
+      // write the DB guard would reject.
       const measuredSqft = Number(values.measured_sqft) || 0
-      if (propertyId && measuredSqft > 0) {
+      const isLawn = servicePricingKind(values.service_type, templates.find(t => t.id === values.service_template_id) ?? null) === 'lawn_recurring'
+      if (propertyId && measuredSqft > 0 && isLawn) {
         const { data: prop } = await supabase.from('properties').select('lawn_sqft').eq('id', propertyId).maybeSingle()
         const prior = Number((prop as { lawn_sqft: number | null } | null)?.lawn_sqft) || 0
         const changed = Math.round(prior) !== Math.round(measuredSqft)
         if (changed) {
-          await supabase.from('properties').update({ lawn_sqft: measuredSqft }).eq('id', propertyId)
-          if (prior > 0) {
+          const saved = await saveManual(supabase, { userId: user!.id, propertyId, kind: 'lawn', value: measuredSqft })
+          if (!saved.ok) toast.error(`Saved the quote, but the lawn size didn’t sync: ${saved.error}`)
+          else if (prior > 0) {
             const priorLawn = (prop as { lawn_sqft: number | null } | null)?.lawn_sqft ?? null
             toast.undo(`Saved lawn size updated to ${measuredSqft.toLocaleString()} ft²`, async () => {
-              await supabase.from('properties').update({ lawn_sqft: priorLawn }).eq('id', propertyId)
+              if (priorLawn != null) await saveManual(supabase, { userId: user!.id, propertyId, kind: 'lawn', value: priorLawn })
             })
           }
         }

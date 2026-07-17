@@ -12,6 +12,7 @@ import { applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix, 
 import { Globe } from 'lucide-react'
 import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes } from '@/lib/pricing'
 import { servicePricingKind } from '@/lib/servicePricing'
+import { saveManual } from '@/lib/measure/data'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { applyFeeRecovery } from '@/lib/invoiceTotals'
 import { sumServiceLines } from '@/lib/quoteServices'
@@ -244,38 +245,53 @@ export default function NewQuotePage() {
           // latestSavedRecommendation already skips).
           // (`?? 0` — estimateVisitMinutes is null when unmeasured; this branch is
           // guarded by measuredSqft > 0, so 0 is a type-level fallback, never data.)
-          const kind = servicePricingKind(values.service_type, templates.find(t => t.id === values.service_template_id) ?? null)
-          let rec: SavedRecommendation | undefined
-          if (kind === 'lawn_recurring') {
-            const cfg = pricingConfigFromSettings(settings)
-            const pkg = pricingPackage(measuredSqft, cfg, { overgrowth: Number(values.overgrowth_multiplier) || 1, nearbyCount: 0 })
-            rec = buildSavedRecommendation(pkg, estimateVisitMinutes(measuredSqft) ?? 0)
-            if (measurement?.cadence && measurement.cadence !== 'one_time') rec.cadence = measurement.cadence
-          }
+          const isLawn = servicePricingKind(values.service_type, templates.find(t => t.id === values.service_template_id) ?? null) === 'lawn_recurring'
           const hist = Array.isArray((prop as { measurement_history: unknown } | null)?.measurement_history)
             ? (prop as { measurement_history: unknown[] }).measurement_history : []
-          const patch: Record<string, unknown> = {
-            lawn_sqft: measuredSqft,
-            measurement_history: [...hist, { date: new Date().toISOString(), total_sqft: measuredSqft, sections: measurement?.sections ?? lead?.sections ?? undefined, recommendation: rec }],
+
+          // MEAS-1: lawn AREA is owned by the typed ledger (property_measurements).
+          // The mirror trigger derives properties.lawn_sqft and a DB guard now
+          // rejects any direct lawn_sqft write that disagrees with it, so persist
+          // through the ONE seam (lib/measure) and never write lawn_sqft here. Only
+          // a LAWN service touches lawn area — a pressure-washing or furnace area is
+          // not a lawn, and V2 exists precisely to stop that cross-contamination
+          // (the old code wrote every measured area into lawn_sqft).
+          if (isLawn) {
+            const saved = await saveManual(supabase, { userId: user!.id, propertyId, kind: 'lawn', value: measuredSqft })
+            if (!saved.ok) toast.error(`Saved the quote, but the lawn size didn’t sync: ${saved.error}`)
+
+            // The pricing RECOMMENDATION is a lawn-only cache in measurement_history
+            // that the property list and JobForm read back; append it alongside the
+            // lawn save so the flagship measure flow keeps feeding those surfaces.
+            const cfg = pricingConfigFromSettings(settings)
+            const pkg = pricingPackage(measuredSqft, cfg, { overgrowth: Number(values.overgrowth_multiplier) || 1, nearbyCount: 0 })
+            const rec = buildSavedRecommendation(pkg, estimateVisitMinutes(measuredSqft) ?? 0)
+            if (measurement?.cadence && measurement.cadence !== 'one_time') rec.cadence = measurement.cadence
+            await supabase.from('properties').update({
+              measurement_history: [...hist, { date: new Date().toISOString(), total_sqft: measuredSqft, sections: measurement?.sections ?? lead?.sections ?? undefined, recommendation: rec }],
+            }).eq('id', propertyId)
+
+            if (prior > 0) {
+              const priorLawn = (prop as { lawn_sqft: number | null } | null)?.lawn_sqft ?? null
+              toast.undo(`Saved lawn size updated to ${measuredSqft.toLocaleString()} ft²`, async () => {
+                if (priorLawn != null) await saveManual(supabase, { userId: user!.id, propertyId, kind: 'lawn', value: priorLawn })
+                await supabase.from('properties').update({ measurement_history: hist }).eq('id', propertyId)
+              })
+            }
           }
-          // From a website lead → permanently persist the boundary/place/travel the
-          // website measured.
+
+          // A website lead measured the boundary/place/travel once — persist them
+          // for any service. These aren't lawn_sqft, so the guard doesn't touch them.
           if (lead) {
-            if (lead.lawnPolygon) patch.lawn_polygon = lead.lawnPolygon
-            if (lead.placeId) patch.google_place_id = lead.placeId
-            if (lead.mapsUrl) patch.maps_url = lead.mapsUrl
-            if (lead.lat != null) patch.lat = lead.lat
-            if (lead.lng != null) patch.lng = lead.lng
-            if (lead.travelDistanceKm != null) patch.property_travel_distance_km = lead.travelDistanceKm
-            if (lead.travelFee != null) patch.property_travel_fee = lead.travelFee
-          }
-          await supabase.from('properties').update(patch).eq('id', propertyId)
-          // Replaced an EXISTING saved size → let the owner undo without a blocking prompt.
-          if (prior > 0) {
-            const priorLawn = (prop as { lawn_sqft: number | null } | null)?.lawn_sqft ?? null
-            toast.undo(`Saved lawn size updated to ${measuredSqft.toLocaleString()} ft²`, async () => {
-              await supabase.from('properties').update({ lawn_sqft: priorLawn, measurement_history: hist }).eq('id', propertyId)
-            })
+            const geo: Record<string, unknown> = {}
+            if (lead.lawnPolygon) geo.lawn_polygon = lead.lawnPolygon
+            if (lead.placeId) geo.google_place_id = lead.placeId
+            if (lead.mapsUrl) geo.maps_url = lead.mapsUrl
+            if (lead.lat != null) geo.lat = lead.lat
+            if (lead.lng != null) geo.lng = lead.lng
+            if (lead.travelDistanceKm != null) geo.property_travel_distance_km = lead.travelDistanceKm
+            if (lead.travelFee != null) geo.property_travel_fee = lead.travelFee
+            if (Object.keys(geo).length) await supabase.from('properties').update(geo).eq('id', propertyId)
           }
         }
       }
