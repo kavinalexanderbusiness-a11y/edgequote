@@ -36,7 +36,7 @@ import {
   profitAndLossLines, balanceSheetLines, journalRows, EXPENSE_COLUMNS, STATEMENT_COLUMNS,
 } from '../src/lib/accounting/exports'
 import { costJob, costJobs, rollupJobCosting } from '../src/lib/accounting/jobCosting'
-import { resolvePeriod, monthRange, quarterRange, monthsBetween, inPeriod, daysInMonth } from '../src/lib/accounting/period'
+import { resolvePeriod, monthRange, quarterRange, yearRange, monthsBetween, inPeriod, daysInMonth } from '../src/lib/accounting/period'
 import { DEFAULT_EXPENSE_CATEGORIES } from '../src/lib/accounting/categories'
 import { summarizeTransactions } from '../src/lib/payments/analytics'
 
@@ -350,6 +350,7 @@ console.log('\nSlices must partition the same total (a breakdown that doesn\'t a
   eq('category slices sum to total cost', catSum, p.cost)
   eq('vendor slices sum to total cost', venSum, p.cost)
   eq('shares sum to 1', +p.byCategory.reduce((s, c) => s + c.share, 0).toFixed(2), 1)
+  eq('vendor shares sum to 1 too', +p.byVendor.reduce((s, v) => s + v.share, 0).toFixed(2), 1)
   eq('uncategorised is surfaced, not dropped', p.uncategorisedCount, 1)
   check('uncategorised has a name, not a blank row',
     p.byCategory.some(c => c.name === 'Uncategorised'), p.byCategory.map(c => c.name).join(','))
@@ -694,6 +695,60 @@ console.log('\nExports mirror the engine exactly (the CSV is what the accountant
   const amountCol = STATEMENT_COLUMNS.find(c => c.label === 'Amount')!
   const totalAssetsLine = bsLines.find(l => l.item === 'TOTAL ASSETS')!
   eq('an unknown total exports as "—", NOT 0', amountCol.value(totalAssetsLine), '—')
+}
+
+// ── 19. THE REFACTOR GUARD ───────────────────────────────────────────────────
+// /dashboard/reports had its OWN period filter, draft rule and summation. It now
+// calls gstReturn() instead, so this pins the engine to what that page produced —
+// against real production figures read by SQL on 2026-07-16 for calendar 2026:
+//
+//   24 invoices counted · net sales 2920.00 · collected 2755.00 · outstanding 165.00
+//   0 drafts · 1 CANCELLED excluded · gst_percent = 0
+//
+// (2920 − 2755 = 165 also ties to the balance sheet's A/R, from a different path.)
+console.log('\nAgainst production: the refactored Revenue & GST report reproduces the old page:')
+{
+  const YEAR = yearRange(2026)
+  // 24 real invoices summing 2920, of which 2755 is collected, 165 outstanding.
+  const real = Array.from({ length: 24 }, (_, i) => ({
+    id: `inv-${i}`, invoice_number: `INV-${i}`,
+    amount: i === 0 ? 2920 - 23 * 120 : 120,
+    amount_paid: i === 0 ? 2920 - 23 * 120 - 165 : 120,
+    status: 'sent', issued_date: '2026-05-01',
+    discount_type: null, discount_value: null, customers: { name: 'Acme' },
+  })) as never[]
+  // The void one: billed nothing, owes nothing, must not touch a single total.
+  const cancelled = [{
+    id: 'inv-void', invoice_number: 'INV-VOID', amount: 999, amount_paid: 0,
+    status: 'cancelled', issued_date: '2026-05-01',
+    discount_type: null, discount_value: null, customers: { name: 'Acme' },
+  }] as never[]
+
+  const r = gstReturn({
+    invoices: [...real, ...cancelled],
+    expenses: [], settings: NOT_REGISTERED, period: YEAR,
+  })
+  eq('counted invoices = 24 (cancelled excluded)', r.invoiceCount, 24)
+  eq('net sales = 2920.00', r.sales, 2920)
+  eq('collected = 2755.00', r.collected, 2755)
+  eq('outstanding = 165.00', r.outstanding, 165)
+  eq('not registered → no GST on the return', r.taxCollected, 0)
+  eq('billed = sales (gst 0)', r.billed, 2920)
+  eq('every row carries its invoice id for the CSV join', r.rows.every(x => Boolean(x.invoiceId)), true)
+
+  // The draft rule, which is the whole reason that page excludes them.
+  const withDraft = gstReturn({
+    invoices: [...real, ...cancelled, {
+      id: 'inv-draft', invoice_number: 'INV-D', amount: 500, amount_paid: 0,
+      status: 'draft', issued_date: '2026-05-01',
+      discount_type: null, discount_value: null, customers: { name: 'Acme' },
+    }] as never[],
+    expenses: [], settings: NOT_REGISTERED, period: YEAR,
+  })
+  eq('a draft does NOT change sales', withDraft.sales, 2920)
+  eq('...nor the count', withDraft.invoiceCount, 24)
+  eq('...and is disclosed, not vanished', withDraft.excludedDrafts.count, 1)
+  eq('...with its value shown', withDraft.excludedDrafts.total, 500)
 }
 
 console.log(

@@ -36,6 +36,13 @@ import { inPeriod, type Period } from '@/lib/accounting/period'
 const round2 = (n: number) => Math.round(n * 100) / 100
 
 export interface GstReturnRow {
+  /**
+   * The invoice this row came from. Carried so a caller that needs richer columns
+   * (due date, service type, status) can join back to its own rows — rather than
+   * this engine growing presentation fields, or the caller re-deriving "which
+   * invoices count" and getting a different answer.
+   */
+  invoiceId: string
   invoiceNumber: string | null
   issuedDate: string | null
   customerName: string
@@ -60,6 +67,16 @@ export interface GstReturn {
   sales: number
   /** Line 105 — GST/HST charged on those invoices. */
   taxCollected: number
+  /** sales + taxCollected — what the customers were actually billed. */
+  billed: number
+  /** Collected against those invoices, per the payment ledger. */
+  collected: number
+  /**
+   * Still owed on them. Floored at 0 PER INVOICE — an overpaid invoice owes nothing,
+   * and letting it net off would hide a real receivable behind someone else's credit.
+   * (The app-wide definition; the invoices list applies the same rule.)
+   */
+  outstanding: number
   /** Line 108 — GST/HST paid on what you bought (input tax credits). */
   inputTaxCredits: number
   /** Line 109 — taxCollected − inputTaxCredits. Positive = remit. Negative = refund due. */
@@ -157,6 +174,9 @@ export function gstReturn(input: GstInput): GstReturn {
     basis: 'accrual',
     sales,
     taxCollected,
+    billed: round2(built.reduce((s, x) => s + x.t.total, 0)),
+    collected: round2(built.reduce((s, x) => s + x.b.paid, 0)),
+    outstanding: round2(built.reduce((s, x) => s + Math.max(0, x.b.balance), 0)),
     inputTaxCredits: itcs,
     // Negative is REAL and unclamped: a big equipment year can mean the CRA owes
     // you. Clamping it to zero would hide a refund the business is entitled to.
@@ -174,6 +194,7 @@ export function gstReturn(input: GstInput): GstReturn {
     },
     capitalItcs,
     rows: built.map(({ inv, t, b }) => ({
+      invoiceId: inv.id,
       invoiceNumber: inv.invoice_number,
       issuedDate: inv.issued_date,
       customerName: inv.customers?.name || 'Customer',
