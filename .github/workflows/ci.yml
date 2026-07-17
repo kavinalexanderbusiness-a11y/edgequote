@@ -137,6 +137,21 @@ jobs:
       - name: Verify labour estimator
         run: npm run verify:labor
 
+      #   density  — route density counts NEIGHBOURING PROPERTIES, not a property's
+      #              own visits. It was fed one row per JOB and neither deduped nor
+      #              excluded the target, so live counts averaged 38.1 against 2.0
+      #              real neighbours and 15 of 16 properties had travel fully waived
+      #              — including 3 with no neighbours at all. The thresholds were
+      #              never wrong; the denominator was.
+      #   learning — confidence measures whether the evidence AGREES, not how much
+      #              of it there is, and a model pinned against its clamp says so
+      #              instead of reporting the clamp as a confident answer.
+      - name: Verify route density
+        run: npm run verify:density
+
+      - name: Verify pricing learning
+        run: npm run verify:learning
+
       # This step is why the first 17 CI runs were red, and it's worth writing down.
       # ESLint had never been configured in this repo — no .eslintrc anywhere — so
       # `next lint` dropped into an INTERACTIVE setup prompt, which cannot be

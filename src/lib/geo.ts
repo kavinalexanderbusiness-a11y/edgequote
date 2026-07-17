@@ -137,18 +137,56 @@ export interface DaySuggestion {
   addedDriveMin: number // estimated extra driving to slot this stop in
 }
 
-// How many existing located jobs sit within driving range of a target property,
-// and how close the nearest one is. Powers the route-density travel discount and
+// THE rule for "these two coordinates are the same stop" — ~1 m at 5 decimals.
+// One rule, because two would be a second answer to the same question:
+// routeDensity's locatedStops() dedupes with this, and so does nearbyJobCount().
+export function pointKey(c: Coord): string {
+  return `${c.lat.toFixed(5)},${c.lng.toFixed(5)}`
+}
+
+// How many OTHER located properties sit within driving range of a target, and how
+// close the nearest one is. Powers the route-density travel discount and
 // pricing-confidence scoring — same radius the Best-Day Suggester uses.
+//
+// COUNTS DISTINCT PROPERTIES, NOT VISITS, AND NEVER THE TARGET ITSELF.
+// This reads a list of JOBS (fetchLocatedUpcomingJobs selects from `jobs`, one row
+// per visit, each carrying its property's coordinates), so a property with 24
+// upcoming recurring visits used to contribute 24 — and a target counted its own
+// visits as its neighbours. Live production: the average count was 38.1 against
+// 2.0 real neighbouring properties, a 19× inflation over 200 job rows spanning
+// just 16 properties.
+//
+// That silently broke the thresholds downstream. routeDensityTravel() waives ALL
+// travel at >= 3 and half at >= 1 — numbers written for neighbours. Against a
+// count of 38 they cannot discriminate: 15 of 16 live properties had travel 100%
+// waived, including 3 with ZERO other properties within 5 km — waived by the
+// weight of their own recurring visits. The `>= 1` half-travel tier was nearly
+// unreachable. The thresholds were never wrong; the denominator was.
+//
+// nearestKm is likewise the nearest OTHER stop. It used to return 0.0 for any
+// property with its own visits scheduled — "your nearest job is 0 km away" was the
+// property describing itself.
+//
+// routeDensity.densityFor() already got both of these right ("same point = the
+// target itself"); this is the same discipline, on the path that prices.
 export function nearbyJobCount(
   target: Coord,
   jobs: { lat: number | null; lng: number | null }[],
   radiusKm: number = NEARBY_RADIUS_KM,
 ): { count: number; nearestKm: number | null } {
-  const dists = jobs
-    .filter(j => j.lat != null && j.lng != null)
-    .map(j => haversineKm(target, { lat: j.lat as number, lng: j.lng as number }))
-    .filter(km => km <= radiusKm)
+  const targetKey = pointKey(target)
+  const seen = new Set<string>()
+  const dists: number[] = []
+  for (const j of jobs) {
+    if (j.lat == null || j.lng == null) continue
+    const c: Coord = { lat: j.lat, lng: j.lng }
+    const key = pointKey(c)
+    if (key === targetKey) continue   // the target's own visits are not neighbours
+    if (seen.has(key)) continue       // one property, however many visits
+    seen.add(key)
+    const km = haversineKm(target, c)
+    if (km <= radiusKm) dists.push(km)
+  }
   return {
     count: dists.length,
     nearestKm: dists.length ? Math.round(Math.min(...dists) * 10) / 10 : null,
