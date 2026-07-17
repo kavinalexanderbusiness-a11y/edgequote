@@ -17,7 +17,7 @@ export const maxDuration = 60
 // GET reports capability so client surfaces can hide themselves entirely when
 // no ANTHROPIC_API_KEY is configured (the app's disabled-by-default contract).
 
-const TASKS: AssistTask[] = ['draft_message', 'customer_summary', 'review_response', 'quote_scope', 'job_notes']
+const TASKS: AssistTask[] = ['draft_message', 'customer_summary', 'review_response', 'quote_scope', 'job_notes', 'quote_intelligence']
 
 export async function GET(): Promise<Response> {
   return NextResponse.json({ aiEnabled: aiEnabled() })

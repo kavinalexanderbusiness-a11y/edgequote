@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/Button'
 import { Card, CardBody } from '@/components/ui/Card'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
+import { QuoteIntelligencePanel } from '@/components/quotes/QuoteIntelligencePanel'
 import { formatCurrency, formatDate, applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix } from '@/lib/utils'
 import { nextInvoiceNumber } from '@/lib/invoicing'
 import { isQuoteExpired, isExpiringSoon, daysUntilExpiry, defaultValidUntil, DEFAULT_QUOTE_VALID_DAYS } from '@/lib/quoteStatus'
@@ -936,6 +937,11 @@ export default function QuoteDetailPage() {
           </div>
         </CardBody>
       </Card>
+
+      {/* Quote Intelligence — the owner's AI second opinion, through THE assist
+          engine. Renders nothing when AI isn't configured; advisory only (the
+          pricing engine's persisted suggestion stays the authority on price). */}
+      <QuoteIntelligencePanel quoteId={quote.id} />
 
       {/* Measurements + pricing analysis — handy when reviewing pricing later */}
       {(hasMeasurement || suggestedPrice != null) && (
