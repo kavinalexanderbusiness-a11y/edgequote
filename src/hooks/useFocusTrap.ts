@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react'
 
-const FOCUSABLE = 'a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])'
+// What counts as focusable — the single source of truth, shared with ui/Modal so a
+// dialog and a hand-trapped overlay can never disagree about what Tab can reach.
+export const FOCUSABLE = 'a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])'
 
 // Makes a custom overlay behave like a real dialog for keyboard + screen-reader
 // users: on open it moves focus into the panel, traps Tab within it, closes on

@@ -1,9 +1,9 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Customer, QuoteFormValues, ServiceTemplate, TravelFeeTier, BusinessSettings, LawnSections, PricingConfidence } from '@/types'
+import { Customer, QuoteFormValues, ServiceTemplate, TravelFeeTier, BusinessSettings, LawnSections, PricingConfidence, SavedRecommendation } from '@/types'
 import { QuoteBuilder } from '@/components/quotes/QuoteBuilder'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { SkeletonRows } from '@/components/ui/Skeleton'
@@ -11,6 +11,7 @@ import { Banner } from '@/components/ui/Banner'
 import { applyOvergrowth, generateQuoteNumber, localTodayISO, maxNumericSuffix, formatCurrency } from '@/lib/utils'
 import { Globe } from 'lucide-react'
 import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes } from '@/lib/pricing'
+import { servicePricingKind } from '@/lib/servicePricing'
 import { ensureCustomerAndProperty } from '@/lib/customers'
 import { applyFeeRecovery } from '@/lib/invoiceTotals'
 import { sumServiceLines } from '@/lib/quoteServices'
@@ -213,10 +214,26 @@ export default function NewQuotePage() {
         // New or unchanged → sync silently. A CHANGED size replaces the saved
         // measurement non-blockingly (no up-front confirm) and offers a quick Undo.
         if (changed) {
-          const cfg = pricingConfigFromSettings(settings)
-          const pkg = pricingPackage(measuredSqft, cfg, { overgrowth: Number(values.overgrowth_multiplier) || 1, nearbyCount: 0 })
-          const rec = buildSavedRecommendation(pkg, estimateVisitMinutes(measuredSqft))
-          if (measurement?.cadence && measurement.cadence !== 'one_time') rec.cadence = measurement.cadence
+          // The AREA is a fact about the property and is always saved. The
+          // RECOMMENDATION is not: buildSavedRecommendation wraps pricingPackage —
+          // the grass cadence engine — so attaching it to a pressure-washing or
+          // furnace quote's measurement wrote weekly/bi-weekly MOWING prices into
+          // that property's history, where every later quote reads them back as
+          // "the saved recommendation" for whatever service comes next. One wrong
+          // quote used to poison the property permanently. Only a lawn-cadence
+          // service gets a lawn recommendation; everything else saves the
+          // measurement alone, and `recommendation` stays undefined (which
+          // latestSavedRecommendation already skips).
+          // (`?? 0` — estimateVisitMinutes is null when unmeasured; this branch is
+          // guarded by measuredSqft > 0, so 0 is a type-level fallback, never data.)
+          const kind = servicePricingKind(values.service_type, templates.find(t => t.id === values.service_template_id) ?? null)
+          let rec: SavedRecommendation | undefined
+          if (kind === 'lawn_recurring') {
+            const cfg = pricingConfigFromSettings(settings)
+            const pkg = pricingPackage(measuredSqft, cfg, { overgrowth: Number(values.overgrowth_multiplier) || 1, nearbyCount: 0 })
+            rec = buildSavedRecommendation(pkg, estimateVisitMinutes(measuredSqft) ?? 0)
+            if (measurement?.cadence && measurement.cadence !== 'one_time') rec.cadence = measurement.cadence
+          }
           const hist = Array.isArray((prop as { measurement_history: unknown } | null)?.measurement_history)
             ? (prop as { measurement_history: unknown[] }).measurement_history : []
           const patch: Record<string, unknown> = {
@@ -261,6 +278,51 @@ export default function NewQuotePage() {
     }
   }
 
+  // ── The MeasureTool → quote handoff (sessionStorage 'eq_measurement') ────────
+  // MeasureTool measures a PROPERTY and has no concept of a service, so every
+  // price it hands over (jobPrice/weekly/biweekly/monthly) comes from
+  // pricingPackage() — the grass cadence engine — whatever the trace was of. This
+  // form then defaulted service_type to the owner's first active template, so for
+  // any non-lawn trade the pair was: THEIR service name + OUR lawn prices. Worse,
+  // QuoteBuilder seeds priceOrigin='manual' whenever a non-zero initial_price
+  // arrives in defaultValues (correct for editing a real saved quote — that price
+  // IS the owner's past decision), which locks the reconciliation effect off, so
+  // the wrong number could never be corrected and read as hand-typed.
+  //
+  // Gate the PRICES on the same seam as everywhere else. The area, address and
+  // customer are facts and always carry over. For the lawn business — first active
+  // template "Lawn Mowing" → lawn_recurring — every field is seeded exactly as
+  // before, byte-identical.
+  const measurementDefaults = useMemo(() => {
+    if (!measurement) return undefined
+    const primary = templates.find(t => t.is_active) ?? null
+    const lawn = servicePricingKind(primary?.name ?? '', primary) === 'lawn_recurring'
+    return {
+      customer_id: measurement.customerId || '',
+      address: measurement.address || '',
+      // The measured area flows straight into the editable field, every trade.
+      measured_sqft: measurement.sqft || 0,
+      // Default to the owner's PRIMARY service (their first template) so a
+      // measured property is saveable in one tap — learned, not assumed.
+      service_type: primary?.name || '',
+      travel_fee: measurement.travelFee || 0,
+      distance_km: measurement.travelDistanceKm || 0,
+      custom_travel_required: measurement.travelIsCustom || false,
+      // Lawn-engine output — only for a lawn-cadence service. The overgrowth
+      // multiplier rides with them: it is a grass-growth adjustment and multiplies
+      // nothing else.
+      ...(lawn ? {
+        initial_price: measurement.jobPrice || 0,
+        // Selected cadence from the pricing package — the full structure
+        // arrives pre-filled, no manual entry.
+        weekly_price: measurement.weekly || 0,
+        biweekly_price: measurement.biweekly || 0,
+        monthly_price: measurement.monthly || 0,
+        overgrowth_multiplier: measurement.overgrowth || 1,
+      } : {}),
+    }
+  }, [measurement, templates])
+
   if (loading) return <div className="max-w-5xl mx-auto space-y-6"><SkeletonRows count={6} /></div>
 
   return (
@@ -292,7 +354,13 @@ export default function NewQuotePage() {
           customer_email: lead.customerEmail || '',
           address: lead.address || '',
           measured_sqft: lead.sqft || 0,
-          service_type: lead.serviceType || 'Lawn Mowing',
+          // The lead's own stated service, else the owner's primary OFFERED one.
+          // `templates` is loaded unfiltered (the picker still lists everything), so
+          // the default must skip anything switched off — defaulting a new quote to a
+          // service the owner has retired is a quote they have to correct by hand.
+          // This branch was unreachable until the lead mapper stopped substituting a
+          // hardcoded 'Lawn Mowing', which is always truthy.
+          service_type: lead.serviceType || templates.find(t => t.is_active)?.name || '',
           // RAW website prices — handleSubmit applies fee-recovery once at insert.
           initial_price: lead.initialPrice || 0,
           weekly_price: lead.weekly || 0,
@@ -302,24 +370,7 @@ export default function NewQuotePage() {
           distance_km: lead.travelDistanceKm || 0,
           overgrowth_multiplier: lead.overgrowth || 1,
           notes: lead.notes || '',
-        } : measurement ? {
-          customer_id: measurement.customerId || '',
-          address: measurement.address || '',
-          // Lawn size measured on the website flows straight into the editable field.
-          measured_sqft: measurement.sqft || 0,
-          // Sensible default so a measured lawn is saveable in one tap (editable).
-          service_type: 'Lawn Mowing',
-          initial_price: measurement.jobPrice || 0,
-          // Selected cadence from the pricing package — the full structure
-          // arrives pre-filled, no manual entry.
-          weekly_price: measurement.weekly || 0,
-          biweekly_price: measurement.biweekly || 0,
-          monthly_price: measurement.monthly || 0,
-          travel_fee: measurement.travelFee || 0,
-          distance_km: measurement.travelDistanceKm || 0,
-          custom_travel_required: measurement.travelIsCustom || false,
-          overgrowth_multiplier: measurement.overgrowth || 1,
-        } : undefined}
+        } : measurement ? measurementDefaults : undefined}
         onSubmit={handleSubmit}
       />
     </div>

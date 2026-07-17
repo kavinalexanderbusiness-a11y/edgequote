@@ -112,10 +112,12 @@ export async function assembleIntelligence(supabase: SupabaseClient, userId: str
   }
 }
 
-// Banded lawn size — "a compact lawn" / "a larger property" — never the raw square footage.
+// Banded property size — "a compact property" / "a larger property" — never the raw
+// square footage. lawn_sqft is a measured area, not a claim the property is a lawn
+// (same rule as lib/ai/assist.ts).
 function lawnBand(sqft: number | null): string | null {
   if (!sqft) return null
-  if (sqft < 2000) return 'a compact lawn'
+  if (sqft < 2000) return 'a compact property'
   if (sqft > 6000) return 'a larger property'
   return null
 }

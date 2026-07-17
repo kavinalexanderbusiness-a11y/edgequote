@@ -109,7 +109,12 @@ export function leadToPrefill(lead: WebsiteLead): LeadPrefillPayload {
     address: lead.address || '',
     sqft: Number(lead.lawn_sqft) || 0,
     sections: lead.sections || null,
-    serviceType: lead.requested_services || 'Lawn Mowing',
+    // Only what the lead actually asked for. When they stated nothing, leave it EMPTY
+    // rather than naming a trade for them: /dashboard/quotes/new already falls back to
+    // the owner's first service template (their primary offering, in their own order).
+    // A hardcoded 'Lawn Mowing' here was always truthy, so that catalog fallback could
+    // never run — and a roofer's lead became a mowing quote.
+    serviceType: lead.requested_services || '',
     initialPrice: est,
     weekly: cadence === 'weekly' ? est : null,
     biweekly: cadence === 'biweekly' ? est : null,

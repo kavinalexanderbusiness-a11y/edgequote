@@ -5,9 +5,10 @@ import { collectionStats } from '@/lib/businessMemory'
 import { crewCostPerHour, visitEconomics } from '@/lib/economics'
 import { effectiveFreq, jobVisitValue } from '@/lib/invoicing'
 import { SEASON_VISITS } from '@/lib/pricing'
-import { settingsToSeasons, seasonForService, isWithinSeason, ServiceSeasons } from '@/lib/seasons'
+import { settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
 import { learnDurations, learnedDurationFor } from '@/lib/duration'
 import { densityFor, locatedStops } from '@/lib/routeDensity'
+import { cadenceDays, daysBetween, isSeasonallyDormant, lifetimeValue, ranOut } from '@/lib/signals'
 import { analyzeWinLoss, WLQuote, QuoteOutcomeRow } from '@/lib/winLoss'
 import {
   ProfitJob, ProfitContext, ProfitQuote, RecInfo,
@@ -314,9 +315,8 @@ export function computeBI(inp: BIInput): BIReport {
   const lastVisitByCust: Record<string, string> = {}
   for (const j of completed) if (j.customer_id) { if (!lastVisitByCust[j.customer_id] || j.scheduled_date > lastVisitByCust[j.customer_id]) lastVisitByCust[j.customer_id] = j.scheduled_date }
   const futureCust = new Set(jobs.filter(j => j.customer_id && j.scheduled_date >= today && j.status !== 'completed' && j.status !== 'cancelled').map(j => j.customer_id as string))
-  const dDays = (iso: string) => Math.round((new Date(today + 'T00:00:00').getTime() - new Date(iso + 'T00:00:00').getTime()) / 86_400_000)
   const activeIds = new Set<string>()
-  for (const id of Object.keys(lastVisitByCust)) if (dDays(lastVisitByCust[id]) <= 90) activeIds.add(id)
+  for (const id of Object.keys(lastVisitByCust)) if (daysBetween(lastVisitByCust[id], today) <= 90) activeIds.add(id)
   for (const id of futureCust) activeIds.add(id)
 
   // Churn / retention over RECURRING customers (in-season, ran out vs still active).
@@ -327,18 +327,26 @@ export function computeBI(inp: BIInput): BIReport {
     if (!s.customerId) continue
     if (s.hasFuture) { recurringAnnual += s.perVisit * visitsPerSeason(s.cadence) }
     if (countedRecCust.has(s.customerId)) continue
-    if (s.hasFuture || (s.customerId && futureCust.has(s.customerId))) { retained++; countedRecCust.add(s.customerId); continue }
-    const season = seasonForService(s.serviceType, seasons)
-    if (season && !isWithinSeason(today, season)) continue // off-season dormant ≠ churned
-    if (s.lastCompleted) { churned++; countedRecCust.add(s.customerId) }
+    // THE ran-out rule (signals/lifecycle): off-season dormant ≠ churned, and a
+    // series cancelled before any service was never a customer to lose.
+    const signal = ranOut({
+      hasRecurring: true,
+      hasUpcoming: s.hasFuture || futureCust.has(s.customerId),
+      lastServiceDate: s.lastCompleted,
+      cadenceDays: cadenceDays(s.cadence),
+      seasonallyDormant: isSeasonallyDormant(s.serviceType, seasons, today),
+      today,
+    })
+    if (signal.reason === 'has_upcoming') { retained++; countedRecCust.add(s.customerId); continue }
+    if (signal.isRanOut) { churned++; countedRecCust.add(s.customerId) }
   }
   const churnRatePct = retained + churned > 0 ? Math.round((churned / (retained + churned)) * 100) : null
   const retentionRatePct = churnRatePct == null ? null : 100 - churnRatePct
 
-  // Lifetime value (all completed) + averages.
-  const ltvByCust: Record<string, number> = {}
-  for (const j of completed) if (j.customer_id) ltvByCust[j.customer_id] = (ltvByCust[j.customer_id] || 0) + earned(j)
-  const ltvVals = Object.values(ltvByCust)
+  // Lifetime value (all completed) + averages — valued by the shared LTV engine.
+  const completedByCust: Record<string, ProfitJob[]> = {}
+  for (const j of completed) if (j.customer_id) (completedByCust[j.customer_id] ||= []).push(j)
+  const ltvVals = Object.values(completedByCust).map(js => lifetimeValue(js, pctx.quotesById, pctx.recById))
   const avgLifetimeValue = ltvVals.length ? round(ltvVals.reduce((a, b) => a + b, 0) / ltvVals.length) : 0
   const avgAnnualValue = activeIds.size ? round(revYTD / activeIds.size) : 0
   const forecastLtv = recCustIds.size ? round((recurringAnnual / Math.max(1, retained)) * 3) : 0 // active recurring annual × ~3yr lifetime
@@ -400,8 +408,7 @@ export function computeBI(inp: BIInput): BIReport {
   let projectedSeasonRemaining = 0
   for (const s of series) {
     if (!s.hasFuture) continue
-    const season = seasonForService(s.serviceType, seasons)
-    if (season && !isWithinSeason(today, season)) continue
+    if (isSeasonallyDormant(s.serviceType, seasons, today)) continue
     const futureVisits = s.rep ? jobs.filter(j => j.recurrence_id && j.customer_id === s.customerId && j.scheduled_date >= today && j.status !== 'cancelled' && j.status !== 'completed').length : 0
     projectedSeasonRemaining += s.perVisit * Math.max(futureVisits, 0)
   }

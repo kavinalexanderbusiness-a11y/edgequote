@@ -5,7 +5,7 @@ import {
 } from '@react-pdf/renderer'
 import type { Invoice, Payment, BusinessSettings } from '@/types'
 import { paymentMethodLabel } from '@/types'
-import { invoiceTotals } from '@/lib/invoiceTotals'
+import { invoiceTotals, gstRegistrationNumber } from '@/lib/invoiceTotals'
 import { invoiceBalance, receiptNumberFor } from '@/lib/payments/ledger'
 
 // ── Payment receipt PDF ──────────────────────────────────────────────────────────
@@ -56,6 +56,11 @@ const styles = StyleSheet.create({
 
   footer: { position: 'absolute', bottom: 28, left: 44, right: 44, borderTopWidth: 1, borderTopColor: COLORS.line, paddingTop: 10, flexDirection: 'row', justifyContent: 'space-between' },
   footerText: { fontSize: 8, color: COLORS.faint },
+  // Its own line BELOW the footer row — appending it as a third child of that
+  // row would shift the right-hand footer text to the centre, on single-page
+  // receipts too (the render returns '', so the slot still exists). Positioning
+  // only; the type comes from styles.footerText.
+  pageNumber: { position: 'absolute', bottom: 14, left: 44, right: 44, textAlign: 'right' },
 })
 
 function money(n: number) {
@@ -81,10 +86,29 @@ export function ReceiptDocument({ payment, invoice, settings }: ReceiptPDFProps)
   const receiptNo = receiptNumberFor(payment.id)
   // A negative ledger row is a refund — same document, refund vocabulary.
   const isRefund = Number(payment.amount) < 0
+  // Printed only for a registrant — and mandatory on the credit note below
+  // (ETA s.232(3)) for the operator to reduce their net tax at all.
+  const gstNumber = gstRegistrationNumber(settings)
+
+  // ── The GST being adjusted (ETA s.232(3)) ──────────────────────────────────
+  // A credit note must show the GST of the REFUND, not of the original invoice —
+  // a partial refund adjusts only part of the tax, so reprinting the invoice's
+  // GST would overstate what was credited.
+  //
+  // The refunded figure is TAX-INCLUDED (we hand back what the customer paid, GST
+  // and all), so the tax is BACKED OUT of it: total - total/(1 + rate). Multiplying
+  // by the rate instead would compute tax ON a tax-inclusive amount and overstate
+  // the GST by a factor of (1 + rate) — inflating the operator's net-tax claim.
+  // The rate comes from the ONE invoiceTotals engine, never a local constant.
+  const refundTotal = Math.abs(Number(payment.amount) || 0)
+  const refundGst = totals.gstPercent > 0
+    ? Math.round((refundTotal - refundTotal / (1 + totals.gstPercent / 100)) * 100) / 100
+    : 0
+  const refundNet = Math.round((refundTotal - refundGst) * 100) / 100
 
   return (
     <Document>
-      <Page size="A4" style={styles.page}>
+      <Page size="LETTER" style={styles.page}>
         <View style={styles.headerRow}>
           <View>
             {settings?.logo_url ? (
@@ -105,10 +129,18 @@ export function ReceiptDocument({ payment, invoice, settings }: ReceiptPDFProps)
               <Text style={styles.companyLine}>{settings?.email_secondary || settings?.email_primary}</Text>
             ) : null}
             {settings?.website ? <Text style={styles.companyLine}>{settings.website}</Text> : null}
+            {gstNumber ? <Text style={styles.companyLine}>GST/HST #: {gstNumber}</Text> : null}
           </View>
         </View>
 
-        <Text style={styles.title}>{isRefund ? 'Refund Receipt' : 'Payment Receipt'}</Text>
+        <Text style={styles.title}>{isRefund ? 'Credit Note' : 'Payment Receipt'}</Text>
+        {/* s.232(3)(a): the document must STATE that it is a credit note — a title
+            alone is a caption, so the statement is spelled out in the body. */}
+        {isRefund ? (
+          <Text style={[styles.muted, { marginTop: -8, marginBottom: 16 }]}>
+            This document is a credit note, issued for a refund on invoice {invoice.invoice_number}.
+          </Text>
+        ) : null}
 
         <View style={styles.bar}>
           <View>
@@ -126,7 +158,7 @@ export function ReceiptDocument({ payment, invoice, settings }: ReceiptPDFProps)
         </View>
 
         <View style={styles.paidBox}>
-          <Text style={{ ...styles.paidAmount, ...(isRefund ? { color: '#B4232F' } : {}) }}>{isRefund ? '−' : ''}{money(Math.abs(Number(payment.amount) || 0))}</Text>
+          <Text style={{ ...styles.paidAmount, ...(isRefund ? { color: '#B4232F' } : {}) }}>{isRefund ? '-' : ''}{money(refundTotal)}</Text>
           <Text style={styles.paidLabel}>{isRefund ? 'Refund issued' : `Payment received — ${paymentMethodLabel(payment.method || payment.provider)}`}</Text>
         </View>
 
@@ -150,44 +182,87 @@ export function ReceiptDocument({ payment, invoice, settings }: ReceiptPDFProps)
           </View>
         ) : null}
 
-        <Text style={styles.sectionTitle}>Invoice Summary</Text>
-        <View style={{ marginBottom: 8 }}>
-          <View style={styles.row}>
-            <Text style={styles.rowLabel}>Subtotal</Text>
-            <Text style={styles.rowValue}>{money(totals.subtotal)}</Text>
-          </View>
-          {totals.hasDiscount ? (
-            <View style={styles.row}>
-              <Text style={styles.rowLabel}>Discount{totals.discountLabel ? ` (${totals.discountLabel})` : ''}</Text>
-              <Text style={styles.rowValue}>-{money(totals.discountAmount)}</Text>
+        {/* s.232(3)(c): a credit note must state the GST being ADJUSTED — the tax
+            inside this refund. The Invoice Summary below is suppressed for refunds
+            on purpose: its GST is the ORIGINAL invoice's, so printing both would
+            put two different GST figures on one tax document and leave an auditor
+            (and the customer's own ITC reversal) guessing which was credited. */}
+        {isRefund ? (
+          <View>
+            <Text style={styles.sectionTitle}>Refund Summary</Text>
+            <View style={{ marginBottom: 8 }} wrap={false}>
+              <View style={styles.row}>
+                <Text style={styles.rowLabel}>Refund total</Text>
+                <Text style={styles.rowValue}>{money(refundTotal)}</Text>
+              </View>
+              {/* No GST lines at all when not registered — a "GST included $0.00"
+                  row on a credit note asserts a tax status the business doesn't have. */}
+              {totals.hasGst ? (
+                <View style={styles.row}>
+                  <Text style={styles.rowLabel}>GST included ({totals.gstPercent}%)</Text>
+                  <Text style={styles.rowValue}>{money(refundGst)}</Text>
+                </View>
+              ) : null}
+              {totals.hasGst ? (
+                <View style={styles.row}>
+                  <Text style={styles.rowLabel}>Refund excluding GST</Text>
+                  <Text style={styles.rowValue}>{money(refundNet)}</Text>
+                </View>
+              ) : null}
             </View>
-          ) : null}
-          {totals.hasGst ? (
-            <View style={styles.row}>
-              <Text style={styles.rowLabel}>GST ({totals.gstPercent}%)</Text>
-              <Text style={styles.rowValue}>{money(totals.gstAmount)}</Text>
+          </View>
+        ) : null}
+
+        {!isRefund ? (
+          <View>
+            <Text style={styles.sectionTitle}>Invoice Summary</Text>
+            <View style={{ marginBottom: 8 }} wrap={false}>
+              <View style={styles.row}>
+                <Text style={styles.rowLabel}>Subtotal</Text>
+                <Text style={styles.rowValue}>{money(totals.subtotal)}</Text>
+              </View>
+              {totals.hasDiscount ? (
+                <View style={styles.row}>
+                  <Text style={styles.rowLabel}>Discount{totals.discountLabel ? ` (${totals.discountLabel})` : ''}</Text>
+                  <Text style={styles.rowValue}>-{money(totals.discountAmount)}</Text>
+                </View>
+              ) : null}
+              {totals.hasGst ? (
+                <View style={styles.row}>
+                  <Text style={styles.rowLabel}>GST ({totals.gstPercent}%)</Text>
+                  <Text style={styles.rowValue}>{money(totals.gstAmount)}</Text>
+                </View>
+              ) : null}
+              <View style={styles.row}>
+                <Text style={styles.rowLabel}>Invoice Total</Text>
+                <Text style={styles.rowValue}>{money(totals.total)}</Text>
+              </View>
+              <View style={styles.row}>
+                <Text style={styles.rowLabel}>Paid to Date</Text>
+                <Text style={styles.rowValue}>{money(Number(invoice.amount_paid) || 0)}</Text>
+              </View>
+              <View style={styles.balanceRow}>
+                <Text style={styles.balanceLabel}>{owing > 0.01 ? 'Balance Remaining' : 'Balance'}</Text>
+                <Text style={[styles.balanceValue, { color: owing > 0.01 ? COLORS.dark : COLORS.green }]}>
+                  {owing > 0.01 ? money(owing) : 'Paid in full'}
+                </Text>
+              </View>
             </View>
-          ) : null}
-          <View style={styles.row}>
-            <Text style={styles.rowLabel}>Invoice Total</Text>
-            <Text style={styles.rowValue}>{money(totals.total)}</Text>
           </View>
-          <View style={styles.row}>
-            <Text style={styles.rowLabel}>Paid to Date</Text>
-            <Text style={styles.rowValue}>{money(Number(invoice.amount_paid) || 0)}</Text>
-          </View>
-          <View style={styles.balanceRow}>
-            <Text style={styles.balanceLabel}>{owing > 0.01 ? 'Balance Remaining' : 'Balance'}</Text>
-            <Text style={[styles.balanceValue, { color: owing > 0.01 ? COLORS.dark : COLORS.green }]}>
-              {owing > 0.01 ? money(owing) : 'Paid in full'}
-            </Text>
-          </View>
-        </View>
+        ) : null}
 
         <View style={styles.footer} fixed>
           <Text style={styles.footerText}>{company}{contactLines.length ? '  ·  ' + contactLines.join('  ·  ') : ''}</Text>
           <Text style={styles.footerText}>Thank you for your business</Text>
         </View>
+
+        {/* Only once the receipt actually spans pages — "Page 1 of 1" on a
+            single-page customer document is noise. */}
+        <Text
+          style={[styles.footerText, styles.pageNumber]}
+          fixed
+          render={({ pageNumber, totalPages }) => (totalPages > 1 ? `Page ${pageNumber} of ${totalPages}` : '')}
+        />
       </Page>
     </Document>
   )

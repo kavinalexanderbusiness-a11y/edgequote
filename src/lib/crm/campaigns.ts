@@ -60,7 +60,10 @@ export const CAMPAIGN_KINDS: Record<CampaignKind, CampaignKindMeta> = {
   },
   seasonal: {
     label: 'Seasonal offer',
-    blurb: 'Fires once a year on a date you pick — spring cleanups, fall aeration, snow bookings.',
+    // The examples used to be "spring cleanups, fall aeration, snow bookings" —
+    // un-overridable chrome that told every non-lawn business it was in the wrong
+    // app. The presets below still offer those to whoever wants them.
+    blurb: 'Fires once a year on a date you pick — whatever your season opens or closes with.',
     defaultTemplate: 'seasonal_offer',
     defaultChannels: ['email'],
     defaultSchedule: { month: 4, day: 1 },
@@ -69,7 +72,7 @@ export const CAMPAIGN_KINDS: Record<CampaignKind, CampaignKindMeta> = {
   },
   referral: {
     label: 'Referral ask',
-    blurb: 'Asks customers to refer a neighbour. Pair with “happy customers only” so you only ask people who already rated you well.',
+    blurb: 'Asks customers to refer someone. Pair with “happy customers only” so you only ask people who already rated you well.',
     defaultTemplate: 'referral_request',
     defaultChannels: ['email'],
     defaultSchedule: { day_of_month: 15, every_months: 6 },
@@ -215,6 +218,10 @@ export const CAMPAIGN_PRESETS: CampaignPreset[] = [
   { kind: 'broadcast',   name: 'Monthly check-in',         channels: ['email'],        schedule: { day_of_month: 1, every_months: 1 }, audience: {} },
   { kind: 'referral',    name: 'Ask happy customers for referrals', channels: ['email'], schedule: { day_of_month: 15, every_months: 6 }, audience: { happy_only: true } },
   { kind: 'review',      name: 'Chase missing reviews',    channels: ['sms', 'email'], schedule: { day_of_month: 1, every_months: 3 }, audience: { not_reviewed: true } },
+  // No static neutral-seasonal row here: CampaignManager REPLACES every seasonal
+  // entry in this list with the business's trade-pack campaigns (lawn pack ≡ the
+  // SEASONAL_TEMPLATES below; packs without their own fall back to the neutral
+  // pack's) — a row added here would be filtered out, dead on arrival.
   ...SEASONAL_TEMPLATES.map((s): CampaignPreset => ({
     kind: 'seasonal',
     name: s.label,

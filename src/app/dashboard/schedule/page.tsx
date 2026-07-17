@@ -3,7 +3,10 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Customer, Job, JobFormValues, JobLineItem, Quote, RecurrenceScope, RecurUnit } from '@/types'
+import { AddonTemplate, Customer, Job, JobFormValues, JobLineItem, Quote, RecurrenceScope, RecurUnit } from '@/types'
+// UI defaults only (add-on quick-chips) — engines never import lib/trades; this
+// page is on verify:trades' reviewed allowlist for exactly this consumption.
+import { tradePack, NEUTRAL_PACK } from '@/lib/trades'
 import { listLineItemsByJob, addLineItems, deleteLineItem, recordPriceChange, addonsTotal, normalizeServiceKey } from '@/lib/jobPricing'
 import { Calendar, CalendarView } from '@/components/schedule/Calendar'
 import { DayOpsPanel, QuoteLite, QuickPatch } from '@/components/schedule/DayOpsPanel'
@@ -50,7 +53,7 @@ import { Plus, X, ChevronLeft, ChevronRight, Trash2, Rocket, AlertTriangle, Repe
 import { OptimizeSchedule } from '@/components/schedule/OptimizeSchedule'
 import { RainDelayCenter } from '@/components/schedule/RainDelayCenter'
 import { WeatherStrip } from '@/components/weather/WeatherStrip'
-import { CloudRain } from 'lucide-react'
+import { CalendarClock } from 'lucide-react'
 import { analyzeSchedule, optimizeSchedule, planRainDelay, MOVE_REASON_LABEL } from '@/lib/optimizer'
 import type { PlannedMove, OptimizeScope, OptimizeMode, OptJob, ScheduleSuggestion, CadenceVisit, CadenceRecs } from '@/lib/optimizer'
 import { evaluateScheduleMove } from '@/lib/scheduleWarnings'
@@ -161,6 +164,8 @@ export default function SchedulePage() {
   const [preferredWorkDays, setPreferredWorkDays] = useState<number[]>([5, 6, 0])
   const [workStartTime, setWorkStartTime] = useState('08:00')
   const [capacityHours, setCapacityHours] = useState(8)
+  // Neutral until the settings read lands — never a trade's chips by default.
+  const [addonTemplates, setAddonTemplates] = useState<AddonTemplate[]>(NEUTRAL_PACK.addons)
   const [defaultCrew, setDefaultCrew] = useState(1)
   // Defaults come from the resolver, not a hand-copied literal — otherwise every
   // new automation has to be remembered here too (and this is loaded from
@@ -527,7 +532,7 @@ export default function SchedulePage() {
       supabase.from('customers').select('*').eq('user_id', user!.id).is('archived_at', null).order('name'), // active only — can't schedule an archived customer without restoring
       supabase.from('job_recurrences').select('*').eq('user_id', user!.id),
       supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
-      supabase.from('business_settings').select('base_lat, base_lng, base_address, preferred_work_days, work_start_time, daily_capacity_hours, automations').eq('user_id', user!.id).maybeSingle(),
+      supabase.from('business_settings').select('base_lat, base_lng, base_address, preferred_work_days, work_start_time, daily_capacity_hours, automations, business_type').eq('user_id', user!.id).maybeSingle(),
       supabase.from('invoices').select('job_id').eq('user_id', user!.id).not('job_id', 'is', null),
       supabase.from('schedule_health_ignored').select('issue_key').eq('user_id', user!.id),
       supabase.from('day_statuses').select(DAY_STATUS_SELECT).eq('user_id', user!.id),
@@ -604,7 +609,12 @@ export default function SchedulePage() {
     }
 
     // Base coordinate for route optimization (geocode the address once if needed).
-    const s = sRes.data as { base_lat: number | null; base_lng: number | null; base_address: string | null; preferred_work_days: number[] | null; work_start_time: string | null; daily_capacity_hours: number | null; automations: unknown } | null
+    const s = sRes.data as { base_lat: number | null; base_lng: number | null; base_address: string | null; preferred_work_days: number[] | null; work_start_time: string | null; daily_capacity_hours: number | null; automations: unknown; business_type: string | null } | null
+    // Add-on quick-chips come from the trade pack (UI defaults only — same
+    // contract as the campaign preset menu). A pack with no list falls back to
+    // the neutral chips; a failed read resolves to the neutral pack too.
+    const packForChips = tradePack(s?.business_type)
+    setAddonTemplates(packForChips.addons.length ? packForChips.addons : NEUTRAL_PACK.addons)
     setAutomations(resolveAutomations(s?.automations))
     setPreferredWorkDays(s?.preferred_work_days?.length ? s.preferred_work_days : [5, 6, 0])
     setWorkStartTime(s?.work_start_time || '08:00')
@@ -1307,7 +1317,7 @@ export default function SchedulePage() {
     let outcome: 'ran' | 'queued'
     try {
       outcome = await queueOrRun(
-        { kind: 'job.update', payload: { id: job.id, patch }, label: `Start ${job.title || 'job'}` },
+        { kind: 'job.update', payload: { id: job.id, patch, baseUpdatedAt: job.updated_at }, label: `Start ${job.title || 'job'}` },
         async () => {
           const { error } = await supabase.from('jobs').update(patch).eq('id', job.id)
           if (error) throw new Error(error.message)
@@ -1323,7 +1333,7 @@ export default function SchedulePage() {
     offerUndo(outcome === 'queued' ? 'Job started — will sync' : 'Job started', async () => {
       setJobs(prev2 => prev2.map(j => (j.id === job.id ? { ...j, ...prev } : j)))
       await queueOrRun(
-        { kind: 'job.update', payload: { id: job.id, patch: prev }, label: `Undo start ${job.title || 'job'}` },
+        { kind: 'job.update', payload: { id: job.id, patch: prev, baseUpdatedAt: job.updated_at }, label: `Undo start ${job.title || 'job'}` },
         async () => { await supabase.from('jobs').update(prev).eq('id', job.id) },
       )
     })
@@ -1347,7 +1357,7 @@ export default function SchedulePage() {
     let outcome: 'ran' | 'queued'
     try {
       outcome = await queueOrRun(
-        { kind: 'job.complete', payload: { id: job.id, patch, job: completed, notify }, label: `Complete ${job.title || 'job'}` },
+        { kind: 'job.complete', payload: { id: job.id, patch, job: completed, notify, baseUpdatedAt: job.updated_at }, label: `Complete ${job.title || 'job'}` },
         async () => {
           const { error } = await supabase.from('jobs').update(patch).eq('id', job.id)
           if (error) throw new Error(error.message)
@@ -1375,7 +1385,7 @@ export default function SchedulePage() {
     offerUndo(outcome === 'queued' ? 'Job completed — will sync' : 'Job completed', async () => {
       setJobs(prev2 => prev2.map(j => (j.id === job.id ? { ...j, ...prev } : j)))
       await queueOrRun(
-        { kind: 'job.update', payload: { id: job.id, patch: prev }, label: `Undo complete ${job.title || 'job'}` },
+        { kind: 'job.update', payload: { id: job.id, patch: prev, baseUpdatedAt: job.updated_at }, label: `Undo complete ${job.title || 'job'}` },
         async () => {
           await supabase.from('jobs').update(prev).eq('id', job.id)
           if (invoiceCreated) await supabase.from('invoices').delete().eq('job_id', job.id).eq('status', 'draft')
@@ -1406,8 +1416,8 @@ export default function SchedulePage() {
     try {
       outcome = await queueOrRun(
         completing
-          ? { kind: 'job.complete', payload: { id: job.id, patch: fields, job: completed, notify: false }, label: `Complete ${job.title || 'job'}` }
-          : { kind: 'job.update', payload: { id: job.id, patch: fields, syncPrice: repriced }, label: `Edit ${job.title || 'job'}` },
+          ? { kind: 'job.complete', payload: { id: job.id, patch: fields, job: completed, notify: false, baseUpdatedAt: job.updated_at }, label: `Complete ${job.title || 'job'}` }
+          : { kind: 'job.update', payload: { id: job.id, patch: fields, syncPrice: repriced, baseUpdatedAt: job.updated_at }, label: `Edit ${job.title || 'job'}` },
         async () => {
           const { error } = await supabase.from('jobs').update(fields).eq('id', job.id)
           if (error) throw new Error(error.message)
@@ -1456,7 +1466,7 @@ export default function SchedulePage() {
     let outcome: 'ran' | 'queued'
     try {
       outcome = await queueOrRun(
-        { kind: 'job.update', payload: { id: job.id, patch: { price }, syncPrice: true, syncReason: reason, priceAudit: audit }, label: `Price ${job.title || 'job'}` },
+        { kind: 'job.update', payload: { id: job.id, patch: { price }, syncPrice: true, syncReason: reason, priceAudit: audit, baseUpdatedAt: job.updated_at }, label: `Price ${job.title || 'job'}` },
         async () => {
           const { error } = await supabase.from('jobs').update({ price }).eq('id', job.id)
           if (error) throw new Error(error.message)
@@ -1876,8 +1886,8 @@ export default function SchedulePage() {
         description={`${jobs.length} job${jobs.length !== 1 ? 's' : ''} on the calendar`}
         action={
           <div className="flex items-center gap-2">
-            <Button variant="secondary" onClick={() => setShowRainCenter(true)} title="Weather Operations — move jobs (rain, equipment, absence, holiday, emergency) and notify customers">
-              <CloudRain className="w-4 h-4" /> Weather Ops
+            <Button variant="secondary" onClick={() => setShowRainCenter(true)} title="Reschedule — move jobs (weather, equipment, absence, holiday, emergency) and notify customers">
+              <CalendarClock className="w-4 h-4" /> Reschedule
             </Button>
             <Button variant="secondary" onClick={() => launchOptimizer()} title="Optimize your schedule — pick scope and goal">
               <Rocket className="w-4 h-4" /> Optimize
@@ -2138,6 +2148,7 @@ export default function SchedulePage() {
           onDeleteLineItem={removeLineItem}
           getPreviousAddons={getPreviousAddons}
           onCopyPreviousAddons={copyPreviousAddons}
+          addonTemplates={addonTemplates}
           workStartTime={dayView.start}
           capacityHours={dayView.laborHours}
           onRainDelay={() => rainDelayDay(format(cursor, 'yyyy-MM-dd'))}

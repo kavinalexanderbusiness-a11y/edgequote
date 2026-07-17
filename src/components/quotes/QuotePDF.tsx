@@ -57,6 +57,11 @@ const styles = StyleSheet.create({
 
   footer: { position: 'absolute', bottom: 28, left: 44, right: 44, borderTopWidth: 1, borderTopColor: COLORS.line, paddingTop: 10, flexDirection: 'row', justifyContent: 'space-between' },
   footerText: { fontSize: 8, color: COLORS.faint },
+  // Its own line BELOW the footer row — appending it as a third child of that
+  // row would shift the right-hand footer text to the centre, on single-page
+  // quotes too (the render returns '', so the slot still exists). Positioning
+  // only; the type comes from styles.footerText.
+  pageNumber: { position: 'absolute', bottom: 14, left: 44, right: 44, textAlign: 'right' },
 })
 
 function money(n: number) {
@@ -72,6 +77,12 @@ const CUSTOMER_STATUS: Record<string, string> = {
 function dateStr(s: string | null) {
   // Date-only strings must anchor to LOCAL midnight or the PDF prints yesterday.
   const d = s ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(s) ? s + 'T00:00:00' : s) : new Date()
+  return new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: 'long', day: 'numeric' }).format(d)
+}
+// Valid-until = issued date + N days, anchored the same way so the window reads honestly.
+function dateStrPlusDays(s: string | null, days: number) {
+  const d = s ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(s) ? s + 'T00:00:00' : s) : new Date()
+  d.setDate(d.getDate() + days)
   return new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: 'long', day: 'numeric' }).format(d)
 }
 
@@ -96,7 +107,7 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
 
   return (
     <Document>
-      <Page size="A4" style={styles.page}>
+      <Page size="LETTER" style={styles.page}>
         {/* Header */}
         <View style={styles.headerRow}>
           <View>
@@ -108,7 +119,9 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
                 height: Math.min(105, 70 * (((settings.logo_scale && settings.logo_scale >= 50 ? settings.logo_scale : 100)) / 100)),
               }} />
             ) : (
-              <Text style={styles.companyName}>{company}</Text>
+              // No logo: the identity is carried once by the right companyBlock —
+              // don't reprint the name here or it prints twice.
+              null
             )}
           </View>
           <View style={styles.companyBlock}>
@@ -131,6 +144,10 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
           <View>
             <Text style={styles.quoteBarLabel}>Date Issued</Text>
             <Text style={styles.quoteBarValue}>{dateStr(quote.issued_date || quote.created_at)}</Text>
+          </View>
+          <View>
+            <Text style={styles.quoteBarLabel}>Valid Until</Text>
+            <Text style={styles.quoteBarValue}>{dateStrPlusDays(quote.issued_date || quote.created_at, 30)}</Text>
           </View>
           <View>
             <Text style={styles.quoteBarLabel}>Status</Text>
@@ -159,7 +176,7 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
         {/* Line items */}
         <Text style={styles.sectionTitle}>Quote Details</Text>
         <View style={styles.table}>
-          <View style={styles.tableHead}>
+          <View style={styles.tableHead} fixed>
             <Text style={[styles.th, styles.cellDesc]}>Description</Text>
             <Text style={[styles.th, styles.cellQty]}>Details</Text>
             <Text style={[styles.th, styles.cellAmt]}>Amount</Text>
@@ -171,7 +188,7 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
               const t = serviceLineTotals(s)
               const qtyLabel = Number(s.quantity) > 1 ? `${s.quantity} × ${money(s.unit_price)}` : s.sort_order === 0 ? `${quote.crew_size} crew · ${quote.hours} hrs` : '—'
               return (
-                <View key={s.id} style={styles.tableRow}>
+                <View key={s.id} style={styles.tableRow} wrap={false}>
                   <View style={styles.cellDesc}>
                     <Text style={styles.td}>{s.service_type}</Text>
                     {s.notes ? <Text style={styles.muted}>{s.notes}</Text> : s.sort_order === 0 ? <Text style={styles.muted}>First visit</Text> : null}
@@ -183,7 +200,7 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
               )
             })
           ) : (
-            <View style={styles.tableRow}>
+            <View style={styles.tableRow} wrap={false}>
               <View style={styles.cellDesc}>
                 <Text style={styles.td}>{quote.service_type}</Text>
                 <Text style={styles.muted}>First visit</Text>
@@ -193,7 +210,7 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
             </View>
           )}
           {quote.travel_fee > 0 ? (
-            <View style={styles.tableRow}>
+            <View style={styles.tableRow} wrap={false}>
               <View style={styles.cellDesc}>
                 <Text style={styles.td}>Travel Fee</Text>
                 <Text style={styles.muted}>Travel to job site</Text>
@@ -207,7 +224,7 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
         {/* Totals — the subtotal row only earns its place when it differs from
             the single line above it (multi-service or a travel fee); otherwise a
             one-service quote printed the same number three rows in a row. */}
-        <View style={styles.totals}>
+        <View style={styles.totals} wrap={false}>
           {((lines && lines.length > 1) || quote.travel_fee > 0) ? (
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>{lines && lines.length > 1 ? 'Services subtotal' : 'First visit'}</Text>
@@ -233,6 +250,9 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
               Plus GST ({Number(settings?.gst_percent)}%) — added on your invoice
             </Text>
           ) : null}
+          <Text style={[styles.muted, { textAlign: 'right', marginTop: 6 }]}>
+            To approve this quote, open the secure link in your email.
+          </Text>
         </View>
 
         {/* Ongoing maintenance options */}
@@ -240,22 +260,27 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
           <View style={{ marginTop: 20 }}>
             <Text style={styles.sectionTitle}>Ongoing Maintenance Options</Text>
             <View style={styles.table}>
+              <View style={styles.tableHead}>
+                <Text style={[styles.th, styles.cellDesc]}>Plan</Text>
+                <Text style={[styles.th, styles.cellQty]}>Frequency</Text>
+                <Text style={[styles.th, styles.cellAmt]}>Amount</Text>
+              </View>
               {quote.weekly_price ? (
-                <View style={styles.tableRow}>
+                <View style={styles.tableRow} wrap={false}>
                   <Text style={[styles.td, styles.cellDesc]}>Weekly visit</Text>
                   <Text style={[styles.td, styles.cellQty]}>per visit</Text>
                   <Text style={[styles.td, styles.cellAmt]}>{money(quote.weekly_price)}</Text>
                 </View>
               ) : null}
               {quote.biweekly_price ? (
-                <View style={styles.tableRow}>
+                <View style={styles.tableRow} wrap={false}>
                   <Text style={[styles.td, styles.cellDesc]}>Bi-weekly visit</Text>
                   <Text style={[styles.td, styles.cellQty]}>per visit</Text>
                   <Text style={[styles.td, styles.cellAmt]}>{money(quote.biweekly_price)}</Text>
                 </View>
               ) : null}
               {quote.monthly_price ? (
-                <View style={styles.tableRow}>
+                <View style={styles.tableRow} wrap={false}>
                   <Text style={[styles.td, styles.cellDesc]}>Monthly visit</Text>
                   <Text style={[styles.td, styles.cellQty]}>per visit</Text>
                   <Text style={[styles.td, styles.cellAmt]}>{money(quote.monthly_price)}</Text>
@@ -286,6 +311,14 @@ export function QuoteDocument({ quote, settings, services }: QuotePDFProps) {
           <Text style={styles.footerText}>{company}{contactLines.length ? '  ·  ' + contactLines.join('  ·  ') : ''}</Text>
           <Text style={styles.footerText}>We look forward to working with you</Text>
         </View>
+
+        {/* Only once the quote actually spans pages — "Page 1 of 1" on a
+            single-page customer document is noise. */}
+        <Text
+          style={[styles.footerText, styles.pageNumber]}
+          fixed
+          render={({ pageNumber, totalPages }) => (totalPages > 1 ? `Page ${pageNumber} of ${totalPages}` : '')}
+        />
       </Page>
     </Document>
   )

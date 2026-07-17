@@ -2,11 +2,16 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AssistPayload } from '@/lib/ai/assist'
+import { readNdjson, isNdjson } from '@/lib/ai/stream'
 
 // ── Client side of /api/ai/assist ─────────────────────────────────────────────
 // One hook for every AI-assist surface: capability check (so surfaces render
 // nothing when no key is configured), NDJSON stream consumption with live
-// deltas, and abort-on-unmount. Same reader loop as the marketing composer.
+// deltas, and abort-on-unmount or on demand.
+//
+// The reader loop used to be copy-pasted here from the marketing composer (the
+// comment on this line used to say exactly that); both now read through the one
+// transport in lib/ai/stream.
 
 // Capability is a deploy-time fact (env var), so check once per page load and
 // share it across every mounted assist surface.
@@ -52,32 +57,27 @@ export function useAiAssist() {
         body: JSON.stringify(payload),
         signal: controller.signal,
       })
-      const ct = res.headers.get('content-type') || ''
-      if (!res.ok || !ct.includes('ndjson') || !res.body) {
+      if (!isNdjson(res)) {
         let msg = 'Could not generate that right now.'
         try { const j = await res.json(); if (j?.error) msg = j.error } catch { /* ignore */ }
         setError(msg)
         return null
       }
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buf = ''
       let full: string | null = null
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buf += decoder.decode(value, { stream: true })
-        let nl: number
-        while ((nl = buf.indexOf('\n')) !== -1) {
-          const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1)
-          if (!line) continue
-          let evt: { t: string; text?: string; error?: string }
-          try { evt = JSON.parse(line) } catch { continue }
-          if (evt.t === 'delta' && evt.text) handlers.onDelta?.(evt.text)
-          else if (evt.t === 'done') { full = evt.text ?? ''; handlers.onDone?.(full) }
-          else if (evt.t === 'error') setError(evt.error || 'Generation failed.')
+      await readNdjson(res, evt => {
+        if (evt.t === 'delta' && evt.text) handlers.onDelta?.(evt.text)
+        else if (evt.t === 'done') {
+          // An empty completion is a FAILURE, not a result. Every surface blanks
+          // its field before streaming and restores the owner's text only on
+          // null — so returning '' here wipes what they wrote and reports
+          // success ("Replaced your message."). Resolve null and say what
+          // happened; one seam, because all five surfaces already handle null.
+          const text = evt.text ?? ''
+          if (text.trim()) { full = text; handlers.onDone?.(text) }
+          else setError('The AI came back empty. Nothing was changed — try again.')
         }
-      }
+        else if (evt.t === 'error') setError(evt.error || 'Generation failed.')
+      })
       return full
     } catch (e) {
       if (!(e instanceof DOMException && e.name === 'AbortError')) {

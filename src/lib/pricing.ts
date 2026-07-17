@@ -177,8 +177,16 @@ export type CadenceKey = 'one_time' | 'weekly' | 'biweekly' | 'monthly'
 // When the owner's OWN check-in/check-out data exists (observed minutes per
 // 1,000 ft² from completed timed jobs), it replaces the generic model — every
 // completed job makes future estimates more accurate.
-export function estimateVisitMinutes(sqft: number, observedMinPer1000?: number | null): number {
-  if (sqft <= 0) return 45
+// Returns NULL when there is no measurement to estimate from.
+//
+// It used to return a bare `45` for sqft <= 0 — a manufactured duration with no
+// basis and no flag, indistinguishable from a real estimate. Callers then divided
+// money by it: priceGuardrails reported a $/hr built on an invented visit length,
+// and it read as fact. A number we cannot know must be absent, not guessed; every
+// caller already has to handle "no measurement", so make them say so out loud.
+// Behaviour for a real measurement (sqft > 0) is byte-for-byte unchanged.
+export function estimateVisitMinutes(sqft: number, observedMinPer1000?: number | null): number | null {
+  if (sqft <= 0) return null
   if (observedMinPer1000 && observedMinPer1000 > 0) {
     return Math.round(Math.min(90, Math.max(15, (sqft / 1000) * observedMinPer1000)))
   }
@@ -254,6 +262,24 @@ function valueCadenceMult(aggression: number): Record<Exclude<CadenceKey, 'one_t
   }
 }
 
+// THE cadence multipliers for a customer — the neutral baseline, or the
+// value-graded curve when their strategic grade is known. pricingPackage() has
+// always made this choice inline; this exposes the SAME choice so that anything
+// judging a price reaches the same answer the engine reached.
+//
+// It exists because the alternative was a copy. priceGuardrails.ts kept a private
+// `{weekly:0.75, biweekly:0.85, monthly:1.1}` — the neutral half only — under a
+// header promising "no new pricing math". So for a GRADED customer the guardrail
+// judged against a different curve than the engine priced with: at A+ the engine
+// recommends weekly ×0.68 and the guardrail called that same price "below the
+// recommended ×0.75" and warned. The app recommended a number and then told the
+// owner the number was too low. Pinned in verify-guardrails.ts.
+export function cadenceMultipliers(
+  valueGrade?: string | null,
+): Record<Exclude<CadenceKey, 'one_time'>, number> {
+  return valueGrade ? valueCadenceMult(gradeAggressiveness(valueGrade)) : CADENCE_MULT
+}
+
 export interface ValuePricingInfo {
   grade: string
   confidence: string                                   // "A+ Route Asset"
@@ -310,7 +336,9 @@ export function pricingPackage(
   // otherwise the neutral baseline (backward compatible for callers without it).
   const grade = ctx.valueGrade ?? null
   const agg = gradeAggressiveness(grade)
-  const mult = grade ? valueCadenceMult(agg) : CADENCE_MULT
+  // Via the exported seam, so a guardrail judging this price reads the multipliers
+  // from the same call the price was built with — never a copy of them.
+  const mult = cadenceMultipliers(grade)
   const options: CadenceOption[] = (['weekly', 'biweekly', 'monthly'] as const).map(c => {
     const price = roundToStep(oneTime * mult[c])
     return { cadence: c, price, visits: SEASON_VISITS[c], annual: price * SEASON_VISITS[c] }

@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Job } from '@/types'
 import { cn } from '@/lib/utils'
 import { DayStatusRow, dayStatusMeta, dayCrew, dayWorkHours, dayLaborHours, dayStartTime, dayEndTime, hasCapacityOverride } from '@/lib/dayStatus'
+import { DEFAULT_JOB_MIN } from '@/lib/route'
 import { Button } from '@/components/ui/Button'
 import {
   Users, Clock, Gauge, Minus, Plus, RotateCcw, CalendarX2, AlertTriangle, ChevronDown,
@@ -50,7 +51,12 @@ export function DaySettingsBar({
   const defaultEnd = dayEndTime(null, def, start)                 // end if hours weren't overridden
   const workHours = dayWorkHours(row, def)
   const available = round1(dayLaborHours(row, def))               // labor-hours (0 when blocked)
-  const bookedMin = jobs.filter(j => j.status !== 'cancelled').reduce((s, j) => s + (j.duration_minutes || 0), 0)
+  // A job with no duration counts as DEFAULT_JOB_MIN, not as zero — the app-wide
+  // convention (route.ts, Day Ops' dayLoad, computeDayEtas all coalesce the same
+  // way). Treating unknown as 0 booked made every figure below lie about the SAME
+  // rows: booked under-reported, util read 0%, the over-capacity warning could not
+  // fire, and "Only N h remain" reported a full day free.
+  const bookedMin = jobs.filter(j => j.status !== 'cancelled').reduce((s, j) => s + (j.duration_minutes || DEFAULT_JOB_MIN), 0)
   const booked = round1(bookedMin / 60)
   const remaining = round1(available - booked)
   const util = available > 0 ? Math.round((booked / available) * 100) : (booked > 0 ? 999 : 0)

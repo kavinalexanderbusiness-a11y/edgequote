@@ -5,6 +5,7 @@ import {
 } from '@react-pdf/renderer'
 import type { BusinessSettings } from '@/types'
 import { formatCurrency, parseLocalDate } from '@/lib/utils'
+import { gstRegistrationNumber } from '@/lib/invoiceTotals'
 import { PDF_COLORS, pdfLogoSize } from '@/lib/pdfTheme'
 
 // ── Revenue & GST Summary PDF ────────────────────────────────────────────────
@@ -64,6 +65,10 @@ const styles = StyleSheet.create({
 
   footer: { position: 'absolute', bottom: 28, left: 44, right: 44, borderTopWidth: 1, borderTopColor: PDF_COLORS.line, paddingTop: 10, flexDirection: 'row', justifyContent: 'space-between' },
   footerText: { fontSize: 8, color: PDF_COLORS.faint },
+  // Its own line BELOW the footer row — appending it as a third child of that
+  // row would shift the right-hand footer text to the centre. Positioning only;
+  // the type comes from styles.footerText.
+  pageNumber: { position: 'absolute', bottom: 14, left: 44, right: 44, textAlign: 'right' },
 })
 
 // Column widths. Two layouts: with GST, and without (not GST-registered — the
@@ -93,6 +98,16 @@ function reportDate(s: string | null): string {
   return new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: 'long', day: 'numeric' }).format(parseLocalDate(s))
 }
 
+// The generated-on stamp. A full ISO timestamp (not a date-only string), because two
+// runs on the SAME day can differ — the minute is what tells them apart.
+function generatedStamp(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  return new Intl.DateTimeFormat('en-CA', {
+    year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  }).format(d)
+}
+
 export interface RevenueGstRow {
   invoiceNumber: string
   issuedDate: string | null      // yyyy-MM-dd
@@ -109,6 +124,16 @@ export interface RevenueGstReport {
   gstPercent: number
   rows: RevenueGstRow[]
   totals: { net: number; gst: number; total: number; paid: number; outstanding: number; count: number }
+  /** Drafts in this period, EXCLUDED from every figure above. Carried onto the
+   *  document because the page's on-screen disclosure doesn't travel with the PDF:
+   *  the moment it's emailed to an accountant, "why is March light?" has no answer
+   *  unless the paper itself says what was left out. */
+  excludedDrafts: { count: number; total: number }
+  /** When this PDF was produced. The report recomputes live from current data, so
+   *  two files both titled "2026 · Q2" can hold different numbers — without this
+   *  there is nothing on either page to say which one is newer, and the operator
+   *  can't show what the figures looked like on filing day. */
+  generatedAt: string            // ISO timestamp, stamped by the caller
 }
 
 interface RevenueGstPDFProps {
@@ -127,13 +152,16 @@ export function RevenueGstDoc({ report, settings }: RevenueGstPDFProps): JSX.Ele
   ].filter(Boolean) as string[]
 
   const hasGst = Number(report.gstPercent) > 0
+  // The registration number is the one thing an accountant needs to actually FILE
+  // from this statement — a GST summary without it can't be tied to a GST account.
+  const gstNumber = gstRegistrationNumber(settings)
   const col = hasGst ? colGst : colNoGst
   const hasRows = report.rows.length > 0
   const logo = pdfLogoSize(settings?.logo_scale)
 
   return (
     <Document>
-      <Page size="A4" style={styles.page}>
+      <Page size="LETTER" style={styles.page}>
         {/* Header */}
         <View style={styles.headerRow}>
           <View>
@@ -152,6 +180,7 @@ export function RevenueGstDoc({ report, settings }: RevenueGstPDFProps): JSX.Ele
               <Text style={styles.companyLine}>{settings?.email_secondary || settings?.email_primary}</Text>
             ) : null}
             {settings?.website ? <Text style={styles.companyLine}>{settings.website}</Text> : null}
+            {gstNumber ? <Text style={styles.companyLine}>GST/HST #: {gstNumber}</Text> : null}
           </View>
         </View>
 
@@ -165,11 +194,18 @@ export function RevenueGstDoc({ report, settings }: RevenueGstPDFProps): JSX.Ele
             <Text style={styles.barLabel}>Period</Text>
             <Text style={styles.barValue}>{report.periodLabel}</Text>
           </View>
+          {/* Which copy is this? The figures recompute from live data, so two files
+              titled the same period can disagree; without a stamp neither page can
+              say which is current, and the operator can't evidence what they filed. */}
+          <View>
+            <Text style={styles.barLabel}>Generated</Text>
+            <Text style={styles.barValue}>{generatedStamp(report.generatedAt)}</Text>
+          </View>
         </View>
 
         {/* Summary */}
         <Text style={styles.sectionTitle}>Summary</Text>
-        <View style={styles.summaryBox}>
+        <View style={styles.summaryBox} wrap={false}>
           <View style={styles.sumRow}>
             <Text style={styles.sumLabel}>Revenue (excluding GST)</Text>
             <Text style={styles.sumValue}>{formatCurrency(report.totals.net)}</Text>
@@ -210,7 +246,7 @@ export function RevenueGstDoc({ report, settings }: RevenueGstPDFProps): JSX.Ele
           <Text style={styles.emptyLine}>No invoices issued in this period.</Text>
         ) : (
           <View style={styles.table}>
-            <View style={styles.tableHead}>
+            <View style={styles.tableHead} fixed>
               <Text style={[styles.th, col.num]}>Invoice #</Text>
               <Text style={[styles.th, col.date]}>Date</Text>
               <Text style={[styles.th, col.cust]}>Customer</Text>
@@ -231,7 +267,7 @@ export function RevenueGstDoc({ report, settings }: RevenueGstPDFProps): JSX.Ele
               </View>
             ))}
             {/* Column totals — an accountant foots the table; give them the sum. */}
-            <View style={styles.tableFootRow}>
+            <View style={styles.tableFootRow} wrap={false}>
               <Text style={[styles.tdBold, col.num]}>Total</Text>
               <Text style={[styles.td, col.date]}> </Text>
               <Text style={[styles.td, col.cust]}> </Text>
@@ -249,9 +285,13 @@ export function RevenueGstDoc({ report, settings }: RevenueGstPDFProps): JSX.Ele
         <View style={styles.disclosureBox}>
           <Text style={styles.sectionTitle}>Basis &amp; Scope</Text>
           <Text style={styles.disclosureText}>
-            Based on invoices issued in this period. Excludes cancelled invoices. GST shown is charged on
-            invoices, not a filing figure. This is a revenue summary, not a profit statement — business
-            expenses are not tracked in EdgeQuote.
+            Accrual basis: based on invoices ISSUED in this period, whether or not they have been paid —
+            not on cash received. Excludes cancelled invoices.
+            {report.excludedDrafts.count > 0
+              ? ` Also excludes ${report.excludedDrafts.count} draft invoice${report.excludedDrafts.count === 1 ? '' : 's'} (${formatCurrency(report.excludedDrafts.total)}) that have not been sent to a customer.`
+              : ' Draft invoices, if any, are excluded until sent.'}
+            {' '}GST shown is charged on invoices, not a filing figure. This is a revenue summary, not a
+            profit statement — business expenses are not tracked in EdgeQuote.
           </Text>
         </View>
 
@@ -260,6 +300,14 @@ export function RevenueGstDoc({ report, settings }: RevenueGstPDFProps): JSX.Ele
           <Text style={styles.footerText}>{company}{contactLines.length ? '  ·  ' + contactLines.join('  ·  ') : ''}</Text>
           <Text style={styles.footerText}>Revenue &amp; GST Summary  ·  {report.periodLabel}</Text>
         </View>
+
+        {/* The accountant-handoff document: a detached or mis-collated page of a
+            50-row summary is otherwise undetectable. */}
+        <Text
+          style={[styles.footerText, styles.pageNumber]}
+          fixed
+          render={({ pageNumber, totalPages }) => (totalPages > 1 ? `Page ${pageNumber} of ${totalPages}` : '')}
+        />
       </Page>
     </Document>
   )

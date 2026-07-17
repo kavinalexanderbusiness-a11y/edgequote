@@ -4,13 +4,33 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "verify:automations": "tsx scripts/verify-automations.ts",
+    "verify:business-shape": "tsx scripts/verify-business-shape.ts",
+    "verify:trades": "tsx scripts/verify-trades.ts",
+    "verify:onboarding": "tsx scripts/verify-onboarding.ts",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "verify:ai-context": "tsx scripts/verify-ai-context.ts",
+    "verify:ai-assist": "tsx scripts/verify-ai-assist.ts",
+    "verify:ai-surface": "tsx scripts/verify-ai-surface.ts",
+    "verify:seasons": "tsx scripts/verify-seasons.ts",
+    "verify:modules": "tsx scripts/verify-modules.ts",
+    "verify:pricing": "tsx scripts/verify-pricing.ts",
+    "verify:guardrails": "tsx scripts/verify-guardrails.ts",
+    "verify:labor": "tsx scripts/verify-labor.ts",
+    "verify:density": "tsx scripts/verify-density.ts",
+    "verify:learning": "tsx scripts/verify-learning.ts",
+    "verify:analytics": "tsx scripts/verify-analytics.ts",
+    "verify:integrations": "tsx scripts/verify-integrations.ts",
+    "verify:inventory": "tsx scripts/verify-inventory.ts",
+    "verify:accounting": "tsx scripts/verify-accounting.ts",
+    "verify:reports": "tsx scripts/verify-reports.ts"
   },
   "dependencies": {
     "@react-pdf/renderer": "^4.5.1",
+    "@sentry/nextjs": "^10.65.0",
     "@supabase/ssr": "^0.5.1",
     "@supabase/supabase-js": "^2.45.4",
     "@types/web-push": "^3.6.4",
@@ -33,6 +53,7 @@
     "eslint-config-next": "15.1.9",
     "postcss": "^8",
     "tailwindcss": "^3.4.1",
+    "tsx": "^4.23.1",
     "typescript": "^5"
   }
 }

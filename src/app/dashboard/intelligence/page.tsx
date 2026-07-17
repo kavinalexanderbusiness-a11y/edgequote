@@ -1,18 +1,34 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { loadBusinessIntelligence, BIReport, NamedValue, WeekdayStat, YearComparison } from '@/lib/businessIntelligence'
 import { loadLaborInsights, LaborInsights, ServiceAccuracy, ServiceProfit } from '@/lib/labor'
+import { loadMarketingPerformance, type MarketingCampaignRow } from '@/lib/analytics/marketing'
+import { summarizeStats } from '@/lib/crm/campaignStats'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Skeleton, SkeletonTiles } from '@/components/ui/Skeleton'
 import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { StatTile } from '@/components/ui/StatTile'
 import { Collapsible } from '@/components/ui/Collapsible'
+import { Tabs } from '@/components/ui/Tabs'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
+import { AnalyticsWorkspace, WidgetChrome, useWidget } from '@/components/analytics/Workspace'
+import type { WidgetId } from '@/lib/analytics/layout'
 import { formatCurrency, cn } from '@/lib/utils'
 import type { Tone } from '@/lib/tone'
-import { TrendingUp, TrendingDown, DollarSign, Gauge, Users, Target, Activity, LineChart, Home, AlertTriangle, CalendarDays, Ban, Briefcase } from 'lucide-react'
+import { TrendingUp, TrendingDown, DollarSign, Gauge, Users, Target, Activity, LineChart, Home, AlertTriangle, CalendarDays, Ban, Briefcase, Megaphone, MessageSquare } from 'lucide-react'
+
+// From THE comms insights engine (comms_insights RPC) — the History page renders
+// the same object, so the two surfaces cannot disagree about a number.
+interface CommsInsights {
+  sends: number; delivered: number; failed: number; skipped: number
+  inbound: number; needs_reply: number; scheduled_pending: number
+  median_reply_minutes: number | null
+}
+const fmtReplyTime = (m: number | null) =>
+  m == null ? '—' : m < 60 ? `${Math.round(m)}m` : m < 1440 ? `${(m / 60).toFixed(1)}h` : `${(m / 1440).toFixed(1)}d`
 
 export default function IntelligencePage() {
   const supabase = useMemo(() => createClient(), [])
@@ -20,6 +36,8 @@ export default function IntelligencePage() {
   const [loading, setLoading] = useState(!bi) // cached → render instantly, refresh in background
   // Labour accuracy & crew efficiency — loaded alongside, but never blocks the BI report.
   const [labor, setLabor] = useState<LaborInsights | null>(() => readCache<LaborInsights>('labor', CACHE_TTL.medium))
+  const [marketing, setMarketing] = useState<MarketingCampaignRow[] | null>(() => readCache<MarketingCampaignRow[]>('marketing', CACHE_TTL.medium))
+  const [comms, setComms] = useState<CommsInsights | null>(() => readCache<CommsInsights>('comms', CACHE_TTL.medium))
 
   useEffect(() => {
     (async () => {
@@ -32,6 +50,28 @@ export default function IntelligencePage() {
     (async () => {
       try { const r = await loadLaborInsights(supabase); if (r) { setLabor(r.insights); writeCache('labor', r.insights) } }
       catch { /* labour insights are supplementary — never break the BI report */ }
+    })()
+  }, [supabase])
+
+  // Campaign outcomes, on the same terms as labour: loaded alongside, never
+  // blocking the BI report. Marketing lives in its own engine (crm_campaign_log,
+  // not the jobs/invoices the BIReport is built from), so it cannot ride along in
+  // loadBusinessIntelligence without that loader growing a second dataset.
+  useEffect(() => {
+    (async () => {
+      try { const r = await loadMarketingPerformance(supabase); setMarketing(r); writeCache('marketing', r) }
+      catch { /* campaign stats are supplementary — never break the BI report */ }
+    })()
+  }, [supabase])
+
+  // Communications pulse — same terms as marketing: alongside, never blocking.
+  // The RPC is THE insights engine; History renders the identical object.
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data, error } = await supabase.rpc('comms_insights', { p_days: 30 })
+        if (!error && data) { setComms(data as CommsInsights); writeCache('comms', data) }
+      } catch { /* supplementary */ }
     })()
   }, [supabase])
 
@@ -52,10 +92,15 @@ export default function IntelligencePage() {
     <div className="max-w-6xl mx-auto space-y-6">
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Business Intelligence" description={`How your business is performing — and where to focus. As of ${bi.generatedFor}.`} />
 
+      {/* Every section below is a workspace widget: arrangeable and hideable, but
+          still rendered from the same BIReport, so customising the page can never
+          change what a number means — only whether and where you see it. */}
+      <AnalyticsWorkspace>
+
       {/* ── EXECUTIVE ── The highest-altitude read on the page, so it leads: who the
           revenue depends on, whether it's compounding, and how fast it turns into
           cash. Every figure here is YTD. */}
-      <Section title="Executive" icon={Briefcase}>
+      <Section id="executive" title="Executive" icon={Briefcase}>
         {/* `payingCustomers === 0` is the one check that keeps a wall of "0%" off
             the page — with no YTD revenue there are no shares to take a share of. */}
         {bi.executive.concentration.payingCustomers === 0 ? (
@@ -99,7 +144,7 @@ export default function IntelligencePage() {
       </Section>
 
       {/* ── FINANCIAL ── */}
-      <Section title="Financial" icon={DollarSign}>
+      <Section id="financial" title="Financial" icon={DollarSign}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Stat label="Revenue this month" value={formatCurrency(bi.financial.revenueThisMonth)} delta={bi.financial.monthOverMonthPct} deltaLabel="vs last month" />
           <Stat label="Revenue last month" value={formatCurrency(bi.financial.revenueLastMonth)} />
@@ -125,7 +170,7 @@ export default function IntelligencePage() {
       {/* ── THIS YEAR VS LAST ── Both sides are SEASON-TO-DATE (the engine cuts last
           year at the same month-day), so the delta is like-for-like and safe as a
           headline. Never label it "vs last year (full)". */}
-      <Section title="This year vs last" icon={TrendingUp}>
+      <Section id="yearly" title="This year vs last" icon={TrendingUp}>
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
           <Stat label="Revenue this year" value={formatCurrency(bi.yearly.thisYear.revenue)}
             delta={bi.yearly.revenueDeltaPct} deltaLabel="vs last year to date"
@@ -146,7 +191,7 @@ export default function IntelligencePage() {
       </Section>
 
       {/* ── PROFITABILITY ── */}
-      <Section title="Profitability" icon={Gauge}>
+      <Section id="profitability" title="Profitability" icon={Gauge}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Stat label="Revenue / labor hour" value={`$${bi.profitability.revenuePerLaborHour}`} />
           <Stat label="Gross profit YTD" value={formatCurrency(bi.profitability.grossProfitYTD)} sub={`${bi.profitability.grossMarginPct}% margin`} />
@@ -161,7 +206,7 @@ export default function IntelligencePage() {
       </Section>
 
       {/* ── CUSTOMERS ── */}
-      <Section title="Customers" icon={Users}>
+      <Section id="customers" title="Customers" icon={Users}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Stat label="Active customers" value={String(bi.customers.active)} sub={`${bi.customers.total} total`} />
           <Stat label="Retention rate" value={bi.customers.retentionRatePct != null ? `${bi.customers.retentionRatePct}%` : '—'} sub={bi.customers.churnRatePct != null ? `${bi.customers.churnRatePct}% churn` : 'recurring only'} />
@@ -172,7 +217,7 @@ export default function IntelligencePage() {
       </Section>
 
       {/* ── SALES ── */}
-      <Section title="Sales" icon={Target}>
+      <Section id="sales" title="Sales" icon={Target}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Stat label="Quote win rate" value={bi.sales.quoteAcceptancePct != null ? `${bi.sales.quoteAcceptancePct}%` : '—'} sub={`${bi.sales.won} won · ${bi.sales.lost} lost`} />
           <Stat label="Avg quote value" value={formatCurrency(bi.sales.avgQuoteValue)} />
@@ -186,7 +231,7 @@ export default function IntelligencePage() {
       </Section>
 
       {/* ── OPERATIONS ── */}
-      <Section title="Operations" icon={Activity}>
+      <Section id="operations" title="Operations" icon={Activity}>
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
           {/* "Estimate accuracy" lives ONCE — in the Labour section below (the two
               engines' numbers could disagree, so only the learned one is shown). */}
@@ -205,7 +250,7 @@ export default function IntelligencePage() {
       </Section>
 
       {/* ── BUSIEST DAYS ── */}
-      <Section title="Busiest days" icon={CalendarDays}>
+      <Section id="weekday" title="Busiest days" icon={CalendarDays}>
         {/* `busiest` is null exactly when no weekday has a completed job — the one
             check that keeps a table of zeroes off the page. */}
         {bi.weekday.busiest ? (
@@ -227,7 +272,7 @@ export default function IntelligencePage() {
 
       {/* ── CANCELLATIONS ── A risk metric: the one section where a tint carries
           alarm rather than confidence. */}
-      <Section title="Cancellations" icon={Ban}>
+      <Section id="cancellations" title="Cancellations" icon={Ban}>
         {bi.cancellations.cancelledYTD === 0 ? (
           <div className="rounded-card border border-border bg-bg-secondary">
             <EmptyState icon={Ban} tone="positive" className="py-10" title="Nothing cancelled this year"
@@ -252,6 +297,9 @@ export default function IntelligencePage() {
       {/* ── LABOUR ACCURACY & CREW EFFICIENCY ── (merged from the former Labor
           Intelligence page). Collapsed by default — it's a deep-dive, not a daily
           decision; the one-line summary keeps the headline number visible. */}
+      {/* Not a <Section>, but it IS a block on this page — so it joins the
+          workspace too rather than being the one thing that won't move. */}
+      <LaborWidget>
       <Collapsible title="Labour accuracy & crew efficiency" icon={Gauge}
         summary={labor && labor.trainingJobs >= 1
           ? `${labor.overallAccuracyPct != null ? `${labor.overallAccuracyPct}% estimate accuracy` : ''} · ${labor.trainingJobs} timed job${labor.trainingJobs !== 1 ? 's' : ''}`
@@ -319,19 +367,96 @@ export default function IntelligencePage() {
         ) : (
           <div className="rounded-card border border-border bg-bg-secondary">
             <EmptyState icon={Gauge} className="py-10" title="No timed jobs yet"
-              description="Start and complete jobs in Day Ops (check-in / check-out) and the model learns automatically. The Smart Estimate falls back to lawn size until then." />
+              description="Start and complete jobs in Day Ops (check-in / check-out) and the model learns automatically. The Smart Estimate falls back to property size until then." />
           </div>
         )}
       </Collapsible>
+      </LaborWidget>
 
       {/* ── FORECASTING ── ("Projected this month" lives once, in Financial above) */}
-      <Section title="Forecasting" icon={LineChart}>
+      <Section id="forecasting" title="Forecasting" icon={LineChart}>
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
           <Stat label="Recurring run-rate" value={formatCurrency(bi.forecasting.projectedRecurringAnnual)} sub="/yr locked in" accent />
           <Stat label="Rest of season" value={formatCurrency(bi.forecasting.projectedSeasonRemaining)} sub="recurring booked" />
           <Stat label="Growth trend" value={bi.forecasting.growthForecastPct != null ? `${bi.forecasting.growthForecastPct > 0 ? '+' : ''}${bi.forecasting.growthForecastPct}%` : '—'} delta={bi.forecasting.growthForecastPct} deltaLabel="3-mo revenue" />
         </div>
       </Section>
+      {/* ── MARKETING ── Campaign outcomes, per campaign. Every figure below is a
+          field of the CampaignStats object loadCampaignStats returned, or the
+          string summarizeStats phrased from it. Nothing is summed, averaged or
+          rated here: there is no cross-campaign total because no engine defines
+          one, and a rate invented in this JSX could quietly disagree with what
+          `sent` means to the send path. Per-campaign is what the engine knows. */}
+      <Section id="marketing" title="Marketing" icon={Megaphone}>
+        {marketing === null ? (
+          <Skeleton className="h-24 w-full rounded-card" />
+        ) : marketing.length === 0 ? (
+          <div className="rounded-card border border-border bg-bg-secondary p-4">
+            <InlineEmpty icon={Megaphone} className="py-3">
+              No campaigns yet — set one up in Grow and its sends, deliveries and opens show up here.
+            </InlineEmpty>
+          </div>
+        ) : (
+          <div className="rounded-card border border-border bg-bg-secondary divide-y divide-border">
+            {marketing.map(c => (
+              <div key={c.id} className="p-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium text-ink truncate">{c.name}</p>
+                    {/* A paused campaign's history still counts — say why it's quiet
+                        rather than dropping it and making past sends disappear. */}
+                    {!c.enabled && (
+                      <span className="text-[10px] uppercase tracking-wide text-ink-faint border border-border rounded px-1 py-px shrink-0">Paused</span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-ink-faint truncate tabular-nums">
+                    {/* summarizeStats IS the phrasing engine — the Grow page renders
+                        this same string from this same object, so the two surfaces
+                        cannot drift. */}
+                    {c.stats.total > 0 ? summarizeStats(c.stats) : 'Never run'}
+                    {c.lastRunAt && ` · last ran ${new Date(c.lastRunAt).toLocaleDateString()}`}
+                  </p>
+                </div>
+                {/* Delivered/opened, straight off the stats object. Opens are email
+                    only — SMS never reports them — so a campaign with no email
+                    would read a misleading "0 opened". Show it only when the
+                    engine actually counted one. */}
+                <div className="flex items-center gap-4 shrink-0 tabular-nums">
+                  <MiniStat label="sent" value={c.stats.sent} />
+                  <MiniStat label="delivered" value={c.stats.delivered} />
+                  {c.stats.opened > 0 && <MiniStat label="opened" value={c.stats.opened} />}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
+
+      {/* ── COMMUNICATIONS ── the 30-day pulse from THE comms insights engine
+          (comms_insights RPC — History renders the identical object). Median
+          first-reply time leads: for a service business it's the number most
+          correlated with winning the job. */}
+      <Section id="communications" title="Communications" icon={MessageSquare}>
+        {comms === null ? (
+          <Skeleton className="h-24 w-full rounded-card" />
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            <StatTile label="Median reply time" value={fmtReplyTime(comms.median_reply_minutes)} icon={Activity}
+              sub={comms.inbound ? `${comms.inbound} inbound · 30d` : 'No inbound yet · 30d'} />
+            <StatTile label="Messages sent" value={String(comms.sends)} icon={MessageSquare} sub="Last 30 days" />
+            <StatTile label="Delivered" value={comms.sends ? `${Math.round((comms.delivered / comms.sends) * 100)}%` : '—'} icon={Target}
+              sub={comms.failed > 0 ? `${comms.failed} failed` : 'No failures'} tone={comms.failed > 0 ? 'warn' : undefined} />
+            <Link href="/dashboard/messages?f=needs_reply" className="block rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+              <StatTile label="Awaiting your reply" value={String(comms.needs_reply)} icon={AlertTriangle}
+                sub="Open conversations · tap to triage" tone={comms.needs_reply > 0 ? 'warn' : undefined} />
+            </Link>
+            <Link href="/dashboard/messages/scheduled" className="block rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+              <StatTile label="Scheduled" value={String(comms.scheduled_pending)} icon={CalendarDays} sub="Queued to send" />
+            </Link>
+          </div>
+        )}
+      </Section>
+      </AnalyticsWorkspace>
     </div>
   )
 }
@@ -342,15 +467,42 @@ function monthLabel(key: string) { return new Date(`${key}-01T00:00:00`).toLocal
 /** 1-12 → 'Jun'. */
 function monthShort(m: number) { return new Date(2000, m - 1, 1).toLocaleString('en-US', { month: 'short' }) }
 
-function Section({ title, icon: Icon, children }: { title: string; icon: typeof DollarSign; children: React.ReactNode }) {
+// The Labour block is a <Collapsible>, not a <Section>, so it gets a thin wrapper
+// to join the workspace rather than being the one block that refuses to move.
+function LaborWidget({ children }: { children: React.ReactNode }) {
+  const { style, className, dragProps } = useWidget('labor')
   return (
-    <div className="space-y-3 animate-rise">
+    <div style={style} className={cn('animate-rise', className)} {...dragProps}>
+      <div className="flex items-center justify-end -mb-1"><WidgetChrome id="labor" /></div>
+      {children}
+    </div>
+  )
+}
+
+// Sections are the workspace's widgets. `id` is all a section needs to become
+// arrangeable — order, hiding and drag all come from the workspace context, so
+// the markup below stays exactly where it is and doesn't know it can move.
+/** A bare count with its noun. Display only — the number arrives already counted. */
+function MiniStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="text-right">
+      <p className="text-sm font-semibold text-ink tabular-nums">{value}</p>
+      <p className="text-[10px] text-ink-faint">{label}</p>
+    </div>
+  )
+}
+
+function Section({ id, title, icon: Icon, children }: { id: WidgetId; title: string; icon: typeof DollarSign; children: React.ReactNode }) {
+  const { style, className, dragProps } = useWidget(id)
+  return (
+    <div style={style} className={cn('space-y-3 animate-rise', className)} {...dragProps}>
       <div className="flex items-center gap-2.5">
         <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
           <Icon className="w-3.5 h-3.5 text-accent-text" />
         </span>
         <p className="text-sm font-semibold tracking-tight text-ink">{title}</p>
         <span className="flex-1 h-px bg-border" aria-hidden />
+        <WidgetChrome id={id} />
       </div>
       {children}
     </div>

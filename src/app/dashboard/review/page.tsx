@@ -12,6 +12,9 @@ import {
   dayProfitability, neighborhoodProfitability, jobValue,
 } from '@/lib/profitability'
 import { needsFollowUp } from '@/lib/followup'
+import { effectiveFreq } from '@/lib/invoicing'
+import { settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
+import { ranOut as ranOutSignal, cadenceDays, isSeasonallyDormant } from '@/lib/signals'
 import { localTodayISO, formatCurrency, formatDate, cn } from '@/lib/utils'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { SkeletonTiles } from '@/components/ui/Skeleton'
@@ -45,7 +48,7 @@ export default function WeeklyReviewPage() {
           supabase.from('jobs').select('id, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, properties(lat, lng, city, postal_code, neighborhood)').eq('user_id', user.id),
           supabase.from('quotes').select('*').eq('user_id', user.id),
           supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user.id),
-          supabase.from('business_settings').select('base_lat, base_lng, base_address').eq('user_id', user.id).maybeSingle(),
+          supabase.from('business_settings').select('base_lat, base_lng, base_address, service_seasons').eq('user_id', user.id).maybeSingle(),
           loadTravelModel(supabase),
         ])
         const quotesById: Record<string, ProfitQuote> = {}
@@ -64,15 +67,35 @@ export default function WeeklyReviewPage() {
         setJobs(rows)
         setQuotes((qRes.data as Quote[]) || [])
 
-        // Ran-out recurring customers (same signal Reactivation alarms on).
+        // Ran-out recurring customers — THE shared detector, so this is literally the
+        // same queue Reactivation alarms on: season-gated, actually-serviced only, and
+        // only while the series is plausibly still active.
         const today = localTodayISO()
+        const seasons: ServiceSeasons = settingsToSeasons((sRes.data as { service_seasons: unknown } | null)?.service_seasons)
         const byCust: Record<string, SatJob[]> = {}
         for (const j of rows) if (j.customer_id) (byCust[j.customer_id] ||= []).push(j)
         let ranOut = 0
         for (const list of Object.values(byCust)) {
-          const hasRec = list.some(j => j.recurrence_id)
+          // Most RECENT recurring activity — DB order can pick a dead series over the
+          // customer's current cadence.
+          const recJob = list.filter(j => j.recurrence_id).sort((a, b) => b.scheduled_date.localeCompare(a.scheduled_date))[0]
           const upcoming = list.some(j => j.scheduled_date >= today && (j.status === 'scheduled' || j.status === 'in_progress'))
-          if (hasRec && !upcoming) ranOut++
+          const completed = list.filter(j => j.status === 'completed').map(j => j.scheduled_date).sort()
+          const pastReal = list.filter(j => j.status !== 'cancelled' && j.scheduled_date <= today).map(j => j.scheduled_date).sort()
+          const lastDate = completed.length ? completed[completed.length - 1]
+            : (pastReal.length ? pastReal[pastReal.length - 1] : null)
+          const rec = recJob?.recurrence_id ? recById[recJob.recurrence_id] : null
+          const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
+          const signal = ranOutSignal({
+            hasRecurring: !!recJob,
+            hasUpcoming: upcoming,
+            lastServiceDate: lastDate,
+            cadenceDays: cadenceDays(freq, rec),
+            seasonallyDormant: isSeasonallyDormant(recJob?.service_type ?? null, seasons, today),
+            today,
+          })
+          // The whole re-book backlog, not just the urgent window — as before.
+          if (signal.isRanOut) ranOut++
         }
         setRanOutCount(ranOut)
 

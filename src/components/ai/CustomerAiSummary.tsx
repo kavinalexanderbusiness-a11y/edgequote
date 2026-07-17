@@ -2,9 +2,9 @@
 
 import { useState } from 'react'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
-import { AssistButton } from '@/components/ai/AssistButton'
+import { AssistButton, AiStop, AiError, AiNote } from '@/components/ai/ui'
 import { useAiAssist } from '@/hooks/useAiAssist'
-import { Sparkles, RefreshCw } from 'lucide-react'
+import { Sparkles } from 'lucide-react'
 
 // ── AI customer brief (profile page) ─────────────────────────────────────────
 // On demand, never automatic: one click streams a short owner-facing brief of
@@ -33,26 +33,26 @@ export function CustomerAiSummary({ customerId }: { customerId: string }) {
       <CardHeader className="flex items-center gap-2">
         <Sparkles className="w-4 h-4 text-accent-text" />
         <h2 className="text-sm font-semibold text-ink">AI brief</h2>
-        {ran && !ai.running && (
-          <button type="button" onClick={summarize} title="Regenerate" aria-label="Regenerate brief"
-            className="ml-auto h-7 w-7 rounded-lg border border-border text-ink-muted hover:text-ink hover:border-border-strong transition-colors flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
-            <RefreshCw className="w-3.5 h-3.5" />
-          </button>
-        )}
+        <div className="ml-auto flex items-center gap-1.5">
+          {ai.running && <AiStop onClick={ai.cancel} />}
+          {ran && !ai.running && <AssistButton label="Try again" onClick={summarize} />}
+        </div>
       </CardHeader>
       <CardBody>
         {!ran ? (
           <div className="flex items-center justify-between gap-3">
             <p className="text-sm text-ink-muted">A 30-second read on this customer — history, money, and a suggested next step.</p>
-            <AssistButton label="Summarize" onClick={summarize} busy={ai.running} className="shrink-0" />
+            <AssistButton label="Summarize" busyLabel="Reading…" onClick={summarize} busy={ai.running} className="shrink-0" />
           </div>
         ) : (
           <>
             {text && <p className="text-sm text-ink whitespace-pre-wrap">{text}</p>}
             {ai.running && !text && <p className="text-sm text-ink-faint">Reading the history…</p>}
-            {ai.error && <p className="text-xs text-amber-400 mt-2">{ai.error}</p>}
+            <AiError message={ai.error} className="mt-2" />
             {!ai.running && text && (
-              <p className="text-[11px] text-ink-faint mt-3">Generated from this customer&rsquo;s records just now — verify anything important before acting on it.</p>
+              <AiNote className="mt-3"
+                explain="Read just now from their visits, quotes, invoices and messages. The suggested next step is the app's own priority order, not a guess."
+                caution="Verify anything important before acting on it." />
             )}
           </>
         )}

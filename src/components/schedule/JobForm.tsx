@@ -5,12 +5,14 @@ import { useForm, Controller } from 'react-hook-form'
 import { createClient } from '@/lib/supabase/client'
 import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
+import { PropertySelect } from '@/components/ui/PropertySelect'
 import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
 import { Customer, Property, JobFormValues, JobStatus, RecurUnit } from '@/types'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { recurrenceLabel } from '@/lib/recurrence'
 import { latestSavedRecommendation, savedPriceFor, recommendationIsStale, CadenceKey } from '@/lib/pricing'
+import { servicePricingKind } from '@/lib/servicePricing'
 import {
   ServiceSeasons, DEFAULT_SEASONS, settingsToSeasons, serviceCategory, seasonForService,
   seasonEndDateFor, estimateSeasonVisits, seasonLabel,
@@ -21,7 +23,8 @@ import type { Cadence } from '@/lib/labor'
 import { resolvePrefs, type PrefSource } from '@/lib/preferences'
 import { findJobMatch, type JobLiteForMatch } from '@/lib/dedup'
 import { Collapsible } from '@/components/ui/Collapsible'
-import { AssistButton } from '@/components/ai/AssistButton'
+import { AssistButton, AiStop, AiUndo, AiError, AiNote } from '@/components/ai/ui'
+import { toast } from '@/lib/toast'
 import { useAiAssist } from '@/hooks/useAiAssist'
 import { Repeat, Sparkles, Snowflake, Sun, AlertTriangle, CalendarRange, Clock } from 'lucide-react'
 
@@ -154,7 +157,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
         customer_id: '',
         property_id: '',
         title: '',
-        service_type: 'Lawn Mowing', // most jobs are mows — quick-add ready
+        service_type: '', // prefilled with the owner's most common service (learned, not assumed — see effect below)
         scheduled_date: '',
         start_time: '',
         end_time: '',
@@ -168,6 +171,46 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
       },
     })
 
+  // Quick-add default service is LEARNED, not assumed: the owner's most frequent
+  // recent service, else their first service template. A lawn company keeps its
+  // instant "Lawn Mowing" quick-add; every other trade gets THEIR default — the
+  // platform itself has no home industry. Never overwrites a caller default or
+  // anything the owner has already typed.
+  // What this business actually does, learned once and reused by the cadence chips.
+  const [learnedService, setLearnedService] = useState<string | null>(null)
+  useEffect(() => {
+    if (isEdit || defaultValues?.service_type) return
+    let alive = true
+    ;(async () => {
+      const { data: { session } } = await supabase.auth.getSession()
+      const uid = session?.user?.id
+      if (!uid) return
+      const { data } = await supabase.from('jobs').select('service_type')
+        .eq('user_id', uid).not('service_type', 'is', null)
+        .order('created_at', { ascending: false }).limit(30)
+      const counts = new Map<string, number>()
+      let top: string | null = null
+      for (const r of (data as { service_type: string | null }[] | null) || []) {
+        const s = (r.service_type || '').trim()
+        if (!s) continue
+        counts.set(s, (counts.get(s) || 0) + 1)
+        if (!top || counts.get(s)! > (counts.get(top) || 0)) top = s
+      }
+      if (!top) {
+        const { data: t } = await supabase.from('service_templates').select('name')
+          .eq('user_id', uid).order('sort_order').limit(1)
+        top = ((t as { name: string | null }[] | null)?.[0]?.name || '').trim() || null
+      }
+      // Keep it: the cadence chips need the same answer, and recomputing it there
+      // would be a second definition of "this business's default service".
+      if (!alive || !top) return
+      setLearnedService(top)
+      if (!watch('service_type')) setValue('service_type', top)
+    })()
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // Quick-add: only Customer / Service / Date show; everything else is collapsed.
   // BUT if a recurrence is pre-filled on a new job (e.g. scheduling a recurring
   // quote), start expanded so the carried cadence is visible and editable.
@@ -179,6 +222,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   const selectedPropertyId = watch('property_id')
   // AI notes cleanup — tidies the owner's jottings; every fact stays theirs.
   const aiNotes = useAiAssist()
+  const [aiNotesPrior, setAiNotesPrior] = useState<string | null>(null)
   const serviceType = watch('service_type')
   const scheduledDate = watch('scheduled_date')
   const startTime = watch('start_time')
@@ -245,7 +289,16 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     : interval.unit === 'month' || (interval.unit === 'week' && interval.count >= 4) ? 'monthly'
     : interval.unit === 'week' && interval.count === 1 ? 'weekly'
     : 'biweekly'
-  const measuredPrice = savedRec ? savedPriceFor(savedRec.rec, cadenceForInterval) : null
+  // A SavedRecommendation is a GRASS cadence price list — buildSavedRecommendation
+  // wraps pricingPackage — and carries no record of the service it was computed
+  // for. So on a property whose lawn was measured once, scheduling ANY recurring
+  // job (snow, an HVAC service plan, a window clean) offered "Use measured price"
+  // and silently auto-filled the MOWING price for that cadence. Gate on the same
+  // ONE seam the quote builder uses. There is no template object here — service_type
+  // is free text — so servicePricingKind falls back to its name normalizer, which
+  // is precisely what that fallback exists for.
+  const lawnService = servicePricingKind(watch('service_type'), null) === 'lawn_recurring'
+  const measuredPrice = savedRec && lawnService ? savedPriceFor(savedRec.rec, cadenceForInterval) : null
 
   function buildRecurrence(): Recurrence {
     if (!interval) return { unit: null, count: 1, endDate: null, endCount: null }
@@ -259,17 +312,29 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     }
   }
 
-  function applyLawnPreset(kind: 'weekly' | 'biweekly' | 'monthly') {
+  // A cadence chip picks the CADENCE. It used to also rename the service to
+  // "Lawn Mowing" (or "Monthly Service"), which threw away both the learned
+  // default above and anything the owner had already typed — tapping Weekly on a
+  // snow job renamed it to mowing. Now it fills the service only when there isn't
+  // one, from what this business actually does. A lawn company whose learned
+  // default is "Lawn Mowing" gets exactly the old behaviour; every other trade
+  // gets theirs.
+  function applyCadencePreset(kind: 'weekly' | 'biweekly' | 'monthly') {
     setPreset(kind === 'weekly' ? 'w1' : kind === 'biweekly' ? 'w2' : 'm1')
-    const svc = kind === 'monthly' ? 'Monthly Service' : 'Lawn Mowing'
-    setValue('service_type', svc)
-    if (!watch('title')) {
-      setValue('title', svc + (selProp?.address ? ` — ${selProp.address}` : ''))
+    const svc = (watch('service_type') || '').trim() || learnedService || ''
+    if (svc) {
+      setValue('service_type', svc)
+      if (!watch('title')) {
+        setValue('title', svc + (selProp?.address ? ` — ${selProp.address}` : ''))
+      }
     }
     // Selecting Weekly/Bi-Weekly/Monthly auto-suggests the measured price for
-    // that cadence (only when the price hasn't been typed yet).
+    // that cadence (only when the price hasn't been typed yet, and only for a
+    // lawn-cadence service — see `lawnService`; the saved rec is a mowing price
+    // list, and this fill is silent, so an ungated one put grass prices on a snow
+    // route with nothing on screen to explain where the number came from).
     const rec = latestSavedRecommendation(selProp?.measurement_history)
-    if (rec && !(Number(watch('price')) > 0)) {
+    if (rec && lawnService && !(Number(watch('price')) > 0)) {
       setValue('price', savedPriceFor(rec.rec, kind))
     }
   }
@@ -366,11 +431,6 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     ...customers.map(c => ({ value: c.id, label: c.name })),
   ]
 
-  const propertyOptions = [
-    { value: '', label: properties.length ? 'Select a property...' : 'No properties found' },
-    ...properties.map(p => ({ value: p.id, label: p.address + (p.is_primary ? ' (primary)' : '') })),
-  ]
-
   const endSummary =
     endMode === 'season' && seasonEndDate ? `ends at season end (${formatDate(seasonEndDate)})`
     : endMode === 'after' ? `ends after ${Math.max(1, endCount)} visit${endCount !== 1 ? 's' : ''}`
@@ -411,7 +471,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
           <Select label="Customer" autoFocus options={customerOptions} {...field} />
         )} />
 
-      <Input label="Service Type" placeholder="e.g. Lawn Mowing"
+      <Input label="Service Type" placeholder="Your most common service"
         {...register('service_type')} />
 
       <div>
@@ -488,15 +548,29 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
         </button>
       )}
 
+      {/* WHERE the work happens. Hidden under "+ More options" on a new job, while
+          the loader silently pre-selected the customer's primary — so a customer with
+          two addresses got one chosen for them, out of sight, and the only symptom is
+          a crew at the wrong house. Whenever there's an actual choice to make
+          (2+ addresses) it's shown up front; a one-property customer has nothing to
+          decide, so it stays collapsed exactly as before. */}
+      {(adv || properties.length > 1) && (
+        <Controller name="property_id" control={control}
+          render={({ field }) => (
+            <PropertySelect
+              label={properties.length > 1 ? 'Property *' : 'Property'}
+              properties={properties}
+              value={field.value || ''}
+              onChange={field.onChange}
+              customerId={customerId || null}
+              onCreated={(p: Property) => setProperties(prev => [...prev, p])}
+              hint={properties.length > 1 ? 'This customer has more than one address — pick the one this visit is for.' : undefined}
+            />
+          )} />
+      )}
+
       {adv && (
       <div className="space-y-4">
-      {/* The real edit workflow: WHERE (property) → what STATE it's in → NOTES.
-          Time/crew details and recurrence are rarer — they collapse below. */}
-      <Controller name="property_id" control={control}
-        render={({ field }) => (
-          <Select label="Property" options={propertyOptions} {...field} />
-        )} />
-
       <Controller name="status" control={control}
         render={({ field }) => (
           <Select label="Status" options={STATUS_OPTIONS} {...field} />
@@ -511,22 +585,37 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
       <Textarea label="Notes" placeholder="Access instructions, gate codes, special requests..."
         {...register('notes')} />
       {aiNotes.enabled === true && String(watch('notes') || '').trim() !== '' && (
-        <div className="flex items-center gap-2 -mt-2">
-          <AssistButton
-            label={aiNotes.running ? 'Cleaning up…' : 'Clean up notes'}
-            busy={aiNotes.running}
-            title="Rewrites rough jottings into clear notes — keeps every gate code, instruction and detail exactly as written"
-            onClick={async () => {
-              const prior = String(watch('notes') || '')
-              aiNotes.clearError()
-              setValue('notes', '')
-              const full = await aiNotes.run(
-                { task: 'job_notes', draft: prior, serviceType: serviceType || undefined },
-                { onDelta: d => setValue('notes', String(watch('notes') || '') + d) },
-              )
-              if (full === null) setValue('notes', prior)
-            }} />
-          {aiNotes.error && <p className="text-xs text-amber-400" role="alert">{aiNotes.error}</p>}
+        <div className="-mt-2 space-y-1.5">
+          <div className="flex items-center gap-1.5">
+            <AssistButton
+              label="Tidy up"
+              busyLabel="Tidying…"
+              busy={aiNotes.running}
+              title="Rewrites rough jottings into clear notes — keeps every gate code, instruction and detail exactly as written"
+              onClick={async () => {
+                const prior = String(watch('notes') || '')
+                aiNotes.clearError()
+                setValue('notes', '')
+                const full = await aiNotes.run(
+                  { task: 'job_notes', draft: prior, serviceType: serviceType || undefined },
+                  { onDelta: d => setValue('notes', String(watch('notes') || '') + d) },
+                )
+                if (full === null) { setValue('notes', prior); return }
+                setAiNotesPrior(prior)
+                toast.undo('Tidied your notes.', () => { setValue('notes', prior); setAiNotesPrior(null) })
+              }} />
+            {aiNotes.running && <AiStop onClick={aiNotes.cancel} />}
+            {!aiNotes.running && aiNotesPrior !== null && (
+              <AiUndo onClick={() => { setValue('notes', aiNotesPrior); setAiNotesPrior(null) }} />
+            )}
+          </div>
+          <AiError message={aiNotes.error} />
+          {/* No check-it-first note: these notes are for whoever does the work,
+              not for the customer. The explanation still matters — this is the
+              one tool whose whole job is to change nothing factual. */}
+          {!aiNotes.running && aiNotesPrior !== null && (
+            <AiNote explain="Tidied your own words — every gate code, digit and instruction is kept exactly as you wrote it." />
+          )}
         </div>
       )}
 
@@ -602,11 +691,16 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
               </div>
             )}
 
-            {/* Season chip — what season this service belongs to */}
+            {/* Season chip — what season this service belongs to. An owner-defined
+                season resolves here too (category stays 'year_round' for those, so
+                the old snow?/lawn binary called a Pool Opening a "Lawn service") —
+                its own label wins, falling back to the binary only for the built-ins. */}
             {serviceSeason && (
               <p className="text-xs text-ink-muted flex items-center gap-1.5">
-                {category === 'snow' ? <Snowflake className="w-3.5 h-3.5 text-sky-400" /> : <Sun className="w-3.5 h-3.5 text-amber-400" />}
-                {category === 'snow' ? 'Snow' : 'Lawn'} service · season {seasonLabel(serviceSeason)}
+                {category === 'snow' ? <Snowflake className="w-3.5 h-3.5 text-sky-400" />
+                  : category === 'lawn' ? <Sun className="w-3.5 h-3.5 text-amber-400" />
+                  : <CalendarRange className="w-3.5 h-3.5 text-accent-text" />}
+                {serviceSeason.label || (category === 'snow' ? 'Snow' : 'Lawn')} service · season {seasonLabel(serviceSeason)}
               </p>
             )}
 
@@ -614,11 +708,11 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
             {!isEdit && (
             <div className="flex flex-wrap gap-2">
               {([
-                { kind: 'weekly', label: 'Weekly Lawn Care' },
-                { kind: 'biweekly', label: 'Bi-Weekly Lawn Care' },
-                { kind: 'monthly', label: 'Monthly Service' },
+                { kind: 'weekly', label: 'Weekly' },
+                { kind: 'biweekly', label: 'Every 2 weeks' },
+                { kind: 'monthly', label: 'Monthly' },
               ] as const).map(p => (
-                <button key={p.kind} type="button" onClick={() => applyLawnPreset(p.kind)}
+                <button key={p.kind} type="button" onClick={() => applyCadencePreset(p.kind)}
                   className="text-xs font-medium px-3 py-1.5 rounded-lg border border-accent/30 bg-accent/10 text-accent-text hover:bg-accent/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
                   {p.label}
                 </button>
