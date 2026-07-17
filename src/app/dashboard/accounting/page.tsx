@@ -7,7 +7,8 @@ import type {
 } from '@/types'
 import { expensePaymentMethodLabel, EXPENSE_PAYMENT_METHODS } from '@/types'
 import { fetchAllRows } from '@/lib/fetchAll'
-import { listExpenses, archiveExpense, restoreExpense } from '@/lib/accounting/expenses'
+import { listExpenses, archiveExpense, restoreExpense, isUnpaid } from '@/lib/accounting/expenses'
+import { accountsPayable } from '@/lib/accounting/balanceSheet'
 import { listVendors } from '@/lib/accounting/vendors'
 import { listCategories, seedDefaultCategories } from '@/lib/accounting/categories'
 import { profitAndLoss, cashFlow } from '@/lib/accounting/report'
@@ -22,6 +23,7 @@ import { Button } from '@/components/ui/Button'
 import { Select } from '@/components/ui/Select'
 import { Input } from '@/components/ui/Input'
 import { SearchInput } from '@/components/ui/SearchInput'
+import { FilterPill } from '@/components/ui/FilterPill'
 import { StatTile } from '@/components/ui/StatTile'
 import { Tabs } from '@/components/ui/Tabs'
 import { Badge } from '@/components/ui/Badge'
@@ -33,9 +35,11 @@ import { Menu } from '@/components/ui/Menu'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
 import { toast } from '@/lib/toast'
 import { formatCurrency, formatDate, localTodayISO } from '@/lib/utils'
+import Link from 'next/link'
 import {
   Receipt, Plus, TrendingDown, TrendingUp, Wallet, Paperclip, MoreHorizontal,
   Pencil, Trash2, Info, Store, Tags, ExternalLink,
+  LayoutDashboard, Waves, Scale, Briefcase, Landmark, Download, Settings,
 } from 'lucide-react'
 
 // ── Accounting ───────────────────────────────────────────────────────────────
@@ -74,6 +78,7 @@ export default function AccountingPage() {
   const [method, setMethod] = useState('')
   const [search, setSearch] = useState('')
 
+  const [showUnpaid, setShowUnpaid] = useState(false)
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<ExpenseWithRelations | null>(null)
 
@@ -143,11 +148,19 @@ export default function AccountingPage() {
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase()
     return expenses.filter(e => {
-      // inPeriod(), NOT a hand-rolled `e.spent_at >= from` comparison. An unpaid
-      // bill has spent_at = null, and JS compares null numerically against a date
-      // string: BOTH bounds come out false, so the row passes and an unpaid bill
-      // lands in every period at once. inPeriod treats null as "no period".
-      if (!inPeriod(e.spent_at, period)) return false
+      // Unpaid bills have NO cash date, so they fall out of every period — correct
+      // for the cash figures, but it would make them unmanageable: the one screen
+      // where you'd go to pay a bill would be the one screen that can't show it.
+      // The "Owed" filter switches to the accrual view instead.
+      if (showUnpaid) {
+        if (!isUnpaid(e)) return false
+      } else {
+        // inPeriod(), NOT a hand-rolled `e.spent_at >= from` comparison. An unpaid
+        // bill has spent_at = null, and JS compares null numerically against a date
+        // string: BOTH bounds come out false, so the row passes and an unpaid bill
+        // lands in every period at once. inPeriod treats null as "no period".
+        if (!inPeriod(e.spent_at, period)) return false
+      }
       if (categoryId && e.category_id !== categoryId) return false
       if (vendorId && e.vendor_id !== vendorId) return false
       if (method && e.payment_method !== method) return false
@@ -158,7 +171,15 @@ export default function AccountingPage() {
       }
       return true
     })
-  }, [expenses, period, categoryId, vendorId, method, search])
+  }, [expenses, period, categoryId, vendorId, method, search, showUnpaid])
+
+  // A/P is a position, not a flow: measured across ALL bills as at today, never
+  // filtered to the period. An unpaid bill from March must not disappear because
+  // you're looking at July — that's exactly when you'd want to see it.
+  const unpaidTotal = useMemo(
+    () => accountsPayable(expenses, todayISO),
+    [expenses, todayISO],
+  )
 
   // THE engine. Filters narrow the expense side; the P&L always sees the whole
   // payment set for the period, so a category filter can't quietly restate revenue.
@@ -195,6 +216,34 @@ export default function AccountingPage() {
           </Button>
         }
       />
+
+      {/* The statements. This page is CAPTURE; everything read-only lives behind
+          these. Without the rail the reports exist and are unreachable, which is the
+          same as not shipping them. */}
+      <div className="flex flex-wrap gap-2 mb-5">
+        {[
+          { href: '/dashboard/accounting/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+          { href: '/dashboard/accounting/pnl', label: 'Profit & Loss', icon: Wallet },
+          { href: '/dashboard/accounting/cash-flow', label: 'Cash Flow', icon: Waves },
+          { href: '/dashboard/accounting/balance-sheet', label: 'Balance Sheet', icon: Scale },
+          { href: '/dashboard/accounting/job-costing', label: 'Job Costing', icon: Briefcase },
+          { href: '/dashboard/accounting/expenses-report', label: 'Expenses', icon: Receipt },
+          { href: '/dashboard/accounting/vendors', label: 'Vendors', icon: Store },
+          { href: '/dashboard/accounting/trends', label: 'Trends', icon: TrendingUp },
+          { href: '/dashboard/accounting/gst', label: 'GST', icon: Landmark },
+          { href: '/dashboard/accounting/export', label: 'Export', icon: Download },
+          { href: '/dashboard/accounting/setup', label: 'Setup', icon: Settings },
+        ].map(l => (
+          <Link
+            key={l.href}
+            href={l.href}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-line text-sm text-ink-muted hover:border-accent hover:text-ink transition-colors"
+          >
+            <l.icon className="w-3.5 h-3.5" />
+            {l.label}
+          </Link>
+        ))}
+      </div>
 
       {loadError && (
         <Banner tone="danger" className="mb-4">
@@ -341,6 +390,15 @@ export default function AccountingPage() {
                   onChange={e => setSearch(e.target.value)}
                   className="w-full sm:w-72"
                 />
+                {/* Unpaid bills have no cash date, so the period filter hides them.
+                    This is how you find them. */}
+                <FilterPill
+                  active={showUnpaid}
+                  onClick={() => setShowUnpaid(v => !v)}
+                  title="Bills you've received but not paid — they're not a cost yet, but you owe them"
+                >
+                  Owed{unpaidTotal > 0 && ` · ${formatCurrency(unpaidTotal)}`}
+                </FilterPill>
                 <Select
                   fieldSize="sm"
                   placeholder="All categories"

@@ -88,6 +88,8 @@ export interface VendorSlice {
   cost: number
   gross: number
   count: number
+  /** Share of total cost, 0..1 — same contract as CategorySlice.share. */
+  share: number
 }
 
 export interface MonthSlice {
@@ -373,14 +375,18 @@ function sliceByVendor(rows: ExpenseWithRelations[], registrant: boolean): Vendo
     const slice = map.get(key) || {
       vendorId: id,
       name: r.vendors?.name ?? 'No vendor',
-      cost: 0, gross: 0, count: 0,
+      cost: 0, gross: 0, count: 0, share: 0,
     }
     slice.cost = round2(slice.cost + expenseCost(r, registrant))
     slice.gross = round2(slice.gross + (Number(r.amount) || 0))
     slice.count++
     map.set(key, slice)
   }
-  return [...map.values()].sort((a, b) => b.cost - a.cost)
+  const all = [...map.values()]
+  const total = all.reduce((s, v) => s + v.cost, 0)
+  return all
+    .map(v => ({ ...v, share: total > 0 ? round2(v.cost / total) : 0 }))
+    .sort((a, b) => b.cost - a.cost)
 }
 
 function sliceByMonth(
