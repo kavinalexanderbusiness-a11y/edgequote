@@ -490,7 +490,16 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
               </span>
             </div>
           )}
-          {center && (
+          {/* Auto-measure is a LAWN estimator, not a generic one: autoMeasureLawn()
+              is building footprint × DEFAULT_LAWN_RATIO (2.3) calibrated per
+              neighbourhood — a number that means nothing for a roof (ratio ≈1) or a
+              driveway (unrelated to footprint). Offering it on a roofing quote would
+              put an invented figure in the measured-area field under the word
+              "measured". Note its copy is deliberately NOT de-lawned: the estimate
+              really is of a lawn, so the honest fix is to show it only where that's
+              true, not to rename it "area" and let a lawn-ratio guess pass for a
+              measurement of something else. Tracing still works for every trade. */}
+          {center && lawnPricing && (
             <AutoMeasureBanner lat={center.lat} lng={center.lng}
               neighborhood={neighborhoodOf(null, null, hoodName)}
               onAuto={r => { autoRef.current = r }}
@@ -568,7 +577,15 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
                     <span className="text-lg font-bold text-ink tabular-nums">{totalSqft.toLocaleString()} sq ft</span>
                     {shapes > 0 && <span className="text-xs text-ink-faint">({shapes} + current)</span>}
                   </div>
-                  {/* Same field order + hint as the Measure page — the two surfaces read identically. */}
+                  {/* Same field order + hint as the Measure page — the two surfaces read identically.
+                      Lawn only, because this control feeds NOTHING else: `overgrowth` is
+                      an input to pricingPackage() and is not carried on
+                      MeasureApplyPayload. With the cadence prices withheld for a
+                      non-lawn service, it was a dead input whose own label promised
+                      "×1.25 applied to prices" against prices that aren't on screen.
+                      (The de-lawned tooltip title below arrived independently from the
+                      trades session — same conclusion, kept as theirs.) */}
+                  {lawnPricing && (
                   <label className="flex items-center gap-1.5 text-xs text-ink-muted" title="Condition multiplier — 0.75 easy, 1.0 standard, 1.25 overgrown">
                     <span>
                       Condition<span className="block text-[10px] text-ink-faint">1.0 standard · 1.25 overgrown</span>
@@ -581,6 +598,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
                       className="w-16 bg-bg border border-border-strong rounded-lg px-2.5 py-2 text-base sm:text-sm text-ink tabular-nums outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20"
                     />
                   </label>
+                  )}
                 </div>
 
                 {/* No cadence engine for this service → show the measurement, and
@@ -617,7 +635,7 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind
                   </div>
                 ) : (
                   <div className="border-t border-border pt-3 text-xs text-ink-faint">
-                    Trace the lawn to see the full pricing recommendation (set rates in Settings).
+                    Trace the area to see the full pricing recommendation (set rates in Settings).
                   </div>
                 )}
               </div>

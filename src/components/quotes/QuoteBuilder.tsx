@@ -637,13 +637,24 @@ export function QuoteBuilder({
                 error={errors.service_type?.message}
                 {...register('service_type', { required: 'Service is required' })} />
 
-              {/* Lawn size — a CORE property attribute (powers pricing, labour & future
-                  analytics). Auto-filled from a website/satellite measurement or the
-                  property's saved size; always editable, and synced back to the property
-                  on save. */}
-              <Input label="Lawn Size (ft²)" type="number" step="1" min="0"
+              {/* A measured AREA — a core property attribute (powers pricing, labour
+                  & future analytics). Auto-filled from a website/satellite measurement
+                  or the property's saved size; always editable, and synced back to the
+                  property on save.
+                  The label said "Lawn Size (ft²)" for every trade, so a plumber pricing
+                  a drain clean was asked for a lawn. Same de-lawning rule already
+                  applied in Settings and the customer Portal: the stored column stays
+                  `measured_sqft` / `lawn_sqft` (read in ~74 places — renaming it is a
+                  migration, not a label fix), only the words change. The hint states
+                  what the area actually does for THIS service, which for a labour job
+                  is: nothing to the price, but it still feeds the labour estimate. */}
+              <Input label="Measured Area (ft²)" type="number" step="1" min="0"
                 placeholder="e.g. 5,000"
-                hint="Powers pricing & labour. Auto-filled from a measurement or the saved property size — edit to correct."
+                hint={pricingKind === 'lawn_recurring'
+                  ? 'Powers pricing & labour. Auto-filled from a measurement or the saved property size — edit to correct.'
+                  : pricingKind === 'per_area'
+                    ? 'Multiplied by your per-unit rate to price this service. Auto-filled from a measurement or the saved property size.'
+                    : 'Optional for this service — it feeds the labour estimate, not the price. Auto-filled from a measurement or the saved property size.'}
                 {...register('measured_sqft', { min: 0 })} />
 
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
@@ -654,7 +665,9 @@ export function QuoteBuilder({
                     if (!address) { toast.error('Enter a service address first.'); return }
                     setShowMeasure(true)
                   }}>
-                  <Ruler className="w-3.5 h-3.5" /> Measure &amp; price from satellite
+                  {/* Only the lawn cadence engine prices FROM the satellite trace, so
+                      only it may promise a price on the button that opens the map. */}
+                  <Ruler className="w-3.5 h-3.5" /> {pricingKind === 'lawn_recurring' ? 'Measure & price from satellite' : 'Measure from satellite'}
                 </Button>
                 {measuredSqft > 0 && (
                   <span className="inline-flex items-center gap-1 text-xs text-emerald-400">
@@ -807,8 +820,17 @@ export function QuoteBuilder({
           <Collapsible title="Advanced Pricing" icon={SlidersHorizontal} summary="Exact price · labour · recurring · travel — full control">
           {/* Saved measurement — the pricing source of truth for this property.
               Shown ONLY when there's no LIVE suggestion (same numbers, same
-              engine — never two copies of the price list on screen). */}
-          {savedRec && !suggested && (
+              engine — never two copies of the price list on screen).
+              …and ONLY for a lawn-cadence service. A SavedRecommendation is built by
+              buildSavedRecommendation(pricingPackage(...)) — it is a grass cadence
+              price list and carries no record of the service it was computed for. So
+              a customer whose lawn was measured last spring would, on a "Furnace
+              Repair" quote, be shown "Measured property · 5,000 ft² · $73/visit
+              recommended · Weekly $55…" plus a one-tap "Use measured prices" that
+              filled MOWING cadence prices into a furnace quote. P0 stopped WRITING
+              lawn recs onto non-lawn measurements; this is the read side of the same
+              bug, and every property measured before that fix still carries one. */}
+          {savedRec && !suggested && pricingKind === 'lawn_recurring' && (
             <div className="rounded-xl border border-accent/30 bg-accent/5 p-3 space-y-2">
               <p className="text-[11px] font-semibold text-accent-text uppercase tracking-wide">
                 Measured property · {savedRec.sqft.toLocaleString()} ft² · {formatCurrency(savedRec.rec[savedRec.rec.cadence === 'one_time' ? 'one_time' : savedRec.rec.cadence])}/{savedRec.rec.cadence === 'one_time' ? 'visit' : savedRec.rec.cadence} recommended
