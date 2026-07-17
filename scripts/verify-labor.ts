@@ -10,10 +10,14 @@
 // Three things it pins, each a real defect found by audit and fixed here:
 //
 //  1. A hardcoded constant must never dilute real property history. When a
-//     property has no sqft, the size model returns a flat 45 (pricing.ts:181).
-//     That 45 was being blended into a property's OWN timed visits — so four real
-//     mows averaging 26.5 min were reported as 33. The estimator was most wrong
-//     exactly where it had the most evidence.
+//     property had no sqft, the size model used to return a flat 45 — and that 45
+//     was being blended into a property's OWN timed visits, so four real mows
+//     averaging 26.5 min were reported as 33. The estimator was most wrong
+//     exactly where it had the most evidence. The field lane then finished the
+//     job at the source: estimateVisitMinutes now returns null for an unmeasured
+//     property (no measurement → no estimate), so there is no constant left to
+//     blend. The checks below pin BOTH halves: the refusal at the source, and
+//     the blend protection that still matters for any future prior.
 //
 //  2. One estimate must not say both "high confidence, this property has a track
 //     record" and "not enough history yet — rough size estimate". Both strings
@@ -35,13 +39,18 @@ const check = (name: string, cond: boolean, detail = '') => (cond ? ok(name) : f
 const eq = (name: string, actual: unknown, expected: unknown) =>
   check(name, Object.is(actual, expected), `expected ${String(expected)}, got ${String(actual)}`)
 
-// The invented constant at the heart of defect 1. Pinned so that if someone
-// changes it, this file explains why it matters.
-console.log('\nThe size model is a guess, and says so:')
+// Defect 1's fix, taken to its conclusion. An earlier version of this check
+// pinned the flat 45 itself ("the size model returns 45 and says it's a guess");
+// the field lane then removed the invented constant at the source — unmeasured
+// now returns null, the type system forces every caller to face it, and the
+// guardrail stops computing $/hr from minutes nobody measured. Pinning 45 after
+// that would fail the exact change this file argues for (see the analytics
+// verifier at 907c9a4 for the same lesson).
+console.log('\nThe size model refuses to guess:')
 {
-  eq('an unmeasured lawn returns the flat 45-min constant', estimateVisitMinutes(0), 45)
-  check('…and a measured one does not', estimateVisitMinutes(3000) !== 45,
-        'the 3,000 ft² estimate collided with the constant — pick a different fixture')
+  eq('an unmeasured lawn returns null — no measurement, no estimate', estimateVisitMinutes(0), null)
+  check('…and a measured one returns real minutes', (estimateVisitMinutes(3000) ?? 0) > 0,
+        'a measured 3,000 ft² lawn must produce an estimate')
 }
 
 // A property with FOUR real timed visits and NO sqft. This is not hypothetical:
