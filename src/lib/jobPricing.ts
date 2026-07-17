@@ -63,6 +63,12 @@ export async function recordPriceChange(
 // concrete target visit ids (this / future-non-completed / all-non-completed);
 // when more than one visit is affected the rows share a group_id so the whole
 // add-on can later be edited or removed together. Returns the inserted rows.
+// THROWS on failure. This is load-bearing, not stylistic: the offline outbox's only
+// success signal is "the handler didn't throw" (lib/offline/outbox.ts doFlush), so
+// while this swallowed its insert error and returned [], a queued add-on replayed,
+// failed, and was deleted from the queue as a success — the contractor sold the work
+// and it was never billed, with no trace. An online caller that refetches could
+// survive that; a replay engine cannot. Every caller must let this throw or handle it.
 export async function addLineItems(
   supabase: SupabaseClient,
   opts: {
@@ -73,15 +79,29 @@ export async function addLineItems(
     serviceKey?: string | null
     serviceType?: string | null
     recurring: boolean
+    /** Stable key for a REPLAYED add. See the idempotency note below. */
+    groupId?: string | null
   },
 ): Promise<JobLineItem[]> {
   const ids = [...new Set(opts.targetJobIds.filter(Boolean))]
   if (!ids.length) return []
-  // A shared group id only when the add-on spans more than one visit. We mint it
-  // without Date.now()/random pitfalls by reusing the first row's id after insert
-  // is awkward; instead let Postgres default a uuid via a throwaway select is
-  // overkill — use crypto.randomUUID (available in the browser) for the batch key.
-  const groupId = ids.length > 1 && typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : null
+
+  // Idempotency for replay. A queued add-on that inserts, then fails its draft
+  // re-price, must be retryable — but a retry that mints a NEW group_id looks like a
+  // second, distinct add-on and bills the customer twice. So a caller that may be
+  // replayed passes a groupId minted ONCE at enqueue time; if rows already carry it,
+  // the insert already landed and we return them instead of adding more.
+  // (Single-visit adds keep group_id null when no key is supplied, preserving the
+  // "grouped == spans multiple visits" meaning the delete/snapshot paths rely on.)
+  const groupId = opts.groupId
+    ?? (ids.length > 1 && typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : null)
+  if (opts.groupId) {
+    const { data: already, error: checkErr } = await supabase
+      .from('job_line_items').select('*').eq('group_id', opts.groupId)
+    if (checkErr) throw new Error(checkErr.message)
+    if (already?.length) return already as JobLineItem[]   // this add already landed
+  }
+
   const rows = ids.map(jobId => ({
     user_id: opts.userId,
     job_id: jobId,
@@ -92,14 +112,21 @@ export async function addLineItems(
     group_id: groupId,
     recurring: opts.recurring,
   }))
-  const { data } = await supabase.from('job_line_items').insert(rows).select('*')
+  const { data, error } = await supabase.from('job_line_items').insert(rows).select('*')
+  if (error) throw new Error(error.message)
   return (data as JobLineItem[]) || []
 }
 
+// THROWS on failure — same reason as addLineItems. This returned void while reading
+// no error, so its caller fired "Removed …" with an Undo button over a row that was
+// still there; tapping that Undo then re-inserted a row that had never been deleted.
+// (Deleting is naturally idempotent: removing an already-gone row succeeds.)
 export async function deleteLineItem(supabase: SupabaseClient, item: JobLineItem): Promise<void> {
   // A grouped (plan-wide) add-on deletes the whole group; a single one deletes itself.
-  if (item.group_id) await supabase.from('job_line_items').delete().eq('group_id', item.group_id)
-  else await supabase.from('job_line_items').delete().eq('id', item.id)
+  const { error } = item.group_id
+    ? await supabase.from('job_line_items').delete().eq('group_id', item.group_id)
+    : await supabase.from('job_line_items').delete().eq('id', item.id)
+  if (error) throw new Error(error.message)
 }
 
 // Load add-ons for many visits at once, grouped by job_id (newest first within a job).

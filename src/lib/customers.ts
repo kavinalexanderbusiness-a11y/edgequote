@@ -18,6 +18,31 @@ export function normalizePhone(p?: string | null): string {
 export function normalizeEmail(e?: string | null): string {
   return (e || '').trim().toLowerCase()
 }
+
+// The fewest digits worth treating as "they're typing a phone number". Below this
+// a stray "40" in a name search would drag in every 403 number in the book.
+const PHONE_SEARCH_MIN_DIGITS = 3
+
+/**
+ * Digits to match against customers.phone_digits, or '' when the query isn't
+ * phone-shaped enough to bother.
+ *
+ * THE rule for turning something a person typed into a phone lookup. A number is
+ * read off a handset, a sticky note or a missed-call list, so it arrives in every
+ * shape there is — "(403) 681-9016", "403-681-9016", "4036819016", or just the
+ * last four. Matching that against however the number happens to be stored is
+ * what the generated column exists for (RUN-2026-07-16-phone-search.sql); this
+ * is the caller's half of the same rule.
+ *
+ * Letters disqualify the query outright: "Rose 403" is a name search that happens
+ * to contain digits, and stripping to "403" would answer a question nobody asked.
+ */
+export function phoneSearchDigits(query: string): string {
+  const q = (query || '').trim()
+  if (!q || /[a-z@]/i.test(q)) return ''
+  const digits = normalizePhone(q)
+  return digits.length >= PHONE_SEARCH_MIN_DIGITS ? digits : ''
+}
 // Canonical forms so "SW" == "Southwest" and "Crescent" == "Cres" — without
 // this, the same address written two ways looks like two places and we'd create
 // duplicate properties (real case: "Canso Crescent SW" vs "Canso Crescent Southwest").

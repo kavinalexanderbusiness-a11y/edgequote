@@ -23,8 +23,13 @@ import { dispatchToCustomer, type DispatchAttempt, type DispatchResult } from '@
 import { logSend, logDispatch } from '@/lib/comms/log'
 import { sendSms, sendEmail } from '@/lib/comms/send'
 import { runChaseCron, type ChaseItem, type ChaseTally } from '@/lib/automation/chase'
-import { SKIP_REASON } from '@/lib/comms/skipReasons'
+import { SKIP_REASON, describeSkip } from '@/lib/comms/skipReasons'
+import { canChaseCustomer, chaseBlockedReason } from '@/lib/followup'
 import { cadenceDays, churnRisk, type CadenceRecLike } from '@/lib/signals'
+import {
+  buildTimeline, filterTimeline, searchTimeline, timelineForProperty, timelineGroupCounts,
+  KIND_GROUP, TIMELINE_GROUPS, type TimelineEvent, type TimelineKind, type TlMessage, type TlPayment,
+} from '@/lib/timeline'
 import { effectiveFreq } from '@/lib/invoicing'
 import { decide } from '@/lib/automation/decide'
 import { AUTOMATION_RULES } from '@/lib/automation/rules'
@@ -918,6 +923,244 @@ async function run() {
       check('quiet-hours', "➜ it passes hour: 'unknown' — the only hour it can honestly claim",
         /hour:\s*'unknown'/.test(routeSrc), true)
     }
+  }
+
+  // ── 29b. CHASEABILITY — "gone quiet" and "can be chased" are different ───────
+  // The follow-up queue offered 9 quotes to chase; 6 of them ($445 on the live
+  // book) belonged to customers with no phone and no email. Staleness is a time
+  // rule and knows nothing about channels — so reachability is asked separately,
+  // of the engine that already owns it, and must predict exactly what the sender
+  // would do.
+  H('29b. Chaseability — a quiet quote you cannot reach is not a to-do')
+  {
+    const reachable = { phone: '4035551234', email: null, sms_opt_in: true, email_opt_in: false }
+    const noContact = { phone: null, email: null, sms_opt_in: true, email_opt_in: true }
+    const optedOut = { phone: '4035551234', email: null, sms_opt_in: false, email_opt_in: false }
+    const emailOnly = { phone: null, email: 'a@b.co', sms_opt_in: true, email_opt_in: true }
+
+    // No contact at all, with the opt-in flags in BOTH states. reachCheck is
+    // per-channel and would answer "no phone" for the first and "no opt-in" for the
+    // second — the second is the dangerous one: it reads as "they refused" when the
+    // record is merely empty. Both must report the one actionable truth.
+    const noContactNoOptIn = { phone: null, email: null, sms_opt_in: false, email_opt_in: false }
+    check('chase', 'a customer with a phone + SMS opt-in can be chased', canChaseCustomer(reachable), true)
+    check('chase', '➜ no phone and no email cannot', canChaseCustomer(noContact), false)
+    check('chase', '➜ ➜ and the reason is "no contact", not the first blocked channel', chaseBlockedReason(noContact), SKIP_REASON.NO_CONTACT)
+    check('chase', '➜ ➜ same when the opt-ins are off — never "no opt-in" for someone nobody asked',
+      chaseBlockedReason(noContactNoOptIn), SKIP_REASON.NO_CONTACT)
+    // Opting out is a real answer and must NOT be relabelled as missing data.
+    check('chase', '➜ a number they told us not to text cannot', canChaseCustomer(optedOut), false)
+    check('chase', '➜ ➜ and that still reports "no opt-in" — they did refuse', chaseBlockedReason(optedOut), SKIP_REASON.NO_OPT_IN)
+    check('chase', '➜ email alone is enough (the chaser tries both channels)', canChaseCustomer(emailOnly), true)
+    check('chase', '➜ a reachable customer reports no blocking reason', chaseBlockedReason(reachable), null)
+    // A missing customer row is not permission to assume a channel — the queue must
+    // not promise a chase it has no evidence it can make.
+    check('chase', '➜ a missing customer is not reachable', canChaseCustomer(null), false)
+    check('chase', '➜ ➜ and reports "no contact" rather than nothing', chaseBlockedReason(undefined), SKIP_REASON.NO_CONTACT)
+    // The block must read the same here as it does in the message thread and the
+    // campaign audience — one vocabulary, not a fourth hand-written copy.
+    check('chase', 'the block is labelled by THE shared describeSkip', describeSkip(chaseBlockedReason(noContact)).label, 'no phone or email on file')
+    // The worst case used to be the only one with no way out.
+    check('chase', '➜ and it offers the fix (it never used to)', describeSkip(chaseBlockedReason(noContact)).action, 'add_phone')
+  }
+
+  // ── 30. Timeline engine ─────────────────────────────────────────────────────
+  // The customer history used to be ~60 lines inline in customers/[id], where it
+  // could not be tested at all. It's now lib/timeline.ts — pure, so its decisions
+  // are checkable without a database. These pin the ones that carry meaning.
+  H('30. Timeline engine')
+  {
+    const base = { created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' }
+    const at = (k: string, evs: TimelineEvent[]) => evs.find(e => e.kind === k)?.at
+    const titleOf = (k: string, evs: TimelineEvent[]) => evs.find(e => e.kind === k)?.title
+
+    // A job finished in March. Its notes get edited in July. updated_at moves;
+    // completed_at doesn't. Reading updated_at claimed the job was done in July
+    // and reordered the whole history around a typo fix.
+    {
+      const evs = buildTimeline({ jobs: [{ ...base, id: 'j1', title: 'Spring cleanup', scheduled_date: '2026-03-02', status: 'completed', completed_at: '2026-03-02T18:00:00Z', updated_at: '2026-07-14T09:00:00Z' }] })
+      check('timeline', 'job completion reads completed_at, not updated_at', at('job_completed', evs), '2026-03-02T18:00:00Z')
+      check('timeline', '➜ falls back to updated_at when completed_at is null (older rows)',
+        at('job_completed', buildTimeline({ jobs: [{ ...base, id: 'j2', title: 'X', scheduled_date: '2026-03-02', status: 'completed', completed_at: null, updated_at: '2026-03-03T00:00:00Z' }] })), '2026-03-03T00:00:00Z')
+      check('timeline', '➜ an unfinished job produces no completion event',
+        buildTimeline({ jobs: [{ ...base, id: 'j3', title: 'X', scheduled_date: '2026-03-02', status: 'scheduled' }] }).some(e => e.kind === 'job_completed'), false)
+    }
+    // Same trap on the money side: editing a paid invoice's notes moved "paid" to today.
+    {
+      const evs = buildTimeline({ invoices: [{ ...base, id: 'i1', invoice_number: 'INV-1', amount: 100, status: 'paid', paid_at: '2026-02-10T12:00:00Z', updated_at: '2026-07-14T09:00:00Z' }] })
+      check('timeline', 'invoice payment reads paid_at, not updated_at', at('invoice_paid', evs), '2026-02-10T12:00:00Z')
+    }
+    // The timeline must agree with the Invoices page and the portal, which are
+    // GST-inclusive. amount is net; the multiplier is the ledger's.
+    {
+      const evs = buildTimeline({ gstPercent: 5, invoices: [{ ...base, id: 'i2', invoice_number: 'INV-2', amount: 100, status: 'paid', paid_at: base.created_at }] })
+      check('timeline', 'invoice amounts are GST-inclusive', titleOf('invoice_created', evs) && evs.find(e => e.kind === 'invoice_created')?.sub, '$105.00')
+      check('timeline', '➜ and 0% GST leaves the net amount alone',
+        buildTimeline({ gstPercent: 0, invoices: [{ ...base, id: 'i3', invoice_number: 'INV-3', amount: 100, status: 'draft' }] }).find(e => e.kind === 'invoice_created')?.sub, '$100.00')
+      check('timeline', '➜ a customer opening their invoice is an event', at('invoice_viewed', buildTimeline({ invoices: [{ ...base, id: 'i4', invoice_number: 'INV-4', amount: 10, status: 'sent', viewed_at: '2026-02-01T00:00:00Z' }] })), '2026-02-01T00:00:00Z')
+    }
+    // The ledger stores payments, credits and reversals in ONE table. They are not
+    // all "Payment received" — that label on a refund is a lie to the owner.
+    {
+      const pay = (over: Partial<TlPayment>): TlPayment => ({ amount: 50, status: 'paid', kind: 'payment', method: 'stripe', notes: null, created_at: base.created_at, ...over })
+      check('timeline', 'a payment is a payment', titleOf('payment', buildTimeline({ payments: [pay({})] })), 'Payment received')
+      check('timeline', '➜ a negative payment is a refund', titleOf('refund', buildTimeline({ payments: [pay({ amount: -50 })] })), 'Refund · $50.00')
+      check('timeline', '➜ a positive credit row is credit added', titleOf('credit', buildTimeline({ payments: [pay({ kind: 'credit' })] })), 'Credit added · $50.00')
+      check('timeline', '➜ a negative credit row is credit applied', titleOf('credit', buildTimeline({ payments: [pay({ kind: 'credit', amount: -50 })] })), 'Credit applied · $50.00')
+      check('timeline', '➜ an unpaid payment row is not history yet', buildTimeline({ payments: [pay({ status: 'pending' })] }).length, 0)
+      check('timeline', '➜ refund/credit/payment are distinct kinds, not one icon',
+        new Set(buildTimeline({ payments: [pay({}), pay({ amount: -1 }), pay({ kind: 'credit' })] }).map(e => e.kind)).size, 3)
+    }
+    // Internal notes were skipped entirely — the one place an owner writes down what
+    // happened never appeared in what happened.
+    {
+      const msg = (direction: string): TlMessage => ({ direction, channel: 'sms', body: 'Gate code is 4432', created_at: base.created_at })
+      check('timeline', 'an internal note is history', titleOf('note', buildTimeline({ messages: [msg('internal')] })), 'Internal note')
+      check('timeline', '➜ inbound and outbound stay distinct', buildTimeline({ messages: [msg('inbound'), msg('outbound')] }).map(e => e.kind).sort(), ['message_in', 'message_out'])
+    }
+    // A lost sale left no trace: a declined quote simply stopped appearing.
+    {
+      const q = (status: string) => ({ ...base, id: 'q1', quote_number: 'Q-1', total: 200, status })
+      check('timeline', 'a declined quote is recorded, not erased', titleOf('quote_declined', buildTimeline({ quotes: [q('declined')] })), 'Quote Q-1 declined')
+      check('timeline', '➜ an accepted quote still reads as accepted', titleOf('quote_accepted', buildTimeline({ quotes: [q('accepted')] })), 'Quote Q-1 accepted')
+      check('timeline', '➜ a draft quote is created but neither accepted nor declined',
+        buildTimeline({ quotes: [q('draft')] }).map(e => e.kind), ['quote_created'])
+    }
+    // spent_at is when the money was spent; created_at is when it was typed in.
+    check('timeline', 'an expense is dated when it was spent, not when it was entered',
+      at('expense', buildTimeline({ expenses: [{ id: 'e1', amount: 40, description: 'Blades', spent_at: '2026-04-01', created_at: '2026-06-30T00:00:00Z' }] })), '2026-04-01')
+    // A photo's taken_at is when the work looked like that.
+    check('timeline', 'a photo is dated when it was taken, not uploaded',
+      at('photo', buildTimeline({ photos: [{ id: 'p1', url: 'u', kind: 'before', taken_at: '2026-05-01T00:00:00Z', created_at: '2026-05-09T00:00:00Z' }] })), '2026-05-01T00:00:00Z')
+    check('timeline', '➜ before/after photos are labelled by their kind',
+      buildTimeline({ photos: [{ id: 'p2', url: 'u', kind: 'after', created_at: base.created_at }] })[0].title, 'After photo')
+    check('timeline', '➜ a photo carries its image, so the row can show it',
+      buildTimeline({ photos: [{ id: 'p3', url: 'https://x/y.jpg', created_at: base.created_at }] })[0].thumb, 'https://x/y.jpg')
+
+    // Ordering is the whole point of a timeline.
+    {
+      const evs = buildTimeline({
+        payments: [{ amount: 1, status: 'paid', kind: 'payment', method: null, notes: null, created_at: '2026-01-01T00:00:00Z' }],
+        photos: [{ id: 'p4', url: 'u', created_at: '2026-06-01T00:00:00Z' }],
+      })
+      check('timeline', 'newest first, across sources', evs.map(e => e.kind), ['photo', 'payment'])
+      // A row with a broken date must not claim to be the oldest thing that ever
+      // happened — 1970 would pin it to the bottom of a newest-first list forever.
+      const withBad = buildTimeline({ photos: [{ id: 'p5', url: 'u', created_at: 'not-a-date' }, { id: 'p6', url: 'u', created_at: '2026-06-01T00:00:00Z' }] })
+      check('timeline', '➜ an unparseable date sinks instead of faking 1970', withBad[withBad.length - 1].at, 'not-a-date')
+    }
+
+    // Filters must never silently hide history.
+    {
+      const evs = buildTimeline({
+        quotes: [{ ...base, id: 'q2', quote_number: 'Q-2', total: 10, status: 'draft' }],
+        payments: [{ amount: 5, status: 'paid', kind: 'payment', method: null, notes: null, created_at: base.created_at }],
+      })
+      check('timeline', 'no filter set shows everything', filterTimeline(evs, new Set()).length, evs.length)
+      check('timeline', '➜ a null filter shows everything', filterTimeline(evs, null).length, evs.length)
+      check('timeline', '➜ a set filter narrows to that group', filterTimeline(evs, new Set(['money' as const])).map(e => e.kind), ['payment'])
+      check('timeline', '➜ counts add up to the whole timeline',
+        Object.values(timelineGroupCounts(evs)).reduce((a, b) => a + b, 0), evs.length)
+      check('timeline', 'search matches the title', searchTimeline(evs, 'Q-2').map(e => e.kind), ['quote_created'])
+      check('timeline', '➜ search matches the detail line too', searchTimeline(evs, '$5.00').map(e => e.kind), ['payment'])
+      check('timeline', '➜ an empty search hides nothing', searchTimeline(evs, '   ').length, evs.length)
+    }
+    // The property view is the same engine, filtered — not a second query.
+    {
+      const evs = buildTimeline({
+        jobs: [{ ...base, id: 'j4', title: 'Mow', scheduled_date: '2026-03-01', status: 'scheduled', property_id: 'prop-A' }],
+        payments: [{ amount: 5, status: 'paid', kind: 'payment', method: null, notes: null, created_at: base.created_at }],
+      })
+      check('timeline', 'a property timeline keeps that property’s events', timelineForProperty(evs, 'prop-A').map(e => e.kind), ['job_scheduled'])
+      // A payment isn't "at" an address — repeating it under every property the
+      // customer owns would invent money that never happened there.
+      check('timeline', '➜ customer-level events do not repeat under each property', timelineForProperty(evs, 'prop-B').length, 0)
+    }
+    // Expenses and price changes carry only a job_id, and a photo may carry one
+    // instead of a property_id. The job knows the address, so these must reach the
+    // property timeline — money spent at a property plainly happened there.
+    {
+      const jobAtA = { ...base, id: 'j5', title: 'Mow', scheduled_date: '2026-03-01', status: 'scheduled', property_id: 'prop-A' }
+      const evs = buildTimeline({
+        jobs: [jobAtA],
+        expenses: [{ id: 'e1', description: 'Blades', amount: 40, spent_at: '2026-03-02', created_at: base.created_at, job_id: 'j5' }],
+        priceChanges: [{ id: 'pc1', old_amount: 50, new_amount: 60, reason: 'bigger lawn', created_at: base.created_at, job_id: 'j5' }],
+        photos: [{ id: 'ph1', url: 'u', created_at: base.created_at, job_id: 'j5' }],
+      })
+      const atA = timelineForProperty(evs, 'prop-A').map(e => e.kind).sort()
+      check('timeline', 'a job-scoped expense reaches its job’s property', atA.includes('expense'), true)
+      check('timeline', '➜ so does a price change', atA.includes('price_change'), true)
+      check('timeline', '➜ and a photo with only a job_id', atA.includes('photo'), true)
+      check('timeline', '➜ none of them leak to a different property', timelineForProperty(evs, 'prop-B').length, 0)
+      // An expense whose job wasn't loaded (or has no address) must stay
+      // customer-level rather than being pinned to an arbitrary property.
+      const orphan = buildTimeline({
+        expenses: [{ id: 'e2', description: 'Fuel', amount: 20, spent_at: '2026-03-02', created_at: base.created_at, job_id: 'j-unknown' }],
+      })
+      check('timeline', '➜ an expense with no known job stays customer-level', orphan[0].propertyId ?? null, null)
+      // A job with no property_id must not hand its expenses a bogus address.
+      const noProp = buildTimeline({
+        jobs: [{ ...base, id: 'j6', title: 'Mow', scheduled_date: '2026-03-01', status: 'scheduled' }],
+        expenses: [{ id: 'e3', description: 'Fuel', amount: 20, spent_at: '2026-03-02', created_at: base.created_at, job_id: 'j6' }],
+      })
+      check('timeline', '➜ a job without an address gives its expense none either',
+        noProp.find(e => e.kind === 'expense')?.propertyId ?? null, null)
+    }
+    // ONE OPERATOR ACTION IS ONE EVENT. Booking a recurring plan writes the whole
+    // series at once; a row-per-job timeline rendered that as 25 identical rows and
+    // buried everything else the customer ever did.
+    {
+      // Weekly from 2026-07-11 — the exact shape of the real series that exposed this
+      // (Peter Dunham: 25 jobs, one created_at, Jul 11 → Dec 26).
+      const weeklyFrom = (i: number) => {
+        const d = new Date('2026-07-11T00:00:00Z'); d.setUTCDate(d.getUTCDate() + i * 7)
+        return d.toISOString().slice(0, 10)
+      }
+      const series = (n: number) => Array.from({ length: n }, (_, i) => ({
+        ...base, id: `s${i}`, title: 'Weekly Mowing', status: 'scheduled',
+        scheduled_date: weeklyFrom(i),
+        created_at: '2026-07-08T20:18:01.580Z', recurrence_id: 'rec-1', property_id: 'prop-A',
+      }))
+      const evs = buildTimeline({ jobs: series(25) })
+      const sched = evs.filter(e => e.kind === 'job_scheduled')
+      check('timeline', 'a booked series is ONE event, not one per visit', sched.length, 1)
+      check('timeline', '➜ it says how many visits', sched[0].title, '25 visits scheduled — Weekly Mowing')
+      check('timeline', '➜ and the span they cover', sched[0].sub, 'Jul 11, 2026 → Dec 26, 2026')
+      check('timeline', '➜ dated when it was booked, not when the last visit lands', sched[0].at, '2026-07-08T20:18:01.580Z')
+      check('timeline', '➜ and it opens the series', sched[0].href, '/dashboard/schedule?focus=rec-1')
+
+      // A one-off job has no recurrence and must read exactly as it always did.
+      const oneOff = buildTimeline({ jobs: [{ ...base, id: 'j9', title: 'Cleanup', scheduled_date: '2026-03-02', status: 'scheduled' }] })
+      check('timeline', '➜ a one-off job is untouched', oneOff.find(e => e.kind === 'job_scheduled')?.title, 'Job scheduled — Cleanup')
+      check('timeline', '➜ ➜ and keeps its "for <date>" line', oneOff.find(e => e.kind === 'job_scheduled')?.sub, 'for Mar 2, 2026')
+
+      // A LATER top-up of the same series is a separate act — collapsing it into the
+      // first booking would hide that the owner extended the plan.
+      const topUp = buildTimeline({ jobs: [
+        ...series(3),
+        { ...base, id: 't1', title: 'Weekly Mowing', status: 'scheduled', scheduled_date: '2026-09-01', created_at: '2026-08-20T10:00:00.000Z', recurrence_id: 'rec-1', property_id: 'prop-A' },
+      ] })
+      check('timeline', '➜ a later top-up of the same series is its own event',
+        topUp.filter(e => e.kind === 'job_scheduled').length, 2)
+
+      // Completions are real, separate days — only the BOOKING is one act.
+      const done = buildTimeline({ jobs: series(4).map((j, i) => i < 2
+        ? { ...j, status: 'completed', completed_at: `2026-07-1${i + 1}T12:00:00.000Z` } : j) })
+      check('timeline', '➜ completions are never collapsed', done.filter(e => e.kind === 'job_completed').length, 2)
+
+      // A series split across two addresses must not collapse into one, or a
+      // property timeline would claim visits at the wrong house.
+      const split = buildTimeline({ jobs: [
+        { ...base, id: 'a1', title: 'Mow', status: 'scheduled', scheduled_date: '2026-07-11', created_at: '2026-07-08T20:18:01.580Z', recurrence_id: 'rec-1', property_id: 'prop-A' },
+        { ...base, id: 'b1', title: 'Mow', status: 'scheduled', scheduled_date: '2026-07-12', created_at: '2026-07-08T20:18:01.580Z', recurrence_id: 'rec-1', property_id: 'prop-B' },
+      ] })
+      check('timeline', '➜ a series across two properties stays two events', split.filter(e => e.kind === 'job_scheduled').length, 2)
+      check('timeline', '➜ ➜ each scoped to its own address', timelineForProperty(split, 'prop-A').filter(e => e.kind === 'job_scheduled').length, 1)
+    }
+    // Every kind must belong to exactly one filter group, or a chip's count lies
+    // and a filtered view drops events with no chip to bring them back.
+    check('timeline', 'every event kind maps to a filter group',
+      Object.keys(KIND_GROUP).every(k => TIMELINE_GROUPS.includes(KIND_GROUP[k as TimelineKind])), true)
   }
 
   console.log(`\n${'═'.repeat(60)}\n  PASS ${pass}   FAIL ${fail}`)

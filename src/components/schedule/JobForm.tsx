@@ -5,6 +5,7 @@ import { useForm, Controller } from 'react-hook-form'
 import { createClient } from '@/lib/supabase/client'
 import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
+import { PropertySelect } from '@/components/ui/PropertySelect'
 import { Textarea } from '@/components/ui/Textarea'
 import { Button } from '@/components/ui/Button'
 import { Customer, Property, JobFormValues, JobStatus, RecurUnit } from '@/types'
@@ -415,11 +416,6 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     ...customers.map(c => ({ value: c.id, label: c.name })),
   ]
 
-  const propertyOptions = [
-    { value: '', label: properties.length ? 'Select a property...' : 'No properties found' },
-    ...properties.map(p => ({ value: p.id, label: p.address + (p.is_primary ? ' (primary)' : '') })),
-  ]
-
   const endSummary =
     endMode === 'season' && seasonEndDate ? `ends at season end (${formatDate(seasonEndDate)})`
     : endMode === 'after' ? `ends after ${Math.max(1, endCount)} visit${endCount !== 1 ? 's' : ''}`
@@ -537,15 +533,29 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
         </button>
       )}
 
+      {/* WHERE the work happens. Hidden under "+ More options" on a new job, while
+          the loader silently pre-selected the customer's primary — so a customer with
+          two addresses got one chosen for them, out of sight, and the only symptom is
+          a crew at the wrong house. Whenever there's an actual choice to make
+          (2+ addresses) it's shown up front; a one-property customer has nothing to
+          decide, so it stays collapsed exactly as before. */}
+      {(adv || properties.length > 1) && (
+        <Controller name="property_id" control={control}
+          render={({ field }) => (
+            <PropertySelect
+              label={properties.length > 1 ? 'Property *' : 'Property'}
+              properties={properties}
+              value={field.value || ''}
+              onChange={field.onChange}
+              customerId={customerId || null}
+              onCreated={(p: Property) => setProperties(prev => [...prev, p])}
+              hint={properties.length > 1 ? 'This customer has more than one address — pick the one this visit is for.' : undefined}
+            />
+          )} />
+      )}
+
       {adv && (
       <div className="space-y-4">
-      {/* The real edit workflow: WHERE (property) → what STATE it's in → NOTES.
-          Time/crew details and recurrence are rarer — they collapse below. */}
-      <Controller name="property_id" control={control}
-        render={({ field }) => (
-          <Select label="Property" options={propertyOptions} {...field} />
-        )} />
-
       <Controller name="status" control={control}
         render={({ field }) => (
           <Select label="Status" options={STATUS_OPTIONS} {...field} />
@@ -651,11 +661,16 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
               </div>
             )}
 
-            {/* Season chip — what season this service belongs to */}
+            {/* Season chip — what season this service belongs to. An owner-defined
+                season resolves here too (category stays 'year_round' for those, so
+                the old snow?/lawn binary called a Pool Opening a "Lawn service") —
+                its own label wins, falling back to the binary only for the built-ins. */}
             {serviceSeason && (
               <p className="text-xs text-ink-muted flex items-center gap-1.5">
-                {category === 'snow' ? <Snowflake className="w-3.5 h-3.5 text-sky-400" /> : <Sun className="w-3.5 h-3.5 text-amber-400" />}
-                {category === 'snow' ? 'Snow' : 'Lawn'} service · season {seasonLabel(serviceSeason)}
+                {category === 'snow' ? <Snowflake className="w-3.5 h-3.5 text-sky-400" />
+                  : category === 'lawn' ? <Sun className="w-3.5 h-3.5 text-amber-400" />
+                  : <CalendarRange className="w-3.5 h-3.5 text-accent-text" />}
+                {serviceSeason.label || (category === 'snow' ? 'Snow' : 'Lawn')} service · season {seasonLabel(serviceSeason)}
               </p>
             )}
 
@@ -663,9 +678,9 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
             {!isEdit && (
             <div className="flex flex-wrap gap-2">
               {([
-                { kind: 'weekly', label: 'Weekly Lawn Care' },
-                { kind: 'biweekly', label: 'Bi-Weekly Lawn Care' },
-                { kind: 'monthly', label: 'Monthly Service' },
+                { kind: 'weekly', label: 'Weekly' },
+                { kind: 'biweekly', label: 'Every 2 weeks' },
+                { kind: 'monthly', label: 'Monthly' },
               ] as const).map(p => (
                 <button key={p.kind} type="button" onClick={() => applyCadencePreset(p.kind)}
                   className="text-xs font-medium px-3 py-1.5 rounded-lg border border-accent/30 bg-accent/10 text-accent-text hover:bg-accent/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">

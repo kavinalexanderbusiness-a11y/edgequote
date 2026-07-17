@@ -124,7 +124,10 @@ export function ReviewLifecycle({ customer, onChange }: {
     await ai.run({
       task: 'review_response',
       customerId: customer.id,
-      rating: customer.review_rating || 5,
+      // Pass the rating through as-is. `|| 5` here used to turn an unrecorded
+      // rating (saveReviewed stores `rating || null`) into a 5 — drafting an
+      // effusive thank-you for a review that may well have been a 1-star.
+      rating: customer.review_rating ?? undefined,
       source: customer.review_source || 'Google',
     }, { onDelta: d => setReply(prev => prev + d) })
   }

@@ -45,11 +45,14 @@ function withUrl(supabase: SupabaseClient, rows: JobPhoto[]): JobPhotoView[] {
 export async function listPhotos(
   supabase: SupabaseClient,
   userId: string,
-  scope: { jobId?: string | null; propertyId?: string | null; limit?: number },
+  scope: { jobId?: string | null; propertyId?: string | null; customerId?: string | null; limit?: number },
 ): Promise<JobPhotoView[]> {
   let q = supabase.from('job_photos').select('*').eq('user_id', userId)
   if (scope.jobId) q = q.eq('job_id', scope.jobId)
   else if (scope.propertyId) q = q.eq('property_id', scope.propertyId)
+  // Customer scope spans every property they own — the whole visual history, which
+  // is what a customer timeline needs. Narrowest scope still wins above.
+  else if (scope.customerId) q = q.eq('customer_id', scope.customerId)
   else return []
   q = q.order('taken_at', { ascending: false })
   if (scope.limit) q = q.limit(scope.limit)

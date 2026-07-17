@@ -18,6 +18,7 @@ import { formatDate, formatCurrency, localTodayISO } from '@/lib/utils'
 import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes, latestSavedRecommendation, recommendationIsStale, pricingConfidence } from '@/lib/pricing'
 import { resolvePrefs, prefSummary, type PrefSource } from '@/lib/preferences'
 import { computePropertyHealth } from '@/lib/propertyHealth'
+import { loadBusinessShape, SHAPE_LOADING, type BusinessShape } from '@/lib/businessShape'
 import { getPropertyContexts } from '@/lib/ai/propertyContext'
 import { LocatedJob, fetchLocatedUpcomingJobs, nearbyJobCount } from '@/lib/geo'
 import { JobPhotos } from '@/components/photos/JobPhotos'
@@ -107,13 +108,16 @@ export default function PropertiesPage() {
   const [photosByProp, setPhotosByProp] = useState<Record<string, JobPhotoView[]>>({})
   const [photosLoaded, setPhotosLoaded] = useState(false) // false → let each card self-fetch (batch failed)
   const [recalcId, setRecalcId] = useState<string | null>(null)
+  // What this business does, derived from its own catalogue and jobs — never asked.
+  // Starts SHOWING everything, so a Measure action can't blink out mid-load.
+  const [shape, setShape] = useState<BusinessShape>(SHAPE_LOADING)
 
   const supabase = createClient()
 
   useEffect(() => {
     async function fetchProperties() {
       const { data: { user } } = await supabase.auth.getUser()
-      const [pRes, sRes, located, jRes, iRes, planJRes, rRes, qRes] = await Promise.all([
+      const [pRes, sRes, located, jRes, iRes, planJRes, rRes, qRes, shapeRes] = await Promise.all([
         supabase
           .from('properties')
           .select('*, customers(id, name, email, phone, preferred_days, avoid_days, pref_time_start, pref_time_end)')
@@ -128,10 +132,17 @@ export default function PropertiesPage() {
         supabase.from('job_recurrences').select('*').eq('user_id', user!.id),
         // Last quote per property (most recent non-draft).
         supabase.from('quotes').select('id, property_id, quote_number, total, status, created_at').eq('user_id', user!.id).neq('status', 'draft'),
+        // Does this business do lawn work? If not, an unmeasured property is not a
+        // defect and must not be scored or nagged as one (see lib/businessShape).
+        // Rides along in the batch already going out; never blocks the page. On
+        // failure the shape falls back to showing everything — how this page
+        // behaved before the shape existed.
+        loadBusinessShape(supabase, user!.id).catch(() => SHAPE_LOADING),
       ])
       const settingsRow = sRes.data as BusinessSettings | null
       setProperties((pRes.data as Property[]) || [])
       setSettings(settingsRow)
+      setShape(shapeRes)
       setLocatedJobs(located)
       setPerfByProp(buildPerformance((jRes.data as PerfJob[]) || [], (iRes.data as PerfInvoice[]) || []))
 
@@ -293,10 +304,18 @@ export default function PropertiesPage() {
               quotedCount: qp?.quoted ?? 0,
               pricingDriftPct: drift,
               hasVision: !!hasVisionByProp[property.id],
+              shape,
             })
             const measureHref = `/dashboard/properties/measure?id=${property.id}`
+            // 'view' means nothing is pressing AND this trade has no lawn to
+            // measure — so it must never fall through to measureHref, which is the
+            // default this change exists to remove. The card is already the view;
+            // the only place left worth going is the customer, and with no customer
+            // there is no destination at all, so no button renders (a primary
+            // button that goes nowhere is worse than a calm card).
             const actionHref = health.action === 'quote' ? `/dashboard/quotes/new?customer=${property.customer_id}&property=${property.id}`
               : health.action === 'schedule' ? `/dashboard/schedule?customer=${property.customer_id}&property=${property.id}`
+              : health.action === 'view' ? (property.customer_id ? `/dashboard/customers/${property.customer_id}` : null)
               : measureHref
             return { property, hist, last, saved, stale, perf, hasPerf, lastQuote, lastInvoice, plans, prefText, nextVisit, qp, confidence, estMin, estFromActual, activePlan, estDur, durDelta, recOneTime, drift, driftBig, health, measureHref, actionHref }
           })
@@ -319,15 +338,26 @@ export default function PropertiesPage() {
                     </div>
                     <div className="space-y-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <p className="text-sm font-semibold text-ink">{property.address}</p>
+                        {/* The address is this card's identity, so it's the way into
+                            the property's history — the one thing this card can't show. */}
+                        <Link href={`/dashboard/properties/${property.id}`}
+                          className="text-sm font-semibold text-ink hover:text-accent-text transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                          {property.address}
+                        </Link>
                         {property.is_primary && (
                           <Badge tone="accent">Primary</Badge>
                         )}
                         {activePlan && (
                           <Badge tone="accent" icon={Repeat}>{activePlan.cadenceLabel}</Badge>
                         )}
-                        {/* One overall health score — measurement, pricing, history, recurring, scheduling, AI Vision */}
-                        <span title="Property health — measurement freshness, pricing confidence, service history, recurring status, scheduling & AI Vision" className="inline-flex">
+                        {/* One overall health score — measurement, pricing, history, recurring, scheduling, AI Vision.
+                            The tooltip lists what the score ACTUALLY counted: naming
+                            measurement to a trade with no lawn would describe points
+                            that aren't in their denominator, which is the same lie
+                            the number itself used to tell. */}
+                        <span title={health.lawnApplies
+                          ? 'Property health — measurement freshness, pricing confidence, service history, recurring status, scheduling & AI Vision'
+                          : 'Property health — service history, recurring status, scheduling & AI Vision'} className="inline-flex">
                           <Badge icon={Heart} tone={
                             health.tone === 'good' ? 'success'
                             : health.tone === 'warn' ? 'warn'
@@ -393,19 +423,23 @@ export default function PropertiesPage() {
                       <Button size="sm" loading={recalcId === property.id} onClick={() => recalculate(property)} className="w-full">
                         <RefreshCw className="w-3.5 h-3.5" /> {health.actionLabel}
                       </Button>
-                    ) : (
+                    ) : actionHref ? (
                       // The Link IS the button (no nested <Button>) — one focusable
                       // element, styled with the shared primary sm recipe.
                       <Link href={actionHref}
                         className="w-full inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-accent text-black hover:bg-accent-hover active:scale-[0.98] shadow-sm px-3.5 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
                         {health.action === 'quote' ? <FileText className="w-3.5 h-3.5" />
                           : health.action === 'schedule' ? <CalendarPlus className="w-3.5 h-3.5" />
+                          : health.action === 'view' ? <User className="w-3.5 h-3.5" />
                           : <Ruler className="w-3.5 h-3.5" />}
                         {health.actionLabel}
                       </Link>
-                    )}
-                    {/* Quiet utility — re-measuring is always one tap away, but never competes as the primary. */}
-                    {health.action !== 'measure' && health.action !== 'remeasure' && (
+                    ) : null}
+                    {/* Quiet utility — re-measuring is always one tap away, but never
+                        competes as the primary. Follows the score's own verdict on
+                        whether this property has a lawn at all, so it can't become
+                        the Measure nag's back door on a plumber's card. */}
+                    {health.lawnApplies && health.action !== 'measure' && health.action !== 'remeasure' && (
                       <Link href={measureHref} className="text-[11px] text-ink-faint hover:text-ink text-right">Re-measure</Link>
                     )}
                     {property.lat && property.lng ? (

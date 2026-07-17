@@ -15,9 +15,12 @@ import { Skeleton } from '@/components/ui/Skeleton'
 import { CrmCampaign, CampaignKind, CampaignAudience, CampaignSchedule, CrmCampaignPreset } from '@/types'
 import { DEFAULT_TEMPLATES, MSG_VARIABLES, MsgType } from '@/lib/comms/templates'
 import {
-  CAMPAIGN_KINDS, CAMPAIGN_PRESETS, AUDIENCE_LABELS, SEASONAL_TEMPLATES,
+  CAMPAIGN_KINDS, CAMPAIGN_PRESETS, AUDIENCE_LABELS,
   describeSchedule, describeNextRun, type CampaignPreset,
 } from '@/lib/crm/campaigns'
+// Trade packs feed UI DEFAULTS only (which seasonal presets this menu offers) —
+// lib/crm stays pack-free; the cron reads crm_campaigns rows and never sees this.
+import { tradePack, NEUTRAL_PACK } from '@/lib/trades'
 import { loadCampaignStats, summarizeStats, EMPTY_STATS, type CampaignStats } from '@/lib/crm/campaignStats'
 import { previewAudience } from '@/lib/crm/audience'
 import { applyCanAskForReview } from '@/lib/crm/reviews'
@@ -66,7 +69,7 @@ export function CampaignManager() {
   const [statsById, setStatsById] = useState<Record<string, CampaignStats>>({})
   const [loading, setLoading] = useState(true)
   const [counts, setCounts] = useState({ total: 0, birthday: 0, anniversary: 0, notReviewed: 0, happy: 0 })
-  const [biz, setBiz] = useState({ name: '', reviewUrl: null as string | null })
+  const [biz, setBiz] = useState({ name: '', reviewUrl: null as string | null, businessType: null as string | null })
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [saving, setSaving] = useState(false)
@@ -88,12 +91,12 @@ export function CampaignManager() {
       // hand-rolled copy here would drift from what the sender actually does.
       applyCanAskForReview(supabase.from('customers').select('id', head).eq('user_id', user.id).is('archived_at', null)),
       supabase.from('customers').select('id', head).eq('user_id', user.id).is('archived_at', null).not('reviewed_at', 'is', null).gte('review_rating', 4),
-      supabase.from('business_settings').select('company_name, review_url').eq('user_id', user.id).maybeSingle(),
+      supabase.from('business_settings').select('company_name, review_url, business_type').eq('user_id', user.id).maybeSingle(),
     ])
     const camps = (campRes.data as CrmCampaign[]) || []
     setCampaigns(camps)
-    const b = bizRes.data as { company_name: string | null; review_url: string | null } | null
-    setBiz({ name: b?.company_name || '', reviewUrl: b?.review_url ?? null })
+    const b = bizRes.data as { company_name: string | null; review_url: string | null; business_type: string | null } | null
+    setBiz({ name: b?.company_name || '', reviewUrl: b?.review_url ?? null, businessType: b?.business_type ?? null })
     // Presets are additive — a missing table (migration not yet run) must not
     // blank the whole manager.
     setPresets((presetRes.data as CrmCampaignPreset[]) || [])
@@ -275,12 +278,30 @@ export function CampaignManager() {
 
   const enabledCount = campaigns.filter(c => c.enabled).length
 
+  // Built-in presets: the non-seasonal six are universal; the SEASONAL ones come
+  // from THIS business's trade pack, so a plumber is offered "Season opener"
+  // instead of "Fall cleanup & aeration". A lawn business sees the exact list it
+  // always has — the lawn pack's campaigns are deep-equalled against
+  // SEASONAL_TEMPLATES in CI (verify:trades), so this swap is provably a no-op
+  // for them. Packs with no seasonal campaigns fall back to the neutral pack's.
+  const packCampaigns = (() => {
+    const p = tradePack(biz.businessType)
+    return p.seasonalCampaigns.length ? p.seasonalCampaigns : NEUTRAL_PACK.seasonalCampaigns
+  })()
+  const builtinPresets: CampaignPreset[] = [
+    ...CAMPAIGN_PRESETS.filter(p => p.kind !== 'seasonal'),
+    ...packCampaigns.map((s): CampaignPreset => ({
+      kind: 'seasonal', name: s.label, channels: s.channels,
+      schedule: { month: s.month, day: s.day }, audience: {},
+      custom_body: s.body, subject: s.subject, seasonalKey: s.key,
+    })),
+  ]
   const menuItems = [
-    ...CAMPAIGN_PRESETS.map((p, i) => ({
+    ...builtinPresets.map((p, i) => ({
       key: `builtin-${i}`,
       label: p.name,
       description: p.seasonalKey
-        ? SEASONAL_TEMPLATES.find(s => s.key === p.seasonalKey)?.blurb ?? CAMPAIGN_KINDS[p.kind].blurb
+        ? packCampaigns.find(s => s.key === p.seasonalKey)?.blurb ?? CAMPAIGN_KINDS[p.kind].blurb
         : CAMPAIGN_KINDS[p.kind].blurb,
       icon: KIND_ICON[p.kind],
       onSelect: () => createFrom(p),

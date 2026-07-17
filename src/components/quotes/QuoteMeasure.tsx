@@ -11,6 +11,7 @@ import { PricePackagePanel, CadenceSelection } from '@/components/pricing/PriceP
 import { DecisionSummary } from '@/components/pricing/DecisionSummary'
 import { AutoMeasureBanner } from '@/components/measure/AutoMeasureBanner'
 import { recordMeasurement, neighborhoodOf, AutoMeasureResult } from '@/lib/autoMeasure'
+import type { ServicePricingKind } from '@/lib/servicePricing'
 import { DEFAULT_CREW_COST, crewCostPerHour as resolveCrewCost } from '@/lib/economics'
 import { Button } from '@/components/ui/Button'
 import { X, Undo2, Trash2, Plus, Ruler, Loader2 } from 'lucide-react'
@@ -43,6 +44,12 @@ interface Props {
   travelFee: number
   cfg: PricingConfig
   serviceType?: string | null   // the selected service — pricing/duration learn from THIS service only
+  /** Which pricing structure the selected service uses — resolved by the ONE seam
+   *  (lib/servicePricing's servicePricingKind) and passed in from the Quote
+   *  Builder rather than recomputed, so the modal and the builder can never
+   *  disagree about what a service is. Only 'lawn_recurring' has a cadence engine
+   *  behind this map. */
+  pricingKind: ServicePricingKind
   propertyId?: string | null
   customerId?: string | null
   services?: string[]           // selectable service names (so the service is chosen BEFORE measuring)
@@ -51,7 +58,14 @@ interface Props {
   onClose: () => void
 }
 
-export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId, customerId, services, onServiceChange, onApply, onClose }: Props) {
+export function QuoteMeasure({ address, travelFee, cfg, serviceType, pricingKind, propertyId, customerId, services, onServiceChange, onApply, onClose }: Props) {
+  // Does the cadence engine behind this map actually speak for the chosen service?
+  // pricingPackage() and gradedProspectPricing() take (sqft, cfg, …) and NO service
+  // — they are the residential lawn engine and cannot be anything else. So their
+  // output is only shown when the service is a lawn-cadence one. For every other
+  // trade the map still measures (area is a fact about the property), but the
+  // prices are withheld and said so, rather than rendered as this service's price.
+  const lawnPricing = pricingKind === 'lawn_recurring'
   const supabase = createClient()
   const [center, setCenter] = useState<Coord | null>(null)
   const [hoodName, setHoodName] = useState<string | null>(null)
@@ -405,12 +419,21 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
     ?? (totalSqft > 0 ? pricingPackage(totalSqft, cfg, { overgrowth, nearbyCount: nearby, neighborhoodName: hoodName }) : null)
 
   // Record auto vs accepted so the estimate self-calibrates (best-effort).
+  //
+  // propertyId/customerId are forwarded because a measurement is a fact about an
+  // ADDRESS, not about a quote. They were already props, already destructured and
+  // already used a few lines above (draftKey) — they just weren't passed here, so
+  // every measurement taken inside the quote builder wrote property_id = null.
+  // Measured: 30 of 31 rows. It stayed invisible because recordMeasurement's
+  // propertyId is optional and defaults to null, so tsc had nothing to object to.
+  // This is what made "Property measured" almost absent from property timelines.
   function recordMeasure() {
     ;(async () => {
       const { data: { user } } = await supabase.auth.getUser()
       if (user) recordMeasurement(supabase, {
         userId: user.id, context: 'quote', lat: center?.lat ?? null, lng: center?.lng ?? null,
         neighborhood: neighborhoodOf(null, null, hoodName), auto: autoRef.current, acceptedSqft: totalSqft,
+        propertyId: propertyId ?? null, customerId: customerId ?? null,
       }).catch(() => {})
     })()
   }
@@ -454,8 +477,16 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
                 <option value="">Select a service…</option>
                 {services.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
+              {/* This read "Pricing & duration are specific to this service" for
+                  every service — above an engine that takes no service argument, so
+                  the same polygon produced byte-identical prices for Lawn Mowing and
+                  Pressure Washing. Say what is actually true of the service picked. */}
               <span className="text-[11px] text-ink-faint">
-                {serviceType ? 'Pricing & duration are specific to this service' : 'Pick a service for service-specific pricing'}
+                {!serviceType
+                  ? 'Pick a service — pricing depends on it'
+                  : lawnPricing
+                    ? 'Recurring pricing & duration are specific to this service'
+                    : 'Measures area only — this service isn’t priced by lawn cadence'}
               </span>
             </div>
           )}
@@ -552,7 +583,19 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
                   </label>
                 </div>
 
-                {pkg ? (
+                {/* No cadence engine for this service → show the measurement, and
+                    say plainly that we have no price for it, instead of rendering
+                    the grass engine's numbers under this service's name. */}
+                {!lawnPricing ? (
+                  <div className="border-t border-border pt-3 animate-fade space-y-1">
+                    <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide">No pricing recommendation for this service</p>
+                    <p className="text-[11px] text-ink-muted">
+                      {serviceType
+                        ? <>EdgeQuote only has a measurement-based pricing engine for recurring lawn services. <span className="text-ink font-medium">{serviceType}</span> isn’t one, so it won’t guess a price from area — the measurement below will be saved to the quote and you can price it in the builder.</>
+                        : 'Pick a service above. Area alone doesn’t decide a price.'}
+                    </p>
+                  </div>
+                ) : pkg ? (
                   <div className="border-t border-border pt-3 space-y-3 animate-fade">
                     <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide mb-2">
                       Pricing recommendation{Number(travelFee || 0) > 0 ? ` · $${Number(travelFee).toLocaleString()} travel stays on the quote` : ''}
@@ -581,15 +624,25 @@ export function QuoteMeasure({ address, travelFee, cfg, serviceType, propertyId,
 
               <div className="flex items-center justify-end gap-2">
                 <Button type="button" variant="ghost" onClick={requestClose}>Cancel</Button>
-                {pkg && (
-                  <Button type="button" onClick={() => applySelection({ cadence: pkg.recommended.cadence, price: pkg.recommended.cadence === 'weekly' ? pkg.options[0].price : pkg.recommended.cadence === 'biweekly' ? pkg.options[1].price : pkg.recommended.cadence === 'monthly' ? pkg.options[2].price : pkg.oneTime })}>
-                    Use recommended
-                  </Button>
-                )}
+                {/* For a non-lawn service this said "Use recommended" and applied a
+                    mowing price. There is no recommendation to use — the honest
+                    action is to keep the measurement, which the builder applies
+                    without touching the price. */}
+                {!lawnPricing
+                  ? totalSqft > 0 && (
+                    <Button type="button" onClick={() => applySelection({ cadence: 'one_time', price: 0 })}>
+                      Use measurement ({Math.round(totalSqft).toLocaleString()} ft²)
+                    </Button>
+                  )
+                  : pkg && (
+                    <Button type="button" onClick={() => applySelection({ cadence: pkg.recommended.cadence, price: pkg.recommended.cadence === 'weekly' ? pkg.options[0].price : pkg.recommended.cadence === 'biweekly' ? pkg.options[1].price : pkg.recommended.cadence === 'monthly' ? pkg.options[2].price : pkg.oneTime })}>
+                      Use recommended
+                    </Button>
+                  )}
               </div>
 
               <p className="text-xs text-ink-faint">
-                Tap each corner of the lawn to trace it — tap near your starting point (or <span className="text-ink font-medium">Add area</span>) to close the shape. For front + back, close one area, then trace the next — they add up. The price is your rate × area, plus the travel fee from the quote.
+                Tap each corner of the area to trace it — tap near your starting point (or <span className="text-ink font-medium">Add area</span>) to close the shape. Close one area, then trace the next — they add up.{lawnPricing ? ' The price is your rate × area, plus the travel fee from the quote.' : ''}
               </p>
             </>
           )}

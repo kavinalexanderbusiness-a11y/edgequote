@@ -179,9 +179,12 @@ check('lib/trades imports nothing outside itself', externalImports, [])
 // (b) Nothing in src/ imports lib/trades except the allowlist. Grows ONLY when
 //     a seeding/onboarding phase lands, in a reviewed change to this file.
 const ALLOWED_IMPORTERS: string[] = [
-  // Phase 2: the pack has ZERO importers. Phase 4/5 adds the settings picker
-  // and the seeding module here — and nothing else, ever. Engines are blocked
-  // below regardless of what this list says.
+  // The COMPLETE set of pack consumers, each a defaults/copy surface — exactly
+  // what packs exist for. Growing this list is a reviewed change; engines are
+  // blocked below regardless of what it says.
+  'lib/onboarding/seed.ts',              // THE seeding path — fills emptiness only
+  'app/setup/page.tsx',                  // first-run wizard + safe-reseed surface
+  'components/grow/CampaignManager.tsx', // seasonal preset MENU comes from the pack
 ]
 // Paths that may NEVER import lib/trades, whatever the allowlist claims.
 // This is the "no engine branches on trade" rule as code.
