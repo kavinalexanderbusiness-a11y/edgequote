@@ -6,7 +6,21 @@ The roadmap defines Phase 6 in one line — *`quotes.viewed_at`, PDF accept link
 revisions fork*. This document is that line, specified.
 **Gate:** the owner's standing order is **Phase 0 only — do not skip phases**. Phase 0 is ~2 of 7.
 **This spec is redesign input. It is not a licence to build.** Build it when Phases 1–5 have landed.
-**Date:** 2026-07-16 · **Code state:** `main` @ `f9014e1` · **Prod verified live.**
+**Date:** 2026-07-16, revised + APPROVED 2026-07-17 · **Code state:** `main` @ `f9014e1` ·
+**Prod verified live.**
+
+> ### 🔗 Read with — and not instead of — `quote-v2-spec-2026-07-17`
+> A parallel session wrote **Quote Engine V2** ([[quote-v2-spec-2026-07-17]]), which maps the owner's
+> 12 areas onto the roadmap's phases and tags **"Customer experience" as Phase 6** — this document.
+> **They are a map and a territory, not rivals:** that spec answers *which phase owns what*; this one
+> is the Phase 6 detail. They agree on the finding, independently — it reached *"quotes have no
+> `viewed_at`; invoices DO"* by its own route, which is corroboration, not duplication.
+> ⚠️ **Whoever implements Phase 6 must read both.** Two documents describing one phase is exactly the
+> species the roadmap exists to kill; the mitigation is this cross-link and the fact that only one of
+> them (this one) is the implementation spec. **If they ever disagree, this document is wrong until
+> proven otherwise — the map was written against the whole plan; this was written against the code.**
+> 📌 Its *"accept or nothing → every hesitation becomes a ghost"* is the origin of `counter_offered`
+> in §5.0's taxonomy.
 
 Every claim below was verified by reading code or querying production. Where a claim could not be
 verified it is marked **[UNVERIFIED]** rather than asserted.
@@ -127,6 +141,20 @@ right about the repo and wrong about reality. See [[prod-schema-exceeds-main]]. 
 12. **Every customer interaction must be measurable.** → the new §5.0. This is the requirement that
     changed the architecture of this spec; read §5.0 before §5.1.
 
+### 3c · ⭐ Owner accepted the `quote_events` architecture, 2026-07-17
+
+13. **`quote_events` is THE canonical engagement event log.** All aggregates — `viewed_at`,
+    `view_count`, et al — are **derived from it**. *"This matches the architecture we already use for
+    payments and avoids multiple sources of truth."* → §5.0 is now settled architecture, not a proposal.
+14. **The taxonomy is a stable vocabulary** so future features **extend this stream rather than
+    inventing parallel tracking**. → §5.0's taxonomy table + naming laws. `option_selected` is the
+    owner's name (an earlier draft said `option_accepted`); `counter_offered` and `question_asked`
+    are theirs and are now reserved.
+15. **Re-confirmed, and now hard constraints:** `time_to_first_view` stays blocked until Phase 0
+    consolidates `markQuoteSent()` — ⛔ **do not introduce another `sent_at` writer**; `expired` stays
+    **derived** — ⛔ **do not persist an `expired` event that could go stale when a quote is
+    extended**; optional-service engagement stays deferred to Phase 3; deposit-on-accept stays out.
+
 And Phase 0's harness-pinned rule, which §5.2 must not break:
 
 > **RECORD TRUTH OR NOTHING.** An unknown cadence is OMITTED, never defaulted. Inferring one from a
@@ -202,20 +230,76 @@ derived convenience columns — so it gets the same architecture.
 - **Record truth or nothing.** Phase 0's rule, unchanged. No inferred events, no backfill — see below.
 - **A sensor must not change what the customer sees.** No read-receipts, no "seen" ticks.
 
+#### ⭐ THE EVENT TAXONOMY (owner requirement, 2026-07-17)
+
+> *"The `quote_events` specification should include a stable event taxonomy … so future features
+> extend the same event stream rather than inventing parallel tracking."*
+
+**This is the point of the whole section.** A ledger without a fixed vocabulary becomes
+`notification_log.template` — free text that drifts until nobody can query it. The taxonomy is the
+mechanism that makes *extending this stream* the path of least resistance, and inventing a parallel
+tracker the expensive one.
+
+**The vocabulary — v1. Reserved in full at step 1; emitted as each feature lands.**
+
+| `type` | Meaning (a FACT, never a UI label) | Emitted by | Ships |
+|---|---|---|---|
+| `viewed` | the customer opened the quote document | portal quote view | **Step 1** |
+| `pdf_downloaded` | they took the document away (download/print/share) | client — see §5.0 note | Step 6 |
+| `question_asked` | they asked something about this quote | §5.2 | Step 3 |
+| `accepted` | they agreed to it | `portal_accept_quote` | Step 3 |
+| `declined` | they said no (`meta.reason`) | `portal_decline_quote` (§5.2) | Step 3 |
+| `counter_offered` | they proposed different terms (`meta.amount`, `meta.note`) | ⚠️ not yet a feature — see below | ⛔ reserved |
+| `option_viewed` | they looked at a plan option (`meta.option_key`) | §5.4 | ⛔ Phase 3 |
+| `option_selected` | they chose a plan option (`meta.option_key`) | §5.4 | ⛔ Phase 3 |
+
+**Naming laws — the taxonomy is only "stable" if these hold:**
+- **Past-tense, snake_case, and a FACT about what happened.** Not a UI label, not a status.
+  Renaming a button must never imply renaming an event.
+- ⛔ **NEVER rename or re-use a type.** A rename orphans every historical row and silently changes
+  what past data means. **Deprecate, never delete** — an append-only log's vocabulary is append-only too.
+- **Additive only.** New feature → new type, appended here. That is the whole contract.
+- **`meta jsonb` carries the specifics; the `type` never encodes them.** `option_selected` +
+  `meta.option_key`, never `option_selected_weekly`. A type-per-value is how a vocabulary explodes.
+- **One vocabulary, two enforcers** — mirror the existing `SYSTEM_UNITS` pattern exactly:
+  `QUOTE_EVENT_TYPES` in `lib/quoteEvents.ts` is the source, a **DB CHECK** enforces it, and
+  `verify:quote-events` pins that **the const and the CHECK agree** (as `verify:pricing` §14 already
+  fingerprints `SYSTEM_UNITS` against the seeded rows, and as Phase 0 CHECK-pinned the 4-cadence
+  vocabulary with a negative test proving the DB rejects a 5th).
+  → The CHECK is deliberate friction: adding an event is a one-line migration; inventing a parallel
+  table is a week. That asymmetry is the requirement, implemented.
+- **Reserved ≠ built.** `counter_offered` is in the vocabulary and has no producer. Reserving costs
+  nothing and prevents the next session inventing `quote_counters`. **It is not permission to build
+  counter-offers.**
+
+**⚠️ `counter_offered` is a new product concept this spec does not otherwise cover.** Nothing in the
+app lets a customer propose terms today, and it raises a real question decision #5 already answers:
+**a counter the owner accepts is a REVISION, not an edit** — never mutate the quote the customer
+holds (§5.3). So the event is reserved, the feature is unspecified, and the architecture is already
+decided if it's ever built. **[UNVERIFIED]** whether owners want this at all — it is a haggling
+surface, and some trades price firm on purpose.
+
+**Two events are deliberately NOT in the vocabulary:**
+- ❌ `expired` — **derived, never stored** (decision #2). A stored `expired` goes stale the instant
+  the owner extends `valid_until`, which is exactly the bug `quoteStatus.ts` already avoids.
+  The metric is a query.
+- ❌ `sent` — that fact belongs to **Phase 0's `markQuoteSent()`**, the one seam. An event here would
+  be a **5th writer** of "sent" (§6). Phase 6 consumes; it does not compete.
+
 #### The ten required interactions, mapped honestly
 
-| # | Required | Model | Ships |
+| # | Required (owner's words) | Model | Ships |
 |---|---|---|---|
 | 1 | **viewed** | event `viewed`, one row per view | **Step 1** |
-| 2 | **first viewed** | derived `min(at)` — the column §5.1 already wanted | **Step 1** |
+| 2 | **first viewed** | derived `min(at)` — the column §5.1 wanted | **Step 1** |
 | 3 | **total view count** | derived `count(*)` — **needs the ledger; a column can't do this** | **Step 1** |
-| 4 | **time to first view** | derived: `first_viewed_at − sent_at` | **Step 1**, ⚠️ see below |
-| 5 | **accepted** | event `accepted`, emitted by `portal_accept_quote` beside its existing snapshot | Step 3 |
-| 6 | **declined** | event `declined` + reason — **needs §5.2's `portal_decline_quote`, which does not exist** | Step 3 |
-| 7 | **expired** | ⚠️ **NOT an event — derived.** Decision #2: `expired` is never stored. See below. | ⚠️ blocked |
+| 4 | **time to first view** | derived `first_viewed_at − sent_at` | **Step 1**, ⚠️ reads *unknown* until Phase 0 |
+| 5 | **accepted** | event `accepted`, beside `portal_accept_quote`'s existing snapshot | Step 3 |
+| 6 | **declined** | event `declined` + `meta.reason` — **needs §5.2's `portal_decline_quote`, which does not exist** | Step 3 |
+| 7 | **expired** | ⚠️ **NOT an event — derived.** Decision #2. | ⚠️ blocked on Phase 0's `valid_until` |
 | 8 | **PDF downloaded** | event `pdf_downloaded` — the PDF renders **client-side**, so this is an explicit client call, not a server-observable fact | Step 6 |
-| 9 | **optional services viewed** | event `option_viewed` | ⛔ **Phase 3** |
-| 10 | **optional services accepted** | event `option_accepted` (the chosen option key) | ⛔ **Phase 3** |
+| 9 | **optional services viewed** | event `option_viewed` (`meta.option_key`) | ⛔ **Phase 3** |
+| 10 | **optional services accepted** | event **`option_selected`** (`meta.option_key`) — the owner's name; an earlier draft said `option_accepted`, and one name per fact is the rule | ⛔ **Phase 3** |
 
 #### Three honest caveats on that list — none of them are reasons not to do it
 
@@ -332,8 +416,8 @@ When Phase 3 lands:
   *which plan*. One is "and also", the other is "instead of". Don't merge them into one control.
 - **The accepted option is the record.** This is what makes §5.2's cadence snapshot knowable.
 - **The two option metrics ship with this phase, not before** (§5.0 #9/#10): `option_viewed` and
-  `option_accepted`. Reserve the event types in step 1; collect here. Measuring options that don't
-  exist would produce a zero that reads like a finding.
+  `option_selected`. Reserved in the taxonomy at step 1; **collected here.** Measuring options that
+  don't exist would produce a zero that reads like a finding.
 - ⚠️ Only **2 `quote_services` lines exist in production.** Before building rich per-line UX, ask why
   multi-service is unused — the answer may be that it's the wrong model, not that it needs polish.
 
@@ -498,8 +582,14 @@ and step 1 alone may end the project early, on purpose (§10).
   ⛔ `recordDeposit()` exists and is owner-only **on purpose** — do not wire it to the portal.
 - ❌ **A mandatory signature, or one defaulted ON.** *(Decision #8.)* The unsigned one-tap path stays
   first-class.
-- ❌ **An `expired` event row.** `expired` is DERIVED (decision #2) — storing it re-breaks the rule
-  that a quote un-expires the moment the owner extends the date. The metric is a query.
+- ❌ **An `expired` event row.** `expired` is DERIVED (decisions #2, #15) — storing it re-breaks the
+  rule that a quote un-expires the moment the owner extends the date. The metric is a query.
+- ❌ **A parallel tracking table.** That is what the taxonomy exists to prevent (decision #14).
+  New interaction → **new `type` in `QUOTE_EVENT_TYPES`**, appended. Never a second log.
+- ❌ **Renaming or re-using an event type.** It orphans history and silently changes what past rows
+  mean. Deprecate, never delete (§5.0).
+- ❌ **Encoding specifics in the type** (`option_selected_weekly`). `meta` carries them.
+- ❌ **Building counter-offers** because `counter_offered` is reserved. Reserved ≠ built.
 - ❌ **App code writing `quotes.view_count` / `viewed_at`.** Trigger-derived from `quote_events`, like
   `invoices.amount_paid` from `payments`. Two writers = the ledger is decorative.
 - ❌ **Backfilling any engagement history.** 55 quotes have none. Inventing it from `sent_at` launders
@@ -533,6 +623,15 @@ Match the standard Phase 0 set, because a document is as falsifiable as a price:
 - **⭐ Pin the derived columns against the ledger** (`verify:quote-events`): `viewed_at ===
   min(at)` and `view_count === count(*)` over `quote_events`, for every fixture. This is the
   `amount_paid` assertion applied to engagement — and it is what stops a second writer appearing.
+- **⭐ Pin the taxonomy against the DB** — the `SYSTEM_UNITS` fingerprint pattern (`verify:pricing`
+  §14) applied to events: `QUOTE_EVENT_TYPES` and the DB CHECK must agree **exactly**, and a
+  negative test must prove the DB **rejects an unknown type** (as Phase 0 proved it rejects a 5th
+  cadence and rolls back clean). Two vocabularies that disagree is a second source of truth wearing
+  one name.
+- **⭐ Pin the taxonomy against renames:** assert the v1 type strings **literally**. A rename must
+  break this file loudly — that is the entire value of calling the vocabulary "stable".
+- **Pin that no `expired` or `sent` type exists** in `QUOTE_EVENT_TYPES`. Both are bans with a
+  reason (decision #15); a test is how a ban survives a well-meaning session.
 - **Pin that a view is NOT idempotent** — two views produce two rows and `view_count = 2`. This is
   the deliberate divergence from `portal_mark_invoice_viewed`; assert it, or a future session will
   "fix" it back into a `coalesce` and silently destroy the metric.
@@ -567,9 +666,19 @@ survives — it is just waiting on step 1's data, like everything else here.
 ## Revision history
 
 - **2026-07-16 · `3152927`** — first draft. Accepted as the foundation for Quote Presentation V2.
-- **2026-07-17 · this revision** — owner adopted 5 product decisions (§3b #6–#11) and added the
+- **2026-07-17 · `749ab06`** — owner adopted 5 product decisions (§3b #6–#11) and added the
   measurability requirement (#12). Changes: **new §5.0** (`quote_events` ledger — the requirement
   broke the original single-column `viewed_at` design, because a timestamp cannot count views);
   §5.1 rewritten (the view RPC is deliberately **not** idempotent, diverging from the invoice
   precedent this spec previously told you to copy exactly); §5.6 + §5.7 settled; §6 is now a gate
   with a dependency table; §7 closed 2 of 5 and added retention/consent; §8 and §9 extended.
+- **2026-07-17 · this revision — SPEC APPROVED.** Owner **accepted the `quote_events` architecture**
+  as the canonical engagement log with all aggregates derived from it (§3c #13), and required a
+  **stable event taxonomy** (#14) so future features extend this stream instead of inventing
+  parallel tracking. Changes: §5.0 gains the **v1 taxonomy** (8 types, naming laws, one vocabulary
+  enforced in two places via the `SYSTEM_UNITS` mirror pattern); `option_accepted` → **`option_selected`**
+  (the owner's name — one name per fact); **`question_asked` + `counter_offered` reserved**
+  (⚠️ `counter_offered` is a product concept this spec does not otherwise cover — reserved, not
+  authorized); `expired` and `sent` explicitly **excluded from the vocabulary** with reasons; §8 and
+  §9 gained the bans and pins that make "stable" and "no parallel tracking" enforceable rather than
+  aspirational. **§3 now carries 15 settled decisions.**
