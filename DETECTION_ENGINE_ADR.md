@@ -30,12 +30,14 @@ pass" — it is not done.
 deprecate → delete sequence in §3 — not a reason to skip #4. Nothing outside
 `reactivation.ts` imports it today, so the cost is zero and the alias is a formality.
 
-⚠️ **#3 has one honest exception, and it must be decided BEFORE Stage 1, not
-discovered inside it:** the cadence-precedence inversion (§Risks #2). Adopting
-signals' rule *will* change the answer for a `weekly`+`month/1` series — 7 days
-instead of 30. No such row exists in production today, so #3 holds on live data;
-the harness must assert the chosen rule explicitly (§5d) rather than let a future
-row silently flip it.
+⚠️ **#3 has exactly one exception, and #5 is what keeps it honest.** The
+cadence-precedence inversion (§Risks #2) is **decided, not open** — signals' rule
+is canonical (§Stage 0). Adopting it *will* change the answer for a
+`weekly`+`month/1` series: 7 days instead of 30. **No such row exists in
+production**, which is why #3 ("all production-valid data") holds without
+qualification on every row that exists. #5 bounds the exception rather than
+excusing it: the change is written down, and §5d asserts the rule in both
+directions so a future mismatched row gets an intentional answer, not a silent one.
 
 ---
 
