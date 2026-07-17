@@ -14,6 +14,11 @@
 // job_id, and /api/comms/send enforces its own opt-in + dedupe — a retried op
 // is a no-op. No new rules live here; this file only composes existing seams.
 //
+// Every queued op carries `baseUpdatedAt` — the row version the tap was based
+// on — so a replay goes through the outbox's guardedPatch and can never
+// silently revert an edit the office made while the field was offline
+// (the same optimistic-concurrency contract every schedule call site passes).
+//
 // NOTE: the schedule page carries a pre-existing inline copy of this flow from
 // before it was frozen (scheduling freeze @ 1d4ef66) — when that page unfreezes
 // it should adopt this seam. Until then this file is the one OTHER surfaces use.
@@ -43,7 +48,7 @@ export async function startVisit(supabase: SupabaseClient, job: Job): Promise<Vi
   const patch = { status: 'in_progress' as const, started_at: new Date().toISOString() }
   try {
     const outcome = await queueOrRun(
-      { kind: 'job.update', payload: { id: job.id, patch }, label: `Start ${job.title || 'job'}` },
+      { kind: 'job.update', payload: { id: job.id, patch, baseUpdatedAt: job.updated_at }, label: `Start ${job.title || 'job'}` },
       async () => {
         const { error } = await supabase.from('jobs').update(patch).eq('id', job.id)
         if (error) throw new Error(error.message)
@@ -71,7 +76,7 @@ export async function completeVisit(
   let invoice: AutoInvoiceResult | null = null
   try {
     const outcome = await queueOrRun(
-      { kind: 'job.complete', payload: { id: job.id, patch, job: completed, notify }, label: `Complete ${job.title || 'job'}` },
+      { kind: 'job.complete', payload: { id: job.id, patch, job: completed, notify, baseUpdatedAt: job.updated_at }, label: `Complete ${job.title || 'job'}` },
       async () => {
         const { error } = await supabase.from('jobs').update(patch).eq('id', job.id)
         if (error) throw new Error(error.message)
@@ -92,15 +97,26 @@ export async function completeVisit(
   }
 }
 
-// Undo a start/complete: write the exact previous fields back (offline-safe).
-// Any invoice already drafted stays — it's a draft, and it de-dupes on job_id
-// if the visit is completed again.
-export async function revertVisit(supabase: SupabaseClient, jobId: string, prev: Partial<Job>, label: string): Promise<void> {
+// Undo a start/complete: write the exact previous fields back (offline-safe,
+// version-guarded like every other queued job op). `deleteDraftInvoice` mirrors
+// the schedule's undo-complete: the draft THIS completion just created is
+// removed rather than left as a stray bill for work now marked not-done (only
+// drafts are ever touched, and only when the caller saw one get created).
+export async function revertVisit(
+  supabase: SupabaseClient,
+  jobId: string,
+  prev: Partial<Job>,
+  label: string,
+  opts?: { baseUpdatedAt?: string | null; deleteDraftInvoice?: boolean },
+): Promise<void> {
   await queueOrRun(
-    { kind: 'job.update', payload: { id: jobId, patch: prev }, label },
+    { kind: 'job.update', payload: { id: jobId, patch: prev, baseUpdatedAt: opts?.baseUpdatedAt ?? null }, label },
     async () => {
       const { error } = await supabase.from('jobs').update(prev).eq('id', jobId)
       if (error) throw new Error(error.message)
+      if (opts?.deleteDraftInvoice) {
+        await supabase.from('invoices').delete().eq('job_id', jobId).eq('status', 'draft')
+      }
     },
   )
 }
