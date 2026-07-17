@@ -150,10 +150,54 @@ right about the repo and wrong about reality. See [[prod-schema-exceeds-main]]. 
     inventing parallel tracking**. → §5.0's taxonomy table + naming laws. `option_selected` is the
     owner's name (an earlier draft said `option_accepted`); `counter_offered` and `question_asked`
     are theirs and are now reserved.
-15. **Re-confirmed, and now hard constraints:** `time_to_first_view` stays blocked until Phase 0
-    consolidates `markQuoteSent()` — ⛔ **do not introduce another `sent_at` writer**; `expired` stays
-    **derived** — ⛔ **do not persist an `expired` event that could go stale when a quote is
-    extended**; optional-service engagement stays deferred to Phase 3; deposit-on-accept stays out.
+15. **Re-confirmed, and now hard constraints:** ⛔ **do not introduce another `sent_at` writer**;
+    `expired` stays **derived** — ⛔ **do not persist an `expired` event that could go stale when a
+    quote is extended**; optional-service engagement stays deferred to Phase 3; deposit-on-accept
+    stays out. *(The `sent`/`expired` blockers this decision named are now RESOLVED — see §3d.)*
+
+### 3d · ⭐ Spec APPROVED, 2026-07-17 — the taxonomy is canonical, and no more specs
+
+16. **The event taxonomy is THE canonical quote-engagement vocabulary.** Approved rules, verbatim:
+    past-tense event names · additive only · **never rename or reuse** a type · **metadata carries
+    specifics rather than encoding them into names** · **ONE canonical vocabulary enforced by both
+    application code AND the database**. → §5.0; pinned by §9.
+17. **⭐ NO ADDITIONAL SPECIFICATIONS.** *"Treat the roadmap as the architectural map and the Phase 6
+    document as the implementation specification. Future work should keep those documents
+    synchronized rather than creating additional specifications."*
+    → **[[quote-v2-spec-2026-07-17]] = the MAP · this file = the TERRITORY.** A third document about
+    Phase 6 is now a defect, not a contribution. If you find yourself writing one, you are supposed
+    to be editing one of these two. **This is the same law as "one engine per responsibility",
+    applied to the documents that describe the engines** — and it is why §3d exists rather than a
+    new file.
+
+### 3e · ⚠️ CORRECTION 2026-07-17 — Phase 0 SHIPPED, and this spec had gone stale
+
+**Verified after the approval, before pausing: Phase 0 is CODE COMPLETE and MERGED to `main`.**
+`origin/pricing/phase0` == `origin/main` == `5bcfdcf`; the seam landed in `a889179`
+*("Quote V2 Phase 0: 'sent' becomes one event instead of four")*.
+
+**Two claims in the approved draft were wrong, and are corrected here rather than left to mislead:**
+- ❌ *"blocked until Phase 0 consolidates `markQuoteSent()`"* → **the function is
+  [`markSentPatch()`](src/lib/quoteStatus.ts), not `markQuoteSent()`.** This spec named a function
+  that never existed. It returns `{ status:'sent', sent_at (if absent), valid_until (if absent) }` —
+  one seam writing all three.
+- ❌ *"`time_to_first_view` and `expired` are blocked"* → **UNBLOCKED.** All three quote writers now
+  route through it — verified: [quotes/[id]:302,802](src/app/dashboard/quotes/[id]/page.tsx#L302),
+  [QuoteList:147](src/components/quotes/QuoteList.tsx#L147),
+  [QuoteStatusControl:66](src/components/quotes/QuoteStatusControl.tsx#L66). No raw `status:'sent'`
+  quote writer remains.
+
+**What that changes — and what it deliberately does not:**
+- Both metrics are measurable **for quotes sent from now on**. `valid_until` is stamped at send, so
+  `expired` can finally fire; `sent_at` has one writer, so `time_to_first_view` has a real baseline.
+- ⚠️ **The existing 55 quotes still have `valid_until = NULL` and are NOT backfilled** — correctly.
+  So the metrics are **forward-only**, and any dashboard must render the historical rows as
+  *unknown*, never as 0 or "never expired". Unknown stays unknown (decision #5).
+- ⛔ **decision #15 still stands, and matters MORE now:** the seam exists, so the temptation to add
+  "just one more" `sent_at` write is exactly what it was built to end. **Consume `markSentPatch`.**
+
+📌 **This correction is decision #17 working as intended** — the spec was synchronized to the code
+instead of a new document being written about the drift.
 
 And Phase 0's harness-pinned rule, which §5.2 must not break:
 
@@ -283,8 +327,9 @@ surface, and some trades price firm on purpose.
 - ❌ `expired` — **derived, never stored** (decision #2). A stored `expired` goes stale the instant
   the owner extends `valid_until`, which is exactly the bug `quoteStatus.ts` already avoids.
   The metric is a query.
-- ❌ `sent` — that fact belongs to **Phase 0's `markQuoteSent()`**, the one seam. An event here would
-  be a **5th writer** of "sent" (§6). Phase 6 consumes; it does not compete.
+- ❌ `sent` — that fact belongs to **Phase 0's `markSentPatch()`** ([lib/quoteStatus.ts](src/lib/quoteStatus.ts)),
+  the one seam, **shipped in `a889179`**. An event here would be a **4th writer** of "sent" — the
+  exact thing that seam just ended (§3e). Phase 6 consumes; it does not compete.
 
 #### The ten required interactions, mapped honestly
 
@@ -301,22 +346,24 @@ surface, and some trades price firm on purpose.
 | 9 | **optional services viewed** | event `option_viewed` (`meta.option_key`) | ⛔ **Phase 3** |
 | 10 | **optional services accepted** | event **`option_selected`** (`meta.option_key`) — the owner's name; an earlier draft said `option_accepted`, and one name per fact is the rule | ⛔ **Phase 3** |
 
-#### Three honest caveats on that list — none of them are reasons not to do it
+#### Three honest caveats — ✅ two of them RESOLVED by Phase 0 shipping (see §3e)
 
-- **#4 "time to first view" is currently unmeasurable, and not for a reason Phase 6 can fix.**
-  It is `first_viewed_at − sent_at`, and **`sent_at` is unreliable today**: 5 of the 8 quotes that
-  reached a decision were never marked sent, because there are **4 writers of "sent" with 4
-  behaviours**. The fix is **Phase 0's `markQuoteSent()` seam** — already scoped there, explicitly
-  called *"the species fix"*. **Phase 6 consumes that seam; it must not build a 5th writer.**
-  → Until Phase 0 lands, ship the event and let the metric read *unknown*. Unknown stays unknown.
-- **#7 "expired" cannot fire at all today.** `expired` is **derived**, never stored (decision #2,
-  and `quoteStatus.ts` already does it right: *"a quote un-expires the instant the owner extends its
-  date"*). But **0 of 55 quotes have `valid_until`**, so nothing can ever expire. Same root cause,
-  same fix: `markQuoteSent()` writes `valid_until`. **Do not add an `expired` event** — that would
-  store a derived state and re-break decision #2. The metric is a query, not a row.
-- **#9/#10 are blocked with Good/Better/Best (decision #10).** You cannot measure a customer viewing
-  options that don't exist. **Reserve the event types now, collect from Phase 3.** Reserving costs
-  nothing; pretending to measure would produce a zero that reads like a finding.
+- **#4 "time to first view" — ✅ UNBLOCKED, forward-only.** It is `first_viewed_at − sent_at`, and
+  `sent_at` *was* unreliable: 5 of the 8 quotes that reached a decision were never marked sent,
+  because there were **4 writers of "sent" with 4 behaviours**. **Phase 0 fixed it** —
+  [`markSentPatch()`](src/lib/quoteStatus.ts) in `a889179`, and all three quote writers now route
+  through it. ⛔ **Phase 6 consumes that seam and must never add another `sent_at` writer**
+  (decision #15). ⚠️ The 55 existing quotes are **not** backfilled, so the metric is unknown for
+  them — render *unknown*, never 0. Unknown stays unknown.
+- **#7 "expired" — ✅ UNBLOCKED, forward-only.** `expired` stays **derived**, never stored (decisions
+  #2/#15 — `quoteStatus.ts` already does it right: *"a quote un-expires the instant the owner extends
+  its date"*). It could never fire because **0 of 55 quotes had `valid_until`**; `markSentPatch` now
+  stamps it at send, so quotes sent from now on can expire. ⛔ **Still do not add an `expired`
+  event** — the metric is a query, not a row. ⚠️ Historical rows stay `valid_until = NULL` and must
+  read *unknown*, not "never expires".
+- **#9/#10 are still blocked with Good/Better/Best (decision #10).** You cannot measure a customer
+  viewing options that don't exist. **Reserve the event types now, collect from Phase 3.** Reserving
+  costs nothing; pretending to measure would produce a zero that reads like a finding.
 
 #### Why an events table and not more columns
 Ten interactions is not "a few flags". Columns would mean a migration per metric, no history (only
@@ -533,12 +580,12 @@ The order is forced by dependency, not taste:
 | 7 | Options / good-better-best + its 2 metrics (§5.4) | **Pricing V2 Phase 3** | ⛔ blocked |
 | 8 | Financing: `payment_terms` data shape only (§5.7) | — | ⛔ no workflow |
 
-**Cross-phase dependencies — Phase 6 cannot fix these itself:**
-- **`time to first view` and `expired` both need Phase 0's `markQuoteSent()` seam.** `sent_at` is
-  written by 4 writers with 4 behaviours (5 of 8 decided quotes were never marked sent), and
-  `valid_until` is set on **0 of 55** quotes. Phase 6 **consumes** that seam — it must not build a
-  5th writer. Until then, both metrics read *unknown*, honestly.
-- **Options metrics need Phase 3.** Reserve the event types; collect later.
+**Cross-phase dependencies:**
+- ✅ **RESOLVED — `time to first view` and `expired` needed Phase 0's sent seam, and it SHIPPED**
+  ([`markSentPatch()`](src/lib/quoteStatus.ts), `a889179`; see §3e). Phase 6 **consumes** it —
+  ⛔ never a new `sent_at` writer. ⚠️ **Forward-only:** the 55 existing quotes aren't backfilled, so
+  both metrics read *unknown* for them, honestly.
+- ⛔ **Options metrics still need Phase 3.** Reserve the event types; collect later.
 
 **Steps 1–2 carry no pricing dependency.** If Phase 6 is ever pulled forward in part, pull those —
 and step 1 alone may end the project early, on purpose (§10).
@@ -594,7 +641,10 @@ and step 1 alone may end the project early, on purpose (§10).
   `invoices.amount_paid` from `payments`. Two writers = the ledger is decorative.
 - ❌ **Backfilling any engagement history.** 55 quotes have none. Inventing it from `sent_at` launders
   a guess into the record — the reasoning that stopped Phase 0 backfilling `accepted_price`.
-- ❌ **A 5th "sent" writer.** `time to first view` needs Phase 0's `markQuoteSent()`; consume it.
+- ❌ **Another "sent" writer.** Phase 0 collapsed 4 into one — [`markSentPatch()`](src/lib/quoteStatus.ts).
+  `time to first view` depends on it staying one. **Consume it** (decisions #15, and §3e).
+- ❌ **A third Phase 6 document.** *(Decision #17.)* The map is [[quote-v2-spec-2026-07-17]]; the
+  territory is this file. Writing a new spec instead of editing one of these two is a defect.
 - ❌ **A second document/PDF system.** `renderPortalQuoteBlob` is the rule already.
 - ❌ **A cadence fallback in the accept snapshot.** Phase 0 pinned this in a harness on purpose.
 - ❌ **Mutating an accepted quote.** Decision #5.
@@ -672,7 +722,16 @@ survives — it is just waiting on step 1's data, like everything else here.
   §5.1 rewritten (the view RPC is deliberately **not** idempotent, diverging from the invoice
   precedent this spec previously told you to copy exactly); §5.6 + §5.7 settled; §6 is now a gate
   with a dependency table; §7 closed 2 of 5 and added retention/consent; §8 and §9 extended.
-- **2026-07-17 · this revision — SPEC APPROVED.** Owner **accepted the `quote_events` architecture**
+- **2026-07-17 · this revision — SPEC APPROVED (final) + a stale-claim correction.** Owner approved
+  the taxonomy as **the canonical quote-engagement vocabulary** with 5 named rules, re-confirmed the
+  `expired`/`sent`/`counter_offered`/deposit constraints, and set a new law: **the roadmap is the
+  MAP, this is the TERRITORY, keep them synchronized — no additional specifications** (§3d #16–#17).
+  **Then §3e:** verifying before pausing showed **Phase 0 SHIPPED and merged** (`5bcfdcf`), so two of
+  this spec's own claims had gone stale within a day — the seam is **`markSentPatch()`**, not
+  `markQuoteSent()` (a name this spec invented), and `time_to_first_view`/`expired` are **unblocked,
+  forward-only**. Corrected in place, which is decision #17 working: the spec was synchronized to the
+  code instead of a new document being written about the drift. **§3 now carries 17 decisions.**
+- **2026-07-17 · `4ab3895` — SPEC APPROVED.** Owner **accepted the `quote_events` architecture**
   as the canonical engagement log with all aggregates derived from it (§3c #13), and required a
   **stable event taxonomy** (#14) so future features extend this stream instead of inventing
   parallel tracking. Changes: §5.0 gains the **v1 taxonomy** (8 types, naming laws, one vocabulary
