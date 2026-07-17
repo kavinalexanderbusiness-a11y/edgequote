@@ -22,6 +22,7 @@ import { AssistButton, AiStop, AiUndo, AiError, AiNote, AI_CHECK_FIRST } from '@
 import { useAiAssist } from '@/hooks/useAiAssist'
 import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
 import { sumServiceLines, serviceLineTotals, emptyServiceLine } from '@/lib/quoteServices'
+import { MATERIAL_SUGGESTIONS, emptyMaterialLine } from '@/lib/quoteMaterials'
 import { loadServiceUnits, SYSTEM_UNITS, type ServiceUnit } from '@/lib/units'
 import { formatCurrency, formatDate, suggestTravelFee, cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
@@ -35,7 +36,7 @@ import type { MeasurementSnapshot, SavedRecommendation } from '@/types'
 import { BestDaySuggestions } from '@/components/schedule/BestDaySuggestions'
 import { SmartLaborField } from '@/components/labor/SmartLaborField'
 import { PriceIntelligence } from '@/components/pricing/PriceIntelligence'
-import { Clock, DollarSign, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, SlidersHorizontal, CheckCircle2, Users, Layers, Plus, Trash2, ChevronUp } from 'lucide-react'
+import { Clock, DollarSign, Car, Calculator, AlertTriangle, MapPin, Repeat, Ruler, Sparkles, FileText, SlidersHorizontal, CheckCircle2, Users, Layers, Plus, Trash2, ChevronUp, Package } from 'lucide-react'
 
 interface QuoteBuilderProps {
   customers: Customer[]
@@ -117,8 +118,25 @@ export function QuoteBuilder({
       },
     })
 
-  // Additional service lines beyond the primary one (multi-service quotes).
+  // Additional lines beyond the primary one. ONE field array holds both services
+  // and materials — they are the same species of line (qty × unit_price through
+  // the one quote-services engine) and a second array would mean a second sum.
+  // The two sections below are a VIEW over it, split by `kind`; the real index is
+  // carried through so register() still addresses the right row.
   const serviceLines = useFieldArray({ control, name: 'services' })
+  const indexedLines = serviceLines.fields.map((f, i) => ({ f, i }))
+  const kindAt = (i: number) => watchedServices?.[i]?.kind ?? 'service'
+  const serviceIdx = indexedLines.filter(({ i }) => kindAt(i) !== 'material')
+  const materialIdx = indexedLines.filter(({ i }) => kindAt(i) === 'material')
+  // Per-section subtotals are DISPLAY ONLY — `extras` remains the ONE figure that
+  // feeds the quote total, and it already sums every line regardless of kind.
+  // Both go through sumServiceLines rather than a hand-rolled reduce: a second
+  // adder here is how two totals start disagreeing.
+  const linesAt = (idx: { i: number }[]) =>
+    idx.map(({ i }) => watchedServices?.[i]).filter(Boolean) as NonNullable<typeof watchedServices>
+  const serviceExtras = sumServiceLines(linesAt(serviceIdx))
+  const materialsSum = sumServiceLines(linesAt(materialIdx))
+  const serviceExtrasNet = serviceExtras.net
 
   // Autosave the whole quote — survives refresh / crash / accidental close (shared engine).
   const formValues = watch()
@@ -985,15 +1003,18 @@ export function QuoteBuilder({
               has qty × unit price − discount; totals sum via the one
               quote-services engine. The primary service above stays untouched. ── */}
           <Collapsible title="Additional services" icon={Layers}
-            summary={serviceLines.fields.length ? `${serviceLines.fields.length} line${serviceLines.fields.length !== 1 ? 's' : ''} · ${formatCurrency(extras.net)}` : 'One-service quote — add mulch, cleanup, hedges…'}>
+            summary={serviceIdx.length ? `${serviceIdx.length} line${serviceIdx.length !== 1 ? 's' : ''} · ${formatCurrency(serviceExtrasNet)}` : 'One-service quote — add cleanup, hedges…'}>
             <div className="space-y-3">
-              {serviceLines.fields.map((f, i) => {
+              {serviceIdx.map(({ f, i }, n) => {
                 const line = watchedServices?.[i]
                 const net = line ? serviceLineTotals(line).net : 0
                 return (
                   <div key={f.id} className="rounded-xl border border-border bg-bg-secondary p-3 space-y-3">
+                    {/* kind is form state, not a visible field — register it so it
+                        survives submit rather than being dropped as unregistered. */}
+                    <input type="hidden" {...register(`services.${i}.kind` as const)} />
                     <div className="flex items-center justify-between gap-2">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Service {i + 2}</p>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Service {n + 2}</p>
                       <div className="flex items-center gap-3">
                         <span className="text-sm font-semibold text-ink tabular-nums">{formatCurrency(net)}</span>
                         <button type="button" onClick={() => serviceLines.remove(i)} aria-label="Remove service"
@@ -1047,11 +1068,103 @@ export function QuoteBuilder({
               <Button type="button" variant="secondary" size="sm" onClick={() => serviceLines.append(emptyServiceLine())}>
                 <Plus className="w-3.5 h-3.5" /> Add service
               </Button>
-              {extras.net > 0 && (
+              {materialIdx.length > 0 && (
+                <p className="text-xs text-ink-faint">
+                  Materials are listed separately below.
+                </p>
+              )}
+              {/* Service-only figures: `extras` sums materials too, so using it
+                  here would file mulch under "Additional services total". */}
+              {serviceExtras.net > 0 && (
                 <p className="text-xs text-ink-muted">
-                  Additional services total <span className="font-semibold text-ink">{formatCurrency(extras.net)}</span>
-                  {extras.discountAmount > 0 && <> (after {formatCurrency(extras.discountAmount)} discounts)</>}
-                  {extras.minutes > 0 && <> · ≈{extras.minutes} min</>}
+                  Additional services total <span className="font-semibold text-ink">{formatCurrency(serviceExtras.net)}</span>
+                  {serviceExtras.discountAmount > 0 && <> (after {formatCurrency(serviceExtras.discountAmount)} discounts)</>}
+                  {serviceExtras.minutes > 0 && <> · ≈{serviceExtras.minutes} min</>}
+                </p>
+              )}
+            </div>
+          </Collapsible>
+
+          {/* ── Materials — goods you SUPPLY, priced like any other line.
+              This section knows what you CHARGE and deliberately nothing about
+              what you PAY: no cost, no margin, no stock, no reservation. What a
+              material costs the business is the one canonical cost model's
+              question (Pricing V2 Phase 1 / Inventory D1), and a cost field here
+              would pre-empt it. Lines live in the SAME array as services and sum
+              through the SAME engine — this is a view, not a second system. ── */}
+          <Collapsible title="Materials" icon={Package}
+            summary={materialIdx.length
+              ? `${materialIdx.length} material${materialIdx.length !== 1 ? 's' : ''} · ${formatCurrency(materialsSum.net)}`
+              : 'Mulch, gravel, sod, plants…'}>
+            <div className="space-y-3">
+              {materialIdx.map(({ f, i }, n) => {
+                const line = watchedServices?.[i]
+                const net = line ? serviceLineTotals(line).net : 0
+                return (
+                  <div key={f.id} className="rounded-xl border border-border bg-bg-secondary p-3 space-y-3">
+                    <input type="hidden" {...register(`services.${i}.kind` as const)} />
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-faint">Material {n + 1}</p>
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-semibold text-ink tabular-nums">{formatCurrency(net)}</span>
+                        <button type="button" onClick={() => serviceLines.remove(i)} aria-label="Remove material"
+                          className="text-ink-faint hover:text-red-400 transition-colors">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                    <Input label="Material *" placeholder="e.g. Mulch" list="eq-material-suggestions"
+                      error={errors.services?.[i]?.service_type ? 'Material is required' : undefined}
+                      hint="Pick a suggestion or type your own."
+                      {...register(`services.${i}.service_type` as const, { required: true })} />
+                    {/* Suggestions prefill the unit too — the point is that mulch
+                        arrives already measured in cubic yards, not 'each'. */}
+                    <div className="flex flex-wrap gap-1.5">
+                      {MATERIAL_SUGGESTIONS.map(s => (
+                        <button key={s.label} type="button"
+                          onClick={() => {
+                            setValue(`services.${i}.service_type`, s.label, { shouldDirty: true })
+                            setValue(`services.${i}.unit`, s.unit, { shouldDirty: true })
+                          }}
+                          title={s.hint}
+                          className="text-[11px] rounded-full border border-border px-2 py-0.5 text-ink-muted hover:text-ink hover:border-accent transition-colors">
+                          {s.label}
+                        </button>
+                      ))}
+                    </div>
+                    {/* No Duration field: spreading the mulch is the SERVICE line's
+                        minutes. Minutes here would inflate the scheduled job twice. */}
+                    <div className="grid grid-cols-3 gap-3">
+                      <Input label="Qty" type="number" step="0.5" min="0"
+                        {...register(`services.${i}.quantity` as const, { min: 0 })} />
+                      <Select label="Unit" options={unitOptions}
+                        {...register(`services.${i}.unit` as const)} />
+                      <Input label="Price per unit ($)" type="number" step="1" min="0"
+                        {...register(`services.${i}.unit_price` as const, { min: 0 })} />
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-[auto_auto_1fr] gap-3 items-end">
+                      <Select label="Discount" placeholder="None"
+                        options={[{ value: 'amount', label: '$ off' }, { value: 'percent', label: '% off' }]}
+                        {...register(`services.${i}.discount_type` as const)} />
+                      <Input label="Value" type="number" step="1" min="0"
+                        {...register(`services.${i}.discount_value` as const, { min: 0 })} />
+                      <Input label="Notes" placeholder="Optional"
+                        {...register(`services.${i}.notes` as const)} />
+                    </div>
+                  </div>
+                )
+              })}
+              <datalist id="eq-material-suggestions">
+                {MATERIAL_SUGGESTIONS.map(s => <option key={s.label} value={s.label} />)}
+              </datalist>
+              <Button type="button" variant="secondary" size="sm" onClick={() => serviceLines.append(emptyMaterialLine())}>
+                <Plus className="w-3.5 h-3.5" /> Add material
+              </Button>
+              {materialsSum.net > 0 && (
+                <p className="text-xs text-ink-muted">
+                  Materials total <span className="font-semibold text-ink">{formatCurrency(materialsSum.net)}</span>
+                  {materialsSum.discountAmount > 0 && <> (after {formatCurrency(materialsSum.discountAmount)} discounts)</>}
+                  {' '}— included in the quote total.
                 </p>
               )}
             </div>

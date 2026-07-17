@@ -1056,21 +1056,32 @@ export interface Quote {
 // fields in the builder); rows 1+ are additional services. When rows exist they
 // are the source of truth; quotes.service_type/initial_price are derived caches
 // (primary label + summed net) so the generated quotes.total stays correct.
+/** What a quote line IS. A material is not a different kind of ROW — it's a
+ *  different kind of LINE, so it rides quote_services rather than a second table
+ *  that would need a second price rollup. See lib/quoteMaterials. */
+export type QuoteLineKind = 'service' | 'material'
+
 export interface QuoteService {
   id: string
   created_at: string
   user_id: string
   quote_id: string
+  /** The line's display NAME. For a service, what you do; for a material, what
+   *  you supply ("Mulch"). Historical column name — not a claim about content. */
   service_type: string
   service_template_id: string | null
   quantity: number
-  unit: string | null            // each | hour | sqft | linear_ft
+  unit: string | null            // any service_units code — see lib/units
   unit_price: number
   est_minutes: number | null
   discount_type: 'amount' | 'percent' | null
   discount_value: number | null
   notes: string | null
   sort_order: number
+  /** Defaults to 'service' in the DB, so every pre-existing line keeps its
+   *  meaning. A material line is an ESTIMATE ON THE QUOTE: it never reserves,
+   *  allocates or deducts stock, and carries no cost. */
+  kind: QuoteLineKind
 }
 
 // Form shape for an additional-service line in the builder ('' = unset selects).
@@ -1084,6 +1095,7 @@ export interface QuoteServiceInput {
   discount_type: '' | 'amount' | 'percent'
   discount_value: number
   notes: string
+  kind: QuoteLineKind
 }
 
 export interface QuoteFormValues {

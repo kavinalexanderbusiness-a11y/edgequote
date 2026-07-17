@@ -8,6 +8,32 @@ CEO-dashboard hold — see below.
 > survives only as a consumer/report built on top of signals. I do not want two
 > competing detection systems long-term."*
 
+## ⛔ ACCEPTANCE CRITERIA — the owner's four conditions on implementation
+
+Re-ratified 2026-07-17 when this ADR was accepted. **These are the gate, not
+advice.** They are not new — each one already has a home below — but they are the
+terms the work is accepted on, so a change that misses any of them is not "a first
+pass", it is not done.
+
+| # | Condition | Where it lives | What "met" looks like |
+|---|---|---|---|
+| 1 | **Preserve backwards compatibility** | §3 | `computeReactivation` / `loadReactivation` / every exported type keep their exact signatures. Both consumers (`dashboard/data.ts`, `dashboard/priorities.ts`) need **zero edits**. signals' 9 consumers are untouched. No DB change. |
+| 2 | **Use differential testing** | §5a | Old vs new run over the **live book**, deep-equalled. Both engines are pure → no DB, no mocks. The old implementation stays until the harness is green; that is what makes Stage 1 revertible. |
+| 3 | **Maintain identical outputs** | §3, §5a | Not "close" — **identical**: same `ranOuts` (membership, order, `daysSince`, `perVisit`, `cadence`, `isVip`), same lapse buckets, same `potentialRecovery` / `atRisk` / `reactivated`. **Any diff is a bug in the refactor, never an improvement to the report.** Production's two recurrence shapes are ones both engines already agree on, so a correct migration changes nothing an owner can see. |
+| 4 | **Eliminate duplicated thresholds** | Stage 2, §4 | The one that actually kills the second engine — Stage 1 alone leaves it dormant. `VIP_THRESHOLD` and `reactivation.daysBetween` deleted; **zero** lifecycle constants and zero cadence maths left in `reactivation.ts`; enforced mechanically by the §4 import-shape assertion, not by a comment. |
+
+⚠️ **1 and 4 pull against each other, deliberately.** #1 says don't break callers;
+#4 says delete the public `VIP_THRESHOLD`. The reconciliation is the alias →
+deprecate → delete sequence in §3 — not a reason to skip #4. Nothing outside
+`reactivation.ts` imports it today, so the cost is zero and the alias is a formality.
+
+⚠️ **#3 has one honest exception, and it must be decided BEFORE Stage 1, not
+discovered inside it:** the cadence-precedence inversion (§Risks #2). Adopting
+signals' rule *will* change the answer for a `weekly`+`month/1` series — 7 days
+instead of 30. No such row exists in production today, so #3 holds on live data;
+the harness must assert the chosen rule explicitly (§5d) rather than let a future
+row silently flip it.
+
 ---
 
 ## Context
