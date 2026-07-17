@@ -12,6 +12,7 @@ import { exportRowsToCsv } from '@/lib/csv'
 import { fetchAllRows } from '@/lib/fetchAll'
 import { downloadBlob } from '@/lib/portalPdf'
 import type { RevenueGstReport, RevenueGstRow } from '@/components/reports/RevenueGstPDF'
+import Link from 'next/link'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -22,7 +23,7 @@ import { InlineEmpty } from '@/components/ui/EmptyState'
 import { Banner } from '@/components/ui/Banner'
 import { toast } from '@/lib/toast'
 import { formatCurrency, toLocalISO } from '@/lib/utils'
-import { FileText, FileDown, Receipt, DollarSign, Percent, Clock, AlertTriangle, Info } from 'lucide-react'
+import { FileText, FileDown, Receipt, DollarSign, Percent, Clock, AlertTriangle, Info, Mail } from 'lucide-react'
 
 // ── Reports & Exports ─────────────────────────────────────────────────────────
 // The accountant handoff: pick a period, take the three files your bookkeeper
@@ -327,7 +328,12 @@ export default function ReportsPage() {
     <div className="max-w-5xl mx-auto space-y-6">
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }}
         title="Reports & Exports"
-        description="Pick a period, hand your bookkeeper the file." />
+        description="Pick a period, hand your bookkeeper the file."
+        action={
+          <Link href="/dashboard/reports/scheduled">
+            <Button variant="secondary" size="sm"><Mail className="w-4 h-4" />Scheduled reports</Button>
+          </Link>
+        } />
 
       {loadError && (
         <Banner tone="danger" icon={AlertTriangle}

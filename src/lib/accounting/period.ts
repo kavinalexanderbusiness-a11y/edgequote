@@ -14,10 +14,15 @@ export interface Period {
 }
 
 export type PeriodKey =
+  | 'today' | 'yesterday' | 'this_week' | 'last_week'
   | 'this_month' | 'last_month' | 'this_quarter' | 'last_quarter'
   | 'this_year' | 'last_year' | 'all' | 'custom'
 
 export const PERIOD_OPTIONS: { value: PeriodKey; label: string }[] = [
+  { value: 'today', label: 'Today' },
+  { value: 'yesterday', label: 'Yesterday' },
+  { value: 'this_week', label: 'This week' },
+  { value: 'last_week', label: 'Last week' },
   { value: 'this_month', label: 'This month' },
   { value: 'last_month', label: 'Last month' },
   { value: 'this_quarter', label: 'This quarter' },
@@ -30,6 +35,8 @@ export const PERIOD_OPTIONS: { value: PeriodKey; label: string }[] = [
 
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December']
+
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
 const pad = (n: number) => String(n).padStart(2, '0')
 
@@ -47,6 +54,54 @@ export function monthRange(year: number, month1: number): Period {
     to: `${year}-${pad(month1)}-${pad(daysInMonth(year, month1))}`,
     label: `${MONTH_NAMES[month1 - 1]} ${year}`,
   }
+}
+
+/**
+ * Shift an ISO date by whole days.
+ *
+ * Same safety rule as daysInMonth: the Date is CONSTRUCTED from integers we split
+ * off the string ourselves, never parsed from the string, so there is no timezone
+ * to shift across. Date's constructor normalises overflow for us — day 0 of March
+ * is the last of February, day 32 is the 1st of next month — so month ends and
+ * leap years need no special case here.
+ */
+export function addDaysISO(iso: string, days: number): string {
+  const y = Number(iso.slice(0, 4))
+  const m = Number(iso.slice(5, 7))
+  const d = Number(iso.slice(8, 10))
+  const dt = new Date(y, m - 1, d + days)
+  return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`
+}
+
+/** Day of week for an ISO date, 0=Sunday..6=Saturday. Constructed, never parsed. */
+export function weekdayOf(iso: string): number {
+  return new Date(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10))).getDay()
+}
+
+/** A single day. `from` and `to` are the same date — a period of one. */
+export function dayRange(iso: string): Period {
+  return { from: iso, to: iso, label: `${DAY_NAMES[weekdayOf(iso)]}, ${MONTH_NAMES[Number(iso.slice(5, 7)) - 1]} ${Number(iso.slice(8, 10))}, ${iso.slice(0, 4)}` }
+}
+
+/**
+ * The CALENDAR week (Sunday–Saturday) containing `iso`.
+ *
+ * Sunday-start is not a new convention: it is what BIReport.weekday already reports
+ * against (Sun(0)..Sat(6)) and what date-fns' startOfWeek defaults to on the
+ * profitability page. A third convention would mean two screens disagreeing about
+ * which week a Sunday job belongs to.
+ *
+ * Deliberately NOT the trailing-7-days that /dashboard/review uses. That page is a
+ * rolling look-back ("how did the last week go, asked today"), which is the right
+ * shape for a page you open whenever. A SCHEDULED report is the opposite: it must
+ * cover a fixed, closed period the owner can reconcile against a bank statement.
+ * "The 7 days ending whenever the cron happened to fire" is not a week anyone can
+ * check, and two runs a day apart would overlap by six days.
+ */
+export function weekRange(iso: string): Period {
+  const from = addDaysISO(iso, -weekdayOf(iso))
+  const to = addDaysISO(from, 6)
+  return { from, to, label: `Week of ${MONTH_NAMES[Number(from.slice(5, 7)) - 1].slice(0, 3)} ${Number(from.slice(8, 10))}, ${from.slice(0, 4)}` }
 }
 
 export function quarterRange(year: number, q: 1 | 2 | 3 | 4): Period {
@@ -82,6 +137,14 @@ export function resolvePeriod(key: PeriodKey, todayISO: string, custom?: { from:
   const month = Number(todayISO.slice(5, 7))
 
   switch (key) {
+    case 'today':
+      return dayRange(todayISO)
+    case 'yesterday':
+      return dayRange(addDaysISO(todayISO, -1))
+    case 'this_week':
+      return weekRange(todayISO)
+    case 'last_week':
+      return weekRange(addDaysISO(todayISO, -7))
     case 'this_month':
       return monthRange(year, month)
     case 'last_month':
