@@ -59,6 +59,28 @@ export interface WinLossStats {
 }
 
 // THE canonical won/lost classification (reused by quoteLearning — never duplicated).
+//
+// A quote is DECIDED only when someone answered it. `sent` is neither won nor lost, so
+// it falls out of `decided` and out of `acceptance = won / decided` — which is how the
+// owner's rule (2026-07-16) that **expired quotes do not count toward acceptance** is
+// satisfied: an expired quote is still `sent`, so it was never counted in the first
+// place. That is deliberate, not incidental. Do not "fix" it by adding expiry here.
+//
+// ⚠️ READ BEFORE CHANGING EITHER LINE. Excluding the unanswered is not free — it
+// INFLATES acceptance, and only ever upward. Measured on the live book 2026-07-16:
+//
+//     won 34 · lost 6 · unanswered 14
+//     acceptance = 34/40 = 0.850          ← what the learner sees
+//     with ghosts counted = 34/54 = 0.630 ← what actually happened
+//
+// quoteLearning:231 raises the price when `acceptance >= 0.85`. It is sitting EXACTLY
+// on that boundary, contributing +0.000 today. One more won quote → 0.854 → targetRatio
+// 0.923, which finally clears the 0.92 floor. So the first price this learner ever
+// moves, it moves UP, on a number that is 63% true.
+//
+// Whether a ghost is a loss is a Phase 5 decision for the owner (see the Quote V2
+// roadmap) — NOT something to settle by editing this line. It is recorded here because
+// this is where someone will come looking.
 export const isWon = (s: string) => s === 'accepted' || s === 'scheduled' || s === 'completed' || s === 'paid'
 export const isLost = (s: string) => s === 'declined'
 
