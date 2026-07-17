@@ -22,7 +22,8 @@ import type { Cadence } from '@/lib/labor'
 import { resolvePrefs, type PrefSource } from '@/lib/preferences'
 import { findJobMatch, type JobLiteForMatch } from '@/lib/dedup'
 import { Collapsible } from '@/components/ui/Collapsible'
-import { AssistButton } from '@/components/ai/AssistButton'
+import { AssistButton, AiStop, AiUndo, AiError, AiNote } from '@/components/ai/ui'
+import { toast } from '@/lib/toast'
 import { useAiAssist } from '@/hooks/useAiAssist'
 import { Repeat, Sparkles, Snowflake, Sun, AlertTriangle, CalendarRange, Clock } from 'lucide-react'
 
@@ -220,6 +221,7 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
   const selectedPropertyId = watch('property_id')
   // AI notes cleanup — tidies the owner's jottings; every fact stays theirs.
   const aiNotes = useAiAssist()
+  const [aiNotesPrior, setAiNotesPrior] = useState<string | null>(null)
   const serviceType = watch('service_type')
   const scheduledDate = watch('scheduled_date')
   const startTime = watch('start_time')
@@ -570,22 +572,37 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
       <Textarea label="Notes" placeholder="Access instructions, gate codes, special requests..."
         {...register('notes')} />
       {aiNotes.enabled === true && String(watch('notes') || '').trim() !== '' && (
-        <div className="flex items-center gap-2 -mt-2">
-          <AssistButton
-            label={aiNotes.running ? 'Cleaning up…' : 'Clean up notes'}
-            busy={aiNotes.running}
-            title="Rewrites rough jottings into clear notes — keeps every gate code, instruction and detail exactly as written"
-            onClick={async () => {
-              const prior = String(watch('notes') || '')
-              aiNotes.clearError()
-              setValue('notes', '')
-              const full = await aiNotes.run(
-                { task: 'job_notes', draft: prior, serviceType: serviceType || undefined },
-                { onDelta: d => setValue('notes', String(watch('notes') || '') + d) },
-              )
-              if (full === null) setValue('notes', prior)
-            }} />
-          {aiNotes.error && <p className="text-xs text-amber-400" role="alert">{aiNotes.error}</p>}
+        <div className="-mt-2 space-y-1.5">
+          <div className="flex items-center gap-1.5">
+            <AssistButton
+              label="Tidy up"
+              busyLabel="Tidying…"
+              busy={aiNotes.running}
+              title="Rewrites rough jottings into clear notes — keeps every gate code, instruction and detail exactly as written"
+              onClick={async () => {
+                const prior = String(watch('notes') || '')
+                aiNotes.clearError()
+                setValue('notes', '')
+                const full = await aiNotes.run(
+                  { task: 'job_notes', draft: prior, serviceType: serviceType || undefined },
+                  { onDelta: d => setValue('notes', String(watch('notes') || '') + d) },
+                )
+                if (full === null) { setValue('notes', prior); return }
+                setAiNotesPrior(prior)
+                toast.undo('Tidied your notes.', () => { setValue('notes', prior); setAiNotesPrior(null) })
+              }} />
+            {aiNotes.running && <AiStop onClick={aiNotes.cancel} />}
+            {!aiNotes.running && aiNotesPrior !== null && (
+              <AiUndo onClick={() => { setValue('notes', aiNotesPrior); setAiNotesPrior(null) }} />
+            )}
+          </div>
+          <AiError message={aiNotes.error} />
+          {/* No check-it-first note: these notes are for whoever does the work,
+              not for the customer. The explanation still matters — this is the
+              one tool whose whole job is to change nothing factual. */}
+          {!aiNotes.running && aiNotesPrior !== null && (
+            <AiNote explain="Tidied your own words — every gate code, digit and instruction is kept exactly as you wrote it." />
+          )}
         </div>
       )}
 

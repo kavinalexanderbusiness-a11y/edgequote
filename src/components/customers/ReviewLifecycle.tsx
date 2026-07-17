@@ -11,7 +11,7 @@ import { Select } from '@/components/ui/Select'
 import { Customer } from '@/types'
 import { reviewStatus, REVIEW_STATUS_META, REVIEW_SOURCES } from '@/lib/crm/reviews'
 import { newClientMessageId } from '@/lib/comms/idempotency'
-import { AssistButton } from '@/components/ai/AssistButton'
+import { AssistButton, AiStop, AiError, AiNote } from '@/components/ai/ui'
 import { useAiAssist } from '@/hooks/useAiAssist'
 import { formatDate } from '@/lib/utils'
 import { Star, Send, ThumbsDown, RotateCcw, Loader2, Check, Copy } from 'lucide-react'
@@ -160,7 +160,7 @@ export function ReviewLifecycle({ customer, onChange }: {
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 {ai.enabled === true && !replyOpen && (
-                  <AssistButton label="Draft a reply" onClick={draftReply} busy={ai.running}
+                  <AssistButton label="Draft a reply" busyLabel="Drafting…" onClick={draftReply} busy={ai.running}
                     title={`Write a public response to post on ${customer.review_source || 'Google'}`} />
                 )}
                 <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>Edit</Button>
@@ -172,14 +172,23 @@ export function ReviewLifecycle({ customer, onChange }: {
                 <textarea value={reply} onChange={e => setReply(e.target.value)} rows={3} aria-label="Suggested review reply"
                   readOnly={ai.running}
                   className="w-full bg-bg-tertiary border border-border-strong rounded-xl px-3 py-2.5 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20 resize-none" />
-                {ai.error && <p className="text-xs text-amber-400" role="alert">{ai.error}</p>}
+                <AiError message={ai.error} />
                 <div className="flex items-center gap-2">
                   <Button size="sm" variant="secondary" onClick={copyReply} disabled={ai.running || !reply.trim()}>
                     <Copy className="w-3.5 h-3.5" /> Copy reply
                   </Button>
-                  <Button size="sm" variant="ghost" onClick={draftReply} loading={ai.running}>Try again</Button>
-                  <Button size="sm" variant="ghost" onClick={() => setReplyOpen(false)} disabled={ai.running}>Close</Button>
+                  {!ai.running && <AssistButton label="Try again" onClick={draftReply} />}
+                  {ai.running
+                    ? <AiStop onClick={ai.cancel} />
+                    : <Button size="sm" variant="ghost" onClick={() => setReplyOpen(false)}>Close</Button>}
                 </div>
+                {!ai.running && reply.trim() !== '' && (
+                  <AiNote
+                    explain={customer.review_rating
+                      ? `Written for a ${customer.review_rating}-star review, from the work you've actually done for them.`
+                      : 'No star rating was recorded, so this stays neutral rather than assuming they were happy.'}
+                    caution="It's public — it never names their address, prices or visit dates." />
+                )}
               </div>
             )}
           </>
