@@ -32,11 +32,11 @@ export interface IntegrationEventDef {
 }
 
 const CUSTOMER_KEYS = ['id', 'name', 'email', 'phone', 'address', 'city', 'acquisition_source', 'created_at']
-const QUOTE_KEYS = ['id', 'quote_number', 'customer_id', 'customer_name', 'service_type', 'status', 'total', 'address', 'created_at']
-const JOB_KEYS = ['id', 'customer_id', 'title', 'service_type', 'status', 'scheduled_date', 'price', 'crew_id', 'created_at']
-const INVOICE_KEYS = ['id', 'invoice_number', 'customer_id', 'customer_name', 'status', 'amount', 'amount_paid', 'due_date', 'created_at']
+const QUOTE_KEYS = ['id', 'quote_number', 'customer_id', 'customer_name', 'property_id', 'service_type', 'status', 'total', 'address', 'created_at']
+const JOB_KEYS = ['id', 'customer_id', 'property_id', 'title', 'service_type', 'status', 'scheduled_date', 'price', 'crew_id', 'created_at']
+const INVOICE_KEYS = ['id', 'invoice_number', 'customer_id', 'customer_name', 'property_id', 'status', 'amount', 'amount_paid', 'due_date', 'created_at']
 const PAYMENT_KEYS = ['id', 'customer_id', 'invoice_id', 'amount', 'currency', 'method', 'kind', 'paid_at', 'created_at']
-const REQUEST_KEYS = ['id', 'customer_id', 'message', 'status', 'created_at']
+const REQUEST_KEYS = ['id', 'customer_id', 'kind', 'message', 'status', 'created_at']
 
 const IDS = {
   customer: '9f4e2c1a-0000-4000-8000-000000000001',
@@ -45,6 +45,7 @@ const IDS = {
   invoice: '9f4e2c1a-0000-4000-8000-000000000004',
   payment: '9f4e2c1a-0000-4000-8000-000000000005',
   request: '9f4e2c1a-0000-4000-8000-000000000006',
+  property: '9f4e2c1a-0000-4000-8000-000000000007',
 }
 
 const SAMPLE_CUSTOMER = {
@@ -54,17 +55,20 @@ const SAMPLE_CUSTOMER = {
 }
 const SAMPLE_QUOTE = {
   id: IDS.quote, quote_number: 'Q-1042', customer_id: IDS.customer,
-  customer_name: 'Jordan Miller', service_type: 'Lawn Mowing', status: 'sent',
+  customer_name: 'Jordan Miller', property_id: IDS.property,
+  service_type: 'Lawn Mowing', status: 'sent',
   total: 65, address: '128 Aspen Ridge Way SW', created_at: '2026-07-15T16:25:00Z',
 }
 const SAMPLE_JOB = {
-  id: IDS.job, customer_id: IDS.customer, title: 'Lawn Mowing — 128 Aspen Ridge Way SW',
+  id: IDS.job, customer_id: IDS.customer, property_id: IDS.property,
+  title: 'Lawn Mowing — 128 Aspen Ridge Way SW',
   service_type: 'Lawn Mowing', status: 'scheduled', scheduled_date: '2026-07-18',
   price: 65, crew_id: null, created_at: '2026-07-15T16:30:00Z',
 }
 const SAMPLE_INVOICE = {
   id: IDS.invoice, invoice_number: 'INV-2088', customer_id: IDS.customer,
-  customer_name: 'Jordan Miller', status: 'unpaid', amount: 65, amount_paid: 0,
+  customer_name: 'Jordan Miller', property_id: IDS.property,
+  status: 'unpaid', amount: 65, amount_paid: 0,
   due_date: '2026-07-25', created_at: '2026-07-18T22:10:00Z',
 }
 
@@ -107,13 +111,13 @@ export const INTEGRATION_EVENTS: IntegrationEventDef[] = [
   },
   {
     key: 'invoice.paid', entity: 'invoice', label: 'Invoice paid',
-    description: 'An invoice reached fully paid — derived from the payments ledger, so card, cash and e-transfer all count.',
+    description: 'An invoice settled in full — derived from the payments ledger, so card, cash and e-transfer all count. Overpayments fire this too (payload status shows "overpaid").',
     payloadKeys: [...INVOICE_KEYS, 'paid_at'],
     sample: { ...SAMPLE_INVOICE, status: 'paid', amount_paid: 65, paid_at: '2026-07-19T14:05:00Z' },
   },
   {
     key: 'payment.recorded', entity: 'payment', label: 'Payment recorded',
-    description: 'A payment hit the ledger — Stripe checkout, portal payment, AutoPay, or recorded manually.',
+    description: 'Money came IN — Stripe checkout, portal payment, AutoPay, or recorded manually. Refunds and other non-payment ledger rows never fire this.',
     payloadKeys: PAYMENT_KEYS,
     sample: {
       id: IDS.payment, customer_id: IDS.customer, invoice_id: IDS.invoice, amount: 65,
@@ -123,10 +127,10 @@ export const INTEGRATION_EVENTS: IntegrationEventDef[] = [
   },
   {
     key: 'request.created', entity: 'request', label: 'Service request received',
-    description: 'A new lead or service request arrived — website form, customer portal, or inbound webhook.',
+    description: 'A new lead or service request arrived — website form, customer portal, or inbound webhook. `kind` separates plain leads ("service") from portal appointment/reschedule/plan-change asks.',
     payloadKeys: REQUEST_KEYS,
     sample: {
-      id: IDS.request, customer_id: IDS.customer,
+      id: IDS.request, customer_id: IDS.customer, kind: 'service',
       message: 'Could you quote weekly mowing for our back yard as well?',
       status: 'new', created_at: '2026-07-15T16:40:00Z',
     },

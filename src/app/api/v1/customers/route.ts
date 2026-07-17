@@ -35,7 +35,13 @@ export async function POST(req: NextRequest) {
     .select(SERIALIZED_FIELDS.customer.join(', '))
     .eq('user_id', auth.userId).eq('id', found.id).single()
   return NextResponse.json(
-    { data: serializeEntity('customer', (data ?? { id: found.id }) as unknown as Record<string, unknown>), created: !found.deduped },
+    {
+      data: serializeEntity('customer', (data ?? { id: found.id }) as unknown as Record<string, unknown>),
+      // The property the address resolved to (created if new) — customers are
+      // property-first app-wide, and API-created ones are no exception.
+      property_id: found.propertyId,
+      created: !found.deduped,
+    },
     { status: found.deduped ? 200 : 201 },
   )
 }
