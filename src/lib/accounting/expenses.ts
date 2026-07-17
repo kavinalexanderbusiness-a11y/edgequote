@@ -120,6 +120,7 @@ export function blankExpense(todayISO: string): ExpenseFormValues {
     bill_date: todayISO,
     paid: true,
     spent_at: todayISO,
+    is_capital: false,
     description: '', payment_method: '', reference: '', notes: '',
   }
 }
@@ -140,6 +141,7 @@ export function expenseToForm(e: Expense): ExpenseFormValues {
     // saving can't silently mark it paid.
     paid: e.spent_at != null,
     spent_at: e.spent_at || e.bill_date,
+    is_capital: e.is_capital === true,
     description: e.description || '',
     payment_method: e.payment_method || '',
     reference: e.reference || '',
@@ -206,6 +208,7 @@ export function expenseFromForm(v: ExpenseFormValues) {
     // sheet as a liability. Writing '' or the bill date instead would silently mark
     // an unpaid bill paid — money the business never spent, in the P&L.
     spent_at: v.paid ? v.spent_at : null,
+    is_capital: v.is_capital,
     description: v.description.trim() || null,
     payment_method: v.payment_method || null,
     reference: v.reference.trim() || null,
@@ -232,7 +235,7 @@ export function parseMoney(s: string): number | null {
 // returns undefined — which reads as "not a draw", quietly putting every owner draw
 // back into the P&L as a cost. The one thing this column exists to prevent.
 const EXPENSE_SELECT =
-  '*, vendors(id, name), expense_categories(id, name, tax_deductible, kind), jobs(id, title, scheduled_date)'
+  '*, vendors(id, name), expense_categories(id, name, tax_deductible, kind, external_account), jobs(id, title, scheduled_date)'
 
 export interface ExpenseFilters {
   /** Inclusive 'YYYY-MM-DD' bounds on spent_at. */
