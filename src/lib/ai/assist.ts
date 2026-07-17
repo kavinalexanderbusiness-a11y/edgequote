@@ -360,11 +360,15 @@ async function jobLine(supabase: SupabaseClient, userId: string, jobId: string |
 // the pricing engine's opinion, carried through verbatim (the engine is the single
 // source of truth for price; this task is read-only over it by design).
 //
-// Two decisions mirror owner rulings recorded elsewhere:
-// • Acceptance = accepted ÷ (accepted + declined). EXPIRED quotes are excluded —
-//   an expiry is silence, not a "no" (owner decision, Pricing V2 Phase 0).
-// • Thin data is said out loud: every rate carries its sample size, and below
-//   4 decided quotes the prompt orders the model to call the history thin.
+// Three decisions mirror owner rulings (2026-07-16, confirmed on this feature):
+// • Won = positive learning, explicit decline = negative learning:
+//   acceptance = accepted ÷ (accepted + declined). Nothing else has weight.
+// • Ghost/unanswered quotes (still 'sent', no decision) are NEUTRAL and tracked
+//   SEPARATELY — counted and shown, never folded into acceptance either way.
+// • EXPIRED quotes follow the recorded Pricing V2 ruling verbatim — an expiry is
+//   silence, not a "no" — and are NOT reinterpreted here.
+// Plus: thin data is said out loud — every rate carries its sample size, and
+// below 4 decided quotes the prompt orders the model to call the history thin.
 async function quoteIntelContext(supabase: SupabaseClient, userId: string, quoteId: string) {
   const { data: qData } = await supabase.from('quotes')
     .select('id, quote_number, customer_id, property_id, service_type, status, total, suggested_price, pricing_confidence, created_at, sent_at, expires_at, notes')
@@ -382,9 +386,10 @@ async function quoteIntelContext(supabase: SupabaseClient, userId: string, quote
       .eq('quote_id', quoteId).order('sort_order'),
     q.customer_id ? customerContext(supabase, userId, q.customer_id, { deep: true }) : Promise.resolve(null),
     loadBusinessContext(supabase, userId),
-    // Decided history for THIS service across the whole book — bounded, newest first.
+    // History for THIS service across the whole book — bounded, newest first.
+    // 'sent' rides along so ghosts can be COUNTED (neutral bucket), never learned from.
     supabase.from('quotes').select('service_type, status, total, customer_id, created_at')
-      .eq('user_id', userId).neq('id', quoteId).in('status', ['accepted', 'declined', 'expired'])
+      .eq('user_id', userId).neq('id', quoteId).in('status', ['accepted', 'declined', 'expired', 'sent'])
       .order('created_at', { ascending: false }).limit(400),
     supabase.from('labor_observations').select('service_type, estimated_minutes, actual_minutes')
       .eq('user_id', userId).order('service_date', { ascending: false }).limit(500),
@@ -402,6 +407,7 @@ async function quoteIntelContext(supabase: SupabaseClient, userId: string, quote
   const accepted = same.filter(h => h.status === 'accepted')
   const declined = same.filter(h => h.status === 'declined')
   const expired = same.filter(h => h.status === 'expired')
+  const ghosts = same.filter(h => h.status === 'sent')
   const decided = accepted.length + declined.length
   const median = (arr: number[]) => { const s = arr.filter(n => n > 0).sort((a, b) => a - b); return s.length ? s[Math.floor(s.length / 2)] : null }
   const medWon = median(accepted.map(h => Number(h.total) || 0))
@@ -435,7 +441,7 @@ async function quoteIntelContext(supabase: SupabaseClient, userId: string, quote
     facts.push('The pricing engine recorded no suggested price for this quote (no basis at the time).')
   }
   if (q.sent_at) facts.push(`Sent ${String(q.sent_at).slice(0, 10)} (${daysBetween(String(q.sent_at).slice(0, 10), today)} days ago).${q.expires_at ? ` Expires ${String(q.expires_at).slice(0, 10)}.` : ''}`)
-  facts.push(`WIN/LOSS HISTORY for "${label}" across the whole book (computed; expired quotes are silence, not a no): ${accepted.length} accepted, ${declined.length} declined${expired.length ? `, ${expired.length} expired` : ''}${decided ? `; acceptance ${Math.round((accepted.length / decided) * 100)}% of ${decided} decided` : ''}${medWon != null ? `; median accepted total ${money(medWon)}` : ''}${medLost != null ? `; median declined total ${money(medLost)}` : ''}.`)
+  facts.push(`WIN/LOSS HISTORY for "${label}" across the whole book (computed — only accepted and explicitly declined quotes carry learning weight): ${accepted.length} accepted, ${declined.length} declined${decided ? `; acceptance ${Math.round((accepted.length / decided) * 100)}% of ${decided} decided` : ''}${medWon != null ? `; median accepted total ${money(medWon)}` : ''}${medLost != null ? `; median declined total ${money(medLost)}` : ''}. Tracked separately, NEUTRAL, no learning weight either way: ${ghosts.length} still awaiting an answer${expired.length ? `, ${expired.length} expired (expiry is silence, not a no)` : ''}.`)
   if (decided < 4) facts.push(`SAMPLE WARNING: only ${decided} decided quote${decided !== 1 ? 's' : ''} for this service — history is too thin to lean on; say so plainly wherever it matters.`)
   if (q.customer_id) facts.push(`THIS CUSTOMER'S quote record with us (all services): ${custAccepted} accepted, ${custDeclined} declined.`)
   if (estMinutes > 0) facts.push(`TIME: the builder estimated ${estMinutes} minutes across the line items.`)
