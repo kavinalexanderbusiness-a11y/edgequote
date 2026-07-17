@@ -8,12 +8,11 @@ import type { QuoteService, QuoteServiceInput } from '@/types'
 // The quote's stored initial_price = Σ line nets, so the generated quotes.total
 // (initial_price + travel_fee) and every downstream consumer stay correct.
 
-export const SERVICE_UNITS = [
-  { value: 'each', label: 'each' },
-  { value: 'hour', label: 'per hour' },
-  { value: 'sqft', label: 'per sq ft' },
-  { value: 'linear_ft', label: 'per linear ft' },
-] as const
+// The unit vocabulary lives in lib/units (SYSTEM_UNITS + the service_units table).
+// A four-value SERVICE_UNITS list used to sit here and was still wired as the
+// picker's fallback, so a failed read silently swapped nine units for four and
+// dropped fixture/room/zone/equipment/flat. Deleted rather than widened: this file
+// owns the ARITHMETIC, which never sees a unit at all.
 
 // Accepts both the builder's input shape ('' = no discount) and loaded DB rows
 // (nulls) — the math already coalesces both to "no discount" / 0.

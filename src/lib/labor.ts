@@ -320,9 +320,32 @@ export function estimateLabor(input: EstimateInput, model: LaborModel | null): L
   if (propStats && propN >= 1) {
     const propSolo = median(propStats.soloMinutes) * og * firstCutF
     propCv = cv(propStats.soloMinutes)
-    const w = clamp(propN / (propN + 2), 0, 0.85) // heavy property weight, capped
+    // Blending toward the learned combo is regression to a MEAN — sound, and the
+    // reason the property weight is capped at 0.85. Blending toward the size model
+    // is regression to a FABRICATION: with no sqft, estimateVisitMinutes(0) is a
+    // flat 45 (pricing.ts) that encodes nothing about this property, this service,
+    // or this owner. It was still mixed in at (1 - w), so four real timed visits
+    // averaging 26.5 min were reported as 33 — the estimator was at its most wrong
+    // exactly where it had the most evidence. 27 of 62 live properties have no
+    // lawn_sqft, so this is the common case, not the corner.
+    //
+    // When the alternative carries no information, the property's own history is
+    // the whole answer.
+    const w = usedSizeModel ? 1 : clamp(propN / (propN + 2), 0, 0.85)
     solo = w * propSolo + (1 - w) * comboSolo
-    reasons.unshift(`${propN} past ${svcLabel} visit${propN !== 1 ? 's' : ''} to this exact property (weighted ${Math.round(w * 100)}%)`)
+    reasons.unshift(
+      usedSizeModel
+        ? `${propN} past ${svcLabel} visit${propN !== 1 ? 's' : ''} to this exact property — timed, so we use them`
+        : `${propN} past ${svcLabel} visit${propN !== 1 ? 's' : ''} to this exact property (weighted ${Math.round(w * 100)}%)`,
+    )
+    // The size-model caveat pushed at the top of this function is now false: we
+    // are not guessing from size, we are reading this property's own stopwatch.
+    // Leaving it made one estimate say both "high confidence — this property has a
+    // track record" and "not enough history yet — rough size estimate".
+    if (usedSizeModel) {
+      const i = reasons.findIndex(r => r.startsWith(`Not enough ${svcLabel} history yet`))
+      if (i !== -1) reasons.splice(i, 1)
+    }
   }
   // Enough data to trust = this service has its own history (learned or this
   // property's). A pure size guess does NOT count — that's the "don't guess" case.
@@ -357,7 +380,14 @@ export function estimateLabor(input: EstimateInput, model: LaborModel | null): L
   if (confidence === 'high' && basis === 'property') reasons.unshift(`High confidence — this property has its own ${svcLabel} track record`)
   else if (confidence === 'high') reasons.unshift(`High confidence — large sample of ${svcLabel} jobs`)
 
-  return { minutes, minMinutes, maxMinutes, confidence, confidencePct, sampleSize: propN + comboN, basis, reasons, manMinutes, enoughData, serviceKey: key, serviceLabel: svcLabel }
+  // DISTINCT visits, not propN + comboN. The property's own visits are a SUBSET of
+  // the combo pool — the same job is in both — so adding them double-counted:
+  // 3 property visits inside a 4-job pool rendered as "7 mowing jobs" under the
+  // estimate. The UI presents this number as evidence; inflating it is the one
+  // thing that must never happen to an evidence count. max() is the honest bound:
+  // we know of at least this many, and never claim a job twice.
+  const sampleSize = Math.max(propN, comboN)
+  return { minutes, minMinutes, maxMinutes, confidence, confidencePct, sampleSize, basis, reasons, manMinutes, enoughData, serviceKey: key, serviceLabel: svcLabel }
 }
 
 // ── recommendation layer (req #4) ─────────────────────────────────────────────────

@@ -21,8 +21,8 @@ import { Modal } from '@/components/ui/Modal'
 import { AssistButton } from '@/components/ai/AssistButton'
 import { useAiAssist } from '@/hooks/useAiAssist'
 import { QuoteFormValues, Customer, ServiceTemplate, TravelFeeTier, BusinessSettings } from '@/types'
-import { sumServiceLines, serviceLineTotals, emptyServiceLine, SERVICE_UNITS } from '@/lib/quoteServices'
-import { loadServiceUnits, type ServiceUnit } from '@/lib/units'
+import { sumServiceLines, serviceLineTotals, emptyServiceLine } from '@/lib/quoteServices'
+import { loadServiceUnits, SYSTEM_UNITS, type ServiceUnit } from '@/lib/units'
 import { formatCurrency, formatDate, suggestTravelFee, cn } from '@/lib/utils'
 import { toast } from '@/lib/toast'
 import { formatServicePrice, servicePricingKind, serviceRecommendation } from '@/lib/servicePricing'
@@ -443,19 +443,19 @@ export function QuoteBuilder({
   // The unit vocabulary (service_units): the nine system units plus this owner's
   // custom ones. It replaces a hardcoded four-value list, which is the whole
   // reason a plumber can now quote 6 fixtures and a painter 3 rooms — the line
-  // maths was always qty × unit_price and never needed to change. Falls back to
-  // the old constant if the read fails, so the picker can never come up empty.
-  const [units, setUnits] = useState<ServiceUnit[]>([])
+  // maths was always qty × unit_price and never needed to change.
+  //
+  // Seeded with the system nine so the picker is never empty and never SHRINKS on
+  // a failed read — loadServiceUnits() falls back to the same nine, so the only
+  // thing a failure costs is this owner's custom units. It used to fall back to a
+  // four-value constant, which silently dropped fixture/room/zone/equipment/flat.
+  const [units, setUnits] = useState<ServiceUnit[]>(SYSTEM_UNITS)
   useEffect(() => {
     let alive = true
     loadServiceUnits(createClient()).then(u => { if (alive) setUnits(u) })
     return () => { alive = false }
   }, [])
-  const unitOptions = useMemo(() => (
-    units.length
-      ? units.map(u => ({ value: u.code, label: u.label }))
-      : SERVICE_UNITS.map(u => ({ value: u.value, label: u.label }))
-  ), [units])
+  const unitOptions = useMemo(() => units.map(u => ({ value: u.code, label: u.label })), [units])
 
   // Favourites first, then the business's own sort_order within each group.
   // THIS is what a favourite is for: the settings toggle promises "shown first in
