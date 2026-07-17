@@ -338,14 +338,15 @@ console.log('\nThe cadence engine only speaks for services it can price:')
 }
 
 // ── 14. EVERY SUPPORTED UNIT RESOLVES AND READS CORRECTLY ────────────────────
-// The nine system units are the vocabulary a non-lawn trade quotes in. They are
-// seeded in the DB (RUN-2026-07-15-service-units-vocabulary.sql) and mirrored by
-// SYSTEM_UNITS for read failures. The mirror is the risk: a fallback that
-// disagrees with the table is a second vocabulary, which is exactly what the old
-// four-value SERVICE_UNITS list was.
+// The fourteen system units are the vocabulary a non-lawn trade quotes in. They
+// are seeded in the DB (RUN-2026-07-15-service-units-vocabulary.sql, then
+// RUN-2026-07-16-quote-materials.sql added the five bulk-material units) and
+// mirrored by SYSTEM_UNITS for read failures. The mirror is the risk: a fallback
+// that disagrees with the table is a second vocabulary, which is exactly what the
+// old four-value SERVICE_UNITS list was.
 console.log('\nEvery supported unit resolves and reads correctly:')
 {
-  eq('there are nine system units', SYSTEM_UNITS.length, 9)
+  eq('there are fourteen system units', SYSTEM_UNITS.length, 14)
   // The FULL fingerprint of the seeded rows, not just their codes — abbrev is the
   // wording on a line, step/decimals are the quantity input's behaviour. Verified
   // against live prod; re-check with:
@@ -358,7 +359,12 @@ console.log('\nEvery supported unit resolves and reads correctly:')
     'each|Each|each|1|0|10 ;; hour|Hours|hr|0.25|2|20 ;; flat|Flat rate|flat|1|0|30 ;; ' +
     'sqft|Square feet|sq ft|1|0|40 ;; linear_ft|Linear feet|linear ft|1|0|50 ;; ' +
     'fixture|Fixtures|fixture|1|0|60 ;; room|Rooms|room|1|0|70 ;; zone|Zones|zone|1|0|80 ;; ' +
-    'equipment|Equipment|unit|1|0|90')
+    'equipment|Equipment|unit|1|0|90 ;; ' +
+    // The five bulk-material units. Read back from live prod after the migration,
+    // not transcribed from the source file — the point of this test is to catch
+    // the mirror disagreeing with the table, which copying the file cannot do.
+    'cubic_yard|Cubic yards|yd³|0.5|1|100 ;; ton|Tons|ton|0.5|2|110 ;; ' +
+    'bag|Bags|bag|1|0|120 ;; pallet|Pallets|pallet|1|0|130 ;; tray|Trays|tray|1|0|140')
 
   for (const u of SYSTEM_UNITS) {
     eq(`"${u.code}" resolves to itself`, resolveUnit(SYSTEM_UNITS, u.code).code, u.code)
@@ -402,24 +408,31 @@ void (async () => {
   // took fixture/room/zone/equipment/flat off a plumber's quote form, with nothing
   // on screen to say why. It degrades to "no custom units" now, never to a
   // different vocabulary.
-  console.log('\nA failed read degrades to the system nine, never to fewer:')
+  console.log('\nA failed read degrades to the full system vocabulary, never to fewer:')
   const clientReturning = (res: { data: unknown; error: unknown }) => ({
     from: () => ({ select: () => ({ eq: () => ({ order: async () => res }) }) }),
   }) as unknown as Parameters<typeof loadServiceUnits>[0]
 
   const onError = await loadServiceUnits(clientReturning({ data: null, error: { message: 'offline' } }))
-  eq('an errored read still yields nine units', onError.length, 9)
+  eq('an errored read still yields all fourteen units', onError.length, 14)
   check('…and fixture survives it', onError.some(u => u.code === 'fixture'),
         'fixture was dropped — the picker just lost a plumber their unit')
+  check('…and cubic_yard survives it', onError.some(u => u.code === 'cubic_yard'),
+        'cubic_yard was dropped — the picker just lost a landscaper their mulch')
 
   const onEmpty = await loadServiceUnits(clientReturning({ data: [], error: null }))
-  eq('an empty table also yields nine', onEmpty.length, 9)
+  eq('an empty table also yields all fourteen', onEmpty.length, 14)
 
   // A successful read is still authoritative — the fallback must not mask real rows.
-  const custom = [{ id: 'x', user_id: 'u1', code: 'pallet', label: 'Pallets', abbrev: 'pallet', step: 1, decimals: 0, sort_order: 5, active: true }]
+  // The custom code must be one NO system unit uses: this case originally used
+  // 'pallet', which RUN-2026-07-16-quote-materials.sql then made a system unit —
+  // so the example quietly stopped being an example of a custom unit at all.
+  const custom = [{ id: 'x', user_id: 'u1', code: 'skid', label: 'Skids', abbrev: 'skid', step: 1, decimals: 0, sort_order: 5, active: true }]
+  check('the custom test code is not a system code', !SYSTEM_UNITS.some(u => u.code === custom[0].code),
+        `"${custom[0].code}" is now a system unit — this case no longer tests a custom unit`)
   const onOk = await loadServiceUnits(clientReturning({ data: custom, error: null }))
   eq('a real read wins over the fallback', onOk.length, 1)
-  eq('…and it is the owner\'s own unit', onOk[0].code, 'pallet')
+  eq('…and it is the owner\'s own unit', onOk[0].code, 'skid')
 
   // ── 16. ONLY LAWN MAY BE HANDED A SAVED LAWN RECOMMENDATION ────────────────
   // §13 pins which services the cadence engine may PRICE. This is the next

@@ -1,4 +1,4 @@
-import type { Quote, QuoteService, Invoice, BusinessSettings } from '@/types'
+import type { Quote, QuoteService, Invoice, BusinessSettings, QuoteLineKind } from '@/types'
 
 // ── Portal PDF bridge ────────────────────────────────────────────────────────
 // The portal renders the SAME quote/invoice PDFs as the dashboard. We map the
@@ -117,6 +117,13 @@ export async function renderPortalQuoteBlob(q: PortalPdfQuote, customerName: str
         quantity: num(s.quantity, 1) || 1, unit: s.unit, unit_price: num(s.unit_price),
         est_minutes: s.est_minutes, discount_type: s.discount_type,
         discount_value: s.discount_value, notes: s.notes, sort_order: s.sort_order,
+        // The portal RPC doesn't return `kind`, so this defaults — which is inert
+        // rather than wrong: the PDF renders every line as name × qty × price and
+        // branches on nothing. A material still reads correctly to the customer
+        // ("Mulch · 5 yd³ · $225"); what it doesn't get is a grouped Materials
+        // heading. Giving it one means widening get_portal_data, which is a frozen
+        // surface and outside this slice.
+        kind: (s as { kind?: QuoteLineKind }).kind ?? 'service',
       }))
     : undefined
   return renderQuoteBlob(portalQuoteToQuote(q, customerName), portalBusinessToSettings(b), services)

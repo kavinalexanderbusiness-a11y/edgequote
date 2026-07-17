@@ -185,6 +185,10 @@ export default function QuoteDetailPage() {
             discount_type: s.discount_type || null,
             discount_value: s.discount_type && Number(s.discount_value) > 0 ? Number(s.discount_value) : null,
             notes: s.notes?.trim() || null,
+            // The line KIND is what makes a material a material. This save path
+            // DELETEs every line and re-inserts, so omitting it here would demote
+            // every material to a service the first time a quote was edited.
+            kind: s.kind || 'service',
           })),
         ]).select('*')
         setServices((rows as QuoteService[]) || [])
@@ -448,6 +452,9 @@ export default function QuoteDetailPage() {
             quantity: s.quantity, unit: s.unit, unit_price: s.unit_price,
             est_minutes: s.est_minutes, discount_type: s.discount_type,
             discount_value: s.discount_value, notes: s.notes,
+            // Without this the duplicate silently demotes every material back to
+            // a service — the copy would stop matching the quote it came from.
+            kind: s.kind ?? 'service',
           })))
         }
         try { window.sessionStorage.setItem('eq_quote_dup_from', quote.quote_number) } catch { /* ignore */ }
@@ -558,6 +565,10 @@ export default function QuoteDetailPage() {
             unit: s.unit || 'each',
             unit_price: s.unit_price,
             est_minutes: s.est_minutes || 0,
+            // Carry the line's kind through the edit round-trip. Defaulting to
+            // 'service' here would silently turn a saved material back into a
+            // service the first time the quote was opened and re-saved.
+            kind: s.kind ?? 'service',
             discount_type: (s.discount_type || '') as '' | 'amount' | 'percent',
             discount_value: s.discount_value || 0,
             notes: s.notes || '',

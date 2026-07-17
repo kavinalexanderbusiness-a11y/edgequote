@@ -54,6 +54,16 @@ export const SYSTEM_UNITS: ServiceUnit[] = [
   { id: 'system:room',      user_id: null, code: 'room',      label: 'Rooms',       abbrev: 'room',      step: 1,    decimals: 0, sort_order: 70, active: true },
   { id: 'system:zone',      user_id: null, code: 'zone',      label: 'Zones',       abbrev: 'zone',      step: 1,    decimals: 0, sort_order: 80, active: true },
   { id: 'system:equipment', user_id: null, code: 'equipment', label: 'Equipment',   abbrev: 'unit',      step: 1,    decimals: 0, sort_order: 90, active: true },
+  // Bulk-material units (RUN-2026-07-16-quote-materials.sql). Peers of the nine,
+  // NOT a materials-only list — a second vocabulary is the exact failure this
+  // fallback exists to prevent. `step` is 0.5 where the trade genuinely sells in
+  // halves (half a yard of mulch, half a ton of gravel); `decimals` follows how
+  // the ticket from the yard reads.
+  { id: 'system:cubic_yard', user_id: null, code: 'cubic_yard', label: 'Cubic yards', abbrev: 'yd³',    step: 0.5, decimals: 1, sort_order: 100, active: true },
+  { id: 'system:ton',        user_id: null, code: 'ton',        label: 'Tons',        abbrev: 'ton',    step: 0.5, decimals: 2, sort_order: 110, active: true },
+  { id: 'system:bag',        user_id: null, code: 'bag',        label: 'Bags',        abbrev: 'bag',    step: 1,   decimals: 0, sort_order: 120, active: true },
+  { id: 'system:pallet',     user_id: null, code: 'pallet',     label: 'Pallets',     abbrev: 'pallet', step: 1,   decimals: 0, sort_order: 130, active: true },
+  { id: 'system:tray',       user_id: null, code: 'tray',       label: 'Trays',       abbrev: 'tray',   step: 1,   decimals: 0, sort_order: 140, active: true },
 ]
 
 // A last-resort unit for a code we can't find. Never written — it only keeps a

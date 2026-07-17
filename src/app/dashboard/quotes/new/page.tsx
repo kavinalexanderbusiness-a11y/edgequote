@@ -198,6 +198,10 @@ export default function NewQuotePage() {
             discount_type: s.discount_type || null,
             discount_value: s.discount_type && Number(s.discount_value) > 0 ? Number(s.discount_value) : null,
             notes: s.notes?.trim() || null,
+            // The line KIND is what makes a material a material. Omit it and
+            // every material saves as a service — silently, and the quote
+            // reads correctly right up until someone reopens it.
+            kind: s.kind || 'service',
           })),
         ])
       }
