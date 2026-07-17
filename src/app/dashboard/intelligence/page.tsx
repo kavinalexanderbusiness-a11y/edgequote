@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { loadBusinessIntelligence, BIReport, NamedValue, WeekdayStat, YearComparison } from '@/lib/businessIntelligence'
 import { loadLaborInsights, LaborInsights, ServiceAccuracy, ServiceProfit } from '@/lib/labor'
@@ -16,7 +17,17 @@ import { AnalyticsWorkspace, WidgetChrome, useWidget } from '@/components/analyt
 import type { WidgetId } from '@/lib/analytics/layout'
 import { formatCurrency, cn } from '@/lib/utils'
 import type { Tone } from '@/lib/tone'
-import { TrendingUp, TrendingDown, DollarSign, Gauge, Users, Target, Activity, LineChart, Home, AlertTriangle, CalendarDays, Ban, Briefcase, Megaphone } from 'lucide-react'
+import { TrendingUp, TrendingDown, DollarSign, Gauge, Users, Target, Activity, LineChart, Home, AlertTriangle, CalendarDays, Ban, Briefcase, Megaphone, MessageSquare } from 'lucide-react'
+
+// From THE comms insights engine (comms_insights RPC) — the History page renders
+// the same object, so the two surfaces cannot disagree about a number.
+interface CommsInsights {
+  sends: number; delivered: number; failed: number; skipped: number
+  inbound: number; needs_reply: number; scheduled_pending: number
+  median_reply_minutes: number | null
+}
+const fmtReplyTime = (m: number | null) =>
+  m == null ? '—' : m < 60 ? `${Math.round(m)}m` : m < 1440 ? `${(m / 60).toFixed(1)}h` : `${(m / 1440).toFixed(1)}d`
 
 export default function IntelligencePage() {
   const supabase = useMemo(() => createClient(), [])
@@ -25,6 +36,7 @@ export default function IntelligencePage() {
   // Labour accuracy & crew efficiency — loaded alongside, but never blocks the BI report.
   const [labor, setLabor] = useState<LaborInsights | null>(() => readCache<LaborInsights>('labor', CACHE_TTL.medium))
   const [marketing, setMarketing] = useState<MarketingCampaignRow[] | null>(() => readCache<MarketingCampaignRow[]>('marketing', CACHE_TTL.medium))
+  const [comms, setComms] = useState<CommsInsights | null>(() => readCache<CommsInsights>('comms', CACHE_TTL.medium))
 
   useEffect(() => {
     (async () => {
@@ -48,6 +60,17 @@ export default function IntelligencePage() {
     (async () => {
       try { const r = await loadMarketingPerformance(supabase); setMarketing(r); writeCache('marketing', r) }
       catch { /* campaign stats are supplementary — never break the BI report */ }
+    })()
+  }, [supabase])
+
+  // Communications pulse — same terms as marketing: alongside, never blocking.
+  // The RPC is THE insights engine; History renders the identical object.
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data, error } = await supabase.rpc('comms_insights', { p_days: 30 })
+        if (!error && data) { setComms(data as CommsInsights); writeCache('comms', data) }
+      } catch { /* supplementary */ }
     })()
   }, [supabase])
 
@@ -404,6 +427,31 @@ export default function IntelligencePage() {
                 </div>
               </div>
             ))}
+          </div>
+        )}
+      </Section>
+
+      {/* ── COMMUNICATIONS ── the 30-day pulse from THE comms insights engine
+          (comms_insights RPC — History renders the identical object). Median
+          first-reply time leads: for a service business it's the number most
+          correlated with winning the job. */}
+      <Section id="communications" title="Communications" icon={MessageSquare}>
+        {comms === null ? (
+          <Skeleton className="h-24 w-full rounded-card" />
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            <StatTile label="Median reply time" value={fmtReplyTime(comms.median_reply_minutes)} icon={Activity}
+              sub={comms.inbound ? `${comms.inbound} inbound · 30d` : 'No inbound yet · 30d'} />
+            <StatTile label="Messages sent" value={String(comms.sends)} icon={MessageSquare} sub="Last 30 days" />
+            <StatTile label="Delivered" value={comms.sends ? `${Math.round((comms.delivered / comms.sends) * 100)}%` : '—'} icon={Target}
+              sub={comms.failed > 0 ? `${comms.failed} failed` : 'No failures'} tone={comms.failed > 0 ? 'warn' : undefined} />
+            <Link href="/dashboard/messages?f=needs_reply" className="block rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+              <StatTile label="Awaiting your reply" value={String(comms.needs_reply)} icon={AlertTriangle}
+                sub="Open conversations · tap to triage" tone={comms.needs_reply > 0 ? 'warn' : undefined} />
+            </Link>
+            <Link href="/dashboard/messages/scheduled" className="block rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+              <StatTile label="Scheduled" value={String(comms.scheduled_pending)} icon={CalendarDays} sub="Queued to send" />
+            </Link>
           </div>
         )}
       </Section>

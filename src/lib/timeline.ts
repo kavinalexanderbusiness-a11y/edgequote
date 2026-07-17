@@ -62,6 +62,8 @@ export interface TimelineEvent {
 // without it rather than a crash — which is what lets the property view pass a subset.
 export interface TimelineSources {
   gstPercent?: number | null
+  /** When present, comms events deep-link into THE conversation (?c=) instead of the bare inbox. */
+  customerId?: string
   quotes?: TlQuote[]
   jobs?: TlJob[]
   invoices?: TlInvoice[]
@@ -146,16 +148,18 @@ export function buildTimeline(s: TimelineSources): TimelineEvent[] {
     if (inv.status === 'paid') out.push({ at: inv.paid_at || inv.updated_at, kind: 'invoice_paid', title: `Invoice ${inv.invoice_number} paid`, sub: money(gross(inv.amount)), href, propertyId: pid })
   }
 
+  // With a customerId, a comms event opens THE conversation, not the bare inbox.
+  const msgHref = s.customerId ? `/dashboard/messages?c=${s.customerId}` : '/dashboard/messages'
   for (const m of s.messages || []) {
     // Internal notes ARE history. They were skipped entirely, so the one place an
     // owner writes down what happened never appeared in what happened.
     if (m.direction === 'internal') {
-      out.push({ at: m.created_at, kind: 'note', title: 'Internal note', sub: clip(m.body, 140), href: '/dashboard/messages' })
+      out.push({ at: m.created_at, kind: 'note', title: 'Internal note', sub: clip(m.body, 140), href: msgHref })
       continue
     }
     const inbound = m.direction === 'inbound'
     const chan = m.channel === 'email' ? 'email' : m.channel === 'portal' ? 'portal message' : 'SMS'
-    out.push({ at: m.created_at, kind: inbound ? 'message_in' : 'message_out', title: `${inbound ? 'Received' : 'Sent'} ${chan}`, sub: clip(m.body, 90), href: '/dashboard/messages' })
+    out.push({ at: m.created_at, kind: inbound ? 'message_in' : 'message_out', title: `${inbound ? 'Received' : 'Sent'} ${chan}`, sub: clip(m.body, 90), href: msgHref })
   }
 
   // The ledger holds payments AND credit movements (kind='credit') AND reversals
@@ -178,7 +182,7 @@ export function buildTimeline(s: TimelineSources): TimelineEvent[] {
     const isLead = /^new .* lead/i.test(msg)
     // Strip the "New Website lead — " prefix so the sub isn't redundant with the title.
     const sub = isLead ? msg.replace(/^new\b.*?\blead\b\s*[—-]?\s*/i, '').slice(0, 160) : msg.slice(0, 160)
-    out.push({ at: sr.created_at, kind: isLead ? 'lead' : 'portal_request', title: isLead ? 'Website lead' : 'Portal service request', sub, href: '/dashboard/messages' })
+    out.push({ at: sr.created_at, kind: isLead ? 'lead' : 'portal_request', title: isLead ? 'Website lead' : 'Portal service request', sub, href: msgHref })
   }
 
   // Photos carry their own kind (before/after/general) — a visit's evidence.

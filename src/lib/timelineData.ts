@@ -26,7 +26,7 @@ interface ExpenseRow { id: string; description: string | null; amount: number | 
 
 /** The sources that can be asked for by customer_id. */
 export type CustomerTimelineSources = Pick<TimelineSources,
-  'messages' | 'payments' | 'serviceRequests' | 'photos' | 'measurements' | 'consentChanges' | 'campaignLog'>
+  'customerId' | 'messages' | 'payments' | 'serviceRequests' | 'photos' | 'measurements' | 'consentChanges' | 'campaignLog'>
 
 /** The sources that only exist per job. */
 export type JobTimelineSources = Pick<TimelineSources, 'expenses' | 'priceChanges'>
@@ -48,6 +48,7 @@ export async function loadCustomerTimelineSources(
   ])
 
   return {
+    customerId,   // comms events deep-link into the conversation (?c=)
     messages: (mRes.data as TlMessage[]) || [],
     payments: (payRes.data as TlPayment[]) || [],
     serviceRequests: (srRes.data as TlServiceRequest[]) || [],
