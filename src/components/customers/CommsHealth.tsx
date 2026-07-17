@@ -31,7 +31,11 @@ export function CommsHealth({ customer, onChange }: {
   const warnings: W[] = []
   if (emailOptIn && !hasEmail) warnings.push({ key: 'email-no-addr', icon: Mail, text: 'Email opt-in is on, but no email address is saved.', add: 'email' })
   if (smsOptIn && !hasPhone) warnings.push({ key: 'sms-no-phone', icon: Phone, text: 'SMS opt-in is on, but no phone number is saved.', add: 'phone' })
-  if (!hasEmail && !hasPhone) warnings.push({ key: 'no-contact', icon: AlertTriangle, text: 'No contact method (email or phone) on file — automatic messages can’t reach this customer.' })
+  // The worst case was the only one with no way out: the two milder warnings above
+  // each offered an inline fix, while "we cannot reach this person at all" offered
+  // a sentence. It asks for a phone for the same reason describeSkip does — SMS is
+  // the channel that reaches this audience, and one ask beats a choice.
+  if (!hasEmail && !hasPhone) warnings.push({ key: 'no-contact', icon: AlertTriangle, text: 'No phone or email on file — nothing can reach this customer, automatic or not.', add: 'phone' })
   else if (!emailOptIn && !smsOptIn) warnings.push({ key: 'both-off', icon: AlertTriangle, text: 'Both SMS and email are off — automatic messages won’t be sent to this customer.' })
 
   if (warnings.length === 0) return null

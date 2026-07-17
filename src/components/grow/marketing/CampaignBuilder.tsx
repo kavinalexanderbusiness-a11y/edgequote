@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/Button'
+import { AssistButton } from '@/components/ai/ui'
 import { Banner } from '@/components/ui/Banner'
 import { Card } from '@/components/ui/Card'
 import { FilterPill } from '@/components/ui/FilterPill'
@@ -176,9 +177,8 @@ export function CampaignBuilder({ aiEnabled, initialCampaigns, initialKind, init
         </div>
 
         <div className="flex items-center gap-3 flex-wrap">
-          <Button onClick={generate} loading={busy} disabled={!aiEnabled || !count}>
-            <Megaphone className="w-4 h-4" /> Generate campaign
-          </Button>
+          <AssistButton size="md" label="Write campaign" busyLabel="Writing…" onClick={generate}
+            busy={busy} disabled={!aiEnabled || !count} />
           <span className="text-[11px] text-ink-faint">
             {count === 0
               ? 'Select at least one platform to generate.'

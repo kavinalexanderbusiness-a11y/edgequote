@@ -21,6 +21,8 @@ import { geocodeAddressDetailed, reverseNeighborhood } from '@/lib/geo'
 import {
   CoverageRow, coveragePct, overallScore, scoreGrade, scoreLabel, DQ_GRADE_COLORS,
 } from '@/lib/dataQuality'
+import { loadBusinessShape, SHAPE_LOADING, type BusinessShape } from '@/lib/businessShape'
+import { GradeBadge } from '@/components/ui/GradeBadge'
 import {
   ShieldCheck, UserPlus, Home, AlertTriangle, CheckCircle2, ArrowRight, DollarSign, Link2, Users, FileText, MapPin, Phone, Ruler, Copy,
 } from 'lucide-react'
@@ -43,17 +45,24 @@ export default function DataQualityPage() {
   const [jobs, setJobs] = useState<DQJob[]>([])
   const [properties, setProperties] = useState<PRow[]>([])
   const [ctx, setCtx] = useState<ProfitContext>(EMPTY_CTX)
+  // Whether this business does lawn work — derived, never asked (lib/businessShape).
+  const [shape, setShape] = useState<BusinessShape>(SHAPE_LOADING)
 
   const load = useCallback(async () => {
     const { data: { session } } = await supabase.auth.getSession()
     const user = session?.user
-    const [cRes, qRes, jRes, rRes, pRes] = await Promise.all([
+    const [cRes, qRes, jRes, rRes, pRes, shapeRes] = await Promise.all([
       supabase.from('customers').select('*').eq('user_id', user!.id).order('name'),
       supabase.from('quotes').select('id, quote_number, customer_id, customer_name, address, property_id, status, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', user!.id),
       supabase.from('jobs').select('id, title, scheduled_date, status, service_type, quote_id, recurrence_id, duration_minutes, actual_minutes, price, customer_id, property_id, properties(lat, lng, city, postal_code, neighborhood)').eq('user_id', user!.id),
       supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', user!.id),
       supabase.from('properties').select('id, customer_id, address, lat, lng, neighborhood, lawn_sqft').eq('user_id', user!.id),
+      // Does this business do lawn work? If not, "no lawn size" is not a data-quality
+      // problem and must not be scored as one. On failure, fall back to showing the
+      // audit exactly as it was.
+      loadBusinessShape(supabase, user!.id).catch(() => SHAPE_LOADING),
     ])
+    setShape(shapeRes)
 
     setCustomers((cRes.data as Customer[]) || [])
 
@@ -107,8 +116,19 @@ export default function DataQualityPage() {
     const customersNoPhone = customers.filter(c => normalizePhone(c.phone).length < 7).length
     const customersNoEmail = customers.filter(c => !normalizeEmail(c.email)).length
 
-    // Property size (lawn_sqft) — the key pricing input. Only audit properties with an address.
-    const sizable = properties.filter(p => (p.address || '').trim().length >= 5)
+    // Property size (lawn_sqft) — the key pricing input FOR LAWN WORK. Only audit
+    // properties with an address.
+    //
+    // This is the one audit in this file that isn't universal. For a plumber or an
+    // electrician, every property legitimately has no lawn size — so the audit reported
+    // 0% coverage, told them to go measure N properties, and dragged their overall
+    // grade toward "Major gaps" for data they will never have and don't need. A
+    // scorecard that can't be fixed isn't an audit, it's an insult. When the business
+    // shows no evidence of lawn work this dimension doesn't apply, so it isn't measured
+    // and isn't scored — the row is dropped from `rows` entirely rather than zeroed,
+    // because overallScore averages the rows it's given.
+    const auditsLawn = shape.showLawnFields
+    const sizable = auditsLawn ? properties.filter(p => (p.address || '').trim().length >= 5) : []
     const propsNoSize = sizable.filter(p => !p.lawn_sqft || Number(p.lawn_sqft) <= 0)
     const sized = sizable.length - propsNoSize.length
 
@@ -134,7 +154,7 @@ export default function DataQualityPage() {
       { key: 'contact', label: 'Customer contact', covered: custReachable, total: customers.length, pct: coveragePct(custReachable, customers.length), hint: 'Customers reachable by phone or email' },
       { key: 'property', label: 'Property coverage', covered: propCovered, total: totalLinkables, pct: coveragePct(propCovered, totalLinkables), hint: 'Quotes & jobs linked to a property' },
       { key: 'located', label: 'Properties located', covered: located, total: locatable.length, pct: coveragePct(located, locatable.length), hint: 'Properties with map coordinates (drives routes & maps)' },
-      { key: 'size', label: 'Property size', covered: sized, total: sizable.length, pct: coveragePct(sized, sizable.length), hint: 'Properties with a lawn size for pricing' },
+      ...(auditsLawn ? [{ key: 'size', label: 'Property size', covered: sized, total: sizable.length, pct: coveragePct(sized, sizable.length), hint: 'Properties with a lawn size for pricing' } as CoverageRow] : []),
       { key: 'quote', label: 'Job → quote linkage', covered: jobs.length - jobsNoQuote, total: jobs.length, pct: coveragePct(jobs.length - jobsNoQuote, jobs.length), hint: 'Jobs tied to a quote for pricing' },
       { key: 'revenue', label: 'Revenue coverage', covered: jobsWithValue, total: activeJobs.length, pct: coveragePct(jobsWithValue, activeJobs.length), hint: 'Active jobs that produce a $ value' },
     ]
@@ -146,7 +166,7 @@ export default function DataQualityPage() {
       activeJobs: activeJobs.length, jobsWithValue,
       propertiesTotal: properties.length,
     }
-  }, [quotes, jobs, properties, customers, ctx])
+  }, [quotes, jobs, properties, customers, ctx, shape])
 
   const grade = scoreGrade(m.score)
 
@@ -264,10 +284,7 @@ export default function DataQualityPage() {
       {/* Score hero */}
       <Card>
         <CardBody className="flex items-center gap-4">
-          <div className="w-16 h-16 rounded-2xl flex items-center justify-center text-2xl font-black tabular-nums shrink-0"
-            style={{ backgroundColor: DQ_GRADE_COLORS[grade] + '22', color: DQ_GRADE_COLORS[grade], border: `1px solid ${DQ_GRADE_COLORS[grade]}55` }}>
-            {m.score}
-          </div>
+          <GradeBadge grade={grade} size="lg">{m.score}</GradeBadge>
           <div className="min-w-0">
             <p className="text-sm font-bold text-ink flex items-center gap-2">
               <ShieldCheck className="w-4 h-4" style={{ color: DQ_GRADE_COLORS[grade] }} /> Data health: {scoreLabel(m.score)}

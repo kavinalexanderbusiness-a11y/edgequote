@@ -10,6 +10,7 @@ import { buildServicePlans, ServicePlan } from '@/lib/recurrence'
 import { settingsToSeasons } from '@/lib/seasons'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
+import { Badge } from '@/components/ui/Badge'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -17,6 +18,7 @@ import { formatDate, formatCurrency, localTodayISO } from '@/lib/utils'
 import { pricingConfigFromSettings, pricingPackage, buildSavedRecommendation, estimateVisitMinutes, latestSavedRecommendation, recommendationIsStale, pricingConfidence } from '@/lib/pricing'
 import { resolvePrefs, prefSummary, type PrefSource } from '@/lib/preferences'
 import { computePropertyHealth } from '@/lib/propertyHealth'
+import { loadBusinessShape, SHAPE_LOADING, type BusinessShape } from '@/lib/businessShape'
 import { getPropertyContexts } from '@/lib/ai/propertyContext'
 import { LocatedJob, fetchLocatedUpcomingJobs, nearbyJobCount } from '@/lib/geo'
 import { JobPhotos } from '@/components/photos/JobPhotos'
@@ -106,13 +108,16 @@ export default function PropertiesPage() {
   const [photosByProp, setPhotosByProp] = useState<Record<string, JobPhotoView[]>>({})
   const [photosLoaded, setPhotosLoaded] = useState(false) // false → let each card self-fetch (batch failed)
   const [recalcId, setRecalcId] = useState<string | null>(null)
+  // What this business does, derived from its own catalogue and jobs — never asked.
+  // Starts SHOWING everything, so a Measure action can't blink out mid-load.
+  const [shape, setShape] = useState<BusinessShape>(SHAPE_LOADING)
 
   const supabase = createClient()
 
   useEffect(() => {
     async function fetchProperties() {
       const { data: { user } } = await supabase.auth.getUser()
-      const [pRes, sRes, located, jRes, iRes, planJRes, rRes, qRes] = await Promise.all([
+      const [pRes, sRes, located, jRes, iRes, planJRes, rRes, qRes, shapeRes] = await Promise.all([
         supabase
           .from('properties')
           .select('*, customers(id, name, email, phone, preferred_days, avoid_days, pref_time_start, pref_time_end)')
@@ -127,10 +132,17 @@ export default function PropertiesPage() {
         supabase.from('job_recurrences').select('*').eq('user_id', user!.id),
         // Last quote per property (most recent non-draft).
         supabase.from('quotes').select('id, property_id, quote_number, total, status, created_at').eq('user_id', user!.id).neq('status', 'draft'),
+        // Does this business do lawn work? If not, an unmeasured property is not a
+        // defect and must not be scored or nagged as one (see lib/businessShape).
+        // Rides along in the batch already going out; never blocks the page. On
+        // failure the shape falls back to showing everything — how this page
+        // behaved before the shape existed.
+        loadBusinessShape(supabase, user!.id).catch(() => SHAPE_LOADING),
       ])
       const settingsRow = sRes.data as BusinessSettings | null
       setProperties((pRes.data as Property[]) || [])
       setSettings(settingsRow)
+      setShape(shapeRes)
       setLocatedJobs(located)
       setPerfByProp(buildPerformance((jRes.data as PerfJob[]) || [], (iRes.data as PerfInvoice[]) || []))
 
@@ -206,6 +218,16 @@ export default function PropertiesPage() {
   // Re-run the pricing engine on the saved measurement with TODAY's rates and
   // route context — appends a new snapshot (history preserved, never overwritten).
   async function recalculate(p: Property) {
+    // This reruns the GRASS cadence engine (pricingPackage) over whatever number is
+    // sitting on the property and appends the result as "the" recommendation. On a
+    // business that does no lawn work that number could be a traced roof or a
+    // driveway, and the output would be mowing prices — written to history, where
+    // every later quote and job reads them back as authoritative. This page already
+    // loads the account's BusinessShape; it is the only signal available here,
+    // because a property-level action has no service to ask about. It fails OPEN
+    // (showLawnFields defaults true until there's evidence), which keeps today's
+    // behaviour for the lawn business and for any account we can't yet classify.
+    if (!shape.showLawnFields) return
     const latest = latestSavedRecommendation(p.measurement_history)
     const sqft = latest?.sqft || Number(p.lawn_sqft) || 0
     if (sqft <= 0) return
@@ -214,7 +236,7 @@ export default function PropertiesPage() {
       const cfg = pricingConfigFromSettings(settings)
       const nearby = p.lat != null && p.lng != null ? nearbyJobCount({ lat: p.lat, lng: p.lng }, locatedJobs).count : 0
       const pkg = pricingPackage(sqft, cfg, { overgrowth: 1, nearbyCount: nearby, neighborhoodName: p.neighborhood })
-      const rec = buildSavedRecommendation(pkg, estimateVisitMinutes(sqft), { hood: p.neighborhood })
+      const rec = buildSavedRecommendation(pkg, estimateVisitMinutes(sqft) ?? 0, { hood: p.neighborhood })
       const hist = Array.isArray(p.measurement_history) ? p.measurement_history : []
       const snapshot = { date: new Date().toISOString(), total_sqft: sqft, recommendation: rec }
       const nextHistory = [...hist, snapshot]
@@ -292,10 +314,18 @@ export default function PropertiesPage() {
               quotedCount: qp?.quoted ?? 0,
               pricingDriftPct: drift,
               hasVision: !!hasVisionByProp[property.id],
+              shape,
             })
             const measureHref = `/dashboard/properties/measure?id=${property.id}`
+            // 'view' means nothing is pressing AND this trade has no lawn to
+            // measure — so it must never fall through to measureHref, which is the
+            // default this change exists to remove. The card is already the view;
+            // the only place left worth going is the customer, and with no customer
+            // there is no destination at all, so no button renders (a primary
+            // button that goes nowhere is worse than a calm card).
             const actionHref = health.action === 'quote' ? `/dashboard/quotes/new?customer=${property.customer_id}&property=${property.id}`
               : health.action === 'schedule' ? `/dashboard/schedule?customer=${property.customer_id}&property=${property.id}`
+              : health.action === 'view' ? (property.customer_id ? `/dashboard/customers/${property.customer_id}` : null)
               : measureHref
             return { property, hist, last, saved, stale, perf, hasPerf, lastQuote, lastInvoice, plans, prefText, nextVisit, qp, confidence, estMin, estFromActual, activePlan, estDur, durDelta, recOneTime, drift, driftBig, health, measureHref, actionHref }
           })
@@ -318,25 +348,33 @@ export default function PropertiesPage() {
                     </div>
                     <div className="space-y-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <p className="text-sm font-semibold text-ink">{property.address}</p>
+                        {/* The address is this card's identity, so it's the way into
+                            the property's history — the one thing this card can't show. */}
+                        <Link href={`/dashboard/properties/${property.id}`}
+                          className="text-sm font-semibold text-ink hover:text-accent-text transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+                          {property.address}
+                        </Link>
                         {property.is_primary && (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border uppercase tracking-wide bg-accent-dim text-accent-text border-accent/20">
-                            Primary
-                          </span>
+                          <Badge tone="accent">Primary</Badge>
                         )}
                         {activePlan && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border uppercase tracking-wide bg-accent/10 text-accent-text border-accent/20">
-                            <Repeat className="w-3 h-3" /> {activePlan.cadenceLabel}
-                          </span>
+                          <Badge tone="accent" icon={Repeat}>{activePlan.cadenceLabel}</Badge>
                         )}
-                        {/* One overall health score — measurement, pricing, history, recurring, scheduling, AI Vision */}
-                        <span title="Property health — measurement freshness, pricing confidence, service history, recurring status, scheduling & AI Vision"
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${
-                            health.tone === 'good' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
-                            : health.tone === 'warn' ? 'border-amber-500/30 bg-amber-500/10 text-amber-400'
-                            : health.tone === 'new' ? 'border-sky-500/30 bg-sky-500/10 text-sky-400'
-                            : 'border-accent/20 bg-accent/10 text-accent-text'}`}>
-                          <Heart className="w-2.5 h-2.5" /> {health.score} · {health.label}
+                        {/* One overall health score — measurement, pricing, history, recurring, scheduling, AI Vision.
+                            The tooltip lists what the score ACTUALLY counted: naming
+                            measurement to a trade with no lawn would describe points
+                            that aren't in their denominator, which is the same lie
+                            the number itself used to tell. */}
+                        <span title={health.lawnApplies
+                          ? 'Property health — measurement freshness, pricing confidence, service history, recurring status, scheduling & AI Vision'
+                          : 'Property health — service history, recurring status, scheduling & AI Vision'} className="inline-flex">
+                          <Badge icon={Heart} tone={
+                            health.tone === 'good' ? 'success'
+                            : health.tone === 'warn' ? 'warn'
+                            : health.tone === 'new' ? 'info'
+                            : 'accent'}>
+                            {health.score} · {health.label}
+                          </Badge>
                         </span>
                       </div>
                       {(property.city || property.province) && (
@@ -395,19 +433,23 @@ export default function PropertiesPage() {
                       <Button size="sm" loading={recalcId === property.id} onClick={() => recalculate(property)} className="w-full">
                         <RefreshCw className="w-3.5 h-3.5" /> {health.actionLabel}
                       </Button>
-                    ) : (
+                    ) : actionHref ? (
                       // The Link IS the button (no nested <Button>) — one focusable
                       // element, styled with the shared primary sm recipe.
                       <Link href={actionHref}
                         className="w-full inline-flex items-center justify-center gap-2 font-medium rounded-xl transition-all duration-150 bg-accent text-black hover:bg-accent-hover active:scale-[0.98] shadow-sm px-3.5 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50">
                         {health.action === 'quote' ? <FileText className="w-3.5 h-3.5" />
                           : health.action === 'schedule' ? <CalendarPlus className="w-3.5 h-3.5" />
+                          : health.action === 'view' ? <User className="w-3.5 h-3.5" />
                           : <Ruler className="w-3.5 h-3.5" />}
                         {health.actionLabel}
                       </Link>
-                    )}
-                    {/* Quiet utility — re-measuring is always one tap away, but never competes as the primary. */}
-                    {health.action !== 'measure' && health.action !== 'remeasure' && (
+                    ) : null}
+                    {/* Quiet utility — re-measuring is always one tap away, but never
+                        competes as the primary. Follows the score's own verdict on
+                        whether this property has a lawn at all, so it can't become
+                        the Measure nag's back door on a plumber's card. */}
+                    {health.lawnApplies && health.action !== 'measure' && health.action !== 'remeasure' && (
                       <Link href={measureHref} className="text-[11px] text-ink-faint hover:text-ink text-right">Re-measure</Link>
                     )}
                     {property.lat && property.lng ? (
@@ -513,8 +555,15 @@ export default function PropertiesPage() {
                   </div>
                 )}
 
-                {/* Latest measurement — the saved pricing source of truth */}
-                {saved && (
+                {/* Latest measurement — the saved pricing source of truth.
+                    Gated on the account's shape for the same reason recalculate()
+                    is: saved.rec is a One-Time/Weekly/Bi-Weekly/Monthly MOWING
+                    price list with no record of the service it was built for, and
+                    a business that does no lawn work should not be shown grass
+                    prices for its properties — nor a one-tap "Quote this" that
+                    carries them onto a quote. The measured AREA is a fact and keeps
+                    showing above regardless; only the price list is gated. */}
+                {saved && shape.showLawnFields && (
                   <div className="mt-3 rounded-xl border border-accent/20 bg-accent/5 px-3 py-2.5">
                     <div className="flex items-center justify-between gap-2 flex-wrap">
                       <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-accent-text">

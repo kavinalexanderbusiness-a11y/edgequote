@@ -9,6 +9,7 @@
 // path here would put two engines on one question.
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { describeSkip } from '@/lib/comms/skipReasons'
 
 // The outcomes the cron finalizes a claimed row to (route.ts). 'sending' is a
 // live claim — a row still mid-flight, or one orphaned by a crashed run.
@@ -23,6 +24,12 @@ export interface CampaignStats {
   delivered: number    // provider confirmed delivery
   opened: number       // email opens (SMS never reports opens)
   lastSentAt: string | null
+  /**
+   * WHY sends were skipped, most common first — resolved from the detail the
+   * send path recorded, through the same describeSkip() the message timeline
+   * uses. "12 skipped" is a shrug; "8 no opt-in, 4 no email on file" is a to-do.
+   */
+  skipReasons: { label: string; count: number }[]
 }
 
 export interface CampaignHistoryRow {
@@ -39,7 +46,8 @@ export interface CampaignHistoryRow {
 }
 
 export const EMPTY_STATS: CampaignStats = {
-  sent: 0, skipped: 0, failed: 0, pending: 0, total: 0, delivered: 0, opened: 0, lastSentAt: null,
+  sent: 0, skipped: 0, failed: 0, pending: 0, total: 0, delivered: 0, opened: 0,
+  lastSentAt: null, skipReasons: [],
 }
 
 const CHUNK = 100   // .in() lists ride the request URI — keep them short
@@ -117,15 +125,27 @@ export async function loadCampaignStats(
   if (!rows.length) return out
 
   const delivery = await deliveryByMessageId(sb, rows.map(r => r.message_id).filter((m): m is string => !!m))
+  const skips: Record<string, Map<string, number>> = {}
 
   for (const r of rows) {
     const s = out[r.campaign_id]
     if (!s) continue
     bumpStatus(s, r.status)
     if (r.status === 'sent' && !s.lastSentAt) s.lastSentAt = r.created_at   // rows are newest-first
+    if (r.status === 'skipped') {
+      const label = describeSkip(r.detail).label
+      const m = (skips[r.campaign_id] ||= new Map())
+      m.set(label, (m.get(label) || 0) + 1)
+    }
     const d = r.message_id ? delivery.get(r.message_id) : undefined
     if (d?.deliveredAt) s.delivered++
     if (d?.openedAt) s.opened++
+  }
+
+  for (const [id, m] of Object.entries(skips)) {
+    out[id].skipReasons = [...m.entries()]
+      .map(([label, count]) => ({ label, count }))
+      .sort((a, b) => b.count - a.count)
   }
   return out
 }

@@ -75,6 +75,20 @@ export interface OptOptions {
   minPerKm?: number
 }
 
+// THE per-date capacity rule, in ONE place: available labor-MINUTES for a date.
+// Day Settings overrides (capacityForDate) win; otherwise every day gets the flat
+// business capacity, with 8h as the last-resort default — so a business with no
+// overrides gets exactly the flat number it always did. This was four identical
+// copies inside this file and a fifth, DIVERGENT one in Weather Ops, which is how a
+// single rendered line could report "62% · over": the ✕ came from the engine (per
+// day, correct) and the % from a flat capMin that had never heard of the override.
+export function buildCapMinFor(
+  opts: { capacityForDate?: (dateISO: string) => number; capacityHours: number },
+): (dateISO: string) => number {
+  return (dateISO: string) =>
+    (opts.capacityForDate ? opts.capacityForDate(dateISO) : (opts.capacityHours > 0 ? opts.capacityHours : 8)) * 60
+}
+
 // Resolve a scope into its date windows. movable = origin dates that may move;
 // target = allowed destinations (wider for 'day' so jobs can leave the day);
 // metrics = the area whose before/after we report. null end = unbounded forward.
@@ -245,7 +259,7 @@ export interface RainDelayPlan {
 }
 
 export function planRainDelay(jobs: OptJob[], dayISO: string, opts: Omit<OptOptions, 'mode' | 'scope' | 'anchorDate'>): RainDelayPlan {
-  const capMinFor = (date: string) => (opts.capacityForDate ? opts.capacityForDate(date) : (opts.capacityHours > 0 ? opts.capacityHours : 8)) * 60
+  const capMinFor = buildCapMinFor(opts)
   const prefSet = opts.preferredDays.length ? new Set(opts.preferredDays) : null
 
   const dayJobs = jobs.filter(j => j.scheduled_date === dayISO && j.status !== 'cancelled' && j.status !== 'completed')
@@ -502,10 +516,11 @@ function isoWeekKey(dateISO: string): string {
 interface DayEval { driveMin: number; laborMin: number; km: number; totalMin: number; cells: number }
 
 export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): OptimizationResult {
-  const capMin = (opts.capacityHours > 0 ? opts.capacityHours : 8) * 60
   // Per-day capacity (Day Settings crew/hours overrides) → falls back to the flat
-  // capacity when no override exists, so normal days are unchanged.
-  const capMinFor = (date: string) => (opts.capacityForDate ? opts.capacityForDate(date) : (opts.capacityHours > 0 ? opts.capacityHours : 8)) * 60
+  // capacity when no override exists, so normal days are unchanged. THE only capacity
+  // source in this function: a flat `capMin` used to sit beside it and fed the scorer,
+  // which is how an owner's override could be shown and then ignored.
+  const capMinFor = buildCapMinFor(opts)
   const prefSet = opts.preferredDays.length ? new Set(opts.preferredDays) : null
   // A day the owner blocked (rain/vacation/…) is never a legal MOVE destination.
   const isBlockedDay = (date: string) => isDayBlocked(opts.dayStatusMap, date)
@@ -672,12 +687,17 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
   }
   interface DayContrib { drive: number; over: number; overDay: number; active: number; cells: number; total: number }
   const ZERO_CONTRIB: DayContrib = { drive: 0, over: 0, overDay: 0, active: 0, cells: 0, total: 0 }
-  const contribOf = (e: DayEval, size: number): DayContrib => {
+  // The date is required, not convenient: over-capacity must be scored against THIS
+  // day's capacity. This read the flat `capMin` while every other capacity check in
+  // the file used capMinFor(date) — so a day the owner had overridden in Day Settings
+  // (fewer hours, smaller crew, blocked) was REPORTED as overloaded and then never
+  // optimized against. The search couldn't see the one number the owner set by hand.
+  const contribOf = (e: DayEval, size: number, dateISO: string): DayContrib => {
     if (size === 0) return ZERO_CONTRIB
-    const over = Math.max(0, e.totalMin - capMin)
+    const over = Math.max(0, e.totalMin - capMinFor(dateISO))
     return { drive: e.driveMin, over, overDay: over > 0 ? 1 : 0, active: 1, cells: Math.max(0, e.cells - 1), total: e.totalMin }
   }
-  const dayContrib = (date: string): DayContrib => contribOf(evalDay(date), dayJobs.get(date)?.size ?? 0)
+  const dayContrib = (date: string): DayContrib => contribOf(evalDay(date), dayJobs.get(date)?.size ?? 0, date)
   let aggDrive = 0, aggOver = 0, aggOverDays = 0, aggDays = 0, aggCells = 0, aggSum = 0, aggSumSq = 0, jobPenaltyTotal = 0
   const jobPenalty = new Map<string, number>()
   function recomputeAggregates(): void {
@@ -738,8 +758,8 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
     const s1 = daySorted.get(from) ?? []
     const s2 = daySorted.get(to) ?? []
     return costWith([
-      { d: dayContrib(from), n: contribOf(evalSet(withRemoved(s1, j.id)), s1.length - 1) },
-      { d: dayContrib(to), n: contribOf(evalSet(withInserted(s2, j.id)), s2.length + 1) },
+      { d: dayContrib(from), n: contribOf(evalSet(withRemoved(s1, j.id)), s1.length - 1, from) },
+      { d: dayContrib(to), n: contribOf(evalSet(withInserted(s2, j.id)), s2.length + 1, to) },
     ], penaltyOf(j, to) - (jobPenalty.get(j.id) ?? 0))
   }
   // Cost if j1 (on its current day) and j2 (on day d2) traded days (no mutation).
@@ -750,8 +770,8 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
     const n1 = withInserted(withRemoved(s1, j1.id), j2.id)
     const n2 = withInserted(withRemoved(s2, j2.id), j1.id)
     return costWith([
-      { d: dayContrib(d1), n: contribOf(evalSet(n1), n1.length) },
-      { d: dayContrib(d2), n: contribOf(evalSet(n2), n2.length) },
+      { d: dayContrib(d1), n: contribOf(evalSet(n1), n1.length, d1) },
+      { d: dayContrib(d2), n: contribOf(evalSet(n2), n2.length, d2) },
     ], penaltyOf(j1, d2) - (jobPenalty.get(j1.id) ?? 0) + penaltyOf(j2, d1) - (jobPenalty.get(j2.id) ?? 0))
   }
 
@@ -1152,7 +1172,7 @@ export function metricsWithMoves(
   opts: Pick<OptOptions, 'scope' | 'anchorDate' | 'today' | 'base' | 'capacityHours' | 'roadDist' | 'capacityForDate' | 'minPerKm'>,
   moves: Pick<PlannedMove, 'jobId' | 'to'>[],
 ): ScheduleMetrics {
-  const capMinFor = (date: string) => (opts.capacityForDate ? opts.capacityForDate(date) : (opts.capacityHours > 0 ? opts.capacityHours : 8)) * 60
+  const capMinFor = buildCapMinFor(opts)
   const win = scopeWindows(opts.scope, opts.anchorDate, opts.today)
   const inMetrics = (date: string) => date >= win.metricsStart && (win.metricsEnd == null || date <= win.metricsEnd)
   const override = new Map(moves.map(m => [m.jobId, m.to]))
@@ -1236,7 +1256,7 @@ function explainStuckDay(dayJobs: OptJob[]): string {
 }
 
 export function analyzeSchedule(jobs: OptJob[], base: Omit<OptOptions, 'mode' | 'scope' | 'anchorDate'>): ScheduleSuggestion[] {
-  const capMinFor = (date: string) => (base.capacityForDate ? base.capacityForDate(date) : (base.capacityHours > 0 ? base.capacityHours : 8)) * 60
+  const capMinFor = buildCapMinFor(base)
   const out: ScheduleSuggestion[] = []
   const future = jobs.filter(j => j.scheduled_date > base.today && j.status !== 'cancelled')
   if (future.length === 0) return out

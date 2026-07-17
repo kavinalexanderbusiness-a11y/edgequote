@@ -61,13 +61,29 @@ function openDB(): Promise<IDBDatabase> {
   })
 }
 
+// Resolves when the TRANSACTION COMMITS, not when the request succeeds.
+//
+// This module is sold as owning survival, and its durability signal used to fire
+// before durability existed: it resolved on `request.onsuccess`, which only means the
+// request was accepted INSIDE the transaction — the bytes are not on disk until the
+// transaction commits. `await putPending(...)` therefore returned while the write was
+// still in flight, and a phone that died in that gap lost the photo silently while
+// the UI said "Saved". (The outbox's tx() has the same shape; there it's harmless,
+// because a lost intent is re-derivable and a lost photo is not — the lawn is mown.)
+// Reads still resolve from the request: there is nothing to commit.
 function tx<T>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
   return openDB().then(db => new Promise<T>((resolve, reject) => {
     const t = db.transaction(STORE, mode)
+    let result: T
     const r = run(t.objectStore(STORE))
-    r.onsuccess = () => resolve(r.result)
+    r.onsuccess = () => { result = r.result; if (mode === 'readonly') resolve(result) }
     r.onerror = () => reject(r.error)
-    t.oncomplete = () => db.close()
+    t.oncomplete = () => { db.close(); resolve(result) }
+    // A write that aborts (quota, a killed tab mid-commit) must REJECT, not hang.
+    // Previously neither of these was handled, so the promise stayed pending forever
+    // and its db handle leaked — enough of them blocks a future openDB upgrade.
+    t.onabort = () => { db.close(); reject(t.error || new Error('idb transaction aborted')) }
+    t.onerror = () => { db.close(); reject(t.error || new Error('idb transaction failed')) }
   }))
 }
 
@@ -76,9 +92,34 @@ function tx<T>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => IDBRequ
 // some webviews), the upload still runs for this session — it just won't survive a
 // restart. Failing the upload because we couldn't write a backup would trade a rare
 // loss for a certain one.
-export async function putPending(rec: PendingPhotoRec): Promise<void> {
-  if (!hasIDB()) return
-  try { await tx('readwrite', s => s.put(rec)) } catch { /* quota / blocked — session-only */ }
+// Returns TRUE only when the bytes are genuinely committed to disk.
+//
+// This used to swallow every failure and return void, so the caller could not tell a
+// stored photo from an unstored one — and the tile said "Saved — uploads when you're
+// back" either way. On a full disk or in a locked-down webview that is the single
+// most damaging sentence in the app: it's the reason a contractor DOESN'T re-shoot,
+// and the lawn is already mown. Still best-effort (a failure never blocks the
+// in-session upload), but now it's an honest answer the UI can use.
+export async function putPending(rec: PendingPhotoRec): Promise<boolean> {
+  if (!hasIDB()) return false
+  try { await tx('readwrite', s => s.put(rec)); return true } catch { return false }
+}
+
+// Age out records that are never going to upload. Unbounded growth is itself a
+// data-loss path: a poison photo from six weeks ago (its job deleted, its user
+// re-logged-in) sits on disk forever, and the quota it holds is quota TODAY's photo
+// can't have — a silent putPending failure caused by yesterday's garbage.
+// Generous on purpose: a photo is unrecreatable, so we'd rather carry it for a month
+// than bin it early. Anything this old has had dozens of reconnects to succeed.
+const MAX_AGE_MS = 30 * 24 * 60 * 60_000
+export async function sweepPending(now: number): Promise<number> {
+  if (!hasIDB()) return 0
+  try {
+    const all = await allPending()
+    const stale = all.filter(r => now - r.createdAt > MAX_AGE_MS)
+    for (const r of stale) await dropPending(r.id)
+    return stale.length
+  } catch { return 0 }
 }
 
 export async function allPending(): Promise<PendingPhotoRec[]> {

@@ -53,10 +53,16 @@ export function CampaignHistory({ campaignId, stats }: { campaignId: string; sta
             <StatTile label="Opened" value={stats.opened} icon={MailOpen} />
             <StatTile label="Skipped" value={stats.skipped} icon={MinusCircle} tone={stats.failed ? 'danger' : undefined} sub={stats.failed ? `${stats.failed} failed` : undefined} />
           </div>
-          {/* Say the true thing: opens are email-only, and skips are usually consent. */}
+          {/* Say the true thing: opens are email-only, and name the actual skip
+              reasons the send path recorded rather than leaving "12 skipped" as
+              a shrug the owner can't act on. */}
+          {stats.skipReasons.length > 0 && (
+            <p className="text-[11px] text-ink-muted leading-snug">
+              Skipped: {stats.skipReasons.map(r => `${r.count} ${r.label}`).join(' · ')}.
+            </p>
+          )}
           <p className="text-[11px] text-ink-faint">
             Delivered and opened come from the email/SMS provider — SMS never reports opens.
-            Skipped means the customer had no contact on file or hadn’t opted in.
           </p>
         </>
       )}

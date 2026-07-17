@@ -7,6 +7,7 @@ import { toast } from '@/lib/toast'
 import { ensureBookingToken } from '@/lib/booking'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
+import { Input } from '@/components/ui/Input'
 import { Toggle } from '@/components/ui/Toggle'
 import { Collapsible } from '@/components/ui/Collapsible'
 import { cn } from '@/lib/utils'
@@ -317,16 +318,13 @@ export function WebsiteIntegration() {
 
               {/* Advanced — reuses website_lead_hourly_limit */}
               <Collapsible title="Advanced" summary={`Spam cap: ${hourlyLimit === 0 ? 'off' : `${hourlyLimit}/hr`}`}>
-                <div className="flex items-end gap-3">
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-xs font-semibold text-ink-muted uppercase tracking-wide">Max submissions per hour</label>
-                    <input type="number" min={0} max={1000} value={hourlyLimit}
-                      onChange={e => setHourlyLimit(Math.max(0, Math.round(Number(e.target.value) || 0)))}
-                      onBlur={e => saveLimit(Number(e.target.value))}
-                      className="w-32 bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
-                  </div>
-                  <p className="text-xs text-ink-faint pb-2">Caps how many leads can be created in any hour (abuse protection if your token leaks). <b>0 = unlimited.</b></p>
-                </div>
+                <Input
+                  label="Max submissions per hour"
+                  hint={<>Caps how many leads can be created in any hour (abuse protection if your token leaks). <b>0 = unlimited.</b></>}
+                  fieldSize="sm" className="w-32"
+                  type="number" min={0} max={1000} value={hourlyLimit}
+                  onChange={e => setHourlyLimit(Math.max(0, Math.round(Number(e.target.value) || 0)))}
+                  onBlur={e => saveLimit(Number(e.target.value))} />
               </Collapsible>
             </>
           )}
@@ -425,7 +423,9 @@ const PLATFORMS = [
 ]
 
 function buildCurl(endpoint: string, token: string): string {
-  const payload = { token, name: 'cURL test', email: 'test@example.com', phone: '5875550000', address: '123 Test St', requestedServices: 'Lawn Mowing' }
+  // Sample data, like every other field here ('cURL test', 'test@example.com',
+  // '123 Test St'). It used to name a trade, which read as a required value.
+  const payload = { token, name: 'cURL test', email: 'test@example.com', phone: '5875550000', address: '123 Test St', requestedServices: 'Test service' }
   return `curl -X POST ${JSON.stringify(endpoint)} \\\n  -H "Content-Type: application/json" \\\n  -d '${JSON.stringify(payload)}'`
 }
 

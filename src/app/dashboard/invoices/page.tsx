@@ -3,10 +3,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRealtimeRefresh } from '@/hooks/useRealtime'
+import { usePaymentsStatus } from '@/hooks/usePaymentsStatus'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
 import { Invoice, InvoiceStatus, InvoiceDisplayStatus, INVOICE_STATUS_LABELS, INVOICE_STATUS_COLORS, BusinessSettings, Payment, paymentMethodLabel } from '@/types'
 import { InvoicePaymentControls } from '@/components/payments/InvoicePaymentControls'
-import { invoiceBalance, displayInvoiceStatus, cancelInvoice, reactivateInvoice } from '@/lib/payments/ledger'
+import { invoiceBalance, displayInvoiceStatus, cancelInvoice, reactivateInvoice, assertCurrent } from '@/lib/payments/ledger'
+import { isAutoPayHeld } from '@/lib/payments/autopay'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { SkeletonRows } from '@/components/ui/Skeleton'
@@ -19,6 +21,7 @@ import { Input } from '@/components/ui/Input'
 import { Textarea } from '@/components/ui/Textarea'
 import { SendMessageDialog } from '@/components/comms/SendMessageDialog'
 import { PaymentHistory } from '@/components/payments/PaymentHistory'
+import { ReconcilePanel } from '@/components/payments/ReconcilePanel'
 import { invoiceTotals, applyDiscount, type DiscountType } from '@/lib/invoiceTotals'
 import { toast as notify } from '@/lib/toast'
 import { confirm as confirmDialog } from '@/lib/confirm'
@@ -37,6 +40,15 @@ const FILTERS: { value: '' | InvoiceDisplayStatus; label: string }[] = [
   { value: 'overpaid', label: 'Overpaid' },
   { value: 'cancelled', label: 'Cancelled' },
 ]
+
+// Money already settled → the figures are history. Notes stay editable; amount,
+// line items and discount don't. Derived from the LEDGER's balance rather than a
+// status string, so it can't disagree with what the list, PDF and charge routes
+// think this invoice is worth. `amount_paid > 0` keeps a $0 draft (balance 0,
+// nothing received) out of the locked branch.
+function financiallyLocked(inv: Invoice, settings: BusinessSettings | null): boolean {
+  return (Number(inv.amount_paid) || 0) > 0 && invoiceBalance(inv, settings).balance <= 0.01
+}
 
 function todayISO(): string {
   const d = new Date()
@@ -71,7 +83,7 @@ export default function InvoicesPage() {
   })
   // The ONE shared Send Message dialog, opened for a specific invoice's customer.
   const [msgInvoice, setMsgInvoice] = useState<Invoice | null>(null)
-  const [paymentsEnabled, setPaymentsEnabled] = useState(false)
+  const { enabled: paymentsEnabled, webhook: webhookReady } = usePaymentsStatus()
   const [payingId, setPayingId] = useState<string | null>(null)
   const [chargingId, setChargingId] = useState<string | null>(null)
   const [cardCustomers, setCardCustomers] = useState<Set<string>>(new Set())
@@ -171,7 +183,6 @@ export default function InvoicesPage() {
   // customer just completed checkout; the webhook marks the invoice paid a beat
   // later, so we refetch after a short delay.
   useEffect(() => {
-    fetch('/api/payments/status').then(r => r.json()).then(d => setPaymentsEnabled(!!d.enabled)).catch(() => {})
     // ?paid=1 only means the customer reached Stripe's return URL — the WEBHOOK is
     // what records the money. Claiming "Payment received" here would be a guess, and
     // if the webhook isn't configured it would be a lie the invoice never corrects.
@@ -236,9 +247,25 @@ export default function InvoicesPage() {
   // Never downgrades an already-sent/partly-paid/paid invoice.
   async function markSent(inv: Invoice) {
     if (inv.status !== 'draft' && inv.status !== 'unpaid') return
-    setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: 'sent' as InvoiceStatus } : i))
-    const { error } = await supabase.from('invoices').update({ status: 'sent' }).eq('id', inv.id)
-    if (error) { setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: inv.status } : i)); notify.error('Could not mark sent: ' + error.message) }
+    // Sending a DRAFT is the moment it is issued, so stamp the date it was issued.
+    //
+    // Completing a job auto-drafts an invoice stamped with THAT day's issued_date.
+    // Send it in a later quarter and it fell through every report: the tax summary
+    // excludes drafts (correctly — nobody had been asked to pay), so it was out of
+    // Q1 at filing time; and its issued_date still said Q1, so `inPeriod` kept it
+    // out of Q2 as well. The invoice existed in NO period and its GST was never
+    // remitted. The comment above already says sending IS issuing — this makes the
+    // stored date agree with it.
+    //
+    // ONLY from 'draft'. An 'unpaid' invoice is already inside the reports (they
+    // exclude drafts and cancelled, nothing else), so re-dating it on send would
+    // yank it out of a quarter that may already be filed — trading this defect for
+    // a worse one. A draft is in no report by definition, so stamping it is free.
+    const patch: { status: InvoiceStatus; issued_date?: string } = { status: 'sent' }
+    if (inv.status === 'draft') patch.issued_date = todayISO()
+    setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, ...patch, status: 'sent' as InvoiceStatus } : i))
+    const { error } = await supabase.from('invoices').update(patch).eq('id', inv.id)
+    if (error) { setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, status: inv.status, issued_date: inv.issued_date } : i)); notify.error('Could not mark sent: ' + error.message) }
   }
 
   // ── Undo — the ONE shared toast system (lib/toast), same as the rest of the app ──
@@ -328,6 +355,20 @@ export default function InvoicesPage() {
         <Banner tone="danger" icon={AlertTriangle}
           action={<button type="button" onClick={() => { setLoading(true); fetchInvoices() }} className="shrink-0 underline font-semibold">Retry</button>}>
           {loadError}
+        </Banner>
+      )}
+
+      {/* Stripe key set, webhook secret missing — the worst possible half-state, and
+          until now a completely silent one. Checkout links keep working, so customers
+          pay in full; but the webhook is the single writer of paid-state, so nothing
+          ever records it and the invoice sits here as outstanding forever. The owner
+          chases a customer who already paid. Warn on the page where those links get
+          sent, since Stripe is env-configured and has no settings screen to warn on. */}
+      {paymentsEnabled && !webhookReady && (
+        <Banner tone="warn" icon={AlertTriangle}>
+          Card payments will be <strong>taken but not recorded</strong> — the Stripe webhook isn&rsquo;t configured
+          (STRIPE_WEBHOOK_SECRET), so paid invoices won&rsquo;t mark themselves paid and AutoPay won&rsquo;t charge.
+          Add the endpoint in your Stripe dashboard, or record these payments by hand for now.
         </Banner>
       )}
 
@@ -454,10 +495,32 @@ export default function InvoicesPage() {
                       // locked (partial/paid/overpaid belong to the payments ledger).
                       const clickable = inv.status === 'draft' || inv.status === 'unpaid' || inv.status === 'sent' || inv.status === 'cancelled'
                       const setStatus = async (status: InvoiceStatus, msg: string) => {
-                        const { error } = await supabase.from('invoices').update({ status }).eq('id', inv.id)
+                        // Same rule as markSent: a draft becoming 'sent' is being ISSUED
+                        // today, and its creation-day stamp would otherwise leave it in
+                        // no reporting period at all. Only from 'draft' — an 'unpaid'
+                        // invoice is already counted in a period that may be filed.
+                        const patch: { status: InvoiceStatus; issued_date?: string } =
+                          status === 'sent' && inv.status === 'draft'
+                            ? { status, issued_date: todayISO() }
+                            : { status }
+                        const { error } = await supabase.from('invoices').update(patch).eq('id', inv.id)
                         if (error) { notify.error('Could not update the status: ' + error.message); return }
                         fetchInvoices()
                         notify.success(msg)
+                      }
+                      // A $0 invoice can't be paid: both charge routes reject a
+                      // zero balance with "This invoice is already paid", so
+                      // approving one sends the customer a document that dead-ends.
+                      // The auto-draft engine already refuses to create one — the
+                      // manual path is the only way to reach this state, so it's
+                      // the only place that has to say no. Uses the SAME ledger
+                      // total the list, PDF and charge routes read.
+                      const approveDraft = async () => {
+                        if (invoiceBalance(inv, settings).total <= 0) {
+                          notify.error(`${inv.invoice_number} is $0 — add a line item with a price before approving it.`)
+                          return
+                        }
+                        await setStatus('unpaid', `${inv.invoice_number} approved — ready to send.`)
                       }
                       const doCancel = async () => {
                         const res = await cancelInvoice(supabase, inv)
@@ -468,7 +531,7 @@ export default function InvoicesPage() {
                       // Drafts list "Approve draft" first — it's the primary next step.
                       const statusItems = [
                         ...(inv.status === 'draft' ? [
-                          { key: 'approve', label: 'Approve draft', onSelect: () => setStatus('unpaid', `${inv.invoice_number} approved — ready to send.`) },
+                          { key: 'approve', label: 'Approve draft', onSelect: approveDraft },
                         ] : []),
                         ...(inv.status === 'draft' || inv.status === 'unpaid' ? [
                           { key: 'mark-sent', label: 'Mark sent', onSelect: () => setStatus('sent', `${inv.invoice_number} marked sent.`) },
@@ -509,8 +572,8 @@ export default function InvoicesPage() {
                       )
                     })()}
                     {/* AutoPay held this invoice for review (amount differs from usual). */}
-                    {inv.status === 'draft' && (inv.notes || '').includes('AutoPay held') && (
-                      <span title={inv.notes || undefined} className="text-[10px] px-2 py-1 rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-400 font-semibold flex items-center gap-1">
+                    {inv.status === 'draft' && isAutoPayHeld(inv) && (
+                      <span title={inv.internal_notes || undefined} className="text-[10px] px-2 py-1 rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-400 font-semibold flex items-center gap-1">
                         <AlertTriangle className="w-3 h-3" /> Review
                       </span>
                     )}
@@ -548,11 +611,18 @@ export default function InvoicesPage() {
                     {inv.customer_id && inv.status !== 'cancelled' && (
                       <Button variant="secondary" size="sm" title="Send this invoice to the customer"
                         onClick={async () => {
-                          const held = inv.status === 'draft' && (inv.notes || '').includes('AutoPay held')
+                          // Send issues the invoice, so it can reach 'sent' without
+                          // ever passing Approve — the $0 guard has to live on both
+                          // doors, not just the one the owner usually uses.
+                          if (invoiceBalance(inv, settings).total <= 0) {
+                            notify.error(`${inv.invoice_number} is $0 — add a line item with a price before sending it.`)
+                            return
+                          }
+                          const held = inv.status === 'draft' && isAutoPayHeld(inv)
                           if (held) {
                             const ok = await confirmDialog({
                               title: 'Send an invoice that was held for review?',
-                              message: `${inv.invoice_number} was held because the amount looks unusual for this customer${inv.notes ? ` — ${inv.notes}` : ''}. Send it as-is?`,
+                              message: `${inv.invoice_number} was held because the amount looks unusual for this customer${inv.internal_notes ? ` — ${inv.internal_notes}` : ''}. Send it as-is?`,
                               confirmLabel: 'Send it anyway',
                             })
                             if (!ok) return
@@ -565,8 +635,22 @@ export default function InvoicesPage() {
                     {/* Overflow — secondary row actions (PDF + draft edit/delete) in ONE shared menu. */}
                     <Menu align="end" width={200} ariaLabel="More actions" items={[
                       { key: 'pdf', label: 'Download PDF', icon: FileDown, onSelect: () => openInvoicePdf(inv) },
+                      // Editing used to stop at 'draft'. Approving or sending an
+                      // invoice is not a reason to freeze a typo: an owner who
+                      // spots a wrong price after approving had to cancel and
+                      // rebuild the invoice — a new number for the same job.
+                      // Cancelled stays terminal; paid/overpaid open in a
+                      // financially-locked mode (notes yes, money no). The editor
+                      // itself enforces which fields are live.
+                      ...(inv.status !== 'cancelled' ? [
+                        {
+                          key: 'edit',
+                          label: financiallyLocked(inv, settings) ? 'Edit notes' : inv.status === 'draft' ? 'Edit draft' : 'Edit invoice',
+                          icon: Pencil,
+                          onSelect: () => setEditId(editId === inv.id ? null : inv.id),
+                        },
+                      ] : []),
                       ...(inv.status === 'draft' ? [
-                        { key: 'edit', label: 'Edit draft', icon: Pencil, onSelect: () => setEditId(editId === inv.id ? null : inv.id) },
                         { key: 'delete', label: 'Delete draft', icon: Trash2, danger: true, onSelect: () => deleteInvoice(inv) },
                       ] : []),
                     ]}>
@@ -584,7 +668,25 @@ export default function InvoicesPage() {
                     inv={inv}
                     settings={settings}
                     onCancel={() => setEditId(null)}
-                    onSaved={patch => { setInvoices(prev => prev.map(i => i.id === inv.id ? { ...i, ...patch } as Invoice : i)); setEditId(null) }}
+                    onSaved={async patch => {
+                      const updated = { ...inv, ...patch } as Invoice
+                      setInvoices(prev => prev.map(i => i.id === inv.id ? updated : i))
+                      setEditId(null)
+                      // The customer is holding the OLD version. Editing silently
+                      // would leave two different truths for one invoice number —
+                      // so ask, and hand off to the SAME send dialog the Send
+                      // button uses. Declining is fine: the edit is saved either
+                      // way, and the row still offers Send.
+                      if (inv.status === 'sent') {
+                        const ok = await confirmDialog({
+                          title: `Resend ${inv.invoice_number}?`,
+                          message: `${inv.customer_name || 'The customer'} already has the previous version. Send them the updated invoice so their copy matches your books?`,
+                          confirmLabel: 'Resend it',
+                          cancelLabel: 'Not now',
+                        })
+                        if (ok) setMsgInvoice(updated)
+                      }
+                    }}
                   />
                 )}
                 {/* Record payments, resolve overpayments, apply credit. Drafts are
@@ -611,6 +713,9 @@ export default function InvoicesPage() {
       )}
 
       {!loading && !loadError && invoices.length > 0 && <PaymentHistory settings={settings} />}
+      {/* Sits with the ledger it checks. Only offered once Stripe is connected —
+          without it there is no second set of books to compare against. */}
+      {!loading && !loadError && paymentsEnabled && invoices.length > 0 && <ReconcilePanel />}
 
       {/* ONE shared Send Message dialog — sending marks the invoice sent. The amount
           is what's actually OWED (the ledger balance), never the original total: a
@@ -635,18 +740,22 @@ export default function InvoicesPage() {
 function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
   inv: Invoice
   settings: BusinessSettings | null
-  onSaved: (patch: Partial<Invoice>) => void
+  onSaved: (patch: Partial<Invoice>) => void | Promise<void>
   onCancel: () => void
 }) {
   const supabase = useMemo(() => createClient(), [])
   const liSum = (inv.line_items || []).reduce((s, li) => s + Number(li.amount || 0), 0)
   const itemized = (inv.line_items?.length ?? 0) > 1
   const initial = invoiceTotals(inv.amount, settings, { type: inv.discount_type, value: inv.discount_value })
+  // Settled money is history: the figures lock, the words don't.
+  const locked = financiallyLocked(inv, settings)
+  const paidSoFar = Math.round((Number(inv.amount_paid) || 0) * 100) / 100
 
   const [name, setName] = useState(inv.customer_name || '')
   const [service, setService] = useState(inv.service_type || '')
   const [due, setDue] = useState(inv.due_date || '')
   const [notes, setNotes] = useState(inv.notes || '')
+  const [internalNotes, setInternalNotes] = useState(inv.internal_notes || '')
   const [base, setBase] = useState(String(Math.round(itemized ? liSum : initial.subtotal)))
   const [dType, setDType] = useState<'' | DiscountType>(inv.discount_type ?? '')
   const [dValue, setDValue] = useState(inv.discount_value != null ? String(inv.discount_value) : '')
@@ -674,20 +783,52 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
   const t = invoiceTotals(net, settings, discount)
 
   async function save() {
+    // A priced line with no description is the one case where dropping it silently
+    // diverges the books: the filter below removes the LINE, but `amount` is summed
+    // from every row — so the money stayed on the invoice with nothing to explain
+    // it, and the PDF's breakdown no longer added up to its own total. Blank rows
+    // worth $0 are still dropped silently: they contribute nothing either way, so
+    // filtering them changes no number.
+    if (!locked && editItems && items.some(li => lineAmount(li) !== 0 && !li.description.trim())) {
+      notify.error('Every priced line needs a description — otherwise it won’t appear on the invoice.')
+      return
+    }
+    // You cannot bill LESS than you've already taken. Dropping the total under
+    // amount_paid would leave the ledger holding money the invoice no longer
+    // claims — the recompute trigger would flip it to 'overpaid' and the owner
+    // would owe a refund they never agreed to. Compared on the SAME GST-inclusive
+    // total the list, PDF and charge routes read.
+    if (!locked && paidSoFar > 0 && t.total < paidSoFar) {
+      notify.error(`${formatCurrency(paidSoFar)} is already paid on ${inv.invoice_number} — the total can’t go below that. Refund the difference first if the price really dropped.`)
+      return
+    }
     setSaving(true)
+    // A payment landing while the editor was open makes every figure above stale.
+    // Same guard the credit/refund writers use — one staleness rule, not two.
+    const stale = await assertCurrent(supabase, inv)
+    if (stale) { setSaving(false); notify.error(stale); return }
     const hasD = !!dType && Number(dValue) > 0
+    // invoice_number and status are deliberately ABSENT: an edit is the same
+    // document, so it keeps its number, and approving/sending is not undone by
+    // fixing a typo. (A 'sent' invoice stays sent — the page offers a resend.)
     const patch: Record<string, unknown> = {
       customer_name: name.trim() || inv.customer_name,
       service_type: service.trim() || null,
       due_date: due || null,
       notes: notes.trim() || null,
-      amount: Math.round(net),
-      discount_type: hasD ? dType : null,
-      discount_value: hasD ? Number(dValue) : null,
+      // Non-financial → stays editable even on a settled invoice.
+      internal_notes: internalNotes.trim() || null,
+    }
+    // The money half — omitted entirely once the invoice is settled, so a locked
+    // invoice cannot have its figures rewritten even if state went stale.
+    if (!locked) {
+      patch.amount = Math.round(net)
+      patch.discount_type = hasD ? dType : null
+      patch.discount_value = hasD ? Number(dValue) : null
     }
     // Persist the breakdown the owner sees: edited rows when itemized, or the
     // single line kept in step with the base so the PDF total never diverges.
-    if (editItems) {
+    if (!locked && editItems) {
       patch.line_items = items
         .filter(li => li.description.trim())
         .map(li => ({
@@ -712,9 +853,25 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
     // type="button" — the untyped-button-submits-the-form trap).
     <form onSubmit={e => { e.preventDefault(); if (!saving) save() }} className="mt-3 pt-3 border-t border-border space-y-3">
       <div className="flex items-center justify-between">
-        <p className="text-xs font-semibold text-ink uppercase tracking-wide flex items-center gap-1.5"><Pencil className="w-3.5 h-3.5 text-accent-text" /> Edit draft</p>
+        <p className="text-xs font-semibold text-ink uppercase tracking-wide flex items-center gap-1.5">
+          <Pencil className="w-3.5 h-3.5 text-accent-text" /> {locked ? 'Edit notes' : inv.status === 'draft' ? 'Edit draft' : `Edit ${inv.invoice_number}`}
+        </p>
         <button type="button" onClick={onCancel} className="h-7 w-7 rounded-lg flex items-center justify-center text-ink-faint hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" aria-label="Close editor"><X className="w-4 h-4" /></button>
       </div>
+
+      {/* Say WHY the money is read-only, next to the money — not as a surprise on save. */}
+      {locked && (
+        <Banner tone="info" icon={Check}>
+          {formatCurrency(paidSoFar)} received — this invoice is settled, so the amount, line items and discount are locked. Notes and details are still editable.
+        </Banner>
+      )}
+      {/* An already-sent invoice is in the customer's hands: saying so up front is
+          the difference between an edit and a surprise. */}
+      {!locked && inv.status === 'sent' && (
+        <Banner tone="warn" icon={MessageSquare}>
+          {inv.invoice_number} is already with the customer. Saving changes it here — you&rsquo;ll be asked whether to resend it.
+        </Banner>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Input label="Customer name" value={name} onChange={e => setName(e.target.value)} />
@@ -722,7 +879,7 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Input label="Due date" type="date" value={due} onChange={e => setDue(e.target.value)} />
-        {!editItems && (
+        {!locked && !editItems && (
           <Input label="Amount (before discount)" type="number" min="0" step="1" value={base} onChange={e => setBase(e.target.value)} />
         )}
       </div>
@@ -741,21 +898,26 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
               <span className="w-3.5" aria-hidden />
             </div>
             {items.map((li, i) => (
-              <div key={i} className="flex items-center gap-2">
+              // Wraps on a phone: qty + unit + amount + remove need ~300px of fixed
+              // width, which left the description a few pixels wide beside them.
+              // Description takes its own row on mobile, one line on sm+.
+              <div key={i} className="flex flex-wrap sm:flex-nowrap items-center gap-2">
                 <input value={li.description} placeholder="Description" aria-label="Line item description"
                   onChange={e => setItems(prev => prev.map((x, j) => j === i ? { ...x, description: e.target.value } : x))}
-                  className="flex-1 min-w-0 bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20" />
-                <input type="number" min="0" step="1" value={li.qty} aria-label="Line item quantity"
+                  className="w-full sm:w-auto sm:flex-1 min-w-0 bg-bg-tertiary border border-border-strong rounded-lg px-3 py-2 text-base sm:text-sm text-ink outline-none focus:border-accent focus:ring-2 focus:ring-accent/20" />
+                {/* inputMode=decimal → the numeric keypad on a phone, not the
+                    full keyboard. text-base on mobile stops iOS zooming the field. */}
+                <input type="number" inputMode="decimal" min="0" step="1" value={li.qty} aria-label="Line item quantity"
                   onChange={e => setItems(prev => prev.map((x, j) => j === i ? { ...x, qty: e.target.value } : x))}
-                  className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2 text-sm text-ink tabular-nums outline-none focus:border-accent focus:ring-2 focus:ring-accent/20" />
-                <div className="relative w-28">
+                  className="w-16 bg-bg-tertiary border border-border-strong rounded-lg px-2 py-2 text-base sm:text-sm text-ink tabular-nums outline-none focus:border-accent focus:ring-2 focus:ring-accent/20" />
+                <div className="relative w-24 sm:w-28">
                   <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-faint text-sm" aria-hidden="true">$</span>
-                  <input type="number" min="0" step="1" value={li.unit} aria-label="Line item unit price"
+                  <input type="number" inputMode="decimal" min="0" step="1" value={li.unit} aria-label="Line item unit price"
                     onChange={e => setItems(prev => prev.map((x, j) => j === i ? { ...x, unit: e.target.value } : x))}
-                    className="w-full bg-bg-tertiary border border-border-strong rounded-lg pl-6 pr-2 py-2 text-sm text-ink tabular-nums outline-none focus:border-accent focus:ring-2 focus:ring-accent/20" />
+                    className="w-full bg-bg-tertiary border border-border-strong rounded-lg pl-6 pr-2 py-2 text-base sm:text-sm text-ink tabular-nums outline-none focus:border-accent focus:ring-2 focus:ring-accent/20" />
                 </div>
                 {/* Derived, never typed — qty x unit is the single source for the line. */}
-                <span className="w-20 text-right text-sm font-medium text-ink tabular-nums" aria-label="Line total">{formatCurrency(lineAmount(li))}</span>
+                <span className="flex-1 sm:flex-none sm:w-20 text-right text-sm font-medium text-ink tabular-nums" aria-label="Line total">{formatCurrency(lineAmount(li))}</span>
                 <button type="button" onClick={() => setItems(prev => prev.filter((_, j) => j !== i))} disabled={items.length <= 1}
                   className="rounded-md text-ink-faint hover:text-red-400 disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40" aria-label="Remove line" title="Remove line">
                   <Trash2 className="w-3.5 h-3.5" />
@@ -795,7 +957,12 @@ function DraftInvoiceEditor({ inv, settings, onSaved, onCancel }: {
         </div>
       </div>
 
-      <Textarea label="Notes" value={notes} onChange={e => setNotes(e.target.value)} rows={2} placeholder="Optional note shown on the invoice" />
+      {/* Two notes, and the labels have to make the difference obvious — the whole
+          point is that one of these is printed and the other never is. */}
+      <Textarea label="Notes (the customer sees this)" value={notes} onChange={e => setNotes(e.target.value)} rows={2}
+        placeholder="Shown on the invoice PDF — e.g. “Thanks for your business!”" />
+      <Textarea label="Internal note (private — never on the PDF)" value={internalNotes} onChange={e => setInternalNotes(e.target.value)} rows={2}
+        placeholder="Only you see this. The app also records here why a draft exists, and why AutoPay held a charge." />
 
       {/* Live breakdown — exactly what the customer, PDF and Stripe charge will show */}
       <div className="rounded-xl border border-border bg-bg-tertiary px-3.5 py-2.5 space-y-1 text-sm">

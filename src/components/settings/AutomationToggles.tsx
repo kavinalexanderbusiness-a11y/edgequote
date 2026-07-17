@@ -4,11 +4,13 @@ import { useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Toggle } from '@/components/ui/Toggle'
+import { Input } from '@/components/ui/Input'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { resolveAutomations, Automations, AUTOMATION_LABELS } from '@/lib/comms/automations'
 import { resolveFollowUpPolicy, type FollowUpPolicy } from '@/lib/followup'
 import { resolveReminderPolicy } from '@/lib/payments/dunning'
 import { Zap } from 'lucide-react'
+import { HelpLink } from '@/components/help/HelpLink'
 
 const KEYS: (keyof Automations)[] = ['reminder', 'job_complete', 'review', 'marketing_draft', 'quote_followup', 'invoice_reminder']
 
@@ -105,7 +107,10 @@ export function AutomationToggles() {
   return (
     <Card>
       <CardHeader>
-        <h2 className="text-sm font-semibold text-ink flex items-center gap-2"><Zap className="w-4 h-4 text-accent-text" /> Automated messages</h2>
+        <h2 className="text-sm font-semibold text-ink flex items-center gap-2">
+          <Zap className="w-4 h-4 text-accent-text" /> Automated messages
+          <HelpLink id="what-sends-itself" />
+        </h2>
         <p className="text-xs text-ink-faint mt-0.5">Which messages send on their own. Per-customer SMS/email opt-in still applies — nothing sends to a customer who hasn’t consented.</p>
       </CardHeader>
       <CardBody>
@@ -135,30 +140,24 @@ export function AutomationToggles() {
                 {/* Cadence sits with the switch that uses it, and only once it's on. */}
                 {CADENCE[k] && auto[k] && (
                   <div className="mt-1 mb-2 ml-0 sm:ml-4 rounded-xl border border-border bg-bg-secondary p-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <label className="flex flex-col gap-1.5">
-                      <span className="text-xs font-semibold uppercase tracking-wide text-ink-muted">{CADENCE[k]!.delayLabel}</span>
-                      <span className="flex items-center gap-2">
-                        <input
-                          type="number" min={1} max={60} value={policies[k].delayDays}
-                          onChange={e => setPolicies({ ...policies, [k]: { ...policies[k], delayDays: Number(e.target.value) } })}
-                          onBlur={e => savePolicy(k, { delayDays: Math.min(60, Math.max(1, Math.floor(Number(e.target.value)) || 3)) })}
-                          className="w-20 bg-bg-tertiary border border-border-strong rounded-lg px-2.5 py-1.5 text-sm text-ink tabular-nums outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20"
-                        />
-                        <span className="text-xs text-ink-muted">{CADENCE[k]!.delayUnit}</span>
-                      </span>
-                    </label>
-                    <label className="flex flex-col gap-1.5">
-                      <span className="text-xs font-semibold uppercase tracking-wide text-ink-muted">{CADENCE[k]!.maxLabel}</span>
-                      <span className="flex items-center gap-2">
-                        <input
-                          type="number" min={0} max={10} value={policies[k].maxCount}
-                          onChange={e => setPolicies({ ...policies, [k]: { ...policies[k], maxCount: Number(e.target.value) } })}
-                          onBlur={e => savePolicy(k, { maxCount: Math.min(10, Math.max(0, Math.floor(Number(e.target.value)) || 0)) })}
-                          className="w-20 bg-bg-tertiary border border-border-strong rounded-lg px-2.5 py-1.5 text-sm text-ink tabular-nums outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20"
-                        />
-                        <span className="text-xs text-ink-muted">{CADENCE[k]!.maxUnit}</span>
-                      </span>
-                    </label>
+                    <div className="flex items-end gap-2">
+                      <Input
+                        label={CADENCE[k]!.delayLabel} fieldSize="sm" className="w-20 tabular-nums"
+                        type="number" min={1} max={60} value={policies[k].delayDays}
+                        onChange={e => setPolicies({ ...policies, [k]: { ...policies[k], delayDays: Number(e.target.value) } })}
+                        onBlur={e => savePolicy(k, { delayDays: Math.min(60, Math.max(1, Math.floor(Number(e.target.value)) || 3)) })}
+                      />
+                      <span className="text-xs text-ink-muted pb-2">{CADENCE[k]!.delayUnit}</span>
+                    </div>
+                    <div className="flex items-end gap-2">
+                      <Input
+                        label={CADENCE[k]!.maxLabel} fieldSize="sm" className="w-20 tabular-nums"
+                        type="number" min={0} max={10} value={policies[k].maxCount}
+                        onChange={e => setPolicies({ ...policies, [k]: { ...policies[k], maxCount: Number(e.target.value) } })}
+                        onBlur={e => savePolicy(k, { maxCount: Math.min(10, Math.max(0, Math.floor(Number(e.target.value)) || 0)) })}
+                      />
+                      <span className="text-xs text-ink-muted pb-2">{CADENCE[k]!.maxUnit}</span>
+                    </div>
                     <p className="sm:col-span-2 text-[11px] text-ink-faint">{CADENCE[k]!.summary(policies[k])}</p>
                   </div>
                 )}

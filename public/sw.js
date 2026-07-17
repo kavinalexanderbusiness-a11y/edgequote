@@ -1,19 +1,47 @@
 /* EdgeQuote service worker — offline shell + fast static assets + push.
-   Conservative by design: never caches API / Supabase / RSC data, so it can't
-   serve stale app state. It DOES cache the dashboard's HTML shell (see
-   isFieldShell) — that's chrome, not state: those pages render no server data, so
-   there's nothing stale to serve, and without it a cold start with no signal can't
-   open the app at all. Bump CACHE to invalidate on a new release. */
-const CACHE = 'eq-v2'
+   Never caches API / Supabase / RSC data, so it can't serve stale app state.
+
+   THREE caches, versioned independently and on purpose:
+     eq-core-*  versioned — offline.html, manifest, icons. Tiny; safe to purge.
+     eq-shell   NOT versioned — the field routes' HTML.
+     eq-static  NOT versioned — /_next/static, which is content-hashed + immutable.
+
+   Why the last two survive a release: they used to sit in one versioned cache that
+   `activate` purged, and the file's own instruction was "bump CACHE on a new
+   release" — so the documented deploy procedure WAS the outage. Reconnect for 20s
+   at a gas station, the new SW installs and wipes the shell and every chunk, drive
+   to the next driveway with no signal, and the app will not open at all.
+   Purging content-hashed assets is also just wrong: their names already encode
+   their version, so old and new coexist happily. Keeping them is what lets a shell
+   cached before a release still find the chunks it references, instead of a white
+   screen. An old-but-working app beats no app; network-first means anyone with
+   signal gets the new one anyway. (Cost: old chunks accumulate. They're small and
+   bounded by how often we ship.) */
+const VERSION = 'v3'
+const CORE = `eq-core-${VERSION}`
+const SHELL = 'eq-shell'
+const STATIC = 'eq-static'
+const KEEP = [CORE, SHELL, STATIC]
 const PRECACHE = ['/offline.html', '/manifest.webmanifest', '/icon.svg', '/icon-maskable.svg']
 
-// The dashboard is the field app. Its pages are shells: /dashboard/layout is the
-// only server component and it renders no business data — every page below it is
-// 'use client' and pulls from Supabase in the BROWSER. So caching this HTML caches
-// chrome, not app state, which is the thing the "no stale data" rule above exists
-// to protect. Data offline is handled where it belongs (lib/clientCache).
+// The FIELD routes, listed explicitly. This was `/dashboard` + everything under it,
+// which was wrong and was my error: I justified it by claiming every page below the
+// layout is 'use client' with no server data, having "verified" it with a grep for
+// `createServerClient` — but this repo's server helper is `createClient` from
+// @/lib/supabase/server, so the grep could not have found what it was looking for.
+// /dashboard is an async server component that fetches invoices/jobs/quotes and
+// bakes collected/outstanding into the HTML (and a greeting with today's date).
+// Caching that replays a FINANCIAL REPORT offline with full authority — days-old
+// receivables reading as live money. Six Grow routes are server components too.
+//
+// So: an allowlist, not a pattern. A denylist would silently start caching money
+// the day someone converts one of these to a server component; an allowlist fails
+// closed (worst case a route just isn't available offline). Both entries below are
+// 'use client' — they hold no server-rendered data — and they are the field
+// workflow: the day board, and the invoice a deep link opens.
+const FIELD_SHELLS = ['/dashboard/schedule', '/dashboard/invoices']
 function isFieldShell(url) {
-  return url.pathname === '/dashboard' || url.pathname.startsWith('/dashboard/')
+  return FIELD_SHELLS.indexOf(url.pathname) !== -1
 }
 
 // Key shells by PATHNAME only. A field deep link carries query (?job=…&pay=1 from
@@ -26,16 +54,30 @@ function shellKey(url) {
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE).then((c) => c.addAll(PRECACHE)).then(() => self.skipWaiting())
+    caches.open(CORE).then((c) => c.addAll(PRECACHE)).then(() => self.skipWaiting())
   )
 })
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
-      .then(() => self.clients.claim())
-  )
+  event.waitUntil((async () => {
+    const keys = await caches.keys()
+    await Promise.all(keys.filter((k) => KEEP.indexOf(k) === -1).map((k) => caches.delete(k)))
+    // Warm the day board while we still have signal. `activate` only runs after this
+    // SW was downloaded, so we are online RIGHT NOW — the one guaranteed moment to
+    // get a shell on disk. Without this the shell only ever appeared as a side effect
+    // of an online visit, so installing the PWA and first opening it in a driveway
+    // went straight to offline.html: there was no guaranteed-openable state after
+    // install. Best-effort: signed-out users get a redirect (skipped), and a failure
+    // here must never block activation.
+    try {
+      const res = await fetch('/dashboard/schedule', { credentials: 'same-origin' })
+      if (res && res.ok && !res.redirected) {
+        const c = await caches.open(SHELL)
+        await c.put(new Request(self.location.origin + '/dashboard/schedule'), res.clone())
+      }
+    } catch (e) { /* offline at activate — the next online visit caches it */ }
+    await self.clients.claim()
+  })())
 })
 
 self.addEventListener('fetch', (event) => {
@@ -59,17 +101,27 @@ self.addEventListener('fetch', (event) => {
         // page as the field shell forever.
         if (res && res.ok && !res.redirected && isFieldShell(url)) {
           const copy = res.clone()
-          caches.open(CACHE).then((c) => c.put(shellKey(url), copy)).catch(() => {})
+          caches.open(SHELL).then((c) => c.put(shellKey(url), copy)).catch(() => {})
         }
         return res
       } catch (e) {
+        // THIS path's shell only. It used to fall back to the schedule for any
+        // /dashboard/* miss, which left the URL bar reading /dashboard/invoices while
+        // the day board rendered — and Next then hydrated router state from the
+        // schedule's flight data, so URL and app disagreed for the rest of the
+        // session. A page we can't serve should say so, not quietly serve another one.
         if (isFieldShell(url)) {
-          // This exact page, else the day board, else the dashboard home — a
-          // contractor with no signal should land on work, not on an apology.
-          const hit = (await caches.match(shellKey(url)))
-            || (await caches.match(new Request(url.origin + '/dashboard/schedule')))
-            || (await caches.match(new Request(url.origin + '/dashboard')))
+          const hit = await caches.match(shellKey(url))
           if (hit) return hit
+        }
+        // /dashboard is the manifest's start_url and we must never cache it (it's a
+        // server-rendered financial report). Offline, send the contractor to the day
+        // board — a REAL redirect, so the URL matches what renders, rather than
+        // serving the schedule under the /dashboard URL. It's also where a contractor
+        // wants to be with no signal.
+        if (url.pathname === '/dashboard') {
+          const day = await caches.match(new Request(url.origin + '/dashboard/schedule'))
+          if (day) return Response.redirect(url.origin + '/dashboard/schedule', 302)
         }
         return (await caches.match('/offline.html')) || Response.error()
       }
@@ -91,8 +143,17 @@ self.addEventListener('fetch', (event) => {
   if (cacheFirst) {
     event.respondWith(
       caches.match(req).then((hit) => hit || fetch(req).then((res) => {
-        const copy = res.clone()
-        caches.open(CACHE).then((c) => c.put(req, copy))
+        // `res.ok` is the difference between a blip and a brick. Without it a chunk
+        // that resolved 404/500 once — a deploy rotation, an edge blip, a captive
+        // portal answering with its own HTML — was cached PERMANENTLY under a
+        // content-hashed URL that will never change. Cache-first then served that
+        // failure forever, back online included: a white screen no reload could fix,
+        // recoverable only by clearing site data. (The navigation path already
+        // checked this; this one didn't.)
+        if (res && res.ok) {
+          const copy = res.clone()
+          caches.open(STATIC).then((c) => c.put(req, copy)).catch(() => {})
+        }
         return res
       }))
     )

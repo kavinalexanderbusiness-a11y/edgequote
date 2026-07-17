@@ -63,16 +63,16 @@ function holidaysForYear(year: number): Holiday[] {
     { date: iso(year, 2, 14), name: 'Valentine’s Day', marketingAngle: 'Light, warm community greeting.',                          campaignKind: 'holiday' },
     { date: nthWeekday(year, 2, 1, 3), name: 'Family Day', marketingAngle: 'Long weekend — a friendly community hello.',           campaignKind: 'holiday' },
     { date: goodFriday(year), name: 'Good Friday',    marketingAngle: 'Spring is around the corner — get on the schedule.',        campaignKind: 'spring' },
-    { date: nthWeekday(year, 5, 0, 2), name: 'Mother’s Day', marketingAngle: 'Yard ready for spring gatherings.',                  campaignKind: 'spring' },
-    { date: mondayBefore(year, 5, 25), name: 'Victoria Day', marketingAngle: 'May long weekend — planting & spring cleanup season.', campaignKind: 'spring' },
-    { date: nthWeekday(year, 6, 0, 3), name: 'Father’s Day', marketingAngle: 'Summer lawn care is in full swing.',                 campaignKind: 'summer' },
-    { date: iso(year, 7, 1),  name: 'Canada Day',     marketingAngle: 'Crisp lawns for Canada Day gatherings.',                    campaignKind: 'summer' },
+    { date: nthWeekday(year, 5, 0, 2), name: 'Mother’s Day', marketingAngle: 'Properties ready for spring gatherings.',            campaignKind: 'spring' },
+    { date: mondayBefore(year, 5, 25), name: 'Victoria Day', marketingAngle: 'May long weekend — peak spring booking season.',      campaignKind: 'spring' },
+    { date: nthWeekday(year, 6, 0, 3), name: 'Father’s Day', marketingAngle: 'The summer season is in full swing.',                campaignKind: 'summer' },
+    { date: iso(year, 7, 1),  name: 'Canada Day',     marketingAngle: 'Looking sharp for Canada Day gatherings.',                  campaignKind: 'summer' },
     { date: nthWeekday(year, 9, 1, 1), name: 'Labour Day', marketingAngle: 'End-of-summer push before fall cleanup.',              campaignKind: 'fall' },
     { date: nthWeekday(year, 10, 1, 2), name: 'Thanksgiving', marketingAngle: 'Fall cleanup before the holiday.',                  campaignKind: 'fall' },
-    { date: iso(year, 10, 31), name: 'Halloween',     marketingAngle: 'Leaf cleanup season — tidy yards for trick-or-treaters.',   campaignKind: 'fall' },
+    { date: iso(year, 10, 31), name: 'Halloween',     marketingAngle: 'Fall cleanup season — tidy and ready for trick-or-treaters.', campaignKind: 'fall' },
     { date: iso(year, 11, 11), name: 'Remembrance Day', marketingAngle: 'A respectful community note.',                            campaignKind: 'holiday' },
-    { date: nthWeekday(year, 11, 5, 4), name: 'Black Friday', marketingAngle: 'A seasonal offer on snow removal packages.',        campaignKind: 'winter' },
-    { date: iso(year, 12, 25), name: 'Christmas',     marketingAngle: 'Warm holiday greeting + snow-season reminder.',             campaignKind: 'winter' },
+    { date: nthWeekday(year, 11, 5, 4), name: 'Black Friday', marketingAngle: 'A seasonal offer on winter packages.',              campaignKind: 'winter' },
+    { date: iso(year, 12, 25), name: 'Christmas',     marketingAngle: 'Warm holiday greeting + winter-season reminder.',           campaignKind: 'winter' },
   ]
   return list.sort((a, b) => a.date.localeCompare(b.date))
 }
@@ -93,11 +93,11 @@ export function upcomingHolidays(fromISO: string, days = 60): Holiday[] {
 // authoritative windows but these are the simple calendar turn-points for nudges).
 function seasonRemindersForYear(year: number): SeasonReminder[] {
   return [
-    { date: iso(year, 4, 1),  season: 'spring', edge: 'start', label: 'Spring cleanup season is starting', campaignKind: 'spring' },
-    { date: iso(year, 6, 1),  season: 'summer', edge: 'start', label: 'Summer lawn-care season is here',    campaignKind: 'summer' },
-    { date: iso(year, 9, 1),  season: 'fall',   edge: 'start', label: 'Leaf-cleanup season is starting',    campaignKind: 'fall' },
-    { date: iso(year, 10, 31), season: 'fall',  edge: 'end',   label: 'Last call for fall cleanup',         campaignKind: 'fall' },
-    { date: iso(year, 11, 1), season: 'winter', edge: 'start', label: 'Snow-removal season is starting',    campaignKind: 'winter' },
+    { date: iso(year, 4, 1),  season: 'spring', edge: 'start', label: 'Spring season is starting',          campaignKind: 'spring' },
+    { date: iso(year, 6, 1),  season: 'summer', edge: 'start', label: 'Peak summer season is here',         campaignKind: 'summer' },
+    { date: iso(year, 9, 1),  season: 'fall',   edge: 'start', label: 'Fall cleanup season is starting',    campaignKind: 'fall' },
+    { date: iso(year, 10, 31), season: 'fall',  edge: 'end',   label: 'Last call for fall work',            campaignKind: 'fall' },
+    { date: iso(year, 11, 1), season: 'winter', edge: 'start', label: 'Winter season is starting — book ahead', campaignKind: 'winter' },
   ]
 }
 

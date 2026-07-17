@@ -6,7 +6,9 @@
 
 import { Coord } from '@/lib/geo'
 import { routeKmEstimate, routeStats, type SpeedModel } from '@/lib/route'
+import { visitEconomics } from '@/lib/economics'
 import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
+import type { Grade } from './grade'
 
 export interface ProfitJob {
   id: string
@@ -34,10 +36,10 @@ export interface ProfitQuote {
   monthly_price: number | null
 }
 
-export type Grade = 'A' | 'B' | 'C' | 'D' | 'F'
-export const GRADE_COLORS: Record<Grade, string> = {
-  A: '#10B981', B: '#34D399', C: '#F59E0B', D: '#F97316', F: '#EF4444',
-}
+// Grade + its colours now live in lib/grade (shared with lib/dataQuality and the
+// GradeBadge primitive). Re-exported here so every existing importer is unchanged.
+export { GRADE_COLORS } from './grade'
+export type { Grade }
 
 export interface RecInfo { freq: string | null; interval_unit: string | null; interval_count: number | null }
 
@@ -77,6 +79,8 @@ export interface RouteProfit {
   completionPct: number
   avgLegKm: number
   hasDriveData: boolean
+  /** False when any job's duration was assumed (DEFAULT_LABOR_MIN) rather than known. */
+  hasLaborData: boolean
   grade: Grade
 }
 
@@ -94,6 +98,13 @@ export function dayProfitability(date: string, dayJobs: ProfitJob[], ctx: Profit
 
   const revenue = Math.round(active.reduce((s, j) => s + jobValue(j, ctx), 0))
   const laborMinutes = active.reduce((s, j) => s + (j.actual_minutes ?? j.duration_minutes ?? DEFAULT_LABOR_MIN), 0)
+  // Did every job bring its OWN duration, or did we assume one? DEFAULT_LABOR_MIN is
+  // 45 — a lawn-calibrated figure. A visit that actually took four hours costed at 45
+  // minutes inflates $/hr enough to grade the route A, confidently, off a constant.
+  // Same treatment as hasDriveData below: the number stays (it's the best we have),
+  // but it can no longer earn a top grade while resting on an assumption.
+  const assumedLabor = active.some(j => j.actual_minutes == null && j.duration_minutes == null)
+  const hasLaborData = active.length > 0 && !assumedLabor
   const driveKm = ctx.base ? routeKmEstimate(ctx.base, located) : 0
   const stats = routeStats(located, driveKm, ctx.speed)
   const hasDriveData = driveKm > 0
@@ -111,17 +122,20 @@ export function dayProfitability(date: string, dayJobs: ProfitJob[], ctx: Profit
     date, future, revenue, driveMinutes, driveKm, laborMinutes, totalHours,
     revPerHour, revPerKm, revPerStop, stops, locatedStops: located.length,
     jobsTotal: active.length, jobsDue, jobsCompleted: completed.length, completionPct,
-    avgLegKm: stats.avgLegKm, hasDriveData,
-    grade: gradeRoute(revPerHour, revPerKm, stats.avgLegKm, hasDriveData),
+    avgLegKm: stats.avgLegKm, hasDriveData, hasLaborData,
+    grade: gradeRoute(revPerHour, revPerKm, stats.avgLegKm, hasDriveData, hasLaborData),
   }
 }
 
 // Letter grade from revenue/hour (primary), adjusted for driving efficiency.
 // Without drive data, $/hr excludes travel (inflated) and density is unknown, so
 // the route can't earn A/B — capped at C until a base + geocoded stops exist.
-export function gradeRoute(revPerHour: number, revPerKm: number, avgLegKm: number, hasDriveData = true): Grade {
+// Without labour data the same logic applies for the same reason: $/hr rests on an
+// assumed visit length, so it can't earn A/B either. One rule, two inputs — rather
+// than a second confidence system alongside the one that already works.
+export function gradeRoute(revPerHour: number, revPerKm: number, avgLegKm: number, hasDriveData = true, hasLaborData = true): Grade {
   let g = revPerHour >= 120 ? 4 : revPerHour >= 90 ? 3 : revPerHour >= 60 ? 2 : revPerHour >= 40 ? 1 : 0
-  if (!hasDriveData) return (['F', 'D', 'C', 'C', 'C'] as Grade[])[g]
+  if (!hasDriveData || !hasLaborData) return (['F', 'D', 'C', 'C', 'C'] as Grade[])[g]
   if (revPerKm < 5 || avgLegKm > 8) g = Math.max(0, g - 1)                       // inefficient driving
   if (revPerKm >= 25 && avgLegKm > 0 && avgLegKm <= 1.5) g = Math.min(4, g + 1)  // excellent density
   return (['F', 'D', 'C', 'B', 'A'] as Grade[])[g]
@@ -188,26 +202,51 @@ export interface MonthTrend {
   driveKm: number
   revPerHour: number
   revPerKm: number
+  profit: number | null    // revenue − on-site labour cost; null when crewCost wasn't supplied
+  marginPct: number | null // profit as % of revenue; null without crewCost or revenue
+  jobs: number             // stops completed/booked that month
+  // Revenue ÷ jobs. Separates "more work" from "better-paid work" — the two look
+  // identical on a revenue line and call for opposite responses. null when no jobs.
+  avgJobValue: number | null
 }
 
 // Roll day-routes up into monthly trends so improvement over time is visible.
-export function monthlyTrends(routes: RouteProfit[]): MonthTrend[] {
-  const map: Record<string, MonthTrend> = {}
+// Pass `crewCost` (lib/economics crewCostPerHour) to get profit/margin per month;
+// without it those stay null and every other field is unchanged.
+//
+// Costing note: RouteProfit.laborMinutes is ON-SITE crew time only — the sum of
+// each non-cancelled stop's actual_minutes ?? duration_minutes ?? DEFAULT_LABOR_MIN.
+// Travel is NOT inside it; dayProfitability tracks it separately as driveMinutes.
+// So profit here charges the crew rate against on-site labour only and leaves
+// drive time uncosted — the same basis as the BI report's grossProfitYTD, which
+// keeps the two figures comparable. (revPerHour below is unaffected: it keeps
+// using drive + labour hours, as it always has.)
+export function monthlyTrends(routes: RouteProfit[], crewCost?: number): MonthTrend[] {
+  const map: Record<string, Omit<MonthTrend, 'profit' | 'marginPct' | 'avgJobValue'>> = {}
   for (const r of routes) {
     const month = r.date.slice(0, 7)
-    const m = (map[month] ||= { month, revenue: 0, driveMinutes: 0, laborMinutes: 0, driveKm: 0, revPerHour: 0, revPerKm: 0 })
+    const m = (map[month] ||= { month, revenue: 0, driveMinutes: 0, laborMinutes: 0, driveKm: 0, revPerHour: 0, revPerKm: 0, jobs: 0 })
     m.revenue += r.revenue
     m.driveMinutes += r.driveMinutes
     m.laborMinutes += r.laborMinutes
     m.driveKm += r.driveKm
+    m.jobs += r.stops
   }
   return Object.values(map).map(m => {
     const hours = (m.driveMinutes + m.laborMinutes) / 60
+    // Profit comes from THE profit engine (lib/economics), never a local
+    // revenue−hours×rate spelling — that's the whole point of that module.
+    // Drive time is passed as 0 because it is NOT inside laborMinutes here (it's
+    // tracked separately), and costing it would diverge from BI's grossProfitYTD.
+    const econ = crewCost != null ? visitEconomics(m.revenue, m.laborMinutes, 0, crewCost) : null
     return {
       ...m,
       driveKm: Math.round(m.driveKm * 10) / 10,
       revPerHour: hours > 0 ? Math.round(m.revenue / hours) : 0,
       revPerKm: m.driveKm > 0 ? Math.round((m.revenue / m.driveKm) * 10) / 10 : 0,
+      profit: econ ? econ.profit : null,
+      marginPct: econ && m.revenue > 0 ? Math.round(econ.margin * 100) : null,
+      avgJobValue: m.jobs > 0 ? Math.round(m.revenue / m.jobs) : null,
     }
   }).sort((a, b) => a.month.localeCompare(b.month))
 }

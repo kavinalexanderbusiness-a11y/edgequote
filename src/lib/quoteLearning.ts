@@ -8,6 +8,7 @@ import { isWon, isLost } from '@/lib/winLoss'
 import { serviceKey, serviceLabel, laborEconomics, type Confidence } from '@/lib/labor'
 import { crewCostPerHour } from '@/lib/economics'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
+import { clamp } from '@/lib/utils'
 
 // ── Quote win-rate learning — the self-learning pricing intelligence layer ───────
 //
@@ -70,13 +71,24 @@ function repPriceAndCadence(q: QuoteRow): { cadence: Cadence; price: number } {
   return { cadence: 'one_time', price: one > 0 ? one : Number(q.total) || 0 }
 }
 
+// Coefficient of variation — spread relative to the middle, so it is comparable
+// across services and sizes. lib/labor uses the same measure for the same purpose
+// (how much do these observations disagree), which is why confidence can read it
+// the same way here. 0 when there is nothing to disagree about.
+function spreadOf(xs: number[]): number {
+  if (xs.length < 2) return 0
+  const mean = xs.reduce((a, b) => a + b, 0) / xs.length
+  if (mean <= 0) return 0
+  const variance = xs.reduce((a, b) => a + (b - mean) ** 2, 0) / xs.length
+  return Math.sqrt(variance) / mean
+}
+
 function median(xs: number[]): number {
   if (!xs.length) return 0
   const s = [...xs].sort((a, b) => a - b)
   const i = Math.floor(s.length / 2)
   return s.length % 2 ? s[i] : (s[i - 1] + s[i]) / 2
 }
-const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n))
 
 // Enough decided quotes for a service before its win-ratio is trusted over the raw
 // engine number. Conservative so thin data never swings price — it just holds at
@@ -171,6 +183,18 @@ export interface QuotePriceInput {
   driveMin?: number | null               // learned travel time to this stop (lib/travelLearning)
   date?: string | null                   // for the season reason
 }
+// When the owner's real closing behaviour sits OUTSIDE the band the learner may
+// move in, the recommendation is the clamp rather than the evidence. That is a
+// fact about the ENGINE's calibration, not about this quote, and it is the more
+// valuable thing to say: per-quote learning cannot fix a base rate that is set
+// wrong. null when the median fits inside the band (the normal, healthy case).
+export interface PriceCalibration {
+  medianWinRatio: number        // the owner's real median price ÷ recommended
+  pinned: 'below' | 'above'     // which clamp the evidence is pressed against
+  gapPct: number                // how far past the clamp the evidence sits, in points
+  sampleSize: number            // ratio-bearing won quotes behind it
+}
+
 export interface QuotePriceRecommendation {
   cadence: Cadence
   price: number                 // the recommendation — always ≥ floor, ≤ engine cap
@@ -178,6 +202,8 @@ export interface QuotePriceRecommendation {
   floor: number                 // the guardrail minimum — the rec NEVER goes below this
   acceptancePct: number | null  // observed acceptance near the recommended price
   sampleSize: number            // similar decided quotes the rec leaned on
+  /** Set only when the evidence is pressed against a clamp — see PriceCalibration. */
+  calibration: PriceCalibration | null
   confidence: Confidence
   confidencePct: number
   reasons: string[]             // the WHY (req #3)
@@ -251,7 +277,7 @@ export function recommendQuotePrice(
   // your minimums (req #4). Floor = the market-tier minimum for this cadence, and
   // the revenue/hour floor against crew cost when we know the visit time.
   const guidanceMin = pricingGuidance(enginePrice, cfg).minimum // enginePrice × marketMult
-  const onSite = input.visitMinutes && input.visitMinutes > 0 ? input.visitMinutes : (sqft > 0 ? estimateVisitMinutes(sqft) : 0)
+  const onSite = input.visitMinutes && input.visitMinutes > 0 ? input.visitMinutes : (estimateVisitMinutes(sqft) ?? 0)
   const drive = input.driveMin && input.driveMin > 0 ? input.driveMin : 0
   const hours = (onSite + drive) / 60
   const revFloorPrice = input.crewCost > 0 && hours > 0 ? roundUpToNice(input.crewCost * 1.5 * hours) : 0
@@ -268,35 +294,124 @@ export function recommendQuotePrice(
     ? Math.round((near.filter(r => r.won).length / near.length) * 100)
     : (aggEnough && stats && stats.n >= 2 ? Math.round(stats.acceptance * 100) : null)
 
+  // ── calibration ──
+  // Does the owner's own closing behaviour fit INSIDE the band the learner is
+  // allowed to move in? RATIO_MIN/RATIO_MAX exist so the learner nudges rather
+  // than lurches — but when the median sits OUTSIDE them, the clamp stops being a
+  // guard rail and becomes a gag: the model has a clear signal and no way to say
+  // it, so it silently pins to the clamp and reports the pinned number as if the
+  // evidence agreed with it.
+  //
+  // Live data made this concrete: 22 mowing ratios spanning 0.56–1.08, median
+  // 0.769, with 15 of the 22 below RATIO_MIN. The owner closes ~23% under their
+  // own engine at every size — and the recommendation landed on its floor at every
+  // size while announcing "95% · High confidence".
+  //
+  // A pinned median is not a pricing nudge, it is a CALIBRATION finding: the base
+  // rate is set wrong, and no amount of per-quote nudging fixes a base rate. So we
+  // surface it as a fact about the engine instead of pretending it away.
+  const wonRatios = stats ? stats.ratios.filter(r => r.won).map(r => r.ratio) : []
+  const ratioN = wonRatios.length
+  const rawMedian = stats?.medianWinRatio ?? 1
+  const pinned: 'below' | 'above' | null =
+    !aggEnough || !stats || ratioN < MIN_SERVICE_SAMPLES ? null
+    : rawMedian < RATIO_MIN ? 'below'
+    : rawMedian > RATIO_MAX ? 'above'
+    : null
+  // Spread of the evidence: ratios that disagree with each other cannot support a
+  // confident answer no matter how many of them there are.
+  const ratioSpread = ratioN >= 3 ? spreadOf(wonRatios) : 0
+  const calibration: PriceCalibration | null = pinned && stats ? {
+    medianWinRatio: Math.round(rawMedian * 1000) / 1000,
+    pinned,
+    // How far the owner's real behaviour sits from where the learner may go.
+    gapPct: Math.round((rawMedian - (pinned === 'below' ? RATIO_MIN : RATIO_MAX)) * 100),
+    sampleSize: ratioN,
+  } : null
+
   // ── confidence ──
+  // Confidence answers "how much should you trust this number", so it must measure
+  // whether the evidence AGREES — not how much of it there is. It used to be a
+  // pure function of the sample COUNT, which is why saturated, self-contradictory
+  // evidence still rendered "95% · High".
+  //
+  // Three corrections, all using data that was already here:
+  //  · count the RATIO-BEARING quotes, not every decided one. aggN includes quotes
+  //    with no measurement, which contribute no ratio and taught the model nothing
+  //    — they inflated the count and the confidence built on it.
+  //  · a wide spread of accepted ratios means the owner's own pricing disagrees
+  //    with itself; that is the definition of an unreliable signal.
+  //  · a PINNED median means the model could not express what it learned. That is
+  //    the least confident state it has, and it was reporting the most.
   let confidence: Confidence, confidencePct: number
-  if (aggN >= 12 || propWon.length >= 2) {
-    confidence = 'high'; confidencePct = clamp(80 + Math.min(15, aggN * 0.5 + propWon.length * 4), 70, 96)
+  const evidenceN = Math.max(ratioN, propWon.length * 2) // property wins are direct evidence
+  if (evidenceN >= 12 || propWon.length >= 2) {
+    confidence = 'high'; confidencePct = clamp(80 + Math.min(15, ratioN * 0.5 + propWon.length * 4), 70, 96)
   } else if (aggEnough || propWon.length >= 1 || custWon.length >= 2) {
-    confidence = 'medium'; confidencePct = clamp(55 + Math.min(16, aggN * 1.5 + propWon.length * 6), 45, 74)
+    confidence = 'medium'; confidencePct = clamp(55 + Math.min(16, ratioN * 1.5 + propWon.length * 6), 45, 74)
   } else {
-    confidence = 'low'; confidencePct = clamp(35 + aggN * 2, 25, 45)
+    confidence = 'low'; confidencePct = clamp(35 + ratioN * 2, 25, 45)
+  }
+  // Disagreement and saturation both cap the claim. These only ever LOWER it —
+  // confidence must never be talked up by anything.
+  //
+  // 0.12 is measured, not guessed. Against real ratio distributions:
+  //   agreeing (tightly clustered)   cv ≈ 0.007
+  //   spread across the whole band   cv ≈ 0.144
+  //   live production mowing         cv ≈ 0.174
+  // The first draft of this used 0.25 and fired on NONE of them — a threshold that
+  // can never trip, which is the same defect this file's audit found elsewhere
+  // (MIN_CREW_SAMPLES unreachable, firstCutFactor frozen at its default). The gap
+  // between 0.007 and 0.144 is wide, so 0.12 discriminates without being
+  // knife-edge. Pinned in verify-learning.ts §3 with both distributions.
+  if (ratioSpread > 0.12) {
+    confidence = confidence === 'high' ? 'medium' : confidence
+    confidencePct = Math.min(confidencePct, 62)
+  }
+  if (pinned) {
+    // The recommendation is the clamp, not the evidence. Say so quietly in the
+    // number, and loudly in the reasons below.
+    confidence = 'low'
+    confidencePct = Math.min(confidencePct, 40)
   }
 
   // ── the WHY (req: explain every recommendation as a clear "Because" list) ──────
   // Built only from existing data + the existing learning systems, ordered so the
   // owner immediately sees what drove the number. Each factor is dropped when its
   // data is absent (never a hollow placeholder).
+  // CALIBRATION is deliberately NOT pushed here. It is not a "because" — it does
+  // not explain this price, it explains why this price cannot follow the evidence.
+  // It travels as the structured `calibration` field (rendered as its own band, and
+  // folded into `summary` below) so there is ONE source and no surface shows the
+  // same sentence twice.
   // 1) Property size + the selected service (always present once measured).
   if (sqft > 0) reasons.push(`${sqft.toLocaleString()} ft² ${svcLabel} job`)
   // 2) Historical acceptance for THIS service (or the honest "still learning").
   if (aggEnough && stats) {
-    reasons.push(`${aggN} similar ${svcLabel} quote${aggN !== 1 ? 's' : ''}${acceptancePct != null ? ` — ${acceptancePct}% accepted near this price` : ''}`)
+    // ONE denominator. This used to read `${aggN} similar quotes — ${acceptancePct}%
+    // accepted near this price`, where aggN was every decided quote (including
+    // those with no measurement, which carry no ratio) while the % came only from
+    // the handful inside the price band. Two different populations, one sentence,
+    // presented as a single fact. `near.length` is the count the % is actually of.
+    const bandN = near.length >= 3 ? near.length : ratioN
+    reasons.push(
+      acceptancePct != null && bandN > 0
+        ? `${bandN} similar ${svcLabel} quote${bandN !== 1 ? 's' : ''} priced near this — ${acceptancePct}% accepted`
+        : `${ratioN} comparable ${svcLabel} quote${ratioN !== 1 ? 's' : ''} to learn from`,
+    )
   } else {
     reasons.push(`Not enough ${svcLabel} quote history yet — using your standard pricing. Learns as you log accepted/declined ${svcLabel} quotes.`)
   }
   // 3) Learned visit duration (lib/labor, service-specific).
   if (onSite > 0) reasons.push(`Historical visit duration ~${onSite} min`)
   // 4) Route density + 5) nearby recurring customers (existing route-density engine).
+  // The noun is NEIGHBOURING PROPERTIES, not jobs — nearbyJobCount() now dedupes by
+  // property and excludes the target, so "3 nearby jobs" would have been three
+  // visits to one house (or, before the fix, this house's own visits).
   if (input.nearbyCount != null) {
-    if (input.nearbyCount >= 3) reasons.push(`Strong route density — ${input.nearbyCount} nearby jobs absorb travel`)
-    else if (input.nearbyCount >= 1) reasons.push(`Builds route density — ${input.nearbyCount} nearby job${input.nearbyCount !== 1 ? 's' : ''}`)
-    else reasons.push('Isolated stop — no nearby jobs, priced to cover the drive')
+    if (input.nearbyCount >= 3) reasons.push(`Strong route density — ${input.nearbyCount} nearby properties absorb the travel`)
+    else if (input.nearbyCount >= 1) reasons.push(`Builds route density — ${input.nearbyCount} nearby propert${input.nearbyCount !== 1 ? 'ies' : 'y'}`)
+    else reasons.push('Isolated stop — no other properties nearby, priced to cover the drive')
   }
   if (input.nearbyRecurring != null && input.nearbyRecurring > 0) reasons.push(`${input.nearbyRecurring} nearby recurring customer${input.nearbyRecurring !== 1 ? 's' : ''}`)
   // 6) Estimated profitability (reuses laborEconomics).
@@ -316,11 +431,21 @@ export function recommendQuotePrice(
   reasons.push(`Pricing confidence: ${confidence[0].toUpperCase()}${confidence.slice(1)} (${confidencePct}%)`)
 
   const cadLabel = cadence === 'one_time' ? 'one-time' : cadence
-  const summary = `Recommended: $${price}${cadence === 'one_time' ? '' : ` /${cadLabel}`} — ${reasons.slice(0, 3).join(' · ')}`
+  // The calibration gap leads the summary when present — a one-line consumer that
+  // shows only the summary would otherwise present a clamped number as a plain
+  // recommendation, which is the exact thing the structured field exists to stop.
+  const calNote = calibration
+    ? `your accepted prices run ~${Math.abs(Math.round((calibration.medianWinRatio - 1) * 100))}% ${calibration.pinned === 'below' ? 'below' : 'above'} standard, so this is held at its ${calibration.pinned === 'below' ? 'floor' : 'cap'}`
+    : null
+  const summary = `Recommended: $${price}${cadence === 'one_time' ? '' : ` /${cadLabel}`} — ${[calNote, ...reasons].filter(Boolean).slice(0, 3).join(' · ')}`
 
   return {
     cadence, price, enginePrice, floor,
-    acceptancePct, sampleSize: aggN, confidence, confidencePct,
+    // sampleSize is the RATIO-BEARING count — the quotes that actually taught the
+    // model something. aggN counted every decided quote, including those with no
+    // measurement, which produce no ratio; the UI presents this number as evidence
+    // ("N similar quotes"), so it must count evidence, not rows.
+    acceptancePct, sampleSize: ratioN, calibration, confidence, confidencePct,
     reasons, heldAtMinimum, enoughData, serviceLabel: svcLabel, summary,
   }
 }

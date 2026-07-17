@@ -1,7 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { localTodayISO } from '@/lib/utils'
-import { effectiveFreq, jobVisitValue } from '@/lib/invoicing'
+import { effectiveFreq } from '@/lib/invoicing'
 import { serviceCategory, seasonForService, isWithinSeason, settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
+import { VIP_LTV, cadenceDays, churnRisk, daysBetween, isLapsed, lifetimeValue } from '@/lib/signals'
 
 // ── Customer Health Score (Growth) ─────────────────────────────────────────────
 // ONE 0-100 number per customer that fuses the signals already scattered across
@@ -45,19 +46,6 @@ interface HRec { freq: string | null; interval_unit: string | null; interval_cou
 interface HQuote { id: string }
 interface HInvoice { customer_id: string | null; status: string; amount: number | null }
 interface HCustomer { id: string; name: string; created_at: string }
-
-const VIP_LTV = 1500
-function daysBetween(aISO: string, bISO: string): number {
-  return Math.round((new Date(bISO + 'T00:00:00').getTime() - new Date(aISO + 'T00:00:00').getTime()) / 86_400_000)
-}
-function intervalDaysFor(rec: HRec | null, cadence: string | null): number {
-  if (cadence === 'weekly') return 7
-  if (cadence === 'biweekly') return 14
-  if (cadence === 'monthly') return 30
-  if (!rec) return 14
-  const c = Math.max(1, rec.interval_count ?? 1)
-  return rec.interval_unit === 'day' ? c : rec.interval_unit === 'week' ? 7 * c : rec.interval_unit === 'month' ? 30 * c : 14
-}
 
 export function computeCustomerHealth(
   customers: HCustomer[],
@@ -104,12 +92,7 @@ export function computeCustomerHealth(
   for (const c of customers) {
     const done = (completed[c.id] || []).sort((a, b) => a.scheduled_date.localeCompare(b.scheduled_date))
     const visits = done.length
-    const ltv = Math.round(done.reduce((s, j) => {
-      const q = j.quote_id ? quotesById[j.quote_id] : null
-      const rec = j.recurrence_id ? recurrences[j.recurrence_id] : null
-      const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
-      return s + jobVisitValue(j.price, q as unknown as Record<string, unknown>, freq, j.is_initial_visit ?? false)
-    }, 0))
+    const ltv = lifetimeValue(done, quotesById, recurrences)
     const tenureDays = c.created_at ? Math.max(0, daysBetween(c.created_at.slice(0, 10), today)) : 0
     const recInfo = recByCust[c.id]
     const recurring = !!recInfo?.active
@@ -124,7 +107,7 @@ export function computeCustomerHealth(
       const season = seasonForService(lastDone.service_type, seasons)
       const inSeason = !season || isWithinSeason(today, season)
       if (inSeason) {
-        intervalDays = intervalDaysFor(recInfo.rec, recInfo.cadence)
+        intervalDays = cadenceDays(recInfo.cadence, recInfo.rec)
         const since = daysBetween(lastDone.scheduled_date, today)
         if (!hasFuture && since > intervalDays) overdueDays = since
       }
@@ -144,12 +127,12 @@ export function computeCustomerHealth(
       if (adherence <= 1.3) score += 8
       else if (adherence >= 2) score -= 8
     }
-    if (overdueDays != null && intervalDays) {
-      const ratio = overdueDays / intervalDays
-      if (ratio >= 1.6) { score -= 22; flags.push('at_risk') }
-      else if (ratio >= 1.25) { score -= 10; flags.push('at_risk') }
-    }
-    if (!recurring && !hasFuture && visits >= 1) { score -= 6; flags.push('lapsed') }
+    // How far past their own cadence they've drifted — the shared churn thresholds.
+    // Measured against the series' rhythm whether or not it's still active.
+    const risk = churnRisk({ hasActiveRecurring: !!recInfo, daysSinceLastService: overdueDays, cadenceDays: intervalDays ?? 0 })
+    if (risk.level === 'high') { score -= 22; flags.push('at_risk') }
+    else if (risk.level === 'watch') { score -= 10; flags.push('at_risk') }
+    if (isLapsed({ hasRecurring: recurring, hasUpcoming: hasFuture, completedVisits: visits })) { score -= 6; flags.push('lapsed') }
     if (unpaid.count > 0) { score -= Math.min(18, unpaid.count * 6); flags.push('unpaid') }
     if (tenureDays < 60 && visits <= 1) flags.push('new')
     score = Math.max(0, Math.min(100, Math.round(score)))

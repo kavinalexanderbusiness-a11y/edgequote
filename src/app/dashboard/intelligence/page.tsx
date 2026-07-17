@@ -1,17 +1,34 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
-import { loadBusinessIntelligence, BIReport, NamedValue } from '@/lib/businessIntelligence'
+import { loadBusinessIntelligence, BIReport, NamedValue, WeekdayStat, YearComparison } from '@/lib/businessIntelligence'
 import { loadLaborInsights, LaborInsights, ServiceAccuracy, ServiceProfit } from '@/lib/labor'
+import { loadMarketingPerformance, type MarketingCampaignRow } from '@/lib/analytics/marketing'
+import { summarizeStats } from '@/lib/crm/campaignStats'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Skeleton, SkeletonTiles } from '@/components/ui/Skeleton'
 import { EmptyState, InlineEmpty } from '@/components/ui/EmptyState'
 import { StatTile } from '@/components/ui/StatTile'
 import { Collapsible } from '@/components/ui/Collapsible'
+import { Tabs } from '@/components/ui/Tabs'
 import { readCache, writeCache, CACHE_TTL } from '@/lib/clientCache'
+import { AnalyticsWorkspace, WidgetChrome, useWidget } from '@/components/analytics/Workspace'
+import type { WidgetId } from '@/lib/analytics/layout'
 import { formatCurrency, cn } from '@/lib/utils'
-import { TrendingUp, TrendingDown, DollarSign, Gauge, Users, Target, Activity, LineChart, Home, AlertTriangle } from 'lucide-react'
+import type { Tone } from '@/lib/tone'
+import { TrendingUp, TrendingDown, DollarSign, Gauge, Users, Target, Activity, LineChart, Home, AlertTriangle, CalendarDays, Ban, Briefcase, Megaphone, MessageSquare } from 'lucide-react'
+
+// From THE comms insights engine (comms_insights RPC) — the History page renders
+// the same object, so the two surfaces cannot disagree about a number.
+interface CommsInsights {
+  sends: number; delivered: number; failed: number; skipped: number
+  inbound: number; needs_reply: number; scheduled_pending: number
+  median_reply_minutes: number | null
+}
+const fmtReplyTime = (m: number | null) =>
+  m == null ? '—' : m < 60 ? `${Math.round(m)}m` : m < 1440 ? `${(m / 60).toFixed(1)}h` : `${(m / 1440).toFixed(1)}d`
 
 export default function IntelligencePage() {
   const supabase = useMemo(() => createClient(), [])
@@ -19,6 +36,8 @@ export default function IntelligencePage() {
   const [loading, setLoading] = useState(!bi) // cached → render instantly, refresh in background
   // Labour accuracy & crew efficiency — loaded alongside, but never blocks the BI report.
   const [labor, setLabor] = useState<LaborInsights | null>(() => readCache<LaborInsights>('labor', CACHE_TTL.medium))
+  const [marketing, setMarketing] = useState<MarketingCampaignRow[] | null>(() => readCache<MarketingCampaignRow[]>('marketing', CACHE_TTL.medium))
+  const [comms, setComms] = useState<CommsInsights | null>(() => readCache<CommsInsights>('comms', CACHE_TTL.medium))
 
   useEffect(() => {
     (async () => {
@@ -31,6 +50,28 @@ export default function IntelligencePage() {
     (async () => {
       try { const r = await loadLaborInsights(supabase); if (r) { setLabor(r.insights); writeCache('labor', r.insights) } }
       catch { /* labour insights are supplementary — never break the BI report */ }
+    })()
+  }, [supabase])
+
+  // Campaign outcomes, on the same terms as labour: loaded alongside, never
+  // blocking the BI report. Marketing lives in its own engine (crm_campaign_log,
+  // not the jobs/invoices the BIReport is built from), so it cannot ride along in
+  // loadBusinessIntelligence without that loader growing a second dataset.
+  useEffect(() => {
+    (async () => {
+      try { const r = await loadMarketingPerformance(supabase); setMarketing(r); writeCache('marketing', r) }
+      catch { /* campaign stats are supplementary — never break the BI report */ }
+    })()
+  }, [supabase])
+
+  // Communications pulse — same terms as marketing: alongside, never blocking.
+  // The RPC is THE insights engine; History renders the identical object.
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data, error } = await supabase.rpc('comms_insights', { p_days: 30 })
+        if (!error && data) { setComms(data as CommsInsights); writeCache('comms', data) }
+      } catch { /* supplementary */ }
     })()
   }, [supabase])
 
@@ -51,8 +92,59 @@ export default function IntelligencePage() {
     <div className="max-w-6xl mx-auto space-y-6">
       <PageHeader crumb={{ label: 'Grow', href: '/dashboard/grow' }} title="Business Intelligence" description={`How your business is performing — and where to focus. As of ${bi.generatedFor}.`} />
 
+      {/* Every section below is a workspace widget: arrangeable and hideable, but
+          still rendered from the same BIReport, so customising the page can never
+          change what a number means — only whether and where you see it. */}
+      <AnalyticsWorkspace>
+
+      {/* ── EXECUTIVE ── The highest-altitude read on the page, so it leads: who the
+          revenue depends on, whether it's compounding, and how fast it turns into
+          cash. Every figure here is YTD. */}
+      <Section id="executive" title="Executive" icon={Briefcase}>
+        {/* `payingCustomers === 0` is the one check that keeps a wall of "0%" off
+            the page — with no YTD revenue there are no shares to take a share of. */}
+        {bi.executive.concentration.payingCustomers === 0 ? (
+          <div className="rounded-card border border-border bg-bg-secondary p-4">
+            <InlineEmpty icon={Briefcase} className="py-3">No revenue yet this year — concentration, mix and collection speed fill in as work completes and invoices are paid.</InlineEmpty>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+            {/* Tint ONLY at >=30%: for a 1-3 person shop, one customer at a third of
+                the year's revenue is a dependency risk, not a fun fact. Below that
+                it's an unremarkable number and gets no colour. */}
+            <Stat label="Top customer share"
+              value={bi.executive.concentration.top1Pct != null ? `${bi.executive.concentration.top1Pct}%` : '—'}
+              tone={bi.executive.concentration.top1Pct != null && bi.executive.concentration.top1Pct >= 30 ? 'warn' : undefined}
+              sub={
+                <span className="tabular-nums">
+                  {bi.executive.concentration.top1Name ?? 'Top customer'}
+                  {bi.executive.concentration.top3Pct != null && ` · top 3 = ${bi.executive.concentration.top3Pct}%`}
+                </span>
+              } />
+            {/* NEW = first ever completed visit falls this year, so last season's
+                customer still on the books reads as returning. */}
+            <Stat label="Revenue from new customers"
+              value={bi.executive.mix.newPct != null ? `${bi.executive.mix.newPct}%` : '—'}
+              sub={<span className="tabular-nums">{formatCurrency(bi.executive.mix.newRevenue)} new · {formatCurrency(bi.executive.mix.returningRevenue)} returning</span>} />
+            {/* Speed of collection — a median over PAID invoices only. It is NOT
+                receivables aging: nothing unpaid is in this number. The sample size
+                rides along because a median over 2 invoices isn't a trend. */}
+            <Stat label="Median time to get paid"
+              value={bi.executive.collection.medianDaysToPay != null ? `${bi.executive.collection.medianDaysToPay} ${bi.executive.collection.medianDaysToPay === 1 ? 'day' : 'days'}` : '—'}
+              tone={bi.executive.collection.medianDaysToPay != null && bi.executive.collection.medianDaysToPay > 14 ? 'warn' : undefined}
+              sub={
+                <span className="tabular-nums">
+                  {bi.executive.collection.medianDaysToPay != null
+                    ? `across ${bi.executive.collection.paidInvoices} paid invoice${bi.executive.collection.paidInvoices === 1 ? '' : 's'}`
+                    : 'No invoices paid yet'}
+                </span>
+              } />
+          </div>
+        )}
+      </Section>
+
       {/* ── FINANCIAL ── */}
-      <Section title="Financial" icon={DollarSign}>
+      <Section id="financial" title="Financial" icon={DollarSign}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Stat label="Revenue this month" value={formatCurrency(bi.financial.revenueThisMonth)} delta={bi.financial.monthOverMonthPct} deltaLabel="vs last month" />
           <Stat label="Revenue last month" value={formatCurrency(bi.financial.revenueLastMonth)} />
@@ -60,6 +152,14 @@ export default function IntelligencePage() {
           <Stat label="Projected this month" value={formatCurrency(bi.forecasting.projectedThisMonth)} accent />
         </div>
         <TrendBars trend={bi.financial.trend} />
+        {/* Average job value, on the SAME 12-month axis as the revenue trend above so
+            the two read together month-for-month: revenue rising on flat job value =
+            more work; revenue rising on rising job value = better-paid work. Those
+            call for opposite responses. Months with no jobs pass through as null and
+            TrendBars draws them as a gap — dropping them would slide this chart's
+            months out of step with the one directly above it. */}
+        <TrendBars label="Average job value"
+          trend={bi.financial.trend.map(t => ({ month: t.month, revenue: t.avgJobValue }))} />
         <div className="grid md:grid-cols-3 gap-3">
           <RankList title="By service" items={bi.financial.byService} fmt={formatCurrency} />
           <RankList title="By neighborhood" items={bi.financial.byNeighborhood} fmt={formatCurrency} subFmt={v => `$${v}/hr`} />
@@ -67,8 +167,31 @@ export default function IntelligencePage() {
         </div>
       </Section>
 
+      {/* ── THIS YEAR VS LAST ── Both sides are SEASON-TO-DATE (the engine cuts last
+          year at the same month-day), so the delta is like-for-like and safe as a
+          headline. Never label it "vs last year (full)". */}
+      <Section id="yearly" title="This year vs last" icon={TrendingUp}>
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+          <Stat label="Revenue this year" value={formatCurrency(bi.yearly.thisYear.revenue)}
+            delta={bi.yearly.revenueDeltaPct} deltaLabel="vs last year to date"
+            sub={bi.yearly.lastYear ? `${formatCurrency(bi.yearly.lastYear.revenue)} at this point last season` : 'season to date'} />
+          <Stat label="Jobs this year" value={String(bi.yearly.thisYear.jobs)}
+            delta={bi.yearly.jobsDeltaPct} deltaLabel="vs last year to date"
+            sub={bi.yearly.lastYear ? `${bi.yearly.lastYear.jobs} at this point last season` : 'season to date'} />
+          <Stat label="Profit this year" value={bi.yearly.thisYear.profit != null ? formatCurrency(bi.yearly.thisYear.profit) : '—'} sub="season to date" accent />
+        </div>
+        {bi.yearly.lastYear ? (
+          <YearMonthList byMonth={bi.yearly.byMonth} thisYear={bi.yearly.thisYear.year} lastYear={bi.yearly.lastYear.year} />
+        ) : (
+          // First season — a null prior year is "nothing to compare", never −100%.
+          <div className="rounded-card border border-border bg-bg-secondary p-4">
+            <InlineEmpty icon={LineChart} className="py-3">First season — no prior year to compare yet. Next year this shows your growth month by month.</InlineEmpty>
+          </div>
+        )}
+      </Section>
+
       {/* ── PROFITABILITY ── */}
-      <Section title="Profitability" icon={Gauge}>
+      <Section id="profitability" title="Profitability" icon={Gauge}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Stat label="Revenue / labor hour" value={`$${bi.profitability.revenuePerLaborHour}`} />
           <Stat label="Gross profit YTD" value={formatCurrency(bi.profitability.grossProfitYTD)} sub={`${bi.profitability.grossMarginPct}% margin`} />
@@ -83,7 +206,7 @@ export default function IntelligencePage() {
       </Section>
 
       {/* ── CUSTOMERS ── */}
-      <Section title="Customers" icon={Users}>
+      <Section id="customers" title="Customers" icon={Users}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Stat label="Active customers" value={String(bi.customers.active)} sub={`${bi.customers.total} total`} />
           <Stat label="Retention rate" value={bi.customers.retentionRatePct != null ? `${bi.customers.retentionRatePct}%` : '—'} sub={bi.customers.churnRatePct != null ? `${bi.customers.churnRatePct}% churn` : 'recurring only'} />
@@ -94,7 +217,7 @@ export default function IntelligencePage() {
       </Section>
 
       {/* ── SALES ── */}
-      <Section title="Sales" icon={Target}>
+      <Section id="sales" title="Sales" icon={Target}>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <Stat label="Quote win rate" value={bi.sales.quoteAcceptancePct != null ? `${bi.sales.quoteAcceptancePct}%` : '—'} sub={`${bi.sales.won} won · ${bi.sales.lost} lost`} />
           <Stat label="Avg quote value" value={formatCurrency(bi.sales.avgQuoteValue)} />
@@ -108,7 +231,7 @@ export default function IntelligencePage() {
       </Section>
 
       {/* ── OPERATIONS ── */}
-      <Section title="Operations" icon={Activity}>
+      <Section id="operations" title="Operations" icon={Activity}>
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
           {/* "Estimate accuracy" lives ONCE — in the Labour section below (the two
               engines' numbers could disagree, so only the learned one is shown). */}
@@ -126,9 +249,57 @@ export default function IntelligencePage() {
         </div>
       </Section>
 
+      {/* ── BUSIEST DAYS ── */}
+      <Section id="weekday" title="Busiest days" icon={CalendarDays}>
+        {/* `busiest` is null exactly when no weekday has a completed job — the one
+            check that keeps a table of zeroes off the page. */}
+        {bi.weekday.busiest ? (
+          <>
+            <div className="grid grid-cols-2 gap-3">
+              <Stat label="Busiest day" value={bi.weekday.busiest.label}
+                sub={`${bi.weekday.busiest.jobs} job${bi.weekday.busiest.jobs === 1 ? '' : 's'} · ${formatCurrency(bi.weekday.busiest.revenue)}`} accent />
+              <Stat label="Best-paying day" value={bi.weekday.bestPaying?.label ?? '—'}
+                sub={bi.weekday.bestPaying?.revPerHour != null ? `$${bi.weekday.bestPaying.revPerHour}/hr` : 'needs completed work'} />
+            </div>
+            <WeekdayBreakdown rows={bi.weekday.byWeekday} busiest={bi.weekday.busiest.weekday} />
+          </>
+        ) : (
+          <div className="rounded-card border border-border bg-bg-secondary p-4">
+            <InlineEmpty className="py-3">No completed work yet — this fills in as jobs complete.</InlineEmpty>
+          </div>
+        )}
+      </Section>
+
+      {/* ── CANCELLATIONS ── A risk metric: the one section where a tint carries
+          alarm rather than confidence. */}
+      <Section id="cancellations" title="Cancellations" icon={Ban}>
+        {bi.cancellations.cancelledYTD === 0 ? (
+          <div className="rounded-card border border-border bg-bg-secondary">
+            <EmptyState icon={Ban} tone="positive" className="py-10" title="Nothing cancelled this year"
+              description={bi.cancellations.completedYTD > 0
+                ? `All ${bi.cancellations.completedYTD} job${bi.cancellations.completedYTD === 1 ? '' : 's'} booked this year went ahead.`
+                : 'No cancellations on the books this year.'} />
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+              <Stat label="Cancelled YTD" value={String(bi.cancellations.cancelledYTD)} tone="warn"
+                sub={`of ${bi.cancellations.cancelledYTD + bi.cancellations.completedYTD} booked jobs`} />
+              <Stat label="Cancellation rate" value={bi.cancellations.cancelRatePct != null ? `${bi.cancellations.cancelRatePct}%` : '—'} tone="warn" sub="of booked jobs this year" />
+              <Stat label="Worst month" value={bi.cancellations.worstMonth ? monthLabel(bi.cancellations.worstMonth) : '—'} sub="most jobs lost" />
+            </div>
+            {/* Same 12-month window as the revenue trend above, so the two line up. */}
+            <TrendBars trend={bi.cancellations.trend.map(t => ({ month: t.name, revenue: t.value }))} label="Cancelled jobs / month" integer tone="warn" />
+          </>
+        )}
+      </Section>
+
       {/* ── LABOUR ACCURACY & CREW EFFICIENCY ── (merged from the former Labor
           Intelligence page). Collapsed by default — it's a deep-dive, not a daily
           decision; the one-line summary keeps the headline number visible. */}
+      {/* Not a <Section>, but it IS a block on this page — so it joins the
+          workspace too rather than being the one thing that won't move. */}
+      <LaborWidget>
       <Collapsible title="Labour accuracy & crew efficiency" icon={Gauge}
         summary={labor && labor.trainingJobs >= 1
           ? `${labor.overallAccuracyPct != null ? `${labor.overallAccuracyPct}% estimate accuracy` : ''} · ${labor.trainingJobs} timed job${labor.trainingJobs !== 1 ? 's' : ''}`
@@ -196,34 +367,142 @@ export default function IntelligencePage() {
         ) : (
           <div className="rounded-card border border-border bg-bg-secondary">
             <EmptyState icon={Gauge} className="py-10" title="No timed jobs yet"
-              description="Start and complete jobs in Day Ops (check-in / check-out) and the model learns automatically. The Smart Estimate falls back to lawn size until then." />
+              description="Start and complete jobs in Day Ops (check-in / check-out) and the model learns automatically. The Smart Estimate falls back to property size until then." />
           </div>
         )}
       </Collapsible>
+      </LaborWidget>
 
       {/* ── FORECASTING ── ("Projected this month" lives once, in Financial above) */}
-      <Section title="Forecasting" icon={LineChart}>
+      <Section id="forecasting" title="Forecasting" icon={LineChart}>
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
           <Stat label="Recurring run-rate" value={formatCurrency(bi.forecasting.projectedRecurringAnnual)} sub="/yr locked in" accent />
           <Stat label="Rest of season" value={formatCurrency(bi.forecasting.projectedSeasonRemaining)} sub="recurring booked" />
           <Stat label="Growth trend" value={bi.forecasting.growthForecastPct != null ? `${bi.forecasting.growthForecastPct > 0 ? '+' : ''}${bi.forecasting.growthForecastPct}%` : '—'} delta={bi.forecasting.growthForecastPct} deltaLabel="3-mo revenue" />
         </div>
       </Section>
+      {/* ── MARKETING ── Campaign outcomes, per campaign. Every figure below is a
+          field of the CampaignStats object loadCampaignStats returned, or the
+          string summarizeStats phrased from it. Nothing is summed, averaged or
+          rated here: there is no cross-campaign total because no engine defines
+          one, and a rate invented in this JSX could quietly disagree with what
+          `sent` means to the send path. Per-campaign is what the engine knows. */}
+      <Section id="marketing" title="Marketing" icon={Megaphone}>
+        {marketing === null ? (
+          <Skeleton className="h-24 w-full rounded-card" />
+        ) : marketing.length === 0 ? (
+          <div className="rounded-card border border-border bg-bg-secondary p-4">
+            <InlineEmpty icon={Megaphone} className="py-3">
+              No campaigns yet — set one up in Grow and its sends, deliveries and opens show up here.
+            </InlineEmpty>
+          </div>
+        ) : (
+          <div className="rounded-card border border-border bg-bg-secondary divide-y divide-border">
+            {marketing.map(c => (
+              <div key={c.id} className="p-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium text-ink truncate">{c.name}</p>
+                    {/* A paused campaign's history still counts — say why it's quiet
+                        rather than dropping it and making past sends disappear. */}
+                    {!c.enabled && (
+                      <span className="text-[10px] uppercase tracking-wide text-ink-faint border border-border rounded px-1 py-px shrink-0">Paused</span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-ink-faint truncate tabular-nums">
+                    {/* summarizeStats IS the phrasing engine — the Grow page renders
+                        this same string from this same object, so the two surfaces
+                        cannot drift. */}
+                    {c.stats.total > 0 ? summarizeStats(c.stats) : 'Never run'}
+                    {c.lastRunAt && ` · last ran ${new Date(c.lastRunAt).toLocaleDateString()}`}
+                  </p>
+                </div>
+                {/* Delivered/opened, straight off the stats object. Opens are email
+                    only — SMS never reports them — so a campaign with no email
+                    would read a misleading "0 opened". Show it only when the
+                    engine actually counted one. */}
+                <div className="flex items-center gap-4 shrink-0 tabular-nums">
+                  <MiniStat label="sent" value={c.stats.sent} />
+                  <MiniStat label="delivered" value={c.stats.delivered} />
+                  {c.stats.opened > 0 && <MiniStat label="opened" value={c.stats.opened} />}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
+
+      {/* ── COMMUNICATIONS ── the 30-day pulse from THE comms insights engine
+          (comms_insights RPC — History renders the identical object). Median
+          first-reply time leads: for a service business it's the number most
+          correlated with winning the job. */}
+      <Section id="communications" title="Communications" icon={MessageSquare}>
+        {comms === null ? (
+          <Skeleton className="h-24 w-full rounded-card" />
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            <StatTile label="Median reply time" value={fmtReplyTime(comms.median_reply_minutes)} icon={Activity}
+              sub={comms.inbound ? `${comms.inbound} inbound · 30d` : 'No inbound yet · 30d'} />
+            <StatTile label="Messages sent" value={String(comms.sends)} icon={MessageSquare} sub="Last 30 days" />
+            <StatTile label="Delivered" value={comms.sends ? `${Math.round((comms.delivered / comms.sends) * 100)}%` : '—'} icon={Target}
+              sub={comms.failed > 0 ? `${comms.failed} failed` : 'No failures'} tone={comms.failed > 0 ? 'warn' : undefined} />
+            <Link href="/dashboard/messages?f=needs_reply" className="block rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+              <StatTile label="Awaiting your reply" value={String(comms.needs_reply)} icon={AlertTriangle}
+                sub="Open conversations · tap to triage" tone={comms.needs_reply > 0 ? 'warn' : undefined} />
+            </Link>
+            <Link href="/dashboard/messages/scheduled" className="block rounded-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40">
+              <StatTile label="Scheduled" value={String(comms.scheduled_pending)} icon={CalendarDays} sub="Queued to send" />
+            </Link>
+          </div>
+        )}
+      </Section>
+      </AnalyticsWorkspace>
     </div>
   )
 }
 
 function cap(s: string) { return s.replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase()) }
+/** 'yyyy-MM' → 'Jun 2026'. Same formatting path as `generatedFor`. */
+function monthLabel(key: string) { return new Date(`${key}-01T00:00:00`).toLocaleString('en-US', { month: 'short', year: 'numeric' }) }
+/** 1-12 → 'Jun'. */
+function monthShort(m: number) { return new Date(2000, m - 1, 1).toLocaleString('en-US', { month: 'short' }) }
 
-function Section({ title, icon: Icon, children }: { title: string; icon: typeof DollarSign; children: React.ReactNode }) {
+// The Labour block is a <Collapsible>, not a <Section>, so it gets a thin wrapper
+// to join the workspace rather than being the one block that refuses to move.
+function LaborWidget({ children }: { children: React.ReactNode }) {
+  const { style, className, dragProps } = useWidget('labor')
   return (
-    <div className="space-y-3 animate-rise">
+    <div style={style} className={cn('animate-rise', className)} {...dragProps}>
+      <div className="flex items-center justify-end -mb-1"><WidgetChrome id="labor" /></div>
+      {children}
+    </div>
+  )
+}
+
+// Sections are the workspace's widgets. `id` is all a section needs to become
+// arrangeable — order, hiding and drag all come from the workspace context, so
+// the markup below stays exactly where it is and doesn't know it can move.
+/** A bare count with its noun. Display only — the number arrives already counted. */
+function MiniStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="text-right">
+      <p className="text-sm font-semibold text-ink tabular-nums">{value}</p>
+      <p className="text-[10px] text-ink-faint">{label}</p>
+    </div>
+  )
+}
+
+function Section({ id, title, icon: Icon, children }: { id: WidgetId; title: string; icon: typeof DollarSign; children: React.ReactNode }) {
+  const { style, className, dragProps } = useWidget(id)
+  return (
+    <div style={style} className={cn('space-y-3 animate-rise', className)} {...dragProps}>
       <div className="flex items-center gap-2.5">
         <span className="w-6 h-6 rounded-md bg-accent/10 border border-accent/20 flex items-center justify-center shrink-0">
           <Icon className="w-3.5 h-3.5 text-accent-text" />
         </span>
         <p className="text-sm font-semibold tracking-tight text-ink">{title}</p>
         <span className="flex-1 h-px bg-border" aria-hidden />
+        <WidgetChrome id={id} />
       </div>
       {children}
     </div>
@@ -233,14 +512,14 @@ function Section({ title, icon: Icon, children }: { title: string; icon: typeof 
 // Thin adapter over the ONE shared KPI tile — the delta (▲/▼ vs last period)
 // renders as the tile's `sub` node, so the change is highlighted right under
 // the number without a second tile style existing anywhere.
-function Stat({ label, value, sub, delta, deltaLabel, accent }: { label: string; value: string; sub?: React.ReactNode; delta?: number | null; deltaLabel?: string; accent?: boolean }) {
+function Stat({ label, value, sub, delta, deltaLabel, accent, tone }: { label: string; value: string; sub?: React.ReactNode; delta?: number | null; deltaLabel?: string; accent?: boolean; tone?: Tone }) {
   const deltaNode = delta != null ? (
     <span className={cn('font-semibold inline-flex items-center gap-1 tabular-nums', delta >= 0 ? 'text-emerald-400' : 'text-red-400')}>
       {delta >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
       {delta > 0 ? '+' : ''}{delta}% {deltaLabel && <span className="text-ink-faint font-normal">{deltaLabel}</span>}
     </span>
   ) : null
-  return <StatTile label={label} value={<span className="tabular-nums">{value}</span>} accent={accent} sub={deltaNode ?? sub} />
+  return <StatTile label={label} value={<span className="tabular-nums">{value}</span>} accent={accent} tone={tone} sub={deltaNode ?? sub} />
 }
 
 function RankList({ title, items, fmt, subFmt }: { title: string; items: NamedValue[]; fmt: (v: number) => string; subFmt?: (v: number) => string }) {
@@ -272,31 +551,65 @@ function RankList({ title, items, fmt, subFmt }: { title: string; items: NamedVa
   )
 }
 
-function TrendBars({ trend, label = 'Revenue / month', integer = false }: { trend: { month: string; revenue: number }[]; label?: string; integer?: boolean }) {
+// Bar palette. `accent` is the default everywhere; `warn` exists only for RISK
+// series (cancellations) — the design language reserves tint for alarm, never
+// for confidence. Literal class strings so Tailwind keeps them.
+const BAR_TONE = {
+  accent: {
+    current: 'bg-gradient-to-t from-accent/70 to-accent',
+    peak: 'bg-gradient-to-t from-accent/35 to-accent/70 opacity-90',
+    rest: 'bg-gradient-to-t from-accent/20 to-accent/50 opacity-80',
+  },
+  warn: {
+    current: 'bg-gradient-to-t from-amber-500/70 to-amber-400',
+    peak: 'bg-gradient-to-t from-amber-500/35 to-amber-500/70 opacity-90',
+    rest: 'bg-gradient-to-t from-amber-500/20 to-amber-500/50 opacity-80',
+  },
+} as const
+
+// `revenue: null` = NO DATA for that month, which is not the same story as $0 — a
+// month you never worked must read as a gap, not a floored stub labelled zero.
+// Nullable so every chart on this page can keep the SAME 12-month axis: filtering
+// empty months out instead would silently shift one chart's months out of step
+// with the one beside it, and make "latest" name a month that isn't the latest.
+function TrendBars({ trend, label = 'Revenue / month', integer = false, tone = 'accent' }: { trend: { month: string; revenue: number | null }[]; label?: string; integer?: boolean; tone?: keyof typeof BAR_TONE }) {
   if (!trend.length) return null
-  const max = Math.max(1, ...trend.map(t => t.revenue))
-  const best = trend.reduce((m, t) => Math.max(m, t.revenue), 0)
+  const values = trend.map(t => t.revenue).filter((v): v is number => v != null)
+  if (!values.length) return null
+  const max = Math.max(1, ...values)
+  const best = Math.max(0, ...values)
   const fmt = (v: number) => integer ? String(v) : '$' + Math.round(v).toLocaleString()
   const latest = trend[trend.length - 1]
   return (
     <div className="rounded-card border border-border bg-bg-secondary p-4">
       <div className="flex items-baseline justify-between gap-3 mb-3">
         <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">{label}</p>
-        {latest && <p className="text-xs text-ink-muted tabular-nums">{latest.month.slice(5)}: <span className="font-semibold text-ink">{fmt(latest.revenue)}</span></p>}
+        {latest && <p className="text-xs text-ink-muted tabular-nums">{latest.month.slice(5)}: <span className="font-semibold text-ink">{latest.revenue != null ? fmt(latest.revenue) : '—'}</span></p>}
       </div>
       <div className="flex items-end gap-1.5 h-24">
         {trend.map((t, i) => {
           const current = i === trend.length - 1
+          // No data → a hairline on the baseline, never a bar. It holds the month's
+          // slot on the axis (so this chart stays aligned with its neighbours) while
+          // reading as "nothing here", which a 3%-floored stub would not.
+          if (t.revenue == null) {
+            return (
+              <div key={i} className="flex-1 flex flex-col items-center justify-end gap-1.5 min-w-0">
+                <div className="w-full h-px bg-border rounded-full" title={`${t.month}: no jobs`} />
+                <span className="text-[10px] truncate w-full text-center tabular-nums text-ink-faint/60">{t.month.slice(5)}</span>
+              </div>
+            )
+          }
           return (
             <div key={i} className="flex-1 flex flex-col items-center justify-end gap-1.5 min-w-0 group/bar">
               <div
                 className={cn(
                   'w-full rounded-t-md transition-all duration-200 group-hover/bar:opacity-100',
                   current
-                    ? 'bg-gradient-to-t from-accent/70 to-accent'
+                    ? BAR_TONE[tone].current
                     : t.revenue === best && best > 0
-                      ? 'bg-gradient-to-t from-accent/35 to-accent/70 opacity-90'
-                      : 'bg-gradient-to-t from-accent/20 to-accent/50 opacity-80',
+                      ? BAR_TONE[tone].peak
+                      : BAR_TONE[tone].rest,
                 )}
                 style={{ height: `${Math.max(3, (t.revenue / max) * 100)}%` }}
                 title={`${t.month}: ${fmt(t.revenue)}`}
@@ -306,6 +619,65 @@ function TrendBars({ trend, label = 'Revenue / month', integer = false }: { tren
           )
         })}
       </div>
+    </div>
+  )
+}
+
+// Sun..Sat in calendar order — NOT a ranking, so it deliberately skips RankList's
+// numbered badges (a chronological list with 1..7 medals would read as a league
+// table). Zero-job days stay in place to show the shape of the week, but their
+// money columns render '—': a day you never work isn't a $0/hr day.
+function WeekdayBreakdown({ rows, busiest }: { rows: WeekdayStat[]; busiest: number }) {
+  return (
+    <div className="rounded-card border border-border bg-bg-secondary p-4">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint mb-2.5">Every weekday</p>
+      <ul className="space-y-2">
+        {rows.map(w => {
+          const worked = w.jobs > 0
+          return (
+            <li key={w.weekday} className="flex items-center justify-between gap-2 text-sm">
+              <span className={cn('truncate', !worked ? 'text-ink-faint' : w.weekday === busiest ? 'text-ink font-medium' : 'text-ink')}>{w.label}</span>
+              <span className="shrink-0 flex items-center gap-3 tabular-nums">
+                <span className={cn('text-xs w-14 text-right', worked ? 'text-ink-muted' : 'text-ink-faint')}>{w.jobs} job{w.jobs === 1 ? '' : 's'}</span>
+                <span className={cn('w-20 text-right font-semibold', worked ? 'text-ink' : 'text-ink-faint font-normal')}>{worked ? formatCurrency(w.revenue) : '—'}</span>
+                <span className="w-16 text-right text-[11px] text-ink-faint font-normal">{w.revPerHour != null ? `$${w.revPerHour}/hr` : '—'}</span>
+              </span>
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
+}
+
+// This year vs last, month by month. A null `lastYear` is NO DATA (an unworked
+// month and a $0 month are different stories) — it renders as a gap, never a zero.
+// Months with nothing on either side are dropped: they're padding, not signal.
+function YearMonthList({ byMonth, thisYear, lastYear }: { byMonth: YearComparison['byMonth']; thisYear: string; lastYear: string }) {
+  const rows = byMonth.filter(m => m.thisYear > 0 || (m.lastYear ?? 0) > 0)
+  return (
+    <div className="rounded-card border border-border bg-bg-secondary p-4">
+      <div className="flex items-baseline justify-between gap-3 mb-2.5">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-faint">Revenue by month</p>
+        <p className="text-xs text-ink-faint tabular-nums">{thisYear} vs {lastYear}</p>
+      </div>
+      {rows.length === 0 ? (
+        <InlineEmpty className="py-3">No revenue recorded in either year yet.</InlineEmpty>
+      ) : (
+        <ul className="space-y-2">
+          {rows.map(m => (
+            <li key={m.month} className="flex items-center justify-between gap-2 text-sm">
+              <span className="text-ink truncate">{monthShort(m.month)}</span>
+              <span className="shrink-0 tabular-nums">
+                <span className="font-semibold text-ink">{formatCurrency(m.thisYear)}</span>
+                <span className="text-[11px] text-ink-faint font-normal ml-1.5">
+                  {m.lastYear != null ? `vs ${formatCurrency(m.lastYear)}` : 'no data last year'}
+                </span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }

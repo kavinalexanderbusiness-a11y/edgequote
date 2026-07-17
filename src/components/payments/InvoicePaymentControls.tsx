@@ -50,6 +50,10 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
   const [sendingReceipt, setSendingReceipt] = useState<string | null>(null)
   // Per-row busy state for the PERMANENT ledger list (receipt download / revert).
   const [rowBusy, setRowBusy] = useState<string | null>(null)
+  // Refunding money already collected (distinct from the overpayment resolver
+  // below, which only exists when they paid MORE than the invoice).
+  const [refundOpen, setRefundOpen] = useState(false)
+  const [refundAmount, setRefundAmount] = useState('')
 
   // Revert = remove the ledger row through the engine; the trigger re-derives the
   // invoice (paid → partial/unpaid) naturally. Undo re-inserts the same row.
@@ -79,13 +83,22 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
   }
 
   const applyable = Math.min(credit, balance)
-  // How the overpayment actually arrived. A cash/e-transfer overpayment must never be
-  // sent to Stripe (no charge exists there), and "Record refund" must never imply the
-  // app moved the money — it only records money the owner moved.
+  // How the money actually arrived. A cash/e-transfer payment must never be sent to
+  // Stripe (no charge exists there), and "Record refund" must never imply the app
+  // moved the money — it only records money the owner moved. Shared by the refund
+  // form and the overpayment resolver, so both tell the same story about the money.
   const lastMoneyIn = [...payments]
     .filter(p => p.kind !== 'credit' && Number(p.amount) > 0)
     .sort((a, b) => String(b.paid_at || b.created_at).localeCompare(String(a.paid_at || a.created_at)))[0]
-  const overpaidViaCard = !!lastMoneyIn && (lastMoneyIn.provider === 'stripe' || lastMoneyIn.method === 'card')
+  // A card refund has exactly ONE writer — the charge.refunded webhook — for the same
+  // reason a card PAYMENT does: Stripe is where the money actually moves, so Stripe is
+  // what we listen to. Hand-recording one on top DOUBLE-COUNTS: the webhook dedupes
+  // only against its own rows (stripe_session_id like 'refund:<charge>:%'), so it can't
+  // see a manual row and writes its own anyway — a $50 refund books as −$100. And if
+  // the owner records it here but never refunds in Stripe, the ledger says the customer
+  // was paid back when they weren't. Wrong in both directions, so we don't offer it —
+  // the same call removePayment already makes for reverting an online payment.
+  const refundViaCard = !!lastMoneyIn && (lastMoneyIn.provider === 'stripe' || lastMoneyIn.method === 'card')
 
   async function save() {
     setBusy(true)
@@ -248,6 +261,67 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
         </div>
       )}
 
+      {/* Refund money already collected. The ledger has recordRefund and the whole
+          downstream (refund receipt PDF, netted totals, the portal's "Refunded"
+          row) already handles negatives — but the only way in was the overpayment
+          resolver below, which needs the customer to have OVERpaid. So an owner who
+          refunded $50 of a normal $150 payment had no truthful way to record it:
+          their only option was Revert, which deletes the row and claims the payment
+          never happened. This is the missing door, not a second engine. */}
+      {paid > 0 && overpaid <= 0 && (
+        refundOpen ? (
+          refundViaCard ? (
+            /* The card path is a dead end by design — see refundViaCard above. Keep the
+               door visible (an owner still needs to ask "how do I refund this?") and
+               answer it truthfully instead of handing them a form that corrupts the
+               ledger whichever way they use it. */
+            <div className="rounded-lg border border-border bg-bg-tertiary/50 p-2.5 space-y-2">
+              <p className="text-xs text-ink font-medium">This one was paid by card — refund it in Stripe.</p>
+              <p className="text-[11px] text-ink-muted">
+                Open the payment in your Stripe dashboard and refund it there. It lands here on its own —
+                the ledger row, the balance and the refund receipt all appear the moment Stripe confirms it.
+                Recording it here too would count the same refund twice.
+              </p>
+              <Button size="sm" variant="ghost" onClick={() => setRefundOpen(false)}>Got it</Button>
+            </div>
+          ) : (
+          <div className="rounded-lg border border-border bg-bg-tertiary/50 p-2.5 space-y-2">
+            <label className="block text-[11px] font-semibold text-ink-muted">
+              Refund amount
+              <div className="relative mt-1">
+                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-faint text-sm" aria-hidden="true">$</span>
+                <input type="number" min="0" step="0.01" max={paid} value={refundAmount} autoFocus
+                  onChange={e => setRefundAmount(e.target.value)}
+                  aria-label="Refund amount"
+                  className="w-full bg-bg-tertiary border border-border-strong rounded-lg pl-6 pr-2 py-2 text-base sm:text-sm font-normal text-ink outline-none transition-all focus:border-accent focus:ring-2 focus:ring-accent/20" />
+              </div>
+            </label>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button size="sm" loading={busy} disabled={!(Number(refundAmount) > 0) || Number(refundAmount) > paid}
+                title={!(Number(refundAmount) > 0) ? 'Enter a refund amount.' : Number(refundAmount) > paid ? `You can’t refund more than the ${formatCurrency(paid)} collected.` : undefined}
+                onClick={() => run(
+                  () => recordRefund(supabase, { userId: uid, invoice, amount: Number(refundAmount) }),
+                  `Refund of ${formatCurrency(Number(refundAmount) || 0)} recorded.`,
+                ).then(() => { setRefundOpen(false); setRefundAmount('') })}>
+                <Banknote className="w-3.5 h-3.5" /> Record refund
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => { setRefundOpen(false); setRefundAmount('') }}>Cancel</Button>
+              {Number(refundAmount) > paid && <span className="text-[10px] text-amber-400">Only {formatCurrency(paid)} was collected.</span>}
+            </div>
+            {/* Never imply we moved money — we didn't. */}
+            <p className="text-[10px] text-ink-faint">
+              Recording a refund doesn’t move any money — return it the way it came in, then record it here so your balances stay correct.
+            </p>
+          </div>
+          )
+        ) : (
+          <button type="button" onClick={() => { setRefundOpen(true); setRefundAmount('') }}
+            className="text-[11px] font-medium text-ink-faint hover:text-ink rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 inline-flex items-center gap-1">
+            <Banknote className="w-3 h-3" /> Record a refund
+          </button>
+        )
+      )}
+
       {/* Overpayment resolver */}
       {overpaid > 0 && (
         <div className="rounded-lg border border-violet-500/30 bg-violet-500/[0.06] p-2.5 space-y-2">
@@ -256,15 +330,20 @@ export function InvoicePaymentControls({ invoice, settings, uid, credit, payment
             <Button size="sm" variant="secondary" loading={busy} onClick={() => run(() => overpaymentToCredit(supabase, { userId: uid, invoice, amount: overpaid }), `${formatCurrency(overpaid)} added to customer credit.`)}>
               <Gift className="w-3.5 h-3.5" /> Apply as credit
             </Button>
-            <Button size="sm" variant="secondary" loading={busy} onClick={() => run(() => recordRefund(supabase, { userId: uid, invoice, amount: overpaid, notes: 'Overpayment refund' }), `Refund of ${formatCurrency(overpaid)} recorded.`)}>
-              <Banknote className="w-3.5 h-3.5" /> Record refund
-            </Button>
+            {/* Same one-writer rule as the refund door above: a card overpayment gets
+                refunded in Stripe, and the webhook books it. Offering the button here
+                would double-count the identical way. */}
+            {!refundViaCard && (
+              <Button size="sm" variant="secondary" loading={busy} onClick={() => run(() => recordRefund(supabase, { userId: uid, invoice, amount: overpaid, notes: 'Overpayment refund' }), `Refund of ${formatCurrency(overpaid)} recorded.`)}>
+                <Banknote className="w-3.5 h-3.5" /> Record refund
+              </Button>
+            )}
             <Button size="sm" variant="ghost" loading={busy} onClick={raiseTotal}>
               <TrendingUp className="w-3.5 h-3.5" /> Raise total
             </Button>
           </div>
-          <p className="text-[10px] text-ink-faint">{overpaidViaCard
-            ? 'Card refunds are issued in your Stripe dashboard; this records it so your balances stay correct.'
+          <p className="text-[10px] text-ink-faint">{refundViaCard
+            ? `They paid by card — to return the ${formatCurrency(overpaid)}, refund it in your Stripe dashboard and it will be recorded here automatically. Or keep it as credit against their next invoice.`
             : `Recording a refund doesn’t move any money — return the ${formatCurrency(overpaid)} the way it came in, then record it here so your balances stay correct.`}</p>
         </div>
       )}

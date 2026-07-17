@@ -45,7 +45,12 @@ const ACTIONS: { type: MsgType; label: string; icon: typeof Navigation; tone?: s
 export function JobMessages({ jobId, customerId, customerName, visitDate, timeWindow, address }: Props) {
   const supabase = useMemo(() => createClient(), [])
   const [custom, setCustom] = useState<Partial<Record<MsgType, string>> | null>(null)
-  const [company, setCompany] = useState('Edge Property Services')
+  // Empty until settings load: `company` is passed straight to renderMessage as
+  // businessName, and templates.ts already falls back to "your service provider".
+  // Seeding it with a real company's name meant any owner whose settings hadn't
+  // loaded — or who never set company_name — composed a message signed with
+  // someone else's business.
+  const [company, setCompany] = useState('')
   const [reviewUrl, setReviewUrl] = useState('')
   const [reviewed, setReviewed] = useState(false)  // customer already left a review → hide review request
 
@@ -139,11 +144,21 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
 
   const activeAction = ACTIONS.find(a => a.type === active)
 
+  // The ETA message exists to promise an arrival window. With none to promise,
+  // `{{time_window}}` falls back to the literal words "your scheduled window" and
+  // the customer is texted "Our estimated arrival window is your scheduled
+  // window." A visit has no window when it has no committed start_time AND the
+  // route couldn't place it — which is EVERY untimed visit when no base address
+  // is set, since without a base there is no route and no arrival at all. Don't
+  // offer a promise we can't fill.
+  const canSendEta = !!timeWindow
+
   return (
     <div className="space-y-2.5">
-      {/* Action buttons — hide Review request once the customer has reviewed */}
+      {/* Action buttons — hide Review request once the customer has reviewed, and
+          Send ETA when there's no window to send. */}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
-        {ACTIONS.filter(a => a.type !== 'review_request' || !reviewed).map(a => (
+        {ACTIONS.filter(a => (a.type !== 'review_request' || !reviewed) && (a.type !== 'eta' || canSendEta)).map(a => (
           <button key={a.type} type="button" onClick={() => open(a.type)} disabled={busy}
             className={cn('h-9 rounded-lg border text-xs font-medium flex items-center justify-center gap-1.5 active:scale-95 transition-transform disabled:opacity-50',
               active === a.type ? 'border-accent bg-accent/15 text-accent-text ring-1 ring-accent/40'
@@ -152,6 +167,14 @@ export function JobMessages({ jobId, customerId, customerName, visitDate, timeWi
           </button>
         ))}
       </div>
+
+      {/* Say why it's missing rather than let the button quietly vanish — both
+          fixes are one step away, and either one restores it. */}
+      {!canSendEta && (
+        <p className="text-[10px] text-ink-faint">
+          <span className="font-semibold text-ink-muted">Send ETA</span> needs an arrival window — give this visit a start time, or set your base address in Settings so the route can estimate one.
+        </p>
+      )}
 
       {/* Editable composer for the chosen action */}
       {activeAction && (

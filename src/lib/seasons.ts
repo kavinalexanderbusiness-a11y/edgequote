@@ -9,6 +9,7 @@
 // year. A season can wrap the new year (snow: Nov 1 → Mar 31).
 
 import { addDays, parseISO, format } from 'date-fns'
+import { monthShort } from '@/lib/preferences'
 import type { RecurUnit } from '@/types'
 
 export type SeasonCategory = 'lawn' | 'snow' | 'year_round'
@@ -20,32 +21,109 @@ export interface ServiceSeason {
   startDay: number   // 1-31
   endMonth: number
   endDay: number
+  // Owner-facing name ("Pool season", "Pest season"). Optional; the two built-in
+  // seasons don't need one. Present on any season an owner defines.
+  label?: string
+  // The keywords that map a service TYPE to this season. This is how a non-lawn
+  // trade declares its own seasonality with NO industry picker and NO code change:
+  // a pool company adds a season whose match is ['pool','open','clos'] and its
+  // "Pool Opening"/"Pool Closing" services become seasonal. Absent on the stored
+  // built-in seasons (they fall back to the hardcoded hints below), so every
+  // existing lawn install behaves identically.
+  match?: string[]
 }
 
+// A keyed map of the business's seasons. `lawn` and `snow` are the built-in two and
+// stay concrete so all existing consumers (settings editor, cross-sell, JobForm
+// labels) keep compiling and behaving exactly as before. The index signature is
+// what lets an owner add more — "pool", "pest", "holiday-lights" — without a schema
+// change, an enum, or the app ever asking "what industry are you?".
 export interface ServiceSeasons {
   lawn: ServiceSeason
   snow: ServiceSeason
+  [key: string]: ServiceSeason
 }
 
-// Calgary defaults.
-export const DEFAULT_LAWN_SEASON: ServiceSeason = { startMonth: 4, startDay: 15, endMonth: 10, endDay: 31 }
-export const DEFAULT_SNOW_SEASON: ServiceSeason = { startMonth: 11, startDay: 1, endMonth: 3, endDay: 31 }
+// Service-type → category. Hints match at a WORD START (prefix), so "Weekly
+// Mowing", "Monthly Lawn Care" and "Fertilization" all read as lawn, and "Snow
+// Removal/Blowing/Clearing" as snow. Anything else is year-round (no season).
+//
+// The boundary is load-bearing, not tidiness. These used to be plain substring
+// tests, and 'ice' is inside serv·ice — so EVERY service with "Service" in its
+// name was classified snow, and snow is tested first, so it won even when the
+// string said "Lawn":
+//
+//     "Lawn Service"   → snow        "Full Service Mowing" → snow
+//     "Weekly Service" → snow        "Edge Property Services" → snow
+//
+// Snow's season is Nov 1–Mar 31, so isSeasonallyDormant answered TRUE all
+// summer: those customers silently left the re-book and reactivation queues for
+// the whole mowing season. "Weekly Service" is not a hypothetical name — the
+// optimizer's own MOW_LABEL matches `(weekly|biweekly|monthly) service`.
+//
+// Prefix, not whole-word: 'fertiliz' must still catch "Fertilizing", and 'mow'
+// "Mowing". Only the LEADING boundary is required.
+//
+// Exported so the Settings editor can WARN when a custom season's keyword collides
+// with a built-in hint — custom seasons resolve first (deliberately: the owner's
+// word beats ours), which means adding 'trim' to a Tree season silently moves
+// "Hedge Trimming" off the lawn season. That priority is right; it being invisible
+// is not. The UI's only defence is knowing these words.
+export const LAWN_HINTS = ['mow', 'lawn', 'fertiliz', 'fertilis', 'grass', 'aerat', 'trim', 'edge']
+export const SNOW_HINTS = ['snow', 'ice', 'plow', 'plough', 'salt', 'shovel']
+
+// Calgary defaults. lawn/snow resolve through the built-in hint lists (below), not
+// through `match`, so their exact priority is preserved — `label` is only for display.
+export const DEFAULT_LAWN_SEASON: ServiceSeason = { startMonth: 4, startDay: 15, endMonth: 10, endDay: 31, label: 'Lawn' }
+export const DEFAULT_SNOW_SEASON: ServiceSeason = { startMonth: 11, startDay: 1, endMonth: 3, endDay: 31, label: 'Snow' }
 export const DEFAULT_SEASONS: ServiceSeasons = { lawn: DEFAULT_LAWN_SEASON, snow: DEFAULT_SNOW_SEASON }
 
-// Service-type → category. Substring match so "Weekly Mowing", "Bi-Weekly
-// Mowing", "Monthly Lawn Care", "Fertilization" all read as lawn; "Snow
-// Removal/Blowing/Clearing" as snow. Anything else is year-round (no season).
-const LAWN_HINTS = ['mow', 'lawn', 'fertiliz', 'fertilis', 'grass', 'aerat', 'trim', 'edge']
-const SNOW_HINTS = ['snow', 'ice', 'plow', 'plough', 'salt', 'shovel']
+// THE hint matcher — used for the built-in lists AND for an owner's own `match`
+// words, so a season an owner defines can never be matched by a rule the built-ins
+// aren't held to. One matcher, one behaviour.
+const hintRe = (h: string) => new RegExp(`\\b${h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i')
+export const matchesHint = (s: string, hints: string[]) => hints.some(h => hintRe(h).test(s))
 
 export function serviceCategory(serviceType: string | null | undefined): SeasonCategory {
   const s = (serviceType || '').toLowerCase()
-  if (SNOW_HINTS.some(h => s.includes(h))) return 'snow'
-  if (LAWN_HINTS.some(h => s.includes(h))) return 'lawn'
+  if (matchesHint(s, SNOW_HINTS)) return 'snow'
+  if (matchesHint(s, LAWN_HINTS)) return 'lawn'
   return 'year_round'
 }
 
+// Resolve the season a service belongs to. THE fix for the one structural blocker:
+// this used to consult only the hardcoded lawn/snow hints, so a genuinely seasonal
+// non-lawn trade (pool opens in spring, pest ramps in summer) matched nothing, fell
+// to year-round with no season end, and the reactivation engine could not tell
+// "their season ended" from "we lost them" — every off-season customer read as
+// lapsed.
+//
+// Now an owner-defined `match` list wins first, so any trade can declare its own
+// season through the EXISTING service_seasons jsonb. The built-in lawn/snow hints
+// remain as the fallback, so a lawn business — including every install whose stored
+// seasons predate `match` — resolves exactly as before.
 export function seasonForService(serviceType: string | null | undefined, seasons: ServiceSeasons): ServiceSeason | null {
+  const s = (serviceType || '').toLowerCase()
+  // Owner-defined CUSTOM seasons (any key other than the built-in lawn/snow) win
+  // first — this is the new capability. lawn/snow are deliberately excluded here so
+  // their exact resolution, INCLUDING snow-before-lawn priority, is left entirely to
+  // the untouched hint logic below. That's what guarantees a lawn business behaves
+  // byte-for-byte as before.
+  if (s) {
+    // Keys are SORTED before iterating. Object.keys order is insertion order in
+    // memory but Postgres jsonb canonicalises key order on save (length, then
+    // bytewise) — so without sorting, which season wins an overlapping keyword
+    // could FLIP between "before save" and "after reload" with no edit by the
+    // owner. Sorting makes resolution identical everywhere, always.
+    for (const key of Object.keys(seasons).sort()) {
+      if (key === 'lawn' || key === 'snow') continue
+      const season = seasons[key]
+      // Same word-start matcher as the built-in hints: an owner who types 'ice' for
+      // an ice-machine business must not have it match every "Service" they sell —
+      // the exact trap the built-in lists were just pulled out of.
+      if (season?.match?.some(m => m && matchesHint(s, [m.toLowerCase()]))) return season
+    }
+  }
   const cat = serviceCategory(serviceType)
   if (cat === 'lawn') return seasons.lawn
   if (cat === 'snow') return seasons.snow
@@ -53,6 +131,16 @@ export function seasonForService(serviceType: string | null | undefined, seasons
 }
 
 function pad(n: number): string { return String(n).padStart(2, '0') }
+
+// Clamp a stored day to a real day of that month IN THAT YEAR. The editor caps
+// days at 31 without month awareness, so "Feb 30" (or Feb 29 crossing into a
+// non-leap year, or Sep 31) can reach the store — and this function used to pad
+// it straight into an invalid date string ('2027-02-30') that crashes formatDate
+// at render and is rejected by the recurrence insert. A season ending "Feb 30"
+// can only ever mean its last real day.
+function clampDay(year: number, month: number, day: number): number {
+  return Math.min(day, new Date(year, month, 0).getDate())
+}
 
 // Does this season wrap the calendar year (start month/day after end)?
 function wraps(s: ServiceSeason): boolean {
@@ -72,12 +160,12 @@ export function seasonEndDateFor(startISO: string, season: ServiceSeason): strin
     // Same-year season (lawn). If we start after this year's end, the relevant
     // end is next year's (e.g. measuring in November for next spring).
     const year = startMD > endMD ? startYear + 1 : startYear
-    return `${year}-${pad(season.endMonth)}-${pad(season.endDay)}`
+    return `${year}-${pad(season.endMonth)}-${pad(clampDay(year, season.endMonth, season.endDay))}`
   }
   // Wrapping season (snow): Nov–Dec start → end next year; Jan–Mar start → end this year.
   const startSegmentIsTail = startMD >= season.startMonth * 100 + season.startDay
   const year = startSegmentIsTail ? startYear + 1 : startYear
-  return `${year}-${pad(season.endMonth)}-${pad(season.endDay)}`
+  return `${year}-${pad(season.endMonth)}-${pad(clampDay(year, season.endMonth, season.endDay))}`
 }
 
 // Is dateISO within the season that contains/follows it? Used to detect whether
@@ -112,22 +200,32 @@ export function estimateSeasonVisits(startISO: string, endISO: string, unit: Rec
 }
 
 // Human label like "Apr 15 → Oct 31".
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 export function seasonLabel(s: ServiceSeason): string {
-  return `${MONTHS[s.startMonth - 1]} ${s.startDay} → ${MONTHS[s.endMonth - 1]} ${s.endDay}`
+  return `${monthShort(s.startMonth - 1)} ${s.startDay} → ${monthShort(s.endMonth - 1)} ${s.endDay}`
 }
 
 // Read seasons off business_settings, falling back to defaults. Stored as a JSON
-// object { lawn, snow }; tolerant of partial/missing data.
+// object keyed by season — { lawn, snow, …any owner-defined seasons }. Tolerant of
+// partial/missing data.
+//
+// It used to hardcode only lawn/snow, which meant an owner-defined "pool" season in
+// the jsonb was silently DROPPED on read — the engine could resolve a custom season
+// but never saw one. This carries every valid season key through, while guaranteeing
+// lawn/snow are always present (so the concrete consumers never hit undefined).
 export function settingsToSeasons(raw: unknown): ServiceSeasons {
   if (!raw || typeof raw !== 'object') return DEFAULT_SEASONS
-  const r = raw as Partial<ServiceSeasons>
+  const r = raw as Record<string, unknown>
   const valid = (s: unknown): s is ServiceSeason =>
     !!s && typeof s === 'object'
     && typeof (s as ServiceSeason).startMonth === 'number'
     && typeof (s as ServiceSeason).endMonth === 'number'
-  return {
+  const out: ServiceSeasons = {
     lawn: valid(r.lawn) ? r.lawn : DEFAULT_LAWN_SEASON,
     snow: valid(r.snow) ? r.snow : DEFAULT_SNOW_SEASON,
   }
+  for (const key of Object.keys(r)) {
+    if (key === 'lawn' || key === 'snow') continue
+    if (valid(r[key])) out[key] = r[key]
+  }
+  return out
 }

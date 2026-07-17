@@ -1,4 +1,4 @@
-import { Coord, haversineKm } from '@/lib/geo'
+import { Coord, haversineKm, pointKey } from '@/lib/geo'
 
 // ── Route Density Score — THE single "how on-route is this stop" engine ─────────
 // One place answers "is this property dense or isolated?" so quotes, the customer
@@ -69,7 +69,9 @@ export function locatedStops(items: { lat: number | null; lng: number | null }[]
   const out: Coord[] = []
   for (const i of items) {
     if (i.lat == null || i.lng == null) continue
-    const key = `${i.lat.toFixed(5)},${i.lng.toFixed(5)}`
+    // geo.pointKey is THE same-stop rule — this used to inline its own copy of the
+    // 5-decimal round, while geo.nearbyJobCount had no dedup at all.
+    const key = pointKey({ lat: i.lat, lng: i.lng })
     if (seen.has(key)) continue
     seen.add(key)
     out.push({ lat: i.lat, lng: i.lng })

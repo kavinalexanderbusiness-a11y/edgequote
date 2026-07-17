@@ -261,7 +261,11 @@ export async function createDraftInvoiceForCompletedJob(supabase: Supa, job: Job
     status: 'draft',
     issued_date: today,
     due_date: dueISO,
-    notes: `Auto-generated from completed ${job.recurrence_id ? `${freq || 'recurring'} visit` : 'job'} on ${job.scheduled_date}.`,
+    // Provenance is for the OWNER, not the customer. This used to go in `notes`,
+    // which InvoicePDF prints — so every auto-drafted invoice told the customer
+    // "Auto-generated from completed weekly visit on 2026-07-10". `notes` is left
+    // empty for the owner to write something the customer should actually read.
+    internal_notes: `Auto-generated from completed ${job.recurrence_id ? `${freq || 'recurring'} visit` : 'job'} on ${job.scheduled_date}.`,
   }).select('id').single()
 
   if (error || !created) {

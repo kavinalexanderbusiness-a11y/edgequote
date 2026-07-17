@@ -1,7 +1,9 @@
+import { DEFAULT_JOB_MIN } from '@/lib/route'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { estimateVisitMinutes } from '@/lib/pricing'
 import { crewCostPerHour } from '@/lib/economics'
-import { jobVisitValue } from '@/lib/invoicing'
+import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
+import { clamp } from '@/lib/utils'
 
 // ── Smart Labor Calculator V2 — the self-learning labor engine ───────────────────
 // Estimates on-site minutes from a property's OWN history first, then the service
@@ -142,7 +144,6 @@ function cv(xs: number[]): number {
   const v = xs.reduce((a, b) => a + (b - mean) ** 2, 0) / xs.length
   return Math.min(1, Math.sqrt(v) / mean)
 }
-const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n))
 
 // ── the learned model ───────────────────────────────────────────────────────────
 export interface LaborModel {
@@ -306,7 +307,12 @@ export function estimateLabor(input: EstimateInput, model: LaborModel | null): L
     if (firstCutF > 1) reasons.push('First cut of the season — heavier than a maintenance visit')
     if (isMowing(key) && season !== 'summer') reasons.push(`${season[0].toUpperCase() + season.slice(1)} adjustment applied`)
   } else {
-    comboSolo = estimateVisitMinutes(sqft) * firstCutF * og
+    // Already the explicit low-confidence branch: usedSizeModel forces enoughData=false
+    // and caps confidence, and the reason below says so in words. estimateVisitMinutes
+    // returns null with no measurement to size from, so fall back to the SHARED
+    // job-length default (lib/route, what duration.ts uses) rather than the lawn 45 —
+    // this path is exactly "we don't know", and it now says so with a neutral number.
+    comboSolo = (estimateVisitMinutes(sqft) ?? DEFAULT_JOB_MIN) * firstCutF * og
     usedSizeModel = true
     reasons.push(`Not enough ${svcLabel} history yet — rough size estimate. Time a few ${svcLabel} jobs to unlock a smart default.`)
   }
@@ -320,9 +326,32 @@ export function estimateLabor(input: EstimateInput, model: LaborModel | null): L
   if (propStats && propN >= 1) {
     const propSolo = median(propStats.soloMinutes) * og * firstCutF
     propCv = cv(propStats.soloMinutes)
-    const w = clamp(propN / (propN + 2), 0, 0.85) // heavy property weight, capped
+    // Blending toward the learned combo is regression to a MEAN — sound, and the
+    // reason the property weight is capped at 0.85. Blending toward the size model
+    // is regression to a FABRICATION: with no sqft, estimateVisitMinutes(0) is a
+    // flat 45 (pricing.ts) that encodes nothing about this property, this service,
+    // or this owner. It was still mixed in at (1 - w), so four real timed visits
+    // averaging 26.5 min were reported as 33 — the estimator was at its most wrong
+    // exactly where it had the most evidence. 27 of 62 live properties have no
+    // lawn_sqft, so this is the common case, not the corner.
+    //
+    // When the alternative carries no information, the property's own history is
+    // the whole answer.
+    const w = usedSizeModel ? 1 : clamp(propN / (propN + 2), 0, 0.85)
     solo = w * propSolo + (1 - w) * comboSolo
-    reasons.unshift(`${propN} past ${svcLabel} visit${propN !== 1 ? 's' : ''} to this exact property (weighted ${Math.round(w * 100)}%)`)
+    reasons.unshift(
+      usedSizeModel
+        ? `${propN} past ${svcLabel} visit${propN !== 1 ? 's' : ''} to this exact property — timed, so we use them`
+        : `${propN} past ${svcLabel} visit${propN !== 1 ? 's' : ''} to this exact property (weighted ${Math.round(w * 100)}%)`,
+    )
+    // The size-model caveat pushed at the top of this function is now false: we
+    // are not guessing from size, we are reading this property's own stopwatch.
+    // Leaving it made one estimate say both "high confidence — this property has a
+    // track record" and "not enough history yet — rough size estimate".
+    if (usedSizeModel) {
+      const i = reasons.findIndex(r => r.startsWith(`Not enough ${svcLabel} history yet`))
+      if (i !== -1) reasons.splice(i, 1)
+    }
   }
   // Enough data to trust = this service has its own history (learned or this
   // property's). A pure size guess does NOT count — that's the "don't guess" case.
@@ -357,7 +386,14 @@ export function estimateLabor(input: EstimateInput, model: LaborModel | null): L
   if (confidence === 'high' && basis === 'property') reasons.unshift(`High confidence — this property has its own ${svcLabel} track record`)
   else if (confidence === 'high') reasons.unshift(`High confidence — large sample of ${svcLabel} jobs`)
 
-  return { minutes, minMinutes, maxMinutes, confidence, confidencePct, sampleSize: propN + comboN, basis, reasons, manMinutes, enoughData, serviceKey: key, serviceLabel: svcLabel }
+  // DISTINCT visits, not propN + comboN. The property's own visits are a SUBSET of
+  // the combo pool — the same job is in both — so adding them double-counted:
+  // 3 property visits inside a 4-job pool rendered as "7 mowing jobs" under the
+  // estimate. The UI presents this number as evidence; inflating it is the one
+  // thing that must never happen to an evidence count. max() is the honest bound:
+  // we know of at least this many, and never claim a job twice.
+  const sampleSize = Math.max(propN, comboN)
+  return { minutes, minMinutes, maxMinutes, confidence, confidencePct, sampleSize, basis, reasons, manMinutes, enoughData, serviceKey: key, serviceLabel: svcLabel }
 }
 
 // ── recommendation layer (req #4) ─────────────────────────────────────────────────
@@ -464,23 +500,39 @@ export async function loadLaborInsights(supabase: SupabaseClient): Promise<{ ins
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
   const uid = user.id
-  const [oRes, jRes, qRes, pRes, sRes] = await Promise.all([
+  const [oRes, jRes, qRes, pRes, sRes, rRes] = await Promise.all([
     supabase.from('labor_observations').select('job_id, property_id, service_date, sqft, service_type, crew_size, frequency, is_initial_visit, overgrowth, estimated_minutes, actual_minutes').eq('user_id', uid),
     supabase.from('jobs').select('id, price, quote_id, recurrence_id, is_initial_visit').eq('user_id', uid),
     supabase.from('quotes').select('id, total, initial_price, weekly_price, biweekly_price, monthly_price').eq('user_id', uid),
     supabase.from('properties').select('id, address').eq('user_id', uid),
     supabase.from('business_settings').select('crew_cost_per_hour').eq('user_id', uid).maybeSingle(),
+    // The recurrence carries the CADENCE. Without it every recurring visit fell
+    // through to the quote's first-visit price (see the valuation note below).
+    supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', uid),
   ])
   const obs = (oRes.data as LaborObservation[]) || []
   const model = learnLaborModel(obs)
 
-  // Per-job value (reuse the invoicing valuation — same numbers as BI).
+  // Per-job value — the ONE invoicing valuation, with the cadence resolved the
+  // same way lib/profitability's jobValue resolves it.
+  //
+  // This used to pass `null` for freq, so quoteVisitAmount treated EVERY visit as
+  // a first visit: a $65 biweekly mow was valued at the quote's $150 initial
+  // price, inflating ServiceProfit revPerHour/profit against every other engine.
+  // Only the anchor visit should read the initial price, and `is_initial_visit`
+  // already says which one that is.
   const quotesById: Record<string, Record<string, unknown>> = {}
   for (const q of (qRes.data as { id: string }[]) || []) quotesById[q.id] = q as unknown as Record<string, unknown>
+  const recById: Record<string, { freq: string | null; interval_unit: string | null; interval_count: number | null }> = {}
+  for (const r of (rRes.data as { id: string; freq: string | null; interval_unit: string | null; interval_count: number | null }[]) || []) {
+    recById[r.id] = { freq: r.freq, interval_unit: r.interval_unit, interval_count: r.interval_count }
+  }
   const valueByJob: Record<string, number> = {}
-  for (const j of (jRes.data as { id: string; price: number | null; quote_id: string | null; is_initial_visit: boolean | null }[]) || []) {
+  for (const j of (jRes.data as { id: string; price: number | null; quote_id: string | null; recurrence_id: string | null; is_initial_visit: boolean | null }[]) || []) {
     const q = j.quote_id ? quotesById[j.quote_id] : null
-    valueByJob[j.id] = jobVisitValue(j.price, q, null, j.is_initial_visit ?? false)
+    const rec = j.recurrence_id ? recById[j.recurrence_id] : null
+    const freq = rec ? effectiveFreq(rec.freq, rec.interval_unit, rec.interval_count) : null
+    valueByJob[j.id] = jobVisitValue(j.price, q, freq, j.is_initial_visit ?? false)
   }
   const nameByProperty: Record<string, string> = {}
   for (const p of (pRes.data as { id: string; address: string }[]) || []) nameByProperty[p.id] = p.address

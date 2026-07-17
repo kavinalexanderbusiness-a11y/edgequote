@@ -5,8 +5,8 @@ import { createClient } from '@/lib/supabase/client'
 import { Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
-import { Select } from '@/components/ui/Select'
 import { CustomerPicker } from '@/components/ui/CustomerPicker'
+import { PropertySelect } from '@/components/ui/PropertySelect'
 import { toast } from '@/lib/toast'
 import { localTodayISO } from '@/lib/utils'
 import { nextInvoiceNumber } from '@/lib/invoicing'
@@ -96,7 +96,15 @@ export function NewInvoiceDialog({ open, onClose, onCreated }: {
         address: property?.address ?? customer.address ?? null,
         service_type: service.trim() || null,
         amount: 0,             // the draft editor sets the real figure from the lines
-        line_items: [],
+        // Seed ONE empty line. The draft editor shows its itemised UI only when a
+        // draft already has lines (line_items.length > 0) — an empty array opened
+        // the editor on the single "Amount" box instead, hiding the qty/unit-price
+        // rows that are the whole reason to bill manually behind an "+ Add line
+        // item" link. A manual invoice starts as a line item, because it is one.
+        // Seeded WITH a description, matching the editor's own "+ Add line item"
+        // fallback: the editor drops blank-description lines on save, so a blank
+        // seed is a trapdoor — you price it, and the line disappears.
+        line_items: [{ description: service.trim() || 'Service', amount: 0, kind: 'service' }],
         status: 'draft',
         issued_date: today,
         due_date: due || null,
@@ -124,13 +132,22 @@ export function NewInvoiceDialog({ open, onClose, onCreated }: {
           hint="The invoice lands on their profile, portal and reminder schedule."
         />
 
-        {properties.length > 0 && (
-          <Select
+        {/* THE shared property picker. This was a hand-built <Select> that had already
+            drifted from JobForm's copy of the same idea (" · primary" here vs
+            " (primary)" there) — and a <select> of every address stops working the
+            moment a landlord shows up. Adding inline means a new address can be billed
+            without abandoning the invoice. */}
+        {customerId && (
+          <PropertySelect
             label="Property"
+            properties={properties}
             value={propertyId}
-            onChange={e => setPropertyId(e.target.value)}
+            onChange={setPropertyId}
+            customerId={customerId}
+            onCreated={p => setProperties(prev => [...prev, p])}
+            allowNone
+            noneLabel="No specific property"
             hint="Optional — leave blank to bill the customer, not a specific address."
-            options={[{ value: '', label: 'No specific property' }, ...properties.map(p => ({ value: p.id, label: p.address + (p.is_primary ? ' · primary' : '') }))]}
           />
         )}
 

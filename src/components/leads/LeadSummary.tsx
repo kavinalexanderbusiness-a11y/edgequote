@@ -84,7 +84,9 @@ export function LeadSummary({ lead, footer, className }: { lead: WebsiteLead; fo
       {/* Measurement / condition chips */}
       {(lead.lawn_sqft || (freq && FREQ_LABEL[freq]) || yardCond || lead.travel_distance_km != null) && (
         <div className="flex flex-wrap gap-1.5 mt-2.5">
-          {lead.lawn_sqft ? <Chip icon={Ruler}>{Number(lead.lawn_sqft).toLocaleString()} ft² lawn</Chip> : null}
+          {/* lawn_sqft is the measured area, whatever was measured — labelling it a
+              lawn told a roofer's lead intake it was in a lawn app. */}
+          {lead.lawn_sqft ? <Chip icon={Ruler}>{Number(lead.lawn_sqft).toLocaleString()} ft² measured</Chip> : null}
           {freq && FREQ_LABEL[freq] ? <Chip icon={Repeat}>{FREQ_LABEL[freq]}</Chip> : null}
           {yardCond ? <Chip>{yardCond}</Chip> : null}
           {lead.travel_distance_km != null ? <Chip>{Number(lead.travel_distance_km).toFixed(1)} km away</Chip> : null}

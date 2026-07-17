@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { loadGoogleMaps } from '@/lib/googleMaps'
 import { Grade, GRADE_COLORS } from '@/lib/profitability'
 import { Coord } from '@/lib/geo'
+import { Banner } from '@/components/ui/Banner'
 
 export interface RouteMapStop { lat: number; lng: number; order: number; title: string }
 
@@ -82,7 +83,7 @@ export function RouteMap({
   }, [ready, stops, grade, base])
 
   if (err) {
-    return <div className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-3">{err}</div>
+    return <Banner tone="warn">{err}</Banner>
   }
   return (
     <div className="relative rounded-card overflow-hidden border border-border">

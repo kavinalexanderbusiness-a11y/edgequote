@@ -1,11 +1,14 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { localTodayISO } from '@/lib/utils'
-import { crewCostPerHour } from '@/lib/economics'
+import { localTodayISO, parseLocalDate } from '@/lib/utils'
+import { weekdayShort } from '@/lib/preferences'
+import { collectionStats } from '@/lib/businessMemory'
+import { crewCostPerHour, visitEconomics } from '@/lib/economics'
 import { effectiveFreq, jobVisitValue } from '@/lib/invoicing'
 import { SEASON_VISITS } from '@/lib/pricing'
-import { settingsToSeasons, seasonForService, isWithinSeason, ServiceSeasons } from '@/lib/seasons'
+import { settingsToSeasons, ServiceSeasons } from '@/lib/seasons'
 import { learnDurations, learnedDurationFor } from '@/lib/duration'
 import { densityFor, locatedStops } from '@/lib/routeDensity'
+import { cadenceDays, daysBetween, isSeasonallyDormant, lifetimeValue, ranOut } from '@/lib/signals'
 import { analyzeWinLoss, WLQuote, QuoteOutcomeRow } from '@/lib/winLoss'
 import {
   ProfitJob, ProfitContext, ProfitQuote, RecInfo,
@@ -22,6 +25,56 @@ import {
 const DEFAULT_LABOR_MIN = 45
 
 export interface NamedValue { name: string; value: number; sub?: number }
+
+// ── The three facts nothing else in the app computes ─────────────────────────
+// Every figure below is COMPOSED from the existing engines (dayProfitability →
+// monthlyTrends → visitEconomics). Nothing here re-derives revenue or profit.
+
+/** One day-of-week rolled up across all history. dayProfitability is keyed by
+ *  calendar DATE, so the weekday dimension was previously thrown away. */
+export interface WeekdayStat { weekday: number; label: string; jobs: number; revenue: number; hours: number; revPerHour: number | null }
+
+/** Cancellations. Everywhere else in the codebase `status === 'cancelled'` is
+ *  only ever a filter to EXCLUDE — nothing counted it until now. */
+export interface CancellationStats { cancelledYTD: number; completedYTD: number; cancelRatePct: number | null; trend: NamedValue[]; worstMonth: string | null }
+
+/** How much of the year's revenue rides on the biggest customers. For a 1-3 person
+ *  shop this is a solvency fact, not trivia: if one customer is 30% of revenue,
+ *  losing them is a different event from losing an average one. */
+export interface RevenueConcentration {
+  top1Name: string | null
+  top1Pct: number | null   // share of YTD revenue, 0-100
+  top3Pct: number | null
+  payingCustomers: number  // customers with any YTD revenue
+}
+
+/** Is growth compounding on a returning base, or churn-and-replace? A customer is
+ *  NEW if their first completed visit ever falls in this year — so a customer won
+ *  last season who is still here counts as returning, which is the honest read. */
+export interface RevenueMix {
+  newRevenue: number
+  returningRevenue: number
+  newPct: number | null    // 0-100; null when there's no YTD revenue
+}
+
+/** How fast money actually arrives. Median (not mean) so one 90-day straggler
+ *  can't make a healthy book look broken. */
+export interface CollectionSpeed {
+  medianDaysToPay: number | null
+  paidInvoices: number     // invoices the figure is based on
+  slowestDays: number | null
+}
+
+/** Season-to-date on BOTH sides — see the cutoff note in computeBI. */
+export interface YearSummary { year: string; revenue: number; jobs: number; profit: number | null }
+export interface YearComparison {
+  thisYear: YearSummary
+  lastYear: YearSummary | null          // null for a first-season business
+  revenueDeltaPct: number | null
+  jobsDeltaPct: number | null
+  byMonth: { month: number; thisYear: number; lastYear: number | null }[]
+}
+
 export interface BIReport {
   generatedFor: string // 'Jun 2026'
   financial: {
@@ -81,6 +134,17 @@ export interface BIReport {
     capacityForecastPct: number | null
     growthForecastPct: number | null
   }
+  // Busiest weekdays — all 7 entries, Sun(0)..Sat(6), zero-jobs days included.
+  weekday: { byWeekday: WeekdayStat[]; busiest: WeekdayStat | null; bestPaying: WeekdayStat | null }
+  cancellations: CancellationStats
+  yearly: YearComparison
+  // Executive read: who the revenue depends on, whether it's compounding, and how
+  // fast it turns into cash. All composed from rows already fetched.
+  executive: {
+    concentration: RevenueConcentration
+    mix: RevenueMix
+    collection: CollectionSpeed
+  }
 }
 
 const round = (n: number) => Math.round(n)
@@ -126,7 +190,9 @@ export interface BIInput {
   quoteOutcomes: QuoteOutcomeRow[]
   properties: { id: string; lat: number | null; lng: number | null; postal_code: string | null; city: string | null; neighborhood: string | null }[]
   recurrences: Record<string, RecInfo>
-  invoices: { status: string; amount: number | null; customer_id: string | null }[]
+  // issued_date/paid_at drive collection speed. This input was fetched and passed
+  // but never read until then — the loader already had the rows.
+  invoices: { status: string; amount: number | null; customer_id: string | null; issued_date?: string | null; paid_at?: string | null }[]
   crewCost: number
   capacityHours: number
   preferredDays: number[]
@@ -135,7 +201,7 @@ export interface BIInput {
 }
 
 export function computeBI(inp: BIInput): BIReport {
-  const { jobs, pctx, customers, quotes, quoteOutcomes, properties, recurrences, crewCost, capacityHours, preferredDays, seasons, today } = inp
+  const { jobs, pctx, customers, quotes, quoteOutcomes, properties, recurrences, invoices, crewCost, capacityHours, preferredDays, seasons, today } = inp
   const yr = today.slice(0, 4)
   const thisMonth = today.slice(0, 7)
   const yearStart = `${yr}-01-01`
@@ -175,8 +241,35 @@ export function computeBI(inp: BIInput): BIReport {
   const jobsByDate: Record<string, ProfitJob[]> = {}
   for (const j of jobs) (jobsByDate[j.scheduled_date] ||= []).push(j)
   const routes = pastDates.map(d => dayProfitability(d, jobsByDate[d] || [], pctx))
-  const allTrend = monthlyTrends(routes)
+  // crewCost makes every MonthTrend profit/margin-aware (lib/profitability) — the
+  // 12-month trend, the YoY comparison below and the chart all read the same rows.
+  const allTrend = monthlyTrends(routes, crewCost)
   const trend = allTrend.slice(-12)
+
+  // ── WEEKDAY ──
+  // Day-of-week rollup of the SAME day routes: revenue/hours are RouteProfit
+  // fields (already priced via jobValue) — nothing is re-derived from jobs here.
+  // totalHours (labour + drive) is the denominator so revPerHour means exactly
+  // what RouteProfit.revPerHour and MonthTrend.revPerHour mean.
+  const wdAcc = Array.from({ length: 7 }, (_, i) => ({ weekday: i, jobs: 0, revenue: 0, hours: 0 }))
+  for (const r of routes) {
+    const e = wdAcc[parseLocalDate(r.date).getDay()] // date-only string → local midnight
+    e.jobs += r.stops
+    e.revenue += r.revenue
+    e.hours += r.totalHours
+  }
+  const byWeekday: WeekdayStat[] = wdAcc.map(e => ({
+    weekday: e.weekday,
+    label: weekdayShort(e.weekday),
+    jobs: e.jobs,
+    revenue: round(e.revenue),
+    hours: Math.round(e.hours * 10) / 10,
+    revPerHour: e.hours > 0 ? round(e.revenue / e.hours) : null,
+  }))
+  const worked = byWeekday.filter(w => w.jobs > 0)
+  const busiest = worked.length ? worked.reduce((a, b) => (b.jobs > a.jobs ? b : a)) : null
+  const payingDays = worked.filter(w => w.revPerHour != null)
+  const bestPaying = payingDays.length ? payingDays.reduce((a, b) => ((b.revPerHour as number) > (a.revPerHour as number) ? b : a)) : null
 
   // ── PROFITABILITY ──
   let totalLaborMin = 0, grossProfit = 0
@@ -222,9 +315,8 @@ export function computeBI(inp: BIInput): BIReport {
   const lastVisitByCust: Record<string, string> = {}
   for (const j of completed) if (j.customer_id) { if (!lastVisitByCust[j.customer_id] || j.scheduled_date > lastVisitByCust[j.customer_id]) lastVisitByCust[j.customer_id] = j.scheduled_date }
   const futureCust = new Set(jobs.filter(j => j.customer_id && j.scheduled_date >= today && j.status !== 'completed' && j.status !== 'cancelled').map(j => j.customer_id as string))
-  const dDays = (iso: string) => Math.round((new Date(today + 'T00:00:00').getTime() - new Date(iso + 'T00:00:00').getTime()) / 86_400_000)
   const activeIds = new Set<string>()
-  for (const id of Object.keys(lastVisitByCust)) if (dDays(lastVisitByCust[id]) <= 90) activeIds.add(id)
+  for (const id of Object.keys(lastVisitByCust)) if (daysBetween(lastVisitByCust[id], today) <= 90) activeIds.add(id)
   for (const id of futureCust) activeIds.add(id)
 
   // Churn / retention over RECURRING customers (in-season, ran out vs still active).
@@ -235,18 +327,26 @@ export function computeBI(inp: BIInput): BIReport {
     if (!s.customerId) continue
     if (s.hasFuture) { recurringAnnual += s.perVisit * visitsPerSeason(s.cadence) }
     if (countedRecCust.has(s.customerId)) continue
-    if (s.hasFuture || (s.customerId && futureCust.has(s.customerId))) { retained++; countedRecCust.add(s.customerId); continue }
-    const season = seasonForService(s.serviceType, seasons)
-    if (season && !isWithinSeason(today, season)) continue // off-season dormant ≠ churned
-    if (s.lastCompleted) { churned++; countedRecCust.add(s.customerId) }
+    // THE ran-out rule (signals/lifecycle): off-season dormant ≠ churned, and a
+    // series cancelled before any service was never a customer to lose.
+    const signal = ranOut({
+      hasRecurring: true,
+      hasUpcoming: s.hasFuture || futureCust.has(s.customerId),
+      lastServiceDate: s.lastCompleted,
+      cadenceDays: cadenceDays(s.cadence),
+      seasonallyDormant: isSeasonallyDormant(s.serviceType, seasons, today),
+      today,
+    })
+    if (signal.reason === 'has_upcoming') { retained++; countedRecCust.add(s.customerId); continue }
+    if (signal.isRanOut) { churned++; countedRecCust.add(s.customerId) }
   }
   const churnRatePct = retained + churned > 0 ? Math.round((churned / (retained + churned)) * 100) : null
   const retentionRatePct = churnRatePct == null ? null : 100 - churnRatePct
 
-  // Lifetime value (all completed) + averages.
-  const ltvByCust: Record<string, number> = {}
-  for (const j of completed) if (j.customer_id) ltvByCust[j.customer_id] = (ltvByCust[j.customer_id] || 0) + earned(j)
-  const ltvVals = Object.values(ltvByCust)
+  // Lifetime value (all completed) + averages — valued by the shared LTV engine.
+  const completedByCust: Record<string, ProfitJob[]> = {}
+  for (const j of completed) if (j.customer_id) (completedByCust[j.customer_id] ||= []).push(j)
+  const ltvVals = Object.values(completedByCust).map(js => lifetimeValue(js, pctx.quotesById, pctx.recById))
   const avgLifetimeValue = ltvVals.length ? round(ltvVals.reduce((a, b) => a + b, 0) / ltvVals.length) : 0
   const avgAnnualValue = activeIds.size ? round(revYTD / activeIds.size) : 0
   const forecastLtv = recCustIds.size ? round((recurringAnnual / Math.max(1, retained)) * 3) : 0 // active recurring annual × ~3yr lifetime
@@ -308,8 +408,7 @@ export function computeBI(inp: BIInput): BIReport {
   let projectedSeasonRemaining = 0
   for (const s of series) {
     if (!s.hasFuture) continue
-    const season = seasonForService(s.serviceType, seasons)
-    if (season && !isWithinSeason(today, season)) continue
+    if (isSeasonallyDormant(s.serviceType, seasons, today)) continue
     const futureVisits = s.rep ? jobs.filter(j => j.recurrence_id && j.customer_id === s.customerId && j.scheduled_date >= today && j.status !== 'cancelled' && j.status !== 'completed').length : 0
     projectedSeasonRemaining += s.perVisit * Math.max(futureVisits, 0)
   }
@@ -321,6 +420,116 @@ export function computeBI(inp: BIInput): BIReport {
     if (a > 0) growthForecastPct = Math.round(((b - a) / a) * 100)
   }
 
+  // ── CANCELLATIONS ──
+  // Cancelled jobs are excluded from every revenue figure above (dayProfitability
+  // drops them); this is the one place they're counted rather than filtered out.
+  const cancelledJobs = jobs.filter(j => j.status === 'cancelled')
+  const cancelledYTD = cancelledJobs.filter(j => j.scheduled_date >= yearStart).length
+  const completedYTD = ytdCompleted.length
+  const cancelDen = cancelledYTD + completedYTD
+  const cancelRatePct = cancelDen > 0 ? Math.round((cancelledYTD / cancelDen) * 100) : null
+  const cancelByMonth: Record<string, number> = {}
+  for (const j of cancelledJobs) { const mk = monthKey(j.scheduled_date); cancelByMonth[mk] = (cancelByMonth[mk] || 0) + 1 }
+  // Same 12-month window as financial.trend, so the two charts line up month-for-month.
+  const cancelTrend: NamedValue[] = trend.map(t => ({ name: t.month, value: cancelByMonth[t.month] || 0 }))
+  // Worst month is measured over ALL history (not just the charted window) — it
+  // answers "when did we bleed the most jobs", null only when nothing was ever cancelled.
+  const worstMonth = Object.entries(cancelByMonth).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] ?? null
+
+  // ── YEARLY (year over year) ──
+  // allTrend holds EVERY month the business has routes for (not just YTD) and is
+  // already profit-aware, so YoY is a pure bucketing of MonthTrend — no re-summing.
+  const lastYr = String(Number(yr) - 1)
+  // DATE-ALIGNED, deliberately. `routes` only runs to `today`, so comparing this
+  // year against last year's FULL twelve months would read sharply negative all
+  // season by construction — the calendar shrinking, not the business. Last year
+  // is therefore cut at the same month-day, so both sides are "season to date".
+  // (Feb 29 → Feb 28 in a non-leap prior year, via the string cut.)
+  const lastYrCutoff = `${lastYr}${today.slice(4)}`
+  const throughFor = (year: string) => (year === yr ? today : lastYrCutoff)
+  const summarizeYear = (year: string): YearSummary => {
+    const through = throughFor(year)
+    const yrRoutes = routes.filter(r => r.date.slice(0, 4) === year && r.date <= through)
+    // Revenue/profit are taken from THE profit engine over the same aligned slice
+    // — never re-summed by hand. Job counts aren't on MonthTrend, so stops come
+    // off the very routes the trend rows were built from.
+    const revenue = yrRoutes.reduce((s, r) => s + r.revenue, 0)
+    const laborMinutes = yrRoutes.reduce((s, r) => s + r.laborMinutes, 0)
+    return {
+      year,
+      revenue: round(revenue),
+      jobs: yrRoutes.reduce((s, r) => s + r.stops, 0),
+      profit: visitEconomics(revenue, laborMinutes, 0, crewCost).profit,
+    }
+  }
+  const thisYearSum = summarizeYear(yr)
+  const hasLastYear = routes.some(r => r.date.slice(0, 4) === lastYr)
+  const lastYearSum = hasLastYear ? summarizeYear(lastYr) : null // null for a first-season business
+  // null (not 0) means "no data for that month" — an unworked month and a $0 month
+  // are different stories, and only the chart knows how to draw the gap.
+  const revenueForMonth = (year: string, month: number) => allTrend.find(m => m.month === `${year}-${String(month).padStart(2, '0')}`)?.revenue ?? null
+  const yearlyByMonth = Array.from({ length: 12 }, (_, i) => {
+    const month = i + 1
+    return { month, thisYear: revenueForMonth(yr, month) ?? 0, lastYear: revenueForMonth(lastYr, month) }
+  })
+  // Both sides are season-to-date (see lastYrCutoff), so these deltas are a like-
+  // for-like read and safe to show as a headline. `byMonth` stays FULL-year on the
+  // prior side on purpose — a chart wants last year's whole shape to compare against.
+  const deltaPct = (now: number, prev: number | null | undefined) => (prev != null && prev > 0 ? Math.round(((now - prev) / prev) * 100) : null)
+  const yearly: YearComparison = {
+    thisYear: thisYearSum,
+    lastYear: lastYearSum,
+    revenueDeltaPct: deltaPct(thisYearSum.revenue, lastYearSum?.revenue),
+    jobsDeltaPct: deltaPct(thisYearSum.jobs, lastYearSum?.jobs),
+    byMonth: yearlyByMonth,
+  }
+
+  // ── EXECUTIVE ──
+  // Concentration: custRev (YTD, keyed by customer) and revYTD are already built
+  // above by the financial pass — this is a share-of-total division, nothing more.
+  const custRevSorted = Object.entries(custRev).sort((a, b) => b[1] - a[1])
+  const shareOf = (n: number) => (revYTD > 0 ? Math.round((n / revYTD) * 100) : null)
+  const concentration: RevenueConcentration = {
+    top1Name: custRevSorted[0] ? (custName[custRevSorted[0][0]] || 'Unknown') : null,
+    top1Pct: custRevSorted[0] ? shareOf(custRevSorted[0][1]) : null,
+    top3Pct: custRevSorted.length ? shareOf(custRevSorted.slice(0, 3).reduce((s, [, v]) => s + v, 0)) : null,
+    payingCustomers: custRevSorted.length,
+  }
+
+  // Mix: a customer counts as NEW only if their FIRST completed visit ever lands
+  // this year. `completed` spans all history, so this reads real first-service
+  // dates rather than customers.created_at — a lead created in 2024 and finally
+  // serviced this spring is genuinely new revenue, and created_at would miss that.
+  const firstVisitByCust: Record<string, string> = {}
+  for (const j of completed) {
+    if (!j.customer_id) continue
+    const prev = firstVisitByCust[j.customer_id]
+    if (!prev || j.scheduled_date < prev) firstVisitByCust[j.customer_id] = j.scheduled_date
+  }
+  let newRevenue = 0, returningRevenue = 0
+  for (const [cid, v] of Object.entries(custRev)) {
+    const first = firstVisitByCust[cid]
+    if (first && first >= yearStart) newRevenue += v
+    else returningRevenue += v
+  }
+  const mix: RevenueMix = {
+    newRevenue: round(newRevenue),
+    returningRevenue: round(returningRevenue),
+    newPct: revYTD > 0 ? Math.round((newRevenue / revYTD) * 100) : null,
+  }
+
+  // Collection speed — via lib/businessMemory's collectionDays, the one definition
+  // of issued→paid (per-customer habits read the same function, so a customer's
+  // "pays in ~3 days" can never contradict this headline). Pooled across invoices
+  // rather than a median-of-per-customer-medians, which would weight a one-invoice
+  // customer the same as a fifty-invoice one.
+  const payStats = collectionStats(invoices)
+  const collection: CollectionSpeed = {
+    medianDaysToPay: payStats.medianDays,
+    paidInvoices: payStats.count,
+    slowestDays: payStats.slowestDays,
+  }
+
   return {
     generatedFor: new Date(today + 'T00:00:00').toLocaleString('en-US', { month: 'short', year: 'numeric' }),
     financial: { revenueThisMonth: round(revThisMonth), revenueLastMonth: round(revLastMonth), revenueYTD: round(revYTD), monthOverMonthPct: revLastMonth > 0 ? Math.round(((revThisMonth - revLastMonth) / revLastMonth) * 100) : null, byService, byNeighborhood, byCustomer, trend },
@@ -329,6 +538,10 @@ export function computeBI(inp: BIInput): BIReport {
     sales: { quoteAcceptancePct: wl.decided >= 1 ? Math.round(wl.winRate * 100) : null, won: wl.won, lost: wl.lost, avgQuoteValue, lostValue: round(wl.byHood.reduce((s, h) => s + h.lostValue, 0)), byServiceType, byNeighborhood: byHoodWL, topLossReasons },
     operations: { capacityUtilizationPct, bookedUtilizationPct, laborAccuracyPct, autoMeasureAccuracyPct: null, avgRouteDensity, timedJobs: durModel.totalSamples },
     forecasting: { projectedThisMonth, projectedRecurringAnnual, projectedSeasonRemaining, capacityForecastPct: bookedUtilizationPct, growthForecastPct },
+    weekday: { byWeekday, busiest, bestPaying },
+    cancellations: { cancelledYTD, completedYTD, cancelRatePct, trend: cancelTrend, worstMonth },
+    yearly,
+    executive: { concentration, mix, collection },
   }
 }
 
@@ -343,7 +556,9 @@ export async function loadBusinessIntelligence(supabase: SupabaseClient): Promis
     supabase.from('job_recurrences').select('id, freq, interval_unit, interval_count').eq('user_id', uid),
     supabase.from('properties').select('id, lat, lng, postal_code, city, neighborhood').eq('user_id', uid),
     supabase.from('customers').select('id, name, created_at').eq('user_id', uid),
-    supabase.from('invoices').select('status, amount, customer_id').eq('user_id', uid),
+    // issued_date/paid_at drive collection speed. Existing columns — no migration;
+    // this select was simply narrower than the rows the report needed.
+    supabase.from('invoices').select('status, amount, customer_id, issued_date, paid_at').eq('user_id', uid),
     supabase.from('business_settings').select('crew_cost_per_hour, daily_capacity_hours, preferred_work_days, base_lat, base_lng, service_seasons').eq('user_id', uid).maybeSingle(),
     supabase.from('quote_outcomes').select('quote_id, reason, detail, competitor_price').eq('user_id', uid),
   ])
@@ -374,7 +589,7 @@ export async function loadBusinessIntelligence(supabase: SupabaseClient): Promis
     quoteOutcomes: (oRes.data as QuoteOutcomeRow[]) || [],
     properties: (pRes.data as { id: string; lat: number | null; lng: number | null; postal_code: string | null; city: string | null; neighborhood: string | null }[]) || [],
     recurrences,
-    invoices: (iRes.data as { status: string; amount: number | null; customer_id: string | null }[]) || [],
+    invoices: (iRes.data as { status: string; amount: number | null; customer_id: string | null; issued_date: string | null; paid_at: string | null }[]) || [],
     crewCost: crewCostPerHour(settings?.crew_cost_per_hour as number | null | undefined),
     capacityHours: Number(settings?.daily_capacity_hours) > 0 ? Number(settings!.daily_capacity_hours) : 8,
     preferredDays: (settings?.preferred_work_days as number[] | null)?.length ? (settings!.preferred_work_days as number[]) : [5, 6, 0],

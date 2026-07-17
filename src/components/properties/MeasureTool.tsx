@@ -6,6 +6,7 @@ import { loadGoogleMaps, addPropertyPin, flashRing, type PropertyPinHandle } fro
 import { createClient } from '@/lib/supabase/client'
 import { Property, BusinessSettings, MeasurementSnapshot, LawnSections, LawnPolygon, PricingConfidence, CONFIDENCE_LABELS, CONFIDENCE_COLORS } from '@/types'
 import { priceTiers, routeDensityTravel, pricingConfidence, travelFeeForDistance, pricingConfigFromSettings, PricingConfig, DEFAULT_PRICING, PriceTier, pricingPackage, estimateVisitMinutes, buildSavedRecommendation } from '@/lib/pricing'
+import { loadBusinessShape } from '@/lib/businessShape'
 import { PricePackagePanel, CadenceSelection } from '@/components/pricing/PricePackagePanel'
 import { ProspectContext, loadProspectContext, gradedProspectPricing } from '@/lib/prospect'
 import { DecisionSummary } from '@/components/pricing/DecisionSummary'
@@ -15,6 +16,7 @@ import { DEFAULT_CREW_COST, crewCostPerHour as resolveCrewCost } from '@/lib/eco
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { Coord, haversineKm, nearbyJobCount, fetchLocatedUpcomingJobs } from '@/lib/geo'
 import { Button } from '@/components/ui/Button'
+import { Banner } from '@/components/ui/Banner'
 import { Undo2, Trash2, Check, Ruler, ZoomIn, ZoomOut, RotateCcw, FileText, Car, ShieldCheck, History, Move, Loader2 } from 'lucide-react'
 
 const M2_TO_SQFT = 10.7639
@@ -544,7 +546,7 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
     const sections = currentSections()
     const sectionsTotal = Math.round(Object.values(sections).reduce((a, b) => a + b, 0))
     const total = sectionsTotal > 0 ? sectionsTotal : Math.round(overrideRef.current || 0)
-    const estMin = estimateVisitMinutes(total, prospect?.observedMinPer1000)
+    const estMin = (estimateVisitMinutes(total, prospect?.observedMinPer1000) ?? undefined)
     // ONE composed result (gradedProspectPricing) — the saved recurring prices and
     // the saved score come from the SAME grade-adjusted package.
     const gradedSave = prospect
@@ -553,6 +555,24 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
       : null
     const scoreSave = gradedSave?.assessment.score ?? null
     const pkgSave = gradedSave?.pkg ?? pricingPackage(total, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood })
+
+    // Does a lawn recommendation mean anything for this business?
+    // This tool measures a PROPERTY, so unlike the quote builder it has no service
+    // to ask about — and it wrote buildSavedRecommendation(pricingPackage(...)),
+    // i.e. weekly/bi-weekly GRASS prices, into measurement_history on every save
+    // regardless of trade. That snapshot is what latestSavedRecommendation() hands
+    // to every later quote and job as "the" recommendation, so one trace of a roof
+    // by a roofing company seeded mowing prices across their whole app.
+    // The account's BusinessShape is the only signal available at property level,
+    // and it is the right one for an account-level question. It fails OPEN
+    // (showLawnFields is true until there's evidence otherwise, and on any read
+    // error), so the lawn business — and any account we can't yet classify — keeps
+    // today's behaviour exactly. Read at write time: no new state, never stale.
+    let lawnApplies = true
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) lawnApplies = (await loadBusinessShape(supabase, user.id)).showLawnFields
+    } catch { /* fail open — an uncertain read must not silently drop a real rec */ }
     // Permanent boundary + how the area was captured (traced shapes win; else the
     // accepted auto estimate; else a typed figure).
     const polygon = currentPolygon()
@@ -561,7 +581,10 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
       date: new Date().toISOString(),
       total_sqft: total,
       sections,
-      recommendation: total > 0 ? buildSavedRecommendation(pkgSave, estMin, { score: scoreSave, hood: property.neighborhood }) : null,
+      // Guarded by total > 0, so estMin is always a real estimate here. lawnApplies
+      // keeps a lawn-cadence recommendation off a non-lawn business's measurement —
+      // a driveway is not that many square feet of grass.
+      recommendation: total > 0 && lawnApplies ? buildSavedRecommendation(pkgSave, estMin ?? 0, { score: scoreSave, hood: property.neighborhood }) : null,
       rate_per_1000: cfg.mowRatePer1000,
       polygon: polygon.length > 0 ? polygon : null,
       source,
@@ -647,10 +670,12 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
 
   if (loadError) {
     return (
-      <div className="text-sm text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-3 space-y-1">
-        <p>The map couldn&apos;t load. Error detail:</p>
-        <p className="font-mono text-xs text-amber-300 break-words">{loadError}</p>
-      </div>
+      <Banner tone="warn">
+        <div className="space-y-1">
+          <p>The map couldn&apos;t load. Error detail:</p>
+          <p className="font-mono text-xs text-amber-300 break-words">{loadError}</p>
+        </div>
+      </Banner>
     )
   }
 
@@ -683,14 +708,14 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
 
       {/* Geocoding honesty — same vocabulary as the QuoteMeasure banner. */}
       {ready && geoFix === 'approx' && (
-        <p className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-3 py-2">
+        <Banner tone="warn">
           Approximate location — the amber pin may not be the exact lot. Verify before quoting.
-        </p>
+        </Banner>
       )}
       {ready && geoFix === 'failed' && (
-        <p className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-3 py-2">
+        <Banner tone="warn">
           Couldn&apos;t locate this address — showing the general area with no property pin. Check the address before quoting.
-        </p>
+        </Banner>
       )}
 
       {/* Map with overlaid zoom controls */}
@@ -818,7 +843,7 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
         const graded = prospect
           ? gradedProspectPricing(totalSqft, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood }, prospect, {
               distanceKm, travelFee: effectiveTravel, neighborhoodName: property.neighborhood,
-              estimatedMinutes: estimateVisitMinutes(totalSqft, prospect.observedMinPer1000),
+              estimatedMinutes: estimateVisitMinutes(totalSqft, prospect.observedMinPer1000) ?? undefined,
               timedJobs: prospect.timedJobs, crewCostPerHour: crewCost,
             })
           : null

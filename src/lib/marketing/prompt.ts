@@ -34,10 +34,13 @@ export interface PromptExtras {
   avoidance?: string | null
 }
 
-// Banded lawn size — never the raw square footage (rule: numbers stay human).
+// Banded property size — never the raw square footage (rule: numbers stay human).
+// The column behind this is lawn_sqft, but it's just a measured area on a property;
+// calling it a lawn is how a roofer's post ends up talking about grass (same rule
+// as lib/ai/assist.ts).
 function lawnBand(sqft: number | null): string | null {
   if (!sqft) return null
-  if (sqft < 2000) return 'a compact lawn'
+  if (sqft < 2000) return 'a compact property'
   if (sqft > 6000) return 'a larger property'
   return null
 }
@@ -99,7 +102,7 @@ function emojiInstruction(def: ChannelDef, options: PostOptions): string {
 const HOOK_RULE =
   'HOOK: open with ONE scroll-stopping line — a sharp observation, a small truth, a vivid detail, or a question — specific to THIS job, place, or season. ' +
   'Never open with the business name, "Another", "Check out", "We just", "Here\'s", or "Looking for". ' +
-  'For calibre only (do NOT reuse these): "Great lawns don\'t happen by accident." / "One clean edge changes the whole property." / "This yard looked completely different an hour ago."'
+  'For calibre only (do NOT reuse these): "Great results don\'t happen by accident." / "One clean edge changes the whole property." / "This place looked completely different an hour ago."'
 
 // The shared prompt body every channel + option set flows through.
 function promptCore(

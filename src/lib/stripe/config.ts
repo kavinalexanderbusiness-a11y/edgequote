@@ -34,7 +34,19 @@ export interface CheckoutResult { ok: boolean; url?: string; error?: string }
 // what lets us mark exactly the right invoice paid for the right owner.
 export async function createInvoiceCheckoutSession(
   invoice: CheckoutInvoice,
-  opts: { successUrl: string; cancelUrl: string; customerEmail?: string | null; chargeCents?: number },
+  opts: {
+    successUrl: string; cancelUrl: string; customerEmail?: string | null; chargeCents?: number
+    // Attaching the Stripe Customer is what makes a card SAVEABLE at all — without
+    // it Stripe has nobody to attach the payment method to, which is why paying an
+    // invoice used to throw the card away every single time.
+    stripeCustomerId?: string | null
+    // Offer to keep the card for future invoices. Stripe renders its own consent
+    // CHECKBOX and only sets setup_future_usage when the customer ticks it — so
+    // consent is explicit, the wording is Stripe's compliant copy, and leaving it
+    // unticked IS the opt-out. We never set setup_future_usage ourselves; doing so
+    // would save the card silently, which is the thing we're refusing to do.
+    offerSaveCard?: boolean
+  },
 ): Promise<CheckoutResult> {
   if (!stripeEnabled()) return { ok: false, error: 'Payments are not set up yet.' }
   // chargeCents (the GST-inclusive total) wins when the caller computes it;
@@ -52,7 +64,18 @@ export async function createInvoiceCheckoutSession(
   form.set('line_items[0][price_data][unit_amount]', String(cents))
   form.set('line_items[0][price_data][product_data][name]', `Invoice ${invoice.invoice_number}`)
   if (invoice.service_type) form.set('line_items[0][price_data][product_data][description]', invoice.service_type.slice(0, 200))
-  if (opts.customerEmail) form.set('customer_email', opts.customerEmail)
+  // `customer` and `customer_email` are mutually exclusive — sending both is a
+  // Stripe 400. Prefer the Customer: it's the only shape a card can be saved to,
+  // and Stripe shows the address/email it already knows.
+  if (opts.stripeCustomerId) {
+    form.set('customer', opts.stripeCustomerId)
+    // Stripe owns the checkbox and its wording; it sets setup_future_usage on the
+    // PaymentIntent only if the customer ticks it. The webhook reads that flag back
+    // as the record of consent, so an untick saves nothing anywhere.
+    if (opts.offerSaveCard) form.set('saved_payment_method_options[payment_method_save]', 'enabled')
+  } else if (opts.customerEmail) {
+    form.set('customer_email', opts.customerEmail)
+  }
   // The webhook reads this metadata to mark the invoice paid for the right owner.
   form.set('metadata[invoice_id]', invoice.id)
   form.set('metadata[user_id]', invoice.user_id)
@@ -179,15 +202,48 @@ export interface OffSessionResult {
   declineCode?: string     // server-side detail (logged/returned to owner UI only)
 }
 
+// ── The off-session Idempotency-Key ──────────────────────────────────────────
+// Stripe caches the response for a key for ~24h and replays it — INCLUDING failures.
+// A single stable key per invoice therefore made a legitimate retry impossible: after
+// a decline, the owner's "Charge card" replayed the cached 402 (same card), or got a
+// 400 idempotency_error (new card — the params no longer match the first request).
+// The customer fixes their card, the owner retries, and it still says declined. For a
+// whole day.
+//
+// So the key now distinguishes the two callers, because they mean different things:
+//
+//   automatic  — the cron sweep and the on-completion fire-and-forget are the SAME
+//                attempt arriving twice. Collapsing them is the entire point, and a
+//                stable per-invoice key is exactly right. UNCHANGED.
+//
+//   manual     — the owner explicitly asking for a NEW attempt, normally because the
+//                last one failed and something has since changed. Keyed per card (so
+//                replacing the card retries instantly rather than 400ing) and per
+//                minute (so a double-click, or a second tab, still collapses into one
+//                charge).
+//
+// Residual, stated plainly: two manual clicks that straddle a minute boundary AND land
+// before the webhook records the first could both charge. That is a far smaller risk
+// than a retry path that was guaranteed broken, and the pre-charge DB dedupe in
+// attemptAutoPayCharge closes it as soon as the webhook lands.
+function offSessionIdempotencyKey(
+  opts: { invoiceId: string; paymentMethodId: string; manual?: boolean },
+): string {
+  if (!opts.manual) return `autopay:${opts.invoiceId}`
+  const minute = Math.floor(Date.now() / 60_000)
+  return `autopay:${opts.invoiceId}:${opts.paymentMethodId}:m${minute}`
+}
+
 // Charge a SAVED card off-session for a recurring invoice. confirm=true + off_session
-// attempts the charge immediately; Idempotency-Key 'autopay:<invoiceId>' means a
-// given invoice can produce AT MOST ONE real charge no matter how many retries fire.
-// metadata.source='autopay' is what the webhook uses to tell these apart from the
-// one-time Checkout PaymentIntents (so the one-time flow is never double-recorded).
+// attempts the charge immediately. metadata.source='autopay' is what the webhook uses
+// to tell these apart from the one-time Checkout PaymentIntents (so the one-time flow
+// is never double-recorded).
 export async function chargeSavedCardOffSession(
   opts: {
     stripeCustomerId: string; paymentMethodId: string; amountCents: number
     invoiceId: string; userId: string; customerId: string; currency?: string
+    /** Owner-initiated "Charge card" — see offSessionIdempotencyKey. */
+    manual?: boolean
   },
 ): Promise<OffSessionResult> {
   if (!stripeEnabled()) return { ok: false, error: 'Payments are not set up yet.' }
@@ -203,7 +259,7 @@ export async function chargeSavedCardOffSession(
   form.set('metadata[invoice_id]', opts.invoiceId)
   form.set('metadata[user_id]', opts.userId)
   form.set('metadata[customer_id]', opts.customerId)
-  const r = await stripePost('payment_intents', form, `autopay:${opts.invoiceId}`)
+  const r = await stripePost('payment_intents', form, offSessionIdempotencyKey(opts))
   if (!r.ok) {
     // A decline returns the failed PaymentIntent inside error.payment_intent.
     const pi = (r.data?.error as { payment_intent?: { id?: string; status?: string } } | undefined)?.payment_intent
@@ -228,6 +284,116 @@ export async function fetchSetupIntentCard(
     stripeCustomerId: typeof si.customer === 'string' ? si.customer : undefined,
     brand: pm?.card?.brand, last4: pm?.card?.last4, expMonth: pm?.card?.exp_month, expYear: pm?.card?.exp_year,
   }
+}
+
+// The mode=payment twin of fetchSetupIntentCard. `setupFutureUsage` is the whole
+// point: Stripe sets it ONLY when the customer ticked "save my card", so it is the
+// durable record of consent. The webhook saves nothing without it — an untick
+// leaves a PaymentIntent that paid the invoice and kept no card, which is exactly
+// what the customer asked for.
+export async function fetchPaymentIntentCard(
+  paymentIntentId: string,
+): Promise<{ ok: boolean; consented: boolean; paymentMethodId?: string; stripeCustomerId?: string; brand?: string; last4?: string; expMonth?: number; expYear?: number }> {
+  const r = await stripeGet(`payment_intents/${paymentIntentId}?expand[]=payment_method`)
+  if (!r.ok || !r.data) return { ok: false, consented: false }
+  const pi = r.data as {
+    customer?: string | null
+    setup_future_usage?: string | null
+    payment_method?: { id?: string; card?: { brand?: string; last4?: string; exp_month?: number; exp_year?: number } } | string | null
+  }
+  const pm = typeof pi.payment_method === 'object' && pi.payment_method ? pi.payment_method : undefined
+  return {
+    ok: true,
+    consented: !!pi.setup_future_usage,
+    paymentMethodId: pm?.id || (typeof pi.payment_method === 'string' ? pi.payment_method : undefined),
+    stripeCustomerId: typeof pi.customer === 'string' ? pi.customer : undefined,
+    brand: pm?.card?.brand, last4: pm?.card?.last4, expMonth: pm?.card?.exp_month, expYear: pm?.card?.exp_year,
+  }
+}
+
+// ── Reconciliation source ────────────────────────────────────────────────────
+// List SUCCEEDED PaymentIntents in a window, newest first, following Stripe's
+// cursor pagination. Read-only: this exists so lib/payments/reconcile can ask "did
+// any of this money never reach the ledger?" — the question nobody could answer,
+// because a missed webhook leaves no trace on our side by definition.
+export interface StripeCharge {
+  paymentIntentId: string
+  /** Dollars STILL HELD — captured minus refunded. Never the gross figure. */
+  amount: number
+  /** Dollars refunded so far; > 0 means this charge was partially given back. */
+  refunded: number
+  createdIso: string
+  invoiceId: string | null  // from metadata, when it was one of ours
+  invoiceNumber: string | null
+  description: string | null
+}
+
+// `latest_charge` is expanded because a PaymentIntent alone CANNOT answer the only
+// question that matters here. A fully refunded charge leaves its PaymentIntent at
+// status='succeeded' with amount_received unchanged — so filtering on status and
+// reporting amount_received would present money the owner already gave back as money
+// they never recorded. They'd "fix" it by recording a payment that doesn't exist.
+// The refund lives on the charge, so we fetch the charge.
+function chargeOf(pi: Record<string, unknown>): { refunded: number; captured: number } | null {
+  // API versions ≥2022-11-15 expose latest_charge; older accounts return charges.data.
+  // Support both rather than silently reporting gross amounts on an older account.
+  const latest = pi.latest_charge
+  const legacy = (pi.charges as { data?: Record<string, unknown>[] } | undefined)?.data?.[0]
+  const ch = (latest && typeof latest === 'object' ? latest : legacy) as Record<string, unknown> | undefined
+  if (!ch) return null
+  return {
+    refunded: (Number(ch.amount_refunded) || 0) / 100,
+    captured: (Number(ch.amount_captured ?? ch.amount) || 0) / 100,
+  }
+}
+
+export async function listSucceededPaymentIntents(
+  opts: { sinceIso: string; maxPages?: number },
+): Promise<{ ok: boolean; charges: StripeCharge[]; truncated: boolean }> {
+  if (!stripeEnabled()) return { ok: false, charges: [], truncated: false }
+  const createdGte = Math.floor(new Date(opts.sinceIso).getTime() / 1000)
+  if (!Number.isFinite(createdGte)) return { ok: false, charges: [], truncated: false }
+  const maxPages = opts.maxPages ?? 10   // 10 × 100 = 1000 intents; bounded on purpose
+  const charges: StripeCharge[] = []
+  let startingAfter: string | null = null
+
+  for (let page = 0; page < maxPages; page++) {
+    const q = new URLSearchParams({ limit: '100', 'created[gte]': String(createdGte) })
+    q.append('expand[]', 'data.latest_charge')
+    if (startingAfter) q.set('starting_after', startingAfter)
+    const r = await stripeGet(`payment_intents?${q.toString()}`)
+    // A partial read must not read as "nothing unrecorded" — that's the same
+    // false-negative this whole report exists to eliminate.
+    if (!r.ok || !r.data) return { ok: false, charges: [], truncated: false }
+    const data = (r.data.data as Record<string, unknown>[] | undefined) || []
+    for (const pi of data) {
+      if (String(pi.status || '') !== 'succeeded') continue
+      const md = (pi.metadata as Record<string, string> | null) || {}
+      const ch = chargeOf(pi)
+      const gross = (Number(pi.amount_received ?? pi.amount) || 0) / 100
+      const refunded = ch?.refunded ?? 0
+      // Net of refunds. If the charge couldn't be read at all, fall back to gross
+      // rather than dropping the row — an over-reported charge gets reviewed by a
+      // human; a dropped one is money that stays invisible.
+      const net = Math.round(((ch ? ch.captured : gross) - refunded) * 100) / 100
+      // Fully refunded → the money is NOT outstanding and never was owed. Reporting
+      // it as unrecorded would invite the owner to book a payment they don't have.
+      if (net <= 0.005) continue
+      charges.push({
+        paymentIntentId: String(pi.id),
+        amount: net,
+        refunded,
+        createdIso: new Date((Number(pi.created) || 0) * 1000).toISOString(),
+        invoiceId: md.invoice_id || null,
+        invoiceNumber: md.invoice_number || null,
+        description: pi.description ? String(pi.description) : null,
+      })
+    }
+    if (!r.data.has_more || data.length === 0) return { ok: true, charges, truncated: false }
+    startingAfter = String(data[data.length - 1].id)
+  }
+  // Hit the page cap — say so rather than quietly reporting a subset as the whole.
+  return { ok: true, charges, truncated: true }
 }
 
 // Detach a saved card from Stripe (used on Remove / on replacing the old card).

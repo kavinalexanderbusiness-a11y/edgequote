@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { addDays, format, getDay, parseISO } from 'date-fns'
 import { createClient } from '@/lib/supabase/client'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
+import { Skeleton } from '@/components/ui/Skeleton'
 import { formatCurrency } from '@/lib/utils'
 import { jobVisitValue, effectiveFreq } from '@/lib/invoicing'
 import { todayLocalISO } from '@/lib/geo'
@@ -109,9 +110,9 @@ export function WeekendOutlook() {
     // and back down when this card popped in.
     return (
       <Card className="p-5" aria-hidden>
-        <div className="h-4 w-40 rounded bg-bg-tertiary animate-pulse" />
-        <div className="h-3 w-64 rounded bg-bg-tertiary animate-pulse mt-3" />
-        <div className="h-3 w-52 rounded bg-bg-tertiary animate-pulse mt-2" />
+        <Skeleton className="h-4 w-40" />
+        <Skeleton className="h-3 w-64 mt-3" />
+        <Skeleton className="h-3 w-52 mt-2" />
       </Card>
     )
   }
