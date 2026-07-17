@@ -82,6 +82,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ token: str
     ok: result.ok,
     summary: result.summary,
     ...(result.customerId ? { customer_id: result.customerId } : {}),
+    ...(result.propertyId ? { property_id: result.propertyId } : {}),
     ...(result.requestId ? { request_id: result.requestId } : {}),
     ...(result.deduped !== undefined ? { matched_existing: result.deduped } : {}),
   }, result.status)

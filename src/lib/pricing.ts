@@ -254,6 +254,24 @@ function valueCadenceMult(aggression: number): Record<Exclude<CadenceKey, 'one_t
   }
 }
 
+// THE cadence multipliers for a customer — the neutral baseline, or the
+// value-graded curve when their strategic grade is known. pricingPackage() has
+// always made this choice inline; this exposes the SAME choice so that anything
+// judging a price reaches the same answer the engine reached.
+//
+// It exists because the alternative was a copy. priceGuardrails.ts kept a private
+// `{weekly:0.75, biweekly:0.85, monthly:1.1}` — the neutral half only — under a
+// header promising "no new pricing math". So for a GRADED customer the guardrail
+// judged against a different curve than the engine priced with: at A+ the engine
+// recommends weekly ×0.68 and the guardrail called that same price "below the
+// recommended ×0.75" and warned. The app recommended a number and then told the
+// owner the number was too low. Pinned in verify-guardrails.ts.
+export function cadenceMultipliers(
+  valueGrade?: string | null,
+): Record<Exclude<CadenceKey, 'one_time'>, number> {
+  return valueGrade ? valueCadenceMult(gradeAggressiveness(valueGrade)) : CADENCE_MULT
+}
+
 export interface ValuePricingInfo {
   grade: string
   confidence: string                                   // "A+ Route Asset"
@@ -310,7 +328,9 @@ export function pricingPackage(
   // otherwise the neutral baseline (backward compatible for callers without it).
   const grade = ctx.valueGrade ?? null
   const agg = gradeAggressiveness(grade)
-  const mult = grade ? valueCadenceMult(agg) : CADENCE_MULT
+  // Via the exported seam, so a guardrail judging this price reads the multipliers
+  // from the same call the price was built with — never a copy of them.
+  const mult = cadenceMultipliers(grade)
   const options: CadenceOption[] = (['weekly', 'biweekly', 'monthly'] as const).map(c => {
     const price = roundToStep(oneTime * mult[c])
     return { cadence: c, price, visits: SEASON_VISITS[c], annual: price * SEASON_VISITS[c] }

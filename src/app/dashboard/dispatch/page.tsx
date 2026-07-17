@@ -942,7 +942,7 @@ export default function DispatchPage() {
     notify(`${job.customers?.name || job.title} started${res.outcome === 'queued' ? ' — will sync' : ''}`, {
       undo: async () => {
         setJobs(cur => cur.map(j => j.id === job.id ? { ...j, ...res.prev } : j))
-        await revertVisit(supabase, job.id, res.prev, `Undo start ${job.title || 'job'}`)
+        await revertVisit(supabase, job.id, res.prev, `Undo start ${job.title || 'job'}`, { baseUpdatedAt: job.updated_at })
         fetchAll()
       },
     })
@@ -955,11 +955,21 @@ export default function DispatchPage() {
     if (!res.ok) { notify.error('Could not complete the visit: ' + res.error); return }
     setJobs(cur => cur.map(j => j.id === job.id ? { ...j, ...res.patch } : j))
     if (res.outcome === 'ran') fetchAll()
-    if (res.outcome === 'queued') notify('Completed offline — it’ll sync and draft the invoice when you’re back in signal.')
-    else if (res.invoice?.created) notify.success(`${job.customers?.name || job.title} done — draft invoice ${res.invoice.invoiceNumber} created.`)
-    else if (res.invoice?.reason === 'no-amount') notify('Done — no invoice drafted because this visit has no price.')
+    const invoiceCreated = res.invoice?.created === true
+    // Undo mirrors the schedule's: revert the fields AND remove the draft this
+    // completion just created — never leave a bill for work marked not-done.
+    const undo = async () => {
+      setJobs(cur => cur.map(j => j.id === job.id ? { ...j, ...res.prev } : j))
+      await revertVisit(supabase, job.id, res.prev, `Undo complete ${job.title || 'job'}`, {
+        baseUpdatedAt: job.updated_at, deleteDraftInvoice: invoiceCreated,
+      })
+      fetchAll()
+    }
+    if (res.outcome === 'queued') notify('Completed offline — it’ll sync and draft the invoice when you’re back in signal.', { undo })
+    else if (invoiceCreated) notify(`${job.customers?.name || job.title} done — draft invoice ${res.invoice!.invoiceNumber} created.`, { undo })
+    else if (res.invoice?.reason === 'no-amount') notify('Done — no invoice drafted because this visit has no price.', { undo })
     else if (res.invoice?.reason === 'error') notify.error('Completed, but the draft invoice failed — invoice it manually from the job.')
-    else notify.success(`${job.customers?.name || job.title} done.`)
+    else notify(`${job.customers?.name || job.title} done.`, { undo })
   }, [supabase, fetchAll, setJobBusy, automations.job_complete])
 
   // Bulk complete — the end-of-day sweep. Sequential on purpose: each visit
@@ -970,13 +980,13 @@ export default function DispatchPage() {
     if (targets.length === 0) return
     setBulkBusy('complete')
     let doneN = 0, invoices = 0, failed = 0
-    const reverts: { id: string; prev: Partial<Job> }[] = []
+    const reverts: { id: string; prev: Partial<Job>; base: string; draft: boolean }[] = []
     for (const job of targets) {
       const res = await completeVisit(supabase, job, { notify: automations.job_complete })
       if (!res.ok) { failed++; continue }
       doneN++
       if (res.invoice?.created) invoices++
-      reverts.push({ id: job.id, prev: res.prev })
+      reverts.push({ id: job.id, prev: res.prev, base: job.updated_at, draft: res.invoice?.created === true })
       setJobs(cur => cur.map(j => j.id === job.id ? { ...j, ...res.patch } : j))
     }
     setBulkBusy(null)
@@ -985,9 +995,10 @@ export default function DispatchPage() {
     if (failed > 0) notify.error(`${failed} visit${failed !== 1 ? 's' : ''} could not be completed.`)
     if (doneN > 0) notify(`${doneN} visit${doneN !== 1 ? 's' : ''} completed${invoices > 0 ? ` · ${invoices} draft invoice${invoices !== 1 ? 's' : ''}` : ''}`, {
       undo: async () => {
-        for (const r of reverts) await revertVisit(supabase, r.id, r.prev, 'Undo bulk complete')
+        for (const r of reverts) {
+          await revertVisit(supabase, r.id, r.prev, 'Undo bulk complete', { baseUpdatedAt: r.base, deleteDraftInvoice: r.draft })
+        }
         fetchAll()
-        if (invoices > 0) notify('Statuses restored — the draft invoices stay (they de-dupe if you complete again).')
       },
     })
   }, [bulk, supabase, fetchAll, automations.job_complete])
