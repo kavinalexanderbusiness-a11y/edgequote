@@ -6,6 +6,7 @@ import { loadGoogleMaps, addPropertyPin, flashRing, type PropertyPinHandle } fro
 import { createClient } from '@/lib/supabase/client'
 import { Property, BusinessSettings, MeasurementSnapshot, LawnSections, LawnPolygon, PricingConfidence, CONFIDENCE_LABELS, CONFIDENCE_COLORS } from '@/types'
 import { priceTiers, routeDensityTravel, pricingConfidence, travelFeeForDistance, pricingConfigFromSettings, PricingConfig, DEFAULT_PRICING, PriceTier, pricingPackage, estimateVisitMinutes, buildSavedRecommendation } from '@/lib/pricing'
+import { loadBusinessShape } from '@/lib/businessShape'
 import { PricePackagePanel, CadenceSelection } from '@/components/pricing/PricePackagePanel'
 import { ProspectContext, loadProspectContext, gradedProspectPricing } from '@/lib/prospect'
 import { DecisionSummary } from '@/components/pricing/DecisionSummary'
@@ -554,6 +555,24 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
       : null
     const scoreSave = gradedSave?.assessment.score ?? null
     const pkgSave = gradedSave?.pkg ?? pricingPackage(total, cfg, { overgrowth, nearbyCount, neighborhoodName: property.neighborhood })
+
+    // Does a lawn recommendation mean anything for this business?
+    // This tool measures a PROPERTY, so unlike the quote builder it has no service
+    // to ask about — and it wrote buildSavedRecommendation(pricingPackage(...)),
+    // i.e. weekly/bi-weekly GRASS prices, into measurement_history on every save
+    // regardless of trade. That snapshot is what latestSavedRecommendation() hands
+    // to every later quote and job as "the" recommendation, so one trace of a roof
+    // by a roofing company seeded mowing prices across their whole app.
+    // The account's BusinessShape is the only signal available at property level,
+    // and it is the right one for an account-level question. It fails OPEN
+    // (showLawnFields is true until there's evidence otherwise, and on any read
+    // error), so the lawn business — and any account we can't yet classify — keeps
+    // today's behaviour exactly. Read at write time: no new state, never stale.
+    let lawnApplies = true
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) lawnApplies = (await loadBusinessShape(supabase, user.id)).showLawnFields
+    } catch { /* fail open — an uncertain read must not silently drop a real rec */ }
     // Permanent boundary + how the area was captured (traced shapes win; else the
     // accepted auto estimate; else a typed figure).
     const polygon = currentPolygon()
@@ -562,8 +581,10 @@ export function MeasureTool({ property, context = 'measure' }: { property: Prope
       date: new Date().toISOString(),
       total_sqft: total,
       sections,
-      // Guarded by total > 0, so estMin is always a real estimate here.
-      recommendation: total > 0 ? buildSavedRecommendation(pkgSave, estMin ?? 0, { score: scoreSave, hood: property.neighborhood }) : null,
+      // Guarded by total > 0, so estMin is always a real estimate here. lawnApplies
+      // keeps a lawn-cadence recommendation off a non-lawn business's measurement —
+      // a driveway is not that many square feet of grass.
+      recommendation: total > 0 && lawnApplies ? buildSavedRecommendation(pkgSave, estMin ?? 0, { score: scoreSave, hood: property.neighborhood }) : null,
       rate_per_1000: cfg.mowRatePer1000,
       polygon: polygon.length > 0 ? polygon : null,
       source,

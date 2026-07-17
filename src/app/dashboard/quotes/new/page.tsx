@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { Customer, QuoteFormValues, ServiceTemplate, TravelFeeTier, BusinessSettings, LawnSections, PricingConfidence, SavedRecommendation } from '@/types'
@@ -278,6 +278,51 @@ export default function NewQuotePage() {
     }
   }
 
+  // ── The MeasureTool → quote handoff (sessionStorage 'eq_measurement') ────────
+  // MeasureTool measures a PROPERTY and has no concept of a service, so every
+  // price it hands over (jobPrice/weekly/biweekly/monthly) comes from
+  // pricingPackage() — the grass cadence engine — whatever the trace was of. This
+  // form then defaulted service_type to the owner's first active template, so for
+  // any non-lawn trade the pair was: THEIR service name + OUR lawn prices. Worse,
+  // QuoteBuilder seeds priceOrigin='manual' whenever a non-zero initial_price
+  // arrives in defaultValues (correct for editing a real saved quote — that price
+  // IS the owner's past decision), which locks the reconciliation effect off, so
+  // the wrong number could never be corrected and read as hand-typed.
+  //
+  // Gate the PRICES on the same seam as everywhere else. The area, address and
+  // customer are facts and always carry over. For the lawn business — first active
+  // template "Lawn Mowing" → lawn_recurring — every field is seeded exactly as
+  // before, byte-identical.
+  const measurementDefaults = useMemo(() => {
+    if (!measurement) return undefined
+    const primary = templates.find(t => t.is_active) ?? null
+    const lawn = servicePricingKind(primary?.name ?? '', primary) === 'lawn_recurring'
+    return {
+      customer_id: measurement.customerId || '',
+      address: measurement.address || '',
+      // The measured area flows straight into the editable field, every trade.
+      measured_sqft: measurement.sqft || 0,
+      // Default to the owner's PRIMARY service (their first template) so a
+      // measured property is saveable in one tap — learned, not assumed.
+      service_type: primary?.name || '',
+      travel_fee: measurement.travelFee || 0,
+      distance_km: measurement.travelDistanceKm || 0,
+      custom_travel_required: measurement.travelIsCustom || false,
+      // Lawn-engine output — only for a lawn-cadence service. The overgrowth
+      // multiplier rides with them: it is a grass-growth adjustment and multiplies
+      // nothing else.
+      ...(lawn ? {
+        initial_price: measurement.jobPrice || 0,
+        // Selected cadence from the pricing package — the full structure
+        // arrives pre-filled, no manual entry.
+        weekly_price: measurement.weekly || 0,
+        biweekly_price: measurement.biweekly || 0,
+        monthly_price: measurement.monthly || 0,
+        overgrowth_multiplier: measurement.overgrowth || 1,
+      } : {}),
+    }
+  }, [measurement, templates])
+
   if (loading) return <div className="max-w-5xl mx-auto space-y-6"><SkeletonRows count={6} /></div>
 
   return (
@@ -325,25 +370,7 @@ export default function NewQuotePage() {
           distance_km: lead.travelDistanceKm || 0,
           overgrowth_multiplier: lead.overgrowth || 1,
           notes: lead.notes || '',
-        } : measurement ? {
-          customer_id: measurement.customerId || '',
-          address: measurement.address || '',
-          // Lawn size measured on the website flows straight into the editable field.
-          measured_sqft: measurement.sqft || 0,
-          // Default to the owner's PRIMARY service (their first template) so a
-          // measured property is saveable in one tap — learned, not assumed.
-          service_type: templates.find(t => t.is_active)?.name || '',
-          initial_price: measurement.jobPrice || 0,
-          // Selected cadence from the pricing package — the full structure
-          // arrives pre-filled, no manual entry.
-          weekly_price: measurement.weekly || 0,
-          biweekly_price: measurement.biweekly || 0,
-          monthly_price: measurement.monthly || 0,
-          travel_fee: measurement.travelFee || 0,
-          distance_km: measurement.travelDistanceKm || 0,
-          custom_travel_required: measurement.travelIsCustom || false,
-          overgrowth_multiplier: measurement.overgrowth || 1,
-        } : undefined}
+        } : measurement ? measurementDefaults : undefined}
         onSubmit={handleSubmit}
       />
     </div>

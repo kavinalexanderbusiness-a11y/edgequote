@@ -421,7 +421,50 @@ void (async () => {
   eq('a real read wins over the fallback', onOk.length, 1)
   eq('…and it is the owner\'s own unit', onOk[0].code, 'pallet')
 
+  // ── 16. ONLY LAWN MAY BE HANDED A SAVED LAWN RECOMMENDATION ────────────────
+  // §13 pins which services the cadence engine may PRICE. This is the next
+  // question: which services may READ a price it already produced.
+  // buildSavedRecommendation() wraps pricingPackage(), so a SavedRecommendation is
+  // a Weekly/Bi-Weekly GRASS price list — and it carries NO record of the service
+  // it was built for. latestSavedRecommendation() just returns the newest snapshot
+  // that has one, so every consumer must ask §13's question first, through the same
+  // seam.
+  //
+  // Four surfaces now depend on this gate: the quote builder's "Use measured
+  // prices", the MeasureTool→quote handoff, JobForm's cadence auto-fill, and the
+  // property card. A regression puts mowing prices on a furnace quote, and neither
+  // tsc nor next build can see a wrong VALUE.
+  console.log('\nOnly a lawn-cadence service may be handed a saved lawn recommendation:')
+  const mayReadLawnRec = (serviceName: string, tpl: { pricing_display_type: PricingDisplayType; default_rate: number; name: string } | null) =>
+    servicePricingKind(serviceName, tpl) === 'lawn_recurring'
+
+  for (const pack of TRADE_PACKS) {
+    const primary = pack.services[0]
+    const tpl = { pricing_display_type: primary.pricing_display_type as PricingDisplayType, default_rate: primary.default_rate, name: primary.name }
+    const allowed = mayReadLawnRec(primary.name, tpl)
+    // The MeasureTool→quote handoff defaults service_type to the owner's FIRST
+    // active template and used to seed the lawn engine's prices alongside it.
+    if (pack.key === 'lawn_landscaping') {
+      check(`${pack.key}: primary "${primary.name}" DOES take lawn prices (unchanged)`, allowed)
+    } else {
+      check(`${pack.key}: primary "${primary.name}" is refused lawn prices`, !allowed,
+        `${primary.name} routed to lawn_recurring — a ${pack.key} handoff would seed mowing prices`)
+    }
+  }
+
+  // JobForm has no template at all (service_type is free text), so the gate must
+  // hold on the name alone.
+  eq('JobForm (name only): "Snow Removal" is refused lawn prices', mayReadLawnRec('Snow Removal', null), false)
+  eq('JobForm (name only): "Furnace Tune-Up" is refused', mayReadLawnRec('Furnace Tune-Up', null), false)
+  eq('JobForm (name only): "Lawn Mowing" still allowed', mayReadLawnRec('Lawn Mowing', null), true)
+  // §13 narrowed the cadence engine; a saved lawn rec must follow it exactly —
+  // "String Trimming" is in serviceKey's mowing bucket but is NOT lawn-priced, so
+  // it must not inherit a mowing price list either.
+  eq('String Trimming is refused too (agrees with §13)', mayReadLawnRec('String Trimming', null), false)
+  // The empty form must never be treated as lawn — it is how every quote starts.
+  eq('no service yet → refused (not lawn)', mayReadLawnRec('', null), false)
+
   console.log('')
   if (failures) { console.log(`✗ ${failures} pricing check(s) failed\n`); process.exit(1) }
-  console.log('✓ all pricing checks passed — margin/markup honest, lawn byte-identical, no invented prices, one unit vocabulary\n')
+  console.log('✓ all pricing checks passed — margin/markup honest, lawn byte-identical, no invented prices, one unit vocabulary, no borrowed lawn recs\n')
 })()

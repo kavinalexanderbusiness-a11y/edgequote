@@ -5,6 +5,10 @@
       "schedule": "0 11 * * *"
     },
     {
+      "path": "/api/cron/reports",
+      "schedule": "0 12 * * *"
+    },
+    {
       "path": "/api/cron/engine",
       "schedule": "30 11 * * *"
     },
@@ -38,11 +42,11 @@
     },
     {
       "path": "/api/cron/scheduled-messages",
-      "schedule": "*/10 * * * *"
+      "schedule": "0 15 * * *"
     },
     {
       "path": "/api/cron/integrations",
-      "schedule": "*/10 * * * *"
+      "schedule": "30 15 * * *"
     }
   ]
 }

@@ -29,6 +29,7 @@ const sectionOf: Record<string, string> = {
   '/dashboard/review': '/dashboard/grow',
   '/dashboard/data-quality': '/dashboard/grow',
   '/dashboard/reports': '/dashboard/grow',
+  '/dashboard/reports/scheduled': '/dashboard/grow',
   '/dashboard/routes': '/dashboard/grow',
   '/dashboard/measurements': '/dashboard/grow',
   '/dashboard/weather': '/dashboard/schedule',

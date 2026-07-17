@@ -12,6 +12,7 @@ import { Customer, Property, JobFormValues, JobStatus, RecurUnit } from '@/types
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { recurrenceLabel } from '@/lib/recurrence'
 import { latestSavedRecommendation, savedPriceFor, recommendationIsStale, CadenceKey } from '@/lib/pricing'
+import { servicePricingKind } from '@/lib/servicePricing'
 import {
   ServiceSeasons, DEFAULT_SEASONS, settingsToSeasons, serviceCategory, seasonForService,
   seasonEndDateFor, estimateSeasonVisits, seasonLabel,
@@ -288,7 +289,16 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
     : interval.unit === 'month' || (interval.unit === 'week' && interval.count >= 4) ? 'monthly'
     : interval.unit === 'week' && interval.count === 1 ? 'weekly'
     : 'biweekly'
-  const measuredPrice = savedRec ? savedPriceFor(savedRec.rec, cadenceForInterval) : null
+  // A SavedRecommendation is a GRASS cadence price list — buildSavedRecommendation
+  // wraps pricingPackage — and carries no record of the service it was computed
+  // for. So on a property whose lawn was measured once, scheduling ANY recurring
+  // job (snow, an HVAC service plan, a window clean) offered "Use measured price"
+  // and silently auto-filled the MOWING price for that cadence. Gate on the same
+  // ONE seam the quote builder uses. There is no template object here — service_type
+  // is free text — so servicePricingKind falls back to its name normalizer, which
+  // is precisely what that fallback exists for.
+  const lawnService = servicePricingKind(watch('service_type'), null) === 'lawn_recurring'
+  const measuredPrice = savedRec && lawnService ? savedPriceFor(savedRec.rec, cadenceForInterval) : null
 
   function buildRecurrence(): Recurrence {
     if (!interval) return { unit: null, count: 1, endDate: null, endCount: null }
@@ -319,9 +329,12 @@ export function JobForm({ customers, defaultValues, excludeJobId, initialRecurre
       }
     }
     // Selecting Weekly/Bi-Weekly/Monthly auto-suggests the measured price for
-    // that cadence (only when the price hasn't been typed yet).
+    // that cadence (only when the price hasn't been typed yet, and only for a
+    // lawn-cadence service — see `lawnService`; the saved rec is a mowing price
+    // list, and this fill is silent, so an ungated one put grass prices on a snow
+    // route with nothing on screen to explain where the number came from).
     const rec = latestSavedRecommendation(selProp?.measurement_history)
-    if (rec && !(Number(watch('price')) > 0)) {
+    if (rec && lawnService && !(Number(watch('price')) > 0)) {
       setValue('price', savedPriceFor(rec.rec, kind))
     }
   }

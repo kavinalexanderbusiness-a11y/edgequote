@@ -75,6 +75,20 @@ export interface OptOptions {
   minPerKm?: number
 }
 
+// THE per-date capacity rule, in ONE place: available labor-MINUTES for a date.
+// Day Settings overrides (capacityForDate) win; otherwise every day gets the flat
+// business capacity, with 8h as the last-resort default — so a business with no
+// overrides gets exactly the flat number it always did. This was four identical
+// copies inside this file and a fifth, DIVERGENT one in Weather Ops, which is how a
+// single rendered line could report "62% · over": the ✕ came from the engine (per
+// day, correct) and the % from a flat capMin that had never heard of the override.
+export function buildCapMinFor(
+  opts: { capacityForDate?: (dateISO: string) => number; capacityHours: number },
+): (dateISO: string) => number {
+  return (dateISO: string) =>
+    (opts.capacityForDate ? opts.capacityForDate(dateISO) : (opts.capacityHours > 0 ? opts.capacityHours : 8)) * 60
+}
+
 // Resolve a scope into its date windows. movable = origin dates that may move;
 // target = allowed destinations (wider for 'day' so jobs can leave the day);
 // metrics = the area whose before/after we report. null end = unbounded forward.
@@ -245,7 +259,7 @@ export interface RainDelayPlan {
 }
 
 export function planRainDelay(jobs: OptJob[], dayISO: string, opts: Omit<OptOptions, 'mode' | 'scope' | 'anchorDate'>): RainDelayPlan {
-  const capMinFor = (date: string) => (opts.capacityForDate ? opts.capacityForDate(date) : (opts.capacityHours > 0 ? opts.capacityHours : 8)) * 60
+  const capMinFor = buildCapMinFor(opts)
   const prefSet = opts.preferredDays.length ? new Set(opts.preferredDays) : null
 
   const dayJobs = jobs.filter(j => j.scheduled_date === dayISO && j.status !== 'cancelled' && j.status !== 'completed')
@@ -506,7 +520,7 @@ export function optimizeSchedule(jobs: OptJob[], opts: OptOptions): Optimization
   // capacity when no override exists, so normal days are unchanged. THE only capacity
   // source in this function: a flat `capMin` used to sit beside it and fed the scorer,
   // which is how an owner's override could be shown and then ignored.
-  const capMinFor = (date: string) => (opts.capacityForDate ? opts.capacityForDate(date) : (opts.capacityHours > 0 ? opts.capacityHours : 8)) * 60
+  const capMinFor = buildCapMinFor(opts)
   const prefSet = opts.preferredDays.length ? new Set(opts.preferredDays) : null
   // A day the owner blocked (rain/vacation/…) is never a legal MOVE destination.
   const isBlockedDay = (date: string) => isDayBlocked(opts.dayStatusMap, date)
@@ -1158,7 +1172,7 @@ export function metricsWithMoves(
   opts: Pick<OptOptions, 'scope' | 'anchorDate' | 'today' | 'base' | 'capacityHours' | 'roadDist' | 'capacityForDate' | 'minPerKm'>,
   moves: Pick<PlannedMove, 'jobId' | 'to'>[],
 ): ScheduleMetrics {
-  const capMinFor = (date: string) => (opts.capacityForDate ? opts.capacityForDate(date) : (opts.capacityHours > 0 ? opts.capacityHours : 8)) * 60
+  const capMinFor = buildCapMinFor(opts)
   const win = scopeWindows(opts.scope, opts.anchorDate, opts.today)
   const inMetrics = (date: string) => date >= win.metricsStart && (win.metricsEnd == null || date <= win.metricsEnd)
   const override = new Map(moves.map(m => [m.jobId, m.to]))
@@ -1242,7 +1256,7 @@ function explainStuckDay(dayJobs: OptJob[]): string {
 }
 
 export function analyzeSchedule(jobs: OptJob[], base: Omit<OptOptions, 'mode' | 'scope' | 'anchorDate'>): ScheduleSuggestion[] {
-  const capMinFor = (date: string) => (base.capacityForDate ? base.capacityForDate(date) : (base.capacityHours > 0 ? base.capacityHours : 8)) * 60
+  const capMinFor = buildCapMinFor(base)
   const out: ScheduleSuggestion[] = []
   const future = jobs.filter(j => j.scheduled_date > base.today && j.status !== 'cancelled')
   if (future.length === 0) return out
