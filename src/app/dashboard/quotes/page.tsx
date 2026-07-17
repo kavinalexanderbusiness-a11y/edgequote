@@ -12,6 +12,9 @@ import { QuoteList } from '@/components/quotes/QuoteList'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { PageHeader } from '@/components/layout/PageHeader'
+import { StatTile } from '@/components/ui/StatTile'
+import { formatCurrency } from '@/lib/utils'
+import { needsFollowUp } from '@/lib/followup'
 import { Plus, AlertTriangle } from 'lucide-react'
 
 export default function QuotesPage() {
@@ -72,6 +75,19 @@ export default function QuotesPage() {
   // another tab) updates this list instantly — no refresh, no polling.
   useRealtimeRefresh('quotes', uid ? `user_id=eq.${uid}` : null, fetchQuotes)
 
+  // Pipeline value at a glance — derived from the already-loaded list (no new fetch).
+  const pipeline = useMemo(() => {
+    let open = 0, awaiting = 0, accepted = 0, followups = 0
+    for (const q of quotes) {
+      const t = Number(q.total) || 0
+      if (q.status !== 'declined' && q.status !== 'paid') open += t
+      if (q.status === 'sent') awaiting += t
+      if (q.status === 'accepted') accepted += t
+      if (needsFollowUp(q)) followups++
+    }
+    return { open, awaiting, accepted, followups }
+  }, [quotes])
+
   async function handleDelete(id: string) {
     const prev = quotes
     const { data: row } = await supabase.from('quotes').select('*').eq('id', id).maybeSingle()
@@ -105,6 +121,15 @@ export default function QuotesPage() {
           </Link>
         }
       />
+      {!loading && quotes.length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <StatTile label="Open value" value={formatCurrency(pipeline.open)} />
+          <StatTile label="Awaiting reply" value={formatCurrency(pipeline.awaiting)} />
+          <StatTile label="Accepted" value={formatCurrency(pipeline.accepted)} />
+          <StatTile label="Follow-ups due" value={pipeline.followups}
+            tone={pipeline.followups > 0 ? 'warn' : undefined} />
+        </div>
+      )}
       {loading ? (
         <SkeletonRows count={6} />
       ) : loadError && quotes.length === 0 ? (

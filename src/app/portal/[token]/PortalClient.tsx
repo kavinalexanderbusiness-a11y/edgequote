@@ -626,6 +626,9 @@ function HomeTab({ data, derived, biz, onRequest, paymentsEnabled, pay, payingId
                 <p className="text-xs text-ink-muted">
                   {awaiting.length === 1 ? `${formatCurrency(Number(awaiting[0].total) || 0)} — review and approve when you're ready` : `Review and approve when you're ready`}
                 </p>
+                {awaiting.length === 1 && (
+                  <p className="text-[11px] text-ink-faint mt-0.5">Valid until {formatDate(new Date(new Date(awaiting[0].issued_date || awaiting[0].created_at).getTime() + 30 * 86400000).toISOString().slice(0, 10))}</p>
+                )}
               </div>
             </div>
             <span className="text-xs font-semibold text-amber-400 shrink-0">Review →</span>
@@ -1051,7 +1054,7 @@ type DocKind = 'quote' | 'invoice'
 // Accept button disappear on its own: `canAccept` already tests for 'sent', so there is
 // no second expiry check anywhere in the render path to forget or contradict.
 // `expiredOn` is the date it lapsed, shown so the customer knows this isn't a glitch.
-interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; expiredOn?: string; dueDate?: string | null; amount: number; amountNote?: string; balance: number; filename: string; getBlob: () => Promise<Blob>; lines?: { label: string; amount: number }[]; explain?: string[] }
+interface DocItem { id: string; rawId: string; kind: DocKind; number: string; title: string; date: string; status: string; expiredOn?: string; validUntil?: string | null; dueDate?: string | null; amount: number; amountNote?: string; balance: number; filename: string; getBlob: () => Promise<Blob>; lines?: { label: string; amount: number }[]; explain?: string[] }
 const KIND_META: Record<DocKind, { label: string; icon: typeof FileText; tone: string }> = {
   quote: { label: 'Quote', icon: FileText, tone: 'text-accent-text border-accent/25 bg-accent/10' },
   invoice: { label: 'Invoice', icon: Receipt, tone: 'text-sky-400 border-sky-500/25 bg-sky-500/10' },
@@ -1131,6 +1134,7 @@ function DocumentsTab({ quotes, invoices, customerName, fallbackAddress, lawnSqf
       return {
         id: 'q' + qq.id, rawId: qq.id, kind: 'quote' as const, number: qq.quote_number, title: qq.service_type || 'Quote',
         date: qq.issued_date || qq.created_at, status: display, expiredOn: expired ? qq.valid_until || undefined : undefined,
+        validUntil: qq.valid_until,
         amount: Number(qq.total) || 0,
         amountNote: gstPct > 0 ? `+ GST (${gstPct}%) — added on your invoice` : undefined, balance: 0,
         filename: `${qq.quote_number}.pdf`, getBlob: () => renderPortalQuoteBlob(qq, customerName, business), lines,
@@ -1236,6 +1240,8 @@ function DocRow({ d, paymentsEnabled, pay, payingId, accept, accepting }: {
   const canAccept = d.kind === 'quote' && d.status === 'sent'
   const isExpired = d.kind === 'quote' && d.status === 'expired'
   const canPay = d.kind === 'invoice' && paymentsEnabled && d.balance > 0 && d.status !== 'draft' && d.status !== 'cancelled'
+  // Quotes hold their price for 30 days from issue — show that window so approval feels timely.
+  const validUntil = new Date(new Date(d.date).getTime() + 30 * 86400000).toISOString().slice(0, 10)
   return (
     <div className="rounded-card border border-border bg-bg-secondary p-4 card-lift">
       <div className="flex items-start justify-between gap-2">
@@ -1256,6 +1262,11 @@ function DocRow({ d, paymentsEnabled, pay, payingId, accept, accepting }: {
         <div className="text-right shrink-0">
           <p className="text-sm font-bold text-ink tabular-nums">{formatCurrency(d.amount)}</p>
           {d.amountNote && <p className="text-[11px] text-ink-faint mt-0.5">{d.amountNote}</p>}
+          {/* How long the price stands, said while it still does — the row already
+              explains a LAPSED price; the live one deserves its date too. Only on
+              quotes that carry one (expiry stamping began 2026-07; older quotes
+              never lapse and get no line). */}
+          {canAccept && d.validUntil && <p className="text-[11px] text-ink-faint mt-0.5">Valid until {formatDate(d.validUntil)}</p>}
           {d.kind === 'quote' ? <QuoteStatusPill status={d.status} /> : <InvoiceStatusPill status={d.status} />}
         </div>
       </div>
@@ -1299,7 +1310,10 @@ function DocRow({ d, paymentsEnabled, pay, payingId, accept, accepting }: {
       {(canAccept || canPay) && (
         <div className="mt-3">
           {canAccept && (
-            <Button className="w-full sm:w-auto" onClick={() => accept(d.rawId)} loading={accepting === d.rawId}><Check className="w-4 h-4" /> Accept this quote</Button>
+            <>
+              <Button className="w-full sm:w-auto" onClick={() => accept(d.rawId)} loading={accepting === d.rawId}><Check className="w-4 h-4" /> Approve — {formatCurrency(d.amount)}</Button>
+              <p className="text-[11px] text-ink-faint mt-1.5">You&rsquo;ll confirm on the next step — we&rsquo;ll then reach out to schedule.</p>
+            </>
           )}
           {canPay && (
             <>

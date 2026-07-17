@@ -6,7 +6,7 @@ import { queueOrRun } from '@/lib/offline/outbox'
 import { toast } from '@/lib/toast'
 import { confirm as confirmDialog } from '@/lib/confirm'
 import { QuoteStatus, STATUS_LABELS, STATUS_COLORS } from '@/types'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDown, Loader2 } from 'lucide-react'
 
 const ALL: QuoteStatus[] = ['draft', 'sent', 'accepted', 'scheduled', 'completed', 'paid', 'declined']
 
@@ -32,6 +32,16 @@ export function QuoteStatusControl({ quoteId, status, followUpCount, onChanged }
         title: 'Mark as Scheduled?',
         message: 'This only changes the label — it won’t add a job to your calendar. To actually book the visit, use Schedule on the quote instead.',
         confirmLabel: 'Just change the status',
+      })
+      if (!ok) return   // controlled select snaps back to `current` on its own
+    }
+    // A declined quote is lost — confirm before committing the transition.
+    if (s === 'declined' && current !== 'declined') {
+      const ok = await confirmDialog({
+        title: 'Mark quote as declined?',
+        message: 'This marks the quote as lost. You can change it back later.',
+        confirmLabel: 'Mark declined',
+        destructive: true,
       })
       if (!ok) return   // controlled select snaps back to `current` on its own
     }
@@ -71,7 +81,7 @@ export function QuoteStatusControl({ quoteId, status, followUpCount, onChanged }
         onChange={handleChange}
         disabled={saving}
         title="Change status"
-        className={`appearance-none cursor-pointer pl-2.5 pr-6 py-1 rounded-full text-xs font-semibold border uppercase tracking-wide outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${STATUS_COLORS[current]}`}
+        className={`appearance-none cursor-pointer pl-2.5 pr-6 py-1 rounded-full text-xs font-semibold border uppercase tracking-wide outline-none focus-visible:ring-2 focus-visible:ring-accent/40 transition-opacity ${saving ? 'opacity-60' : ''} ${STATUS_COLORS[current]}`}
       >
         {ALL.map(s => (
           <option key={s} value={s} className="bg-bg-secondary text-ink normal-case">
@@ -79,7 +89,9 @@ export function QuoteStatusControl({ quoteId, status, followUpCount, onChanged }
           </option>
         ))}
       </select>
-      <ChevronDown className="w-3 h-3 absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none opacity-60" />
+      {saving
+        ? <Loader2 className="w-3 h-3 absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none animate-spin" />
+        : <ChevronDown className="w-3 h-3 absolute right-1.5 top-1/2 -translate-y-1/2 pointer-events-none opacity-60" />}
     </div>
   )
 }
