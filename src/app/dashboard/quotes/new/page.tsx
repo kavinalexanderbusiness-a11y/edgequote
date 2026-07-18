@@ -188,7 +188,10 @@ export default function NewQuotePage() {
       travel_distance_km: measurement?.travelDistanceKm ?? null,
       pricing_confidence: measurement?.confidence ?? null,
       property_id: propertyId,
-      status: values.status,
+      // QL-1: a new quote is always a draft. Sending/accepting are deliberate
+      // transitions through QuoteStatusControl (markSentPatch/markWonPatch) on the
+      // detail page — never a raw status set that skips sent_at/valid_until.
+      status: 'draft',
       user_id: user!.id,
     }).select().single()
 

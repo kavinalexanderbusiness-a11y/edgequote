@@ -503,12 +503,13 @@ export function QuoteBuilder({
       label: `${t.is_favorite ? '★ ' : ''}${t.name} — ${formatServicePrice(t)}`,
     })),
   ], [activeTemplates])
-  const statusOptions = [
-    { value: 'draft', label: 'Draft' }, { value: 'sent', label: 'Sent' },
-    { value: 'accepted', label: 'Accepted' }, { value: 'scheduled', label: 'Scheduled' },
-    { value: 'completed', label: 'Completed' }, { value: 'paid', label: 'Paid' },
-    { value: 'declined', label: 'Declined' },
-  ]
+  // QL-1: there is no status dropdown here, on purpose. QuoteStatusControl (on the
+  // quote detail page) is the ONE status writer — it routes sent→markSentPatch and
+  // accepted→markWonPatch, so sent_at/valid_until and the acceptance snapshot are
+  // always set. A raw status write from this form was a second, incomplete writer:
+  // setting 'Sent' here left sent_at/valid_until null, so the quote could never
+  // expire (the 0-of-55 bug) and entered the follow-up queue as a lie. The builder
+  // edits quote CONTENT only; status transitions happen through the control.
   const showManualName = !customerId || customerId === '__manual'
 
   // ── The price breakdown, defined ONCE ────────────────────────────────────────
@@ -1222,9 +1223,7 @@ export function QuoteBuilder({
             )}
           </Collapsible>
 
-          <Collapsible title="Scheduling & status" icon={SlidersHorizontal}>
-            <Controller name="status" control={control}
-              render={({ field }) => (<Select label="Quote Status" options={statusOptions} {...field} />)} />
+          <Collapsible title="Scheduling" icon={SlidersHorizontal}>
             <div className="pt-1">
               <p className="text-xs font-semibold text-ink-muted uppercase tracking-wide flex items-center gap-2 mb-2">
                 <Sparkles className="w-3.5 h-3.5 text-accent-text" /> Best days to schedule

@@ -159,7 +159,9 @@ export default function QuoteDetailPage() {
         travel_fee: Number(values.travel_fee),
         measured_sqft: Number(values.measured_sqft) || null,
         suggested_price: Number(values.suggested_price) || null,
-        status: values.status,
+        // QL-1: editing quote CONTENT never touches status. QuoteStatusControl is
+        // the sole status writer (routes sent→markSentPatch, accepted→markWonPatch),
+        // so a content edit can't downgrade a Sent quote or skip the expiry stamps.
       })
       .eq('id', id)
       .select()
